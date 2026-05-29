@@ -18,6 +18,7 @@ use crate::api::projects::{ProjectInfo, ProjectsApi};
 use crate::components::directory_browser::DirectoryBrowser;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use crate::state::layout::WorkspaceState;
 
 use super::state::ChatState;
 
@@ -36,6 +37,10 @@ pub fn ProjectMenu() -> impl IntoView {
     let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
+    // Entering / leaving / switching a project clears the chat session
+    // (see `ChatState::set_active_project`), so the workspace pane's
+    // tool-detail view and captured payloads must be evicted alongside it.
+    let workspace = use_context::<WorkspaceState>();
 
     let menu_open = RwSignal::new(false);
     let recents: RwSignal<Vec<ProjectInfo>> = RwSignal::new(Vec::new());
@@ -81,6 +86,9 @@ pub fn ProjectMenu() -> impl IntoView {
                             Some(project.path.clone()),
                             Some(project.name.clone()),
                         );
+                        if let Some(ws) = workspace {
+                            ws.reset();
+                        }
                     }
                     Err(e) => last_error.set(Some(e)),
                 },
@@ -99,6 +107,9 @@ pub fn ProjectMenu() -> impl IntoView {
                                         Some(project.path.clone()),
                                         Some(project.name.clone()),
                                     );
+                                    if let Some(ws) = workspace {
+                                        ws.reset();
+                                    }
                                 }
                                 Err(e) => last_error.set(Some(e)),
                             }
@@ -112,6 +123,9 @@ pub fn ProjectMenu() -> impl IntoView {
 
     let on_exit_project = move |_| {
         chat.set_active_project(None, None);
+        if let Some(ws) = workspace {
+            ws.reset();
+        }
         menu_open.set(false);
     };
 
@@ -235,6 +249,9 @@ pub fn ProjectMenu() -> impl IntoView {
                                                 Some(proj.path.clone()),
                                                 Some(proj.name.clone()),
                                             );
+                                            if let Some(ws) = workspace {
+                                                ws.reset();
+                                            }
                                             menu_open.set(false);
                                         }
                                     >

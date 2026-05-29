@@ -10,6 +10,7 @@ use std::sync::Arc;
 use crate::api::chat::ChatApi;
 use crate::context::DashboardState;
 use crate::i18n::*;
+use crate::state::layout::WorkspaceState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::state::ChatState;
 
@@ -47,6 +48,11 @@ pub fn ChatSidebar() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();
     let session_map = expect_context::<SessionMap>();
+    // Workspace pane state — used to reset the tool-detail view and evict
+    // captured tool payloads whenever the chat session changes (switch /
+    // new / delete). `Option` + `Copy` so it can be captured into every
+    // session-gesture closure without panicking if the pane isn't mounted.
+    let workspace = use_context::<WorkspaceState>();
     let i18n = use_i18n();
 
     let agents = RwSignal::new(Vec::<AgentEntry>::new());
@@ -170,6 +176,9 @@ pub fn ChatSidebar() -> impl IntoView {
         // overwrites cleanly without leaking the previous topic.
         session_map.activate(chat, &agent_id);
         chat.clear_session();
+        if let Some(ws) = workspace {
+            ws.reset();
+        }
         selected_agent.set(Some(agent_id));
         chat.session_key.set(Some(key.clone()));
 
@@ -208,6 +217,11 @@ pub fn ChatSidebar() -> impl IntoView {
         if !val.is_empty() {
             selected_agent.set(Some(val.clone()));
             session_map.activate(chat, &val);
+            // Switching to another agent's tab swaps the chat snapshot but
+            // the workspace pane is global — drop its stale tool-detail.
+            if let Some(ws) = workspace {
+                ws.reset();
+            }
         }
     };
 
@@ -217,6 +231,9 @@ pub fn ChatSidebar() -> impl IntoView {
     let on_new_chat = move |_: web_sys::MouseEvent| {
         if let Some(agent_id) = selected_agent.get_untracked() {
             chat.clear_session();
+            if let Some(ws) = workspace {
+                ws.reset();
+            }
             chat.agent_id.set(Some(agent_id));
         }
     };
@@ -280,6 +297,9 @@ pub fn ChatSidebar() -> impl IntoView {
                     // If deleting the active session, clear it
                     if chat.session_key.get_untracked().as_deref() == Some(&session_key) {
                         chat.clear_session();
+                        if let Some(ws) = workspace {
+                            ws.reset();
+                        }
                     }
                     reload(dash);
                 }

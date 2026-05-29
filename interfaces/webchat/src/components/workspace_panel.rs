@@ -6,14 +6,12 @@
 //! - `Empty`     — hero placeholder
 //! - `ToolDetail` — looks the tool entry up in `ChatState.messages` and
 //!                  dispatches it through the [`ToolRendererRegistry`]
-//! - `Notes`     — read-only markdown preview of the freeform scratchpad
 //!
 //! Mount is conditional in `app.rs`: only when chat mode is active AND
 //! `LayoutMode::Split` is set, the panel slides in as a flex sibling of
 //! the chat surface.
 
 use crate::components::json_viewer::JsonViewer;
-use crate::components::markdown::MarkdownRenderer;
 use crate::components::tool_renderer::ToolRendererRegistry;
 use crate::i18n::*;
 use crate::state::layout::{LayoutMode, ToolPayload, WorkspaceContent, WorkspaceState};
@@ -52,12 +50,6 @@ fn WorkspaceBody() -> impl IntoView {
         WorkspaceContent::Empty => view! { <WorkspaceEmptyHero /> }.into_any(),
         WorkspaceContent::ToolDetail { run_id, tool_id } => view! {
             <ToolDetailView run_id=run_id tool_id=tool_id />
-        }
-        .into_any(),
-        WorkspaceContent::Notes(text) => view! {
-            <div class="prose-aleph max-w-none">
-                <MarkdownRenderer content=text />
-            </div>
         }
         .into_any(),
     }
@@ -210,4 +202,53 @@ mod tests {
         }
     }
 
+    fn tool(id: &str, name: &str) -> ToolCallEntry {
+        ToolCallEntry {
+            tool_id: id.into(),
+            tool_name: name.into(),
+            status: "completed".into(),
+            duration_ms: None,
+        }
+    }
+
+    /// The canonical `assistant-{run_id}` message must win even when an
+    /// identical `tool_id` lives in an earlier message — the lookup keys
+    /// off the run, not document order.
+    #[test]
+    fn find_tool_entry_prefers_canonical_run_over_scan_order() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.messages.set(vec![
+            // Decoy: same tool_id, earlier in scan order, different run.
+            msg_with_tools("assistant-run2", vec![tool("t1", "DECOY")]),
+            // Canonical target for run1, deliberately placed second.
+            msg_with_tools("assistant-run1", vec![tool("t1", "search")]),
+        ]);
+        let found = find_tool_entry(&chat, "run1", "t1").expect("entry present");
+        assert_eq!(found.tool_name, "search");
+    }
+
+    /// When no `assistant-{run_id}` message exists (e.g. history-loaded
+    /// rows with synthetic ids), the global scan still resolves the tool.
+    #[test]
+    fn find_tool_entry_falls_back_to_global_scan() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.messages
+            .set(vec![msg_with_tools("hist-7", vec![tool("t9", "fetch")])]);
+        let found = find_tool_entry(&chat, "missing-run", "t9").expect("fallback finds it");
+        assert_eq!(found.tool_name, "fetch");
+    }
+
+    #[test]
+    fn find_tool_entry_returns_none_when_absent() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.messages
+            .set(vec![msg_with_tools("assistant-run1", vec![tool("t1", "search")])]);
+        assert!(find_tool_entry(&chat, "run1", "nope").is_none());
+    }
 }

@@ -45,7 +45,6 @@
     "workspace_title": "工作区",
     "workspace_state_idle": "· 空闲",
     "workspace_state_tool": "· 工具详情",
-    "workspace_state_notes": "· 笔记",
     "workspace_pane": "工作区面板",
     "workspace_hint": "点击对话中任意工具标签可在此查看调用详情。通过编辑栏中的切换按钮可回到单栏视图。",
     "workspace_tool_evicted": "该工具调用已不在会话内存中。",

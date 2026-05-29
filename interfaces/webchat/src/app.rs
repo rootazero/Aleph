@@ -251,7 +251,7 @@ fn AppContent() -> impl IntoView {
 ///     `Split` so it tracks the chat / workspace boundary (workspace
 ///     pane is `basis-[66%]` of main, so its left edge is at 34 % of
 ///     main width and the toggle parks 8 px inside the chat surface).
-///   • Workspace label ("WORKSPACE · idle / tool / notes") — Split-only,
+///   • Workspace label ("WORKSPACE · idle / tool") — Split-only,
 ///     left offset is `left-[calc(34%+16px)]` so the text sits 16 px
 ///     inside the workspace pane's leading edge, matching the previous
 ///     `WorkspaceHeader.px-4` placement.
@@ -288,9 +288,6 @@ fn ChatBandChrome() -> impl IntoView {
                             }
                             WorkspaceContent::ToolDetail { .. } => {
                                 t_string!(i18n, common.workspace_state_tool).to_string()
-                            }
-                            WorkspaceContent::Notes(_) => {
-                                t_string!(i18n, common.workspace_state_notes).to_string()
                             }
                         }}
                     </span>

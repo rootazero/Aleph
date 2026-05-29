@@ -1,34 +1,15 @@
 use crate::context::DashboardState;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// A workspace entry returned by workspace.list
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkspaceEntry {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub icon: Option<String>,
-}
-
+/// Agent ↔ channel binding RPC surface.
+///
+/// Named `WorkspaceApi` for historical reasons — the original `workspace.list`
+/// method was dead (no consumer; the project-folder switcher lives in
+/// [`crate::api::projects`]) and was removed. Only the agent-binding calls
+/// below have live consumers (`agent_binding_selector`, `agents_sidebar`).
 pub struct WorkspaceApi;
 
 impl WorkspaceApi {
-    /// List all available workspaces
-    pub async fn list(state: &DashboardState) -> Result<Vec<WorkspaceEntry>, String> {
-        let result = state.rpc_call("workspace.list", Value::Null).await?;
-
-        result
-            .get("workspaces")
-            .ok_or_else(|| "Invalid response: missing workspaces".to_string())
-            .and_then(|workspaces| {
-                serde_json::from_value(workspaces.clone())
-                    .map_err(|e| format!("Failed to parse workspaces: {}", e))
-            })
-    }
-
     /// Set the agent binding for a channel (or unbind with None)
     pub async fn set_channel_agent(
         state: &DashboardState,

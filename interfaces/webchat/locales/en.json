@@ -45,7 +45,6 @@
     "workspace_title": "Workspace",
     "workspace_state_idle": "· idle",
     "workspace_state_tool": "· tool detail",
-    "workspace_state_notes": "· notes",
     "workspace_pane": "Workspace pane",
     "workspace_hint": "Click any tool chip in the chat to inspect its call here. Switch back to single-column with the toggle in the composer.",
     "workspace_tool_evicted": "Tool call no longer in session memory.",

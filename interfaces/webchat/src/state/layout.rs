@@ -90,8 +90,6 @@ pub enum WorkspaceContent {
         run_id: String,
         tool_id: String,
     },
-    /// Freeform markdown notes scratchpad — quick brain-dump area.
-    Notes(String),
 }
 
 impl Default for WorkspaceContent {
@@ -158,6 +156,21 @@ impl WorkspaceState {
     /// Reset content to `Empty` (close-pane semantic without changing mode).
     pub fn clear_content(&self) {
         self.content.set(WorkspaceContent::Empty);
+    }
+
+    /// Reset the pane for a new / switched chat session: drop any open
+    /// tool-detail view back to `Empty` **and** evict every captured tool
+    /// payload. The layout mode (`Split`/`ChatOnly`) is intentionally
+    /// preserved — the user's pane-open preference outlives a single chat.
+    ///
+    /// Without this, [`Self::tool_payloads`] accumulates one entry per tool
+    /// call for the lifetime of the tab and is never reclaimed across
+    /// `new chat` / session switches / deletes — an unbounded leak whose
+    /// stale `(run_id, tool_id)` keys also outlive the messages they
+    /// describe. Wired into the session-reset gestures in `chat_sidebar`.
+    pub fn reset(&self) {
+        self.clear_content();
+        self.tool_payloads.update(|m| m.clear());
     }
 
     /// Record the input/args of a tool call. Idempotent — repeated calls
@@ -240,5 +253,42 @@ mod tests {
         assert_ne!(p1, p2);
         assert_eq!(p1.args, p2.args);
         assert!(p1.result.is_none() && p2.result.is_some());
+    }
+
+    /// `reset` must evict every captured payload and drop the open tool
+    /// view back to `Empty`, while leaving the layout mode untouched —
+    /// the session-scoped lifecycle fix for the unbounded `tool_payloads`
+    /// growth. Runs inside an explicit `Owner` so the `RwSignal`s have a
+    /// reactive context (the rest of this module is plain-Rust logic).
+    #[test]
+    fn reset_evicts_payloads_and_content_but_preserves_layout_mode() {
+        let owner = Owner::new();
+        owner.set();
+
+        // Build via struct literal rather than `new()` — `new()` reads
+        // localStorage through `web_sys::window()`, which panics on the
+        // non-wasm test target. Seeding `mode = Split` also keeps
+        // `show_tool` off its web_sys-backed `set_layout` branch.
+        let ws = WorkspaceState {
+            mode: RwSignal::new(LayoutMode::Split),
+            content: RwSignal::new(WorkspaceContent::Empty),
+            tool_payloads: RwSignal::new(HashMap::new()),
+        };
+        ws.show_tool("run-1", "tool-a");
+        ws.record_tool_args("run-1", "tool-a", serde_json::json!({"q": "x"}));
+        ws.record_tool_result("run-1", "tool-a", serde_json::json!({"ok": true}));
+
+        assert!(ws.get_tool_payload("run-1", "tool-a").is_some());
+        assert_eq!(ws.content.get_untracked(), WorkspaceContent::ToolDetail {
+            run_id: "run-1".into(),
+            tool_id: "tool-a".into(),
+        });
+
+        ws.reset();
+
+        assert!(ws.get_tool_payload("run-1", "tool-a").is_none());
+        assert_eq!(ws.content.get_untracked(), WorkspaceContent::Empty);
+        // Layout mode is the user's pane preference — it survives a reset.
+        assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
     }
 }
