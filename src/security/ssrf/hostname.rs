@@ -3,6 +3,19 @@
 //! Detects blocked hostnames, legacy IP literal encodings (hex, octal, decimal),
 //! and URL credential injection.
 
+/// Canonicalizes a hostname for security comparison.
+///
+/// Lowercases (case-insensitive DNS) and strips trailing dots. A fully qualified
+/// hostname like `evil.com.` (or `evil.com...`) is resolved identically to
+/// `evil.com` by the DNS layer but string-compares differently against an
+/// allow/deny list — so without this normalization a single trailing dot
+/// bypasses every host-based check (the `blocked_hosts` denylist has no IP
+/// backstop). Stripping is semantically lossless and therefore safe in both
+/// directions (allow and deny).
+fn normalize_host(hostname: &str) -> String {
+    hostname.to_lowercase().trim_end_matches('.').to_string()
+}
+
 /// Returns true if the hostname is on the hardcoded blocklist.
 ///
 /// Blocked: "localhost", "localhost.localdomain", "metadata.google.internal",
@@ -11,14 +24,14 @@
 /// Also checks the Unicode-decoded form of IDNA/punycode hostnames to prevent
 /// homograph attacks (e.g., `localhоst` with Cyrillic `о`).
 pub(crate) fn is_blocked_hostname(hostname: &str) -> bool {
-    let lower = hostname.to_lowercase();
+    let lower = normalize_host(hostname);
     if check_blocked(&lower) {
         return true;
     }
     // If the hostname looks like punycode, decode it and normalize homoglyphs
     // to catch homograph attacks that bypass the ASCII blocklist.
     if lower.contains("xn--") {
-        let unicode = url::quirks::domain_to_unicode(hostname);
+        let unicode = url::quirks::domain_to_unicode(&lower);
         let unicode_lower = unicode.to_lowercase();
         if check_blocked(&unicode_lower) {
             return true;
@@ -52,9 +65,9 @@ fn check_blocked(lower: &str) -> bool {
 /// Supports case-insensitive exact match and wildcard subdomain patterns
 /// (e.g., "*.example.com" matches "example.com" and "sub.example.com").
 pub(crate) fn is_allowlisted(hostname: &str, allowed_hosts: &[String]) -> bool {
-    let hostname_lower = hostname.to_lowercase();
+    let hostname_lower = normalize_host(hostname);
     for pattern in allowed_hosts {
-        let pattern_lower = pattern.to_lowercase();
+        let pattern_lower = normalize_host(pattern);
         if let Some(base) = pattern_lower.strip_prefix("*.") {
             // strip "*."
             if hostname_lower == base || hostname_lower.ends_with(&format!(".{}", base)) {
@@ -282,5 +295,72 @@ mod tests {
     #[test]
     fn no_credentials_in_normal_url() {
         assert!(!has_url_credentials("https://example.com/path"));
+    }
+
+    // --- Trailing-dot normalization (SSRF allow/deny bypass) ---
+
+    #[test]
+    fn blocks_localhost_with_trailing_dot() {
+        // A single trailing dot is a fully qualified name resolving identically
+        // to `localhost` — it must not bypass the hardcoded blocklist.
+        assert!(is_blocked_hostname("localhost."));
+        assert!(is_blocked_hostname("LOCALHOST."));
+        assert!(is_blocked_hostname("localhost.localdomain."));
+    }
+
+    #[test]
+    fn blocks_metadata_with_trailing_dots() {
+        assert!(is_blocked_hostname("metadata.google.internal."));
+        // Repeated trailing dots must also be stripped.
+        assert!(is_blocked_hostname("metadata.google.internal..."));
+    }
+
+    #[test]
+    fn blocks_suffix_with_trailing_dot() {
+        assert!(is_blocked_hostname("printer.local."));
+        assert!(is_blocked_hostname("service.internal."));
+        assert!(is_blocked_hostname("evil.localhost."));
+    }
+
+    #[test]
+    fn blocks_idna_homograph_with_trailing_dot() {
+        // Punycode homograph + trailing dot must still resolve to the blocklist.
+        assert!(is_blocked_hostname("xn--localhst-sbh."));
+    }
+
+    #[test]
+    fn blocklist_bypassed_by_trailing_dot_is_closed() {
+        // The user `blocked_hosts` denylist has no IP backstop, so a trailing
+        // dot must not evade it.
+        let hosts = vec!["evil.com".to_string()];
+        assert!(is_blocklisted("evil.com.", &hosts));
+        assert!(is_blocklisted("evil.com...", &hosts));
+        assert!(is_blocklisted("EVIL.COM.", &hosts));
+    }
+
+    #[test]
+    fn blocklist_pattern_with_trailing_dot_still_matches() {
+        // A config entry written as `evil.com.` should behave like `evil.com`.
+        let hosts = vec!["evil.com.".to_string()];
+        assert!(is_blocklisted("evil.com", &hosts));
+        assert!(is_blocklisted("evil.com.", &hosts));
+    }
+
+    #[test]
+    fn blocklist_wildcard_with_trailing_dot() {
+        let hosts = vec!["*.evil.com".to_string()];
+        assert!(is_blocklisted("sub.evil.com.", &hosts));
+        assert!(is_blocklisted("evil.com.", &hosts));
+    }
+
+    #[test]
+    fn allowlist_trailing_dot_still_allowed() {
+        // Legitimate fully qualified requests must still match the allowlist
+        // (fail-closed direction preserved).
+        let hosts = vec!["api.example.com".to_string()];
+        assert!(is_allowlisted("api.example.com.", &hosts));
+        let wild = vec!["*.example.com".to_string()];
+        assert!(is_allowlisted("sub.example.com.", &wild));
+        assert!(is_allowlisted("example.com.", &wild));
     }
 }
