@@ -4,6 +4,7 @@ pub mod budget;
 pub mod compact;
 pub mod environment;
 pub mod memory_context;
+pub mod retrieval;
 pub mod session_info;
 
 pub use environment::EnvironmentInfo;

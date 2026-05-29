@@ -27,7 +27,8 @@ use crate::builtin_tools::browser_tools::{
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree,
+    BashExecTool, CodeExecTool, CtxSearchTool, DesktopAxQueryByRole, DesktopAxQueryFocused,
+    DesktopAxQueryTree,
     ApplyPatchTool, DesktopAxSnapshot, DesktopBrowserOperator, DesktopCheckPermissions,
     DesktopGuiLocate, DesktopTool, FileEditTool,
     FileOpsTool,
@@ -108,6 +109,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "code_exec",
         description: "Execute code in various programming languages (Python, JavaScript, Shell)",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "ctx_search",
+        description: "BM25-search large tool outputs that were offloaded out of the context window; retrieve only the relevant sections instead of re-reading whole files",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -716,6 +722,7 @@ pub fn create_tool_boxed(
         "apply_patch" => Some(Box::new(ApplyPatchTool::new())),
         "bash" => Some(Box::new(BashExecTool::new())),
         "code_exec" => Some(Box::new(CodeExecTool::new())),
+        "ctx_search" => Some(Box::new(CtxSearchTool::new())),
         "pdf_generate" => Some(Box::new(PdfGenerateTool::new())),
         "image_generate" => {
             if let Some(cfg) = config {

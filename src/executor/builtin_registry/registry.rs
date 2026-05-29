@@ -102,6 +102,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) read_skill_tool: crate::builtin_tools::skill_reader::ReadSkillTool,
     /// Config guide tool instance (progressive disclosure for self-management)
     pub(crate) config_guide_tool: crate::builtin_tools::ReadConfigGuideTool,
+    /// Ctx-search tool instance (BM25 retrieval over offloaded tool output)
+    pub(crate) ctx_search_tool: crate::builtin_tools::CtxSearchTool,
     /// Self-management tool instance (LLM-triggered entry point)
     pub(crate) self_manage_tool: crate::builtin_tools::SelfManageTool,
     /// Self-config tool instance (identity files + config.toml access)
@@ -645,6 +647,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "read_config_guide" => {
                 Box::pin(async move { self.config_guide_tool.call_json(arguments).await })
+            }
+            "ctx_search" => {
+                Box::pin(async move { self.ctx_search_tool.call_json(arguments).await })
             }
             "self_manage" => {
                 Box::pin(async move { self.self_manage_tool.call_json(arguments).await })

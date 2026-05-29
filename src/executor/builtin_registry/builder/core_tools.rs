@@ -4,9 +4,9 @@ use crate::builtin_tools::skill_reader::{
     ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
 };
 use crate::builtin_tools::{
-    AutomationTool, CodeExecTool, DesktopTool, FileEditTool, FileReadTool, FileWriteTool,
-    MediaTool, PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool, ScratchpadTool,
-    SearchTool, SelfManageTool, SystemTool,
+    AutomationTool, CodeExecTool, CtxSearchTool, DesktopTool, FileEditTool, FileReadTool,
+    FileWriteTool, MediaTool, PdfGenerateTool, PermissionTool, PimTool, ReadConfigGuideTool,
+    ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
 };
 use crate::tool_metadata::{ToolSource, UnifiedTool};
 use crate::tools::AlephTool;
@@ -125,6 +125,13 @@ impl BuiltinToolRegistry {
                 crate::builtin_tools::config_guide::ReadConfigGuideArgs
             ))
             .unwrap_or_default(),
+        );
+        reg(
+            tools,
+            "ctx_search",
+            CtxSearchTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::ctx_search::CtxSearchArgs))
+                .unwrap_or_default(),
         );
         reg(
             tools,

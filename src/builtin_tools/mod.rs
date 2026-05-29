@@ -41,6 +41,7 @@ pub mod code_exec;
 pub mod command_canonicalize;
 pub mod config_guide;
 pub mod cron_manage;
+pub mod ctx_search;
 pub mod desktop;
 pub mod error;
 pub mod file_ops;
@@ -117,6 +118,7 @@ pub use config_guide::{
     GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool,
 };
 pub use cron_manage::{CronAction, CronManageArgs, CronManageOutput, CronManageTool};
+pub use ctx_search::{CtxSearchArgs, CtxSearchOutput, CtxSearchTool};
 pub use desktop::{
     BrowserOperatorMode, DesktopArgs, DesktopAxQueryByRole, DesktopAxQueryByRoleArgs,
     DesktopAxQueryFocused, DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs,

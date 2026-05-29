@@ -102,6 +102,9 @@ impl BuiltinToolRegistry {
         // Config guide tool (Progressive Disclosure for self-management)
         let config_guide_tool = ReadConfigGuideTool::default();
 
+        // Ctx-search tool (BM25 retrieval over offloaded tool output)
+        let ctx_search_tool = crate::builtin_tools::CtxSearchTool::new();
+
         // Self-management tool (LLM-triggered entry point)
         let self_manage_tool = SelfManageTool::default();
 
@@ -1385,6 +1388,7 @@ impl BuiltinToolRegistry {
             list_skills_tool,
             read_skill_tool,
             config_guide_tool,
+            ctx_search_tool,
             self_manage_tool,
             self_config_tool,
             vault_store_tool,

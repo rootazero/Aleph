@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 use crate::sync_primitives::Arc;
 
 use crate::context::budget::pressure::estimate_tokens_smart;
+use crate::context::retrieval::{ContentIndex, IndexOutcome, SearchHit};
 
 /// Prefix used to identify persisted-result reference lines.
 const PERSISTED_REF_PREFIX: &str = "[Full output persisted: ";
@@ -86,12 +87,23 @@ pub fn global_tool_result_store() -> Option<Arc<ToolResultStore>> {
 // ToolResultStore
 // =============================================================================
 
+/// Filename of the FTS5 retrieval index inside [`ToolResultStore::base_dir`].
+const INDEX_DB_NAME: &str = "index.db";
+
 /// Session-scoped store that offloads large tool outputs to disk.
 ///
 /// On drop the store removes its base directory, so tool result files are
 /// automatically cleaned up when the session ends.
+///
+/// Alongside the raw `.txt` blobs, the store lazily maintains an FTS5
+/// [`ContentIndex`] (`index.db`) so the model can BM25-search offloaded
+/// output via `ctx_search` instead of re-reading whole files. The index is
+/// opened on first use and shares the directory's Drop / TTL-sweep lifecycle.
 pub struct ToolResultStore {
     base_dir: PathBuf,
+    /// Lazily-opened retrieval index. `None` inside the `OnceLock` means an
+    /// open attempt failed once and indexing/search degrade to no-ops.
+    index: OnceLock<Option<ContentIndex>>,
 }
 
 impl ToolResultStore {
@@ -107,7 +119,10 @@ impl ToolResultStore {
             .join(session_id);
 
         std::fs::create_dir_all(&base_dir)?;
-        Ok(Self { base_dir })
+        Ok(Self {
+            base_dir,
+            index: OnceLock::new(),
+        })
     }
 
     /// Construct a store rooted at an arbitrary base directory. The
@@ -117,7 +132,10 @@ impl ToolResultStore {
     /// `~/.aleph/`.
     #[doc(hidden)]
     pub fn with_dir_for_tests(base_dir: PathBuf) -> Self {
-        Self { base_dir }
+        Self {
+            base_dir,
+            index: OnceLock::new(),
+        }
     }
 
     /// Persist the content to disk if it exceeds `threshold_tokens`.
@@ -162,6 +180,68 @@ impl ToolResultStore {
             tool_name,
         );
         Some(marker)
+    }
+
+    /// Lazily open (once) the FTS5 retrieval index in `base_dir`. Returns
+    /// `None` if the index could not be opened — callers degrade to no-ops.
+    fn index(&self) -> Option<&ContentIndex> {
+        self.index
+            .get_or_init(|| {
+                let db_path = self.base_dir.join(INDEX_DB_NAME);
+                match ContentIndex::open(&db_path) {
+                    Ok(idx) => Some(idx),
+                    Err(e) => {
+                        tracing::warn!(
+                            db = %db_path.display(),
+                            error = %e,
+                            "failed to open tool-result content index; ctx_search disabled"
+                        );
+                        None
+                    }
+                }
+            })
+            .as_ref()
+    }
+
+    /// Index an offloaded tool output into the retrieval store so the model
+    /// can BM25-search it via `ctx_search`. Best-effort: returns `None` (and
+    /// logs) on any failure, and `Some(outcome)` with the section count on
+    /// success. Callers use the outcome to build the model-facing hint.
+    pub fn index_output(
+        &self,
+        tool_call_id: &str,
+        tool_name: &str,
+        content: &str,
+    ) -> Option<IndexOutcome> {
+        let idx = self.index()?;
+        match idx.index_text(tool_call_id, tool_name, content) {
+            Ok(out) => Some(out),
+            Err(e) => {
+                tracing::warn!(
+                    tool_call_id,
+                    tool_name,
+                    error = %e,
+                    "failed to index tool output for retrieval"
+                );
+                None
+            }
+        }
+    }
+
+    /// BM25-search previously-indexed tool output. Returns up to `limit` hits,
+    /// most relevant first. Empty when nothing is indexed or the index is
+    /// unavailable — never errors out to the caller.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+        match self.index() {
+            Some(idx) => idx.search(query, limit).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Number of indexed sections across all offloaded outputs. `0` when the
+    /// index is empty or unavailable.
+    pub fn indexed_sections(&self) -> usize {
+        self.index().and_then(|idx| idx.len().ok()).unwrap_or(0)
     }
 
     /// Remove the base directory and all its contents.
@@ -344,6 +424,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let store = ToolResultStore {
             base_dir: base.clone(),
+            index: OnceLock::new(),
         };
         (store, base)
     }
@@ -386,6 +467,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let store = ToolResultStore {
             base_dir: base.clone(),
+            index: OnceLock::new(),
         };
         assert!(base.exists());
         store.cleanup();

@@ -16,6 +16,7 @@
 use std::path::PathBuf;
 
 use crate::context::budget::pressure::estimate_tokens_smart;
+use crate::context::retrieval::IndexOutcome;
 use crate::tools::result_store::{extract_persisted_ref, ToolResultStore};
 
 /// Global default budget for tools that neither declare an explicit
@@ -98,9 +99,18 @@ pub fn apply_result_budget(
     if let Some(store) = store {
         if let Some(marker) = store.persist_if_large(tool_call_id, tool_name, text, budget) {
             let path = extract_persisted_ref(&marker).and_then(parse_marker_path);
-            let tokens_after = estimate_tokens_smart(&marker);
+            // Index the offloaded blob so the model can BM25-retrieve only the
+            // relevant slices via `ctx_search` instead of re-reading the whole
+            // file (which would defeat the offload). Best-effort: on failure
+            // the bare persist marker still lets the model `read_file` it back.
+            let indexed = store.index_output(tool_call_id, tool_name, text);
+            let full_marker = match indexed.filter(|o| o.sections > 0) {
+                Some(outcome) => format!("{marker}\n{}", search_hint(&outcome)),
+                None => marker,
+            };
+            let tokens_after = estimate_tokens_smart(&full_marker);
             return ProcessedResult {
-                text: marker,
+                text: full_marker,
                 tokens_in_context: tokens_after,
                 persisted_path: path,
             };
@@ -113,6 +123,28 @@ pub fn apply_result_budget(
         text: truncated,
         tokens_in_context: tokens_after,
         persisted_path: None,
+    }
+}
+
+/// Build the model-facing hint appended to a persist marker when the output
+/// was also indexed for retrieval. Tells the model it can `ctx_search` the
+/// offloaded blob instead of re-reading the whole file, and lists the first
+/// few section titles as orientation. Kept to a few hundred bytes so the
+/// offload's token saving is preserved.
+fn search_hint(outcome: &IndexOutcome) -> String {
+    let preview = outcome.previews.join(" · ");
+    if preview.is_empty() {
+        format!(
+            "[Indexed {} sections — use ctx_search(query=\"…\") to retrieve only \
+             the relevant parts instead of re-reading the whole file]",
+            outcome.sections
+        )
+    } else {
+        format!(
+            "[Indexed {} sections — use ctx_search(query=\"…\") to retrieve only the \
+             relevant parts instead of re-reading the whole file. First sections: {}]",
+            outcome.sections, preview
+        )
     }
 }
 
@@ -268,7 +300,11 @@ mod tests {
     #[test]
     fn large_text_persists_returns_marker() {
         let (store, base) = test_store("large_persists");
-        let big = "y".repeat(40_000);
+        // Build text with retrievable structure so indexing produces sections.
+        let big = (0..2000)
+            .map(|i| format!("line {i} payload alpha beta gamma"))
+            .collect::<Vec<_>>()
+            .join("\n");
         let out = apply_result_budget("c3", "bash", &big, Some(&store), Some(100));
         assert!(
             out.text.starts_with("[Full output persisted:"),
@@ -276,11 +312,22 @@ mod tests {
             &out.text[..80.min(out.text.len())]
         );
         assert!(out.persisted_path.is_some());
-        let entries: Vec<_> = std::fs::read_dir(&base)
+        // The marker is now augmented with a ctx_search retrieval hint.
+        assert!(
+            out.text.contains("ctx_search"),
+            "expected ctx_search hint in marker, got: {}",
+            out.text
+        );
+        // Exactly one persisted blob (.txt); the FTS5 index.db lives alongside.
+        let txt_count = std::fs::read_dir(&base)
             .unwrap()
             .filter_map(|e| e.ok())
-            .collect();
-        assert_eq!(entries.len(), 1, "exactly one file should be written");
+            .filter(|e| e.path().extension().is_some_and(|x| x == "txt"))
+            .count();
+        assert_eq!(txt_count, 1, "exactly one .txt blob should be written");
+        // The blob's content is searchable through the same store.
+        let hits = store.search("payload alpha", 3);
+        assert!(!hits.is_empty(), "offloaded blob should be searchable");
     }
 
     #[test]
