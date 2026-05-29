@@ -199,6 +199,9 @@ siphasher = "1.0"
 aes-gcm = "0.10"
 aes = "0.9"
 cipher = "0.5"
+# AES-256-CBC (cipher 0.4 line) for Feishu webhook event decryption — pairs with `cbc`.
+aes_cbc = { package = "aes", version = "0.8" }
+cbc = { version = "0.1", features = ["alloc", "block-padding"] }
 hkdf = "0.12"
 secrecy = { version = "0.10", features = ["serde"] }
 zeroize = { version = "1.8", features = ["derive"] }

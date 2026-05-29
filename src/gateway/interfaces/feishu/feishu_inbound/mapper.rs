@@ -6,7 +6,7 @@ use crate::gateway::channel::{ChannelId, ConversationId, InboundMessage, Message
 use crate::gateway::interfaces::feishu::api::FeishuApi;
 use crate::gateway::interfaces::feishu::config::{FeishuConfig, GroupSessionScope};
 use crate::gateway::interfaces::feishu::feishu_inbound::user_cache::UserProfileCache;
-use crate::gateway::interfaces::feishu::types::{ChatType, FeishuEvent};
+use crate::gateway::interfaces::feishu::types::{ChatType, FeishuEvent, Mention};
 
 pub fn map_event_to_inbound(
     event: &FeishuEvent,
@@ -32,9 +32,15 @@ pub fn map_event_to_inbound(
             let is_group = *chat_type == ChatType::Group;
             let conversation_id =
                 build_conversation_id(chat_id, sender_id, root_id, config, is_group);
-            let text = extract_text_content(message_type, content);
+            // Mark which mentions point at the bot once, then reuse for gating + stripping.
+            let mut marked = mentions.clone();
+            crate::gateway::interfaces::feishu::feishu_inbound::events::mark_bot_mentions(
+                &mut marked,
+                bot_open_id,
+            );
+            let bot_mentioned = marked.iter().any(|m| m.is_bot);
+            let text = extract_message_text(message_type, content, &marked);
             let mut metadata = vec![];
-            let bot_mentioned = mentions.iter().any(|m| m.id == bot_open_id);
             if bot_mentioned {
                 metadata.push(crate::gateway::channel::MessageMeta::AppMention);
             }
@@ -96,11 +102,17 @@ fn build_conversation_id(
     }
 }
 
-fn extract_text_content(message_type: &str, content: &str) -> String {
+/// Convert a Feishu message body into the plain text handed to the agent.
+///
+/// `content` is the raw Feishu content JSON (e.g. `{"text":"..."}`); `mentions`
+/// must already be marked (see [`events::mark_bot_mentions`]) so bot @placeholders
+/// are stripped from text messages.
+fn extract_message_text(message_type: &str, content: &str, mentions: &[Mention]) -> String {
+    use crate::gateway::interfaces::feishu::feishu_inbound::events;
     match message_type {
-        "text" => content.to_string(),
+        "text" => events::extract_text_content(content, mentions).unwrap_or_default(),
+        "post" => events::parse_post_content(content),
         "image" => "[Image]".to_string(),
-        "post" => "[Post]".to_string(),
         "file" => serde_json::from_str::<serde_json::Value>(content)
             .map(|v| v["file_name"].as_str().unwrap_or("[File]").to_string())
             .unwrap_or_else(|_| "[File]".to_string()),
@@ -189,14 +201,46 @@ mod tests {
     }
 
     #[test]
-    fn test_post_message_placeholder() {
-        assert_eq!(extract_text_content("post", "{}"), "[Post]");
+    fn test_text_message_extracts_plain_text() {
+        // Regression: previously returned the raw JSON `{"text":"hello"}` verbatim.
+        assert_eq!(
+            extract_message_text("text", r#"{"text":"hello"}"#, &[]),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn test_text_message_strips_bot_mention() {
+        let mentions = vec![Mention {
+            key: "@_user_1".into(),
+            id: "ou_bot".into(),
+            name: "Aleph".into(),
+            is_bot: true,
+        }];
+        assert_eq!(
+            extract_message_text("text", r#"{"text":"@_user_1 ping"}"#, &mentions),
+            "ping"
+        );
+    }
+
+    #[test]
+    fn test_post_message_parsed() {
+        let content = r#"{"title":"T","content":[[{"tag":"text","text":"hello world"}]]}"#;
+        assert_eq!(extract_message_text("post", content, &[]), "T\n\nhello world");
+    }
+
+    #[test]
+    fn test_post_message_fallback_on_garbage() {
+        assert_eq!(
+            extract_message_text("post", "{}", &[]),
+            "[Rich text message]"
+        );
     }
 
     #[test]
     fn test_file_message_placeholder() {
         assert_eq!(
-            extract_text_content("file", r#"{"file_name":"report.pdf"}"#),
+            extract_message_text("file", r#"{"file_name":"report.pdf"}"#, &[]),
             "report.pdf"
         );
     }

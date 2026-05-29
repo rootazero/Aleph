@@ -1,3 +1,4 @@
+pub mod crypto;
 pub mod dedup;
 pub mod events;
 pub mod mapper;
