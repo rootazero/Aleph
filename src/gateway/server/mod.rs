@@ -26,6 +26,7 @@ use super::lane::{LaneConfig, LaneManager};
 use super::presence::PresenceTracker;
 use super::rate_limiter::{RateLimitConfig, RateLimiter};
 use super::security::SharedTokenManager;
+use super::security::TokenManager;
 use super::session::HttpSessionManager;
 use super::state_version::StateVersionTracker;
 use crate::providers::protocols::ProtocolLoader;
@@ -54,6 +55,16 @@ pub struct ConnectionState {
     pub permissions: Vec<String>,
     /// Guest session ID (set for guest connections)
     pub guest_session_id: Option<String>,
+    /// HMAC hash of the device token this connection authenticated with.
+    ///
+    /// Set ONLY when auth succeeded via an existing device token
+    /// (`connect` Case 1). `None` for every other auth path — shared-token
+    /// loopback bootstrap, guest invitations, approved-device token issuance,
+    /// and auth-disabled mode — so those connections are never subject to the
+    /// per-dispatch revocation re-check (and the local panel is never
+    /// disconnected by it). When `Some`, the dispatch loop re-checks revocation
+    /// on each request and closes the connection if the token was revoked.
+    pub device_token_hash: Option<String>,
 }
 
 impl ConnectionState {
@@ -68,6 +79,7 @@ impl ConnectionState {
             device_id: None,
             permissions: vec![],
             guest_session_id: None,
+            device_token_hash: None,
         }
     }
 
@@ -127,6 +139,12 @@ pub struct GatewaySharedState {
     /// to obtain the token string injected into the first `connect`.
     /// `None` ⇒ cookie bootstrap is disabled even if `session_mgr` is set.
     pub shared_token_mgr: Option<Arc<SharedTokenManager>>,
+    /// Device-token manager, used by the dispatch loop to re-check whether an
+    /// already-authenticated connection's device token has been revoked since
+    /// `connect`. `None` ⇒ the per-dispatch revocation re-check is disabled
+    /// (e.g. auth-disabled mode or legacy wiring); the existing flow is
+    /// untouched.
+    pub token_manager: Option<Arc<TokenManager>>,
 }
 
 /// Configuration for the Gateway server
@@ -267,6 +285,8 @@ pub struct GatewayServer {
     /// Shared token manager. See `session_mgr` doc for the bootstrap
     /// flow these two cooperate to enable.
     shared_token_mgr: Option<Arc<SharedTokenManager>>,
+    /// Device-token manager for the dispatch-time revocation re-check.
+    token_manager: Option<Arc<TokenManager>>,
 }
 
 impl GatewayServer {
@@ -315,6 +335,7 @@ impl GatewayServer {
             auth_routes: None,
             session_mgr: None,
             shared_token_mgr: None,
+            token_manager: None,
         }
     }
 
@@ -364,6 +385,7 @@ impl GatewayServer {
             auth_routes: None,
             session_mgr: None,
             shared_token_mgr: None,
+            token_manager: None,
         }
     }
 
@@ -435,6 +457,13 @@ impl GatewayServer {
         self.shared_token_mgr = Some(manager);
     }
 
+    /// Install the `TokenManager` so the dispatch loop can re-check device-token
+    /// revocation on each request from an already-authenticated connection.
+    /// When unset, the re-check is skipped (existing behaviour).
+    pub fn set_token_manager(&mut self, manager: Arc<TokenManager>) {
+        self.token_manager = Some(manager);
+    }
+
     /// Get the current number of active connections
     pub async fn connection_count(&self) -> usize {
         self.connections.read().await.len()
@@ -466,6 +495,7 @@ impl GatewayServer {
             require_idempotency_key: self.config.require_idempotency_key,
             session_mgr: self.session_mgr.clone(),
             shared_token_mgr: self.shared_token_mgr.clone(),
+            token_manager: self.token_manager.clone(),
         });
 
         let control_plane = create_control_plane_router();

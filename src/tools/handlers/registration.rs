@@ -15,6 +15,40 @@ use crate::tools::probes::mcp::McpServerProbe;
 use crate::tools::registry::ToolHandlerRegistry;
 use crate::tools::service::ToolSource;
 
+use serde_json::Value;
+
+/// Returns `Some(reason)` when a tool's advertised parameters schema is
+/// structurally unusable for function-calling and should be quarantined.
+///
+/// Conservative on purpose — only flags schemas that EVERY provider would
+/// reject, so a valid tool is never dropped:
+/// - the schema is not a JSON object at all, or
+/// - it declares a `type` that is neither `"object"` nor an array containing
+///   `"object"`.
+///
+/// A missing `type` is tolerated (providers default object-shaped tool params),
+/// and individual unsupported keywords (`$ref`, `format`, …) are intentionally
+/// left untouched — keyword stripping is provider-specific and handled
+/// elsewhere (e.g. the Gemini schema cleaner).
+fn unusable_tool_schema_reason(schema: &Value) -> Option<&'static str> {
+    let Value::Object(map) = schema else {
+        return Some("parameters schema is not a JSON object");
+    };
+    match map.get("type") {
+        None => None,
+        Some(Value::String(t)) if t == "object" => None,
+        Some(Value::String(_)) => Some("parameters schema `type` is not \"object\""),
+        Some(Value::Array(types)) => {
+            if types.iter().any(|v| v.as_str() == Some("object")) {
+                None
+            } else {
+                Some("parameters schema `type` array does not include \"object\"")
+            }
+        }
+        Some(_) => Some("parameters schema `type` is not a string or array"),
+    }
+}
+
 /// Register every tool from one MCP server into the shared executor `ToolHandlerRegistry`,
 /// and (when a tool catalog is supplied) attach a single
 /// [`McpServerProbe`] per qualified name so the `<tool_runtime_state>` block
@@ -34,6 +68,23 @@ pub fn register_mcp_tools(
 ) -> Vec<String> {
     let mut registered = Vec::with_capacity(tools.len());
     for tool in tools {
+        // Quarantine structurally-unusable parameter schemas. A function-call
+        // tool's parameters MUST be an object schema; an MCP server that
+        // advertises a non-object schema would otherwise make every provider
+        // reject the whole LLM request (HTTP 400) for as long as the server is
+        // connected, breaking unrelated tool calls. Skip + log instead of
+        // poisoning the turn. (openclaw #86689 — quarantine unsupported tool
+        // schemas.) We deliberately do NOT strip individual unsupported
+        // keywords here; that is provider-specific and regression-prone.
+        if let Some(reason) = unusable_tool_schema_reason(&tool.input_schema) {
+            tracing::warn!(
+                server_id = %server_id,
+                tool = %tool.name,
+                reason,
+                "MCP tool quarantined: unusable parameters schema (skipping registration)"
+            );
+            continue;
+        }
         let qualified = format!("{}__{}", server_id, tool.name);
         let handler: Arc<dyn ToolHandler> = Arc::new(McpHandler::new(
             Arc::clone(&client),
@@ -107,6 +158,40 @@ mod tests {
             input_schema: json!({"type": "object"}),
             requires_confirmation: false,
         }
+    }
+
+    #[test]
+    fn unusable_schema_reason_flags_only_clearly_broken() {
+        // Tolerated:
+        assert!(unusable_tool_schema_reason(&json!({"type": "object"})).is_none());
+        assert!(unusable_tool_schema_reason(&json!({})).is_none()); // type omitted
+        assert!(unusable_tool_schema_reason(&json!({"type": ["object", "null"]})).is_none());
+        // $ref / format are NOT structural — left for provider-specific cleaning:
+        assert!(unusable_tool_schema_reason(&json!({"$ref": "#/defs/X"})).is_none());
+        // Quarantined:
+        assert!(unusable_tool_schema_reason(&json!("not a schema")).is_some());
+        assert!(unusable_tool_schema_reason(&json!(42)).is_some());
+        assert!(unusable_tool_schema_reason(&json!({"type": "string"})).is_some());
+        assert!(unusable_tool_schema_reason(&json!({"type": ["string", "number"]})).is_some());
+        assert!(unusable_tool_schema_reason(&json!({"type": 7})).is_some());
+    }
+
+    #[test]
+    fn register_mcp_tools_quarantines_unusable_schema() {
+        let reg = ToolHandlerRegistry::new();
+        let client = Arc::new(McpClient::new());
+        let mut bad = tool("broken", "d");
+        bad.input_schema = json!({"type": "string"});
+        let mut bad2 = tool("scalar", "d");
+        bad2.input_schema = json!("nope");
+        let good = tool("ok", "d");
+        let names = register_mcp_tools(&reg, None, client, "srv", &[bad, bad2, good]);
+        // Only the valid tool is registered; the two broken ones are skipped.
+        assert_eq!(names, vec!["srv__ok"]);
+        let snap = reg.snapshot();
+        assert!(snap.contains_key("srv__ok"));
+        assert!(!snap.contains_key("srv__broken"));
+        assert!(!snap.contains_key("srv__scalar"));
     }
 
     #[test]

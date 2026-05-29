@@ -420,6 +420,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the WS handshake fell through to device-pairing on every restart.
     server.set_session_manager(auth_bundle.session_mgr.clone());
     server.set_shared_token_manager(auth_bundle.auth_ctx.shared_token_mgr.clone());
+    // Wire the device-token manager so the WS dispatch loop can disconnect a
+    // connection whose device token is revoked mid-session (rotation/removal).
+    server.set_token_manager(auth_bundle.auth_ctx.token_manager.clone());
 
     // Wizard session manager — constructs real PairingFlow + OnboardingFlow factory
     // and replaces the phase-1 service_unavailable stubs installed in HandlerRegistry::new.
