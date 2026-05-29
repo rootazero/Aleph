@@ -374,6 +374,22 @@ pub(in crate::commands::start) async fn initialize_channels(
                 }
             }
 
+            // The generic factory hardcodes the id "whatsapp"; rebuild with the
+            // real instance id so the registry keys the channel correctly and
+            // multi-instance configs are addressable.
+            if inst.channel_type == "whatsapp" {
+                if let Ok(wa_config) = serde_json::from_value::<
+                    alephcore::gateway::interfaces::whatsapp::WhatsAppConfig,
+                >(config_with_secrets.clone())
+                {
+                    let wa_channel =
+                        alephcore::gateway::interfaces::whatsapp::WhatsAppChannel::new(
+                            &inst.id, wa_config,
+                        );
+                    channel = Box::new(wa_channel);
+                }
+            }
+
             let channel_id = channel_registry.register(channel).await;
             if !daemon {
                 println!("Registered channel: {} ({})", channel_id, inst.channel_type);

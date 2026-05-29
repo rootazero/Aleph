@@ -161,7 +161,15 @@ impl Channel for WhatsAppChannel {
 
         *self.pairing_state.write().await = PairingState::Initializing;
 
-        let auth = WaAuthManager::new("default");
+        // Honour the configured account id so multi-account auth/session storage
+        // (vault key + per-account SQLite db) is keyed correctly. Falls back to
+        // "default" to preserve single-account behaviour.
+        let account_id = self
+            .config
+            .default_account_id
+            .as_deref()
+            .unwrap_or("default");
+        let auth = WaAuthManager::new(account_id);
         let (event_tx, mut event_rx) = tokio::sync::mpsc::channel(64);
         let mut runtime = WaRuntime::new(auth, event_tx)
             .await
@@ -337,5 +345,41 @@ impl ChannelFactory for WhatsAppChannelFactory {
         let config: WhatsAppConfig = serde_json::from_value(config)
             .map_err(|e| ChannelError::ConfigError(format!("Invalid WhatsApp config: {}", e)))?;
         Ok(Box::new(WhatsAppChannel::new("whatsapp", config)))
+    }
+}
+
+fn whatsapp_factory_creator(
+    _config: crate::gateway::channel::ChannelConfig,
+) -> ChannelResult<Arc<dyn ChannelFactory>> {
+    Ok(Arc::new(WhatsAppChannelFactory))
+}
+
+/// Register the WhatsApp channel factory with the global channel plugin
+/// registry so that config-driven creation (`create_channel_from_config`)
+/// can instantiate it. Without this the entire WhatsApp channel is
+/// unreachable through configuration.
+pub fn register_with_plugin() {
+    crate::gateway::interfaces::plugin::register("whatsapp", whatsapp_factory_creator);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_factory_channel_type() {
+        assert_eq!(WhatsAppChannelFactory.channel_type(), "whatsapp");
+    }
+
+    #[test]
+    fn test_factory_creator_builds_factory() {
+        let config = crate::gateway::channel::ChannelConfig {
+            id: "whatsapp".into(),
+            channel_type: "whatsapp".into(),
+            enabled: true,
+            config: serde_json::json!({}),
+        };
+        let factory = whatsapp_factory_creator(config).expect("factory creator should succeed");
+        assert_eq!(factory.channel_type(), "whatsapp");
     }
 }
