@@ -2,7 +2,6 @@
 //!
 //! Implements the long-polling getupdates loop for receiving messages.
 
-use reqwest::Client;
 use std::time::Duration;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
@@ -24,9 +23,6 @@ const MAX_BACKOFF_MS: u64 = 30000;
 pub struct WeChatRuntime {
     config: WeChatConfig,
     api: ILinkApi,
-    #[allow(dead_code)]
-    http: Client,
-    #[allow(dead_code)]
     token_store: ContextTokenStore,
     sync_buf: RwLock<String>,
     running: RwLock<bool>,
@@ -37,7 +33,6 @@ impl WeChatRuntime {
     pub fn new(config: WeChatConfig, token_store: ContextTokenStore) -> Self {
         Self {
             api: ILinkApi::new(config.base_url.clone()),
-            http: Client::new(),
             config,
             token_store,
             sync_buf: RwLock::new(String::new()),

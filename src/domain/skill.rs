@@ -327,7 +327,6 @@ pub struct DispatchSpec {
 impl ValueObject for DispatchSpec {}
 
 /// Serde helper: returns `true`.
-#[allow(dead_code)]
 fn default_true() -> bool {
     true
 }

@@ -1,8 +1,6 @@
 //! Callback adapter that bridges AgentLoop events to Gateway StreamEvents.
 
-use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
-use crate::gateway::media::PendingMedia;
-use crate::sync_primitives::{Arc, AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
+use crate::sync_primitives::{Arc, AtomicU32, AtomicU64, Mutex, Ordering};
 
 /// Persists trace events to the state database.
 pub(super) struct TracePersistence {
@@ -64,14 +62,14 @@ impl TracePersistence {
 }
 
 /// Shared state for the stream callback.
-#[allow(dead_code)] // seq/chunk_index kept for StreamCallback wiring (cfg(test) only post-flip)
 pub(super) struct StreamCallbackState {
+    #[allow(dead_code)] // reserved for stream sequencing wiring
     seq: AtomicU64,
+    #[allow(dead_code)] // reserved for stream sequencing wiring
     chunk_index: AtomicU32,
     trace_persistence: Option<Arc<TracePersistence>>,
 }
 
-#[allow(dead_code)] // next_seq/next_chunk_index kept for StreamCallback (cfg(test) post-flip)
 impl StreamCallbackState {
     pub(super) fn new(trace_persistence: Option<Arc<TracePersistence>>) -> Self {
         Self {
@@ -81,10 +79,12 @@ impl StreamCallbackState {
         }
     }
 
+    #[allow(dead_code)] // reserved for stream sequencing wiring
     pub(super) fn next_seq(&self) -> u64 {
         self.seq.fetch_add(1, Ordering::SeqCst) + 1
     }
 
+    #[allow(dead_code)] // reserved for stream sequencing wiring
     pub(super) fn next_chunk_index(&self) -> u32 {
         self.chunk_index.fetch_add(1, Ordering::SeqCst)
     }
@@ -99,63 +99,6 @@ impl StreamCallbackState {
         if let Some(trace_persistence) = self.trace_persistence.as_ref() {
             trace_persistence.flush().await;
         }
-    }
-}
-
-/// Adapter that bridges AgentLoop events to Gateway StreamEvents.
-#[allow(dead_code)] // retained for cfg(test) coverage of the trace-persistence seam
-pub(super) struct StreamCallback<E: EventEmitter + Send + Sync + 'static> {
-    emitter: Arc<E>,
-    run_id: String,
-    pending_media: PendingMedia,
-    /// True when a StreamingDeltaSink is active for this run.
-    /// When true, text tokens that were already delivered via DeltaSink are skipped.
-    streaming_active: bool,
-    /// Shared flag set by StreamingDeltaSink after each token delivery.
-    /// StreamCallback swaps it to false and skips the duplicate on_text call.
-    has_emitted_text: Arc<AtomicBool>,
-    shared: Arc<StreamCallbackState>,
-}
-
-#[allow(dead_code)] // all methods retained for cfg(test) fixture
-impl<E: EventEmitter + Send + Sync + 'static> StreamCallback<E> {
-    pub(super) fn new(
-        emitter: Arc<E>,
-        run_id: String,
-        pending_media: PendingMedia,
-        streaming_active: bool,
-        has_emitted_text: Arc<AtomicBool>,
-        shared: Arc<StreamCallbackState>,
-    ) -> Self {
-        Self {
-            emitter,
-            run_id,
-            pending_media,
-            streaming_active,
-            has_emitted_text,
-            shared,
-        }
-    }
-
-    pub(super) fn next_seq(&mut self) -> u64 {
-        self.shared.next_seq()
-    }
-
-    pub(super) fn next_chunk_index(&self) -> u32 {
-        self.shared.next_chunk_index()
-    }
-
-    pub(super) fn emit_async(&self, event: StreamEvent) {
-        let emitter = self.emitter.clone();
-        tokio::spawn(async move {
-            if let Err(e) = emitter.emit(event).await {
-                tracing::warn!(error = %e, "StreamCallback: emit failed");
-            }
-        });
-    }
-
-    pub(super) async fn flush_trace_persistence(&self) {
-        self.shared.flush_trace_persistence().await;
     }
 }
 

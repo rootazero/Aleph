@@ -44,10 +44,6 @@ pub use resolver::{
     AccountResolver, Candidate, ChannelResolutionError, ChannelSettingsResolver, DiscordResolver,
     ResolvedChannel, ResolvedChannelSettings,
 };
-pub use security::{
-    AuditError, AuditEventType, AuditEvents, AuditMetadata, ContentRetention, DiscordAuditEvent,
-    DiscordAuditLogger, DiscordSecurityConfig,
-};
 
 use crate::gateway::channel::{
     Attachment, Channel, ChannelCapabilities, ChannelError, ChannelFactory, ChannelId, ChannelInfo,
@@ -113,9 +109,6 @@ pub struct DiscordChannel {
     info: ChannelInfo,
     /// Configuration (legacy flat config)
     config: DiscordConfig,
-    /// Channel configuration (new nested config, for multi-account support)
-    #[allow(dead_code)]
-    channel_config: Option<DiscordChannelConfig>,
     /// Account pool for multi-bot-instance support
     account_pool: Option<DiscordAccountPool>,
     /// Account resolver for channel-to-account mapping
@@ -149,7 +142,6 @@ impl DiscordChannel {
         Self {
             info,
             config: config.clone(),
-            channel_config: Some(channel_config.clone()),
             account_pool: None,
             account_resolver: Some(account_resolver),
             settings_resolver: Some(ChannelSettingsResolver::new(channel_config)),
@@ -183,7 +175,6 @@ impl DiscordChannel {
         Self {
             info,
             config: DiscordConfig::default(),
-            channel_config: Some(channel_config),
             account_pool: Some(account_pool),
             account_resolver: Some(account_resolver),
             settings_resolver: Some(settings_resolver),

@@ -106,7 +106,7 @@ impl OrchestratorMetrics {
 
 /// Per-flow metrics tracker.
 #[derive(Debug)]
-#[allow(dead_code)]
+#[allow(dead_code)] // test-only metrics helper
 pub struct FlowMetrics {
     flow_id: Arc<str>,
     started_at: Instant,
@@ -115,6 +115,7 @@ pub struct FlowMetrics {
     last_activity: AtomicU64,
 }
 
+#[allow(dead_code)] // test-only metrics helper
 impl FlowMetrics {
     pub fn new(flow_id: Arc<str>) -> Self {
         Self {

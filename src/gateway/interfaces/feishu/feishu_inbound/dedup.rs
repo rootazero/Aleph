@@ -30,7 +30,6 @@ impl MessageDedup {
         }
     }
 
-    #[allow(dead_code)]
     pub fn with_ttl(ttl_secs: u64) -> Self {
         Self {
             seen: VecDeque::with_capacity(DEDUP_CAPACITY),

@@ -76,10 +76,6 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// the `teams.usage` RPC + `team_usage` tool aggregate by team-member
     /// agent_id. `None` in simulated mode.
     pub state_db: Option<Arc<alephcore::resilience::StateDatabase>>,
-    /// Event-sourced memory command handler (used by Phase 2/3 consumers)
-    #[allow(dead_code)]
-    pub command_handler:
-        Option<std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>>,
     /// Event log store for team event logging
     pub event_store: Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
     /// Artifact store for teams.task.trace and team artifact tools (R3).
@@ -146,9 +142,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     let mut embedder_out: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = None;
     let mut compression_out: Option<
         std::sync::Arc<alephcore::memory::compression::CompressionService>,
-    > = None;
-    let mut command_handler_out: Option<
-        std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler>,
     > = None;
     let mut multi_reg: Option<Arc<alephcore::MultiProviderRegistry>> = None;
     let mut channel_reg_cell: Option<
@@ -924,7 +917,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_compression_service(cs.clone());
         }
         compression_out = compression_svc;
-        command_handler_out = command_handler.clone();
 
         // Start DreamDaemon with command handler so decay mutations are event-sourced.
         // Spec 5 Task 12: thread wiki handle into DreamDaemon for IndexRefresherStage.
@@ -1986,7 +1978,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         coord_task_store: coord_store,
         snapshot_store,
         state_db: state_db_out,
-        command_handler: command_handler_out,
         event_store: event_store.clone(),
         // Concrete Arc<SqliteArtifactStore> upcast to the trait object so
         // `register_teams_handlers` can consume it without knowing the

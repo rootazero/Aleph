@@ -28,8 +28,6 @@ pub struct DiscordResolver {
 }
 
 struct Cache {
-    #[allow(dead_code)]
-    guilds: Vec<GuildSummary>,
     channels: Vec<(GuildSummary, Vec<ChannelSummary>)>,
 }
 
@@ -139,7 +137,6 @@ impl DiscordResolver {
         {
             let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
             *cache = Some(Cache {
-                guilds,
                 channels: channels.clone(),
             });
         }

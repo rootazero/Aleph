@@ -26,15 +26,6 @@ impl UserProfileLoader {
         let body = tokio::fs::read_to_string(&path).await.ok()?;
         Some(strip_frontmatter(&body))
     }
-
-    /// Expose the expected path for diagnostics/tests.
-    #[allow(dead_code)]
-    pub fn path_for(&self, agent_id: &str) -> PathBuf {
-        self.memory_dir
-            .join(agent_id)
-            .join("personal")
-            .join("profile.md")
-    }
 }
 
 fn strip_frontmatter(s: &str) -> String {

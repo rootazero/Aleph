@@ -10,9 +10,9 @@ use crate::sync_primitives::Arc;
 use super::config::TranscriptIndexerConfig;
 
 /// Near-realtime transcript indexer
-#[allow(dead_code)]
 pub struct TranscriptIndexer {
     database: MemoryBackend,
+    #[allow(dead_code)] // retained: ctor param part of public API, consumed cross-file
     embedder: Arc<dyn EmbeddingProvider>,
     config: TranscriptIndexerConfig,
     /// Optional capture-filter registry (Spec 4 Task 6).

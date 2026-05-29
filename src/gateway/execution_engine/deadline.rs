@@ -4,7 +4,6 @@ use crate::sync_primitives::Arc;
 ///
 /// The deadline can be extended by compression tasks. This function re-checks
 /// after waking to handle extensions that occurred during sleep.
-#[allow(dead_code)]
 pub(super) async fn wait_for_deadline(deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>) {
     loop {
         let dl = *deadline.lock().await;

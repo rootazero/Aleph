@@ -54,10 +54,8 @@ use self::types::*;
 
 /// Cached reference for proactive messaging and service URL resolution.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct ConversationReference {
     service_url: String,
-    conversation_id: String,
     bot_id: String,
     last_seen: Instant,
 }
@@ -181,7 +179,6 @@ impl MsTeamsChannel {
             refs.entry(conversation_id.to_string())
                 .or_insert_with(|| ConversationReference {
                     service_url: String::new(),
-                    conversation_id: conversation_id.to_string(),
                     bot_id: String::new(),
                     last_seen: Instant::now(),
                 });
@@ -705,7 +702,6 @@ impl MsTeamsChannel {
                     .entry(conv_id.clone())
                     .or_insert_with(|| ConversationReference {
                         service_url: String::new(),
-                        conversation_id: conv_id.clone(),
                         bot_id: String::new(),
                         last_seen: Instant::now(),
                     });

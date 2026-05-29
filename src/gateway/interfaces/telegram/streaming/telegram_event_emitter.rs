@@ -13,8 +13,6 @@ use super::StreamOrchestrator;
 pub struct TelegramEventEmitter {
     event_tx: mpsc::Sender<StreamEvent>,
     seq_counter: Arc<crate::sync_primitives::AtomicU64>,
-    #[allow(dead_code)]
-    route: crate::gateway::inbound_context::ReplyRoute,
 }
 
 impl TelegramEventEmitter {
@@ -67,7 +65,6 @@ impl TelegramEventEmitter {
         Self {
             event_tx,
             seq_counter: Arc::new(crate::sync_primitives::AtomicU64::new(0)),
-            route,
         }
     }
 }

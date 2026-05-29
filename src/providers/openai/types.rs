@@ -154,7 +154,7 @@ pub struct OpenAiFunction {
 pub struct OpenAiToolCall {
     pub id: String,
     #[serde(rename = "type")]
-    #[allow(dead_code)] // Deserialized from API response
+    #[allow(dead_code)] // deserialized from API, not read
     pub call_type: Option<String>,
     pub function: OpenAiFunctionCall,
 }
@@ -218,18 +218,4 @@ pub struct ResponseMessage {
     pub content: Option<String>,
     /// Tool calls from the model (present when model invokes functions)
     pub tool_calls: Option<Vec<OpenAiToolCall>>,
-}
-
-/// Error response from OpenAI API
-#[derive(Debug, Deserialize)]
-pub struct ErrorResponse {
-    pub error: ErrorDetails,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ErrorDetails {
-    pub message: String,
-    #[serde(rename = "type")]
-    #[allow(dead_code)] // Deserialized from API response
-    pub error_type: String,
 }

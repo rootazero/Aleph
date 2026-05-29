@@ -86,7 +86,6 @@ pub(crate) struct AbortParams {
 
 /// Parameters for chat.history request
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 pub(crate) struct HistoryParams {
     /// Session key to get history for
     pub session_key: String,
@@ -95,6 +94,7 @@ pub(crate) struct HistoryParams {
     pub limit: Option<usize>,
     /// Get messages before this timestamp (ISO 8601 or Unix timestamp)
     #[serde(default)]
+    #[allow(dead_code)] // deserialized request param, not yet consumed
     pub before: Option<String>,
 }
 

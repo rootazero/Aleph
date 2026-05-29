@@ -350,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn google_date_restrict_uses_N1_suffix() {
+    fn google_date_restrict_uses_n1_suffix() {
         assert_eq!(opts_with_range("day").google_date_restrict(), Some("d1"));
         assert_eq!(opts_with_range("week").google_date_restrict(), Some("w1"));
         assert_eq!(opts_with_range("month").google_date_restrict(), Some("m1"));

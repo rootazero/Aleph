@@ -72,9 +72,6 @@ impl ScanResult {
 pub struct LeakDetector {
     /// Aho-Corasick automaton for fast prefix scanning.
     ac: AhoCorasick,
-    /// Prefix strings used to build the automaton (for reference).
-    #[allow(dead_code)]
-    prefixes: Vec<&'static str>,
     /// Full regex patterns for detailed matching.
     patterns: Vec<LeakPattern>,
 }
@@ -83,11 +80,7 @@ impl LeakDetector {
     /// Create a new LeakDetector with the given prefixes and patterns.
     pub fn new(prefixes: Vec<&'static str>, patterns: Vec<LeakPattern>) -> Self {
         let ac = AhoCorasick::new(&prefixes).expect("failed to build Aho-Corasick automaton");
-        Self {
-            ac,
-            prefixes,
-            patterns,
-        }
+        Self { ac, patterns }
     }
 
     /// Create a LeakDetector with default patterns for common secret types.

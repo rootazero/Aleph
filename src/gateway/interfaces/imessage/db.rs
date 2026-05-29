@@ -41,8 +41,6 @@ pub struct RawMessage {
     pub text: Option<String>,
     pub handle_id: i64,
     pub date: i64,
-    #[allow(dead_code)] // Populated from SQLite query; used for filtering context
-    pub is_from_me: bool,
     pub cache_has_attachments: bool,
     pub chat_id: Option<i64>,
 }
@@ -135,7 +133,6 @@ impl MessagesDb {
                 text: row.get(2)?,
                 handle_id: row.get(3)?,
                 date: row.get(4)?,
-                is_from_me: row.get::<_, i64>(5)? != 0,
                 cache_has_attachments: row.get::<_, i64>(6)? != 0,
                 chat_id: row.get(7)?,
             })

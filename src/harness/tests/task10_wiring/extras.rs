@@ -18,15 +18,13 @@ use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload
 use crate::providers::AiProvider;
 use crate::sandbox::test_util::MockSandbox;
 use crate::session::events::SessionEvent;
-use crate::session::service::SessionId;
 use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 use crate::verification::stop_hooks::{StopHookContext, StopHookHandler, StopHookVerdict};
 use crate::verification::{StopHookVerifier, VerifierChain};
 
 use super::{
-    assistant_message_event_with_text, noop_sandbox_output, sample_session_id, tiny_budget_config,
-    turn_started_event, user_message_event, CountingProvider, FailingProvider, MockSession,
-    NoopTools,
+    noop_sandbox_output, sample_session_id, tiny_budget_config, turn_started_event,
+    user_message_event, CountingProvider, FailingProvider, MockSession, NoopTools,
 };
 
 // =============================================================================

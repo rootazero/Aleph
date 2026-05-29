@@ -12,21 +12,6 @@ impl MessageOps {
         Self { api }
     }
 
-    #[allow(dead_code)]
-    pub async fn reply(
-        &self,
-        conversation_id: &ConversationId,
-        message_id: &MessageId,
-        text: &str,
-    ) -> ChannelResult<MessageId> {
-        let msg_id = self
-            .api
-            .send_text(conversation_id.as_str(), text, Some(message_id.as_str()))
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("{e:?}")))?;
-        Ok(MessageId::new(msg_id))
-    }
-
     pub async fn react(
         &self,
         _conversation_id: &ConversationId,
@@ -55,20 +40,6 @@ impl MessageOps {
         _message_id: &MessageId,
     ) -> ChannelResult<()> {
         Err(ChannelError::UnsupportedFeature("deletion".to_string()))
-    }
-
-    #[allow(dead_code)]
-    pub async fn send(
-        &self,
-        conversation_id: &ConversationId,
-        text: &str,
-    ) -> ChannelResult<MessageId> {
-        let msg_id = self
-            .api
-            .send_text(conversation_id.as_str(), text, None)
-            .await
-            .map_err(|e| ChannelError::SendFailed(format!("{e:?}")))?;
-        Ok(MessageId::new(msg_id))
     }
 }
 

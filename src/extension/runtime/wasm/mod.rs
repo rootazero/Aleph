@@ -55,10 +55,6 @@ pub struct WasmRuntime {
 
 struct LoadedWasmPlugin {
     plugin: Mutex<extism::Plugin>,
-    #[allow(dead_code)]
-    manifest: PluginManifest,
-    #[allow(dead_code)]
-    kernel: Arc<WasmCapabilityKernel>,
 }
 
 impl WasmRuntime {
@@ -134,8 +130,6 @@ impl WasmRuntime {
 
         let loaded = LoadedWasmPlugin {
             plugin: Mutex::new(plugin),
-            manifest: manifest.clone(),
-            kernel,
         };
 
         self.plugins.insert(manifest.id.clone(), loaded);

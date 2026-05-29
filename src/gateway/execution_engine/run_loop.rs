@@ -1,5 +1,4 @@
 //! Agent loop execution and streaming callback.
-#![allow(dead_code)]
 //!
 //! Contains `run_agent_loop` (the think-act two-step loop).
 

@@ -125,7 +125,6 @@ impl HybridAssembler {
             Ok(v) => v,
             Err(AssemblerError::RerankEmpty) => return Err("llm_empty_slots"),
             Err(AssemblerError::RerankParse(_)) => return Err("llm_parse_error"),
-            Err(_) => return Err("llm_unknown_error"),
         };
 
         let by_id: HashMap<&str, &Candidate> =

@@ -33,10 +33,4 @@ pub struct OpenAiError {
     #[serde(rename = "type")]
     #[allow(dead_code)] // Deserialized from API response; useful in logs only.
     pub error_type: String,
-    #[serde(default)]
-    #[allow(dead_code)] // Deserialized from API response; useful in logs only.
-    pub param: Option<String>,
-    #[serde(default)]
-    #[allow(dead_code)] // Deserialized from API response; useful in logs only.
-    pub code: Option<String>,
 }

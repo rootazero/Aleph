@@ -47,41 +47,6 @@ impl InteractionHandler {
     pub async fn handle(&self, _interaction: Interaction) -> InteractionResult {
         Ok(())
     }
-
-    #[allow(dead_code)]
-    async fn handle_component(&self, component: MessageComponent) -> InteractionResult {
-        match component.component_type {
-            2 => self.handle_button(&component.custom_id).await?,
-            3..=5 => self.handle_select_menu(&component.custom_id).await?,
-            _ => {}
-        }
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    async fn handle_button(&self, custom_id: &str) -> InteractionResult {
-        if let Some(approval_id) = custom_id.strip_prefix("exec_approve:") {
-            if let Some(queue) = &self.approval_queue {
-                queue
-                    .approve(approval_id)
-                    .await
-                    .map_err(|e| InteractionError::HandlerError(e.to_string()))?;
-            }
-        } else if let Some(approval_id) = custom_id.strip_prefix("exec_deny:") {
-            if let Some(queue) = &self.approval_queue {
-                queue
-                    .deny(approval_id)
-                    .await
-                    .map_err(|e| InteractionError::HandlerError(e.to_string()))?;
-            }
-        }
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    async fn handle_select_menu(&self, _custom_id: &str) -> InteractionResult {
-        Ok(())
-    }
 }
 
 impl Default for InteractionHandler {

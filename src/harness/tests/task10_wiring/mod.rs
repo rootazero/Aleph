@@ -10,7 +10,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -21,7 +21,7 @@ use crate::context::budget::{ContextBudget, ContextBudgetConfig};
 use crate::context::compact::compactor::{CompactorConfig, ContextCompactor};
 use crate::error::Result as AlephResult;
 use crate::harness::{AgentHarness, Harness, HarnessDeps, NoopHarnessCallback, TurnState};
-use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::sandbox::test_util::MockSandbox;
 use crate::sandbox::SandboxOutput;

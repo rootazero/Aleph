@@ -257,7 +257,7 @@ impl ErrorCooldown {
     }
 
     /// Manually reset a conversation's cooldown (e.g. from a `/reset_cooldown` tool).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // test-only helper
     pub fn reset(&self, conversation_id: &str) {
         if self.cooldowns.remove(conversation_id).is_some() {
             tracing::info!(conversation_id, "cooldown manually reset");

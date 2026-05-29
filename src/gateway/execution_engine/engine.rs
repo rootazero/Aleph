@@ -20,7 +20,6 @@ use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 use crate::tool_metadata::UnifiedTool;
 
-#[allow(dead_code)]
 /// Execution engine that bridges Gateway to the AgentLoop
 pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> {
     pub(super) config: ExecutionEngineConfig,

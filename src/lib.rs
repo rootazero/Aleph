@@ -81,7 +81,6 @@ pub mod skill;
 pub mod tool_metadata;
 
 pub mod harness;
-pub(crate) mod process_supervisor;
 pub mod thinker;
 pub(crate) mod tool_output;
 pub mod tools;
@@ -272,9 +271,3 @@ pub fn init_logging() {
     }
 }
 
-// =============================================================================
-// Test Exports
-// =============================================================================
-
-#[cfg(test)]
-pub use crate::event_handler::MockEventHandler;

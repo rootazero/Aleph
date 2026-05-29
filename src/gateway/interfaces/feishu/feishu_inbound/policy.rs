@@ -14,17 +14,14 @@ pub struct InboundPolicy {
     dm: DmPolicyEngine,
     group: GroupPolicyEngine,
     require_mention: bool,
-    #[allow(dead_code)]
-    bot_open_id: String,
 }
 
 impl InboundPolicy {
-    pub fn new(config: FeishuConfig, bot_open_id: String) -> Self {
+    pub fn new(config: FeishuConfig, _bot_open_id: String) -> Self {
         Self {
             dm: DmPolicyEngine::new(config.clone()),
             group: GroupPolicyEngine::new(config.clone()),
             require_mention: config.require_mention,
-            bot_open_id,
         }
     }
 

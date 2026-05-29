@@ -1,6 +1,5 @@
 //! Media downloader — resolves attachments to local files and extracts URLs from text.
 
-use std::collections::HashSet;
 use std::path::PathBuf;
 
 use tracing::warn;
@@ -25,21 +24,14 @@ const TRAILING_PUNCT: &[char] = &[',', '.', ')', ']', '>', ';', '\u{3002}', '\u{
 pub struct MediaDownloader {
     workspace_root: PathBuf,
     max_file_size: u64,
-    #[allow(dead_code)]
-    supported_prefixes: HashSet<String>,
 }
 
 impl MediaDownloader {
     /// Create a new downloader rooted at `workspace_root`.
     pub fn new(workspace_root: PathBuf) -> Self {
-        let mut supported_prefixes = HashSet::new();
-        supported_prefixes.insert("http://".to_string());
-        supported_prefixes.insert("https://".to_string());
-
         Self {
             workspace_root,
             max_file_size: DEFAULT_MAX_FILE_SIZE,
-            supported_prefixes,
         }
     }
 

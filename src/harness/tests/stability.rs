@@ -1,8 +1,6 @@
 //! Stability rescue test suite — covers TraceSink wiring, act() error
 //! rescue, per-turn timeout, and StallTracker dispersion.
 
-#![allow(dead_code)] // helpers grow as tasks land
-
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -129,31 +127,6 @@ impl AiProvider for OneShotToolProvider {
     }
     fn color(&self) -> &str {
         "#000000"
-    }
-}
-
-/// Tool service that always returns `Err(ToolError::Other(...))`.
-pub(super) struct AlwaysFailTools;
-
-#[async_trait::async_trait]
-impl crate::tools::service::ToolService for AlwaysFailTools {
-    async fn execute(
-        &self,
-        name: &str,
-        _input: serde_json::Value,
-    ) -> Result<ToolOutput, crate::tools::service::ToolError> {
-        Err(crate::tools::service::ToolError::Other(format!(
-            "forced fail for {name}"
-        )))
-    }
-    async fn list(&self) -> Vec<crate::tools::service::ToolDefinition> {
-        Vec::new()
-    }
-    async fn describe(&self, _name: &str) -> Option<crate::tools::service::ToolDefinition> {
-        None
-    }
-    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
-        std::sync::Arc::from([])
     }
 }
 
@@ -357,18 +330,6 @@ async fn recording_sink_captures_full_lifecycle() {
         names.last().copied() == Some("SessionCompleted"),
         "SessionCompleted should be last: {names:?}",
     );
-}
-
-/// Sink builder that panics when invoked. Confirms `emit()` skips construction
-/// when `trace_sink` is `None`.
-struct PanickingTraceSink;
-impl TraceSink for PanickingTraceSink {
-    fn on_trace(&self, _event: &LoopTraceEvent) {
-        panic!("trace sink should not be invoked");
-    }
-    fn flush(&self) {
-        panic!("trace sink flush should not be invoked");
-    }
 }
 
 #[tokio::test]

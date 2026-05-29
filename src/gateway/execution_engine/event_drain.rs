@@ -20,14 +20,13 @@ use aleph_protocol::TokenBreakdownView;
 
 /// Pending tool call info stashed between `ToolCallStart` and `ToolCallDone`.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // used by Task 4c when wired into run_loop.rs
 pub(crate) struct PendingTool {
+    #[allow(dead_code)] // reserved for ToolSummary wiring (see TODO)
     pub name: String,
 }
 
 /// Mutable drain state shared across calls for a single run.
 #[derive(Debug, Default)]
-#[allow(dead_code)] // used by Task 4c when wired into run_loop.rs
 pub(crate) struct DrainState {
     /// Set to `true` on the first `Delta` event so callers can detect
     /// "first-delta" transitions if needed in the future.
@@ -42,7 +41,6 @@ pub(crate) struct DrainState {
 /// `state` accumulates cross-event bookkeeping (pending tools, first-delta).
 ///
 /// This function is `async` because the `EventEmitter` trait is async.
-#[allow(dead_code)] // wired into run_loop.rs by Task 4c
 pub(crate) async fn emit_flow_event(
     event: FlowStreamEvent,
     emitter: &Arc<dyn EventEmitter>,
@@ -192,7 +190,6 @@ pub(crate) async fn emit_flow_event(
 /// P3a: populates the enriched `RunSummary` fields that were previously
 /// always empty. Channels that ignore the new fields keep working — the
 /// schema additions are all `#[serde(default)]`.
-#[allow(dead_code)] // called from emit_flow_event which is itself dead_code until Task 4c
 async fn emit_complete(
     emitter: &Arc<dyn EventEmitter>,
     run_id: &str,

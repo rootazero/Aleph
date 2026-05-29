@@ -58,9 +58,6 @@ pub enum ChallengeError {
 
 /// Internal bookkeeping for a nonce that has been issued but not yet verified.
 struct PendingNonce {
-    /// The nonce string itself (kept for clarity, key in DashMap is the same).
-    #[allow(dead_code)]
-    nonce: String,
     /// Monotonic instant when this nonce was created (used for pruning).
     created_at: Instant,
     /// Unix millisecond timestamp embedded in the challenge.
@@ -127,7 +124,6 @@ impl ChallengeManager {
         self.pending.insert(
             nonce.clone(),
             PendingNonce {
-                nonce: nonce.clone(),
                 created_at: Instant::now(),
                 timestamp,
             },

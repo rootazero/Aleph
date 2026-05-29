@@ -44,9 +44,9 @@ pub mod types;
 
 // Re-export types for external use (used by protocols/openai.rs)
 pub use types::{
-    ChatCompletionRequest, ChatCompletionResponse, Choice, ContentBlock, ErrorDetails,
-    ErrorResponse, ImageUrl, Message, MessageContent, OpenAiFunction, OpenAiFunctionCall,
-    OpenAiTool, OpenAiToolCall, OpenAiUsage, ResponseMessage,
+    ChatCompletionRequest, ChatCompletionResponse, Choice, ContentBlock, ImageUrl, Message,
+    MessageContent, OpenAiFunction, OpenAiFunctionCall, OpenAiTool, OpenAiToolCall, OpenAiUsage,
+    ResponseMessage,
 };
 
 // Note: Provider tests removed - use protocols/openai tests instead

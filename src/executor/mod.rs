@@ -26,8 +26,6 @@
 
 pub mod action_types;
 mod builtin_registry;
-mod cache_config;
-mod cache_store;
 mod tool_registry;
 mod types;
 

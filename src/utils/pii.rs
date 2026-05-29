@@ -33,7 +33,13 @@ fn get_patterns() -> &'static PiiPatterns {
             .expect("ssn regex should be valid"),
         credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b")
             .expect("credit_card regex should be valid"),
-        api_key: Regex::new(r#"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-=]{20,})(?=\s|$|["'])"#)
+        // NOTE: no trailing look-ahead — the `regex` crate has no look-around
+        // support, and it is unnecessary here: every alternative's character
+        // class already excludes the boundary characters, so greedy matching
+        // stops at whitespace/quotes/punctuation on its own. Dropping it also
+        // makes scrubbing strictly more conservative (keys followed by `,`/`)`
+        // are now caught too), which matches this module's privacy-first intent.
+        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-=]{20,})")
             .expect("api_key regex should be valid"),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b")
             .expect("china_mobile regex should be valid"),

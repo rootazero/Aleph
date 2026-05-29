@@ -5,20 +5,12 @@
 
 pub mod atomic;
 mod atomic_action;
-#[allow(dead_code)]
-mod atomic_engine;
 mod atomic_executor;
 #[allow(dead_code)]
 mod classifier;
 #[allow(dead_code)]
-mod conflict_detector;
-#[allow(dead_code)]
 mod feature_extractor;
 mod patch;
-#[allow(dead_code)]
-mod performance_optimizer;
-#[allow(dead_code)]
-mod persistence;
 mod reflex_bench;
 mod reflex_layer;
 
@@ -32,16 +24,10 @@ mod performance_benchmarks;
 
 pub use atomic_action::{AtomicAction, FileFilter, SearchPattern, SearchScope};
 pub(crate) use atomic_action::{LineRange, WriteMode};
-pub use atomic_engine::{ExecutionResult, RoutingLayer};
 pub use atomic_executor::AtomicExecutor;
-pub(crate) use classifier::NaiveBayesClassifier;
-pub use conflict_detector::{
-    Conflict, ConflictDetector, ConflictReport, ConflictResolver, ConflictType, ResolutionStrategy,
-};
 pub use feature_extractor::{Entity, Intent};
 pub use patch::Patch;
 pub(crate) use patch::PatchApplier;
-pub use performance_optimizer::CacheStats;
-pub use persistence::Persistence;
 pub use reflex_layer::ActionType;
+#[cfg(test)]
 pub(crate) use reflex_layer::ReflexLayer;

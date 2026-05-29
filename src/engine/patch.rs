@@ -230,13 +230,13 @@ impl PatchApplier {
     }
 
     /// Get the number of patches
-    #[allow(dead_code)]
+    #[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
     pub fn len(&self) -> usize {
         self.patches.len()
     }
 
     /// Check if there are no patches
-    #[allow(dead_code)]
+    #[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
     pub fn is_empty(&self) -> bool {
         self.patches.is_empty()
     }

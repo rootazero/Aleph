@@ -1,7 +1,5 @@
 use super::*;
 
-use super::*;
-
 #[test]
 fn test_presets_contain_known_providers() {
     assert!(PRESETS.contains_key("openai-dalle"));

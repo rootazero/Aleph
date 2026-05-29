@@ -766,7 +766,7 @@ fn turn_token_total(usage: &Option<crate::providers::adapter::TokenUsage>) -> u6
 mod tests {
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
 
     use crate::error::Result as AlephResult;
     use crate::harness::callback::NoopHarnessCallback;
@@ -781,30 +781,6 @@ mod tests {
     use crate::session::service::{SessionId, SessionService};
     use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
     use serde_json::{json, Value};
-
-    #[allow(dead_code)]
-    struct RecordingProvider {
-        captured: Arc<Mutex<Option<String>>>,
-    }
-
-    impl AiProvider for RecordingProvider {
-        fn process<'a>(
-            &'a self,
-            payload: RequestPayload<'a>,
-        ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
-            let captured = self.captured.clone();
-            *captured.lock().unwrap() = payload.system_prompt.map(|s| s.to_string());
-            Box::pin(async move { Ok(ProviderResponse::text_only("ok".to_string())) })
-        }
-
-        fn name(&self) -> &str {
-            "recording"
-        }
-
-        fn color(&self) -> &str {
-            "#000000"
-        }
-    }
 
     struct AlwaysOkTools;
 

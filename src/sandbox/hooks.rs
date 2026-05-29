@@ -127,16 +127,6 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
-    struct TestAfterHook(&'static str);
-    #[async_trait]
-    impl SandboxAfterHook for TestAfterHook {
-        fn name(&self) -> &'static str {
-            self.0
-        }
-        async fn after(&self, _: SandboxHookContext<'_>, _: &Result<(), &str>) {}
-    }
-
     #[tokio::test]
     async fn test_before_hook_allows() {
         use crate::routing::session_key::SessionKey;

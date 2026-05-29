@@ -22,7 +22,7 @@ use super::commands::*;
 
 pub struct MemoryCommandHandler {
     db: Arc<StateDatabase>,
-    #[allow(dead_code)]
+    #[allow(dead_code)] // reserved: memory backend handle, not yet consumed
     memory_store: Option<MemoryBackend>,
     /// NoteIndexer for the notes write path.
     /// When present, every create/update/delete also writes to the notes filesystem layer.

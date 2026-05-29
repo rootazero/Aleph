@@ -43,11 +43,7 @@ const MIN_STABILITY: f64 = 0.5;
 
 #[derive(Debug, Clone)]
 struct CycleRecord {
-    #[allow(dead_code)]
-    strategy: DreamStrategy,
     validation_passed: bool,
-    #[allow(dead_code)]
-    skill_recall_hit_rate: f64,
 }
 
 /// Deterministic strategy selector with sliding-window personality.
@@ -65,18 +61,14 @@ impl StrategySelector {
     /// Record outcome of a completed Dream cycle for personality adaptation.
     pub fn record_cycle_outcome(
         &mut self,
-        strategy: DreamStrategy,
+        _strategy: DreamStrategy,
         validation_passed: bool,
-        skill_recall_hit_rate: f64,
+        _skill_recall_hit_rate: f64,
     ) {
         if self.history.len() >= PERSONALITY_WINDOW {
             self.history.pop_front();
         }
-        self.history.push_back(CycleRecord {
-            strategy,
-            validation_passed,
-            skill_recall_hit_rate,
-        });
+        self.history.push_back(CycleRecord { validation_passed });
     }
 
     /// Current synthesize threshold after personality adjustment.

@@ -34,14 +34,8 @@ pub enum InvitationError {
 struct PendingInvitation {
     /// Unique guest ID
     guest_id: String,
-    /// Guest display name (stored for future admin inspection)
-    #[allow(dead_code)]
-    guest_name: String,
     /// Encrypted invitation token (the secret shared with guest)
     token: String,
-    /// When this invitation was created (stored for future audit/admin)
-    #[allow(dead_code)]
-    created_at: i64,
     /// When this invitation expires
     expires_at: i64,
     /// Guest scope (permissions)
@@ -102,9 +96,7 @@ impl InvitationManager {
         // Store the pending invitation
         let invitation = PendingInvitation {
             guest_id: guest_id.clone(),
-            guest_name: request.guest_name,
             token: token.clone(),
-            created_at: now,
             expires_at,
             scope: request.scope,
             activated: false,

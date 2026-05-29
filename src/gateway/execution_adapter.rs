@@ -110,11 +110,6 @@ mod tests {
         fn new() -> Self {
             Self { should_fail: false }
         }
-
-        #[allow(dead_code)]
-        fn failing() -> Self {
-            Self { should_fail: true }
-        }
     }
 
     #[async_trait]

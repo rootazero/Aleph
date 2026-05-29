@@ -92,7 +92,6 @@ where
 
     // Deserialized from JSON-RPC params; fields read via serde
     #[derive(Debug, Clone, Deserialize)]
-    #[allow(dead_code)] // Deserialized from JSON-RPC request params
     struct AgentRunParams {
         pub input: String,
         #[serde(default)]
@@ -102,6 +101,7 @@ where
         #[serde(default)]
         pub peer_id: Option<String>,
         #[serde(default = "default_stream")]
+        #[allow(dead_code)] // deserialized request param, not yet wired
         pub stream: bool,
         /// Optional absolute project root for per-run `workspace_override`.
         #[serde(default)]

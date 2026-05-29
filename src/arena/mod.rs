@@ -4,10 +4,8 @@
 //! a structured workspace where multiple agents collaborate on a shared goal.
 
 pub mod aggregate;
-pub mod events;
 pub mod handle;
 pub mod manager;
-pub mod storage;
 pub mod types;
 
 pub use manager::*;

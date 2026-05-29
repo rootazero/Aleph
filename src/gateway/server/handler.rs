@@ -26,7 +26,6 @@ use crate::gateway::event_scope::EventScopeGuard;
 use crate::gateway::handlers::events::{
     handle_list as handle_events_list, handle_subscribe, handle_unsubscribe, SubscriptionManager,
 };
-use crate::gateway::handlers::HandlerRegistry;
 use crate::gateway::lane::{ChannelClass, LaneManager};
 use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
@@ -42,8 +41,6 @@ use super::{ConnectionState, GatewaySharedState, MAX_AUTH_ATTEMPTS};
 
 /// Shared context for handling a WebSocket connection.
 struct ConnectionContext {
-    #[allow(dead_code)]
-    handlers: Arc<HandlerRegistry>,
     middleware_chain: MiddlewareChain,
     event_bus: Arc<GatewayEventBus>,
     connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
@@ -262,7 +259,6 @@ pub(super) async fn ws_upgrade_handler(
 
     ws.on_upgrade(move |socket| async move {
         let ctx = ConnectionContext {
-            handlers: state.handlers.clone(),
             middleware_chain: MiddlewareChain::new(
                 state.handlers.clone(),
                 state.rate_limiter.clone(),

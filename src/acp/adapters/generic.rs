@@ -58,7 +58,6 @@ impl GenericAcpAdapter {
     }
 
     /// Create from individual fields (for programmatic construction).
-    #[allow(dead_code)]
     pub fn new(
         id: impl Into<String>,
         display_name: impl Into<String>,

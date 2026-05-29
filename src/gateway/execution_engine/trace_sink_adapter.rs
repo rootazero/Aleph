@@ -48,7 +48,6 @@ pub struct GatewayTraceSink {
 }
 
 impl GatewayTraceSink {
-    #[allow(dead_code)]
     pub fn new(handle: Arc<dyn TraceFlushHandle>) -> Self {
         Self { handle }
     }

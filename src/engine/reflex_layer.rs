@@ -47,6 +47,7 @@ use tracing::{debug, info};
 use super::AtomicAction;
 
 /// Reflex layer for L1/L2 fast routing
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 pub struct ReflexLayer {
     /// L1: Exact match cache (user input → atomic action)
     exact_cache: DashMap<String, AtomicAction>,
@@ -60,6 +61,7 @@ pub struct ReflexLayer {
     l3_fallbacks: AtomicU64,
 }
 
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 impl ReflexLayer {
     /// Create a new reflex layer with empty rules
     pub fn new() -> Self {
@@ -340,6 +342,7 @@ impl Default for ReflexLayer {
 }
 
 /// Keyword routing rule
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 pub struct KeywordRule {
     /// Trigger pattern (regex)
     pub pattern: Regex,
@@ -367,12 +370,14 @@ pub enum ActionType {
 }
 
 /// Parameter extractor trait
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 pub trait ParamExtractor: Send + Sync {
     /// Extract parameters from input
     fn extract(&self, input: &str) -> Option<HashMap<String, Value>>;
 }
 
 /// File path extractor
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 struct FilePathExtractor;
 
 impl ParamExtractor for FilePathExtractor {
@@ -389,6 +394,7 @@ impl ParamExtractor for FilePathExtractor {
 }
 
 /// Direct command extractor (uses input as-is)
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 struct DirectCommandExtractor;
 
 impl ParamExtractor for DirectCommandExtractor {
@@ -400,6 +406,7 @@ impl ParamExtractor for DirectCommandExtractor {
 }
 
 /// Ls command extractor
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 struct LsCommandExtractor;
 
 impl ParamExtractor for LsCommandExtractor {
@@ -424,6 +431,7 @@ impl ParamExtractor for LsCommandExtractor {
 }
 
 /// Pwd command extractor
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 struct PwdCommandExtractor;
 
 impl ParamExtractor for PwdCommandExtractor {
@@ -435,6 +443,7 @@ impl ParamExtractor for PwdCommandExtractor {
 }
 
 /// Search pattern extractor
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 struct SearchPatternExtractor;
 
 impl ParamExtractor for SearchPatternExtractor {
@@ -462,6 +471,7 @@ impl ParamExtractor for SearchPatternExtractor {
 }
 
 /// Replace pattern extractor
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 struct ReplacePatternExtractor;
 
 impl ParamExtractor for ReplacePatternExtractor {
@@ -497,6 +507,7 @@ impl ParamExtractor for ReplacePatternExtractor {
 }
 
 /// Move file extractor
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 struct MoveFileExtractor;
 
 impl ParamExtractor for MoveFileExtractor {
@@ -517,6 +528,7 @@ impl ParamExtractor for MoveFileExtractor {
 
 /// Reflex statistics
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 pub struct ReflexStats {
     /// L1 cache hits
     pub l1_hits: u64,
@@ -528,6 +540,7 @@ pub struct ReflexStats {
     pub l3_fallbacks: u64,
 }
 
+#[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
 impl ReflexStats {
     /// Get total requests
     pub fn total(&self) -> u64 {

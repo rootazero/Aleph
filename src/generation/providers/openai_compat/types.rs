@@ -45,8 +45,8 @@ pub struct ImageGenerationRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ImageGenerationResponse {
     /// Unix timestamp of when the request was created
-    #[allow(dead_code)] // Deserialized from API response
     #[serde(default)]
+    #[allow(dead_code)] // deserialized from API response
     pub created: u64,
     /// Array of generated images
     pub data: Vec<ImageData>,

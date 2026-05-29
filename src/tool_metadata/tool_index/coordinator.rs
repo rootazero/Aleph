@@ -83,8 +83,6 @@ const TOOL_CATEGORY: &str = "tool";
 /// Stores tools as notes in the `tool/` category (markdown files + notes_index).
 /// Uses SemanticPurposeInferrer to generate rich content descriptions.
 pub struct ToolIndexCoordinator {
-    #[allow(dead_code)]
-    db: MemoryBackend,
     indexer: NoteIndexer<crate::memory::store::SqliteMemoryBackend>,
     inferrer: Arc<SemanticPurposeInferrer>,
 }
@@ -96,7 +94,6 @@ impl ToolIndexCoordinator {
     /// typically `~/.aleph/data/memory/note/`.
     pub fn new(db: MemoryBackend, memory_dir: PathBuf) -> Self {
         Self {
-            db: db.clone(),
             indexer: NoteIndexer::new(memory_dir, db),
             inferrer: Arc::new(SemanticPurposeInferrer::new()),
         }
@@ -109,7 +106,6 @@ impl ToolIndexCoordinator {
         llm_provider: Arc<dyn crate::providers::AiProvider>,
     ) -> Self {
         Self {
-            db: db.clone(),
             indexer: NoteIndexer::new(memory_dir, db),
             inferrer: Arc::new(SemanticPurposeInferrer::with_llm(llm_provider)),
         }
