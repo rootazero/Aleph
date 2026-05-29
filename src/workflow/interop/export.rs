@@ -16,7 +16,12 @@ pub const EMBED_SUFFIX: &str = " */";
 
 /// Render `manifest` as a `.workflow.js` source string.
 pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
-    let manifest_json = serde_json::to_string(manifest).unwrap_or_else(|_| "{}".to_string());
+    // Escape `*/` as `*\/` (a legal JSON `/` escape) so a string field
+    // containing `*/` (glob/regex/C-comment) cannot terminate the embed block
+    // early; `import`'s serde_json parse reads `\/` back transparently.
+    let manifest_json = serde_json::to_string(manifest)
+        .unwrap_or_else(|_| "{}".to_string())
+        .replace("*/", "*\\/");
     let mut out = String::new();
 
     // 1. Lossless round-trip header.
@@ -34,6 +39,10 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
         Some(levels) => {
             let mut last_phase: Option<&str> = None;
             for layer in &levels {
+                // The phase marker reflects only the layer's first step. Mixed
+                // per-step phases within one parallel layer are NOT all rendered
+                // in the body, but every step's `phase` is preserved losslessly
+                // via the embed-block manifest.
                 if let Some(&first) = layer.first() {
                     if let Some(ph) = manifest.steps[first].phase.as_deref() {
                         if last_phase != Some(ph) {

@@ -147,14 +147,25 @@ fn read_first_string_literal(s: &str) -> Option<String> {
 
 /// Collect the first string-literal argument of each `agent(` call, in order.
 /// Catches both top-level `agent(` and `() => agent(` inside `parallel([...])`.
+///
+/// Only accepts `agent(` at an identifier boundary so `subagent(` /
+/// `useragent(` and similar do not over-match.
 fn scan_agent_prompts(src: &str) -> Vec<String> {
     let needle = "agent(";
     let mut out = Vec::new();
     let mut rest = src;
     while let Some(pos) = rest.find(needle) {
         let after = &rest[pos + needle.len()..];
-        if let Some(lit) = read_first_string_literal(after) {
-            out.push(lit);
+        // Reject matches embedded in a larger identifier (e.g. `subagent(`):
+        // the preceding char must be absent or a non-identifier char.
+        let boundary = rest[..pos]
+            .chars()
+            .next_back()
+            .is_none_or(|c| !c.is_alphanumeric() && c != '_');
+        if boundary {
+            if let Some(lit) = read_first_string_literal(after) {
+                out.push(lit);
+            }
         }
         rest = after;
     }
@@ -258,5 +269,42 @@ const r = await pipeline(items, s1, s2)
     fn bare_js_without_agents_errors() {
         let src = "export const meta = { name: 'empty' }";
         assert!(parse_workflow_js(src).is_err());
+    }
+
+    #[test]
+    fn embed_block_roundtrips_prompt_containing_comment_terminator() {
+        // A prompt containing ` */` (glob/regex/C-comment) must NOT truncate the
+        // embed block; export escapes it as `*\/`, import parses it back.
+        let original = WorkflowManifest {
+            name: "scan".into(),
+            description: "look in src/**/*.rs */ etc".into(),
+            when_to_use: String::new(),
+            phases: vec![],
+            steps: vec![WorkflowManifestStep {
+                id: "a".into(),
+                agent: "scanner".into(),
+                prompt: "scan src/**/*.rs */ then stop".into(),
+                depends_on: vec![],
+                label: None,
+                model: None,
+                phase: None,
+                schema: None,
+            }],
+        };
+        let js = render_workflow_js(&original);
+        let outcome = parse_workflow_js(&js).expect("parse js with */ in prompt");
+        assert_eq!(outcome.manifest, original, "embed block stays lossless");
+        assert!(outcome.dropped.is_empty());
+    }
+
+    #[test]
+    fn scan_ignores_subagent_identifier() {
+        // `subagent(` must not over-match the `agent(` needle on the bare path.
+        let src = "export const meta = { name: 'wf' }\n\
+                   await subagent('noise')\n\
+                   await agent('real')";
+        let outcome = parse_workflow_js(src).expect("scan bare js");
+        assert_eq!(outcome.manifest.steps.len(), 1, "only the real agent() counts");
+        assert_eq!(outcome.manifest.steps[0].prompt, "real");
     }
 }
