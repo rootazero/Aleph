@@ -1,6 +1,8 @@
 pub mod max_tokens;
+pub mod model_id;
 pub mod openai_strict_schema;
 pub mod provider_policy;
+pub mod reasoning_effort;
 pub mod response_format;
 pub mod sse;
 pub mod tools;

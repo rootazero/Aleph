@@ -156,8 +156,13 @@ fn test_build_endpoint_with_trailing_slash() {
 fn test_map_think_level() {
     use crate::agents::thinking::ThinkLevel;
 
+    // Off omits the field entirely; every other level maps faithfully so
+    // gpt-5-family `minimal`/`xhigh` efforts are no longer silently collapsed.
     assert!(OpenAiProtocol::map_think_level(&ThinkLevel::Off).is_none());
-    assert!(OpenAiProtocol::map_think_level(&ThinkLevel::Minimal).is_none());
+    assert_eq!(
+        OpenAiProtocol::map_think_level(&ThinkLevel::Minimal),
+        Some("minimal".to_string())
+    );
     assert_eq!(
         OpenAiProtocol::map_think_level(&ThinkLevel::Low),
         Some("low".to_string())
@@ -172,7 +177,7 @@ fn test_map_think_level() {
     );
     assert_eq!(
         OpenAiProtocol::map_think_level(&ThinkLevel::XHigh),
-        Some("high".to_string())
+        Some("xhigh".to_string())
     );
 }
 
@@ -394,6 +399,78 @@ fn test_build_request_no_tools_when_none() {
     let body: serde_json::Value = serde_json::from_slice(body_bytes).unwrap();
     // tools field should be absent when no tools provided
     assert!(body.get("tools").is_none());
+}
+
+#[test]
+fn test_build_request_sets_service_tier_on_official_endpoint() {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs);
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.openai.com/v1".to_string());
+    config.service_tier = Some("priority".to_string());
+
+    let built = protocol.build_request(&payload, &config).unwrap().build().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert_eq!(body["service_tier"], "priority");
+}
+
+#[test]
+fn test_build_request_strips_service_tier_on_custom_endpoint() {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("Hello")];
+    let payload = RequestPayload::new(&msgs);
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://my-proxy.example.com/v1".to_string());
+    config.service_tier = Some("priority".to_string());
+
+    let built = protocol.build_request(&payload, &config).unwrap().build().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert!(
+        body.get("service_tier").is_none(),
+        "service_tier must be stripped on non-official OpenAI-compatible backends"
+    );
+}
+
+#[test]
+fn test_build_request_sets_prompt_cache_key_from_session_metadata() {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("Hello")];
+    let mut meta = std::collections::HashMap::new();
+    meta.insert("session_id".to_string(), "sess-abc".to_string());
+    let payload = RequestPayload::new(&msgs).with_metadata(Some(meta));
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://api.openai.com/v1".to_string());
+
+    let built = protocol.build_request(&payload, &config).unwrap().build().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert_eq!(body["prompt_cache_key"], "sess-abc");
+}
+
+#[test]
+fn test_build_request_strips_prompt_cache_key_on_custom_endpoint() {
+    let protocol = OpenAiProtocol::new(Client::new());
+    let msgs = [UnifiedMessage::user("Hello")];
+    let mut meta = std::collections::HashMap::new();
+    meta.insert("session_id".to_string(), "sess-abc".to_string());
+    let payload = RequestPayload::new(&msgs).with_metadata(Some(meta));
+    let mut config = ProviderConfig::test_config("gpt-4o");
+    config.api_key = Some("test-key".to_string());
+    config.base_url = Some("https://my-proxy.example.com/v1".to_string());
+
+    let built = protocol.build_request(&payload, &config).unwrap().build().unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
+    assert!(
+        body.get("prompt_cache_key").is_none(),
+        "prompt_cache_key must be stripped on non-official OpenAI-compatible backends"
+    );
 }
 
 #[test]

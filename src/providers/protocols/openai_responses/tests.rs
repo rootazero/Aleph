@@ -257,6 +257,137 @@ fn test_build_responses_request_with_reasoning() {
     assert_eq!(reasoning.summary.as_deref(), Some("auto"));
 }
 
+#[test]
+fn test_prompt_cache_key_from_session_metadata_capability_gated() {
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("hi")];
+    let mut meta = std::collections::HashMap::new();
+    meta.insert("session_id".to_string(), "sess-xyz".to_string());
+
+    // Official endpoint honors prompt_cache_key → set from session_id.
+    let official = ProviderConfig::test_config("gpt-4o");
+    let payload = RequestPayload::new(&msgs).with_metadata(Some(meta.clone()));
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &official,
+    );
+    assert_eq!(req.prompt_cache_key.as_deref(), Some("sess-xyz"));
+
+    // Non-official endpoint lacks the capability → omitted.
+    let mut custom = ProviderConfig::test_config("gpt-4o");
+    custom.base_url = Some("https://openrouter.ai/api/v1".to_string());
+    let payload_custom = RequestPayload::new(&msgs).with_metadata(Some(meta));
+    let req_custom = OpenAiResponsesProtocol::build_responses_request(
+        &payload_custom,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &custom,
+    );
+    assert!(req_custom.prompt_cache_key.is_none());
+
+    // No session metadata → omitted even on an official endpoint.
+    let payload_bare = RequestPayload::new(&msgs);
+    let req_bare = OpenAiResponsesProtocol::build_responses_request(
+        &payload_bare,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &official,
+    );
+    assert!(req_bare.prompt_cache_key.is_none());
+}
+
+#[test]
+fn test_build_reasoning_emits_minimal_and_xhigh_faithfully() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("hi")];
+
+    // minimal/xhigh are emitted faithfully on models whose family supports them
+    // (no longer collapsed by the old map): gpt-5 (base) supports `minimal`;
+    // gpt-5.2 supports `xhigh`.
+    for (model, level, expected) in [
+        ("gpt-5", ThinkLevel::Minimal, "minimal"),
+        ("gpt-5.2", ThinkLevel::XHigh, "xhigh"),
+    ] {
+        let config = ProviderConfig::test_config(model);
+        let payload = RequestPayload::new(&msgs).with_think_level(Some(level));
+        let request = OpenAiResponsesProtocol::build_responses_request(
+            &payload,
+            model,
+            &ResponsesVariant::default(),
+            &config,
+        );
+        let reasoning = request
+            .reasoning
+            .unwrap_or_else(|| panic!("{model} {level:?} should produce a reasoning config"));
+        assert_eq!(reasoning.effort.as_deref(), Some(expected));
+    }
+
+    // Per-model clamp: gpt-5.2 lacks `minimal`, so it narrows up to `low`
+    // (never down to the disabled `none` state).
+    let config = ProviderConfig::test_config("gpt-5.2");
+    let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Minimal));
+    let request = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-5.2",
+        &ResponsesVariant::default(),
+        &config,
+    );
+    assert_eq!(request.reasoning.unwrap().effort.as_deref(), Some("low"));
+
+    // Off still omits the reasoning block entirely.
+    let off = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
+    let req_off = OpenAiResponsesProtocol::build_responses_request(
+        &off,
+        "gpt-5.2",
+        &ResponsesVariant::default(),
+        &config,
+    );
+    assert!(req_off.reasoning.is_none());
+}
+
+#[test]
+fn test_service_tier_set_on_official_and_stripped_on_custom() {
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    // Official OpenAI endpoint supports service_tier → field is set.
+    let mut official = ProviderConfig::test_config("gpt-4o");
+    official.base_url = Some("https://api.openai.com/v1".to_string());
+    official.service_tier = Some("flex".to_string());
+    let req = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &official,
+    );
+    assert_eq!(req.service_tier.as_deref(), Some("flex"));
+
+    // Custom OpenAI-compatible backend does not → field is stripped.
+    let mut custom = ProviderConfig::test_config("gpt-4o");
+    custom.base_url = Some("https://my-proxy.example.com/v1".to_string());
+    custom.service_tier = Some("flex".to_string());
+    let req2 = OpenAiResponsesProtocol::build_responses_request(
+        &payload,
+        "gpt-4o",
+        &ResponsesVariant::default(),
+        &custom,
+    );
+    assert!(req2.service_tier.is_none());
+}
+
+#[test]
+fn test_responses_normalizes_model_id() {
+    use crate::providers::adapter::ProtocolAdapter;
+    let adapter = OpenAiResponsesProtocol::new(Client::new(), ResponsesVariant::default());
+    assert_eq!(adapter.normalize_model_id("openai/gpt-5"), "gpt-5");
+    assert_eq!(adapter.normalize_model_id("gpt4o"), "gpt-4o");
+    assert_eq!(adapter.normalize_model_id("gpt-5.2"), "gpt-5.2");
+}
+
 // ─── Adapter metadata ────────────────────────────────────────────────
 
 #[test]

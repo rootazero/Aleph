@@ -165,8 +165,16 @@ fn build_request_payload<'a>(
     system_blocks: Option<&'a [crate::thinker::prompt_builder::SystemPromptPart]>,
     messages: &'a [UnifiedMessage],
     tools_ref: Option<&'a [crate::tool_metadata::ToolDefinition]>,
+    session_id: &SessionId,
 ) -> RequestPayload<'a> {
-    let base = RequestPayload::new(messages).with_tools(tools_ref);
+    // Carry the session id as provider metadata: OpenAI-family adapters use it
+    // as `prompt_cache_key` for cache-routing affinity, and the cost-metering
+    // hooks key on `metadata["session_id"]` for per-session attribution.
+    let mut metadata = std::collections::HashMap::with_capacity(1);
+    metadata.insert("session_id".to_string(), session_id.to_string());
+    let base = RequestPayload::new(messages)
+        .with_tools(tools_ref)
+        .with_metadata(Some(metadata));
     let base = match system_prompt {
         Some(sp) => base.with_system(Some(sp)),
         None => base,
@@ -479,7 +487,7 @@ impl AgentHarness {
         // breaker — lives inside `deps.llm` itself (`providers::FailoverProvider`),
         // so the harness simply propagates whatever error survives it.
         let started = std::time::Instant::now();
-        let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref);
+        let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref, session_id);
         let mut response = match self
             .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
             .await?
@@ -516,7 +524,7 @@ impl AgentHarness {
                 empty_retries,
                 "provider returned an empty response; retrying",
             );
-            let retry_payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref);
+            let retry_payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref, session_id);
             response = match self
                 .race_llm_call(
                     self.deps.llm.process(retry_payload),
@@ -576,7 +584,7 @@ impl AgentHarness {
                 messages.push(UnifiedMessage::assistant(partial));
             }
             messages.push(UnifiedMessage::user(MAX_OUTPUT_TOKENS_RESUME_NUDGE));
-            let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref);
+            let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref, session_id);
             response = match self
                 .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
                 .await?
@@ -965,7 +973,7 @@ impl AgentHarness {
         }
 
         // 4. Retry the LLM call once with the summarised history.
-        let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), messages, tools_ref);
+        let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), messages, tools_ref, session_id);
         match self
             .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
             .await?

@@ -176,7 +176,7 @@ impl OpenAiResponsesProtocol {
             instructions: payload.system_prompt.map(|s| s.to_string()),
             stream: true,
             store,
-            reasoning: shared::build_reasoning(payload.think_level),
+            reasoning: shared::build_reasoning(payload.think_level, model),
             tools,
             tool_choice,
             parallel_tool_calls: config.parallel_tool_calls,
@@ -206,6 +206,19 @@ impl OpenAiResponsesProtocol {
             } else {
                 None
             },
+            service_tier: config
+                .service_tier
+                .clone()
+                .filter(|_| policy.capabilities.supports_service_tier),
+            // Route by session id for prompt-cache affinity on endpoints that
+            // honor it; omitted elsewhere (and stripped defensively by policy).
+            prompt_cache_key: payload
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("session_id"))
+                .filter(|s| !s.is_empty())
+                .filter(|_| policy.capabilities.supports_prompt_cache)
+                .cloned(),
         }
     }
 }
@@ -224,6 +237,13 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
         "openai-responses"
     }
 
+    /// Share the Chat protocol's canonicalization (no-dash typos, `openai/`
+    /// prefix). Previously the Responses adapter used the trait default
+    /// pass-through, so aggregator-leaked ids reached `/v1/responses` raw.
+    fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
+        super::openai_common::model_id::normalize_openai_model_id(model_id)
+    }
+
     fn build_request(
         &self,
         payload: &RequestPayload,
@@ -234,11 +254,13 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             std::sync::atomic::Ordering::Relaxed,
         );
         let endpoint = Self::build_endpoint(config, &self.variant);
-        let actual_model = payload
+        let raw_model = payload
             .model
             .as_deref()
             .unwrap_or_else(|| config.default_model());
-        let request = Self::build_responses_request(payload, actual_model, &self.variant, config);
+        let actual_model = self.normalize_model_id(raw_model);
+        let request =
+            Self::build_responses_request(payload, &actual_model, &self.variant, config);
 
         let api_key = config
             .api_key
@@ -494,6 +516,27 @@ fn parse_sse_event_multi(
         } => {
             // Fallback ToolCallEnd (some providers skip FunctionCallArgumentsDone)
             out.push_back(Ok(ProviderDelta::ToolCallEnd { id: call_id }));
+        }
+
+        StreamEvent::OutputItemDone {
+            item:
+                OutputItem::Reasoning {
+                    id,
+                    encrypted_content: Some(ec),
+                    ..
+                },
+            ..
+        } => {
+            // Persist the encrypted reasoning blob for cross-turn replay
+            // (stateless `store:false` flows). NDJSON-encoded into the thinking
+            // signature: the DeltaCollector concatenates these fragments, and
+            // `convert_messages` parses each line back into a reasoning input
+            // item on the next turn.
+            if let Ok(line) = serde_json::to_string(&serde_json::json!({"id": id, "ec": ec})) {
+                out.push_back(Ok(ProviderDelta::ThinkingSignatureDelta(format!(
+                    "{line}\n"
+                ))));
+            }
         }
 
         StreamEvent::Completed { response } => {

@@ -194,13 +194,23 @@ impl OpenAiProtocol {
         result
     }
 
-    /// Map ThinkLevel to OpenAI reasoning_effort
+    /// Map ThinkLevel to OpenAI `reasoning_effort`.
+    ///
+    /// Emits all five non-`Off` levels faithfully — `minimal` and `xhigh` are
+    /// real effort values on the gpt-5 family, so collapsing them (the old
+    /// behavior: `Minimal → None`, `XHigh → "high"`) silently dropped fidelity.
+    /// The endpoint-level `supports_reasoning_effort` capability still strips
+    /// the whole field for backends that don't accept it; value-level
+    /// compatibility (e.g. o-series capping at `high`) is the model's concern,
+    /// consistent with the "think_level set ⇒ reasoning model" assumption.
     pub(super) fn map_think_level(level: &ThinkLevel) -> Option<String> {
         match level {
-            ThinkLevel::Off | ThinkLevel::Minimal => None,
+            ThinkLevel::Off => None,
+            ThinkLevel::Minimal => Some("minimal".to_string()),
             ThinkLevel::Low => Some("low".to_string()),
             ThinkLevel::Medium => Some("medium".to_string()),
-            ThinkLevel::High | ThinkLevel::XHigh => Some("high".to_string()),
+            ThinkLevel::High => Some("high".to_string()),
+            ThinkLevel::XHigh => Some("xhigh".to_string()),
         }
     }
 }

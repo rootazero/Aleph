@@ -73,10 +73,19 @@ impl ProtocolAdapter for OpenAiProtocol {
             body["presence_penalty"] = json!(pres);
         }
 
-        // Add reasoning_effort for thinking models
+        // Add reasoning_effort for thinking models, clamped to the values the
+        // target model's family actually accepts (an unsupported effort like
+        // `minimal` on a generic reasoning model is a hard 400).
         if let Some(ref level) = payload.think_level {
             if let Some(effort) = Self::map_think_level(level) {
-                body["reasoning_effort"] = json!(effort);
+                if let Some(clamped) =
+                    crate::providers::protocols::openai_common::reasoning_effort::clamp_effort(
+                        &model_name,
+                        &effort,
+                    )
+                {
+                    body["reasoning_effort"] = json!(clamped);
+                }
             }
         }
 
@@ -93,6 +102,20 @@ impl ProtocolAdapter for OpenAiProtocol {
         }
 
         let policy = build_payload_policy(config.base_url.as_deref(), "openai-chat", None);
+
+        // prompt_cache_key: route by session id for prompt-cache affinity when
+        // the endpoint honors it. `policy.apply` strips it on unsupported
+        // endpoints, but gate here too so it is never set needlessly.
+        if policy.capabilities.supports_prompt_cache {
+            if let Some(key) = payload
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("session_id"))
+                .filter(|s| !s.is_empty())
+            {
+                body["prompt_cache_key"] = json!(key);
+            }
+        }
 
         // response_format: emit only when capability-enabled
         if let Some(ref fmt) = config.response_format {
@@ -170,6 +193,17 @@ impl ProtocolAdapter for OpenAiProtocol {
         // parallel_tool_calls: emit only when config explicitly sets it
         if let Some(parallel) = config.parallel_tool_calls {
             body["parallel_tool_calls"] = json!(parallel);
+        }
+
+        // service_tier: opt-in latency/cost tier ("auto" | "default" | "flex" |
+        // "priority"). Capability-gated inline so only endpoints that accept it
+        // (official OpenAI) receive the field; third-party OpenAI-compatible
+        // backends never see it. The config field is shared with the Anthropic
+        // adapter, which already wires it — this closes the OpenAI dead wire.
+        if let Some(ref tier) = config.service_tier {
+            if policy.capabilities.supports_service_tier {
+                body["service_tier"] = json!(tier);
+            }
         }
 
         // Validate API key
@@ -389,29 +423,10 @@ impl ProtocolAdapter for OpenAiProtocol {
 
     /// Forgive common OpenAI model-id typos that production users hit.
     ///
-    /// Covers the no-dash variants returned by some routing aggregators
-    /// (`gpt4o` → `gpt-4o`, `gpt4omini` → `gpt-4o-mini`, `o3mini` → `o3-mini`)
-    /// and the legacy `openai/` prefix that OpenRouter-style callers leak in.
-    /// Anything else passes through unchanged.
+    /// Delegates to the shared [`normalize_openai_model_id`] so the Chat and
+    /// Responses protocols can never drift on canonicalization rules.
     fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
-        let trimmed = model_id.trim();
-        // Strip vendor-routing prefix sometimes used by aggregators.
-        let core = trimmed.strip_prefix("openai/").unwrap_or(trimmed);
-        let lower = core.to_ascii_lowercase();
-        let canonical = match lower.as_str() {
-            "gpt4o" => Some("gpt-4o"),
-            "gpt4omini" | "gpt-4omini" | "gpt4o-mini" => Some("gpt-4o-mini"),
-            "gpt4turbo" => Some("gpt-4-turbo"),
-            "o1mini" => Some("o1-mini"),
-            "o3mini" => Some("o3-mini"),
-            "o4mini" => Some("o4-mini"),
-            _ => None,
-        };
-        match canonical {
-            Some(c) => std::borrow::Cow::Owned(c.to_string()),
-            None if core.len() != trimmed.len() => std::borrow::Cow::Owned(core.to_string()),
-            None => std::borrow::Cow::Borrowed(model_id),
-        }
+        crate::providers::protocols::openai_common::model_id::normalize_openai_model_id(model_id)
     }
 }
 

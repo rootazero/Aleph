@@ -53,6 +53,17 @@ pub struct ResponsesRequest {
     /// Number of top alternative tokens per position (Cycle 3, capability-gated)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_logprobs: Option<u32>,
+    /// Latency/cost tier ("auto" | "default" | "flex" | "priority").
+    /// Capability-gated; only set for endpoints whose `supports_service_tier`
+    /// is true (official OpenAI).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_tier: Option<String>,
+    /// Stable cache-routing key (usually the session id). OpenAI routes
+    /// requests sharing a `prompt_cache_key` to the same backend to maximize
+    /// prompt-cache hit rate. Capability-gated (`supports_prompt_cache`) and
+    /// sourced from `RequestPayload.metadata["session_id"]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_cache_key: Option<String>,
 }
 
 /// Function tool definition for the Responses API
@@ -91,6 +102,17 @@ pub enum InputItem {
     /// Output from a function call
     #[serde(rename = "function_call_output")]
     FunctionCallOutput { call_id: String, output: String },
+    /// A reasoning item replayed from a prior turn. Carries the original item
+    /// id and its encrypted blob so a stateless (`store:false`) reasoning model
+    /// can resume its chain-of-thought. `summary` is sent as an empty array on
+    /// replay — the server only needs `id` + `encrypted_content`.
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        id: String,
+        encrypted_content: String,
+        #[serde(default)]
+        summary: Vec<serde_json::Value>,
+    },
 }
 
 /// Message content — either plain text or multimodal (text + images)
@@ -207,6 +229,12 @@ pub enum OutputItem {
         content: Option<String>,
         #[serde(default)]
         summary: Option<String>,
+        /// Opaque encrypted reasoning blob, present when the request set
+        /// `include: ["reasoning.encrypted_content"]` (stateless `store:false`
+        /// flows, e.g. Codex/ZDR). Replayed verbatim on later turns to preserve
+        /// the model's chain-of-thought across a stateless conversation.
+        #[serde(default)]
+        encrypted_content: Option<String>,
     },
     /// Function/tool call
     #[serde(rename = "function_call")]
@@ -433,10 +461,14 @@ mod cycle3_struct_tests {
             context_management: None,
             seed: None,
             top_logprobs: None,
+            service_tier: None,
+            prompt_cache_key: None,
         };
         let v = serde_json::to_value(&req).unwrap();
         assert!(v.get("seed").is_none());
         assert!(v.get("top_logprobs").is_none());
+        assert!(v.get("service_tier").is_none());
+        assert!(v.get("prompt_cache_key").is_none());
     }
 
     #[test]
@@ -459,9 +491,16 @@ mod cycle3_struct_tests {
             context_management: None,
             seed: Some(42),
             top_logprobs: Some(3),
+            service_tier: Some("flex".into()),
+            prompt_cache_key: Some("sess-123".into()),
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v.get("seed"), Some(&serde_json::json!(42)));
         assert_eq!(v.get("top_logprobs"), Some(&serde_json::json!(3)));
+        assert_eq!(v.get("service_tier"), Some(&serde_json::json!("flex")));
+        assert_eq!(
+            v.get("prompt_cache_key"),
+            Some(&serde_json::json!("sess-123"))
+        );
     }
 }

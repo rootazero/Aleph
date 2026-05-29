@@ -182,7 +182,9 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub verified: bool,
 
-    /// Service tier for Anthropic API ("auto" or "default")
+    /// Latency/cost service tier. Capability-gated per endpoint and shared
+    /// across protocols: Anthropic accepts "auto"/"standard_only"; OpenAI
+    /// (chat + responses) accepts "auto"/"default"/"flex"/"priority".
     #[serde(default)]
     pub service_tier: Option<String>,
 

@@ -73,6 +73,19 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
                 }
             }
             UnifiedMessage::Assistant { content } => {
+                // Replay encrypted reasoning items captured on a prior turn so a
+                // stateless (`store:false`) reasoning model resumes its
+                // chain-of-thought. The reasoning item must precede the message
+                // / function calls it produced, so emit it first.
+                for block in content {
+                    if let ContentBlock::Thinking {
+                        signature: Some(sig),
+                        ..
+                    } = block
+                    {
+                        items.extend(parse_reasoning_signature(sig));
+                    }
+                }
                 let text: String = content
                     .iter()
                     .filter_map(|b| match b {
@@ -129,23 +142,64 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
     items
 }
 
-/// Map ThinkLevel to Responses API reasoning config
-pub(crate) fn build_reasoning(think_level: Option<ThinkLevel>) -> Option<ReasoningConfig> {
-    match think_level {
-        Some(ThinkLevel::Low) => Some(ReasoningConfig {
-            effort: Some("low".to_string()),
-            summary: Some("auto".to_string()),
-        }),
-        Some(ThinkLevel::Medium) => Some(ReasoningConfig {
-            effort: Some("medium".to_string()),
-            summary: Some("auto".to_string()),
-        }),
-        Some(ThinkLevel::High) | Some(ThinkLevel::XHigh) => Some(ReasoningConfig {
-            effort: Some("high".to_string()),
-            summary: Some("auto".to_string()),
-        }),
-        _ => None, // Off, Minimal → no reasoning config
-    }
+/// Parse the NDJSON `{"id","ec"}` lines stored in a [`ContentBlock::Thinking`]
+/// signature back into reasoning [`InputItem`]s for cross-turn replay.
+///
+/// The Responses SSE capture encodes each encrypted reasoning item as one JSON
+/// line; here each line is parsed back. Lines that don't match the expected
+/// shape are skipped — this keeps a non-OpenAI signature (e.g. an Anthropic
+/// thinking verifier carried through a provider switch) from producing a
+/// malformed reasoning item.
+///
+/// Note: a *stale* encrypted blob (replayed to a different endpoint than the
+/// one that minted it) is rejected by the server with `invalid_encrypted_content`.
+/// A future hardening stage could strip reasoning items and retry; for now the
+/// blob is only ever emitted on the same endpoint that captured it.
+fn parse_reasoning_signature(sig: &str) -> Vec<InputItem> {
+    sig.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            let id = v.get("id")?.as_str()?.to_string();
+            let ec = v.get("ec")?.as_str()?.to_string();
+            Some(InputItem::Reasoning {
+                id,
+                encrypted_content: ec,
+                summary: Vec::new(),
+            })
+        })
+        .collect()
+}
+
+/// Map ThinkLevel to Responses API reasoning config, clamped per model.
+///
+/// Mirrors the Chat protocol: every non-`Off` level maps to its faithful effort
+/// value (`minimal`/`xhigh` are real gpt-5-family efforts), then
+/// [`reasoning_effort::clamp_effort`] narrows it to a value the target model's
+/// family accepts (a generic reasoning model rejects `minimal`/`xhigh`; gpt-5
+/// caps at `high`). `summary: "auto"` lets the server decide whether to surface
+/// a reasoning summary. `Off` (and `None`) omit the reasoning block entirely.
+pub(crate) fn build_reasoning(
+    think_level: Option<ThinkLevel>,
+    model: &str,
+) -> Option<ReasoningConfig> {
+    let effort = match think_level {
+        Some(ThinkLevel::Minimal) => "minimal",
+        Some(ThinkLevel::Low) => "low",
+        Some(ThinkLevel::Medium) => "medium",
+        Some(ThinkLevel::High) => "high",
+        Some(ThinkLevel::XHigh) => "xhigh",
+        Some(ThinkLevel::Off) | None => return None,
+    };
+    let clamped =
+        crate::providers::protocols::openai_common::reasoning_effort::clamp_effort(model, effort)?;
+    Some(ReasoningConfig {
+        effort: Some(clamped),
+        summary: Some("auto".to_string()),
+    })
 }
 
 /// Convert ToolDefinitions to Responses API FunctionToolDef format
@@ -444,21 +498,81 @@ mod tests {
         assert!(matches!(&items[3], InputItem::Message { role, .. } if role == "assistant"));
     }
 
+    // ─── encrypted reasoning replay tests ───────────────────────────
+
+    #[test]
+    fn test_convert_messages_replays_encrypted_reasoning() {
+        use crate::providers::message::ContentBlock;
+        let msgs = [UnifiedMessage::Assistant {
+            content: vec![
+                ContentBlock::Thinking {
+                    thinking: "summary".into(),
+                    signature: Some("{\"id\":\"rs_1\",\"ec\":\"gAAAblob\"}\n".into()),
+                },
+                ContentBlock::Text {
+                    text: "answer".into(),
+                    cache_control: None,
+                },
+            ],
+        }];
+        let items = convert_messages(&msgs);
+        // Reasoning item must precede the assistant text message.
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            InputItem::Reasoning {
+                id,
+                encrypted_content,
+                summary,
+            } => {
+                assert_eq!(id, "rs_1");
+                assert_eq!(encrypted_content, "gAAAblob");
+                assert!(summary.is_empty());
+            }
+            other => panic!("expected Reasoning first, got {other:?}"),
+        }
+        assert!(matches!(&items[1], InputItem::Message { role, .. } if role == "assistant"));
+    }
+
+    #[test]
+    fn test_parse_reasoning_signature_skips_malformed_lines() {
+        // One valid line, plus a plain-text signature and a wrong-shape object
+        // (both skipped) — mirrors a non-OpenAI signature carried through.
+        let sig = "{\"id\":\"rs_1\",\"ec\":\"blob\"}\nnot-json\n{\"foo\":1}\n";
+        let items = parse_reasoning_signature(sig);
+        assert_eq!(items.len(), 1);
+        assert!(matches!(&items[0], InputItem::Reasoning { id, .. } if id == "rs_1"));
+    }
+
+    #[test]
+    fn test_reasoning_input_item_serializes_with_empty_summary() {
+        let item = InputItem::Reasoning {
+            id: "rs_9".into(),
+            encrypted_content: "enc".into(),
+            summary: Vec::new(),
+        };
+        let v = serde_json::to_value(&item).unwrap();
+        assert_eq!(v["type"], "reasoning");
+        assert_eq!(v["id"], "rs_9");
+        assert_eq!(v["encrypted_content"], "enc");
+        assert_eq!(v["summary"], serde_json::json!([]));
+    }
+
     // ─── build_reasoning tests ──────────────────────────────────────
 
     #[test]
     fn test_build_reasoning_levels() {
-        let low = build_reasoning(Some(ThinkLevel::Low));
+        // gpt-5 supports minimal/low/medium/high, so low/medium/high pass through.
+        let low = build_reasoning(Some(ThinkLevel::Low), "gpt-5");
         assert_eq!(low.as_ref().unwrap().effort.as_deref(), Some("low"));
         assert_eq!(low.as_ref().unwrap().summary.as_deref(), Some("auto"));
 
-        let medium = build_reasoning(Some(ThinkLevel::Medium));
+        let medium = build_reasoning(Some(ThinkLevel::Medium), "gpt-5");
         assert_eq!(medium.as_ref().unwrap().effort.as_deref(), Some("medium"));
 
-        let high = build_reasoning(Some(ThinkLevel::High));
+        let high = build_reasoning(Some(ThinkLevel::High), "gpt-5");
         assert_eq!(high.as_ref().unwrap().effort.as_deref(), Some("high"));
 
-        let none = build_reasoning(None);
+        let none = build_reasoning(None, "gpt-5");
         assert!(none.is_none());
     }
 
@@ -594,14 +708,23 @@ mod tests {
     }
 
     #[test]
-    fn test_build_reasoning_xhigh_maps_to_high() {
-        let result = build_reasoning(Some(ThinkLevel::XHigh));
-        assert_eq!(result.as_ref().unwrap().effort.as_deref(), Some("high"));
+    fn test_build_reasoning_xhigh_clamped_per_model() {
+        // gpt-5 caps at high → xhigh clamps down.
+        let gpt5 = build_reasoning(Some(ThinkLevel::XHigh), "gpt-5");
+        assert_eq!(gpt5.as_ref().unwrap().effort.as_deref(), Some("high"));
+        // gpt-5.2 accepts xhigh → passes through faithfully.
+        let gpt52 = build_reasoning(Some(ThinkLevel::XHigh), "gpt-5.2");
+        assert_eq!(gpt52.as_ref().unwrap().effort.as_deref(), Some("xhigh"));
     }
 
     #[test]
-    fn test_build_reasoning_minimal_maps_to_none() {
-        assert!(build_reasoning(Some(ThinkLevel::Minimal)).is_none());
+    fn test_build_reasoning_minimal_clamped_per_model() {
+        // gpt-5 supports minimal → emitted faithfully (no longer collapsed).
+        let gpt5 = build_reasoning(Some(ThinkLevel::Minimal), "gpt-5");
+        assert_eq!(gpt5.as_ref().unwrap().effort.as_deref(), Some("minimal"));
+        // Generic reasoning model lacks minimal → clamps up to low.
+        let generic = build_reasoning(Some(ThinkLevel::Minimal), "o3");
+        assert_eq!(generic.as_ref().unwrap().effort.as_deref(), Some("low"));
     }
 
     #[test]
