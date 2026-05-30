@@ -131,6 +131,27 @@ impl HybridAssembler {
             candidates.iter().map(|c| (c.id.as_str(), c)).collect();
         let mut slots: Vec<EnvelopeSlot> = Vec::new();
 
+        // Feedback (user-taught rules) is pre-populated first — highest
+        // priority and never subject to the LLM re-rank's discretion, so a
+        // standing rule that matched retrieval can never be dropped. Mirrors
+        // the UserProfile handling below.
+        let feedback_cands: Vec<&Candidate> = candidates
+            .iter()
+            .filter(|c| c.slot_hint == SlotKind::Feedback)
+            .collect();
+        if !feedback_cands.is_empty() {
+            let items = feedback_cands
+                .into_iter()
+                .map(candidate_to_item)
+                .collect::<Vec<_>>();
+            slots.push(EnvelopeSlot {
+                kind: SlotKind::Feedback,
+                items,
+                tokens_used: 0,
+                tokens_budget: self.config.fallback_skeleton.feedback_tokens,
+            });
+        }
+
         // UserProfile always appended first if present in candidates.
         let profile_cands: Vec<&Candidate> = candidates
             .iter()

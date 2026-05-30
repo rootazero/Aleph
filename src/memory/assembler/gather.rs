@@ -83,6 +83,7 @@ impl Gatherer {
                         .next()
                         .unwrap_or(&path_no_scheme)
                         .to_string();
+                    let slot_hint = slot_hint_for_path(&path_no_scheme);
                     Candidate {
                         id: display_id,
                         title,
@@ -93,7 +94,7 @@ impl Gatherer {
                         },
                         relevance: sf.score,
                         updated_at: sf.fact.updated_at,
-                        slot_hint: SlotKind::RelevantNotes,
+                        slot_hint,
                         fact_source: FactSource::Extracted,
                     }
                 })
@@ -188,6 +189,25 @@ impl Gatherer {
     }
 }
 
+/// Category-prefix of `feedback/` notes (written by `FeedbackDistill`).
+const FEEDBACK_CATEGORY_PREFIX: &str = "feedback/";
+
+/// Decide which slot a retrieved note belongs to from its scheme-less path
+/// (`"{category}/{filename}"`).
+///
+/// Routing is keyed on the path prefix, NOT on `NoteType::to_category_dir()`:
+/// there is no `NoteType::Feedback` variant, so a feedback note round-trips
+/// through `NoteType::from_str_or_other("feedback") == Other` and its category
+/// would mangle to `"other"`. The on-disk path always keeps the real
+/// `feedback/` prefix, so it is the reliable signal.
+fn slot_hint_for_path(path_no_scheme: &str) -> SlotKind {
+    if path_no_scheme.starts_with(FEEDBACK_CATEGORY_PREFIX) {
+        SlotKind::Feedback
+    } else {
+        SlotKind::RelevantNotes
+    }
+}
+
 fn raw_to_candidate(r: RawMemory) -> Candidate {
     let session_id = r.session_id.clone().unwrap_or_default();
     let fact_source = raw_source_to_fact_source(&r.source);
@@ -250,6 +270,20 @@ mod tests {
         .with_session("sess-2");
         let c = raw_to_candidate(raw);
         assert_eq!(c.fact_source, FactSource::SessionCompressed);
+    }
+
+    #[test]
+    fn feedback_path_routes_to_feedback_slot() {
+        assert_eq!(slot_hint_for_path("feedback/no-jsdoc"), SlotKind::Feedback);
+        // Substring, not prefix — must NOT match.
+        assert_eq!(
+            slot_hint_for_path("reference/feedback-loops"),
+            SlotKind::RelevantNotes
+        );
+        assert_eq!(
+            slot_hint_for_path("reference/rust-ownership"),
+            SlotKind::RelevantNotes
+        );
     }
 
     #[test]

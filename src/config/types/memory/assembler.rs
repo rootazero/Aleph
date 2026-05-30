@@ -49,6 +49,8 @@ pub struct FallbackSkeleton {
     pub relevant_notes_tokens: u32,
     #[serde(default = "super::defaults::default_raw_fragments_tokens")]
     pub raw_fragments_tokens: u32,
+    #[serde(default = "super::defaults::default_feedback_tokens")]
+    pub feedback_tokens: u32,
     #[serde(default)]
     pub nudges_tokens: u32,
 }
@@ -60,6 +62,7 @@ impl Default for FallbackSkeleton {
             session_recent_tokens: super::defaults::default_session_recent_tokens(),
             relevant_notes_tokens: super::defaults::default_relevant_notes_tokens(),
             raw_fragments_tokens: super::defaults::default_raw_fragments_tokens(),
+            feedback_tokens: super::defaults::default_feedback_tokens(),
             nudges_tokens: 0,
         }
     }

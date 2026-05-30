@@ -30,6 +30,12 @@ pub enum SlotKind {
     UserProfile,
     SessionRecent,
     RelevantNotes,
+    /// Rules and corrections the user has taught the agent (distilled into
+    /// `feedback/` notes by `FeedbackDistill`). Surfaced with a distinct label
+    /// and a standing-directive note so the model treats them as behavioural
+    /// rules to honour, not as ordinary reference material. Pre-populated like
+    /// `UserProfile` — never dropped by the LLM re-rank stage.
+    Feedback,
     RawFragments,
     Nudges,
 }

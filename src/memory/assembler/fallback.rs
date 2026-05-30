@@ -35,6 +35,7 @@ pub(crate) fn skeleton_pack(
 ) -> Vec<EnvelopeSlot> {
     let mut slots = Vec::new();
     for (kind, budget) in [
+        (SlotKind::Feedback, skeleton.feedback_tokens),
         (SlotKind::UserProfile, skeleton.user_profile_tokens),
         (SlotKind::SessionRecent, skeleton.session_recent_tokens),
         (SlotKind::RelevantNotes, skeleton.relevant_notes_tokens),
@@ -124,6 +125,24 @@ mod tests {
         assert_eq!(rel_slot.items[0].id, "note://reference/b");
         assert_eq!(rel_slot.items[1].id, "note://reference/c");
         assert_eq!(rel_slot.items[2].id, "note://reference/a");
+    }
+
+    #[test]
+    fn feedback_candidates_pack_into_feedback_slot() {
+        let now = 1_700_000_000;
+        let c = [
+            cand("note://feedback/no-jsdoc", SlotKind::Feedback, 0.4, now),
+            cand("note://reference/a", SlotKind::RelevantNotes, 0.9, now),
+        ];
+        let slots = skeleton_pack(&c, &FallbackSkeleton::default(), now);
+        let fb = slots
+            .iter()
+            .find(|s| s.kind == SlotKind::Feedback)
+            .expect("feedback slot present");
+        assert_eq!(fb.items.len(), 1);
+        assert_eq!(fb.items[0].id, "note://feedback/no-jsdoc");
+        // Feedback is packed first → highest priority slot in the output.
+        assert_eq!(slots[0].kind, SlotKind::Feedback);
     }
 
     #[test]
