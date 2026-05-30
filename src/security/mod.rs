@@ -10,6 +10,7 @@ pub mod audit;
 pub mod audit_drain;
 pub mod content_sanitizer;
 pub mod context_id_hasher;
+pub mod dangerous_tools;
 pub mod headers;
 pub mod runtime_guard;
 pub mod secret_equal;

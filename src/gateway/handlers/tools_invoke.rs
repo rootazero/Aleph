@@ -67,6 +67,23 @@ where
         return JsonRpcResponse::error(request.id, INVALID_PARAMS, "tool_name must not be empty");
     }
 
+    // Transport hard floor (openclaw `dangerous-tools` parity): `tools.invoke`
+    // is a gateway-reachable RPC surface, so RCE / host-mutation /
+    // self-reconfiguration tools are denied here by default. Production agents
+    // reach these tools through the agent loop, not this RPC. Re-enable a
+    // specific tool via the `ALEPH_GATEWAY_TOOLS_ALLOW` env var.
+    if crate::security::dangerous_tools::is_denied_on_gateway_surface(&params.tool_name) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!(
+                "tool '{}' is denied on the gateway tools.invoke surface (set {} to override)",
+                params.tool_name,
+                crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV
+            ),
+        );
+    }
+
     // Allowlist gate — applied only when caller supplied an agent registry.
     if let Some(ref agents) = agents {
         let resolved_id = params
@@ -213,6 +230,23 @@ mod tests {
         let resp = handle_invoke(req, reg, None).await;
         assert!(!resp.is_success());
         assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
+    }
+
+    #[tokio::test]
+    async fn denies_dangerous_tool_on_gateway_surface() {
+        // Transport hard floor: an RCE tool is refused before the registry
+        // is ever touched, even with no agent allowlist supplied.
+        std::env::remove_var(crate::security::dangerous_tools::GATEWAY_TOOLS_ALLOW_ENV);
+        let reg = Arc::new(StubRegistry::new().with_ok("exec", json!({"ok": true})));
+        let params = json!({"tool_name": "exec", "arguments": {}});
+        let req = JsonRpcRequest::with_id("tools.invoke", Some(params), json!(1));
+        let resp = handle_invoke(req, reg.clone(), None).await;
+        assert!(!resp.is_success(), "dangerous tool must be denied");
+        assert_eq!(resp.error.unwrap().code, INVALID_PARAMS);
+        assert!(
+            reg.last_call().is_none(),
+            "registry must not be touched when the hard floor denies"
+        );
     }
 
     #[tokio::test]

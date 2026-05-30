@@ -131,6 +131,22 @@ impl PolicyEngine {
         // Extract tool category (e.g., "shell:exec" -> "shell")
         let tool_category = tool_name.split(':').next().unwrap_or(tool_name);
 
+        // Hard floor: RCE / host-mutation / control-plane tools are denied
+        // to guests unless the scope names them EXACTLY. A wildcard ("*")
+        // or a category grant must never silently cover a dangerous tool.
+        // Mirrors openclaw's `DEFAULT_GATEWAY_HTTP_TOOL_DENY` (see
+        // `crate::security::dangerous_tools`).
+        if crate::security::dangerous_tools::is_dangerous_tool(tool_name)
+            && !scope.allowed_tools.iter().any(|t| t == tool_name)
+        {
+            return PermissionResult::Denied {
+                reason: format!(
+                    "Dangerous tool '{}' requires an explicit grant for guest '{}' (wildcard / category scopes do not cover it)",
+                    tool_name, guest_id
+                ),
+            };
+        }
+
         // Check if tool or category is in allowed list
         let allowed = scope.allowed_tools.iter().any(|allowed| {
             allowed == tool_name       // Exact match
