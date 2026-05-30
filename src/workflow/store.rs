@@ -4,13 +4,24 @@
 //! JSON-RPC, no tool registration (R4). Mirrors [`crate::canvas_io`]: atomic
 //! writes via temp-file + rename so readers never see a torn write, and
 //! reuses its `sanitise_name` for path-traversal-safe filenames.
+//!
+//! The persisted document is the [`WorkflowManifest`] superset — the single
+//! source of truth (see [`super::interop::manifest`]). Storing the manifest
+//! rather than the lean [`WorkflowDef`](crate::workflow::def::WorkflowDef)
+//! keeps the `.workflow.js`-compatible metadata (`whenToUse`, `phases`,
+//! per-step `label`/`model`/`phase`/`schema`) durable across
+//! `import → save → export`, so an exported template faithfully reproduces the
+//! engineering format. Execution still consumes only the projected core via
+//! [`WorkflowManifest::to_def`] (R10 — the executor never sees the extra
+//! metadata). Legacy snake_case `WorkflowDef.json` files load unchanged via a
+//! serde alias on the manifest step.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::canvas_io::sanitise_name;
 use crate::error::{AlephError, Result};
-use crate::workflow::def::WorkflowDef;
+use crate::workflow::interop::manifest::WorkflowManifest;
 
 /// File extension for stored workflow templates.
 pub const WORKFLOW_EXT: &str = "json";
@@ -51,13 +62,13 @@ fn ensure_dir_at(dir: &Path) -> Result<()> {
     })
 }
 
-/// Persist `def` under its own name into `dir`. Validates before writing —
+/// Persist `manifest` under its own name into `dir`. Validates before writing —
 /// an invalid template never reaches disk.
-pub fn save_at(dir: &Path, def: &WorkflowDef) -> Result<PathBuf> {
-    def.validate()?;
+pub fn save_at(dir: &Path, manifest: &WorkflowManifest) -> Result<PathBuf> {
+    manifest.validate()?;
     ensure_dir_at(dir)?;
-    let final_path = resolve_path_at(dir, &def.name);
-    let body = serde_json::to_string_pretty(def)
+    let final_path = resolve_path_at(dir, &manifest.name);
+    let body = serde_json::to_string_pretty(manifest)
         .map_err(|e| AlephError::config(format!("workflow serialise failed: {e}")))?;
 
     let tmp_path = final_path.with_extension(format!("{WORKFLOW_EXT}.tmp"));
@@ -75,8 +86,8 @@ pub fn save_at(dir: &Path, def: &WorkflowDef) -> Result<PathBuf> {
 }
 
 /// Convenience: [`save_at`] anchored to [`workflow_dir`].
-pub fn save(def: &WorkflowDef) -> Result<PathBuf> {
-    save_at(&workflow_dir(), def)
+pub fn save(manifest: &WorkflowManifest) -> Result<PathBuf> {
+    save_at(&workflow_dir(), manifest)
 }
 
 /// Write rendered text (e.g. an exported `.workflow.js`) into `dir` under
@@ -104,7 +115,9 @@ pub fn write_text(name: &str, ext: &str, body: &str) -> Result<PathBuf> {
 }
 
 /// Load a workflow by `name` from `dir`. Errors if missing or parse fails.
-pub fn load_at(dir: &Path, name: &str) -> Result<WorkflowDef> {
+/// Legacy snake_case `WorkflowDef.json` files deserialise transparently via the
+/// `depends_on` serde alias on [`WorkflowManifest`]'s step.
+pub fn load_at(dir: &Path, name: &str) -> Result<WorkflowManifest> {
     let path = resolve_path_at(dir, name);
     let body = fs::read_to_string(&path)
         .map_err(|e| AlephError::config(format!("workflow read {} failed: {e}", path.display())))?;
@@ -113,7 +126,7 @@ pub fn load_at(dir: &Path, name: &str) -> Result<WorkflowDef> {
 }
 
 /// Convenience: [`load_at`] anchored to [`workflow_dir`].
-pub fn load(name: &str) -> Result<WorkflowDef> {
+pub fn load(name: &str) -> Result<WorkflowManifest> {
     load_at(&workflow_dir(), name)
 }
 
@@ -173,25 +186,35 @@ pub fn delete(name: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflow::def::WorkflowStepDef;
+    use crate::workflow::interop::manifest::{WorkflowManifestStep, WorkflowPhase};
     use tempfile::TempDir;
 
-    fn sample(name: &str) -> WorkflowDef {
-        WorkflowDef {
+    fn sample(name: &str) -> WorkflowManifest {
+        WorkflowManifest {
             name: name.into(),
             description: "demo".into(),
+            when_to_use: String::new(),
+            phases: vec![],
             steps: vec![
-                WorkflowStepDef {
+                WorkflowManifestStep {
                     id: "gather".into(),
                     agent: "researcher".into(),
                     prompt: "research {input}".into(),
                     depends_on: vec![],
+                    label: None,
+                    model: None,
+                    phase: None,
+                    schema: None,
                 },
-                WorkflowStepDef {
+                WorkflowManifestStep {
                     id: "write".into(),
                     agent: "writer".into(),
                     prompt: "write it up".into(),
                     depends_on: vec!["gather".into()],
+                    label: None,
+                    model: None,
+                    phase: None,
+                    schema: None,
                 },
             ],
         }
@@ -204,6 +227,49 @@ mod tests {
         save_at(tmp.path(), &d).unwrap();
         let back = load_at(tmp.path(), "report").unwrap();
         assert_eq!(d, back);
+    }
+
+    #[test]
+    fn rich_manifest_metadata_survives_disk_roundtrip() {
+        // The whole point of persisting the manifest: per-step model/schema/phase
+        // and meta whenToUse/phases must come back byte-identical so a later
+        // `export` reproduces the engineering format faithfully.
+        let tmp = TempDir::new().unwrap();
+        let mut m = sample("rich");
+        m.when_to_use = "use for reports".into();
+        m.phases = vec![WorkflowPhase {
+            title: "Gather".into(),
+            detail: "collect".into(),
+        }];
+        m.steps[0].model = Some("haiku".into());
+        m.steps[0].phase = Some("Gather".into());
+        m.steps[0].label = Some("audit:gather".into());
+        m.steps[0].schema = Some(serde_json::json!({"type": "object"}));
+        save_at(tmp.path(), &m).unwrap();
+        let back = load_at(tmp.path(), "rich").unwrap();
+        assert_eq!(m, back, "rich metadata is durable across save/load");
+    }
+
+    #[test]
+    fn legacy_workflow_def_json_loads_via_alias() {
+        // A file written before the manifest migration uses snake_case
+        // `depends_on` and carries none of the extra fields. It must still load.
+        let tmp = TempDir::new().unwrap();
+        ensure_dir_at(tmp.path()).unwrap();
+        let legacy = r#"{
+            "name": "legacy",
+            "description": "old",
+            "steps": [
+                {"id": "a", "agent": "w", "prompt": "do a"},
+                {"id": "b", "agent": "w", "prompt": "do b", "depends_on": ["a"]}
+            ]
+        }"#;
+        fs::write(resolve_path_at(tmp.path(), "legacy"), legacy).unwrap();
+        let back = load_at(tmp.path(), "legacy").unwrap();
+        assert_eq!(back.name, "legacy");
+        assert_eq!(back.steps.len(), 2);
+        assert_eq!(back.steps[1].depends_on, vec!["a".to_string()]);
+        assert!(back.when_to_use.is_empty() && back.phases.is_empty());
     }
 
     #[test]
