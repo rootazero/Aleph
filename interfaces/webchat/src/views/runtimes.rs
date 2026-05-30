@@ -47,7 +47,7 @@ pub fn RuntimesView() -> impl IntoView {
     };
 
     view! {
-        <div class="p-6 space-y-4">
+        <div class="px-6 pb-6 aleph-content-top space-y-4">
             <div class="flex items-center justify-between">
                 <div>
                     <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, runtimes.title)}</h1>

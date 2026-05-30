@@ -122,7 +122,7 @@ pub fn Settings() -> impl IntoView {
     ];
 
     view! {
-        <div class="p-8 max-w-5xl mx-auto space-y-10">
+        <div class="px-8 pb-8 aleph-content-top max-w-5xl mx-auto space-y-10">
             <div>
                 <h1 class="text-3xl font-bold mb-2 text-text-primary">
                     {t!(i18n, settings.welcome)}

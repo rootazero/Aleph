@@ -1080,16 +1080,30 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 :root {
     --aleph-chrome-y: 28px;
     --aleph-band-h: 0px;
+    /* Mirrors `.aleph-sidebar-head` top padding so every right-pane page's
+       content top edge lines up with the sidebar brand-logo top edge. */
+    --aleph-content-top: 0.85rem;
 }
 html[data-platform="macos"] {
     --aleph-chrome-y: 15px;
     --aleph-band-h: 30px;
+    --aleph-content-top: 2.45rem;
 }
 .aleph-chrome-top {
     top: calc(var(--aleph-chrome-y) - 14px);
 }
 .aleph-chrome-row-h {
     height: calc(var(--aleph-chrome-y) * 2);
+}
+
+/* Uniform page-content top inset. Applied to every section page's root
+   container (Dashboard / Agents / Teams / Settings) so the right pane's
+   content top edge aligns with the left sidebar logo. Platform-aware via
+   `--aleph-content-top`: on macOS it clears the overlay traffic-light band
+   exactly like the brand row does. Pages keep their own horizontal/bottom
+   padding; only the top inset is centralized here. */
+.aleph-content-top {
+    padding-top: var(--aleph-content-top);
 }
 
 /* Belt-and-braces opt-out from the macOS `-webkit-app-region: drag`

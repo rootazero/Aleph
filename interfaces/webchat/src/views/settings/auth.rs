@@ -58,7 +58,7 @@ pub fn AuthView() -> impl IntoView {
     });
 
     view! {
-        <div class="flex-1 p-6 overflow-y-auto">
+        <div class="flex-1 px-6 pb-6 overflow-y-auto aleph-content-top">
             <div class="max-w-4xl">
                 <div class="mb-8">
                     <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, settings.auth.title)}</h1>

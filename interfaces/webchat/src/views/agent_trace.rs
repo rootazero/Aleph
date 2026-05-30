@@ -164,7 +164,7 @@ pub fn AgentTrace() -> impl IntoView {
 
     // --- Render --------------------------------------------------------------
     view! {
-        <div class="p-6 max-w-4xl mx-auto space-y-4">
+        <div class="px-6 pb-6 aleph-content-top max-w-4xl mx-auto space-y-4">
             <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, trace.title)}</h1>
 
             // Mode toggle + replay loader

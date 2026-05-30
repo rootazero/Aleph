@@ -423,7 +423,7 @@ pub fn Home() -> impl IntoView {
     };
 
     view! {
-        <div class="p-8 max-w-7xl mx-auto space-y-12">
+        <div class="px-8 pb-8 aleph-content-top max-w-7xl mx-auto space-y-12">
             // Header with connection controls
             <header class="flex items-center justify-between">
                 <div>

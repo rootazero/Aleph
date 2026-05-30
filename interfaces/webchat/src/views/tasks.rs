@@ -102,7 +102,7 @@ pub fn TasksView() -> impl IntoView {
     let i18n = use_i18n();
 
     view! {
-        <div class="flex flex-col h-full">
+        <div class="flex flex-col h-full aleph-content-top">
             // Tab bar
             <div class="flex items-center border-b border-border px-6 gap-1 flex-shrink-0">
                 <button

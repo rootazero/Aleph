@@ -95,7 +95,7 @@ pub fn ExecutionView() -> impl IntoView {
     };
 
     view! {
-        <div class="p-8 max-w-5xl mx-auto">
+        <div class="px-8 pb-8 aleph-content-top max-w-5xl mx-auto">
             <h1 class="text-2xl font-bold mb-6 text-text-primary">{t!(i18n, execution_settings.title)}</h1>
 
             <Show when=move || loading.get()>

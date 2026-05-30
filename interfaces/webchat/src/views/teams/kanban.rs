@@ -94,7 +94,7 @@ pub fn KanbanView() -> impl IntoView {
     let on_changed = Callback::new(move |()| refresh());
 
     view! {
-        <div class="flex flex-col h-full">
+        <div class="flex flex-col h-full aleph-content-top">
             {move || {
                 if state.teams.get().is_empty() {
                     view! {

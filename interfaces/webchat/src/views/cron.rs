@@ -342,7 +342,7 @@ pub fn CronView() -> impl IntoView {
     on_cleanup(move || state.unsubscribe_events(sub_id));
 
     view! {
-        <div class="flex flex-col h-full">
+        <div class="flex flex-col h-full aleph-content-top">
             // Header
             <div class="p-6 border-b border-border">
                 <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, cron.title)}</h1>

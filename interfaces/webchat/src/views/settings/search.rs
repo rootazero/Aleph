@@ -153,7 +153,7 @@ pub fn SearchView() -> impl IntoView {
     });
 
     view! {
-        <div class="flex h-full">
+        <div class="flex h-full aleph-content-top">
             // Left panel: Presets + Settings
             <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
                 // Header

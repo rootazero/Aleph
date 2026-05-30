@@ -52,7 +52,7 @@ pub fn ChannelsOverview() -> impl IntoView {
     });
 
     view! {
-        <div class="flex-1 p-6 overflow-y-auto bg-surface">
+        <div class="flex-1 px-6 pb-6 overflow-y-auto bg-surface aleph-content-top">
             <div class="max-w-5xl">
                 // Header
                 <div class="mb-6">

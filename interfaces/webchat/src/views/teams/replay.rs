@@ -106,7 +106,7 @@ pub fn ReplayView() -> impl IntoView {
     on_cleanup(move || dash.unsubscribe_events(sub_id));
 
     view! {
-        <div class="flex-1 flex h-full overflow-hidden">
+        <div class="flex-1 flex h-full overflow-hidden aleph-content-top">
             <TaskListPane
                 tasks=tasks
                 journals=journals

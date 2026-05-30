@@ -83,7 +83,7 @@ pub fn PlanDagView() -> impl IntoView {
     let on_changed = Callback::new(move |_| refresh());
 
     view! {
-        <div class="flex-1 flex flex-col h-full overflow-hidden">
+        <div class="flex-1 flex flex-col h-full overflow-hidden aleph-content-top">
             <div class="flex-1 overflow-auto bg-surface">
                 {move || {
                     let list = tasks.get();

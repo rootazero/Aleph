@@ -118,7 +118,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
         move |preset_id: &str| providers.get().into_iter().find(|p| p.name == preset_id);
 
     view! {
-        <div class="flex h-full">
+        <div class="flex h-full aleph-content-top">
             // Left panel - Provider list + Generation settings
             <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
                 // Header

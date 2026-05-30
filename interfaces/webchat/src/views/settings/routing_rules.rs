@@ -47,7 +47,7 @@ pub fn RoutingRulesView() -> impl IntoView {
     });
 
     view! {
-        <div class="flex flex-col h-full">
+        <div class="flex flex-col h-full aleph-content-top">
             // Header
             <div class="p-6 border-b border-border">
                 <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, settings.routing_rules.title)}</h1>

@@ -86,7 +86,7 @@ pub fn Memory() -> impl IntoView {
     };
 
     view! {
-        <div class="p-8 max-w-7xl mx-auto space-y-8">
+        <div class="px-8 pb-8 aleph-content-top max-w-7xl mx-auto space-y-8">
             <header class="flex items-center justify-between">
                 <div>
                     <h2 class="text-3xl font-bold tracking-tight mb-2 flex items-center gap-3 text-text-primary">

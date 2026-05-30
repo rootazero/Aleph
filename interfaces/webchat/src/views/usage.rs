@@ -95,7 +95,7 @@ pub fn UsageView() -> impl IntoView {
     });
 
     view! {
-        <div class="p-8 max-w-7xl mx-auto space-y-10">
+        <div class="px-8 pb-8 aleph-content-top max-w-7xl mx-auto space-y-10">
             <header>
                 <h2 class="text-3xl font-bold tracking-tight mb-2">{t!(i18n, usage.header_title)}</h2>
                 <p class="text-text-secondary">

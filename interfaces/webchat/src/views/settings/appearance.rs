@@ -31,7 +31,7 @@ pub fn AppearanceView() -> impl IntoView {
     };
 
     view! {
-        <div class="p-8 max-w-4xl mx-auto">
+        <div class="px-8 pb-8 aleph-content-top max-w-4xl mx-auto">
             <div class="mb-8">
                 <h1 class="text-3xl font-bold mb-2 text-text-primary">"外观"</h1>
                 <p class="text-text-secondary">

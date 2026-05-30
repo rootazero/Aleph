@@ -60,7 +60,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
         Some(d) => d,
         None => {
             return view! {
-                <div class="flex-1 p-6 overflow-y-auto bg-surface">
+                <div class="flex-1 px-6 pb-6 overflow-y-auto bg-surface aleph-content-top">
                     <div class="text-text-tertiary">{t!(i18n, settings.channels.unknown_platform)}</div>
                 </div>
             }
@@ -170,7 +170,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
     let is_discord = definition.id == "discord";
 
     view! {
-        <div class="flex-1 flex flex-col overflow-hidden bg-surface">
+        <div class="flex-1 flex flex-col overflow-hidden bg-surface aleph-content-top">
             // ---- Header: back link + platform identity ----
             <div class="p-6 pb-4 border-b border-border">
                 <A

@@ -139,7 +139,7 @@ pub fn AgentsView() -> impl IntoView {
     };
 
     view! {
-        <div class="p-6 max-w-6xl mx-auto">
+        <div class="px-6 pb-6 aleph-content-top max-w-6xl mx-auto">
             {move || {
                 if is_loading.get() {
                     return view! {

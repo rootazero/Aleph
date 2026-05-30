@@ -36,7 +36,7 @@ pub fn BehaviorView() -> impl IntoView {
     });
 
     view! {
-        <div class="p-6 space-y-6">
+        <div class="px-6 pb-6 aleph-content-top space-y-6">
             <div>
                 <h1 class="text-2xl font-bold text-text-primary">{t!(i18n, settings.behavior.title)}</h1>
                 <p class="mt-1 text-sm text-text-tertiary">
