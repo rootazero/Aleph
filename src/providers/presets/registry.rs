@@ -151,7 +151,39 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_display("Moonshot / Kimi")
         .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai/console/api-keys")
-        .with_fallback_models(&["kimi-k2-0905-preview", "moonshot-v1-128k", "moonshot-v1-32k"])
+        .with_description("OpenAI-compatible Kimi K2 / Moonshot chat models")
+        .with_fallback_models(&[
+            "kimi-k2-0905-preview",
+            "kimi-k2-turbo-preview",
+            "kimi-latest",
+            "moonshot-v1-128k",
+            "moonshot-v1-32k",
+            "moonshot-v1-8k",
+        ])
+        .with_thinking_profile(MOONSHOT_THINKING),
+    ),
+    // ─── Moonshot / Kimi (CN region, OpenAI protocol) ─────────────
+    (
+        "moonshot-cn",
+        ProviderPreset::new(
+            "https://api.moonshot.cn/v1",
+            "openai",
+            "#6366f1",
+            "kimi-k2-0905-preview",
+        )
+        .with_aliases(&["kimi-cn"])
+        .with_display("Moonshot / Kimi (CN)")
+        .with_homepage("https://platform.moonshot.cn")
+        .with_signup("https://platform.moonshot.cn/console/api-keys")
+        .with_description("China-region (api.moonshot.cn) Kimi K2 / Moonshot models")
+        .with_fallback_models(&[
+            "kimi-k2-0905-preview",
+            "kimi-k2-turbo-preview",
+            "kimi-latest",
+            "moonshot-v1-128k",
+            "moonshot-v1-32k",
+            "moonshot-v1-8k",
+        ])
         .with_thinking_profile(MOONSHOT_THINKING),
     ),
     (
