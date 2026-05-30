@@ -52,6 +52,13 @@ pub(in crate::commands::start) fn register_memory_handlers(
         memory_handlers::handle_app_list,
         memory_db
     );
+    // Read-only per-tool usage introspection over ToolInvocation raw rows.
+    register_handler!(
+        server,
+        "insights.tools",
+        alephcore::gateway::handlers::insights::handle_tools,
+        memory_db
+    );
     if let Some(cs) = compression_service {
         register_handler!(
             server,
@@ -133,6 +140,7 @@ pub(in crate::commands::start) fn register_memory_handlers(
         println!("  - memory.clear      : Clear memories");
         println!("  - memory.compress   : Trigger compression");
         println!("  - memory.reembed    : Re-embed all memories");
+        println!("  - insights.tools    : Per-tool usage breakdown");
         println!();
     }
 }
