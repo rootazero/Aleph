@@ -11,11 +11,11 @@ use tracing::{info, warn};
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserDialogTool, BrowserEvaluateTool,
+    BrowserClickTool, BrowserConsoleTool, BrowserDialogTool, BrowserDragTool, BrowserEvaluateTool,
     BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
-    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool,
+    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool, BrowserResizeTool,
     BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSnapshotTool,
-    BrowserTabsTool, BrowserTypeTool, BrowserWaitForTool,
+    BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::skill_reader::{
     ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
@@ -204,6 +204,9 @@ impl BuiltinToolRegistry {
         let browser_pdf_tool = BrowserPdfTool::new(Arc::clone(&browser_profile_manager));
         let browser_network_tool = BrowserNetworkTool::new(Arc::clone(&browser_profile_manager));
         let browser_dialog_tool = BrowserDialogTool::new(Arc::clone(&browser_profile_manager));
+        let browser_drag_tool = BrowserDragTool::new(Arc::clone(&browser_profile_manager));
+        let browser_upload_tool = BrowserUploadTool::new(Arc::clone(&browser_profile_manager));
+        let browser_resize_tool = BrowserResizeTool::new(Arc::clone(&browser_profile_manager));
         // Start the idle-profile reaper (sweeps stale browsers every 60s).
         browser_profile_manager.spawn_idle_reaper(60);
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
@@ -337,6 +340,9 @@ impl BuiltinToolRegistry {
                 browser_pdf_tool.definition(),
                 browser_network_tool.definition(),
                 browser_dialog_tool.definition(),
+                browser_drag_tool.definition(),
+                browser_upload_tool.definition(),
+                browser_resize_tool.definition(),
                 browser_profile_tool.definition(),
             ];
             for td in &browser_tool_defs {
@@ -1519,6 +1525,9 @@ impl BuiltinToolRegistry {
             browser_pdf_tool,
             browser_network_tool,
             browser_dialog_tool,
+            browser_drag_tool,
+            browser_upload_tool,
+            browser_resize_tool,
             browser_profile_tool,
             agent_create_tool,
             agent_list_tool,

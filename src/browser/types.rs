@@ -4,64 +4,6 @@ use serde::{Deserialize, Serialize};
 /// Unique identifier for a browser tab.
 pub type TabId = String;
 
-/// Configuration for launching or connecting to a browser instance.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct BrowserConfig {
-    /// How to obtain a browser instance.
-    pub mode: LaunchMode,
-
-    /// Custom user data directory for the browser profile.
-    pub user_data_dir: Option<String>,
-
-    /// CDP (Chrome DevTools Protocol) port.
-    #[serde(default = "default_cdp_port")]
-    pub cdp_port: u16,
-
-    /// Whether to launch in headless mode.
-    #[serde(default)]
-    pub headless: bool,
-
-    /// Extra command-line arguments passed to the browser binary.
-    #[serde(default)]
-    pub extra_args: Vec<String>,
-}
-
-fn default_cdp_port() -> u16 {
-    9222
-}
-
-impl Default for BrowserConfig {
-    fn default() -> Self {
-        Self {
-            mode: LaunchMode::Auto,
-            user_data_dir: None,
-            cdp_port: 9222,
-            headless: false,
-            extra_args: Vec::new(),
-        }
-    }
-}
-
-/// How to obtain a browser instance.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum LaunchMode {
-    /// Automatically detect and launch a browser.
-    Auto,
-
-    /// Connect to an existing browser via a WebSocket endpoint.
-    Connect {
-        /// WebSocket debugger URL (e.g. ws://127.0.0.1:9222/devtools/browser/...).
-        endpoint: String,
-    },
-
-    /// Launch a specific browser binary.
-    Binary {
-        /// Path to the browser executable.
-        path: String,
-    },
-}
-
 /// Target for a browser action (click, hover, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -138,16 +80,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_browser_config_defaults() {
-        let config = BrowserConfig::default();
-        assert_eq!(config.cdp_port, 9222);
-        assert!(!config.headless);
-        assert!(config.extra_args.is_empty());
-        assert!(config.user_data_dir.is_none());
-        assert!(matches!(config.mode, LaunchMode::Auto));
-    }
-
-    #[test]
     fn test_action_target_serialization() {
         // Ref variant
         let target = ActionTarget::Ref {
@@ -169,34 +101,6 @@ mod tests {
         assert!(
             matches!(round_trip, ActionTarget::Coordinates { x, y } if x == 100.0 && y == 200.0)
         );
-    }
-
-    #[test]
-    fn test_launch_mode_tagged_enum_serialization() {
-        // Auto
-        let mode = LaunchMode::Auto;
-        let json = serde_json::to_value(&mode).unwrap();
-        assert_eq!(json["type"], "auto");
-
-        // Connect
-        let mode = LaunchMode::Connect {
-            endpoint: "ws://127.0.0.1:9222".to_string(),
-        };
-        let json = serde_json::to_value(&mode).unwrap();
-        assert_eq!(json["type"], "connect");
-        assert_eq!(json["endpoint"], "ws://127.0.0.1:9222");
-
-        // Binary
-        let mode = LaunchMode::Binary {
-            path: "/usr/bin/chromium".to_string(),
-        };
-        let json = serde_json::to_value(&mode).unwrap();
-        assert_eq!(json["type"], "binary");
-        assert_eq!(json["path"], "/usr/bin/chromium");
-
-        // Round-trip deserialization
-        let round_trip: LaunchMode = serde_json::from_value(json).unwrap();
-        assert!(matches!(round_trip, LaunchMode::Binary { path } if path == "/usr/bin/chromium"));
     }
 
     #[test]

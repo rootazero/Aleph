@@ -5,6 +5,7 @@
 pub mod click;
 pub mod console;
 pub mod dialog;
+pub mod drag;
 pub mod evaluate;
 pub mod fill_form;
 pub mod hover;
@@ -14,12 +15,14 @@ pub mod open;
 pub mod pdf;
 pub mod press_key;
 pub mod profile_tool;
+pub mod resize;
 pub mod screenshot;
 pub mod scroll;
 pub mod select;
 pub mod snapshot;
 pub mod tabs;
 pub mod type_text;
+pub mod upload;
 pub mod wait_for;
 
 use crate::browser::backend::BrowserBackend;
@@ -155,6 +158,7 @@ pub(crate) async fn make_backend_and_tab_guarded(
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
 pub use console::{BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool};
 pub use dialog::{BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool};
+pub use drag::{BrowserDragArgs, BrowserDragOutput, BrowserDragTool};
 pub use evaluate::{BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool};
 pub use fill_form::{BrowserFillFormArgs, BrowserFillFormOutput, BrowserFillFormTool};
 pub use hover::{BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool};
@@ -164,12 +168,14 @@ pub use open::{BrowserOpenArgs, BrowserOpenOutput, BrowserOpenTool};
 pub use pdf::{BrowserPdfArgs, BrowserPdfOutput, BrowserPdfTool};
 pub use press_key::{BrowserPressKeyArgs, BrowserPressKeyOutput, BrowserPressKeyTool};
 pub use profile_tool::{BrowserProfileArgs, BrowserProfileOutput, BrowserProfileTool};
+pub use resize::{BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool};
 pub use screenshot::{BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool};
 pub use scroll::{BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool};
 pub use select::{BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool};
 pub use snapshot::{BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool};
 pub use tabs::{BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool};
 pub use type_text::{BrowserTypeArgs, BrowserTypeOutput, BrowserTypeTool};
+pub use upload::{BrowserUploadArgs, BrowserUploadOutput, BrowserUploadTool};
 pub use wait_for::{BrowserWaitForArgs, BrowserWaitForOutput, BrowserWaitForTool};
 
 /// Default browser profile name, used by serde `default` attributes across all browser tools.

@@ -105,6 +105,37 @@ pub trait BrowserBackend: Send + Sync {
         ))
     }
 
+    /// Drag-and-drop from one snapshot element onto another.
+    /// Both targets must be snapshot refs (coordinates unsupported).
+    /// Default impl returns Unsupported.
+    async fn drag(
+        &self,
+        _tab_id: &str,
+        _from: ActionTarget,
+        _to: ActionTarget,
+    ) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed("drag not supported".into()))
+    }
+
+    /// Attach one or more local files to a file input.
+    /// `target` identifies the `<input type=file>` element (required by the
+    /// existing-session/MCP backend; ignored by the managed CLI backend, which
+    /// targets the page's file chooser directly). Default impl returns Unsupported.
+    async fn upload(
+        &self,
+        _tab_id: &str,
+        _target: Option<ActionTarget>,
+        _paths: &[String],
+    ) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed("upload not supported".into()))
+    }
+
+    /// Resize the browser viewport / window to `width` × `height` CSS pixels.
+    /// Default impl returns Unsupported.
+    async fn resize(&self, _tab_id: &str, _width: u32, _height: u32) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed("resize not supported".into()))
+    }
+
     async fn fill_form(
         &self,
         tab_id: &str,
