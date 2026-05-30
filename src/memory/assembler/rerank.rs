@@ -36,7 +36,7 @@ pub(crate) fn build_prompt(query: &str, candidates: &[Candidate], total_budget: 
     let max_sum = ((total_budget as f32) * 0.7) as u32;
     let cand_block: String = candidates
         .iter()
-        .filter(|c| c.slot_hint != SlotKind::UserProfile)
+        .filter(|c| c.slot_hint != SlotKind::UserProfile && c.slot_hint != SlotKind::Feedback)
         .map(|c| {
             let summary: String = c.full_content.chars().take(30).collect();
             format!(
@@ -62,6 +62,7 @@ fn slot_name(k: SlotKind) -> &'static str {
         SlotKind::UserProfile => "user_profile",
         SlotKind::SessionRecent => "session_recent",
         SlotKind::RelevantNotes => "relevant_notes",
+        SlotKind::Feedback => "feedback",
         SlotKind::RawFragments => "raw_fragments",
         SlotKind::Nudges => "nudges",
     }
@@ -247,6 +248,19 @@ mod tests {
         let c = [cand("note://a", SlotKind::RelevantNotes)];
         let raw = "```json\n{\"slots\":[{\"kind\":\"relevant_notes\",\"item_ids\":[\"note://a\"],\"tokens_budget\":500}]}\n```";
         assert!(parse_response(raw, &c, 4000).is_ok());
+    }
+
+    #[test]
+    fn prompt_excludes_feedback_candidates() {
+        // Feedback is pre-populated by the assembler and must NOT be offered to
+        // the re-ranker (mirrors user_profile exclusion).
+        let c = [
+            cand("note://feedback/no-jsdoc", SlotKind::Feedback),
+            cand("note://reference/a", SlotKind::RelevantNotes),
+        ];
+        let p = build_prompt("q", &c, 4000);
+        assert!(!p.contains("note://feedback/no-jsdoc"));
+        assert!(p.contains("note://reference/a"));
     }
 
     #[test]

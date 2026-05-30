@@ -67,7 +67,8 @@ mod integration_tests {
     use crate::error::AlephError;
     use crate::memory::assembler::hybrid::LlmReranker;
     use crate::memory::assembler::{
-        AssemblyBudget, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler,
+        AssemblyBudget, FeedbackFloorLoader, HybridAssembler, UserProfileLoader,
+        WorkingMemoryAssembler,
     };
     use crate::memory::context::FactSource;
     use crate::memory::embedding_provider::EmbeddingProvider;
@@ -117,6 +118,7 @@ mod integration_tests {
         let snap_dir = notes_dir.join("_snapshots");
         std::fs::create_dir_all(&snap_dir).unwrap();
         let snapshots = Arc::new(SnapshotReader::new(&snap_dir));
+        let feedback_floor = FeedbackFloorLoader::new(notes_dir.clone());
         let profile = UserProfileLoader::new(notes_dir);
         let reranker: Arc<dyn LlmReranker> = Arc::new(NeverCalledReranker);
         let cfg = crate::config::types::memory::AssemblerConfig {
@@ -130,7 +132,15 @@ mod integration_tests {
             fallback_skeleton: Default::default(),
             assembly_log: Default::default(),
         };
-        HybridAssembler::new(retrieval, snapshots, backend, profile, reranker, cfg)
+        HybridAssembler::new(
+            retrieval,
+            snapshots,
+            backend,
+            profile,
+            feedback_floor,
+            reranker,
+            cfg,
+        )
     }
 
     /// Seed: 2 Transcript raw memories + 1 SessionCompressed raw memory.

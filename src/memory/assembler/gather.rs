@@ -3,6 +3,7 @@
 
 use super::envelope::{ItemSource, SlotKind};
 use super::fallback::Candidate;
+use super::feedback_floor::{FeedbackFloorEntry, FeedbackFloorLoader};
 use super::profile::UserProfileLoader;
 use crate::memory::context::FactSource;
 use crate::memory::note_retrieval::NoteFactRetrieval;
@@ -27,21 +28,38 @@ pub(crate) struct Gatherer {
     pub snapshots: Arc<SnapshotReader>,
     pub backend: MemoryBackend,
     pub profile: Arc<UserProfileLoader>,
+    pub feedback_floor: Arc<FeedbackFloorLoader>,
 }
 
 impl Gatherer {
     pub async fn gather(&self, input: &GatherInputs) -> Vec<Candidate> {
-        let (notes, snapshot, raws, profile) = tokio::join!(
+        let (notes, snapshot, raws, profile, feedback_floor) = tokio::join!(
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
             self.fetch_snapshot(input.session_id.as_deref()),
             self.fetch_raws(&input.agent_id, input.session_id.as_deref(), &input.filter),
             self.profile.load(&input.agent_id),
+            self.feedback_floor.load(&input.agent_id),
         );
 
-        let mut pool = Vec::with_capacity(notes.len() + raws.len() + 2);
+        let mut pool = Vec::with_capacity(notes.len() + raws.len() + feedback_floor.len() + 2);
+        // Track feedback notes the query already surfaced so the always-on
+        // floor only ADDS the High/Critical rules retrieval missed — query
+        // matches keep their real relevance score.
+        let mut seen_feedback: std::collections::HashSet<String> = notes
+            .iter()
+            .filter(|c| c.slot_hint == SlotKind::Feedback)
+            .map(|c| c.id.clone())
+            .collect();
         pool.extend(notes);
         pool.extend(snapshot);
         pool.extend(raws);
+        for entry in feedback_floor {
+            let id = format!("note://{}", entry.path);
+            if !seen_feedback.insert(id.clone()) {
+                continue;
+            }
+            pool.push(feedback_entry_to_candidate(id, entry));
+        }
         if let Some(body) = profile {
             pool.push(Candidate {
                 id: "note://personal/profile".into(),
@@ -83,6 +101,7 @@ impl Gatherer {
                         .next()
                         .unwrap_or(&path_no_scheme)
                         .to_string();
+                    let slot_hint = slot_hint_for_path(&path_no_scheme);
                     Candidate {
                         id: display_id,
                         title,
@@ -93,7 +112,7 @@ impl Gatherer {
                         },
                         relevance: sf.score,
                         updated_at: sf.fact.updated_at,
-                        slot_hint: SlotKind::RelevantNotes,
+                        slot_hint,
                         fact_source: FactSource::Extracted,
                     }
                 })
@@ -188,6 +207,44 @@ impl Gatherer {
     }
 }
 
+/// Category-prefix of `feedback/` notes (written by `FeedbackDistill`).
+const FEEDBACK_CATEGORY_PREFIX: &str = "feedback/";
+
+/// Decide which slot a retrieved note belongs to from its scheme-less path
+/// (`"{category}/{filename}"`).
+///
+/// Routing is keyed on the on-disk path prefix. `NoteType::Feedback` now exists
+/// so `to_category_dir()` would also yield `"feedback"`, but the physical path
+/// is the durable signal: it stays correct for legacy notes written before the
+/// variant existed (whose persisted type mangled to `Other`).
+fn slot_hint_for_path(path_no_scheme: &str) -> SlotKind {
+    if path_no_scheme.starts_with(FEEDBACK_CATEGORY_PREFIX) {
+        SlotKind::Feedback
+    } else {
+        SlotKind::RelevantNotes
+    }
+}
+
+/// Convert an always-on [`FeedbackFloorEntry`] into a `Feedback`-slotted
+/// candidate. Relevance is pinned to `1.0` (like the user profile) so it is
+/// never edged out, and `hybrid.rs::run_rerank` pre-populates the Feedback slot
+/// unconditionally — these standing rules surface regardless of query match.
+fn feedback_entry_to_candidate(id: String, entry: FeedbackFloorEntry) -> Candidate {
+    Candidate {
+        id,
+        title: entry.title,
+        full_content: entry.body,
+        source: ItemSource::Note {
+            path: entry.path,
+            category: "feedback".into(),
+        },
+        relevance: 1.0,
+        updated_at: entry.updated_at,
+        slot_hint: SlotKind::Feedback,
+        fact_source: FactSource::Extracted,
+    }
+}
+
 fn raw_to_candidate(r: RawMemory) -> Candidate {
     let session_id = r.session_id.clone().unwrap_or_default();
     let fact_source = raw_source_to_fact_source(&r.source);
@@ -250,6 +307,20 @@ mod tests {
         .with_session("sess-2");
         let c = raw_to_candidate(raw);
         assert_eq!(c.fact_source, FactSource::SessionCompressed);
+    }
+
+    #[test]
+    fn feedback_path_routes_to_feedback_slot() {
+        assert_eq!(slot_hint_for_path("feedback/no-jsdoc"), SlotKind::Feedback);
+        // Substring, not prefix — must NOT match.
+        assert_eq!(
+            slot_hint_for_path("reference/feedback-loops"),
+            SlotKind::RelevantNotes
+        );
+        assert_eq!(
+            slot_hint_for_path("reference/rust-ownership"),
+            SlotKind::RelevantNotes
+        );
     }
 
     #[test]

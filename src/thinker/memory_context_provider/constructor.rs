@@ -1,7 +1,9 @@
 use super::{MemoryContextConfig, MemoryContextProvider, NoopReranker};
 use crate::config::types::memory::{AssemblerConfig, MemoryInjectionMode};
 use crate::memory::assembler::hybrid::AiProviderReranker;
-use crate::memory::assembler::{HybridAssembler, UserProfileLoader, WorkingMemoryAssembler};
+use crate::memory::assembler::{
+    FeedbackFloorLoader, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler,
+};
 use crate::memory::curated::CuratedConfig;
 use crate::memory::note_retrieval::NoteFactRetrieval;
 use crate::memory::notes::NoteIndexer;
@@ -198,6 +200,7 @@ impl MemoryContextProvider {
                     })
             });
         let snapshots = Arc::new(SnapshotReader::new(snapshot_dir));
+        let feedback_floor = FeedbackFloorLoader::new(memory_dir.clone());
         let profile = UserProfileLoader::new(memory_dir);
         let reranker: Arc<dyn crate::memory::assembler::hybrid::LlmReranker> = match provider {
             Some(p) => AiProviderReranker::new(p),
@@ -208,6 +211,7 @@ impl MemoryContextProvider {
             snapshots,
             memory_db,
             profile,
+            feedback_floor,
             reranker,
             assembler_config,
         ));

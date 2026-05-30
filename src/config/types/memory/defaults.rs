@@ -197,6 +197,12 @@ pub fn default_raw_fragments_tokens() -> u32 {
     1000
 }
 
+/// Token budget for the `Feedback` slot — user-taught rules/corrections.
+/// Small on purpose: these notes are short imperative rules, not prose.
+pub fn default_feedback_tokens() -> u32 {
+    500
+}
+
 pub fn default_assembly_retention_days() -> u32 {
     14
 }
