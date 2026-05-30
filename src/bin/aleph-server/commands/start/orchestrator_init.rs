@@ -260,14 +260,30 @@ fn build_guardrail_registry(
 
     // PiiSecretsGuardrail wiring — pass vault-backed resolver so {{secret:NAME}}
     // in tool args resolves at the tool_call surface (LLM→tool boundary).
-    let resolver: Option<Arc<dyn alephcore::secrets::AsyncSecretResolver>> = Some(Arc::new(
+    let vault_resolver: Arc<dyn alephcore::secrets::AsyncSecretResolver> = Arc::new(
         alephcore::secrets::VaultSecretResolver::new(shared_token_mgr),
-    )
-        as Arc<dyn alephcore::secrets::AsyncSecretResolver>);
-
-    let (guard, audit_rx) = alephcore::security::RuntimeSecurityGuard::new_with_audit(
-        alephcore::security::SecurityGuardConfig::default(),
     );
+    // Apply operator-defined virtual-key aliases ([secrets_config].virtual_keys)
+    // so `{{secret:ALIAS}}` resolves to the mapped secret name. Pass-through
+    // when no aliases are configured.
+    let resolver: Option<Arc<dyn alephcore::secrets::AsyncSecretResolver>> =
+        if config.secrets_config.virtual_keys.is_empty() {
+            Some(vault_resolver)
+        } else {
+            Some(Arc::new(alephcore::secrets::VirtualKeyResolver::new(
+                vault_resolver,
+                config.secrets_config.virtual_keys.clone(),
+            ))
+                as Arc<dyn alephcore::secrets::AsyncSecretResolver>)
+        };
+
+    // Feed operator-configured leak patterns ([secrets_config].custom_leak_patterns)
+    // into the guard so they take effect alongside the built-in detectors.
+    let guard_config = alephcore::security::SecurityGuardConfig {
+        custom_leak_patterns: config.secrets_config.custom_leak_patterns.clone(),
+        ..Default::default()
+    };
+    let (guard, audit_rx) = alephcore::security::RuntimeSecurityGuard::new_with_audit(guard_config);
     let guard = Arc::new(guard);
 
     // Drain audit events to the security_audit_log table.

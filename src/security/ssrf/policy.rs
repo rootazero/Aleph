@@ -4,22 +4,45 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Policy controlling SSRF validation behavior.
+///
+/// Every field carries a serde default (matching [`SsrfPolicy::default`]) so a
+/// partially-populated `[ssrf]` TOML table — e.g. one that only sets
+/// `allowed_hosts` — still deserializes instead of erroring on the missing
+/// siblings. This keeps hand-edited and Panel-written configs robust.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SsrfPolicy {
     /// Master switch for SSRF protection.
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
     /// Whether to allow requests to private/internal IP ranges.
     /// Even when true, loopback and cloud metadata endpoints remain blocked.
+    #[serde(default)]
     pub allow_private_network: bool,
     /// Hosts that bypass the blocklist. Supports exact matches
     /// (e.g., "api.example.com") and wildcard subdomain matches (e.g., "*.example.com").
+    #[serde(default)]
     pub allowed_hosts: Vec<String>,
     /// Hosts that are always blocked. Same matching rules as allowed_hosts.
+    #[serde(default)]
     pub blocked_hosts: Vec<String>,
     /// Maximum number of HTTP redirects to follow.
+    #[serde(default = "default_max_redirects")]
     pub max_redirects: u8,
     /// Strip Authorization/Cookie headers on cross-origin redirects.
+    #[serde(default = "default_strip_auth")]
     pub strip_auth_on_cross_origin: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+fn default_max_redirects() -> u8 {
+    5
+}
+
+fn default_strip_auth() -> bool {
+    true
 }
 
 impl Default for SsrfPolicy {

@@ -37,14 +37,16 @@ pub(super) fn OutboundSecuritySection(config: RwSignal<Option<SecurityConfig>>) 
                     </div>
                 </label>
 
-                // Tool LAN access toggle
+                // Allow private/internal network access toggle. Maps to the
+                // canonical [ssrf].allow_private_network knob (loopback and
+                // cloud-metadata endpoints stay blocked regardless).
                 <label class="flex items-center space-x-3 cursor-pointer ml-4">
                     <input
                         type="checkbox"
-                        prop:checked=move || config.get().map(|c| c.ssrf_allow_tool_private_network).unwrap_or(false)
+                        prop:checked=move || config.get().map(|c| c.ssrf_allow_private_network).unwrap_or(false)
                         on:change=move |ev| {
                             if let Some(mut cfg) = config.get() {
-                                cfg.ssrf_allow_tool_private_network = event_target_checked(&ev);
+                                cfg.ssrf_allow_private_network = event_target_checked(&ev);
                                 config.set(Some(cfg));
                             }
                         }
@@ -54,26 +56,6 @@ pub(super) fn OutboundSecuritySection(config: RwSignal<Option<SecurityConfig>>) 
                     <div>
                         <div class="font-medium text-text-primary">{t!(i18n, settings.security.ssrf_allow_tool_lan)}</div>
                         <div class="text-xs text-text-tertiary">{t!(i18n, settings.security.ssrf_allow_tool_lan_desc)}</div>
-                    </div>
-                </label>
-
-                // Webhook LAN access toggle
-                <label class="flex items-center space-x-3 cursor-pointer ml-4">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || config.get().map(|c| c.ssrf_allow_webhook_private_network).unwrap_or(false)
-                        on:change=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.ssrf_allow_webhook_private_network = event_target_checked(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        disabled=move || !config.get().map(|c| c.ssrf_enabled).unwrap_or(true)
-                        class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
-                    />
-                    <div>
-                        <div class="font-medium text-text-primary">{t!(i18n, settings.security.ssrf_allow_webhook_lan)}</div>
-                        <div class="text-xs text-text-tertiary">{t!(i18n, settings.security.ssrf_allow_webhook_lan_desc)}</div>
                     </div>
                 </label>
 
@@ -154,4 +136,3 @@ pub(super) fn OutboundSecuritySection(config: RwSignal<Option<SecurityConfig>>) 
         </div>
     }
 }
-

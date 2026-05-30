@@ -166,6 +166,14 @@ pub struct AuthContext {
     pub guest_session_manager: Arc<crate::gateway::security::GuestSessionManager>,
     pub event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
     pub auth_mode: AuthMode,
+    /// Whether guest invitation tokens may activate a guest session.
+    /// Sourced from `[gateway].allow_guest`. When `false`, the guest
+    /// invitation path in `connect` is rejected. Default `true`.
+    pub allow_guest: bool,
+    /// Whether device pairing (the 6-digit `/pair` flow) is accepted.
+    /// Sourced from `[gateway].enable_pairing`. When `false`, pairing
+    /// requests at `connect` are rejected. Default `true`.
+    pub enable_pairing: bool,
     pub shared_token_mgr: Arc<SharedTokenManager>,
     /// Monotonic state-version tracker, shared with `GatewayServer`.
     /// Surfaced in the `connect` success response so clients capture a
@@ -312,6 +320,8 @@ pub(crate) mod tests {
             guest_session_manager,
             event_bus,
             auth_mode: AuthMode::Token,
+            allow_guest: true,
+            enable_pairing: true,
             shared_token_mgr,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
             transport_policy: TransportPolicy::defaults(),

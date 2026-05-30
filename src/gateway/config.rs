@@ -106,6 +106,14 @@ pub struct GatewayServerConfig {
     /// Authentication configuration
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Whether device pairing (the 6-digit `/pair` flow) is accepted. When
+    /// `false`, pairing requests are rejected at `connect`. Default `true`.
+    #[serde(default = "default_true_flag")]
+    pub enable_pairing: bool,
+    /// Whether guest invitation tokens may activate a guest session. When
+    /// `false`, guest connects are rejected at `connect`. Default `true`.
+    #[serde(default = "default_true_flag")]
+    pub allow_guest: bool,
     /// Lane concurrency & channel-class priority configuration. Missing
     /// keys fall back to [`LaneConfig::default`], so old TOML files
     /// without a `[gateway.lane]` block keep loading.
@@ -194,6 +202,10 @@ fn default_idle_timeout_secs() -> u64 {
     90
 }
 
+fn default_true_flag() -> bool {
+    true
+}
+
 impl Default for GatewayServerConfig {
     fn default() -> Self {
         Self {
@@ -203,6 +215,8 @@ impl Default for GatewayServerConfig {
             require_auth: false,
             protocol_version: 1,
             auth: AuthConfig::default(),
+            enable_pairing: true,
+            allow_guest: true,
             lane: LaneConfig::default(),
             ping_interval_secs: default_ping_interval_secs(),
             idle_timeout_secs: default_idle_timeout_secs(),

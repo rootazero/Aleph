@@ -2,6 +2,7 @@
 //!
 //! Provides RPC methods for managing search settings.
 
+use crate::config::types::PiiAction;
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -60,8 +61,16 @@ pub async fn handle_get(
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
 
+    // PII toggles are sourced from the canonical `[privacy]` config — the same
+    // section consumed by `PiiEngine` at runtime. A category is "on" in the
+    // simple Panel UI whenever its action is not `Off` (Block or Warn).
+    let pii_enabled = cfg.privacy.pii_filtering;
+    let pii_scrub_email = cfg.privacy.email != PiiAction::Off;
+    let pii_scrub_phone = cfg.privacy.phone != PiiAction::Off;
+    let pii_scrub_ssn = cfg.privacy.id_card != PiiAction::Off;
+    let pii_scrub_credit_card = cfg.privacy.bank_card != PiiAction::Off;
+
     if let Some(search) = &cfg.search {
-        let pii = search.pii.as_ref();
         let backends: Vec<SearchBackendDto> = search
             .backends
             .iter()
@@ -86,11 +95,11 @@ pub async fn handle_get(
             default_provider: search.default_provider.clone(),
             max_results: search.max_results as u64,
             timeout_seconds: search.timeout_seconds,
-            pii_enabled: pii.map(|p| p.enabled).unwrap_or(false),
-            pii_scrub_email: pii.map(|p| p.scrub_email).unwrap_or(true),
-            pii_scrub_phone: pii.map(|p| p.scrub_phone).unwrap_or(true),
-            pii_scrub_ssn: pii.map(|p| p.scrub_ssn).unwrap_or(true),
-            pii_scrub_credit_card: pii.map(|p| p.scrub_credit_card).unwrap_or(true),
+            pii_enabled,
+            pii_scrub_email,
+            pii_scrub_phone,
+            pii_scrub_ssn,
+            pii_scrub_credit_card,
             backends,
         };
         match serde_json::to_value(dto) {
@@ -102,17 +111,18 @@ pub async fn handle_get(
             ),
         }
     } else {
-        // Return default values — no provider active by default
+        // No search provider active by default — but PII toggles still reflect
+        // the canonical `[privacy]` config so the page is truthful.
         let dto = SearchConfigDto {
             enabled: false,
             default_provider: String::new(),
             max_results: 5,
             timeout_seconds: 10,
-            pii_enabled: false,
-            pii_scrub_email: true,
-            pii_scrub_phone: true,
-            pii_scrub_ssn: true,
-            pii_scrub_credit_card: true,
+            pii_enabled,
+            pii_scrub_email,
+            pii_scrub_phone,
+            pii_scrub_ssn,
+            pii_scrub_credit_card,
             backends: Vec::new(),
         };
         match serde_json::to_value(dto) {
@@ -182,8 +192,7 @@ pub async fn handle_update(
                 timeout_seconds: 10,
                 backends: std::collections::HashMap::new(),
                 pii: Some(crate::config::types::PIIConfig::default()),
-                web_fetch_fallback:
-                    crate::config::types::search::default_web_fetch_fallback(),
+                web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
             });
         }
 
@@ -224,28 +233,46 @@ pub async fn handle_update(
                 entry.engine_id = backend_dto.engine_id.clone();
                 entry.verified = false; // Config change resets verified
             }
-
-            // Update PII config
-            if search.pii.is_none() {
-                search.pii = Some(crate::config::types::PIIConfig::default());
-            }
-            if let Some(pii) = &mut search.pii {
-                pii.enabled = dto.pii_enabled;
-                pii.scrub_email = dto.pii_scrub_email;
-                pii.scrub_phone = dto.pii_scrub_phone;
-                pii.scrub_ssn = dto.pii_scrub_ssn;
-                pii.scrub_credit_card = dto.pii_scrub_credit_card;
-            }
         }
 
+        // Mirror the PII toggles into the canonical `[privacy]` config — the
+        // section `PiiEngine` actually consumes. Checking a category that was
+        // `Off` turns it `Block`; an already-on category keeps its `Block`/`Warn`
+        // distinction (the simple on/off UI never downgrades Warn→Block).
+        // Unchecking sets `Off`. Other categories (api_key, ssh_key, ip_address)
+        // and custom rules are left untouched.
+        let apply = |current: &mut PiiAction, on: bool| {
+            *current = if on {
+                if *current == PiiAction::Off {
+                    PiiAction::Block
+                } else {
+                    current.clone()
+                }
+            } else {
+                PiiAction::Off
+            };
+        };
+        cfg.privacy.pii_filtering = dto.pii_enabled;
+        apply(&mut cfg.privacy.email, dto.pii_scrub_email);
+        apply(&mut cfg.privacy.phone, dto.pii_scrub_phone);
+        apply(&mut cfg.privacy.id_card, dto.pii_scrub_ssn);
+        apply(&mut cfg.privacy.bank_card, dto.pii_scrub_credit_card);
+
         // api_key is #[serde(skip)] — never persisted to config.toml
-        if let Err(e) = cfg.save_incremental(&["search"]).map_err(|e| e.to_string()) {
+        if let Err(e) = cfg
+            .save_incremental(&["search", "privacy"])
+            .map_err(|e| e.to_string())
+        {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
                 format!("Failed to save config: {}", e),
             );
         }
+
+        // Hot-reload the global PII engine so the new policy takes effect
+        // without a restart (PiiEngine::global() is what the runtime reads).
+        crate::pii::PiiEngine::reload(cfg.privacy.clone());
     }
 
     // Broadcast config change event

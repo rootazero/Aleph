@@ -11,6 +11,7 @@ pub mod provider;
 pub mod types;
 pub mod vault;
 pub mod vault_resolver;
+pub mod virtual_key_resolver;
 pub mod web3_signer;
 
 pub use injection::{render_with_secrets, AsyncSecretResolver, InjectedSecret};
@@ -20,4 +21,5 @@ pub use provider::ProviderStatus;
 pub use types::{DecryptedSecret, EntryMetadata, SecretError};
 pub use vault::SecretVault;
 pub use vault_resolver::VaultSecretResolver;
+pub use virtual_key_resolver::VirtualKeyResolver;
 pub use web3_signer::{EvmSigner, SecretResolver, SignIntent, SignedResult};

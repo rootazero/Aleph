@@ -140,10 +140,11 @@ pub struct SecurityConfig {
     // SSRF outbound protection
     #[serde(default = "default_true_ssrf")]
     pub ssrf_enabled: bool,
+    /// Allow outbound requests to private/internal IP ranges. Maps to the
+    /// canonical `[ssrf].allow_private_network`. Loopback and cloud-metadata
+    /// endpoints remain blocked regardless.
     #[serde(default)]
-    pub ssrf_allow_tool_private_network: bool,
-    #[serde(default)]
-    pub ssrf_allow_webhook_private_network: bool,
+    pub ssrf_allow_private_network: bool,
     #[serde(default = "default_max_redirects")]
     pub ssrf_max_redirects: u8,
     #[serde(default)]
@@ -193,28 +194,23 @@ pub async fn handle_get(
     // Read gateway.host from config file to determine network access scope
     let host = toml_io::read_gateway_host_from_config(&config_patcher);
 
-    let (
-        ssrf_enabled,
-        ssrf_tool_private,
-        ssrf_webhook_private,
-        ssrf_max_redirects,
-        ssrf_allowed,
-        ssrf_blocked,
-    ) = toml_io::read_ssrf_config_from_toml(&config_patcher);
+    let (ssrf_enabled, ssrf_allow_private, ssrf_max_redirects, ssrf_allowed, ssrf_blocked) =
+        toml_io::read_ssrf_config_from_toml(&config_patcher);
 
     let shell_security = toml_io::read_shell_security_from_toml(&config_patcher);
     let custom_pii_rules = toml_io::read_custom_pii_rules_from_toml(&config_patcher);
     let secrets_protection = toml_io::read_secrets_protection_from_toml(&config_patcher);
     let sandbox_rate_limit = rate_limit::read_sandbox_rate_limit_from_toml(&config_patcher);
+    let (require_auth, enable_pairing, allow_guest) =
+        toml_io::read_gateway_auth_flags(&config_patcher);
 
     let security_config = SecurityConfig {
-        require_auth: false,
-        enable_pairing: true,
-        allow_guest: false,
+        require_auth,
+        enable_pairing,
+        allow_guest,
         network_access: NetworkAccess::from_bind_address(&host),
         ssrf_enabled,
-        ssrf_allow_tool_private_network: ssrf_tool_private,
-        ssrf_allow_webhook_private_network: ssrf_webhook_private,
+        ssrf_allow_private_network: ssrf_allow_private,
         ssrf_max_redirects,
         ssrf_allowed_hosts: ssrf_allowed,
         ssrf_blocked_hosts: ssrf_blocked,
@@ -254,14 +250,23 @@ pub async fn handle_update(
 
     // Check current host to determine if restart is needed
     let current_host = toml_io::read_gateway_host_from_config(&config_patcher);
+    let (cur_require_auth, cur_enable_pairing, cur_allow_guest) =
+        toml_io::read_gateway_auth_flags(&config_patcher);
 
     let new_host = security_config.network_access.to_bind_address().to_string();
-    let needs_restart = current_host != new_host;
+    // All gateway-level knobs (host, auth mode, pairing/guest gates) are read
+    // into the auth subsystem at boot, so a change to any requires a restart.
+    let host_changed = current_host != new_host;
+    let auth_flags_changed = cur_require_auth != security_config.require_auth
+        || cur_enable_pairing != security_config.enable_pairing
+        || cur_allow_guest != security_config.allow_guest;
+    let needs_restart = host_changed || auth_flags_changed;
+
+    let config_path = crate::config::Config::default_path();
 
     // Persist gateway.host directly to TOML (cannot use ConfigPatcher because
     // Config struct has no `gateway` field — the patcher would discard it).
-    if needs_restart {
-        let config_path = crate::config::Config::default_path();
+    if host_changed {
         if let Err(e) = toml_io::write_gateway_host_to_config(&config_path, &new_host) {
             return JsonRpcResponse::error(
                 request.id,
@@ -271,8 +276,23 @@ pub async fn handle_update(
         }
     }
 
+    // Persist the gateway auth flags (require_auth / enable_pairing / allow_guest).
+    if auth_flags_changed {
+        if let Err(e) = toml_io::write_gateway_auth_flags(
+            &config_path,
+            security_config.require_auth,
+            security_config.enable_pairing,
+            security_config.allow_guest,
+        ) {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to save gateway auth config: {}", e),
+            );
+        }
+    }
+
     // Write SSRF config
-    let config_path = crate::config::Config::default_path();
     if let Err(e) = toml_io::write_ssrf_config_to_toml(&config_path, &security_config) {
         return JsonRpcResponse::error(
             request.id,

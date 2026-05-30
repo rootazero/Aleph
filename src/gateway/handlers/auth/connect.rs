@@ -10,9 +10,9 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, AUTH_FAILED, INV
 use crate::gateway::security::store::DeviceUpsertData;
 use crate::gateway::security::DeviceRole;
 
-use super::{AuthContext, ConnectParams, ConnectResult, PairingRequiredParams};
 #[cfg(test)]
 use super::TransportPolicy;
+use super::{AuthContext, ConnectParams, ConnectResult, PairingRequiredParams};
 
 /// Handle "connect" request
 ///
@@ -46,10 +46,8 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
     // Guest invitations have no per-device bearer and are exempt from
     // challenge-response — the invitation_token is one-shot and time-windowed
     // by the InvitationManager already, so replay is bounded.
-    let bearer_for_challenge: Option<&str> = params
-        .token
-        .as_deref()
-        .or(params.shared_token.as_deref());
+    let bearer_for_challenge: Option<&str> =
+        params.token.as_deref().or(params.shared_token.as_deref());
 
     // Enforcement: when ops sets require_challenge=true, any bearer-bound
     // connect (shared_token / token) MUST carry a signed challenge or we
@@ -102,6 +100,12 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
     // Check for guest invitation token FIRST
     // Guest invitations should work regardless of auth_mode setting
     if let Some(invitation_token) = &params.invitation_token {
+        // Operator gate: when guest access is disabled, refuse before
+        // touching the InvitationManager so no guest session can be minted.
+        if !ctx.allow_guest {
+            warn!("Guest invitation rejected: guest access is disabled by config");
+            return JsonRpcResponse::error(request.id, AUTH_FAILED, "guest access is disabled");
+        }
         debug!(
             "Processing guest invitation token: {}...",
             invitation_token.get(..8).unwrap_or("***")
@@ -453,6 +457,12 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
     }
 
     // Case 3: New device - initiate pairing
+    // Operator gate: when pairing is disabled, refuse rather than creating a
+    // pending pairing request that could never be approved through the UI.
+    if !ctx.enable_pairing {
+        warn!("Device pairing rejected: pairing is disabled by config");
+        return JsonRpcResponse::error(request.id, AUTH_FAILED, "device pairing is disabled");
+    }
     debug!("Case 3: Initiating new device pairing");
     let device_name = params
         .device_name
@@ -589,7 +599,9 @@ mod tests {
             invitation_manager,
             guest_session_manager,
             event_bus,
-            auth_mode: AuthMode::None, // Auth not required
+            auth_mode: AuthMode::None,
+            allow_guest: true,
+            enable_pairing: true, // Auth not required
             shared_token_mgr,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
             transport_policy: TransportPolicy::defaults(),
@@ -700,6 +712,8 @@ mod tests {
             guest_session_manager,
             event_bus,
             auth_mode: AuthMode::Token,
+            allow_guest: true,
+            enable_pairing: true,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
             transport_policy: TransportPolicy::defaults(),
             instance_id: "test-instance".to_string(),
@@ -768,7 +782,9 @@ mod tests {
             invitation_manager,
             guest_session_manager,
             event_bus,
-            auth_mode: AuthMode::None, // no-auth path → success ConnectResult
+            auth_mode: AuthMode::None,
+            allow_guest: true,
+            enable_pairing: true, // no-auth path → success ConnectResult
             shared_token_mgr,
             state_versions,
             transport_policy: TransportPolicy::defaults(),
@@ -837,6 +853,8 @@ mod tests {
             guest_session_manager,
             event_bus,
             auth_mode: AuthMode::None,
+            allow_guest: true,
+            enable_pairing: true,
             shared_token_mgr,
             state_versions,
             transport_policy: TransportPolicy {
@@ -907,6 +925,8 @@ mod tests {
             guest_session_manager,
             event_bus,
             auth_mode: AuthMode::Token,
+            allow_guest: true,
+            enable_pairing: true,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
             transport_policy: TransportPolicy::defaults(),
             instance_id: "test-srv".to_string(),
@@ -968,8 +988,7 @@ mod tests {
         let challenge = challenge_manager.generate();
         let device_id = "panel-1";
         // Client signs `nonce + timestamp + device_id` with the shared_token.
-        let signature =
-            compute_signature(&token, &challenge.nonce, challenge.timestamp, device_id);
+        let signature = compute_signature(&token, &challenge.nonce, challenge.timestamp, device_id);
 
         let ctx = Arc::new(AuthContext {
             token_manager: Arc::new(TokenManager::new(store.clone())),
@@ -981,6 +1000,8 @@ mod tests {
             guest_session_manager,
             event_bus,
             auth_mode: AuthMode::Token,
+            allow_guest: true,
+            enable_pairing: true,
             state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
             transport_policy: TransportPolicy::defaults(),
             instance_id: "test-srv".to_string(),

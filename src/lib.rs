@@ -130,6 +130,7 @@ pub use crate::config::{
         ContextBudgetToml, FallbackProviderToml, GuardrailsToml, StabilityToml,
     },
     types::resume::ResumeConfig,
+    types::security::ShellSecurityConfig,
     types::stop_hooks::StopHookConfig,
     AssemblerConfig, BehaviorConfig, ChannelInstanceConfig, Config, EmbeddingProviderConfig,
     FullConfig, GeneralConfig, GenerationProviderConfig, MemoryConfig, MemoryInjectionMode,
@@ -271,4 +272,3 @@ pub fn init_logging() {
             .try_init();
     }
 }
-

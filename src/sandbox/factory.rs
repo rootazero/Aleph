@@ -32,12 +32,33 @@ pub fn build_sandbox(
     driver: Arc<dyn OsSandboxDriverTrait>,
     approval: Arc<ApprovalGate>,
     rate_limit_config: SandboxRateLimitConfig,
+    shell_security: &crate::config::types::ShellSecurityConfig,
 ) -> Arc<dyn Sandbox> {
     if !cfg.enabled {
         return Arc::new(NoopSandbox);
     }
     let rate_limiter = Arc::new(SandboxRateLimiter::new(rate_limit_config));
     let mut hooks = SandboxHooks::new();
+
+    // Advisory shell-security layer: Panel-managed `[security]` custom patterns.
+    // Installed BEFORE the command policy so an explicitly user-blocked command
+    // is vetoed first. A malformed custom-rule regex fails *safe* (logged and
+    // skipped) rather than aborting sandbox construction.
+    match crate::exec::SecurityKernel::from_config(shell_security) {
+        Ok(kernel) if shell_security.enable_custom_patterns => {
+            hooks = hooks.with_before(Arc::new(
+                crate::sandbox::security_kernel_hook::SecurityKernelHook::new(kernel),
+            ));
+        }
+        Ok(_) => { /* custom patterns disabled — no advisory hook */ }
+        Err(e) => {
+            tracing::error!(
+                target: "shell_security",
+                error = %e,
+                "custom shell-security pattern regex invalid — advisory layer disabled"
+            );
+        }
+    }
 
     // Command-policy hard-filter runs FIRST so a catastrophic command is
     // refused before it consumes rate-limit budget or reaches the OS driver.
@@ -172,7 +193,13 @@ mod tests {
             command_policy: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(UnusedDriver);
-        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxRateLimitConfig::default());
+        let sandbox = build_sandbox(
+            &cfg,
+            driver,
+            make_gate(),
+            SandboxRateLimitConfig::default(),
+            &crate::config::types::ShellSecurityConfig::default(),
+        );
 
         // NoopSandbox::execute must surface a structured error — it never
         // reaches the OS driver, so the workspace dir must remain absent.
@@ -217,7 +244,13 @@ mod tests {
             command_policy: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
-        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxRateLimitConfig::default());
+        let sandbox = build_sandbox(
+            &cfg,
+            driver,
+            make_gate(),
+            SandboxRateLimitConfig::default(),
+            &crate::config::types::ShellSecurityConfig::default(),
+        );
 
         let before = std::fs::read_dir(tmp.path())
             .map(|d| d.count())
@@ -264,7 +297,13 @@ mod tests {
             command_policy: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
-        let sandbox = build_sandbox(&cfg, driver, make_gate(), SandboxRateLimitConfig::default());
+        let sandbox = build_sandbox(
+            &cfg,
+            driver,
+            make_gate(),
+            SandboxRateLimitConfig::default(),
+            &crate::config::types::ShellSecurityConfig::default(),
+        );
 
         let err = sandbox
             .execute(SandboxCommand {

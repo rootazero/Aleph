@@ -56,7 +56,13 @@ pub async fn handle_sandbox_debug(
         ApprovalConfig::default(),
         Some(Arc::new(DebugAutoApprover) as Arc<dyn ApprovalRequester>),
     ));
-    let sandbox = build_sandbox(&cfg, driver, gate, SandboxRateLimitConfig::default());
+    let sandbox = build_sandbox(
+        &cfg,
+        driver,
+        gate,
+        SandboxRateLimitConfig::default(),
+        &alephcore::ShellSecurityConfig::default(),
+    );
 
     // 1. Print summary.
     println!("=== Sandbox summary ===");

@@ -28,6 +28,7 @@ pub mod proxy;
 pub mod rate_limit;
 pub mod sandbox_init;
 pub mod scrub;
+pub mod security_kernel_hook;
 pub mod summary;
 pub mod windows_init;
 pub mod workspace;

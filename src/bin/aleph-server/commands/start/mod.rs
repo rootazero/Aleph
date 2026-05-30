@@ -41,7 +41,6 @@ use runtime_warmup::runtime_startup_warmup;
 
 // ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
 
-
 /// Start the gateway server
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
@@ -239,6 +238,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             os_driver,
             approval_gate.clone(),
             SandboxRateLimitConfig::from(loaded_app_config.sandbox.rate_limit.clone()),
+            &loaded_app_config.security,
         )
     };
     if !args.daemon {
@@ -376,6 +376,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.presence.clone(),
         u32::try_from(full_config.gateway.max_connections).unwrap_or(u32::MAX),
         full_config.gateway.require_challenge,
+        full_config.gateway.allow_guest,
+        full_config.gateway.enable_pairing,
         &full_config.gateway.bootstrap,
         full_config.gateway.auth.session_expiry_hours,
         args.daemon,
@@ -437,28 +439,26 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let device_store = auth_bundle.device_store.clone();
         let token_manager = auth_bundle.token_manager.clone();
 
-        let flow_factory: alephcore::gateway::handlers::wizard::WizardFlowFactory =
-            Arc::new(move |wizard_type: &str, _initial: Option<serde_json::Value>| {
-                match wizard_type {
-                    "pairing" => Some(Box::new(alephcore::wizard::PairingFlow::new(
-                        device_name.clone(),
-                        pairing_mgr.clone(),
-                        security_store.clone(),
-                        device_store.clone(),
-                        token_manager.clone(),
-                    )) as Box<dyn alephcore::wizard::WizardFlow>),
-                    "onboarding" => Some(
-                        Box::new(alephcore::wizard::OnboardingFlow::new())
-                            as Box<dyn alephcore::wizard::WizardFlow>,
-                    ),
-                    _ => None,
-                }
-            });
-
-        let wizard_manager = Arc::new(
-            alephcore::gateway::handlers::wizard::WizardSessionManager::new(flow_factory),
+        let flow_factory: alephcore::gateway::handlers::wizard::WizardFlowFactory = Arc::new(
+            move |wizard_type: &str, _initial: Option<serde_json::Value>| match wizard_type {
+                "pairing" => Some(Box::new(alephcore::wizard::PairingFlow::new(
+                    device_name.clone(),
+                    pairing_mgr.clone(),
+                    security_store.clone(),
+                    device_store.clone(),
+                    token_manager.clone(),
+                )) as Box<dyn alephcore::wizard::WizardFlow>),
+                "onboarding" => Some(Box::new(alephcore::wizard::OnboardingFlow::new())
+                    as Box<dyn alephcore::wizard::WizardFlow>),
+                _ => None,
+            },
         );
-        server.handlers_mut().install_wizard_handlers(wizard_manager);
+
+        let wizard_manager =
+            Arc::new(alephcore::gateway::handlers::wizard::WizardSessionManager::new(flow_factory));
+        server
+            .handlers_mut()
+            .install_wizard_handlers(wizard_manager);
     }
 
     // Safety net: detect plaintext secrets in config (manual edits or LLM writes)
@@ -1404,8 +1404,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         use alephcore::extension::watcher::{ExtensionChangeEvent, ExtensionChangeType};
         let bus = event_bus.clone();
         let sink = tools_changed_sink.clone();
-        let cb: Box<dyn Fn(ExtensionChangeEvent) + Send + Sync> = Box::new(
-            move |ev: ExtensionChangeEvent| {
+        let cb: Box<dyn Fn(ExtensionChangeEvent) + Send + Sync> =
+            Box::new(move |ev: ExtensionChangeEvent| {
                 let kind = match ev.change_type {
                     ExtensionChangeType::Skill => "skill",
                     ExtensionChangeType::Command => "command",
@@ -1439,12 +1439,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         serde_json::json!({"kind": kind, "paths": paths}),
                     );
                 }
-            },
-        );
+            });
         match em.start_watcher(Some(cb)).await {
             Ok(()) => {
                 if !args.daemon {
-                    println!("Extension watcher: hot-reload active (commands/agents/plugins/hooks.json)");
+                    println!(
+                        "Extension watcher: hot-reload active (commands/agents/plugins/hooks.json)"
+                    );
                 }
             }
             Err(e) => {
@@ -1481,9 +1482,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 cron_state.config.default_max_iterations,
             );
             let alert_dispatcher_fn =
-                alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(
-                    cron_channel_cell,
-                );
+                alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(cron_channel_cell);
 
             let cron_config = cron_state.config.clone();
             tokio::spawn(async move {
@@ -2185,4 +2184,3 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     Ok(())
 }
-

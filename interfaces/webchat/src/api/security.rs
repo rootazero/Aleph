@@ -160,9 +160,7 @@ pub struct SecurityConfig {
     #[serde(default = "default_true")]
     pub ssrf_enabled: bool,
     #[serde(default)]
-    pub ssrf_allow_tool_private_network: bool,
-    #[serde(default)]
-    pub ssrf_allow_webhook_private_network: bool,
+    pub ssrf_allow_private_network: bool,
     #[serde(default = "default_max_redirects")]
     pub ssrf_max_redirects: u8,
     #[serde(default)]

@@ -115,6 +115,27 @@ impl SecurityKernel {
         RiskLevel::Caution
     }
 
+    /// Assess a command against ONLY the configured custom patterns.
+    ///
+    /// Built-in patterns are intentionally skipped so this can be used as a
+    /// purely additive advisory layer on top of an existing command gate
+    /// (e.g. the sandbox command-policy hook) without re-enforcing — and
+    /// possibly diverging from — the built-in floor. Returns `None` when no
+    /// custom pattern matches.
+    pub fn assess_custom(&self, command: &str) -> Option<RiskLevel> {
+        let cmd = command.trim();
+        if self.custom_blocked.iter().any(|p| p.is_match(cmd)) {
+            return Some(RiskLevel::Blocked);
+        }
+        if self.custom_danger.iter().any(|p| p.is_match(cmd)) {
+            return Some(RiskLevel::Danger);
+        }
+        if self.custom_safe.iter().any(|p| p.is_match(cmd)) {
+            return Some(RiskLevel::Safe);
+        }
+        None
+    }
+
     /// Assess a command and return detailed result.
     pub fn assess_detailed(&self, command: &str) -> RiskAssessment {
         let level = self.assess(command);

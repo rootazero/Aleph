@@ -64,6 +64,8 @@ pub(in crate::commands::start) fn initialize_auth(
     presence: Arc<alephcore::gateway::presence::PresenceTracker>,
     max_connections: u32,
     require_challenge: bool,
+    allow_guest: bool,
+    enable_pairing: bool,
     bootstrap_cfg: &alephcore::gateway::config::BootstrapConfig,
     session_expiry_hours: u64,
     daemon: bool,
@@ -172,12 +174,10 @@ pub(in crate::commands::start) fn initialize_auth(
         }
     }
 
-    let bootstrap_mgr = Arc::new(
-        alephcore::gateway::bootstrap::BootstrapNonceManager::new(
-            std::time::Duration::from_secs(bootstrap_cfg.nonce_ttl_secs),
-            std::time::Duration::from_secs(bootstrap_cfg.used_retention_secs),
-        ),
-    );
+    let bootstrap_mgr = Arc::new(alephcore::gateway::bootstrap::BootstrapNonceManager::new(
+        std::time::Duration::from_secs(bootstrap_cfg.nonce_ttl_secs),
+        std::time::Duration::from_secs(bootstrap_cfg.used_retention_secs),
+    ));
 
     let session_mgr = Arc::new(alephcore::gateway::session::HttpSessionManager::new(
         security_store_out.clone(),
@@ -193,6 +193,8 @@ pub(in crate::commands::start) fn initialize_auth(
         guest_session_manager: guest_session_manager.clone(),
         event_bus: event_bus.clone(),
         auth_mode,
+        allow_guest,
+        enable_pairing,
         shared_token_mgr,
         state_versions,
         transport_policy,
@@ -200,9 +202,9 @@ pub(in crate::commands::start) fn initialize_auth(
         started_at_unix,
         presence,
         max_connections,
-        challenge_manager: Arc::new(alephcore::gateway::challenge::ChallengeManager::with_server_id(
-            instance_id,
-        )),
+        challenge_manager: Arc::new(
+            alephcore::gateway::challenge::ChallengeManager::with_server_id(instance_id),
+        ),
         require_challenge,
         bootstrap_mgr: bootstrap_mgr.clone(),
         session_mgr: session_mgr.clone(),
@@ -388,10 +390,9 @@ pub(in crate::commands::start) async fn initialize_channels(
                     alephcore::gateway::interfaces::whatsapp::WhatsAppConfig,
                 >(config_with_secrets.clone())
                 {
-                    let wa_channel =
-                        alephcore::gateway::interfaces::whatsapp::WhatsAppChannel::new(
-                            &inst.id, wa_config,
-                        );
+                    let wa_channel = alephcore::gateway::interfaces::whatsapp::WhatsAppChannel::new(
+                        &inst.id, wa_config,
+                    );
                     channel = Box::new(wa_channel);
                 }
             }

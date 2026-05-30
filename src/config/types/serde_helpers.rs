@@ -46,10 +46,9 @@ where
         fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
             let mut models = Vec::new();
             while let Some(s) = seq.next_element::<String>()? {
-                let trimmed = s.trim().to_string();
-                if !trimmed.is_empty() {
-                    models.push(trimmed);
-                }
+                // An element may itself be a comma-joined string (legacy/tool
+                // writes stored `["a,b,c"]`); fan it out so each model is distinct.
+                models.extend(split_csv_models(&s));
             }
             if models.is_empty() {
                 Err(de::Error::custom("models list cannot be empty"))
@@ -92,10 +91,7 @@ where
         fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Vec<String>, A::Error> {
             let mut models = Vec::new();
             while let Some(s) = seq.next_element::<String>()? {
-                let trimmed = s.trim().to_string();
-                if !trimmed.is_empty() {
-                    models.push(trimmed);
-                }
+                models.extend(split_csv_models(&s));
             }
             Ok(models)
         }
@@ -142,6 +138,23 @@ mod tests {
     fn array_form_still_supported() {
         let r: Required = serde_json::from_value(json!({ "models": ["a", " b ", "c"] })).unwrap();
         assert_eq!(r.models, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn array_element_with_commas_fans_out() {
+        // Legacy/tool-written configs stored a comma-joined value as a single
+        // array element (e.g. `models = ["gpt-5.4,gpt-5.3-codex,gpt-5.4-mini"]`).
+        // It must split so the picker renders one selectable row per model.
+        let r: Required =
+            serde_json::from_value(json!({ "models": ["gpt-5.4,gpt-5.3-codex,gpt-5.4-mini"] }))
+                .unwrap();
+        assert_eq!(r.models, vec!["gpt-5.4", "gpt-5.3-codex", "gpt-5.4-mini"]);
+    }
+
+    #[test]
+    fn optional_array_element_with_commas_fans_out() {
+        let o: Optional = serde_json::from_value(json!({ "models": ["a,b", "c"] })).unwrap();
+        assert_eq!(o.models, vec!["a", "b", "c"]);
     }
 
     #[test]
