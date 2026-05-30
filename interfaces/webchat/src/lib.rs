@@ -1,5 +1,6 @@
 pub mod api;
 pub mod app;
+pub mod appearance;
 pub mod canvas_engine;
 pub mod components;
 pub mod context;
@@ -24,50 +25,10 @@ pub fn main() {
     // plus a DOM recovery overlay with a Reload button. See panic_overlay.rs.
     panic_overlay::install();
 
-    // Initialize theme from localStorage or system preference
-    init_theme();
+    // Replay persisted appearance prefs (mode / accent / font scale / roundness)
+    // onto <html> before mount so the first paint already reflects user choices.
+    appearance::init_appearance();
 
     // Mount the app to the body
     mount_to_body(app::App);
-}
-
-/// Read theme preference from localStorage and apply dark/light class to <html>
-fn init_theme() {
-    let window = web_sys::window().expect("no window");
-    let document = window.document().expect("no document");
-    let html = document.document_element().expect("no html element");
-
-    // Check localStorage for saved preference
-    let storage: Option<web_sys::Storage> = window.local_storage().ok().flatten();
-    let saved_theme: Option<String> = storage
-        .as_ref()
-        .and_then(|s: &web_sys::Storage| s.get_item("aleph-theme").ok())
-        .flatten();
-
-    match saved_theme.as_deref() {
-        Some("dark") => {
-            let _ = html.class_list().add_1("dark");
-        }
-        Some("light") => {
-            let _ = html.class_list().add_1("light");
-        }
-        Some("translucent") => {
-            // Vibrant theme — translucent surfaces over the dark palette.
-            let _ = html.class_list().add_2("dark", "translucent");
-        }
-        _ => {
-            // Follow system preference (CSS @media handles this)
-        }
-    }
-
-    // Apply the saved accent palette (data-accent attribute drives CSS).
-    let saved_accent: Option<String> = storage
-        .as_ref()
-        .and_then(|s: &web_sys::Storage| s.get_item("aleph-accent").ok())
-        .flatten();
-    if let Some(accent) = saved_accent.as_deref() {
-        if matches!(accent, "ocean" | "forest" | "sunset" | "rose") {
-            let _ = html.set_attribute("data-accent", accent);
-        }
-    }
 }

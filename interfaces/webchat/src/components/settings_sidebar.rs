@@ -11,6 +11,7 @@ use leptos_i18n::I18nContext;
 pub enum SettingsTab {
     // Basic
     General,
+    Appearance,
     Behavior,
 
     // AI
@@ -49,6 +50,7 @@ impl SettingsTab {
     pub fn path(&self) -> &'static str {
         match self {
             Self::General => "/settings/general",
+            Self::Appearance => "/settings/appearance",
             Self::Behavior => "/settings/behavior",
             Self::Providers => "/settings/providers",
             Self::EmbeddingProviders => "/settings/embedding-providers",
@@ -79,6 +81,7 @@ impl SettingsTab {
     pub fn i18n_label(&self, i18n: I18nContext<Locale>) -> String {
         match self {
             Self::General => t_string!(i18n, settings.tabs.general).to_string(),
+            Self::Appearance => "外观".to_string(),
             Self::Behavior => t_string!(i18n, settings.tabs.behavior).to_string(),
             Self::Providers => t_string!(i18n, settings.tabs.providers).to_string(),
             Self::EmbeddingProviders => t_string!(i18n, settings.tabs.embedding).to_string(),
@@ -110,6 +113,9 @@ impl SettingsTab {
         match self {
             Self::General => {
                 r#"<circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6M5.64 5.64l4.24 4.24m4.24 4.24l4.24 4.24M1 12h6m6 0h6M5.64 18.36l4.24-4.24m4.24-4.24l4.24-4.24"/>"#
+            }
+            Self::Appearance => {
+                r#"<circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/>"#
             }
             Self::Behavior => {
                 r#"<path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M12 6v6l4 2"/>"#
@@ -201,7 +207,11 @@ impl SettingsGroup {
 pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
     SettingsGroup {
         label: "Basic",
-        tabs: &[SettingsTab::General, SettingsTab::Behavior],
+        tabs: &[
+            SettingsTab::General,
+            SettingsTab::Appearance,
+            SettingsTab::Behavior,
+        ],
     },
     SettingsGroup {
         label: "AI",

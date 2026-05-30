@@ -383,6 +383,7 @@ fn SettingsRouter() -> impl IntoView {
             // Basic
             "/settings" => view! { <Settings /> }.into_any(),
             "/settings/general" => view! { <GeneralView /> }.into_any(),
+            "/settings/appearance" => view! { <AppearanceView /> }.into_any(),
             "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
 
             // AI

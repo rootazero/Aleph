@@ -1,144 +1,17 @@
 //
-// Theme picker — a popover that controls two orthogonal axes:
+// Theme picker — a topbar popover that controls two of the appearance axes:
 //   • Mode   : System / Light / Dark / Vibrant (translucent glass)
 //   • Accent : Mauve / Ocean / Forest / Sunset / Rose
 //
-// Mode drives the `dark` / `light` / `translucent` classes on <html>;
-// accent drives the `data-accent` attribute. Both persist to
-// localStorage (`aleph-theme`, `aleph-accent`) and are re-applied on
-// boot by `init_theme()` in lib.rs.
+// The read/apply/persist logic + enums live in `crate::appearance` (the single
+// source of appearance truth, shared with the Appearance settings page and the
+// boot replay in `lib.rs`). This component only owns the popover UI and the
+// circular View-Transition reveal animation.
 //
+use crate::appearance::{apply_accent, apply_mode, read_accent, read_mode, Accent, ThemeMode};
 use leptos::prelude::*;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen::{JsCast, JsValue};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ThemeMode {
-    System,
-    Light,
-    Dark,
-    Vibrant,
-}
-
-impl ThemeMode {
-    fn label(self) -> &'static str {
-        match self {
-            Self::System => "跟随系统",
-            Self::Light => "明亮",
-            Self::Dark => "暗黑",
-            Self::Vibrant => "玻璃",
-        }
-    }
-
-    /// localStorage value, or `None` for System (which clears the key).
-    fn storage_value(self) -> Option<&'static str> {
-        match self {
-            Self::System => None,
-            Self::Light => Some("light"),
-            Self::Dark => Some("dark"),
-            Self::Vibrant => Some("translucent"),
-        }
-    }
-}
-
-/// Accent palette: (id, label, swatch color).
-/// "mauve" is the base theme — selecting it clears `data-accent`.
-const ACCENTS: &[(&str, &str, &str)] = &[
-    ("mauve", "魅紫", "oklch(0.60 0.13 310)"),
-    ("ocean", "海蓝", "oklch(0.58 0.13 250)"),
-    ("forest", "森绿", "oklch(0.55 0.12 150)"),
-    ("sunset", "暖橙", "oklch(0.66 0.135 60)"),
-    ("rose", "玫瑰", "oklch(0.62 0.15 15)"),
-];
-
-/// Read the current mode from localStorage.
-fn read_mode() -> ThemeMode {
-    let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
-    match storage
-        .and_then(|s| s.get_item("aleph-theme").ok().flatten())
-        .as_deref()
-    {
-        Some("light") => ThemeMode::Light,
-        Some("dark") => ThemeMode::Dark,
-        Some("translucent") => ThemeMode::Vibrant,
-        _ => ThemeMode::System,
-    }
-}
-
-/// Read the current accent id from localStorage (defaults to "mauve").
-fn read_accent() -> String {
-    web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-        .and_then(|s| s.get_item("aleph-accent").ok().flatten())
-        .filter(|a| ACCENTS.iter().any(|(id, ..)| id == a))
-        .unwrap_or_else(|| "mauve".to_string())
-}
-
-/// Apply a mode to <html> and persist it.
-fn apply_mode(mode: ThemeMode) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let Some(document) = window.document() else {
-        return;
-    };
-    let Some(html) = document.document_element() else {
-        return;
-    };
-
-    let class_list = html.class_list();
-    let _ = class_list.remove_3("dark", "light", "translucent");
-    match mode {
-        ThemeMode::Light => {
-            let _ = class_list.add_1("light");
-        }
-        ThemeMode::Dark => {
-            let _ = class_list.add_1("dark");
-        }
-        ThemeMode::Vibrant => {
-            let _ = class_list.add_2("dark", "translucent");
-        }
-        ThemeMode::System => {}
-    }
-
-    if let Some(storage) = window.local_storage().ok().flatten() {
-        match mode.storage_value() {
-            Some(value) => {
-                let _ = storage.set_item("aleph-theme", value);
-            }
-            None => {
-                let _ = storage.remove_item("aleph-theme");
-            }
-        }
-    }
-}
-
-/// Apply an accent to <html> and persist it.
-fn apply_accent(id: &str) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let Some(document) = window.document() else {
-        return;
-    };
-    let Some(html) = document.document_element() else {
-        return;
-    };
-
-    if id == "mauve" {
-        let _ = html.remove_attribute("data-accent");
-    } else {
-        let _ = html.set_attribute("data-accent", id);
-    }
-
-    if let Some(storage) = window.local_storage().ok().flatten() {
-        if id == "mauve" {
-            let _ = storage.remove_item("aleph-accent");
-        } else {
-            let _ = storage.set_item("aleph-accent", id);
-        }
-    }
-}
 
 /// Convert a click position within the viewport into the CSS percentage
 /// origin (`x%`, `y%`) for the circular theme reveal. Clamped to [0, 100];
@@ -208,14 +81,7 @@ pub fn ThemeToggle() -> impl IntoView {
     let accent = RwSignal::new(read_accent());
     let open = RwSignal::new(false);
 
-    let current_swatch = move || {
-        let id = accent.get();
-        ACCENTS
-            .iter()
-            .find(|(aid, ..)| *aid == id)
-            .map(|(.., color)| color.to_string())
-            .unwrap_or_else(|| "oklch(0.60 0.13 310)".to_string())
-    };
+    let current_swatch = move || accent.get().swatch().to_string();
 
     view! {
         <div class="relative">
@@ -259,7 +125,7 @@ pub fn ThemeToggle() -> impl IntoView {
                             "外观"
                         </p>
                         <div class="grid grid-cols-2 gap-1">
-                            {[ThemeMode::System, ThemeMode::Light, ThemeMode::Dark, ThemeMode::Vibrant]
+                            {ThemeMode::ALL
                                 .into_iter()
                                 .map(|m| {
                                     let is_active = move || mode.get() == m;
@@ -294,24 +160,17 @@ pub fn ThemeToggle() -> impl IntoView {
                             "强调色"
                         </p>
                         <div class="flex items-center justify-between px-1">
-                            {ACCENTS.iter().map(|(id, label, color)| {
-                                let id = id.to_string();
-                                let id_for_click = id.clone();
-                                let color = color.to_string();
-                                let is_active = {
-                                    let id = id.clone();
-                                    move || accent.get() == id
-                                };
+                            {Accent::ALL.into_iter().map(|a| {
+                                let is_active = move || accent.get() == a;
                                 view! {
                                     <button
                                         on:click=move |ev: web_sys::MouseEvent| {
-                                            let id = id_for_click.clone();
                                             let x = ev.client_x() as f64;
                                             let y = ev.client_y() as f64;
-                                            animated_apply(x, y, move || apply_accent(&id));
-                                            accent.set(id_for_click.clone());
+                                            animated_apply(x, y, move || apply_accent(a));
+                                            accent.set(a);
                                         }
-                                        title=*label
+                                        title=a.label()
                                         class="flex flex-col items-center gap-1 group"
                                     >
                                         <span
@@ -323,7 +182,7 @@ pub fn ThemeToggle() -> impl IntoView {
                                                     format!("{base} ring-1 ring-border")
                                                 }
                                             }
-                                            style=format!("background: {}", color)
+                                            style=format!("background: {}", a.swatch())
                                         />
                                     </button>
                                 }
