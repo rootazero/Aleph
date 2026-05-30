@@ -157,6 +157,17 @@ impl DreamPipeline {
                 Box::new(stages::NoteLintStage),
                 Box::new(stages::NoteReviewStage::default()),
                 Box::new(stages::NoteConsolidateStage),
+                // Distill user-correction signals on the FREQUENT consolidate
+                // path (not just the rarer synthesize path), so a freshly
+                // flagged correction becomes a recallable feedback rule within
+                // a day instead of waiting for a high-growth synthesize cycle.
+                // Watermark + min_candidates gating make this a cheap no-op when
+                // there are no new corrections, so no extra LLM call is incurred.
+                Box::new(stages::FeedbackDistillStage {
+                    max_per_cycle: dreaming_cfg.feedback_distill_max_per_cycle,
+                    min_candidates: dreaming_cfg.feedback_distill_min_candidates,
+                    lookback: dreaming_cfg.feedback_lookback,
+                }),
                 Box::new(stages::NoteDriftStage),
                 Box::new(stages::IndexRefresherStage),
                 Box::new(stages::NoteDecayStage),
@@ -179,7 +190,9 @@ impl DreamPipeline {
                 // Phase 3: distill user-correction signals into feedback notes.
                 // Runs after SkillDistill so a single dream cycle can pick up
                 // both implicit (synthesis-derived) and explicit (correction)
-                // learnings.
+                // learnings. Also present on the Consolidate path so distillation
+                // happens daily; only one strategy runs per cycle, so there is no
+                // double execution.
                 Box::new(stages::FeedbackDistillStage {
                     max_per_cycle: dreaming_cfg.feedback_distill_max_per_cycle,
                     min_candidates: dreaming_cfg.feedback_distill_min_candidates,
@@ -916,10 +929,8 @@ async fn compute_raw_metrics(
     let notes_added_24h = notes.iter().filter(|n| n.created_at >= day_ago).count() as u32;
 
     let (tool_total, tool_failed, tool_avg_ms) =
-        match crate::memory::tool_signal_sink::aggregate_tool_stats(
-            store, agent_id, day_ago, 5_000,
-        )
-        .await
+        match crate::memory::tool_signal_sink::aggregate_tool_stats(store, agent_id, day_ago, 5_000)
+            .await
         {
             Ok(stats) => (stats.total, stats.failed, stats.avg_duration_ms),
             Err(e) => {
@@ -991,6 +1002,7 @@ mod tests {
                 "note_lint",
                 "note_review",
                 "note_consolidate",
+                "feedback_distill",
                 "note_drift",
                 "index_refresher",
                 "note_decay",
@@ -1107,15 +1119,17 @@ mod tests {
 
     #[tokio::test]
     async fn compute_raw_metrics_folds_in_tool_invocation_stats() {
-        use crate::memory::store::raw_memory::{
-            RawMemory, RawMemorySource, RawMemoryStore,
-        };
-        let temp = std::env::temp_dir().join(format!("aleph_metrics_tool_{}", uuid::Uuid::new_v4()));
+        use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+        let temp =
+            std::env::temp_dir().join(format!("aleph_metrics_tool_{}", uuid::Uuid::new_v4()));
         let store = Arc::new(SqliteMemoryBackend::new(&temp).unwrap());
 
         // Synthesize three fresh tool invocations: 2 ok (10 + 30 ms) + 1 fail.
-        for (name, ok, ms) in [("read_file", true, 10u64), ("shell", true, 30), ("grep", false, 0)]
-        {
+        for (name, ok, ms) in [
+            ("read_file", true, 10u64),
+            ("shell", true, 30),
+            ("grep", false, 0),
+        ] {
             let raw = RawMemory::new(
                 format!("tool {name}"),
                 RawMemorySource::ToolInvocation {

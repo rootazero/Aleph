@@ -35,6 +35,8 @@ pub enum NoteType {
     Skill,
     /// Structured reference document (first-class knowledge document).
     Reference,
+    /// User-taught correction / standing rule, distilled by `FeedbackDistill`.
+    Feedback,
     /// Conversation transcript chunk (embedded for direct retrieval)
     Transcript,
     /// Other facts that don't fit above categories
@@ -64,6 +66,7 @@ impl NoteType {
             NoteType::Lesson => "lesson",
             NoteType::Skill => "skill",
             NoteType::Reference => "reference",
+            NoteType::Feedback => "feedback",
             NoteType::Transcript => "transcript",
             NoteType::Other => "other",
             NoteType::SubagentRun => "subagent_run",
@@ -88,6 +91,7 @@ impl NoteType {
             NoteType::Lesson => "lesson",
             NoteType::Skill => "skill",
             NoteType::Reference => "reference",
+            NoteType::Feedback => "feedback",
             NoteType::Transcript => "transcript",
             NoteType::Other => "other",
             NoteType::SubagentRun => "subagent-run",
@@ -114,6 +118,7 @@ impl NoteType {
             NoteType::Lesson => "aleph://knowledge/lessons/",
             NoteType::Skill => "aleph://skills/",
             NoteType::Reference => "aleph://reference/",
+            NoteType::Feedback => "aleph://feedback/",
             NoteType::Transcript => "aleph://transcript/",
             NoteType::Other => "aleph://knowledge/",
             NoteType::SubagentRun
@@ -129,7 +134,9 @@ impl NoteType {
             NoteType::Preference => MemoryCategory::Preferences,
             NoteType::Plan | NoteType::Personal => MemoryCategory::Profile,
             NoteType::Learning | NoteType::Project | NoteType::Other => MemoryCategory::Entities,
-            NoteType::Tool | NoteType::Skill | NoteType::Reference => MemoryCategory::Patterns,
+            NoteType::Tool | NoteType::Skill | NoteType::Reference | NoteType::Feedback => {
+                MemoryCategory::Patterns
+            }
             NoteType::Lesson => MemoryCategory::Cases,
             NoteType::SubagentRun | NoteType::SubagentSession | NoteType::SubagentCheckpoint => {
                 MemoryCategory::Cases
@@ -153,6 +160,7 @@ impl std::str::FromStr for NoteType {
             "lesson" => Ok(NoteType::Lesson),
             "skill" => Ok(NoteType::Skill),
             "reference" => Ok(NoteType::Reference),
+            "feedback" => Ok(NoteType::Feedback),
             "subagent_run" => Ok(NoteType::SubagentRun),
             "subagent_session" => Ok(NoteType::SubagentSession),
             "subagent_checkpoint" => Ok(NoteType::SubagentCheckpoint),
@@ -475,6 +483,25 @@ mod tests {
         assert_eq!(
             NoteType::Reference.default_category(),
             MemoryCategory::Patterns
+        );
+    }
+
+    #[test]
+    fn feedback_note_type_roundtrips() {
+        let ft = NoteType::Feedback;
+        assert_eq!(ft.as_str(), "feedback");
+        assert_eq!(ft.to_category_dir(), "feedback");
+        assert_eq!("feedback".parse::<NoteType>().unwrap(), NoteType::Feedback);
+        // Round-trips cleanly now instead of mangling to Other.
+        assert_eq!(NoteType::from_str_or_other("feedback"), NoteType::Feedback);
+    }
+
+    #[test]
+    fn feedback_category_is_valid_dir() {
+        use crate::memory::notes::CATEGORY_DIRS;
+        assert!(
+            CATEGORY_DIRS.contains(&NoteType::Feedback.to_category_dir()),
+            "feedback must be a scannable category dir so cold rebuild_index keeps feedback notes"
         );
     }
 }

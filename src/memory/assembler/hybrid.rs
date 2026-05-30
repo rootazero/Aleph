@@ -6,6 +6,7 @@ use super::envelope::{
 };
 use super::error::AssemblerError;
 use super::fallback::{skeleton_pack, Candidate};
+use super::feedback_floor::FeedbackFloorLoader;
 use super::gather::{GatherInputs, Gatherer};
 use super::hydration::{estimate_tokens, truncate_utf8_safe};
 use super::profile::UserProfileLoader;
@@ -81,6 +82,7 @@ impl HybridAssembler {
         snapshots: Arc<SnapshotReader>,
         backend: MemoryBackend,
         profile: Arc<UserProfileLoader>,
+        feedback_floor: Arc<FeedbackFloorLoader>,
         reranker: Arc<dyn LlmReranker>,
         config: AssemblerConfig,
     ) -> Self {
@@ -90,6 +92,7 @@ impl HybridAssembler {
                 snapshots,
                 backend,
                 profile,
+                feedback_floor,
             },
             reranker,
             config,

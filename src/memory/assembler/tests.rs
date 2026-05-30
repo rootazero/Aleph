@@ -6,7 +6,7 @@ use crate::config::types::memory::{AssemblerConfig, AssemblyLogConfig, FallbackS
 use crate::error::AlephError;
 use crate::memory::assembler::hybrid::LlmReranker;
 use crate::memory::assembler::{
-    AssemblyBudget, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler,
+    AssemblyBudget, FeedbackFloorLoader, HybridAssembler, UserProfileLoader, WorkingMemoryAssembler,
 };
 use crate::memory::embedding_provider::EmbeddingProvider;
 use crate::memory::note_retrieval::NoteFactRetrieval;
@@ -124,12 +124,14 @@ fn fixture(reranker: Arc<StubReranker>, config: AssemblerConfig) -> Fixture {
     let retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
     let snapshots = Arc::new(SnapshotReader::new(tmp_snap.path()));
     let profile = UserProfileLoader::new(tmp_mem.path().join("notes"));
+    let feedback_floor = FeedbackFloorLoader::new(tmp_mem.path().join("notes"));
     let reranker_dyn: Arc<dyn LlmReranker> = reranker.clone();
     let assembler = HybridAssembler::new(
         retrieval,
         snapshots,
         backend.clone(),
         profile,
+        feedback_floor,
         reranker_dyn,
         config,
     );

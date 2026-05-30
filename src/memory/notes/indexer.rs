@@ -27,6 +27,7 @@ pub const CATEGORY_DIRS: &[&str] = &[
     "lesson",
     "skill",
     "reference",
+    "feedback", // user-taught corrections distilled by FeedbackDistill
     "transcript",
     "subagent-run",
     "subagent-session",

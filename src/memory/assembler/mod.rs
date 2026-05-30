@@ -5,6 +5,7 @@ pub mod context_block;
 pub mod envelope;
 pub(crate) mod error;
 pub(crate) mod fallback;
+pub(crate) mod feedback_floor;
 pub(crate) mod gather;
 pub mod hybrid;
 pub mod hydration;
@@ -16,14 +17,15 @@ pub(crate) mod rerank;
 #[cfg(test)]
 mod tests;
 
+pub use feedback_floor::FeedbackFloorLoader;
 pub use hybrid::{AiProviderReranker, HybridAssembler, LlmReranker};
 pub use log_store::AssemblyLogWriter;
 pub use profile::UserProfileLoader;
 
+pub use context_block::{wrap_memory_context, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
 pub use envelope::{
     EnvelopeItem, EnvelopeMeta, EnvelopeSlot, ItemSource, MemoryEnvelope, SlotKind, SCHEMA_VERSION,
 };
-pub use context_block::{wrap_memory_context, MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
 pub use render::{render_envelope, render_with, RenderStyle};
 
 use crate::error::AlephError;
