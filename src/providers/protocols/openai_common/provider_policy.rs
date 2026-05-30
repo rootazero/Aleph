@@ -291,7 +291,11 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
             supports_logprobs: false,
             supports_server_compaction: false,
             requires_object_properties: true,
-            context_window: Some(64_000),
+            // deepseek-chat / deepseek-reasoner now map to deepseek-v4-flash
+            // (non-thinking / thinking modes), whose advertised context length
+            // is 1M tokens — the legacy 64K reflected the V3-era window. Source:
+            // https://api-docs.deepseek.com/quick_start/pricing
+            context_window: Some(1_000_000),
         },
         EndpointClass::GroqNative => ProviderCapabilities {
             supports_responses_store: false,
@@ -496,6 +500,9 @@ mod tests {
         assert!(!caps.supports_reasoning_effort);
         assert!(!caps.supports_strict_schema);
         assert!(!caps.supports_server_compaction);
+        // Current deepseek-chat/reasoner (→ deepseek-v4-flash) advertise a 1M
+        // context window; guard against silently regressing to the stale 64K.
+        assert_eq!(caps.context_window, Some(1_000_000));
     }
 
     #[test]
