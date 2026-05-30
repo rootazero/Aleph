@@ -94,7 +94,7 @@ fn convert_room_message(
     }
 
     if let Some(cfg) = config {
-        if !cfg.check_mention(&text, own_user_id) {
+        if !cfg.check_mention(&text, own_user_id, room_id) {
             return None;
         }
     }
@@ -517,5 +517,46 @@ mod tests {
             Some(&config),
         );
         assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_convert_per_room_mention_override() {
+        let event = serde_json::json!({
+            "type": "m.room.message",
+            "sender": "@user:matrix.org",
+            "event_id": "$e_room_gate",
+            "origin_server_ts": 1700000000000_i64,
+            "content": { "msgtype": "m.text", "body": "Hello without mention" }
+        });
+        let channel_id = ChannelId::new("matrix");
+
+        // Global gating OFF, but the strict room demands a mention.
+        let mut config = MatrixConfig::default();
+        config.rooms.insert(
+            "!strict:matrix.org".to_string(),
+            crate::gateway::interfaces::matrix::config::MatrixRoomPolicy {
+                require_mention: Some(true),
+                allow_bots: None,
+                users: None,
+            },
+        );
+
+        // Unmentioned message is gated out only in the strict room.
+        assert!(convert_timeline_event(
+            &event,
+            "!strict:matrix.org",
+            &channel_id,
+            "@bot:matrix.org",
+            Some(&config),
+        )
+        .is_none());
+        assert!(convert_timeline_event(
+            &event,
+            "!other:matrix.org",
+            &channel_id,
+            "@bot:matrix.org",
+            Some(&config),
+        )
+        .is_some());
     }
 }
