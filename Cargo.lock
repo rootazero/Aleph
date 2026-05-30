@@ -199,6 +199,7 @@ name = "aleph-desktop-linux"
 version = "26.5.30"
 dependencies = [
  "aleph-desktop",
+ "aleph-protocol",
  "async-trait",
  "base64 0.22.1",
  "chrono",

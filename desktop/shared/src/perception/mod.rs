@@ -9,7 +9,9 @@
 //! All functions are synchronous and should be called via
 //! `tokio::task::spawn_blocking` from async contexts.
 
-#[cfg(target_os = "linux")]
+// Compiled on all hosts (like `ocr_windows`) so the pure TSV parser stays
+// unit-testable cross-platform; `linux_ocr` is only *called* under
+// `#[cfg(target_os = "linux")]` in `perform_ocr`.
 mod ocr_linux;
 mod ocr_windows;
 mod screen_record;
