@@ -34,6 +34,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "apply_patch",
             "bash",
             "code_exec",
+            "code_check",
             "pdf_generate",
         ],
     },

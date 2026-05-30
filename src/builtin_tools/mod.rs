@@ -39,6 +39,7 @@ pub mod channel_manage;
 pub mod channel_message;
 pub mod clawhub;
 pub mod code_exec;
+pub mod code_check;
 pub mod command_canonicalize;
 pub mod config_guide;
 pub mod cron_manage;
@@ -122,6 +123,7 @@ pub use channel_message::{
 };
 pub use clawhub::{ClawHubAction, ClawHubArgs, ClawHubOutput, ClawHubTool};
 pub use code_exec::{CodeExecArgs, CodeExecTool};
+pub use code_check::{CodeCheckArgs, CodeCheckOutput, CodeCheckTool};
 pub use config_guide::{
     GuideTopic, ReadConfigGuideArgs, ReadConfigGuideOutput, ReadConfigGuideTool,
 };

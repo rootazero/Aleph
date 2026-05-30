@@ -21,7 +21,7 @@ use crate::builtin_tools::skill_reader::{
     ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
 };
 use crate::builtin_tools::{
-    ApplyPatchTool, AutomationTool, BashExecTool, CodeExecTool, DesktopTool, FileEditTool,
+    ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool, FileEditTool,
     FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool, MediaTool, MemoryBrowseTool,
     MemoryExploreTool, MemorySearchTool, PdfGenerateTool, PermissionTool, PimTool,
     ReadConfigGuideTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool, VaultStoreTool,
@@ -88,6 +88,11 @@ impl BuiltinToolRegistry {
             CodeExecTool::new().with_sandbox(sb.clone())
         } else {
             CodeExecTool::new()
+        };
+        let code_check_tool = if let Some(ref sb) = config.sandbox {
+            CodeCheckTool::new().with_sandbox(sb.clone())
+        } else {
+            CodeCheckTool::new()
         };
         let pdf_generate_tool = if let Some(ref tc) = config.tool_context {
             PdfGenerateTool::new().with_tool_context(Arc::clone(tc))
@@ -1418,6 +1423,7 @@ impl BuiltinToolRegistry {
             apply_patch_tool,
             bash_tool,
             code_exec_tool,
+            code_check_tool,
             pdf_generate_tool,
             image_generate_tool,
             video_generate_tool,

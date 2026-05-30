@@ -27,7 +27,7 @@ use crate::builtin_tools::browser_tools::{
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
-    BashExecTool, CodeExecTool, CtxSearchTool, DesktopAxQueryByRole, DesktopAxQueryFocused,
+    BashExecTool, CodeCheckTool, CodeExecTool, CtxSearchTool, DesktopAxQueryByRole, DesktopAxQueryFocused,
     DesktopAxQueryTree,
     ApplyPatchTool, DesktopAxSnapshot, DesktopBrowserOperator, DesktopCheckPermissions,
     DesktopGuiLocate, DesktopTool, FileEditTool,
@@ -109,6 +109,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "code_exec",
         description: "Execute code in various programming languages (Python, JavaScript, Shell)",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "code_check",
+        description: "Run the project's type-checker/linter (auto-detected: cargo/tsc/go/ruff) and return structured diagnostics",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -759,6 +764,7 @@ pub fn create_tool_boxed(
         "apply_patch" => Some(Box::new(ApplyPatchTool::new())),
         "bash" => Some(Box::new(BashExecTool::new())),
         "code_exec" => Some(Box::new(CodeExecTool::new())),
+        "code_check" => Some(Box::new(CodeCheckTool::new())),
         "ctx_search" => Some(Box::new(CtxSearchTool::new())),
         "recall_events" => Some(Box::new(RecallEventsTool::new())),
         "pdf_generate" => Some(Box::new(PdfGenerateTool::new())),
