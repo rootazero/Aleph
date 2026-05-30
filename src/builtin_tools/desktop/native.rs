@@ -392,6 +392,67 @@ impl super::DesktopTool {
                     })),
                 }
             }
+            "move_window" => {
+                let window_id = match args.window_id {
+                    Some(id) => id as u64,
+                    None => {
+                        return Ok(Some(invalid_args(
+                            "move_window requires 'window_id' (get it from window_list)",
+                        )));
+                    }
+                };
+                let (x, y) = match require_xy(args, "move_window") {
+                    Ok((x, y)) => (x as i32, y as i32),
+                    Err(out) => return Ok(Some(out)),
+                };
+                match screen.move_window(window_id, x, y).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "moved": true, "window_id": window_id, "x": x, "y": y,
+                        })),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
+            "resize_window" => {
+                let window_id = match args.window_id {
+                    Some(id) => id as u64,
+                    None => {
+                        return Ok(Some(invalid_args(
+                            "resize_window requires 'window_id' (get it from window_list)",
+                        )));
+                    }
+                };
+                let (width, height) = match (args.width, args.height) {
+                    (Some(w), Some(h)) => (w, h),
+                    _ => {
+                        return Ok(Some(invalid_args(
+                            "resize_window requires numeric 'width' and 'height'",
+                        )));
+                    }
+                };
+                match screen.resize_window(window_id, width, height).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({
+                            "resized": true, "window_id": window_id,
+                            "width": width, "height": height,
+                        })),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
             "launch_app" => {
                 let bundle_id = match args.bundle_id.as_deref() {
                     Some(id) if !id.is_empty() => id,

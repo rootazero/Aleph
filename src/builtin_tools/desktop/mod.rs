@@ -320,6 +320,25 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
             args.bundle_id.clone().unwrap_or_default(),
         )),
 
+        "move_window" => Some((
+            ActionType::DesktopClick,
+            format!(
+                "move_window(#{},{},{})",
+                args.window_id.unwrap_or(0),
+                args.x.unwrap_or(0.0),
+                args.y.unwrap_or(0.0)
+            ),
+        )),
+        "resize_window" => Some((
+            ActionType::DesktopClick,
+            format!(
+                "resize_window(#{},{}x{})",
+                args.window_id.unwrap_or(0),
+                args.width.unwrap_or(0),
+                args.height.unwrap_or(0)
+            ),
+        )),
+
         "batch" => Some((ActionType::DesktopClick, "batch operation".into())),
         "paste" => Some((
             ActionType::DesktopType,
@@ -424,6 +443,8 @@ Actions:
 - quit_app: Close app by bundle_id.
 - window_list: List open windows.
 - focus_window: Bring window to front by window_id.
+- move_window: Move a window's top-left corner to (x, y) by window_id.
+- resize_window: Resize a window to width × height pixels by window_id.
 - clipboard_read: Read clipboard text.
 - clipboard_write: Write text to clipboard.
 - screen_record: Record screen as MP4. Optional duration/fps/with_audio.
@@ -443,6 +464,8 @@ Examples:
 {"action":"type_text","text":"Hello"}
 {"action":"screen_record","duration":3.0,"fps":30}
 {"action":"display_list"}
+{"action":"move_window","window_id":1234,"x":100,"y":80}
+{"action":"resize_window","window_id":1234,"width":1280,"height":800}
 {"action":"batch","actions":[{"action":"click","x":100,"y":200},{"action":"type_text","text":"hello"}]}
 {"action":"paste","text":"line1\nline2\nline3"}
 {"action":"wait_visual","timeout_ms":3000}
