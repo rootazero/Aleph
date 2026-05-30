@@ -86,6 +86,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) bash_tool: crate::builtin_tools::BashExecTool,
     /// Code execution tool instance
     pub(crate) code_exec_tool: crate::builtin_tools::CodeExecTool,
+    pub(crate) code_check_tool: crate::builtin_tools::CodeCheckTool,
     /// PDF generation tool instance
     pub(crate) pdf_generate_tool: crate::builtin_tools::PdfGenerateTool,
     /// Image generation tool instance (optional - requires generation registry)
@@ -595,6 +596,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "bash" => Box::pin(async move { self.bash_tool.call_json(arguments).await }),
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
+            "code_check" => Box::pin(async move { self.code_check_tool.call_json(arguments).await }),
             "pdf_generate" => {
                 Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await })
             }

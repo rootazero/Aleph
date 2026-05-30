@@ -95,6 +95,13 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "code_check",
+            crate::builtin_tools::code_check::CodeCheckTool::DESCRIPTION,
+            serde_json::to_value(schema_for!(crate::builtin_tools::code_check::CodeCheckArgs))
+                .unwrap_or_default(),
+        );
+        reg(
+            tools,
             "pdf_generate",
             PdfGenerateTool::DESCRIPTION,
             serde_json::to_value(schema_for!(
