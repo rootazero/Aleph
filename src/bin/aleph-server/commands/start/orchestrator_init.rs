@@ -209,6 +209,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         // H1: wire the (previously orphaned) `[execution] max_iterations`
         // config so every harness run is capped. Default 200.
         default_max_iterations: config.execution.max_iterations,
+        // Wire `[execution] prompt_mode` so the dormant Compact/Minimal prompt
+        // tiers become reachable on the production harness path. Default
+        // `full` → byte-identical to the prior always-Full assembly.
+        default_prompt_mode: config.execution.prompt_mode,
         power,
         memory_context_provider,
         memory_backend,

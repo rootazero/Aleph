@@ -133,6 +133,13 @@ pub struct AgentHarnessRunner {
     /// uncapped — see [`resolve_max_iterations`].
     pub default_max_iterations: usize,
 
+    /// Boot-time system-prompt verbosity tier, sourced from
+    /// `[execution] prompt_mode`. Threaded into `build_system_prompt` so the
+    /// cache-aware assembly can shed heavy guidance layers in `Compact` /
+    /// `Minimal` deployments. Defaults to [`PromptMode::Full`] — byte-identical
+    /// to the prior always-Full behaviour.
+    pub default_prompt_mode: crate::thinker::prompt_mode::PromptMode,
+
     /// Platform-specific power-management capability. Injected at boot so the
     /// core never directly imports platform crates (R1: Brain–Limb separation).
     pub power: Option<Arc<dyn aleph_desktop::traits::PowerCapability>>,
@@ -892,7 +899,7 @@ impl AgentHarnessRunner {
         // flat string remains the source of truth for adapters that do
         // not consume `system_blocks` (everything except Anthropic today)
         // and for callsites that read `HarnessDeps::system_prompt`.
-        let parts = builder.build_system_prompt_cached(&[]);
+        let parts = builder.build_system_prompt_cached_with_mode(&[], self.default_prompt_mode);
         let prompt: String = parts.iter().map(|p| p.content.as_str()).collect();
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
         // Logs character counts (not contents) so prompts are observable
@@ -914,6 +921,7 @@ impl AgentHarnessRunner {
             prompt_chars = prompt.len(),
             cache_stable_chars = stable_chars,
             cache_dynamic_chars = dynamic_chars,
+            prompt_mode = self.default_prompt_mode.label(),
             "system prompt assembled"
         );
         Some((prompt, parts))

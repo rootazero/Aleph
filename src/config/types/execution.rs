@@ -1,5 +1,6 @@
 //! Execution engine configuration types
 
+use crate::thinker::prompt_mode::PromptMode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +19,18 @@ pub struct ExecutionConfig {
     /// generously. Lower it per-deployment if you want tighter guardrails.
     #[serde(default = "default_max_iterations")]
     pub max_iterations: usize,
+
+    /// System-prompt verbosity tier (`"full"` / `"compact"` / `"minimal"`,
+    /// default: `"full"`).
+    ///
+    /// Drives which prompt layers participate in assembly (see
+    /// [`PromptMode`]). `full` keeps every guidance section; `compact` and
+    /// `minimal` progressively shed heavy layers (safety constitution, memory
+    /// protocol, operational guidelines, …) that frontier models already
+    /// internalise — the "thin prompt, trust the model" posture. The default
+    /// is byte-identical to prior behaviour.
+    #[serde(default)]
+    pub prompt_mode: PromptMode,
 }
 
 fn default_timeout_secs() -> u64 {
@@ -33,6 +46,7 @@ impl Default for ExecutionConfig {
         Self {
             default_timeout_secs: default_timeout_secs(),
             max_iterations: default_max_iterations(),
+            prompt_mode: PromptMode::default(),
         }
     }
 }
@@ -62,5 +76,15 @@ mod tests {
         let parsed: ExecutionConfig = toml::from_str("").unwrap();
         assert_eq!(parsed.default_timeout_secs, 172_800);
         assert_eq!(parsed.max_iterations, 1000);
+        // Absent `prompt_mode` defaults to Full — preserves prior behaviour.
+        assert_eq!(parsed.prompt_mode, PromptMode::Full);
+    }
+
+    #[test]
+    fn test_prompt_mode_parses_lowercase() {
+        let parsed: ExecutionConfig = toml::from_str("prompt_mode = \"minimal\"").unwrap();
+        assert_eq!(parsed.prompt_mode, PromptMode::Minimal);
+        let parsed: ExecutionConfig = toml::from_str("prompt_mode = \"compact\"").unwrap();
+        assert_eq!(parsed.prompt_mode, PromptMode::Compact);
     }
 }
