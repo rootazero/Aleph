@@ -1,5 +1,17 @@
 use super::types::{CanvasNode, Vec2};
 
+/// Extra hit tolerance in **screen pixels**, added to every node's world
+/// radius during hit-testing. Two reasons:
+///   1. Enhance — tiny DOT-mode nodes (≈10 px) become comfortably clickable
+///      and hoverable instead of pixel-perfect targets.
+///   2. Stabilise — the renderer draws a hover glow that makes a node look
+///      larger than its bare radius, so a bare-radius test toggles hover
+///      on/off under sub-pixel pointer jitter at the visual edge. A small
+///      padding gives the held node a forgiving zone, killing the flicker.
+/// Converted to world units via the live zoom so the felt size stays constant
+/// at any scale.
+const HIT_TOLERANCE_PX: f64 = 6.0;
+
 #[derive(Debug, Clone)]
 pub struct Viewport {
     pub offset: Vec2,
@@ -52,11 +64,14 @@ impl Viewport {
 
     pub fn hit_test(&self, screen_point: Vec2, nodes: &[CanvasNode]) -> Option<usize> {
         let world = self.screen_to_world(screen_point);
+        // Screen-space padding → world units (scale is clamped ≥ 0.1 by zoom_at,
+        // guard anyway so an unexpected tiny scale can't explode the tolerance).
+        let tol = HIT_TOLERANCE_PX / self.scale.max(0.1);
         nodes
             .iter()
             .enumerate()
             .rev()
-            .find(|(_, node)| world.distance_to(&node.position) <= node.radius)
+            .find(|(_, node)| world.distance_to(&node.position) <= node.radius + tol)
             .map(|(idx, _)| idx)
     }
 
@@ -205,5 +220,66 @@ mod parallax_tests {
             "expected scale ≥ 0.2, got {}",
             v2.scale
         );
+    }
+}
+
+#[cfg(test)]
+mod hit_test_tests {
+    use super::*;
+
+    fn node_at(x: f64, y: f64, radius: f64) -> CanvasNode {
+        CanvasNode {
+            id: "n".into(),
+            name: "n".into(),
+            category: "".into(),
+            color: super::super::types::Color { r: 0, g: 0, b: 0 },
+            radius,
+            position: Vec2::new(x, y),
+            velocity: Vec2::zero(),
+            z: 0.0,
+            hop: 1,
+            decay_score: 1.0,
+            edge_count: 0,
+        }
+    }
+
+    #[test]
+    fn hit_test_inside_radius_resolves() {
+        // Identity viewport (scale 1, origin at canvas centre 400,300).
+        let v = Viewport::new(800.0, 600.0);
+        let nodes = vec![node_at(0.0, 0.0, 6.0)];
+        // World (0,0) maps to screen (400,300); 3 px away is well inside radius 6.
+        assert_eq!(v.hit_test(Vec2::new(403.0, 300.0), &nodes), Some(0));
+    }
+
+    #[test]
+    fn hit_test_tolerance_grabs_just_outside_radius() {
+        // A 10 px DOT (radius ~5) just beyond the bare radius must still resolve
+        // thanks to HIT_TOLERANCE_PX — this is the "tiny dots are clickable" win.
+        let v = Viewport::new(800.0, 600.0);
+        let nodes = vec![node_at(0.0, 0.0, 5.0)];
+        // 9 px from centre: outside radius 5, inside 5 + 6 (tolerance) = 11.
+        assert_eq!(v.hit_test(Vec2::new(409.0, 300.0), &nodes), Some(0));
+    }
+
+    #[test]
+    fn hit_test_misses_beyond_radius_plus_tolerance() {
+        let v = Viewport::new(800.0, 600.0);
+        let nodes = vec![node_at(0.0, 0.0, 5.0)];
+        // 20 px away: outside radius 5 + tolerance 6 = 11 → no hit.
+        assert_eq!(v.hit_test(Vec2::new(420.0, 300.0), &nodes), None);
+    }
+
+    #[test]
+    fn hit_test_tolerance_shrinks_in_world_when_zoomed_in() {
+        // At 2× zoom the 6 px screen tolerance is only 3 world units, so the felt
+        // hover zone stays constant on screen rather than ballooning in world space.
+        let mut v = Viewport::new(800.0, 600.0);
+        v.scale = 2.0;
+        let nodes = vec![node_at(0.0, 0.0, 5.0)];
+        // World point 7 units away → radius 5 + world-tolerance 3 = 8 → hit.
+        assert_eq!(v.hit_test(v.world_to_screen(Vec2::new(7.0, 0.0)), &nodes), Some(0));
+        // World point 9 units away → outside 8 → miss.
+        assert_eq!(v.hit_test(v.world_to_screen(Vec2::new(9.0, 0.0)), &nodes), None);
     }
 }

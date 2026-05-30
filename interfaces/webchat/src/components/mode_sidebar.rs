@@ -152,11 +152,11 @@ fn MemorySidebar() -> impl IntoView {
     view! {
         <div class="flex flex-col h-full">
             <div class="px-3 pt-3 pb-1.5">
-                <label style="font-size:9.5px;color:var(--text-meta);text-transform:uppercase;letter-spacing:0.05em">
+                <label style="font-size:9.5px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">
                     "Agent"
                 </label>
                 <select
-                    class="w-full mt-1 bg-[#1a1a2e] border border-[#2a2a40] rounded text-xs text-[#e2e8f0] px-2 py-1.5"
+                    class="w-full mt-1 bg-surface-sunken border border-border rounded text-xs text-text-primary px-2 py-1.5 focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
                     prop:value=move || mem.agent_id.get()
                     on:change=move |ev| {
                         mem.agent_id.set(event_target_value(&ev));
@@ -192,13 +192,13 @@ fn MemorySidebar() -> impl IntoView {
                 </select>
             </div>
             <div class="px-3 pb-1.5">
-                <label style="font-size:9.5px;color:var(--text-meta);text-transform:uppercase;letter-spacing:0.05em">
+                <label style="font-size:9.5px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">
                     "Search"
                 </label>
                 <input
                     type="search"
                     placeholder="keyword…"
-                    class="w-full mt-1 bg-[#1a1a2e] border border-[#2a2a40] rounded text-xs text-[#e2e8f0] px-2 py-1.5 placeholder-[#64748b]"
+                    class="w-full mt-1 bg-surface-sunken border border-border rounded text-xs text-text-primary placeholder:text-text-tertiary px-2 py-1.5 focus:outline-none focus:border-primary/60 focus:ring-1 focus:ring-primary/30"
                     prop:value=move || mem.search_query.get()
                     on:input=move |ev| {
                         mem.search_query.set(event_target_value(&ev));
@@ -206,7 +206,7 @@ fn MemorySidebar() -> impl IntoView {
                 />
             </div>
             <div class="px-3 pb-2">
-                <label style="font-size:9.5px;color:var(--text-meta);text-transform:uppercase;letter-spacing:0.05em">
+                <label style="font-size:9.5px;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.05em">
                     "Fold"
                 </label>
                 <input

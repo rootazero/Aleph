@@ -1015,6 +1015,37 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 }
 .node-detail-btn--save:hover:not(:disabled) { filter: brightness(1.1); background: var(--cat-feedback); }
 
+/* ── Memory detail panel: theme-following overrides ───────────────────
+   The node tokens (--text-title/body/meta/code, --node-border) and the
+   editor/button backgrounds above are tuned for cards floating on the
+   always-dark canvas (.node-card-*). The NodeDetailPanel, however, lives
+   inside the theme-following left sidebar (.aleph-sidebar): there the dark
+   constants render as black boxes + washed-out text in light mode (and are
+   needlessly muted in dark mode). Remap the tokens to the app theme tokens
+   inside the sidebar scope only — canvas cards are outside .aleph-sidebar
+   and keep their original dark palette untouched. */
+.aleph-sidebar {
+    --text-title: var(--color-text-primary);
+    --text-body:  var(--color-text-secondary);
+    --text-meta:  var(--color-text-tertiary);
+    --text-code:  var(--color-text-primary);
+    --node-border: var(--color-border);
+}
+.aleph-sidebar .node-detail-editor {
+    background: var(--color-surface-sunken);
+    color: var(--color-text-primary);
+}
+.aleph-sidebar .node-detail-btn {
+    background: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
+}
+.aleph-sidebar .node-detail-btn:hover:not(:disabled) {
+    background: color-mix(in oklch, var(--color-text-primary) 16%, transparent);
+}
+.aleph-sidebar .node-card-full__excerpt code,
+.aleph-sidebar .node-card-full__excerpt pre {
+    background: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
+}
+
 /* ── Collapsible aleph-sidebar ───────────────────────────────────── */
 .aleph-sidebar {
     transition: transform 200ms ease-out, width 200ms ease-out;
