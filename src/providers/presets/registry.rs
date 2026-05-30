@@ -13,10 +13,6 @@
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
-use super::thinking::{
-    ANTHROPIC_THINKING, DEEPSEEK_THINKING, DOUBAO_THINKING, GEMINI_THINKING, MOONSHOT_THINKING,
-    OPENAI_THINKING,
-};
 use super::ProviderPreset;
 use crate::providers::metadata::ProviderMetadata;
 
@@ -33,7 +29,6 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             .with_signup("https://platform.openai.com/api-keys")
             .with_aux_model("gpt-4o-mini")
             .with_fallback_models(&["gpt-4o", "gpt-4o-mini", "o3-mini", "o1-mini"])
-            .with_thinking_profile(OPENAI_THINKING),
     ),
     (
         "chatgpt",
@@ -77,7 +72,6 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "claude-opus-4-5-20250514",
             "claude-haiku-4-5-20251001",
         ])
-        .with_thinking_profile(ANTHROPIC_THINKING),
     ),
     (
         "amazon-bedrock",
@@ -126,7 +120,6 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
         ])
-        .with_thinking_profile(GEMINI_THINKING),
     ),
     // ─── DeepSeek / Moonshot ──────────────────────────────────────────────────
     (
@@ -137,7 +130,6 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             .with_signup("https://platform.deepseek.com/api_keys")
             .with_aux_model("deepseek-chat")
             .with_fallback_models(&["deepseek-chat", "deepseek-reasoner"])
-            .with_thinking_profile(DEEPSEEK_THINKING),
     ),
     (
         "moonshot",
@@ -152,7 +144,6 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_homepage("https://platform.moonshot.ai")
         .with_signup("https://platform.moonshot.ai/console/api-keys")
         .with_fallback_models(&["kimi-k2-0905-preview", "moonshot-v1-128k", "moonshot-v1-32k"])
-        .with_thinking_profile(MOONSHOT_THINKING),
     ),
     (
         "kimi-for-coding",
@@ -183,7 +174,6 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_display("Volcengine Doubao")
         .with_homepage("https://www.volcengine.com/product/ark")
         .with_signup("https://console.volcengine.com/ark")
-        .with_thinking_profile(DOUBAO_THINKING),
     ),
     (
         "siliconflow",

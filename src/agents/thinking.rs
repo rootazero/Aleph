@@ -341,60 +341,6 @@ pub fn is_level_supported(level: ThinkLevel, provider: &str, model: &str) -> boo
 }
 
 // =============================================================================
-// ThinkingConfig
-// =============================================================================
-
-/// Configuration for thinking level in LLM requests
-#[derive(Debug, Clone, Default)]
-pub struct ThinkingConfig {
-    /// Requested thinking level
-    pub level: ThinkLevel,
-    /// Provider name (for capability checking)
-    pub provider: String,
-    /// Model name (for capability checking)
-    pub model: String,
-}
-
-impl ThinkingConfig {
-    /// Create a new ThinkingConfig
-    pub fn new(level: ThinkLevel, provider: impl Into<String>, model: impl Into<String>) -> Self {
-        Self {
-            level,
-            provider: provider.into(),
-            model: model.into(),
-        }
-    }
-
-    /// Get the effective level (capped by model capability)
-    ///
-    /// If the requested level is not supported, returns the highest
-    /// supported level that is less than or equal to the requested level.
-    pub fn effective_level(&self) -> ThinkLevel {
-        let supported = get_supported_levels(&self.provider, &self.model);
-        if supported.contains(&self.level) {
-            self.level
-        } else {
-            // Find highest supported level <= requested
-            supported
-                .into_iter()
-                .filter(|l| l.weight() <= self.level.weight())
-                .max_by_key(|l| l.weight())
-                .unwrap_or(ThinkLevel::Off)
-        }
-    }
-
-    /// Check if the config is using full capability
-    pub fn is_at_full_capability(&self) -> bool {
-        self.level == self.effective_level()
-    }
-
-    /// Get the token budget for the effective level
-    pub fn token_budget(&self) -> u32 {
-        self.effective_level().token_budget()
-    }
-}
-
-// =============================================================================
 // ThinkingFallbackState
 // =============================================================================
 
@@ -766,26 +712,6 @@ mod tests {
         assert!(is_level_supported(ThinkLevel::High, "openai", "gpt-4o"));
         assert!(!is_level_supported(ThinkLevel::XHigh, "openai", "gpt-4o"));
         assert!(is_level_supported(ThinkLevel::XHigh, "openai", "o1"));
-    }
-
-    // ThinkingConfig tests
-    #[test]
-    fn test_thinking_config_effective_level() {
-        let config = ThinkingConfig::new(ThinkLevel::XHigh, "openai", "gpt-4o");
-        assert_eq!(config.effective_level(), ThinkLevel::High);
-
-        let config = ThinkingConfig::new(ThinkLevel::XHigh, "openai", "o1");
-        assert_eq!(config.effective_level(), ThinkLevel::XHigh);
-    }
-
-    #[test]
-    fn test_thinking_config_token_budget() {
-        let config = ThinkingConfig::new(ThinkLevel::High, "openai", "gpt-4o");
-        assert_eq!(config.token_budget(), 8192);
-
-        let config = ThinkingConfig::new(ThinkLevel::XHigh, "openai", "gpt-4o");
-        // XHigh not supported, falls back to High
-        assert_eq!(config.token_budget(), 8192);
     }
 
     // Fallback state tests

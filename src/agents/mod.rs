@@ -34,9 +34,6 @@ pub mod teammates;
 /// Thinking levels system for LLM reasoning depth control.
 pub mod thinking;
 
-/// Provider-specific thinking level adapters.
-pub mod thinking_adapter;
-
 /// Rig-core based AI agent implementation.
 pub mod rig;
 
@@ -70,6 +67,5 @@ pub use swarm::{AgentEvent, AgentMessageBus, CriticalEvent, EventTier, Important
 pub use thinking::{
     format_thinking_levels, get_supported_levels, is_binary_thinking_provider, is_level_supported,
     is_thinking_level_error, list_thinking_level_labels, normalize_think_level,
-    supports_xhigh_thinking, ThinkLevel, ThinkingConfig, ThinkingFallbackState,
+    supports_xhigh_thinking, ThinkLevel, ThinkingFallbackState,
 };
-pub use thinking_adapter::ThinkingAdapter;
