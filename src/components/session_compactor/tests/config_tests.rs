@@ -194,3 +194,42 @@ fn test_is_overflow() {
 
     assert!(tracker.is_overflow(&session));
 }
+
+#[test]
+fn test_kimi_k2_context_window_256k() {
+    let tracker = TokenTracker::new();
+
+    // Kimi K2 preview models ship a 256K (262_144) context window per
+    // platform.moonshot.ai; they must NOT fall through to the 128K default.
+    let k2 = tracker.get_model_limit("kimi-k2-0905-preview");
+    assert_eq!(k2.context_limit, 262_144);
+
+    let k2_turbo = tracker.get_model_limit("kimi-k2-turbo-preview");
+    assert_eq!(k2_turbo.context_limit, 262_144);
+
+    // Longer/dated K2 ids resolve via longest-prefix match.
+    let k2_dated = tracker.get_model_limit("kimi-k2-0905-preview-20250905");
+    assert_eq!(k2_dated.context_limit, 262_144);
+}
+
+#[test]
+fn test_moonshot_v1_context_windows() {
+    let tracker = TokenTracker::new();
+
+    assert_eq!(
+        tracker.get_model_limit("moonshot-v1-8k").context_limit,
+        8192
+    );
+    assert_eq!(
+        tracker.get_model_limit("moonshot-v1-32k").context_limit,
+        32_768
+    );
+    assert_eq!(
+        tracker.get_model_limit("moonshot-v1-128k").context_limit,
+        131_072
+    );
+    assert_eq!(
+        tracker.get_model_limit("kimi-latest").context_limit,
+        131_072
+    );
+}

@@ -126,6 +126,41 @@ fn test_brand_names_retained() {
     assert!(get_preset("moonshot").is_some());
 }
 
+#[test]
+fn moonshot_cn_preset_uses_cn_endpoint() {
+    let p = get_preset("moonshot-cn").expect("moonshot-cn preset");
+    assert_eq!(p.base_url, "https://api.moonshot.cn/v1");
+    assert_eq!(p.protocol, "openai");
+    assert_eq!(p.default_model, "kimi-k2-0905-preview");
+}
+
+#[test]
+fn kimi_cn_alias_resolves_to_moonshot_cn() {
+    let cn = get_preset("kimi-cn").expect("kimi-cn alias resolves");
+    let moonshot_cn = get_preset("moonshot-cn").expect("moonshot-cn preset");
+    assert_eq!(cn.base_url, moonshot_cn.base_url);
+    assert!(cn.base_url.contains("api.moonshot.cn"));
+    let moonshot = get_preset("moonshot").expect("moonshot preset");
+    assert_ne!(cn.base_url, moonshot.base_url);
+}
+
+#[test]
+fn moonshot_cn_inherits_moonshot_thinking() {
+    use super::thinking::lookup_thinking_profile;
+    let prof = lookup_thinking_profile("moonshot-cn").expect("moonshot-cn thinking");
+    assert_eq!(prof.param_key, "use_thinking");
+}
+
+#[test]
+fn moonshot_fallbacks_include_current_lineup() {
+    let p = get_preset("moonshot").expect("moonshot preset");
+    assert!(p
+        .fallback_models
+        .iter()
+        .any(|m| *m == "kimi-k2-turbo-preview"));
+    assert!(p.fallback_models.iter().any(|m| *m == "moonshot-v1-8k"));
+}
+
 // =========================================================================
 // get_merged_preset tests
 // =========================================================================

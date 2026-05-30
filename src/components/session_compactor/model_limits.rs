@@ -98,6 +98,33 @@ impl TokenTracker {
             ModelLimit::new(1000000, 8192, 0.2),
         );
 
+        // Moonshot / Kimi models.
+        //
+        // Kimi K2 (0905 / turbo preview) ship a 256K (262_144) context window —
+        // doubled from 128K — per platform.moonshot.ai. Without these entries the
+        // model falls through to the 128K default and is compacted/truncated at
+        // ~102K, roughly half the real window. Longer "kimi-k2-…" ids resolve via
+        // the longest-prefix match below.
+        model_limits.insert("kimi-k2".to_string(), ModelLimit::new(262_144, 8192, 0.2));
+        // Conservative per-name windows for the older moonshot-v1-* line.
+        model_limits.insert(
+            "moonshot-v1-8k".to_string(),
+            ModelLimit::new(8192, 4096, 0.2),
+        );
+        model_limits.insert(
+            "moonshot-v1-32k".to_string(),
+            ModelLimit::new(32_768, 4096, 0.2),
+        );
+        model_limits.insert(
+            "moonshot-v1-128k".to_string(),
+            ModelLimit::new(131_072, 4096, 0.2),
+        );
+        // kimi-latest tracks the 128K vision-capable endpoint.
+        model_limits.insert(
+            "kimi-latest".to_string(),
+            ModelLimit::new(131_072, 4096, 0.2),
+        );
+
         Self { model_limits }
     }
 
