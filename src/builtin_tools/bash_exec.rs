@@ -17,15 +17,19 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::code_exec::{CodeExecArgs, CodeExecTool, Language};
+use super::code_exec::{CodeExecArgs, CodeExecOutput, CodeExecTool, Language};
+use super::process_registry::{process_registry, KillOutcome, PollOutcome};
 use crate::error::Result;
-use crate::sandbox::Sandbox;
+use crate::sandbox::context::SESSION_ID;
+use crate::sandbox::{current_session, Sandbox};
 use crate::tools::AlephTool;
 
 /// Arguments for bash execution tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct BashExecArgs {
-    /// The bash command to execute
+    /// The bash command to execute. Optional only when `process_action` is set
+    /// (poll/kill/list don't run a command).
+    #[serde(default)]
     pub cmd: String,
     /// Working directory (optional, defaults to session workspace root)
     #[serde(default)]
@@ -42,6 +46,19 @@ pub struct BashExecArgs {
     /// Extra writable paths beyond the session workspace (sandbox approval-gated).
     #[serde(default)]
     pub extra_writable_paths: Vec<PathBuf>,
+    /// Run `cmd` in the background and return a `process_id` immediately instead
+    /// of blocking until it finishes. Poll/kill it later with `process_action`.
+    #[serde(default)]
+    pub background: bool,
+    /// Manage a background process instead of running a command:
+    /// `"poll"` (fetch status/output), `"kill"` (terminate), or `"list"`
+    /// (enumerate this session's background processes). When set, `cmd` is
+    /// ignored; `poll`/`kill` require `process_id`.
+    #[serde(default)]
+    pub process_action: Option<String>,
+    /// Target background process id for `process_action` = `poll` | `kill`.
+    #[serde(default)]
+    pub process_id: Option<u64>,
 }
 
 /// Bash execution tool - wraps CodeExecTool for bash/shell commands
@@ -106,12 +123,26 @@ Capability escalations (`allow_network`, `allow_subprocess`, `extra_writable_pat
 trigger an approval prompt the first time per session; subsequent same-or-
 narrower requests reuse the grant.
 
+BACKGROUND MODE — for commands that outlive the 180s ceiling (builds, installs,
+long test runs). Set `background: true` and the call returns a `process_id`
+immediately instead of blocking. Manage it with `process_action`:
+- `{"process_action": "poll", "process_id": N}` → status while running, or the
+  full {exit_code, stdout, stderr} once finished (output is captured, not
+  streamed mid-run — poll again until done).
+- `{"process_action": "kill", "process_id": N}` → terminate it (SIGKILL).
+- `{"process_action": "list"}` → enumerate this session's background processes.
+Background processes are scoped to your session; you cannot see or kill another
+session's processes. Prefer foreground (blocking) execution for anything that
+finishes quickly — backgrounding is only worth it past ~the timeout ceiling.
+
 Examples:
 - One-liner: {"cmd": "ls -la /tmp"}
 - Multi-line with set -e: {"cmd": "set -e\ncd src\ncargo check\necho ok"}
 - Heredoc: {"cmd": "cat <<'EOF' > /tmp/note\nhello world\nEOF\nwc -l /tmp/note"}
 - Large script: {"cmd": "<paste a 50 KB build script — auto-piped via stdin>"}
-- Custom timeout: {"cmd": "find . -name '*.rs' | wc -l", "timeout": 30}"#;
+- Custom timeout: {"cmd": "find . -name '*.rs' | wc -l", "timeout": 30}
+- Background a build: {"cmd": "cargo build --release", "background": true}
+- Check on it later: {"process_action": "poll", "process_id": 1}"#;
 
     type Args = BashExecArgs;
     type Output = super::code_exec::CodeExecOutput;
@@ -126,7 +157,17 @@ Examples:
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // Convert BashExecArgs to CodeExecArgs
+        // Background-process management never runs a command — handle first.
+        if let Some(action) = args.process_action.as_deref() {
+            return Ok(handle_process_action(action, args.process_id));
+        }
+
+        if args.cmd.is_empty() {
+            return Ok(error_output(
+                "bash: `cmd` is required (or set `process_action` to manage a background process)",
+            ));
+        }
+
         let code_exec_args = CodeExecArgs {
             language: Language::Shell,
             code: args.cmd,
@@ -137,8 +178,153 @@ Examples:
             extra_writable_paths: args.extra_writable_paths,
         };
 
-        // Delegate to CodeExecTool
+        if args.background {
+            return Ok(self.spawn_background(code_exec_args));
+        }
+
+        // Foreground (default) — delegate to CodeExecTool, blocking.
         self.inner.call(code_exec_args).await
+    }
+}
+
+impl BashExecTool {
+    /// Drive `code_exec_args` inside a detached task and return a `process_id`
+    /// immediately. The task re-enters the current `SESSION_ID` scope (task
+    /// locals don't propagate into `tokio::spawn`) so the sandbox still targets
+    /// the right per-session workspace.
+    fn spawn_background(&self, code_exec_args: CodeExecArgs) -> CodeExecOutput {
+        let registry = process_registry();
+        let caller = session_label();
+        let sid = current_session();
+        let inner = self.inner.clone();
+        let preview = code_exec_args.code.clone();
+
+        // The task must not record completion before it has been registered
+        // (a fast command could otherwise finish before `register_running`
+        // inserts its slot, dropping the output). Gate the task on a oneshot
+        // carrying its id; the foreground sends it only after registration.
+        let (id_tx, id_rx) = tokio::sync::oneshot::channel::<u64>();
+        let reg = registry.clone();
+        let join = tokio::spawn(async move {
+            let id = match id_rx.await {
+                Ok(id) => id,
+                // Foreground dropped the sender (registration failed) — nothing
+                // to report against; abandon quietly.
+                Err(_) => return,
+            };
+            let result = match sid {
+                Some(sid) => SESSION_ID.scope(sid, inner.call(code_exec_args)).await,
+                None => inner.call(code_exec_args).await,
+            };
+            let output = result
+                .unwrap_or_else(|e| error_output(format!("bash: background task error: {e}")));
+            reg.complete(id, output);
+        });
+
+        let id = registry.register_running(preview.clone(), caller, join.abort_handle());
+        let _ = id_tx.send(id);
+
+        info_output(serde_json::json!({
+            "process_id": id,
+            "status": "running",
+            "background": true,
+            "message": format!(
+                "Started background process {id}. Poll with {{\"process_action\":\"poll\",\"process_id\":{id}}}."
+            ),
+        }))
+    }
+}
+
+/// Session label used to scope the process registry. Mirrors the JSON form the
+/// sandbox uses for its workspace key so the value is stable for a session.
+fn session_label() -> Option<String> {
+    current_session().map(|sid| serde_json::to_string(&sid).unwrap_or_else(|_| format!("{sid:?}")))
+}
+
+/// Dispatch a `poll` / `kill` / `list` management action against the registry,
+/// scoped to the caller's session.
+fn handle_process_action(action: &str, process_id: Option<u64>) -> CodeExecOutput {
+    let registry = process_registry();
+    let caller = session_label();
+    match action {
+        "list" => {
+            let rows = registry.list(caller.as_deref());
+            info_output(serde_json::json!({ "processes": rows }))
+        }
+        "poll" => {
+            let Some(id) = process_id else {
+                return error_output("bash: process_action=poll requires `process_id`");
+            };
+            match registry.poll(id, caller.as_deref()) {
+                // Surface the captured tool output verbatim once finished.
+                PollOutcome::Done(out) => *out,
+                PollOutcome::Running { elapsed_ms } => info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "running",
+                    "elapsed_ms": elapsed_ms,
+                })),
+                PollOutcome::Killed => info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "killed",
+                })),
+                PollOutcome::NotFound => {
+                    error_output(format!("bash: no background process #{id} for this session"))
+                }
+            }
+        }
+        "kill" => {
+            let Some(id) = process_id else {
+                return error_output("bash: process_action=kill requires `process_id`");
+            };
+            match registry.kill(id, caller.as_deref()) {
+                KillOutcome::Killed => info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "killed",
+                })),
+                KillOutcome::AlreadyFinished => info_output(serde_json::json!({
+                    "process_id": id,
+                    "status": "already_finished",
+                })),
+                KillOutcome::NotFound => {
+                    error_output(format!("bash: no background process #{id} for this session"))
+                }
+            }
+        }
+        other => error_output(format!(
+            "bash: unknown process_action '{other}' (expected poll|kill|list)"
+        )),
+    }
+}
+
+/// Build a successful informational `CodeExecOutput` whose `stdout` carries a
+/// JSON payload. Keeps the tool's Output type stable — background/management
+/// responses ride inside the existing envelope rather than a new struct.
+fn info_output(payload: serde_json::Value) -> CodeExecOutput {
+    CodeExecOutput {
+        success: true,
+        exit_code: 0,
+        stdout: payload.to_string(),
+        stderr: String::new(),
+        duration_ms: 0,
+        language: "shell".to_string(),
+        truncated: None,
+        stdout_truncated_bytes: 0,
+        stderr_truncated_bytes: 0,
+    }
+}
+
+/// Build a failed `CodeExecOutput` carrying a human-readable error in `stderr`.
+fn error_output(message: impl Into<String>) -> CodeExecOutput {
+    CodeExecOutput {
+        success: false,
+        exit_code: -1,
+        stdout: String::new(),
+        stderr: message.into(),
+        duration_ms: 0,
+        language: "shell".to_string(),
+        truncated: None,
+        stdout_truncated_bytes: 0,
+        stderr_truncated_bytes: 0,
     }
 }
 
@@ -172,6 +358,147 @@ mod tests {
         assert!(
             d.contains("preserved"),
             "should promise partial output on kill"
+        );
+    }
+
+    #[test]
+    fn description_teaches_background_mode() {
+        let d = <BashExecTool as AlephTool>::DESCRIPTION;
+        assert!(d.contains("BACKGROUND MODE"), "should document backgrounding");
+        assert!(d.contains("process_id"), "should mention the handle");
+        assert!(d.contains("process_action"), "should mention management verbs");
+        assert!(
+            d.contains("\"poll\"") && d.contains("\"kill\"") && d.contains("\"list\""),
+            "should enumerate poll/kill/list"
+        );
+    }
+
+    fn bash(args: BashExecArgs) -> impl std::future::Future<Output = CodeExecOutput> {
+        let tool = BashExecTool::new();
+        async move { tool.call(args).await.expect("structured output, not Err") }
+    }
+
+    fn args_action(action: &str, id: Option<u64>) -> BashExecArgs {
+        BashExecArgs {
+            cmd: String::new(),
+            working_dir: None,
+            timeout: None,
+            allow_network: false,
+            allow_subprocess: false,
+            extra_writable_paths: Vec::new(),
+            background: false,
+            process_action: Some(action.to_string()),
+            process_id: id,
+        }
+    }
+
+    #[tokio::test]
+    async fn poll_without_id_is_a_clear_error() {
+        let out = bash(args_action("poll", None)).await;
+        assert!(!out.success);
+        assert!(out.stderr.contains("requires `process_id`"), "{}", out.stderr);
+    }
+
+    #[tokio::test]
+    async fn kill_without_id_is_a_clear_error() {
+        let out = bash(args_action("kill", None)).await;
+        assert!(!out.success);
+        assert!(out.stderr.contains("requires `process_id`"), "{}", out.stderr);
+    }
+
+    #[tokio::test]
+    async fn unknown_action_is_rejected() {
+        let out = bash(args_action("frobnicate", None)).await;
+        assert!(!out.success);
+        assert!(out.stderr.contains("unknown process_action"), "{}", out.stderr);
+    }
+
+    #[tokio::test]
+    async fn poll_unknown_id_reports_not_found() {
+        let out = bash(args_action("poll", Some(u64::MAX))).await;
+        assert!(!out.success);
+        assert!(out.stderr.contains("no background process"), "{}", out.stderr);
+    }
+
+    #[tokio::test]
+    async fn empty_cmd_without_action_errors() {
+        let out = bash(BashExecArgs {
+            cmd: String::new(),
+            working_dir: None,
+            timeout: None,
+            allow_network: false,
+            allow_subprocess: false,
+            extra_writable_paths: Vec::new(),
+            background: false,
+            process_action: None,
+            process_id: None,
+        })
+        .await;
+        assert!(!out.success);
+        assert!(out.stderr.contains("`cmd` is required"), "{}", out.stderr);
+    }
+
+    /// End-to-end background round-trip with no sandbox wired: the spawned task
+    /// completes with `CodeExecTool`'s structured "sandbox not configured"
+    /// error, which `poll` then surfaces verbatim. Scoped under a unique
+    /// session so the process-global registry stays isolated from other tests.
+    #[tokio::test]
+    async fn background_spawn_then_poll_round_trips_output() {
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-bg-e2e");
+        let out = SESSION_ID
+            .scope(session.clone(), async {
+                let tool = BashExecTool::new();
+                // Spawn.
+                let spawn = tool
+                    .call(BashExecArgs {
+                        cmd: "echo hi".to_string(),
+                        working_dir: None,
+                        timeout: None,
+                        allow_network: false,
+                        allow_subprocess: false,
+                        extra_writable_paths: Vec::new(),
+                        background: true,
+                        process_action: None,
+                        process_id: None,
+                    })
+                    .await
+                    .unwrap();
+                assert!(spawn.success);
+                let v: serde_json::Value = serde_json::from_str(&spawn.stdout).unwrap();
+                let id = v["process_id"].as_u64().expect("process_id");
+
+                // Poll until it finishes (the no-sandbox path returns instantly).
+                for _ in 0..200 {
+                    let polled = tool
+                        .call(BashExecArgs {
+                            cmd: String::new(),
+                            working_dir: None,
+                            timeout: None,
+                            allow_network: false,
+                            allow_subprocess: false,
+                            extra_writable_paths: Vec::new(),
+                            background: false,
+                            process_action: Some("poll".to_string()),
+                            process_id: Some(id),
+                        })
+                        .await
+                        .unwrap();
+                    // While running the poll envelope reports status=running in
+                    // stdout; once done, the captured tool output surfaces (here
+                    // a structured error because no sandbox is wired).
+                    if !polled.stdout.contains("\"status\":\"running\"") {
+                        return polled;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+                panic!("background process never completed");
+            })
+            .await;
+
+        assert!(
+            out.stderr.contains("sandbox not configured"),
+            "poll should surface the captured task output verbatim: {}",
+            out.stderr
         );
     }
 }
