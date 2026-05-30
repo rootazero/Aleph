@@ -80,8 +80,9 @@ pub fn apply_result_budget(
 ) -> ProcessedResult {
     let tokens = estimate_tokens_smart(text);
     let Some(budget) = budget else {
-        // Budget = None → never persist; fall back to a global truncate.
-        let truncated = truncate_with_budget(text, DEFAULT_RESULT_BUDGET_TOKENS);
+        // Budget = None → never persist; distill salient errors/paths if any,
+        // else fall back to a global head+tail truncate.
+        let truncated = distill_or_truncate(text, DEFAULT_RESULT_BUDGET_TOKENS);
         let tokens_after = estimate_tokens_smart(&truncated);
         return ProcessedResult {
             text: truncated,
@@ -108,6 +109,13 @@ pub fn apply_result_budget(
                 Some(outcome) => format!("{marker}\n{}", search_hint(&outcome)),
                 None => marker,
             };
+            // Surface key errors inline above the marker so a failed command's
+            // diagnostics are visible immediately, not gated behind a
+            // ctx_search round-trip. Bounded; absent when there is no error.
+            let full_marker = match inline_error_digest(text) {
+                Some(errors) => format!("{errors}\n{full_marker}"),
+                None => full_marker,
+            };
             let tokens_after = estimate_tokens_smart(&full_marker);
             return ProcessedResult {
                 text: full_marker,
@@ -117,7 +125,7 @@ pub fn apply_result_budget(
         }
         // Persist failed (the store logs internally); fall through to truncate.
     }
-    let truncated = truncate_with_budget(text, budget);
+    let truncated = distill_or_truncate(text, budget);
     let tokens_after = estimate_tokens_smart(&truncated);
     ProcessedResult {
         text: truncated,
@@ -146,6 +154,39 @@ fn search_hint(outcome: &IndexOutcome) -> String {
             outcome.sections, preview
         )
     }
+}
+
+/// Reduce over-budget text to a salient digest when it carries error / path
+/// signal, otherwise fall back to head+tail [`truncate_with_budget`].
+///
+/// This is the "only the key errors, paths, context" path: for command / log
+/// output whose real signal sits in the *middle* of the stream (compile
+/// errors, panics, failing assertions), head+tail truncation drops exactly
+/// that middle. [`distill_output`](crate::tool_output::distill::distill_output)
+/// extracts it locally. The digest is preferred only when it both carries an
+/// error and fits the budget; signal-free output still truncates as before.
+fn distill_or_truncate(text: &str, budget_tokens: usize) -> String {
+    if let Some(digest) = crate::tool_output::distill::distill_output(text) {
+        if digest.error_count > 0 {
+            let rendered = digest.render(digest.salient.len());
+            if estimate_tokens_smart(&rendered) <= budget_tokens {
+                return rendered;
+            }
+        }
+    }
+    truncate_with_budget(text, budget_tokens)
+}
+
+/// Inline error preview prepended to a persist marker, so the model sees the
+/// key failures immediately instead of having to `ctx_search` the offloaded
+/// blob first. Returns `None` when there is no error signal. Bounded to a
+/// handful of lines to preserve the offload's token saving.
+fn inline_error_digest(text: &str) -> Option<String> {
+    let digest = crate::tool_output::distill::distill_output(text)?;
+    if digest.error_count == 0 {
+        return None;
+    }
+    Some(digest.render(8))
 }
 
 /// Head + tail truncation under the budget. Mirrors
@@ -348,6 +389,55 @@ mod tests {
         let marker = "[Full output persisted: /tmp/aleph/x.txt (1234 tokens, bash)]";
         let path = parse_marker_path(marker).expect("parse");
         assert_eq!(path, PathBuf::from("/tmp/aleph/x.txt"));
+    }
+
+    #[test]
+    fn budget_none_distills_errors_instead_of_truncating() {
+        let (store, _base) = test_store("budget_none_distill");
+        // Error signal buried in the middle of head/tail noise.
+        let mut big = (0..400)
+            .map(|i| format!("   Compiling crate_{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        big.push_str("\nerror[E0382]: borrow of moved value: `x`\n");
+        big.push_str("  --> src/main.rs:42:9\n");
+        big.push_str(
+            &(0..400)
+                .map(|i| format!("   Finished step_{i}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let out = apply_result_budget("c-distill", "read_file", &big, Some(&store), None);
+        assert!(out.persisted_path.is_none());
+        assert!(
+            out.text.contains("E0382") && out.text.contains("Output digest"),
+            "expected distilled errors, got: {}",
+            &out.text[..120.min(out.text.len())]
+        );
+        // Head/tail compile noise must be gone.
+        assert!(!out.text.contains("Compiling crate_0"));
+    }
+
+    #[test]
+    fn persist_branch_prepends_inline_errors() {
+        let (store, _base) = test_store("persist_inline_errors");
+        let mut big = String::new();
+        big.push_str("error: linker failed with exit code 1\n");
+        big.push_str("  --> src/net.rs:10:3\n");
+        // Enough retrievable structure to index into sections + exceed budget.
+        for i in 0..2000 {
+            big.push_str(&format!("trace line {i} payload alpha beta gamma\n"));
+        }
+        let out = apply_result_budget("c-persist", "bash", &big, Some(&store), Some(100));
+        assert!(out.persisted_path.is_some(), "should have persisted");
+        // The marker is still present...
+        assert!(out.text.contains("[Full output persisted:"));
+        // ...but errors now lead so they are visible without a ctx_search.
+        assert!(
+            out.text.contains("Output digest") && out.text.contains("linker failed"),
+            "expected inline error digest above marker, got: {}",
+            &out.text[..160.min(out.text.len())]
+        );
     }
 
     #[test]
