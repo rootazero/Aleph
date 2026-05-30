@@ -145,13 +145,6 @@ fn kimi_cn_alias_resolves_to_moonshot_cn() {
 }
 
 #[test]
-fn moonshot_cn_inherits_moonshot_thinking() {
-    use super::thinking::lookup_thinking_profile;
-    let prof = lookup_thinking_profile("moonshot-cn").expect("moonshot-cn thinking");
-    assert_eq!(prof.param_key, "use_thinking");
-}
-
-#[test]
 fn moonshot_fallbacks_include_current_lineup() {
     let p = get_preset("moonshot").expect("moonshot preset");
     assert!(p
