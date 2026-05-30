@@ -739,3 +739,149 @@ mod e2e_normalized {
         assert_eq!(click, (250.0, 750.0));
     }
 }
+
+// Verifies the `clipboard_read` action surfaces a clipboard image via the
+// system capability (the path macOS uses), rather than dropping it on the
+// text-only screen path.
+mod clipboard_image {
+    use super::*;
+    use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
+    use aleph_desktop::traits::{
+        AutomationCapability, MediaCapability, PermissionCapability, PimCapability,
+        PowerCapability, ScreenCapability, SystemCapability,
+    };
+    use aleph_desktop::{
+        DesktopPlatform, MouseButton, OcrResult, Result as DResult, ScreenRegion, Screenshot,
+        WindowInfo,
+    };
+
+    // Minimal screen so `platform.screen()` is Some (production always wires
+    // one). clipboard_read routes through system(), so none of these are hit.
+    struct NoopScreen;
+
+    #[async_trait]
+    impl ScreenCapability for NoopScreen {
+        async fn screenshot(&self, _r: Option<ScreenRegion>) -> DResult<Screenshot> {
+            Ok(Screenshot {
+                image_base64: String::new(),
+                width: 0,
+                height: 0,
+                format: "png".into(),
+                scale_factor: None,
+            })
+        }
+        async fn ocr(&self, _i: Option<&[u8]>) -> DResult<OcrResult> {
+            Err(aleph_desktop::DesktopError::NotImplemented("ocr".into()))
+        }
+        async fn click(&self, _x: f64, _y: f64, _b: MouseButton) -> DResult<()> {
+            Ok(())
+        }
+        async fn type_text(&self, _t: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn key_combo(&self, _m: &[String], _k: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn scroll(&self, _d: &str, _a: i32) -> DResult<()> {
+            Ok(())
+        }
+        async fn window_list(&self) -> DResult<Vec<WindowInfo>> {
+            Ok(vec![])
+        }
+        async fn focus_window(&self, _id: u64) -> DResult<()> {
+            Ok(())
+        }
+        async fn launch_app(&self, _n: &str) -> DResult<()> {
+            Ok(())
+        }
+    }
+
+    struct ImgSystem;
+
+    #[async_trait]
+    impl SystemCapability for ImgSystem {
+        async fn launch_app(&self, _app: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn quit_app(&self, _app: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn list_running_apps(&self) -> DResult<Vec<AppInfo>> {
+            Ok(vec![])
+        }
+        async fn send_notification(&self, _title: &str, _body: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn clipboard_read(&self) -> DResult<ClipboardContent> {
+            Ok(ClipboardContent {
+                text: Some("hello".into()),
+                has_image: true,
+                // Small base64 (under budget) — passes through untouched.
+                image_base64: Some("ZmFrZS1wbmc=".into()),
+            })
+        }
+        async fn clipboard_write(&self, _text: &str) -> DResult<()> {
+            Ok(())
+        }
+        async fn system_info(&self) -> DResult<SystemInfo> {
+            Ok(SystemInfo {
+                os_name: "macOS".into(),
+                os_version: "0".into(),
+                hostname: "h".into(),
+                arch: "aarch64".into(),
+                username: "u".into(),
+            })
+        }
+    }
+
+    struct ImgPlatform {
+        screen: NoopScreen,
+        system: ImgSystem,
+    }
+
+    impl DesktopPlatform for ImgPlatform {
+        fn platform_name(&self) -> &str {
+            "clipimg-mock"
+        }
+        fn screen(&self) -> Option<&dyn ScreenCapability> {
+            Some(&self.screen)
+        }
+        fn pim(&self) -> Option<&dyn PimCapability> {
+            None
+        }
+        fn system(&self) -> Option<&dyn SystemCapability> {
+            Some(&self.system)
+        }
+        fn automation(&self) -> Option<&dyn AutomationCapability> {
+            None
+        }
+        fn permission(&self) -> Option<&dyn PermissionCapability> {
+            None
+        }
+        fn media(&self) -> Option<&dyn MediaCapability> {
+            None
+        }
+        fn power(&self) -> Option<&dyn PowerCapability> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn clipboard_read_surfaces_image_from_system_capability() {
+        let dyn_platform: Arc<dyn DesktopPlatform> = Arc::new(ImgPlatform {
+            screen: NoopScreen,
+            system: ImgSystem,
+        });
+        let tool = DesktopTool::new().with_platform(dyn_platform);
+
+        let output = AlephTool::call(&tool, make_args("clipboard_read"))
+            .await
+            .unwrap();
+        assert!(output.success, "clipboard_read failed: {:?}", output.message);
+
+        let data = output.data.expect("clipboard_read should return data");
+        assert_eq!(data["text"], "hello");
+        assert_eq!(data["has_image"], true);
+        assert_eq!(data["image_base64"], "ZmFrZS1wbmc=");
+    }
+}

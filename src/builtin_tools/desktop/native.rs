@@ -38,6 +38,41 @@ fn require_xy(args: &DesktopArgs, action: &str) -> std::result::Result<(f64, f64
     }
 }
 
+/// Fit a clipboard image (base64 PNG from the limb) within the tool-result
+/// budget. A pasted screenshot easily exceeds it, and the generic result
+/// budget would then truncate the base64 into an undecodable image — the same
+/// footgun the `screenshot` action guards against. Small images pass through
+/// untouched; oversized ones are re-encoded to budget-fitting JPEG via the
+/// shared screenshot pipeline (reused, not duplicated).
+async fn fit_clipboard_image(png_base64: String) -> Result<String> {
+    use base64::Engine;
+
+    let est_raw_bytes = png_base64.len() / 4 * 3;
+    if est_raw_bytes <= aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES {
+        return Ok(png_base64);
+    }
+
+    let raw = base64::engine::general_purpose::STANDARD
+        .decode(&png_base64)
+        .map_err(|e| crate::error::AlephError::other(format!("clipboard image base64 decode: {e}")))?;
+
+    let processed = tokio::task::spawn_blocking(move || {
+        aleph_desktop::perception::process_screenshot(
+            &raw,
+            None,
+            None,
+            "jpeg",
+            90,
+            Some(aleph_desktop::perception::DEFAULT_SCREENSHOT_MAX_BYTES),
+        )
+    })
+    .await
+    .map_err(|e| crate::error::AlephError::other(format!("task join: {e}")))?
+    .map_err(|e| crate::error::AlephError::other(format!("clipboard image processing: {e}")))?;
+
+    Ok(processed.image_base64)
+}
+
 /// Platform execution methods for [`super::DesktopTool`].
 impl super::DesktopTool {
     /// Execute a desktop action via `DesktopPlatform.screen()`.
@@ -625,17 +660,48 @@ impl super::DesktopTool {
                     })),
                 }
             }
-            "clipboard_read" => match screen.clipboard_read().await {
-                Ok(text) => Ok(Some(DesktopOutput {
-                    success: true,
-                    data: Some(serde_json::json!({"text": text})),
-                    message: None,
-                })),
-                Err(e) => Ok(Some(DesktopOutput {
-                    success: false,
-                    data: None,
-                    message: Some(format!("Screen capability error: {e}")),
-                })),
+            "clipboard_read" => match platform.system() {
+                // Prefer the system capability: on macOS it surfaces clipboard
+                // images (PNG/TIFF→base64 PNG) decoded natively in the limb,
+                // which the text-only screen path silently drops. Linux/Windows
+                // return text only (has_image=false), so this stays backward
+                // compatible while letting vision-capable agents see a copied
+                // image.
+                Some(system) => match system.clipboard_read().await {
+                    Ok(content) => {
+                        let mut obj = serde_json::Map::new();
+                        obj.insert("text".into(), serde_json::json!(content.text));
+                        obj.insert("has_image".into(), serde_json::json!(content.has_image));
+                        if let Some(img) = content.image_base64 {
+                            let fitted = fit_clipboard_image(img).await?;
+                            obj.insert("image_base64".into(), serde_json::json!(fitted));
+                        }
+                        Ok(Some(DesktopOutput {
+                            success: true,
+                            data: Some(serde_json::Value::Object(obj)),
+                            message: None,
+                        }))
+                    }
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("System capability error: {e}")),
+                    })),
+                },
+                // No system capability wired: fall back to the text-only screen
+                // path (unchanged behavior).
+                None => match screen.clipboard_read().await {
+                    Ok(text) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"text": text, "has_image": false})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                },
             },
             "clipboard_write" => {
                 let text = args.text.as_deref().unwrap_or("");
