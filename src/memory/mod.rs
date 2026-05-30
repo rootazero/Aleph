@@ -28,6 +28,7 @@ pub mod embedding_provider;
 pub mod events;
 pub mod extensions;
 pub mod ingestion;
+pub mod insights;
 pub mod namespace;
 pub mod note_retrieval;
 pub mod notes;
@@ -92,6 +93,7 @@ pub use events::{
     EventActor, MemoryEvent, MemoryEventEnvelope,
 };
 pub use ingestion::MemoryIngestion;
+pub use insights::{aggregate_tool_usage, ToolBreakdown, ToolUsageReport};
 pub use namespace::NamespaceScope;
 pub use retrieval::MemoryRetrieval;
 pub use ripple::{RippleConfig, RippleResult, RippleTask};

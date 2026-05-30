@@ -93,6 +93,14 @@ pub struct DesktopArgs {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_y: Option<f64>,
 
+    /// Target width in pixels for resize_window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+
+    /// Target height in pixels for resize_window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+
     /// Drag duration in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
@@ -248,6 +256,14 @@ pub struct DesktopBatchAction {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delta_y: Option<f64>,
 
+    /// Target width in pixels for resize_window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+
+    /// Target height in pixels for resize_window.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+
     /// Drag duration in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
@@ -323,6 +339,8 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             end_y: b.end_y,
             delta_x: b.delta_x,
             delta_y: b.delta_y,
+            width: b.width,
+            height: b.height,
             duration_ms: b.duration_ms,
             press_action: b.press_action.clone(),
             duration: b.duration,

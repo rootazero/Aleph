@@ -81,6 +81,7 @@ pub mod health;
 pub mod heartbeat;
 pub mod hooks_admin;
 pub mod identity;
+pub mod insights;
 pub mod logs;
 pub mod markdown_skills;
 pub mod mcp;
@@ -759,6 +760,12 @@ impl HandlerRegistry {
         // need two-phase wiring; if the daemon was never initialized (memory
         // disabled or simulated mode), it simply returns an error.
         registry.register("dreaming.run_now", dreaming::handle_run_now);
+
+        // Insights introspection handler — needs MemoryBackend; the real
+        // handler is wired in Gateway startup (register_memory_handlers).
+        registry.register("insights.tools", |req| async move {
+            service_unavailable(req, "insights.tools requires MemoryBackend (boot phase 2)")
+        });
 
         // Agent management handlers (placeholders — actual handlers wired with AgentManager)
         registry.register("agents.list", |req| async move {

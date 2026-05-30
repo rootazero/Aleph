@@ -21,6 +21,26 @@ pub trait ScreenCapability: Send + Sync {
     async fn focus_window(&self, window_id: u64) -> Result<()>;
     async fn launch_app(&self, app_name: &str) -> Result<()>;
 
+    /// Move a window so its top-left corner sits at `(x, y)` in global
+    /// screen coordinates. `window_id` is the id returned by [`window_list`].
+    ///
+    /// Default stub returns [`DesktopError::NotImplemented`]; platform
+    /// implementations override it.
+    async fn move_window(&self, window_id: u64, x: i32, y: i32) -> Result<()> {
+        let _ = (window_id, x, y);
+        Err(crate::DesktopError::NotImplemented("move_window".into()))
+    }
+
+    /// Resize a window to `width` × `height` pixels. `window_id` is the id
+    /// returned by [`window_list`].
+    ///
+    /// Default stub returns [`DesktopError::NotImplemented`]; platform
+    /// implementations override it.
+    async fn resize_window(&self, window_id: u64, width: u32, height: u32) -> Result<()> {
+        let _ = (window_id, width, height);
+        Err(crate::DesktopError::NotImplemented("resize_window".into()))
+    }
+
     async fn screen_record(&self, config: ScreenRecordConfig) -> Result<ScreenRecordResult> {
         let _ = config;
         Err(crate::DesktopError::NotImplemented(

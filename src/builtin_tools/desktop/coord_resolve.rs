@@ -153,6 +153,8 @@ mod tests {
             end_y: None,
             delta_x: None,
             delta_y: None,
+            width: None,
+            height: None,
             duration_ms: None,
             press_action: None,
             duration: None,

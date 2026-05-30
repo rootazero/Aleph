@@ -24,6 +24,8 @@ fn make_args(action: &str) -> DesktopArgs {
         end_y: None,
         delta_x: None,
         delta_y: None,
+        width: None,
+        height: None,
         duration_ms: None,
         press_action: None,
         duration: None,
@@ -290,6 +292,64 @@ async fn test_click_missing_coordinates_reports_validation_error() {
         msg.contains("'x' and 'y'"),
         "expected coordinate validation error, got: {msg}"
     );
+}
+
+#[tokio::test]
+async fn test_move_window_requires_window_id() {
+    // move_window without a window_id must report a clear validation error,
+    // and (being mutating) only after passing the no-policy gate.
+    let tool = DesktopTool::new();
+    let mut args = make_args("move_window");
+    args.x = Some(100.0);
+    args.y = Some(80.0);
+    let output = AlephTool::call(&tool, args).await.unwrap();
+    assert!(!output.success);
+    // No platform wired → reaches dispatch and reports the missing-id error.
+    let msg = output.message.as_deref().unwrap();
+    assert!(
+        msg.contains("window_id") || msg.contains("not configured"),
+        "expected window_id validation or missing-capability error, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_resize_window_is_approval_gated() {
+    // resize_window is a mutating action: a deny-all policy must block it
+    // before it ever reaches the platform.
+    let policy = Arc::new(MockPolicy {
+        decision: ApprovalDecision::Deny {
+            reason: "resize blocked".to_string(),
+        },
+    });
+    let tool = DesktopTool::new().with_approval_policy(policy);
+
+    let mut args = make_args("resize_window");
+    args.window_id = Some(1234);
+    args.width = Some(1280);
+    args.height = Some(800);
+    let output = AlephTool::call(&tool, args).await.unwrap();
+    assert!(!output.success);
+    assert!(output.message.as_deref().unwrap().contains("Action denied"));
+}
+
+#[test]
+fn test_move_resize_classified_as_mutating() {
+    // Both window-geometry actions must be gated (classify returns Some),
+    // unlike read-only window_list / focus_window.
+    let mut mv = make_args("move_window");
+    mv.window_id = Some(1);
+    mv.x = Some(10.0);
+    mv.y = Some(20.0);
+    assert!(classify_approval(&mv).is_some());
+
+    let mut rz = make_args("resize_window");
+    rz.window_id = Some(1);
+    rz.width = Some(640);
+    rz.height = Some(480);
+    assert!(classify_approval(&rz).is_some());
+
+    // focus_window stays read-only.
+    assert!(classify_approval(&make_args("focus_window")).is_none());
 }
 
 // ── agent_id audit pipeline ──────────────────────────────────────────
@@ -655,6 +715,8 @@ mod e2e_normalized {
             end_y: None,
             delta_x: None,
             delta_y: None,
+            width: None,
+            height: None,
             duration_ms: None,
             press_action: None,
             duration: None,

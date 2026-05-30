@@ -77,6 +77,70 @@ pub fn focus_window(window_id: u64) -> Result<()> {
     }
 }
 
+/// Move a window's top-left corner to `(x, y)` in global screen coordinates.
+///
+/// - **macOS**: `System Events` Accessibility API via `osascript` (requires
+///   the Accessibility TCC permission, same as input automation).
+/// - **Linux**: `wmctrl -i -r <id> -e 0,x,y,-1,-1` (preserves size).
+/// - **Windows**: not yet implemented.
+///
+/// # Errors
+///
+/// - [`DesktopError::WindowFailed`] if the window is not found or the platform
+///   command fails.
+/// - [`DesktopError::NotImplemented`] on platforms without an implementation.
+pub fn move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_set_window_bounds(window_id, Some((x, y)), None)
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        linux_move_window(window_id, x, y)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (window_id, x, y);
+        Err(DesktopError::NotImplemented(
+            "move_window not implemented on this platform".into(),
+        ))
+    }
+}
+
+/// Resize a window to `width` × `height` pixels.
+///
+/// - **macOS**: `System Events` Accessibility API via `osascript` (requires
+///   the Accessibility TCC permission, same as input automation).
+/// - **Linux**: `wmctrl -i -r <id> -e 0,-1,-1,w,h` (preserves position).
+/// - **Windows**: not yet implemented.
+///
+/// # Errors
+///
+/// - [`DesktopError::WindowFailed`] if the window is not found or the platform
+///   command fails.
+/// - [`DesktopError::NotImplemented`] on platforms without an implementation.
+pub fn resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        macos_set_window_bounds(window_id, None, Some((width as i32, height as i32)))
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        linux_resize_window(window_id, width, height)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (window_id, width, height);
+        Err(DesktopError::NotImplemented(
+            "resize_window not implemented on this platform".into(),
+        ))
+    }
+}
+
 // ── Windows window management helpers ─────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -266,6 +330,93 @@ fn macos_focus_window(window_id: u64) -> Result<()> {
     }
 }
 
+/// Set a window's position and/or size via the `System Events` Accessibility
+/// API (driven by `osascript`).
+///
+/// `window_id` is resolved to its owning process (`unix id`) and window title
+/// by scanning [`macos_window_list`], mirroring [`macos_focus_window`]. The
+/// AppleScript matches the target window by title within that process and
+/// falls back to `window 1` when no title matches (e.g. untitled windows).
+///
+/// All dynamic values are passed through AppleScript's `argv` rather than
+/// interpolated into the script body, so titles containing quotes or other
+/// metacharacters cannot break out of the string literal.
+#[cfg(target_os = "macos")]
+fn macos_set_window_bounds(
+    window_id: u64,
+    position: Option<(i32, i32)>,
+    size: Option<(i32, i32)>,
+) -> Result<()> {
+    let windows = macos_window_list()?;
+    let window = windows.iter().find(|w| w.id == window_id).ok_or_else(|| {
+        DesktopError::WindowFailed(format!("No window found with id {window_id}"))
+    })?;
+    let pid = window.pid;
+    let title = window.title.clone();
+
+    // The two operations share the same window-resolution preamble; the
+    // trailing setter line differs. `{0}` is replaced with the AX setter.
+    let setter = match (position, size) {
+        (Some(_), None) => "set position of tw to {a, b}",
+        (None, Some(_)) => "set size of tw to {a, b}",
+        // The public `move_window` / `resize_window` entry points only ever
+        // pass exactly one of the two; reject anything else defensively.
+        _ => {
+            return Err(DesktopError::WindowFailed(
+                "macos_set_window_bounds requires exactly one of position or size".into(),
+            ))
+        }
+    };
+    let (a, b) = position.or(size).expect("exactly one of position/size is Some");
+
+    let script = format!(
+        r#"on run argv
+set pid to (item 1 of argv) as integer
+set t to item 2 of argv
+set a to (item 3 of argv) as integer
+set b to (item 4 of argv) as integer
+tell application "System Events"
+set proc to first process whose unix id is pid
+tell proc
+set tw to missing value
+repeat with w in windows
+if name of w is t then
+set tw to w
+exit repeat
+end if
+end repeat
+if tw is missing value then
+if (count of windows) is 0 then error "process has no windows"
+set tw to window 1
+end if
+{setter}
+end tell
+end tell
+end run"#
+    );
+
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(&script)
+        .arg(pid.to_string())
+        .arg(title)
+        .arg(a.to_string())
+        .arg(b.to_string())
+        .output()
+        .map_err(|e| DesktopError::WindowFailed(format!("Failed to run osascript: {e}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DesktopError::WindowFailed(format!(
+            "osascript failed (is Accessibility permission granted?): {}",
+            stderr.trim()
+        )));
+    }
+
+    info!(window_id, pid, "Window bounds updated (macOS)");
+    Ok(())
+}
+
 // ── Linux window management helpers ──────────────────────────────
 
 #[cfg(target_os = "linux")]
@@ -337,5 +488,42 @@ fn linux_focus_window(window_id: u64) -> Result<()> {
     }
 
     info!(window_id, "Window focused (Linux)");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn linux_move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
+    // `wmctrl -e <gravity>,<x>,<y>,<w>,<h>`; -1 leaves a dimension unchanged.
+    let mvarg = format!("0,{x},{y},-1,-1");
+    linux_wmctrl_geometry(window_id, &mvarg)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
+    let szarg = format!("0,-1,-1,{width},{height}");
+    linux_wmctrl_geometry(window_id, &szarg)
+}
+
+#[cfg(target_os = "linux")]
+fn linux_wmctrl_geometry(window_id: u64, geometry: &str) -> Result<()> {
+    let id_hex = format!("0x{window_id:08x}");
+    let output = std::process::Command::new("wmctrl")
+        .args(["-i", "-r", &id_hex, "-e", geometry])
+        .output()
+        .map_err(|e| {
+            DesktopError::WindowFailed(format!(
+                "Failed to run wmctrl (is it installed? `sudo apt install wmctrl`): {e}"
+            ))
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DesktopError::WindowFailed(format!(
+            "Failed to set geometry for window {id_hex}: {}",
+            stderr.trim()
+        )));
+    }
+
+    info!(window_id, geometry, "Window geometry updated (Linux)");
     Ok(())
 }

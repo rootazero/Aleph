@@ -97,6 +97,18 @@ impl ScreenCapability for NativeScreen {
             .map_err(|e| DesktopError::WindowFailed(format!("task join error: {e}")))?
     }
 
+    async fn move_window(&self, window_id: u64, x: i32, y: i32) -> Result<()> {
+        tokio::task::spawn_blocking(move || action::move_window(window_id, x, y))
+            .await
+            .map_err(|e| DesktopError::WindowFailed(format!("task join error: {e}")))?
+    }
+
+    async fn resize_window(&self, window_id: u64, width: u32, height: u32) -> Result<()> {
+        tokio::task::spawn_blocking(move || action::resize_window(window_id, width, height))
+            .await
+            .map_err(|e| DesktopError::WindowFailed(format!("task join error: {e}")))?
+    }
+
     async fn launch_app(&self, app_name: &str) -> Result<()> {
         let app_name = app_name.to_string();
         tokio::task::spawn_blocking(move || action::launch_app(&app_name))

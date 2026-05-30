@@ -140,6 +140,14 @@ impl ScreenCapability for MacOSScreen {
         self.inner.focus_window(window_id).await
     }
 
+    async fn move_window(&self, window_id: u64, x: i32, y: i32) -> Result<()> {
+        self.inner.move_window(window_id, x, y).await
+    }
+
+    async fn resize_window(&self, window_id: u64, width: u32, height: u32) -> Result<()> {
+        self.inner.resize_window(window_id, width, height).await
+    }
+
     async fn launch_app(&self, app_name: &str) -> Result<()> {
         self.inner.launch_app(app_name).await
     }

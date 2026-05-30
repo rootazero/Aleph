@@ -336,6 +336,8 @@ fn blank_batch_action() -> DesktopBatchAction {
         end_y: None,
         delta_x: None,
         delta_y: None,
+        width: None,
+        height: None,
         duration_ms: None,
         press_action: None,
         duration: None,
