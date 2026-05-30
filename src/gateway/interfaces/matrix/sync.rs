@@ -1,6 +1,6 @@
 use crate::gateway::channel::{ChannelId, ChannelStatus, InboundMessageSender};
 use crate::gateway::interfaces::matrix::{
-    client::MatrixSdkClient, config::MatrixConfig, dedupe::EventDeduper, events,
+    client::MatrixSdkClient, config::MatrixConfig, dedupe::EventDeduper, events, media,
 };
 use crate::sync_primitives::Arc;
 use futures::StreamExt;
@@ -83,13 +83,25 @@ pub async fn run_sync_loop(
                     }
                 }
 
-                if let Some(inbound) = events::convert_timeline_event(
+                if let Some(mut inbound) = events::convert_timeline_event(
                     &event_json,
                     room_id_str,
                     &channel_id,
                     &own_user_id,
                     Some(&config),
                 ) {
+                    // Inbound media arrives as `mxc://` URLs the HTTP pipeline
+                    // cannot resolve; hydrate them into inline bytes here while
+                    // we hold the authenticated Matrix client.
+                    if config.download_media && !inbound.attachments.is_empty() {
+                        inbound.attachments = media::hydrate_inbound_attachments(
+                            client.inner(),
+                            inbound.attachments,
+                            config.media_max_bytes(),
+                        )
+                        .await;
+                    }
+
                     tracing::debug!(
                         "Matrix message from {} in {}: {}",
                         inbound.sender_id.as_str(),
@@ -101,6 +113,18 @@ pub async fn run_sync_loop(
                         *status.write().await = ChannelStatus::Error;
                         return;
                     }
+                }
+            }
+        }
+
+        if config.auto_join_invites {
+            for room_id in response.rooms.invited.keys() {
+                if !config.is_room_allowed(room_id.as_str()) {
+                    continue;
+                }
+                match client.inner().join_room_by_id(room_id).await {
+                    Ok(_) => tracing::info!("Matrix auto-joined invited room {room_id}"),
+                    Err(e) => tracing::warn!("Matrix failed to join invited room {room_id}: {e}"),
                 }
             }
         }

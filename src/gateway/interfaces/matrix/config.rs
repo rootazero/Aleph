@@ -17,6 +17,10 @@ fn default_initial_sync_limit() -> u64 {
     10
 }
 
+fn default_media_max_mb() -> u64 {
+    25
+}
+
 /// Room-level policy configuration for Matrix channels.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MatrixRoomPolicy {
@@ -73,6 +77,18 @@ pub struct MatrixConfig {
     #[serde(default)]
     pub auto_join_invites: bool,
 
+    /// Download inbound media (`mxc://`) into inline bytes for the pipeline.
+    ///
+    /// The generic media pipeline fetches over HTTP and cannot resolve
+    /// `mxc://` URIs, so when this is disabled inbound attachments arrive as
+    /// metadata only. Enabled by default.
+    #[serde(default = "default_true")]
+    pub download_media: bool,
+
+    /// Maximum inbound media size to download, in megabytes.
+    #[serde(default = "default_media_max_mb")]
+    pub media_max_mb: u64,
+
     /// Room-level policy overrides
     #[serde(default)]
     pub rooms: HashMap<String, MatrixRoomPolicy>,
@@ -92,6 +108,8 @@ impl Default for MatrixConfig {
             dedupe_store_path: None,
             initial_sync_limit: 10,
             auto_join_invites: false,
+            download_media: true,
+            media_max_mb: 25,
             rooms: HashMap::new(),
         }
     }
@@ -142,6 +160,11 @@ impl MatrixConfig {
             .unwrap_or_else(Self::default_dedupe_store_path)
     }
 
+    /// Maximum inbound media download size in bytes (`media_max_mb` × 1 MiB).
+    pub fn media_max_bytes(&self) -> u64 {
+        self.media_max_mb.saturating_mul(1024 * 1024)
+    }
+
     /// Check if a room ID is allowed
     pub fn is_room_allowed(&self, room_id: &str) -> bool {
         if self.allowed_rooms.is_empty() {
@@ -161,7 +184,15 @@ impl MatrixConfig {
     }
 
     /// Get effective mention gating for a room.
-    pub fn is_mention_gating_enabled(&self, _room_id: &str) -> bool {
+    ///
+    /// Returns the per-room [`MatrixRoomPolicy::require_mention`] override when
+    /// present, otherwise the global [`mention_gating`](Self::mention_gating).
+    pub fn effective_mention_gating(&self, room_id: &str) -> bool {
+        if let Some(policy) = self.rooms.get(room_id) {
+            if let Some(require_mention) = policy.require_mention {
+                return require_mention;
+            }
+        }
         self.mention_gating
     }
 
@@ -181,8 +212,14 @@ impl MatrixConfig {
         true
     }
 
-    pub fn check_mention(&self, body: &str, user_id: &str) -> bool {
-        if !self.mention_gating {
+    /// Returns `true` when the message passes mention gating for `room_id`.
+    ///
+    /// Gating is governed by [`effective_mention_gating`](Self::effective_mention_gating),
+    /// so a per-room [`MatrixRoomPolicy::require_mention`] override takes
+    /// precedence over the global flag. When gating is off, every message
+    /// passes; when on, only messages that @mention the bot pass.
+    pub fn check_mention(&self, body: &str, user_id: &str, room_id: &str) -> bool {
+        if !self.effective_mention_gating(room_id) {
             return true;
         }
 
@@ -292,6 +329,8 @@ mod tests {
             dedupe_store_path: Some("/tmp/matrix_dedupe.db".to_string()),
             initial_sync_limit: 50,
             auto_join_invites: true,
+            download_media: false,
+            media_max_mb: 50,
             rooms: {
                 let mut m = HashMap::new();
                 m.insert(
@@ -320,6 +359,8 @@ mod tests {
         assert_eq!(deserialized.dedupe_store_path, config.dedupe_store_path);
         assert_eq!(deserialized.initial_sync_limit, config.initial_sync_limit);
         assert_eq!(deserialized.auto_join_invites, config.auto_join_invites);
+        assert_eq!(deserialized.download_media, config.download_media);
+        assert_eq!(deserialized.media_max_mb, config.media_max_mb);
         assert_eq!(deserialized.rooms.len(), config.rooms.len());
     }
 
@@ -353,5 +394,76 @@ mod tests {
         assert!(!config.is_user_allowed_in_room("@bob:matrix.org", "!room1:matrix.org"));
         // Other rooms fall back to global allowlist
         assert!(config.is_user_allowed_in_room("@bob:matrix.org", "!room2:matrix.org"));
+    }
+
+    #[test]
+    fn test_effective_mention_gating_per_room_override() {
+        let mut config = MatrixConfig {
+            mention_gating: false,
+            ..Default::default()
+        };
+        // Room with an explicit require_mention=true overrides the global off.
+        config.rooms.insert(
+            "!strict:matrix.org".to_string(),
+            MatrixRoomPolicy {
+                require_mention: Some(true),
+                allow_bots: None,
+                users: None,
+            },
+        );
+        // Room with require_mention=None falls back to global.
+        config.rooms.insert(
+            "!loose:matrix.org".to_string(),
+            MatrixRoomPolicy {
+                require_mention: None,
+                allow_bots: None,
+                users: None,
+            },
+        );
+
+        assert!(config.effective_mention_gating("!strict:matrix.org"));
+        assert!(!config.effective_mention_gating("!loose:matrix.org"));
+        assert!(!config.effective_mention_gating("!unknown:matrix.org"));
+    }
+
+    #[test]
+    fn test_check_mention_respects_per_room_override() {
+        let mut config = MatrixConfig::default(); // mention_gating = false globally
+        config.rooms.insert(
+            "!strict:matrix.org".to_string(),
+            MatrixRoomPolicy {
+                require_mention: Some(true),
+                allow_bots: None,
+                users: None,
+            },
+        );
+
+        // Global gating off → message without mention passes in a normal room.
+        assert!(config.check_mention("hello there", "@bot:matrix.org", "!any:matrix.org"));
+        // Strict room requires the mention → unmentioned message is gated out.
+        assert!(!config.check_mention("hello there", "@bot:matrix.org", "!strict:matrix.org"));
+        // ...but a message that mentions the bot passes even in the strict room.
+        assert!(config.check_mention(
+            "hey @bot:matrix.org ping",
+            "@bot:matrix.org",
+            "!strict:matrix.org"
+        ));
+    }
+
+    #[test]
+    fn test_media_cap_defaults_and_conversion() {
+        let config = MatrixConfig::default();
+        assert!(config.download_media);
+        assert_eq!(config.media_max_mb, 25);
+        assert_eq!(config.media_max_bytes(), 25 * 1024 * 1024);
+    }
+
+    #[test]
+    fn test_media_fields_serde_default_backward_compatible() {
+        // Configs written before these fields existed must still deserialize.
+        let json = r#"{"homeserver_url": "https://matrix.org", "access_token": "t"}"#;
+        let config: MatrixConfig = serde_json::from_str(json).unwrap();
+        assert!(config.download_media);
+        assert_eq!(config.media_max_mb, 25);
     }
 }
