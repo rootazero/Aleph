@@ -263,6 +263,7 @@ name = "aleph-desktop-windows"
 version = "26.5.30"
 dependencies = [
  "aleph-desktop",
+ "aleph-protocol",
  "async-trait",
  "chrono",
  "clipboard-win",
