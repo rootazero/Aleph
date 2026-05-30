@@ -23,6 +23,7 @@ mod persistence;
 mod run_loop;
 mod simple;
 mod slash_command;
+mod steering;
 mod tool_refresh;
 mod tool_service_builder;
 mod trace_sink_adapter;
@@ -56,6 +57,11 @@ pub struct ExecutionEngineConfig {
     pub default_timeout_secs: u64,
     /// Enable detailed tracing
     pub enable_tracing: bool,
+    /// Mid-loop steering: when a message arrives for a session whose loop is
+    /// already running, inject it into the live event log (the running loop
+    /// consumes it at the next turn boundary) instead of rejecting with
+    /// `AgentBusy`. Disable to restore the legacy busy/retry behaviour.
+    pub mid_turn_steering: bool,
 }
 
 impl Default for ExecutionEngineConfig {
@@ -64,6 +70,7 @@ impl Default for ExecutionEngineConfig {
             max_concurrent_runs: 5,
             default_timeout_secs: 172_800,
             enable_tracing: true,
+            mid_turn_steering: true,
         }
     }
 }

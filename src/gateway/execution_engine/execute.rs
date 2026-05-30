@@ -77,9 +77,23 @@ where
         // to close the TOCTOU window between an is_idle() probe and the later
         // set_state(Running).
         if !agent.try_start_run(&run_id).await {
-            // Remove the just-inserted run since agent is busy
+            // Agent busy. Before rejecting, try mid-loop steering: if the busy
+            // run is on THIS session, inject the message into the live event
+            // log so the running loop picks it up at its next turn boundary
+            // (codex parity). The just-reserved run is removed either way.
+            let injected = super::steering::try_inject_steering(
+                self.config.mid_turn_steering,
+                &self.active_runs,
+                self.orchestrator.as_ref(),
+                &request,
+                &run_id,
+            )
+            .await;
             let mut runs = self.active_runs.write().await;
             runs.remove(&run_id);
+            if injected {
+                return Ok(());
+            }
             return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
 
@@ -124,18 +138,9 @@ where
             );
         }
 
-        // Store user message in session (with attachment markers for history)
-        let mut session_text = request.input.clone();
-        for att in &request.attachments {
-            let label = att.filename.as_deref().unwrap_or("file");
-            if att.mime_type.starts_with("image/") {
-                session_text.push_str(&format!("\n[Image attached: {}]", att.mime_type));
-            } else if att.mime_type.starts_with("audio/") {
-                session_text.push_str(&format!("\n[Audio attached: {}]", att.mime_type));
-            } else {
-                session_text.push_str(&format!("\n[Attachment: {} ({})]", label, att.mime_type));
-            }
-        }
+        // Store user message in session (with attachment markers for history).
+        // Shared with the mid-loop steering path so both render identically.
+        let session_text = super::steering::render_user_session_text(&request);
         agent
             .add_message(&request.session_key, MessageRole::User, &session_text)
             .await;
