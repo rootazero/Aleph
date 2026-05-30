@@ -1,6 +1,7 @@
 mod automation;
 mod escape_listener;
 mod media;
+mod permission;
 mod pim;
 mod sleep_inhibitor;
 mod system;
@@ -8,6 +9,7 @@ mod system;
 pub use automation::LinuxAutomation;
 pub use escape_listener::LinuxEscapeListener;
 pub use media::LinuxMedia;
+pub use permission::LinuxPermission;
 pub use pim::LinuxPim;
 pub use sleep_inhibitor::LinuxPower;
 pub use system::LinuxSystem;
@@ -27,6 +29,7 @@ pub struct LinuxPlatform {
     escape: LinuxEscapeListener,
     pim: LinuxPim,
     media: LinuxMedia,
+    permission: LinuxPermission,
 }
 
 impl LinuxPlatform {
@@ -39,6 +42,7 @@ impl LinuxPlatform {
             escape: LinuxEscapeListener::new(),
             pim: LinuxPim::new(),
             media: LinuxMedia::new(),
+            permission: LinuxPermission::new(),
         }
     }
 }
@@ -71,7 +75,7 @@ impl DesktopPlatform for LinuxPlatform {
     }
 
     fn permission(&self) -> Option<&dyn PermissionCapability> {
-        None
+        Some(&self.permission)
     }
 
     fn media(&self) -> Option<&dyn MediaCapability> {
@@ -107,6 +111,6 @@ mod tests {
         assert!(platform.escape_listener().is_some());
         assert!(platform.pim().is_some());
         assert!(platform.media().is_some());
-        assert!(platform.permission().is_none());
+        assert!(platform.permission().is_some());
     }
 }
