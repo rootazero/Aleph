@@ -82,7 +82,8 @@ pub fn focus_window(window_id: u64) -> Result<()> {
 /// - **macOS**: `System Events` Accessibility API via `osascript` (requires
 ///   the Accessibility TCC permission, same as input automation).
 /// - **Linux**: `wmctrl -i -r <id> -e 0,x,y,-1,-1` (preserves size).
-/// - **Windows**: not yet implemented.
+/// - **Windows**: `SetWindowPos` with `SWP_NOSIZE` (resolves `window_id` as an
+///   `HWND`; preserves the current size).
 ///
 /// # Errors
 ///
@@ -100,7 +101,12 @@ pub fn move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
         linux_move_window(window_id, x, y)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_move_window(window_id, x, y)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = (window_id, x, y);
         Err(DesktopError::NotImplemented(
@@ -114,7 +120,8 @@ pub fn move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
 /// - **macOS**: `System Events` Accessibility API via `osascript` (requires
 ///   the Accessibility TCC permission, same as input automation).
 /// - **Linux**: `wmctrl -i -r <id> -e 0,-1,-1,w,h` (preserves position).
-/// - **Windows**: not yet implemented.
+/// - **Windows**: `SetWindowPos` with `SWP_NOMOVE` (resolves `window_id` as an
+///   `HWND`; preserves the current top-left position).
 ///
 /// # Errors
 ///
@@ -132,7 +139,12 @@ pub fn resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
         linux_resize_window(window_id, width, height)
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(target_os = "windows")]
+    {
+        windows_resize_window(window_id, width, height)
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = (window_id, width, height);
         Err(DesktopError::NotImplemented(
@@ -224,6 +236,76 @@ fn windows_focus_window(window_id: u64) -> Result<()> {
     }
 
     info!(window_id, "Window focused (Windows)");
+    Ok(())
+}
+
+/// Reposition and/or resize a window via Win32 `SetWindowPos`.
+///
+/// `SWP_NOZORDER | SWP_NOACTIVATE` are always added so the call never changes
+/// the Z-order or steals focus; callers pass `SWP_NOSIZE` (move only) or
+/// `SWP_NOMOVE` (resize only) to pin the dimension they want preserved.
+#[cfg(target_os = "windows")]
+fn windows_set_window_pos(
+    window_id: u64,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    flags: windows::Win32::UI::WindowsAndMessaging::SET_WINDOW_POS_FLAGS,
+) -> Result<()> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        IsWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
+    };
+
+    let hwnd = HWND(window_id as usize as *mut core::ffi::c_void);
+
+    // SAFETY: the handle is validated by `IsWindow` before the state-changing
+    // call; `SetWindowPos` is a documented Win32 API and the insert-after
+    // handle is ignored because `SWP_NOZORDER` is always set.
+    unsafe {
+        if !IsWindow(hwnd).as_bool() {
+            return Err(DesktopError::WindowFailed(format!(
+                "No window found with id {window_id}"
+            )));
+        }
+        SetWindowPos(
+            hwnd,
+            HWND::default(),
+            x,
+            y,
+            cx,
+            cy,
+            flags | SWP_NOZORDER | SWP_NOACTIVATE,
+        )
+        .map_err(|e| DesktopError::WindowFailed(format!("SetWindowPos failed: {e}")))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_move_window(window_id: u64, x: i32, y: i32) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::SWP_NOSIZE;
+
+    windows_set_window_pos(window_id, x, y, 0, 0, SWP_NOSIZE)?;
+    info!(window_id, x, y, "Window moved (Windows)");
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn windows_resize_window(window_id: u64, width: u32, height: u32) -> Result<()> {
+    use windows::Win32::UI::WindowsAndMessaging::SWP_NOMOVE;
+
+    // Win32 `SetWindowPos` takes signed dimensions; reject values past `i32::MAX`
+    // rather than letting an `as` cast silently wrap to a negative size.
+    let cx = i32::try_from(width)
+        .map_err(|_| DesktopError::WindowFailed(format!("width {width} exceeds i32 range")))?;
+    let cy = i32::try_from(height)
+        .map_err(|_| DesktopError::WindowFailed(format!("height {height} exceeds i32 range")))?;
+
+    windows_set_window_pos(window_id, 0, 0, cx, cy, SWP_NOMOVE)?;
+    info!(window_id, width, height, "Window resized (Windows)");
     Ok(())
 }
 
@@ -526,4 +608,39 @@ fn linux_wmctrl_geometry(window_id: u64, geometry: &str) -> Result<()> {
 
     info!(window_id, geometry, "Window geometry updated (Linux)");
     Ok(())
+}
+
+// ── Windows window-management tests ──────────────────────────────
+//
+// These exercise the real Win32 entry points, so they only compile and run on
+// Windows. They assert graceful failure on a bogus handle and on out-of-range
+// dimensions — both must surface `WindowFailed` rather than panic or wrap.
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn move_window_invalid_id_errors() {
+        // HWND 1 is never a valid top-level window handle.
+        let err = move_window(1, 0, 0).unwrap_err();
+        assert!(matches!(err, DesktopError::WindowFailed(_)));
+    }
+
+    #[test]
+    fn resize_window_invalid_id_errors() {
+        let err = resize_window(1, 800, 600).unwrap_err();
+        assert!(matches!(err, DesktopError::WindowFailed(_)));
+    }
+
+    #[test]
+    fn resize_window_dimension_overflow_errors() {
+        // u32 values past i32::MAX must be rejected, not wrapped to a negative.
+        let err = resize_window(1, u32::MAX, 600).unwrap_err();
+        match err {
+            DesktopError::WindowFailed(msg) => {
+                assert!(msg.contains("exceeds i32 range"), "got: {msg}");
+            }
+            other => panic!("expected WindowFailed, got {other:?}"),
+        }
+    }
 }
