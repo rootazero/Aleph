@@ -359,6 +359,55 @@ impl BrowserBackend for ChromeMcpBackend {
         Ok(Self::extract_text(&result))
     }
 
+    async fn drag(
+        &self,
+        tab_id: &str,
+        from: ActionTarget,
+        to: ActionTarget,
+    ) -> Result<(), BrowserError> {
+        let from_uid = Self::extract_element_ref(&from)?;
+        let to_uid = Self::extract_element_ref(&to)?;
+        self.select_page(tab_id).await?;
+        self.call("drag", json!({ "from_uid": from_uid, "to_uid": to_uid }))
+            .await?;
+        Ok(())
+    }
+
+    async fn upload(
+        &self,
+        tab_id: &str,
+        target: Option<ActionTarget>,
+        paths: &[String],
+    ) -> Result<(), BrowserError> {
+        let target = target.ok_or_else(|| {
+            BrowserError::ActionFailed(
+                "upload in existing-session mode requires a ref_id for the file input element \
+                 (from browser_snapshot)"
+                    .into(),
+            )
+        })?;
+        let uid = Self::extract_element_ref(&target)?;
+        if paths.is_empty() {
+            return Err(BrowserError::ActionFailed(
+                "upload requires at least one file path".into(),
+            ));
+        }
+        self.select_page(tab_id).await?;
+        // chrome-devtools-mcp's `upload_file` is single-file; apply each path in order.
+        for path in paths {
+            self.call("upload_file", json!({ "uid": uid, "filePath": path }))
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn resize(&self, tab_id: &str, width: u32, height: u32) -> Result<(), BrowserError> {
+        self.select_page(tab_id).await?;
+        self.call("resize_page", json!({ "width": width, "height": height }))
+            .await?;
+        Ok(())
+    }
+
     async fn fill_form(
         &self,
         tab_id: &str,

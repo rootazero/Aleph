@@ -19,11 +19,11 @@
 use crate::sync_primitives::Arc;
 
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserDialogTool, BrowserEvaluateTool,
+    BrowserClickTool, BrowserConsoleTool, BrowserDialogTool, BrowserDragTool, BrowserEvaluateTool,
     BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
-    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool,
+    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool, BrowserResizeTool,
     BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSnapshotTool,
-    BrowserTabsTool, BrowserTypeTool, BrowserWaitForTool,
+    BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
@@ -440,6 +440,21 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "browser_dialog",
         description: "Respond to a native browser dialog (alert/confirm/prompt)",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_drag",
+        description: "Drag one element onto another in the browser",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_upload",
+        description: "Attach local files to a file input in the browser",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_resize",
+        description: "Resize the browser viewport",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -866,7 +881,8 @@ pub fn create_tool_boxed(
         | "browser_snapshot" | "browser_navigate" | "browser_tabs" | "browser_select"
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
         | "browser_console" | "browser_hover" | "browser_scroll" | "browser_pdf"
-        | "browser_network" | "browser_dialog" | "browser_profile" => {
+        | "browser_network" | "browser_dialog" | "browser_drag" | "browser_upload"
+        | "browser_resize" | "browser_profile" => {
             let manager = config
                 .and_then(|cfg| cfg.browser_profile_manager.clone())
                 .unwrap_or_else(|| {
@@ -893,6 +909,9 @@ pub fn create_tool_boxed(
                 "browser_pdf" => Some(Box::new(BrowserPdfTool::new(manager))),
                 "browser_network" => Some(Box::new(BrowserNetworkTool::new(manager))),
                 "browser_dialog" => Some(Box::new(BrowserDialogTool::new(manager))),
+                "browser_drag" => Some(Box::new(BrowserDragTool::new(manager))),
+                "browser_upload" => Some(Box::new(BrowserUploadTool::new(manager))),
+                "browser_resize" => Some(Box::new(BrowserResizeTool::new(manager))),
                 "browser_profile" => Some(Box::new(BrowserProfileTool::new(manager))),
                 _ => None,
             }

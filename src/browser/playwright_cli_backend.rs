@@ -261,6 +261,49 @@ impl BrowserBackend for PlaywrightCliBackend {
             .await?;
         Ok(())
     }
+
+    async fn drag(
+        &self,
+        _tab_id: &str,
+        from: ActionTarget,
+        to: ActionTarget,
+    ) -> Result<(), BrowserError> {
+        let from_ref = target_ref(&from)?;
+        let to_ref = target_ref(&to)?;
+        let _ = self
+            .run(&["drag", from_ref, to_ref], self.action_timeout())
+            .await?;
+        Ok(())
+    }
+
+    async fn upload(
+        &self,
+        _tab_id: &str,
+        _target: Option<ActionTarget>,
+        paths: &[String],
+    ) -> Result<(), BrowserError> {
+        if paths.is_empty() {
+            return Err(BrowserError::ActionFailed(
+                "upload requires at least one file path".into(),
+            ));
+        }
+        // `playwright-cli upload <file...>` self-targets the page's file chooser;
+        // the element ref is only meaningful to the existing-session backend.
+        let mut args: Vec<&str> = Vec::with_capacity(paths.len() + 1);
+        args.push("upload");
+        args.extend(paths.iter().map(String::as_str));
+        let _ = self.run(&args, self.action_timeout()).await?;
+        Ok(())
+    }
+
+    async fn resize(&self, _tab_id: &str, width: u32, height: u32) -> Result<(), BrowserError> {
+        let w = width.to_string();
+        let h = height.to_string();
+        let _ = self
+            .run(&["resize", &w, &h], self.action_timeout())
+            .await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

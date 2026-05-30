@@ -214,6 +214,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_pdf_tool: crate::builtin_tools::browser_tools::BrowserPdfTool,
     pub(crate) browser_network_tool: crate::builtin_tools::browser_tools::BrowserNetworkTool,
     pub(crate) browser_dialog_tool: crate::builtin_tools::browser_tools::BrowserDialogTool,
+    pub(crate) browser_drag_tool: crate::builtin_tools::browser_tools::BrowserDragTool,
+    pub(crate) browser_upload_tool: crate::builtin_tools::browser_tools::BrowserUploadTool,
+    pub(crate) browser_resize_tool: crate::builtin_tools::browser_tools::BrowserResizeTool,
     pub(crate) browser_profile_tool: crate::builtin_tools::browser_tools::BrowserProfileTool,
     /// Shared session key handle for memory_search scope=current_session
     pub(super) memory_session_key_handle: Option<Arc<RwLock<String>>>,
@@ -866,6 +869,15 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "browser_dialog" => {
                 Box::pin(async move { self.browser_dialog_tool.call_json(arguments).await })
+            }
+            "browser_drag" => {
+                Box::pin(async move { self.browser_drag_tool.call_json(arguments).await })
+            }
+            "browser_upload" => {
+                Box::pin(async move { self.browser_upload_tool.call_json(arguments).await })
+            }
+            "browser_resize" => {
+                Box::pin(async move { self.browser_resize_tool.call_json(arguments).await })
             }
             "browser_profile" => {
                 Box::pin(async move { self.browser_profile_tool.call_json(arguments).await })

@@ -18,6 +18,5 @@ pub use chrome_mcp_backend::ChromeMcpBackend;
 pub use discovery::find_chromium;
 pub use error::BrowserError;
 pub use types::{
-    ActionTarget, BrowserConfig, LaunchMode, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
-    SnapshotOutput, TabId,
+    ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
 };
