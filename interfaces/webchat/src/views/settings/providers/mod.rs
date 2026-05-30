@@ -67,7 +67,7 @@ pub fn ProvidersView() -> impl IntoView {
             // Left panel: Presets + Configured providers
             <div class="flex flex-col w-5/12 min-w-0 border-r border-border">
                 // Header
-                <div class="px-6 py-4 border-b border-border">
+                <div class="px-6 pb-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">{t!(i18n, settings.providers.title)}</h1>
                     <p class="mt-1 text-sm text-text-tertiary">
                         {t!(i18n, settings.providers.description)}

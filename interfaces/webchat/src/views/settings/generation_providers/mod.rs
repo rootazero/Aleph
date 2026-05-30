@@ -122,7 +122,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
             // Left panel - Provider list + Generation settings
             <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
                 // Header
-                <div class="px-6 py-4 border-b border-border">
+                <div class="px-6 pb-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
                         {t!(i18n, settings.generation.title)}
                     </h1>

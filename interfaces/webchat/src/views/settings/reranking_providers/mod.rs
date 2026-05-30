@@ -103,7 +103,7 @@ pub fn RerankingProvidersView() -> impl IntoView {
         <div class="flex h-full aleph-content-top">
             // Left panel — provider list
             <div class="flex flex-col w-5/12 min-w-[400px] border-r border-border">
-                <div class="px-6 py-4 border-b border-border">
+                <div class="px-6 pb-4 border-b border-border">
                     <h1 class="text-2xl font-semibold text-text-primary">
                         {t!(i18n, settings.reranking.title)}
                     </h1>
