@@ -150,7 +150,10 @@ impl AlephTool for WorkflowTool {
         match args {
             WorkflowArgs::Save { definition } => {
                 debug!(name = %definition.name, "workflow: save");
-                let path = workflow::store::save(&definition)?;
+                // `save` authors the lean executable core; persist it as a
+                // manifest (extras empty) so the on-disk format stays uniform.
+                let manifest = WorkflowManifest::from_def(&definition);
+                let path = workflow::store::save(&manifest)?;
                 Ok(WorkflowToolOutput::msg(
                     "save",
                     format!("saved workflow '{}' → {}", definition.name, path.display()),
@@ -170,12 +173,15 @@ impl AlephTool for WorkflowTool {
                 })
             }
             WorkflowArgs::Describe { name } => {
-                let def = workflow::store::load(&name)?;
+                let manifest = workflow::store::load(&name)?;
+                // Output the executable projection — the tool's `definition`
+                // field is a `WorkflowDef`; the extra metadata is reachable via
+                // `export`.
                 Ok(WorkflowToolOutput {
                     action: "describe".into(),
-                    message: format!("workflow '{name}' has {} step(s)", def.steps.len()),
+                    message: format!("workflow '{name}' has {} step(s)", manifest.steps.len()),
                     names: None,
-                    definition: Some(def),
+                    definition: Some(manifest.to_def()),
                     task_ids: None,
                     rendered: None,
                     dropped: None,
@@ -196,7 +202,10 @@ impl AlephTool for WorkflowTool {
                 input,
             } => {
                 debug!(name = %name, team_id = %team_id, "workflow: run");
-                let def = workflow::store::load(&name)?;
+                // Project to the executable core — `materialize` consumes only
+                // id/agent/prompt/depends_on (R10: the executor never sees the
+                // interchange metadata).
+                let def = workflow::store::load(&name)?.to_def();
                 let mat =
                     workflow::materialize(&def, &input, &team_id, self.coord_store.as_ref()).await?;
                 if let Some(signal) = &self.dispatch_signal {
@@ -217,8 +226,10 @@ impl AlephTool for WorkflowTool {
             }
             WorkflowArgs::Export { name, write_file } => {
                 debug!(name = %name, write_file, "workflow: export");
-                let def = workflow::store::load(&name)?;
-                let manifest = WorkflowManifest::from_def(&def);
+                // The stored manifest carries the full `.workflow.js` metadata,
+                // so the render is now faithful (phases, per-step
+                // label/model/phase/schema) rather than a bare skeleton.
+                let manifest = workflow::store::load(&name)?;
                 let rendered = workflow::render_workflow_js(&manifest);
                 let message = if write_file {
                     let path = workflow::store::write_text(&name, "workflow.js", &rendered)?;
@@ -244,7 +255,7 @@ impl AlephTool for WorkflowTool {
                 // diagnostics into the error so the user keeps the context that
                 // the import was lossy (imperative constructs were skipped) —
                 // otherwise `?` would discard `outcome.dropped` silently.
-                if let Err(e) = def.validate() {
+                if let Err(e) = outcome.manifest.validate() {
                     if outcome.dropped.is_empty() {
                         return Err(e);
                     }
@@ -255,7 +266,9 @@ impl AlephTool for WorkflowTool {
                     )));
                 }
                 let message = if save {
-                    let path = workflow::store::save(&def)?;
+                    // Persist the full manifest so an `import` of a rich
+                    // `.workflow.js` keeps its phases/schema/model on disk.
+                    let path = workflow::store::save(&outcome.manifest)?;
                     format!(
                         "imported workflow '{}' ({} step(s)) → {}",
                         def.name,
@@ -413,7 +426,7 @@ mod tests {
             unsafe {
                 std::env::set_var("ALEPH_HOME", tmp.path());
             }
-            workflow::store::save(&linear_def()).expect("save under temp ALEPH_HOME");
+            workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save under temp ALEPH_HOME");
             let r = t
                 .call(WorkflowArgs::Run {
                     name: "pipeline".into(),
@@ -468,7 +481,7 @@ mod tests {
         unsafe {
             std::env::set_var("ALEPH_HOME", tmp.path());
         }
-        workflow::store::save(&linear_def()).expect("save");
+        workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save");
         let run = t
             .call(WorkflowArgs::Run {
                 name: "pipeline".into(),
@@ -504,7 +517,7 @@ mod tests {
         unsafe {
             std::env::set_var("ALEPH_HOME", tmp.path());
         }
-        workflow::store::save(&linear_def()).expect("save");
+        workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save");
         let out = t
             .call(WorkflowArgs::Run {
                 name: "pipeline".into(),
@@ -599,7 +612,7 @@ mod tests {
                 std::env::set_var("ALEPH_HOME", tmp.path());
             }
 
-            workflow::store::save(&linear_def()).expect("save template");
+            workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save template");
 
             // export (no write_file) populates `rendered`, not task_ids/definition.
             let exported = t
@@ -639,6 +652,75 @@ mod tests {
         let def = imported.definition.as_ref().expect("import populates definition");
         assert_eq!(def, &linear_def());
         assert_eq!(imported.dropped.as_deref(), Some(&[][..]));
+    }
+
+    #[tokio::test]
+    async fn import_rich_manifest_then_export_reproduces_metadata() {
+        // The headline fidelity guarantee: importing a rich AWI manifest
+        // (per-step schema/model/phase + meta phases) with save=true, then
+        // exporting it, reproduces that metadata — because the store now
+        // persists the manifest superset, not just the executable core. (Bare
+        // hand-written `.workflow.js` opts are out of scope for the scanner;
+        // the lossless rich channels are manifest JSON and the embed block.)
+        let tmp = TempDir::new().unwrap();
+        let store = setup_store().await;
+        let t = tool(store, None);
+
+        let rich_manifest_json = r#"{
+  "name": "audit",
+  "description": "two-phase audit",
+  "whenToUse": "on any subsystem",
+  "phases": [
+    { "title": "Scan", "detail": "look" },
+    { "title": "Fix", "detail": "patch" }
+  ],
+  "steps": [
+    { "id": "a", "agent": "scanner", "prompt": "scan {input}", "label": "scan:a", "phase": "Scan", "model": "haiku", "schema": {"type":"object"} },
+    { "id": "b", "agent": "fixer", "prompt": "fix it", "dependsOn": ["a"], "label": "fix:b", "phase": "Fix" }
+  ]
+}"#;
+
+        let exported = {
+            let _lock = ENV_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+            let prev = std::env::var_os("ALEPH_HOME");
+            // SAFETY: guarded single mutator; restored below.
+            unsafe {
+                std::env::set_var("ALEPH_HOME", tmp.path());
+            }
+            // Import the rich AWI manifest JSON (lossless) and persist it.
+            t.call(WorkflowArgs::Import {
+                source: rich_manifest_json.into(),
+                save: true,
+            })
+            .await
+            .expect("import rich manifest + save");
+            // Re-export from disk — must reproduce phases/schema/model/label.
+            let exported = t
+                .call(WorkflowArgs::Export {
+                    name: "audit".into(),
+                    write_file: false,
+                })
+                .await
+                .expect("export");
+            // SAFETY: same guarded invariant; restore prior value.
+            unsafe {
+                match prev {
+                    Some(v) => std::env::set_var("ALEPH_HOME", v),
+                    None => std::env::remove_var("ALEPH_HOME"),
+                }
+            }
+            exported
+        };
+
+        let js = exported.rendered.as_ref().expect("export populates rendered");
+        // meta block carries whenToUse + both phases.
+        assert!(js.contains("whenToUse: \"on any subsystem\""), "whenToUse: {js}");
+        assert!(js.contains("title: \"Scan\"") && js.contains("title: \"Fix\""), "phases: {js}");
+        // per-step metadata survived: schema, model, label, phase markers.
+        assert!(js.contains("schema: {\"type\":\"object\"}"), "schema: {js}");
+        assert!(js.contains("model: \"haiku\""), "model: {js}");
+        assert!(js.contains("label: \"scan:a\""), "label: {js}");
+        assert!(js.contains("phase(\"Scan\")") && js.contains("phase(\"Fix\")"), "phase markers: {js}");
     }
 
     #[tokio::test]

@@ -9,6 +9,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::error::Result;
 use crate::workflow::def::{WorkflowDef, WorkflowStepDef};
 
 // NOTE: no `JsonSchema` derive — these types never appear in a tool arg schema
@@ -44,7 +45,10 @@ pub struct WorkflowManifestStep {
     pub id: String,
     pub agent: String,
     pub prompt: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    // `alias = "depends_on"` lets a legacy `WorkflowDef.json` (snake_case, written
+    // before the store persisted the manifest superset) deserialise as a manifest
+    // unchanged — backward compatibility for already-saved templates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "depends_on")]
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -81,6 +85,15 @@ impl WorkflowManifest {
                 })
                 .collect(),
         }
+    }
+
+    /// Validate the manifest by validating its executable projection — the
+    /// extra metadata (`label`/`model`/`phase`/`schema`/`phases`/`whenToUse`)
+    /// is pure interchange data and carries no invariants of its own, so the
+    /// `WorkflowDef` checks (unique ids, resolvable deps, acyclic) are the whole
+    /// contract. Pure — touches no store.
+    pub fn validate(&self) -> Result<()> {
+        self.to_def().validate()
     }
 
     /// Project to the executable core, dropping extra metadata. Callers
