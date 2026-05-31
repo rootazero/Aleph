@@ -140,8 +140,11 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
         let serialized = match serde_json::to_string(args) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!(error = %e, "failed to serialize tool args for guardrail scan");
-                return GuardrailDecision::Allow;
+                tracing::error!(error = %e, "failed to serialize tool args for guardrail scan; failing closed");
+                return GuardrailDecision::Block {
+                    reason: format!("Guardrail serialization failed: {e}"),
+                    class: ErrorClass::Unexpected,
+                };
             }
         };
         let ctx = SecurityContext::default();

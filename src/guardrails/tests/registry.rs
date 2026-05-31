@@ -163,7 +163,7 @@ async fn counts_match_registered_guardrails() {
 /// good practical coverage for a single-AtomicBool flag at minimal cost.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn concurrent_evaluate_vs_disable_all_is_consistent() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::sync_primitives::{AtomicUsize, Ordering};
     let registry = Arc::new(
         GuardrailRegistry::builder()
             .with_tool_call(Arc::new(AlwaysBlock))
