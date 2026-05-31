@@ -396,8 +396,11 @@ Configuration changes are detected via file watcher:
 
 Alongside WebSocket, Gateway serves:
 - Static files (WebChat UI)
-- Health check endpoint (`/health`)
-- Metrics endpoint (`/metrics`)
+- Liveness probe (`/health`) and readiness probe (`/ready`)
+- Metrics endpoint (`/metrics`) — Prometheus text exposition (v0.0.4) of
+  request-lifecycle counters, connection gauges, and rate-limiter pressure;
+  exports only aggregate counts (no payloads/secrets), unauthenticated like the
+  probes. Implemented in `src/gateway/server/metrics_endpoint.rs`.
 
 ---
 

@@ -4,6 +4,7 @@
 //! to registered handlers.
 
 mod handler;
+mod metrics_endpoint;
 mod per_client_buffer;
 mod probe;
 
@@ -524,6 +525,7 @@ impl GatewayServer {
             .route("/ws", get(handler::ws_upgrade_handler))
             .route("/health", get(probe::handle_health))
             .route("/ready", get(probe::handle_ready))
+            .route("/metrics", get(metrics_endpoint::handle_metrics))
             .fallback_service(control_plane)
             .with_state(shared)
             .merge(openai);
