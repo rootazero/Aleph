@@ -358,7 +358,7 @@ mod tests {
     #[async_trait]
     impl ToolService for SessionSpy {
         async fn execute(&self, _name: &str, _input: Value) -> Result<ToolOutput, ToolError> {
-            *self.seen.lock().unwrap() = crate::sandbox::context::current_session();
+            *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = crate::sandbox::context::current_session();
             Ok(ToolOutput {
                 value: serde_json::json!({"ok": true}),
                 metadata: Default::default(),
@@ -399,7 +399,7 @@ mod tests {
         .await
         .expect("success");
 
-        let captured = seen.lock().unwrap().clone();
+        let captured = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
         assert_eq!(
             captured.as_ref(),
             Some(&id),

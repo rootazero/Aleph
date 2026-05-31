@@ -155,11 +155,16 @@ impl SessionService for InProcessActorSessionService {
         &self,
         id: &SessionId,
     ) -> Result<broadcast::Receiver<SessionEventRecord>, SessionError> {
-        // Fast path: broadcaster already alive.
+        // Fast path: verify sender is alive before handing out a broadcaster.
+        // An idle-timed-out actor leaves its broadcaster in the map; without
+        // this check subscribers would receive a dead channel.
         {
+            let senders = self.senders.read().await;
             let broadcasters = self.broadcasters.read().await;
-            if let Some(bcast) = broadcasters.get(id) {
-                return Ok(bcast.subscribe());
+            if let (Some(sender), Some(bcast)) = (senders.get(id), broadcasters.get(id)) {
+                if !sender.is_closed() {
+                    return Ok(bcast.subscribe());
+                }
             }
         }
 

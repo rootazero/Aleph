@@ -262,9 +262,10 @@ impl SafetyGuard {
 
 fn collect_string_values(v: &Value, out: &mut String) {
     const MAX_DEPTH: usize = 64;
+    const MAX_TOTAL_LEN: usize = 10_000;
 
     fn recurse(v: &Value, out: &mut String, depth: usize) {
-        if depth > MAX_DEPTH {
+        if depth >= MAX_DEPTH || out.len() >= MAX_TOTAL_LEN {
             return;
         }
         match v {
@@ -279,6 +280,9 @@ fn collect_string_values(v: &Value, out: &mut String) {
     }
 
     recurse(v, out, 0);
+    if out.len() > MAX_TOTAL_LEN {
+        out.truncate(MAX_TOTAL_LEN);
+    }
 }
 
 /// Default blocked patterns for dangerous system commands.
