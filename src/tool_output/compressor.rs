@@ -40,6 +40,10 @@ const DEVTOOLS_TOOLS: &[&str] = &[
     "lighthouse_audit",
 ];
 
+/// Max chars per retained snapshot line — prevents a single long text node
+/// from blowing the token budget.
+const MAX_SNAPSHOT_LINE_CHARS: usize = 500;
+
 /// Interactive accessibility roles to keep during snapshot compression.
 const INTERACTIVE_ROLES: &[&str] = &[
     "link",
@@ -141,7 +145,7 @@ fn compress_snapshot(output: &str) -> String {
 
     let lines: Vec<&str> = output.lines().collect();
     let total_nodes = lines.len();
-    let mut kept: Vec<&str> = Vec::new();
+    let mut kept: Vec<String> = Vec::new();
 
     for line in &lines {
         let trimmed = line.trim_start().trim_start_matches('-').trim_start();
@@ -154,7 +158,8 @@ fn compress_snapshot(output: &str) -> String {
                         .is_some_and(|&b| b == b' ' || b == b'"'))
         });
         if is_interactive {
-            kept.push(line);
+            let capped = cap_line(line);
+            kept.push(capped);
         }
     }
 
@@ -162,7 +167,8 @@ fn compress_snapshot(output: &str) -> String {
         // No interactive elements found — keep first 20 lines as structural summary
         // rather than a raw byte truncation so element types are still visible.
         let summary_lines = lines.len().min(20);
-        let mut result = lines[..summary_lines].join("\n");
+        let capped: Vec<String> = lines[..summary_lines].iter().map(|l| cap_line(l)).collect();
+        let mut result = capped.join("\n");
         if lines.len() > summary_lines {
             let total_line_word = if lines.len() == 1 { "line" } else { "lines" };
             result.push_str(&format!(
@@ -250,6 +256,15 @@ fn compress_console_messages(output: &str) -> String {
         total,
         kept.join("\n"),
     )
+}
+
+/// Char-safe cap for a single snapshot line (never slice on a byte boundary).
+fn cap_line(s: &str) -> String {
+    if s.chars().count() <= MAX_SNAPSHOT_LINE_CHARS {
+        return s.to_string();
+    }
+    let kept: String = s.chars().take(MAX_SNAPSHOT_LINE_CHARS).collect();
+    format!("{kept}…")
 }
 
 /// Generic truncation: keep at most `max_bytes` with a UTF-8-safe cut.

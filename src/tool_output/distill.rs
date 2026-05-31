@@ -152,7 +152,11 @@ fn extract_path(line: &str) -> Option<String> {
         // followed by a digit.
         let Some(colon) = tok.find(':') else { continue };
         let (path_part, rest) = tok.split_at(colon);
-        if !path_part.contains('.') || path_part.is_empty() {
+        if path_part.is_empty() {
+            continue;
+        }
+        // Accept paths that have an extension dot, a Unix slash, or a Windows backslash.
+        if !path_part.contains('.') && !path_part.contains('/') && !path_part.contains('\\') {
             continue;
         }
         let rest = &rest[1..]; // drop the ':'
