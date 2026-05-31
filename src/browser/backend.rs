@@ -6,7 +6,8 @@ use async_trait::async_trait;
 
 use super::error::BrowserError;
 use super::types::{
-    ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
+    ActionTarget, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
+    SnapshotOutput, TabId,
 };
 
 #[async_trait]
@@ -134,6 +135,17 @@ pub trait BrowserBackend: Send + Sync {
     /// Default impl returns Unsupported.
     async fn resize(&self, _tab_id: &str, _width: u32, _height: u32) -> Result<(), BrowserError> {
         Err(BrowserError::ActionFailed("resize not supported".into()))
+    }
+
+    /// Apply environment/device emulation overrides (color scheme, geolocation,
+    /// network/CPU throttling, extra HTTP headers, user-agent) to a tab.
+    /// Only the fields set in `opts` are applied. Default impl returns Unsupported.
+    async fn emulate(
+        &self,
+        _tab_id: &str,
+        _opts: &EmulateOptions,
+    ) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed("emulate not supported".into()))
     }
 
     async fn fill_form(

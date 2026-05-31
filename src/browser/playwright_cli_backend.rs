@@ -11,7 +11,8 @@ use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::playwright_cli::{CliOutput, PlaywrightCliDriver};
 use super::types::{
-    ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
+    ActionTarget, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
+    SnapshotOutput, TabId,
 };
 
 pub struct PlaywrightCliBackend {
@@ -304,6 +305,77 @@ impl BrowserBackend for PlaywrightCliBackend {
             .await?;
         Ok(())
     }
+
+    async fn switch_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
+        let _ = self
+            .run(&["tab-select", tab_id], self.action_timeout())
+            .await?;
+        Ok(())
+    }
+
+    async fn handle_dialog(
+        &self,
+        _tab_id: &str,
+        action: &str,
+        prompt_text: Option<&str>,
+    ) -> Result<(), BrowserError> {
+        match action.to_ascii_lowercase().as_str() {
+            "accept" | "ok" | "confirm" => {
+                let mut args = vec!["dialog-accept"];
+                if let Some(text) = prompt_text {
+                    args.push(text);
+                }
+                let _ = self.run(&args, self.action_timeout()).await?;
+                Ok(())
+            }
+            "dismiss" | "cancel" | "reject" => {
+                let _ = self.run(&["dialog-dismiss"], self.action_timeout()).await?;
+                Ok(())
+            }
+            other => Err(BrowserError::ActionFailed(format!(
+                "unknown dialog action '{other}' — expected 'accept' or 'dismiss'"
+            ))),
+        }
+    }
+
+    async fn emulate(&self, _tab_id: &str, opts: &EmulateOptions) -> Result<(), BrowserError> {
+        opts.validate().map_err(BrowserError::ActionFailed)?;
+        // The managed Playwright CLI can only toggle online/offline at runtime;
+        // color scheme, geolocation, CPU throttling, HTTP headers and user-agent
+        // are context-construction options it does not expose as live commands.
+        if opts.color_scheme.is_some()
+            || opts.geolocation.is_some()
+            || opts.cpu_throttle.is_some()
+            || opts.extra_http_headers.is_some()
+            || opts.user_agent.is_some()
+        {
+            return Err(BrowserError::ActionFailed(
+                "managed profile only supports network_condition emulation; for color scheme, \
+                 geolocation, CPU throttle, HTTP headers or user-agent use an existing-session \
+                 profile (e.g. 'user')"
+                    .into(),
+            ));
+        }
+        match opts.network_condition {
+            Some(cond) => match cond.as_playwright_state() {
+                Some(state) => {
+                    let _ = self
+                        .run(&["network-state-set", state], self.action_timeout())
+                        .await?;
+                    Ok(())
+                }
+                None => Err(BrowserError::ActionFailed(format!(
+                    "managed profile supports only offline/online network emulation, not {cond:?}; \
+                     use an existing-session profile for throttled tiers"
+                ))),
+            },
+            // validate() already guaranteed at least one field is set, and the
+            // block above rejected every non-network field, so this is unreachable.
+            None => Err(BrowserError::ActionFailed(
+                "emulate requires at least one option".into(),
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -340,5 +412,35 @@ mod tests {
             .navigate("last", "http://127.0.0.1:8080/secret")
             .await;
         assert!(matches!(result, Err(BrowserError::NavigationFailed(_))));
+    }
+
+    #[tokio::test]
+    async fn test_emulate_rejects_mcp_only_fields_before_spawn() {
+        use crate::browser::types::{ColorScheme, EmulateOptions};
+        // color_scheme is an existing-session-only override; the managed backend
+        // must reject it up-front (without spawning the CLI) and point to 'user'.
+        let backend = test_backend();
+        let opts = EmulateOptions {
+            color_scheme: Some(ColorScheme::Dark),
+            ..Default::default()
+        };
+        let err = backend.emulate("last", &opts).await.unwrap_err();
+        match err {
+            BrowserError::ActionFailed(msg) => {
+                assert!(msg.contains("existing-session"), "got: {msg}");
+            }
+            other => panic!("expected ActionFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_emulate_rejects_empty_options() {
+        use crate::browser::types::EmulateOptions;
+        let backend = test_backend();
+        let err = backend
+            .emulate("last", &EmulateOptions::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BrowserError::ActionFailed(_)));
     }
 }

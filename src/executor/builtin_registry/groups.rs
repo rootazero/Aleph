@@ -123,6 +123,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "browser_drag",
             "browser_upload",
             "browser_resize",
+            "browser_emulate",
             "browser_profile",
         ],
     },

@@ -75,6 +75,143 @@ pub struct ScreenshotOutput {
     pub png_bytes: Vec<u8>,
 }
 
+/// Emulated color scheme (CSS `prefers-color-scheme`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorScheme {
+    Dark,
+    Light,
+    /// Reset to the system default.
+    Auto,
+}
+
+impl ColorScheme {
+    /// Value accepted by chrome-devtools-mcp's `emulate.colorScheme`.
+    pub fn as_mcp(self) -> &'static str {
+        match self {
+            ColorScheme::Dark => "dark",
+            ColorScheme::Light => "light",
+            ColorScheme::Auto => "auto",
+        }
+    }
+}
+
+/// Emulated network condition.
+///
+/// `Offline` / `Online` are supported by both backends; the throttled tiers are
+/// chrome-devtools-mcp only (the managed Playwright CLI only toggles offline/online).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkCondition {
+    Offline,
+    Online,
+    Slow3g,
+    Fast3g,
+    Slow4g,
+    Fast4g,
+}
+
+impl NetworkCondition {
+    /// Value for chrome-devtools-mcp's `emulate.networkConditions`, or `None`
+    /// when the condition is expressed by *omitting* the field (`Online` =
+    /// no throttling per the MCP contract).
+    pub fn as_mcp(self) -> Option<&'static str> {
+        match self {
+            NetworkCondition::Offline => Some("Offline"),
+            NetworkCondition::Slow3g => Some("Slow 3G"),
+            NetworkCondition::Fast3g => Some("Fast 3G"),
+            NetworkCondition::Slow4g => Some("Slow 4G"),
+            NetworkCondition::Fast4g => Some("Fast 4G"),
+            NetworkCondition::Online => None,
+        }
+    }
+
+    /// `playwright-cli network-state-set` argument for the conditions the
+    /// managed backend can express natively; `None` for throttled tiers it cannot.
+    pub fn as_playwright_state(self) -> Option<&'static str> {
+        match self {
+            NetworkCondition::Offline => Some("offline"),
+            NetworkCondition::Online => Some("online"),
+            _ => None,
+        }
+    }
+}
+
+/// A geographic coordinate to emulate.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Geolocation {
+    /// Latitude, between -90 and 90.
+    pub latitude: f64,
+    /// Longitude, between -180 and 180.
+    pub longitude: f64,
+}
+
+/// Environment/device emulation overrides applied to a tab.
+///
+/// Every field is optional; only the set fields are applied. This collapses
+/// what other tools spread across many setters (geolocation, color scheme,
+/// network throttling, CPU throttling, HTTP headers, user-agent) into one
+/// type-checked request.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct EmulateOptions {
+    /// Emulate dark / light / auto color scheme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_scheme: Option<ColorScheme>,
+    /// Override the geolocation reported to the page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geolocation: Option<Geolocation>,
+    /// Throttle (or disable) the network.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_condition: Option<NetworkCondition>,
+    /// CPU slowdown factor (1.0 = none, up to 20.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_throttle: Option<f64>,
+    /// Extra HTTP headers added to every request from the page (e.g. an
+    /// `Authorization` bearer token). An empty map clears previously-set headers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_http_headers: Option<std::collections::BTreeMap<String, String>>,
+    /// Override the `User-Agent` string. Empty string clears the override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
+}
+
+impl EmulateOptions {
+    /// Whether no override at all was requested.
+    pub fn is_empty(&self) -> bool {
+        self.color_scheme.is_none()
+            && self.geolocation.is_none()
+            && self.network_condition.is_none()
+            && self.cpu_throttle.is_none()
+            && self.extra_http_headers.is_none()
+            && self.user_agent.is_none()
+    }
+
+    /// Validate field ranges at the system boundary. Returns a human-readable
+    /// reason string on the first violation.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.is_empty() {
+            return Err("emulate requires at least one option to apply".into());
+        }
+        if let Some(geo) = &self.geolocation {
+            if !(-90.0..=90.0).contains(&geo.latitude) {
+                return Err(format!("latitude {} out of range [-90, 90]", geo.latitude));
+            }
+            if !(-180.0..=180.0).contains(&geo.longitude) {
+                return Err(format!(
+                    "longitude {} out of range [-180, 180]",
+                    geo.longitude
+                ));
+            }
+        }
+        if let Some(rate) = self.cpu_throttle {
+            if !(1.0..=20.0).contains(&rate) {
+                return Err(format!("cpu_throttle {rate} out of range [1, 20]"));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,5 +257,61 @@ mod tests {
         let json = serde_json::json!({"type": "selector", "css": ".foo"});
         let parsed: Result<ActionTarget, _> = serde_json::from_value(json);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_color_scheme_mcp_values() {
+        assert_eq!(ColorScheme::Dark.as_mcp(), "dark");
+        assert_eq!(ColorScheme::Light.as_mcp(), "light");
+        assert_eq!(ColorScheme::Auto.as_mcp(), "auto");
+    }
+
+    #[test]
+    fn test_network_condition_backend_mappings() {
+        // MCP: Online omits the field; tiers map to spaced labels.
+        assert_eq!(NetworkCondition::Offline.as_mcp(), Some("Offline"));
+        assert_eq!(NetworkCondition::Slow3g.as_mcp(), Some("Slow 3G"));
+        assert_eq!(NetworkCondition::Fast4g.as_mcp(), Some("Fast 4G"));
+        assert_eq!(NetworkCondition::Online.as_mcp(), None);
+        // Playwright: only offline/online expressible; tiers are None.
+        assert_eq!(
+            NetworkCondition::Offline.as_playwright_state(),
+            Some("offline")
+        );
+        assert_eq!(
+            NetworkCondition::Online.as_playwright_state(),
+            Some("online")
+        );
+        assert_eq!(NetworkCondition::Slow3g.as_playwright_state(), None);
+    }
+
+    #[test]
+    fn test_emulate_options_validate() {
+        // Empty → rejected.
+        assert!(EmulateOptions::default().validate().is_err());
+
+        // Valid single field.
+        let ok = EmulateOptions {
+            color_scheme: Some(ColorScheme::Dark),
+            ..Default::default()
+        };
+        assert!(ok.validate().is_ok());
+        assert!(!ok.is_empty());
+
+        // Out-of-range latitude / longitude / cpu.
+        let bad_lat = EmulateOptions {
+            geolocation: Some(Geolocation {
+                latitude: 200.0,
+                longitude: 0.0,
+            }),
+            ..Default::default()
+        };
+        assert!(bad_lat.validate().is_err());
+
+        let bad_cpu = EmulateOptions {
+            cpu_throttle: Some(0.5),
+            ..Default::default()
+        };
+        assert!(bad_cpu.validate().is_err());
     }
 }
