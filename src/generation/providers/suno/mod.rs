@@ -310,7 +310,13 @@ impl GenerationProvider for SunoProvider {
             let audio_url = complete
                 .audio_url
                 .as_ref()
-                .expect("is_complete guarantees audio_url is non-empty");
+                .ok_or_else(|| {
+                    GenerationError::provider(
+                        "Suno clip completed but audio_url is missing",
+                        None,
+                        "suno",
+                    )
+                })?;
             let bytes = self.download(audio_url).await?;
 
             let mut metadata = GenerationMetadata::new()

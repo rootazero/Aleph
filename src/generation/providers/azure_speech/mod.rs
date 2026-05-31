@@ -381,12 +381,13 @@ fn build_ssml(input: &str, voice: &str) -> String {
         return input.to_string();
     }
     let xml_lang = locale_from_voice(voice);
-    let escaped = xml_escape(input);
+    let escaped_input = xml_escape(input);
+    let escaped_voice = xml_escape(voice);
     format!(
         r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="{lang}"><voice name="{voice}">{text}</voice></speak>"#,
         lang = xml_lang,
-        voice = voice,
-        text = escaped,
+        voice = escaped_voice,
+        text = escaped_input,
     )
 }
 
