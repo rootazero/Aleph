@@ -25,7 +25,7 @@ pub fn init_file_logging() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Get the log directory path: `~/.aleph/logs/`
 pub fn get_log_directory() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    aleph_logging::get_log_directory().map_err(|e| e.into())
+    Ok(aleph_logging::get_log_directory()?)
 }
 
 #[cfg(test)]

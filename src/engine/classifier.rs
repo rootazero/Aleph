@@ -226,7 +226,7 @@ impl NaiveBayesClassifier {
             .copied()
             .unwrap_or(0);
         let intent_prob = (intent_count as f64 + self.alpha)
-            / (likelihoods.total_samples as f64 + self.alpha * 6.0); // 6 intent types
+            / (likelihoods.total_samples as f64 + self.alpha * self.intent_type_count());
         log_likelihood += intent_prob.ln();
 
         // Keyword likelihoods
@@ -237,7 +237,7 @@ impl NaiveBayesClassifier {
                 .copied()
                 .unwrap_or(0);
             let keyword_prob = (keyword_count as f64 + self.alpha)
-                / (likelihoods.total_samples as f64 + self.alpha * 1000.0); // Vocabulary size estimate
+                / (likelihoods.total_samples as f64 + self.alpha * self.vocabulary_size_estimate());
             log_likelihood += keyword_prob.ln();
         }
 
@@ -250,11 +250,26 @@ impl NaiveBayesClassifier {
                 .copied()
                 .unwrap_or(0);
             let entity_prob = (entity_count as f64 + self.alpha)
-                / (likelihoods.total_samples as f64 + self.alpha * 4.0); // 4 entity types
+                / (likelihoods.total_samples as f64 + self.alpha * self.entity_type_count());
             log_likelihood += entity_prob.ln();
         }
 
         log_likelihood
+    }
+
+    /// Number of distinct intent types
+    fn intent_type_count(&self) -> f64 {
+        6.0
+    }
+
+    /// Estimated vocabulary size for keyword smoothing
+    fn vocabulary_size_estimate(&self) -> f64 {
+        1000.0
+    }
+
+    /// Number of distinct entity types
+    fn entity_type_count(&self) -> f64 {
+        4.0
     }
 
     /// Get the number of training samples

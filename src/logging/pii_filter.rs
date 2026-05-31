@@ -170,6 +170,22 @@ impl Visit for StringVisitor {
                 .expect("write to String cannot fail");
         }
     }
+
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        self.record_debug(field, &value);
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        self.record_debug(field, &value);
+    }
+
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        self.record_debug(field, &value);
+    }
+
+    fn record_f64(&mut self, field: &tracing::field::Field, value: f64) {
+        self.record_debug(field, &value);
+    }
 }
 
 #[cfg(test)]
@@ -240,7 +256,7 @@ mod tests {
         let field = metadata.fields().field("message").unwrap();
         visitor.record_debug(&field, &"test message");
 
-        assert_eq!(visitor.message, "\"test message\"");
+        assert_eq!(visitor.message, "test message");
     }
 
     /// Integration test: verify PII is actually scrubbed in logged output

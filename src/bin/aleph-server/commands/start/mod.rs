@@ -86,7 +86,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     "Error: cannot create config directory {}: {}",
                     config_dir.display(),
                     e
-                ).into());
+                )
+                .into());
             }
             // Deploy config guide files for LLM self-management
             if let Err(e) = alephcore::deploy_guides(&config_dir) {

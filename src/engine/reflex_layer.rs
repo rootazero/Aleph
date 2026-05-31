@@ -37,14 +37,66 @@
 //! ```
 
 use dashmap::DashMap;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use super::AtomicAction;
+
+// Pre-compiled regex patterns for extractors (avoid recompilation per call)
+static FILE_PATH_EXTRACTOR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:read|cat|show|display)\s+(.+)").expect("static regex is valid")
+});
+
+static LS_EXTRACTOR_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^(?:ls|list)\s*(.*)$").expect("static regex is valid"));
+
+static SEARCH_EXTRACTOR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:search|find|grep)\s+(?:for\s+)?(.+?)(?:\s+in\s+(.+))?$")
+        .expect("static regex is valid")
+});
+
+static REPLACE_EXTRACTOR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)replace\s+(.+?)\s+with\s+(.+?)(?:\s+in\s+(.+))?$")
+        .expect("static regex is valid")
+});
+
+static MOVE_EXTRACTOR_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(?:move|mv|rename)\s+(.+?)\s+(?:to\s+)?(.+)").expect("static regex is valid")
+});
+
+// Pre-compiled regex patterns for default routing rules
+static RULE_READ_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^(read|cat|show|display)\s+(.+\.(rs|toml|md|txt|json|yaml|yml))$")
+        .expect("static regex is valid")
+});
+
+static RULE_GIT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^git\s+(status|log|diff|branch)$").expect("static regex is valid")
+});
+
+static RULE_LS_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^(ls|list)\s*(.*)$").expect("static regex is valid"));
+
+static RULE_PWD_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^(pwd|where am i|current directory)$").expect("static regex is valid")
+});
+
+static RULE_SEARCH_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^(search|find|grep)\s+").expect("static regex is valid"));
+
+static RULE_REPLACE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^replace\s+").expect("static regex is valid"));
+
+static RULE_MOVE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?i)^(move|mv|rename)\s+").expect("static regex is valid"));
+
+/// Maximum number of entries in L1 exact match cache
+const MAX_L1_CACHE_SIZE: usize = 10_000;
 
 /// Reflex layer for L1/L2 fast routing
 #[allow(dead_code)] // test-only: exercised by reflex_bench #[cfg(test)] benches
@@ -230,6 +282,14 @@ impl ReflexLayer {
     pub fn learn_from_success(&self, input: &str, action: AtomicAction) {
         // Only cache simple, deterministic inputs
         if input.len() < 100 && !input.contains("complex") {
+            if self.exact_cache.len() >= MAX_L1_CACHE_SIZE {
+                warn!(
+                    cache_size = self.exact_cache.len(),
+                    "L1 cache at capacity, skipping learn"
+                );
+                return;
+            }
+
             // Guard against caching huge actions that could exhaust memory
             if let Ok(action_json) = serde_json::to_string(&action) {
                 if action_json.len() > Self::MAX_CACHED_ACTION_SIZE {
@@ -251,10 +311,7 @@ impl ReflexLayer {
     fn load_default_rules(&mut self) {
         // Rule 1: Read files
         self.add_rule(KeywordRule {
-            pattern: Regex::new(
-                r"(?i)^(read|cat|show|display)\s+(.+\.(rs|toml|md|txt|json|yaml|yml))$",
-            )
-            .unwrap(),
+            pattern: RULE_READ_RE.clone(),
             priority: 80,
             action_type: ActionType::Read,
             extractor: Box::new(FilePathExtractor),
@@ -262,7 +319,7 @@ impl ReflexLayer {
 
         // Rule 2: Git commands
         self.add_rule(KeywordRule {
-            pattern: Regex::new(r"(?i)^git\s+(status|log|diff|branch)$").unwrap(),
+            pattern: RULE_GIT_RE.clone(),
             priority: 90,
             action_type: ActionType::Bash,
             extractor: Box::new(DirectCommandExtractor),
@@ -270,7 +327,7 @@ impl ReflexLayer {
 
         // Rule 3: List directory
         self.add_rule(KeywordRule {
-            pattern: Regex::new(r"(?i)^(ls|list)\s*(.*)$").unwrap(),
+            pattern: RULE_LS_RE.clone(),
             priority: 85,
             action_type: ActionType::Bash,
             extractor: Box::new(LsCommandExtractor),
@@ -278,7 +335,7 @@ impl ReflexLayer {
 
         // Rule 4: Current directory
         self.add_rule(KeywordRule {
-            pattern: Regex::new(r"(?i)^(pwd|where am i|current directory)$").unwrap(),
+            pattern: RULE_PWD_RE.clone(),
             priority: 95,
             action_type: ActionType::Bash,
             extractor: Box::new(PwdCommandExtractor),
@@ -286,7 +343,7 @@ impl ReflexLayer {
 
         // Rule 5: Search operations
         self.add_rule(KeywordRule {
-            pattern: Regex::new(r"(?i)^(search|find|grep)\s+").unwrap(),
+            pattern: RULE_SEARCH_RE.clone(),
             priority: 75,
             action_type: ActionType::Search,
             extractor: Box::new(SearchPatternExtractor),
@@ -294,7 +351,7 @@ impl ReflexLayer {
 
         // Rule 6: Replace operations
         self.add_rule(KeywordRule {
-            pattern: Regex::new(r"(?i)^replace\s+").unwrap(),
+            pattern: RULE_REPLACE_RE.clone(),
             priority: 75,
             action_type: ActionType::Replace,
             extractor: Box::new(ReplacePatternExtractor),
@@ -302,7 +359,7 @@ impl ReflexLayer {
 
         // Rule 7: Move/rename operations
         self.add_rule(KeywordRule {
-            pattern: Regex::new(r"(?i)^(move|mv|rename)\s+").unwrap(),
+            pattern: RULE_MOVE_RE.clone(),
             priority: 75,
             action_type: ActionType::Move,
             extractor: Box::new(MoveFileExtractor),
@@ -382,9 +439,7 @@ struct FilePathExtractor;
 
 impl ParamExtractor for FilePathExtractor {
     fn extract(&self, input: &str) -> Option<HashMap<String, Value>> {
-        // Extract file path from commands like "read src/main.rs"
-        let re = Regex::new(r"(?i)(?:read|cat|show|display)\s+(.+)").ok()?;
-        let caps = re.captures(input)?;
+        let caps = FILE_PATH_EXTRACTOR_RE.captures(input)?;
         let path = caps.get(1)?.as_str().trim();
 
         let mut params = HashMap::new();
@@ -411,9 +466,7 @@ struct LsCommandExtractor;
 
 impl ParamExtractor for LsCommandExtractor {
     fn extract(&self, input: &str) -> Option<HashMap<String, Value>> {
-        // Extract path from "ls" or "ls path"
-        let re = Regex::new(r"(?i)^(?:ls|list)\s*(.*)$").ok()?;
-        let caps = re.captures(input)?;
+        let caps = LS_EXTRACTOR_RE.captures(input)?;
         let path = caps.get(1).map(|m| m.as_str().trim()).unwrap_or(".");
 
         let command = if path.is_empty() || path == "." {
@@ -448,10 +501,7 @@ struct SearchPatternExtractor;
 
 impl ParamExtractor for SearchPatternExtractor {
     fn extract(&self, input: &str) -> Option<HashMap<String, Value>> {
-        // Extract pattern from commands like "search for TODO" or "find pattern in file.rs"
-        let re =
-            Regex::new(r"(?i)(?:search|find|grep)\s+(?:for\s+)?(.+?)(?:\s+in\s+(.+))?$").ok()?;
-        let caps = re.captures(input)?;
+        let caps = SEARCH_EXTRACTOR_RE.captures(input)?;
         let pattern = caps
             .get(1)?
             .as_str()
@@ -476,9 +526,7 @@ struct ReplacePatternExtractor;
 
 impl ParamExtractor for ReplacePatternExtractor {
     fn extract(&self, input: &str) -> Option<HashMap<String, Value>> {
-        // Extract pattern and replacement from commands like "replace foo with bar" or "replace 'old' with 'new' in file.rs"
-        let re = Regex::new(r"(?i)replace\s+(.+?)\s+with\s+(.+?)(?:\s+in\s+(.+))?$").ok()?;
-        let caps = re.captures(input)?;
+        let caps = REPLACE_EXTRACTOR_RE.captures(input)?;
         let pattern = caps
             .get(1)?
             .as_str()
@@ -512,9 +560,7 @@ struct MoveFileExtractor;
 
 impl ParamExtractor for MoveFileExtractor {
     fn extract(&self, input: &str) -> Option<HashMap<String, Value>> {
-        // Extract from and to paths from commands like "move file.rs to new/path.rs"
-        let re = Regex::new(r"(?i)(?:move|mv|rename)\s+(.+?)\s+(?:to\s+)?(.+)").ok()?;
-        let caps = re.captures(input)?;
+        let caps = MOVE_EXTRACTOR_RE.captures(input)?;
         let from = caps.get(1)?.as_str().trim();
         let to = caps.get(2)?.as_str().trim();
 

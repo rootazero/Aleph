@@ -61,13 +61,17 @@ impl EditOpsHandler {
 
         match scope {
             SearchScope::File { path } => {
-                let resolved = self.context.resolve_path(path.to_str().unwrap_or(""))?;
+                let resolved = self.context.resolve_path(path.to_str().ok_or_else(|| {
+                    AlephError::tool("File path contains invalid UTF-8".to_string())
+                })?)?;
                 if resolved.exists() && ExecutorContext::should_include_file(&resolved, filters) {
                     files.push(resolved);
                 }
             }
             SearchScope::Directory { path, recursive } => {
-                let resolved = self.context.resolve_path(path.to_str().unwrap_or(""))?;
+                let resolved = self.context.resolve_path(path.to_str().ok_or_else(|| {
+                    AlephError::tool("Directory path contains invalid UTF-8".to_string())
+                })?)?;
                 if resolved.exists() && resolved.is_dir() {
                     self.context
                         .collect_files_from_directory(&resolved, *recursive, filters, &mut files)
@@ -185,7 +189,10 @@ impl EditOps for EditOpsHandler {
             // Read file content
             let content = match tokio::fs::read_to_string(file).await {
                 Ok(c) => c,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!(file = %file.display(), error = %e, "Skipping file due to read error");
+                    continue;
+                }
             };
 
             // Perform replacement based on pattern type
@@ -257,12 +264,19 @@ impl EditOps for EditOpsHandler {
                 // Show first few lines of diff
                 let old_lines: Vec<&str> = repl.old_content.lines().collect();
                 let new_lines: Vec<&str> = repl.new_content.lines().collect();
+                let max_lines = old_lines.len().max(new_lines.len());
 
-                for (i, (old, new)) in old_lines.iter().zip(new_lines.iter()).enumerate() {
+                for i in 0..max_lines {
+                    let old = old_lines.get(i);
+                    let new = new_lines.get(i);
                     if old != new {
                         preview_output.push_str(&format!("  Line {}:\n", i + 1));
-                        preview_output.push_str(&format!("    - {}\n", old));
-                        preview_output.push_str(&format!("    + {}\n", new));
+                        if let Some(old) = old {
+                            preview_output.push_str(&format!("    - {}\n", old));
+                        }
+                        if let Some(new) = new {
+                            preview_output.push_str(&format!("    + {}\n", new));
+                        }
                     }
                 }
                 preview_output.push('\n');

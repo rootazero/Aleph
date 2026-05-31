@@ -193,6 +193,7 @@ impl OrchestratorFixture {
             session_epoch_registrar: None,
             cheap_provider: None,
             default_prompt_mode: Default::default(),
+            mcp_handle: None,
         });
 
         let orchestrator = Orchestrator::new(

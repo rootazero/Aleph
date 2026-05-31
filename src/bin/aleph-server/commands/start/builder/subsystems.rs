@@ -233,7 +233,8 @@ pub(in crate::commands::start) fn initialize_auth(
 // ── load_app_config ──────────────────────────────────────────────────────────
 
 /// Load and return the application config.
-pub(in crate::commands::start) fn load_app_config() -> Result<alephcore::Config, Box<dyn std::error::Error>> {
+pub(in crate::commands::start) fn load_app_config(
+) -> Result<alephcore::Config, Box<dyn std::error::Error>> {
     match alephcore::Config::load() {
         Ok(cfg) => Ok(cfg),
         Err(e) => Err(format!("Error loading application config: {}", e).into()),

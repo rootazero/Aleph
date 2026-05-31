@@ -22,6 +22,7 @@ use alephcore::memory::notes::NoteIndexer;
 use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::session_search_summary::FactSourceFilter;
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
+use alephcore::memory::assembler::FeedbackFloorLoader;
 use alephcore::memory::{MemoryBackend, SqliteMemoryBackend};
 use alephcore::{AlephError, AssemblerConfig};
 use async_trait::async_trait;
@@ -80,6 +81,7 @@ fn force_fallback_cfg() -> AssemblerConfig {
         force_fallback: true,
         fallback_skeleton: Default::default(),
         assembly_log: Default::default(),
+        project_scoped: false,
     }
 }
 
@@ -93,7 +95,8 @@ fn build_assembler(backend: MemoryBackend, notes_dir: std::path::PathBuf) -> Hyb
     std::fs::create_dir_all(&snap_dir).unwrap();
     let snapshots = Arc::new(SnapshotReader::new(&snap_dir));
 
-    let profile = UserProfileLoader::new(notes_dir);
+    let profile = UserProfileLoader::new(notes_dir.clone());
+    let feedback_floor = FeedbackFloorLoader::new(notes_dir);
     let reranker: Arc<dyn LlmReranker> = Arc::new(NeverCalledReranker);
 
     HybridAssembler::new(
@@ -101,6 +104,7 @@ fn build_assembler(backend: MemoryBackend, notes_dir: std::path::PathBuf) -> Hyb
         snapshots,
         backend,
         profile,
+        feedback_floor,
         reranker,
         force_fallback_cfg(),
     )

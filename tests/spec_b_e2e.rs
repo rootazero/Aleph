@@ -28,7 +28,7 @@ use alephcore::gateway::session_store::types::*;
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{AgentInstance, EventEmitter};
 use alephcore::memory::assembler::{
-    HybridAssembler, LlmReranker, UserProfileLoader, WorkingMemoryAssembler,
+    FeedbackFloorLoader, HybridAssembler, LlmReranker, UserProfileLoader, WorkingMemoryAssembler,
 };
 use alephcore::memory::embedding_provider::EmbeddingProvider;
 use alephcore::memory::note_retrieval::NoteFactRetrieval;
@@ -432,7 +432,8 @@ impl TestEnv {
         let snap_dir = notes_dir.join("_snapshots");
         std::fs::create_dir_all(&snap_dir).expect("snap dir");
         let snapshots = Arc::new(SnapshotReader::new(&snap_dir));
-        let profile = UserProfileLoader::new(notes_dir);
+        let profile = UserProfileLoader::new(notes_dir.clone());
+        let feedback_floor = FeedbackFloorLoader::new(notes_dir);
         let reranker: Arc<dyn LlmReranker> = Arc::new(NeverCalledReranker);
         let assembler_cfg = AssemblerConfig {
             enabled: true,
@@ -444,12 +445,14 @@ impl TestEnv {
             force_fallback: true,
             fallback_skeleton: Default::default(),
             assembly_log: Default::default(),
+            project_scoped: false,
         };
         let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(HybridAssembler::new(
             retrieval,
             snapshots,
             raw_store.clone(),
             profile,
+            feedback_floor,
             reranker,
             assembler_cfg,
         ));

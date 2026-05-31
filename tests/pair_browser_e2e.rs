@@ -80,6 +80,8 @@ fn setup() -> (Arc<AuthContext>, Arc<AuthState>) {
         bootstrap_mgr: bootstrap_mgr.clone(),
         session_mgr: session_mgr.clone(),
         bind_port: 18790,
+        allow_guest: false,
+        enable_pairing: true,
     });
 
     let auth_state = Arc::new(AuthState {

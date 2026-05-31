@@ -5,7 +5,6 @@
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use regex::Regex;
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -59,13 +58,17 @@ impl SearchOpsHandler {
 
         match scope {
             SearchScope::File { path } => {
-                let resolved = self.context.resolve_path(path.to_str().unwrap_or(""))?;
+                let resolved = self.context.resolve_path(path.to_str().ok_or_else(|| {
+                    AlephError::tool("File path contains invalid UTF-8".to_string())
+                })?)?;
                 if resolved.exists() && ExecutorContext::should_include_file(&resolved, filters) {
                     files.push(resolved);
                 }
             }
             SearchScope::Directory { path, recursive } => {
-                let resolved = self.context.resolve_path(path.to_str().unwrap_or(""))?;
+                let resolved = self.context.resolve_path(path.to_str().ok_or_else(|| {
+                    AlephError::tool("Directory path contains invalid UTF-8".to_string())
+                })?)?;
                 if resolved.exists() && resolved.is_dir() {
                     self.context
                         .collect_files_from_directory(&resolved, *recursive, filters, &mut files)
@@ -89,7 +92,8 @@ impl SearchOpsHandler {
 
     /// Search files using regex pattern
     async fn search_regex(&self, files: &[PathBuf], pattern: &str) -> Result<Vec<SearchMatch>> {
-        let regex = Regex::new(pattern)
+        let regex = crate::security::safe_regex::bounded_builder(pattern)
+            .build()
             .map_err(|e| AlephError::tool(format!("Invalid regex pattern: {}", e)))?;
 
         let mut matches = Vec::new();

@@ -488,7 +488,7 @@ impl Harness for AgentHarness {
                                     self.hit_limit.store(true, Ordering::Relaxed);
                                     self.set_terminate_reason(
                                         TerminateReason::ConsecutiveFailureCap {
-                                            consecutive: consecutive_failure_turns as u32,
+                                            consecutive: consecutive_failure_turns.try_into().unwrap_or(u32::MAX),
                                         },
                                     );
                                     callback.on_complete();
@@ -513,7 +513,7 @@ impl Harness for AgentHarness {
                             );
                             self.hit_limit.store(true, Ordering::Relaxed);
                             self.set_terminate_reason(TerminateReason::VerifierVeto {
-                                vetos: verifier_veto_count as u32,
+                                vetos: verifier_veto_count.try_into().unwrap_or(u32::MAX),
                             });
                             callback.on_complete();
                             break Ok(crate::harness::trace::LoopTraceSessionOutcome::HitLimit);
@@ -525,7 +525,7 @@ impl Harness for AgentHarness {
                         if iterations >= limit {
                             self.hit_limit.store(true, Ordering::Relaxed);
                             self.set_terminate_reason(TerminateReason::HitMaxIterations {
-                                used: iterations as u32,
+                                used: iterations.try_into().unwrap_or(u32::MAX),
                             });
                             // C1: rescue a runaway that ended on an unresolved
                             // tool_use so the user gets a terminal summary
@@ -533,7 +533,7 @@ impl Harness for AgentHarness {
                             // No-op when the last assistant turn already has
                             // text — well-behaved capped runs pay nothing.
                             self.fire_max_iterations_grace_turn(
-                                session_id, callback, iterations, cancel,
+                                &current_session, callback, iterations, cancel,
                             )
                             .await;
                             callback.on_complete();

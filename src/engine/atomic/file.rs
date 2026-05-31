@@ -93,11 +93,28 @@ impl FileOpsHandler {
 
         // Update imports in each file
         for file in &rust_files {
-            if let Ok(content) = tokio::fs::read_to_string(file).await {
-                let new_content = content.replace(&old_mod, &new_mod);
-                if content != new_content {
-                    tokio::fs::write(file, new_content).await?;
-                    updated_files.push(file.clone());
+            match tokio::fs::read_to_string(file).await {
+                Ok(content) => {
+                    // Use word-boundary-aware replacement to avoid partial matches
+                    let replacement = format!("\\b{}\\b", regex::escape(&old_mod));
+                    let re = match regex::Regex::new(&replacement) {
+                        Ok(re) => re,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to compile import replacement regex");
+                            continue;
+                        }
+                    };
+                    let new_content = re.replace_all(&content, &new_mod as &str).to_string();
+                    if content != new_content {
+                        if let Err(e) = tokio::fs::write(file, new_content).await {
+                            tracing::warn!(file = %file.display(), error = %e, "Failed to write updated imports");
+                            continue;
+                        }
+                        updated_files.push(file.clone());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(file = %file.display(), error = %e, "Skipping import update due to read error");
                 }
             }
         }
@@ -223,6 +240,18 @@ impl FileOps for FileOpsHandler {
         // Resolve paths through context (enforces sandbox, handles ~ expansion)
         let source_path = self.context.resolve_path(source)?;
         let dest_path = self.context.resolve_path(dest)?;
+
+        // Prevent moving a directory into itself or a subdirectory
+        if source_path.is_dir() && dest_path.starts_with(&source_path) {
+            return Ok(AtomicResult {
+                success: false,
+                output: String::new(),
+                error: Some(format!(
+                    "Cannot move directory {} into itself or a subdirectory",
+                    source_path.display()
+                )),
+            });
+        }
 
         // Check source exists
         if !source_path.exists() {

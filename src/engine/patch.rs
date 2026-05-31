@@ -122,8 +122,9 @@ impl Patch {
             });
         }
 
-        // Extract actual content
-        let actual_content = lines[(self.start_line - 1)..self.end_line].join("\n");
+        let actual_content = lines[(self.start_line - 1)..self.end_line]
+            .join("\n")
+            .replace("\r\n", "\n");
 
         // Validate old_content matches
         if actual_content != self.old_content {
@@ -168,7 +169,7 @@ impl Patch {
 
     /// Get the number of lines this patch affects
     pub fn affected_lines(&self) -> usize {
-        self.end_line - self.start_line + 1
+        self.end_line.saturating_sub(self.start_line) + 1
     }
 }
 

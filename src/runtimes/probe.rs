@@ -61,19 +61,17 @@ pub fn probe(name: &str) -> ProbeResult {
 }
 
 fn probe_system_path(spec: &RuntimeSpec) -> Option<ProbeResult> {
-    for bin_name in spec.binaries {
-        let bin_path = find_on_path(bin_name)?;
-        let version = get_version(&bin_path, spec.version_flag, spec.version_regex);
-        let version_warning = check_version_warning(spec, version.as_deref());
-        return Some(ProbeResult {
-            found: true,
-            bin_path: Some(bin_path),
-            version,
-            source: CapabilitySource::System,
-            version_warning,
-        });
-    }
-    None
+    let bin_name = spec.binaries.iter().next()?;
+    let bin_path = find_on_path(bin_name)?;
+    let version = get_version(&bin_path, spec.version_flag, spec.version_regex);
+    let version_warning = check_version_warning(spec, version.as_deref());
+    Some(ProbeResult {
+        found: true,
+        bin_path: Some(bin_path),
+        version,
+        source: CapabilitySource::System,
+        version_warning,
+    })
 }
 
 /// Locate a binary on the system PATH.

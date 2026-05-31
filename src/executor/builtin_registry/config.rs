@@ -130,7 +130,9 @@ pub struct BuiltinToolConfig {
         Option<Arc<dyn crate::memory::notes::profile::synthesizer::ProfileSynthesizer>>,
 
     /// Arena manager for arena collaboration tools (arena_create, arena_query, arena_settle).
-    pub arena_manager: Option<crate::sync_primitives::Arc<crate::sync_primitives::RwLock<crate::arena::ArenaManager>>>,
+    pub arena_manager: Option<
+        crate::sync_primitives::Arc<crate::sync_primitives::RwLock<crate::arena::ArenaManager>>,
+    >,
 
     /// Sandbox for exec-class tools (code_exec, bash_exec).
     /// `None` → tools return a structured "sandbox not configured" error.
