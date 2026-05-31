@@ -183,7 +183,10 @@ fn event_to_message(event: &SessionEvent) -> Option<UnifiedMessage> {
         SessionEvent::ToolResult {
             call_id, output, ..
         } => {
-            let text = output.value.as_str().unwrap_or_default().to_string();
+            let text = match output.value.as_str() {
+                Some(s) => s.to_string(),
+                None => output.value.to_string(),
+            };
             Some(UnifiedMessage::tool_result(
                 call_id.clone(),
                 "",

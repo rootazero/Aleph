@@ -1,12 +1,10 @@
 //! Execution session types
 
-use crate::sync_primitives::{Arc, AtomicBool};
+use crate::event::EventBus;
+use crate::sync_primitives::{Arc, AtomicBool, AsyncRwLock as RwLock};
+use crate::tool_metadata::ToolCatalog;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tokio::sync::RwLock;
-
-use crate::event::EventBus;
-use crate::tool_metadata::ToolCatalog;
 
 use super::parts::SessionPart;
 use super::status::SessionStatus;
@@ -123,7 +121,7 @@ pub enum Decision {
 
 /// Component context - shared state for all event handlers
 pub struct ComponentContext {
-    pub session: Arc<RwLock<ExecutionSession>>,
+    pub session: Arc<crate::sync_primitives::AsyncRwLock<ExecutionSession>>,
     pub tools: Arc<ToolCatalog>,
     pub bus: EventBus,
     pub abort_signal: Arc<AtomicBool>,

@@ -336,15 +336,15 @@ fn rrf_fuse(porter: Vec<RankedRow>, trigram: Vec<RankedRow>, limit: usize) -> Ve
 
     let mut hits: Vec<SearchHit> = order
         .into_iter()
-        .map(|key| {
-            let (score, row) = acc.remove(&key).expect("key was inserted above");
-            SearchHit {
+        .filter_map(|key| {
+            let (score, row) = acc.remove(&key)?;
+            Some(SearchHit {
                 source: row.source,
                 chunk_no: row.chunk_no,
                 title: row.title,
                 snippet: row.snippet,
                 score,
-            }
+            })
         })
         .collect();
     // Descending by fused score; the sort is stable, so exact ties keep the
