@@ -156,6 +156,11 @@ pub struct NoteManageTool {
     /// the `memory_timeline` tool can show a note's history. `None` is a
     /// graceful no-op.
     command_handler: Option<Arc<MemoryCommandHandler>>,
+    /// When true, notes written/read by this tool are partitioned by the
+    /// active project directory (Claude-Code-style workspaces) via
+    /// [`crate::memory::project_scope`]. Mirrors `MemoryConfig.project_scoped`;
+    /// `false` (the default) is byte-for-byte the single-namespace behaviour.
+    project_scoped: bool,
 }
 
 impl NoteManageTool {
@@ -163,7 +168,15 @@ impl NoteManageTool {
         Self {
             indexer: Arc::new(NoteIndexer::new(memory_dir, store)),
             command_handler: None,
+            project_scoped: false,
         }
+    }
+
+    /// Enable per-project memory namespacing for this tool. Wired from
+    /// `MemoryConfig.project_scoped` at construction; default-off otherwise.
+    pub fn with_project_scoping(mut self, enabled: bool) -> Self {
+        self.project_scoped = enabled;
+        self
     }
 
     /// Attach an event-sourcing handler so note mutations are recorded in the
@@ -183,7 +196,7 @@ impl NoteManageTool {
         let Some(note_path) = result.note_path.as_deref() else {
             return;
         };
-        let agent = self.resolve_agent_id(args).to_string();
+        let agent = self.resolve_agent_id(args);
         let outcome = match &args.action {
             NoteManageAction::Create => {
                 let note_type = args
@@ -243,11 +256,23 @@ impl NoteManageTool {
         "default"
     }
 
-    /// Resolve the effective agent_id for this invocation: prefer args.agent_id,
-    /// fall back to the tool's default. This is the only path callers should use
-    /// when they need an agent-scoped operation.
-    fn resolve_agent_id<'a>(&'a self, args: &'a NoteManageArgs) -> &'a str {
-        args.agent_id.as_deref().unwrap_or_else(|| self.agent_id())
+    /// Resolve the effective agent_id (storage partition key) for this
+    /// invocation: prefer `args.agent_id`, fall back to the tool's default.
+    ///
+    /// When `project_scoped` is enabled and a project root is active for the
+    /// run, the base id is composed with the project namespace so notes are
+    /// isolated per project directory (the existing `note/{agent_id}/…` layout
+    /// + `(agent_id, …)` table keys do the partitioning, no schema change).
+    /// Outside a project — or with the feature off — the base id is returned
+    /// unchanged. This is the only path callers should use when they need an
+    /// agent-scoped operation.
+    fn resolve_agent_id(&self, args: &NoteManageArgs) -> String {
+        let base = args.agent_id.as_deref().unwrap_or_else(|| self.agent_id());
+        crate::memory::project_scope::scoped_or_base(
+            base,
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -255,7 +280,8 @@ impl NoteManageTool {
     // -------------------------------------------------------------------------
 
     async fn handle_create(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id = agent_id_owned.as_str();
 
         let category = args
             .category
@@ -359,7 +385,8 @@ impl NoteManageTool {
     }
 
     async fn handle_update(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id = agent_id_owned.as_str();
 
         let category = args
             .category
@@ -447,7 +474,8 @@ impl NoteManageTool {
     }
 
     async fn handle_append(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id = agent_id_owned.as_str();
 
         let category = args
             .category
@@ -492,7 +520,8 @@ impl NoteManageTool {
     }
 
     async fn handle_query(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id = agent_id_owned.as_str();
 
         let query = args
             .query
@@ -556,7 +585,8 @@ impl NoteManageTool {
     }
 
     async fn handle_list(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id = agent_id_owned.as_str();
         let limit = args.limit.unwrap_or(100);
 
         let all_entries = self
@@ -601,7 +631,8 @@ impl NoteManageTool {
     }
 
     async fn handle_delete(&self, args: &NoteManageArgs) -> Result<NoteManageResult> {
-        let agent_id = self.resolve_agent_id(args);
+        let agent_id_owned = self.resolve_agent_id(args);
+        let agent_id = agent_id_owned.as_str();
 
         let category = args
             .category

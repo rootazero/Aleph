@@ -97,10 +97,6 @@ pub struct BuiltinToolRegistry {
     pub(crate) audio_generate_tool: Option<crate::builtin_tools::generation::AudioGenerateTool>,
     /// Speech generation tool instance (optional - requires generation registry)
     pub(crate) speech_generate_tool: Option<crate::builtin_tools::generation::SpeechGenerateTool>,
-    /// List skills tool instance
-    pub(crate) list_skills_tool: crate::builtin_tools::skill_reader::ListSkillsTool,
-    /// Read skill tool instance (deferred loading — LLM calls this to load full skill instructions)
-    pub(crate) read_skill_tool: crate::builtin_tools::skill_reader::ReadSkillTool,
     /// Config guide tool instance (progressive disclosure for self-management)
     pub(crate) config_guide_tool: crate::builtin_tools::ReadConfigGuideTool,
     /// Ctx-search tool instance (BM25 retrieval over offloaded tool output)
@@ -657,11 +653,32 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
 
             // Self-management tools
+            // Project-mode (round 3): resolve skills against the active
+            // project's `.aleph/skills` / `.claude/skills` (walked up to the
+            // git root) on top of the global dirs. `current_project_root()`
+            // is the per-run task-local published by `run_agent_loop`; it is
+            // `None` outside project mode, in which case discovery falls back
+            // to `with_auto_discover(None)` — byte-for-byte the pre-round-3
+            // behaviour, so non-project runs are unaffected.
             "skill_list" => {
-                Box::pin(async move { self.list_skills_tool.call_json(arguments).await })
+                let project = crate::projects::current_project_root();
+                Box::pin(async move {
+                    crate::builtin_tools::skill_reader::ListSkillsTool::with_auto_discover(
+                        project.as_deref(),
+                    )
+                    .call_json(arguments)
+                    .await
+                })
             }
             "skill_read" => {
-                Box::pin(async move { self.read_skill_tool.call_json(arguments).await })
+                let project = crate::projects::current_project_root();
+                Box::pin(async move {
+                    crate::builtin_tools::skill_reader::ReadSkillTool::with_auto_discover(
+                        project.as_deref(),
+                    )
+                    .call_json(arguments)
+                    .await
+                })
             }
             "read_config_guide" => {
                 Box::pin(async move { self.config_guide_tool.call_json(arguments).await })

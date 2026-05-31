@@ -663,12 +663,32 @@ impl ExtensionManager {
         let mut seen = HashSet::new();
         let mut result = Vec::new();
 
+        // Project-local plugin parents: every registered project's
+        // `.aleph/plugins` (+ `.aleph/plugins.local`), so project-local installs
+        // are discovered alongside the global `~/.aleph/plugins` (Claude-Code
+        // style). The daemon serves all registered projects from one process,
+        // so discovery is union-of-all; isolating which project sees which
+        // plugin at runtime is a separate, deferred concern. A failure to read
+        // the registry degrades to global-only discovery.
+        let project_plugin_parents: Vec<PathBuf> = crate::projects::ProjectStore::new()
+            .list()
+            .map(|projects| {
+                projects
+                    .into_iter()
+                    .flat_map(|p| {
+                        [p.path.join(".aleph/plugins"), p.path.join(".aleph/plugins.local")]
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
         // Collect from all discovery sources: skills, commands, agents, plugins
         let all_dirs = [
             self.discovery.discover_skill_dirs(),
             self.discovery.discover_command_dirs(),
             self.discovery.discover_agent_dirs(),
-            self.discovery.discover_plugins(),
+            self.discovery
+                .discover_plugins_with_extra(&project_plugin_parents),
         ];
 
         for dirs in all_dirs.into_iter().flatten() {

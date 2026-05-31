@@ -21,7 +21,17 @@ impl SessionCompactor {
 
         let session_id = session_key.to_key_string();
         tracing::info!(target: "session_compactor", session = %session_id, "compress_start");
-        let agent_id = agent.id().to_string();
+        // Single chokepoint: resolve the (optionally project-scoped) storage
+        // agent id here, while still synchronous in the run-loop task where the
+        // `current_project_root()` task-local is live. Every downstream session
+        // write (pre-compress, d0/d1/d2 summaries, transcript index) — including
+        // the spawned pre-compress task — inherits this resolved id, so the
+        // task-local is never read across a `tokio::spawn` boundary.
+        let agent_id = crate::memory::project_scope::scoped_or_base(
+            &agent.id().to_string(),
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        );
         let ratio = self.config.token_estimate_ratio;
 
         let raw_messages = agent.get_history(session_key, None).await;

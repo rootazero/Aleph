@@ -260,76 +260,85 @@ impl DirectoryScanner {
     /// of a cloned repo is an individual plugin.
     pub fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
         let mut discovered = Vec::new();
-
         // Only scan Aleph plugins directory (not Claude)
-        let plugins_dir = self.aleph_home.join(PLUGINS_DIR);
-        if !plugins_dir.exists() || !plugins_dir.is_dir() {
-            return Ok(discovered);
-        }
+        self.scan_plugin_parent(&self.aleph_home.join(PLUGINS_DIR), &mut discovered);
+        trace!("Discovered {} plugins", discovered.len());
+        Ok(discovered)
+    }
 
-        match std::fs::read_dir(&plugins_dir) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = match entry {
-                        Ok(e) => e,
+    /// Like [`Self::discover_plugins`] but also scans each `extra_parent`
+    /// plugin directory (e.g. a registered project's `.aleph/plugins`), so
+    /// project-local installs are discovered alongside the global ones. Each
+    /// parent is scanned with the same direct + monorepo-subdir logic.
+    pub fn discover_plugins_with_extra(
+        &self,
+        extra_parents: &[PathBuf],
+    ) -> DiscoveryResult<Vec<DiscoveredPath>> {
+        let mut discovered = Vec::new();
+        self.scan_plugin_parent(&self.aleph_home.join(PLUGINS_DIR), &mut discovered);
+        for parent in extra_parents {
+            self.scan_plugin_parent(parent, &mut discovered);
+        }
+        trace!(
+            "Discovered {} plugins ({} extra parents)",
+            discovered.len(),
+            extra_parents.len()
+        );
+        Ok(discovered)
+    }
+
+    /// Scan a single plugin-parent directory, pushing each plugin root (direct
+    /// manifest or one-level monorepo subdir) into `discovered`. A missing or
+    /// unreadable parent is a silent no-op.
+    fn scan_plugin_parent(&self, plugins_dir: &Path, discovered: &mut Vec<DiscoveredPath>) {
+        if !plugins_dir.is_dir() {
+            return;
+        }
+        let entries = match std::fs::read_dir(plugins_dir) {
+            Ok(e) => e,
+            Err(e) => {
+                debug!("Failed to read plugins directory {:?}: {}", plugins_dir, e);
+                return;
+            }
+        };
+        for entry in entries {
+            let path = match entry {
+                Ok(e) => e.path(),
+                Err(e) => {
+                    debug!("Failed to read entry in {:?}: {}", plugins_dir, e);
+                    continue;
+                }
+            };
+            if !path.is_dir() || is_hidden(&path) {
+                continue;
+            }
+
+            if has_plugin_manifest(&path) {
+                // Direct plugin directory
+                discovered.push(DiscoveredPath::new(path, DiscoverySource::AlephGlobal, 10));
+            } else if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                // Check subdirectories (monorepo layout)
+                for sub_entry in sub_entries {
+                    let sub_path = match sub_entry {
+                        Ok(e) => e.path(),
                         Err(e) => {
-                            debug!("Failed to read entry in {:?}: {}", plugins_dir, e);
+                            debug!("Failed to read entry in {:?}: {}", path, e);
                             continue;
                         }
                     };
-                    let path = entry.path();
-                    if !path.is_dir() {
+                    if !sub_path.is_dir() || is_hidden(&sub_path) {
                         continue;
                     }
-
-                    if is_hidden(&path) {
-                        continue;
-                    }
-
-                    if has_plugin_manifest(&path) {
-                        // Direct plugin directory
+                    if has_plugin_manifest(&sub_path) {
                         discovered.push(DiscoveredPath::new(
-                            path,
+                            sub_path,
                             DiscoverySource::AlephGlobal,
                             10,
                         ));
-                    } else {
-                        // Check subdirectories (monorepo layout)
-                        if let Ok(sub_entries) = std::fs::read_dir(&path) {
-                            for sub_entry in sub_entries {
-                                let sub_entry = match sub_entry {
-                                    Ok(e) => e,
-                                    Err(e) => {
-                                        debug!("Failed to read entry in {:?}: {}", path, e);
-                                        continue;
-                                    }
-                                };
-                                let sub_path = sub_entry.path();
-                                if !sub_path.is_dir() {
-                                    continue;
-                                }
-                                if is_hidden(&sub_path) {
-                                    continue;
-                                }
-                                if has_plugin_manifest(&sub_path) {
-                                    discovered.push(DiscoveredPath::new(
-                                        sub_path,
-                                        DiscoverySource::AlephGlobal,
-                                        10,
-                                    ));
-                                }
-                            }
-                        }
                     }
                 }
             }
-            Err(e) => {
-                debug!("Failed to read plugins directory {:?}: {}", plugins_dir, e);
-            }
         }
-
-        trace!("Discovered {} plugins", discovered.len());
-        Ok(discovered)
     }
 }
 
@@ -567,5 +576,53 @@ mod tests {
         let names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
         assert!(names.contains(&"diagnostics"));
         assert!(names.contains(&"llm-task"));
+    }
+
+    #[test]
+    fn test_discover_plugins_with_extra_project_dirs() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Global plugin under ~/.aleph/plugins.
+        let global = root.join(".aleph/plugins/global-plugin");
+        std::fs::create_dir_all(&global).unwrap();
+        std::fs::write(global.join("aleph.plugin.toml"), "[plugin]\nid = \"global-plugin\"")
+            .unwrap();
+
+        // Project-local plugin under <project>/.aleph/plugins.
+        let project = root.join("workspace/proj-a");
+        let proj_plugin = project.join(".aleph/plugins/proj-plugin");
+        std::fs::create_dir_all(&proj_plugin).unwrap();
+        std::fs::write(proj_plugin.join("aleph.plugin.toml"), "[plugin]\nid = \"proj-plugin\"")
+            .unwrap();
+
+        let scanner = DirectoryScanner {
+            aleph_home: root.join(".aleph"),
+            claude_home: None,
+            git_root: None,
+            working_dir: root.to_path_buf(),
+            config: DiscoveryConfig::default(),
+        };
+
+        // Plain discover_plugins sees only the global one.
+        assert_eq!(scanner.discover_plugins().unwrap().len(), 1);
+
+        // With the project's plugin parent, both are discovered.
+        let plugins = scanner
+            .discover_plugins_with_extra(&[project.join(".aleph/plugins")])
+            .unwrap();
+        let names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"global-plugin"), "got {names:?}");
+        assert!(names.contains(&"proj-plugin"), "got {names:?}");
+
+        // A non-existent extra parent is a silent no-op (still just global +
+        // the present project one).
+        let plugins2 = scanner
+            .discover_plugins_with_extra(&[
+                project.join(".aleph/plugins"),
+                root.join("workspace/proj-missing/.aleph/plugins"),
+            ])
+            .unwrap();
+        assert_eq!(plugins2.len(), 2);
     }
 }

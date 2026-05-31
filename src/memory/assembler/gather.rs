@@ -29,6 +29,12 @@ pub(crate) struct Gatherer {
     pub backend: MemoryBackend,
     pub profile: Arc<UserProfileLoader>,
     pub feedback_floor: Arc<FeedbackFloorLoader>,
+    /// Mirror of `MemoryConfig.project_scoped`. When true and a project root is
+    /// active for the run, note retrieval unions the project's namespace with
+    /// the agent's global namespace so project-authored notes surface alongside
+    /// cross-project knowledge. The profile/feedback floors are loaded under the
+    /// base id regardless, keeping them global.
+    pub project_scoped: bool,
 }
 
 impl Gatherer {
@@ -83,7 +89,26 @@ impl Gatherer {
     }
 
     async fn fetch_notes(&self, query: &str, agent_id: &str, limit: usize) -> Vec<Candidate> {
-        match self.retrieval.retrieve(query, agent_id, limit).await {
+        // Project-scoped reads union the active project's namespace with the
+        // agent's global namespace (via the existing multi-agent path) so a
+        // project sees its own notes plus cross-project knowledge. With the
+        // feature off, or outside any project, `read_scope_ids` collapses to
+        // `[agent_id]` and we take the single-agent fast path — byte-identical
+        // to the pre-feature behaviour.
+        let fetched = if self.project_scoped {
+            let ns = crate::memory::project_scope::project_namespace(
+                crate::projects::current_project_root().as_deref(),
+            );
+            if crate::memory::project_scope::is_global(&ns) {
+                self.retrieval.retrieve(query, agent_id, limit).await
+            } else {
+                let ids = crate::memory::project_scope::read_scope_ids(agent_id, &ns);
+                self.retrieval.retrieve_multi_agent(query, &ids, limit).await
+            }
+        } else {
+            self.retrieval.retrieve(query, agent_id, limit).await
+        };
+        match fetched {
             Ok(results) => results
                 .into_iter()
                 .map(|sf| {
@@ -192,18 +217,34 @@ impl Gatherer {
 
     /// Fetch all `SessionCompressed` raw memories for an agent, regardless of
     /// session. Used by the cross-session `session_search` path.
+    ///
+    /// Mirrors [`Self::fetch_notes`]: when project scoping is on inside a
+    /// project, sessions written under the project's composed id are unioned
+    /// with the agent's global sessions (`read_scope_ids`). Off / outside a
+    /// project this collapses to the single base id — one query, unchanged.
     async fn fetch_session_compressed(&self, agent_id: &str) -> Vec<Candidate> {
-        match self
-            .backend
-            .get_raw_by_source(RawMemorySource::SessionCompressed, agent_id, 20)
-            .await
-        {
-            Ok(raws) => raws.into_iter().map(raw_to_candidate).collect(),
-            Err(e) => {
-                warn!(error = %e, agent = agent_id, "assembler.gather: session_compressed fetch failed");
-                Vec::new()
+        let ids = if self.project_scoped {
+            let ns = crate::memory::project_scope::project_namespace(
+                crate::projects::current_project_root().as_deref(),
+            );
+            crate::memory::project_scope::read_scope_ids(agent_id, &ns)
+        } else {
+            vec![agent_id.to_string()]
+        };
+        let mut out = Vec::new();
+        for id in &ids {
+            match self
+                .backend
+                .get_raw_by_source(RawMemorySource::SessionCompressed, id, 20)
+                .await
+            {
+                Ok(raws) => out.extend(raws.into_iter().map(raw_to_candidate)),
+                Err(e) => {
+                    warn!(error = %e, agent = %id, "assembler.gather: session_compressed fetch failed");
+                }
             }
         }
+        out
     }
 }
 

@@ -137,4 +137,9 @@ pub struct BuiltinToolConfig {
     /// `None` → the tool reports "bridge not configured" (Chrome/Twilio/audio
     /// automation lives out-of-core per R1/R3; core only relays JSON-RPC).
     pub google_meet_bridge: Option<Arc<crate::builtin_tools::google_meet::GoogleMeetBridge>>,
+
+    /// Mirror of `MemoryConfig.project_scoped`: when true, the `note_manage`
+    /// tool partitions notes by the active project directory. Default `false`
+    /// (single-namespace, pre-feature behaviour).
+    pub memory_project_scoped: bool,
 }

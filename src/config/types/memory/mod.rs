@@ -107,6 +107,31 @@ pub struct MemoryConfig {
 
     #[serde(default)]
     pub curated: CuratedSection,
+
+    /// Isolate memory per project directory (Claude-Code-style workspaces).
+    ///
+    /// When `true` and a project root is active for the run, general notes and
+    /// raw captures are partitioned by the project (via
+    /// [`crate::memory::project_scope`]) so work in one project does not bleed
+    /// into another; reads union the project's memories with the agent's global
+    /// knowledge, and the always-on profile/feedback floors stay global.
+    ///
+    /// Default `false` — byte-for-byte the pre-feature single-namespace
+    /// behaviour, so existing memory stores are unaffected.
+    #[serde(default)]
+    pub project_scoped: bool,
+}
+
+impl MemoryConfig {
+    /// The assembler config with the top-level `project_scoped` toggle folded
+    /// in, so callers building a `HybridAssembler` get a single source of truth
+    /// for project namespacing (the user sets `memory.project_scoped`, not the
+    /// nested `memory.assembler.project_scoped`).
+    pub fn assembler_config(&self) -> AssemblerConfig {
+        let mut cfg = self.assembler.clone();
+        cfg.project_scoped = self.project_scoped;
+        cfg
+    }
 }
 
 impl Default for MemoryConfig {
@@ -141,6 +166,7 @@ impl Default for MemoryConfig {
             profile: UserProfileConfig::default(),
             query_filer: QueryFilerConfig::default(),
             curated: CuratedSection::default(),
+            project_scoped: false,
         }
     }
 }

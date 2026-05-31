@@ -14,7 +14,16 @@ impl SessionCompactor {
             indexer: None,
             raw_memory_writer: None,
             capture_registry: None,
+            project_scoped: false,
         }
+    }
+
+    /// Enable per-project namespacing of post-turn session memory. When on,
+    /// captures are written under the active project's composed agent id;
+    /// off (default) keeps the base id — byte-identical to before.
+    pub fn with_project_scoping(mut self, enabled: bool) -> Self {
+        self.project_scoped = enabled;
+        self
     }
 
     /// Return a reference to the compactor metrics.
