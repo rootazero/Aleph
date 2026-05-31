@@ -104,16 +104,17 @@ impl StateDatabase {
         status: TaskStatus,
     ) -> Result<(), AlephError> {
         let now = chrono::Utc::now().timestamp();
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
 
         // Wrap all updates in a transaction so started_at / completed_at
         // stay in sync with status even on crash.
-        conn.execute_batch("BEGIN")
+        let tx = conn
+            .transaction()
             .map_err(|e| AlephError::config(format!("Failed to begin transaction: {}", e)))?;
 
-        let result = (|| {
+        let result = (|| -> rusqlite::Result<()> {
             // Simple update - timestamps handled separately for clarity
-            conn.execute(
+            tx.execute(
                 r#"
                 UPDATE agent_tasks
                 SET status = ?1, updated_at = ?2
@@ -124,7 +125,7 @@ impl StateDatabase {
 
             // Update started_at for Running status
             if status == TaskStatus::Running {
-                conn.execute(
+                tx.execute(
                     "UPDATE agent_tasks SET started_at = ?1 WHERE id = ?2 AND started_at IS NULL",
                     params![now, task_id],
                 )?;
@@ -132,26 +133,24 @@ impl StateDatabase {
 
             // Update completed_at for terminal states
             if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
-                conn.execute(
+                tx.execute(
                     "UPDATE agent_tasks SET completed_at = ?1 WHERE id = ?2",
                     params![now, task_id],
                 )?;
             }
 
-            Ok(()) as rusqlite::Result<()>
+            Ok(())
         })();
 
         match result {
             Ok(()) => {
-                conn.execute_batch("COMMIT").map_err(|e| {
+                tx.commit().map_err(|e| {
                     AlephError::config(format!("Failed to commit transaction: {}", e))
                 })?;
                 Ok(())
             }
             Err(e) => {
-                if let Err(rollback_err) = conn.execute_batch("ROLLBACK") {
-                    tracing::error!(error = %rollback_err, "Failed to rollback task status update");
-                }
+                drop(tx); // implicit rollback on uncommitted transaction drop
                 Err(AlephError::config(format!(
                     "Failed to update task status: {}",
                     e

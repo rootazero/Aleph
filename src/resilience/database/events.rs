@@ -76,27 +76,36 @@ impl StateDatabase {
             return Ok(());
         }
 
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                INSERT INTO agent_events (task_id, seq, event_type, payload_json, is_structural, timestamp)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {}", e)))?;
 
-        for event in events {
-            stmt.execute(params![
-                event.task_id,
-                event.seq,
-                event.event_type,
-                event.payload_json,
-                event.is_structural as i32,
-                event.timestamp,
-            ])
-            .map_err(|e| AlephError::config(format!("Failed to insert event: {}", e)))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+                    INSERT INTO agent_events (task_id, seq, event_type, payload_json, is_structural, timestamp)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
+
+            for event in events {
+                stmt.execute(params![
+                    event.task_id,
+                    event.seq,
+                    event.event_type,
+                    event.payload_json,
+                    event.is_structural as i32,
+                    event.timestamp,
+                ])
+                .map_err(|e| AlephError::config(format!("Failed to insert event: {}", e)))?;
+            }
         }
+
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("Failed to commit transaction: {}", e)))?;
 
         Ok(())
     }

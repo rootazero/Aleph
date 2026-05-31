@@ -50,7 +50,13 @@ impl fmt::Display for TaskStatus {
 impl TaskStatus {
     /// Parse status from database string with fallback to Pending
     pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(TaskStatus::Pending)
+        match s.parse() {
+            Ok(status) => status,
+            Err(e) => {
+                tracing::warn!(input = %s, error = %e, "Unknown task status, defaulting to Pending");
+                TaskStatus::Pending
+            }
+        }
     }
 
     /// Check if task can be auto-resumed on restart
@@ -98,7 +104,13 @@ impl fmt::Display for RiskLevel {
 impl RiskLevel {
     /// Parse risk level from database string with fallback to Low
     pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(RiskLevel::Low)
+        match s.parse() {
+            Ok(level) => level,
+            Err(e) => {
+                tracing::warn!(input = %s, error = %e, "Unknown risk level, defaulting to Low");
+                RiskLevel::Low
+            }
+        }
     }
 }
 
@@ -136,7 +148,13 @@ impl fmt::Display for Lane {
 impl Lane {
     /// Parse lane from database string with fallback to Subagent
     pub fn from_str_or_default(s: &str) -> Self {
-        s.parse().unwrap_or(Lane::Subagent)
+        match s.parse() {
+            Ok(lane) => lane,
+            Err(e) => {
+                tracing::warn!(input = %s, error = %e, "Unknown lane, defaulting to Subagent");
+                Lane::Subagent
+            }
+        }
     }
 }
 

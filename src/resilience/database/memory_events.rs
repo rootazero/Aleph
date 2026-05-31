@@ -57,37 +57,46 @@ impl StateDatabase {
             return Ok(());
         }
 
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                "#,
-            )
-            .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::other(format!("Failed to begin transaction: {e}")))?;
 
-        for envelope in envelopes {
-            let event_json = serde_json::to_string(&envelope.event)
-                .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
-            let tier = if envelope.event.is_skeleton() {
-                "skeleton"
-            } else {
-                "pulse"
-            };
+        {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+                    INSERT INTO memory_events (fact_id, seq, event_type, event_json, actor, tier, timestamp, correlation_id)
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                    "#,
+                )
+                .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
-            stmt.execute(params![
-                envelope.fact_id,
-                envelope.seq,
-                envelope.event.event_type_tag(),
-                event_json,
-                envelope.actor.to_string(),
-                tier,
-                envelope.timestamp,
-                envelope.correlation_id,
-            ])
-            .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
+            for envelope in envelopes {
+                let event_json = serde_json::to_string(&envelope.event)
+                    .map_err(|e| AlephError::other(format!("Failed to serialize event: {e}")))?;
+                let tier = if envelope.event.is_skeleton() {
+                    "skeleton"
+                } else {
+                    "pulse"
+                };
+
+                stmt.execute(params![
+                    envelope.fact_id,
+                    envelope.seq,
+                    envelope.event.event_type_tag(),
+                    event_json,
+                    envelope.actor.to_string(),
+                    tier,
+                    envelope.timestamp,
+                    envelope.correlation_id,
+                ])
+                .map_err(|e| AlephError::other(format!("Failed to append memory event: {e}")))?;
+            }
         }
+
+        tx.commit()
+            .map_err(|e| AlephError::other(format!("Failed to commit transaction: {e}")))?;
 
         Ok(())
     }
@@ -142,7 +151,7 @@ impl StateDatabase {
             .map_err(|e| AlephError::other(format!("Failed to prepare statement: {e}")))?;
 
         let since_seq_i64 = i64::try_from(since_seq)
-            .map_err(|e| AlephError::other(format!("Sequence number too large for query: {e}")))?;
+            .map_err(|_| AlephError::other(format!("Sequence number {since_seq} exceeds i64::MAX and cannot be used in SQLite query")))?;
         let rows = stmt
             .query_map(params![fact_id, since_seq_i64], MemoryEventRow::from_row)
             .map_err(|e| AlephError::other(format!("Failed to query events: {e}")))?;

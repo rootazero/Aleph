@@ -115,29 +115,38 @@ impl StateDatabase {
             return Ok(());
         }
 
-        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
-        let mut stmt = conn
-            .prepare(
-                r#"
-                INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
-                VALUES (?1, ?2, ?3, ?4, ?5)
-                "#,
-            )
-            .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
+        let mut conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = conn
+            .transaction()
+            .map_err(|e| AlephError::config(format!("Failed to begin transaction: {}", e)))?;
 
-        for trace in traces {
-            let event_json = serde_json::to_string(&trace.event).map_err(|e| {
-                AlephError::config(format!("Failed to serialize trace event: {}", e))
-            })?;
-            stmt.execute(params![
-                trace.task_id,
-                trace.step_index,
-                trace.event_kind(),
-                event_json,
-                trace.timestamp,
-            ])
-            .map_err(|e| AlephError::config(format!("Failed to insert trace: {}", e)))?;
+        {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+                    INSERT INTO task_traces (task_id, step_index, event_kind, event_json, timestamp)
+                    VALUES (?1, ?2, ?3, ?4, ?5)
+                    "#,
+                )
+                .map_err(|e| AlephError::config(format!("Failed to prepare statement: {}", e)))?;
+
+            for trace in traces {
+                let event_json = serde_json::to_string(&trace.event).map_err(|e| {
+                    AlephError::config(format!("Failed to serialize trace event: {}", e))
+                })?;
+                stmt.execute(params![
+                    trace.task_id,
+                    trace.step_index,
+                    trace.event_kind(),
+                    event_json,
+                    trace.timestamp,
+                ])
+                .map_err(|e| AlephError::config(format!("Failed to insert trace: {}", e)))?;
+            }
         }
+
+        tx.commit()
+            .map_err(|e| AlephError::config(format!("Failed to commit transaction: {}", e)))?;
 
         Ok(())
     }
@@ -450,21 +459,28 @@ impl StateDatabase {
 
         let rows = stmt
             .query_map(rusqlite::params_from_iter(all_values), |row| {
-                let to_u64 = |v: i64| -> u64 {
+                let to_u64 = |v: i64, col: &str| -> Result<u64, rusqlite::Error> {
                     if v < 0 {
-                        0
+                        Err(rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Integer,
+                            Box::new(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                format!("{col} must be non-negative, got {v}"),
+                            )),
+                        ))
                     } else {
-                        v as u64
+                        Ok(v as u64)
                     }
                 };
                 Ok(AgentUsageTotal {
                     agent_id: row.get::<_, String>(0)?,
-                    call_count: to_u64(row.get::<_, i64>(1)?),
-                    input_tokens: to_u64(row.get::<_, i64>(2)?),
-                    output_tokens: to_u64(row.get::<_, i64>(3)?),
-                    cache_read_tokens: to_u64(row.get::<_, i64>(4)?),
-                    cache_creation_tokens: to_u64(row.get::<_, i64>(5)?),
-                    reasoning_tokens: to_u64(row.get::<_, i64>(6)?),
+                    call_count: to_u64(row.get::<_, i64>(1)?, "call_count")?,
+                    input_tokens: to_u64(row.get::<_, i64>(2)?, "input_tokens")?,
+                    output_tokens: to_u64(row.get::<_, i64>(3)?, "output_tokens")?,
+                    cache_read_tokens: to_u64(row.get::<_, i64>(4)?, "cache_read_tokens")?,
+                    cache_creation_tokens: to_u64(row.get::<_, i64>(5)?, "cache_creation_tokens")?,
+                    reasoning_tokens: to_u64(row.get::<_, i64>(6)?, "reasoning_tokens")?,
                 })
             })
             .map_err(|e| AlephError::config(format!("Failed to query usage: {e}")))?
