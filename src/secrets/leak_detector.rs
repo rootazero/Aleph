@@ -145,6 +145,9 @@ impl LeakDetector {
     }
 
     /// Register secrets that were injected in the current request.
+    ///
+    /// Only values with length >= 8 are tracked for exact substring matching.
+    /// Shorter values are skipped to reduce false positives with common words.
     pub fn register_injected(&mut self, secrets: &[InjectedSecret], values: &[&str]) {
         for secret in secrets {
             self.injected_hashes.insert(secret.value_hash);
@@ -156,8 +159,12 @@ impl LeakDetector {
         }
     }
 
-    /// Scan outbound content for known secret patterns.
-    pub fn scan_outbound(&self, content: &str) -> LeakDecision {
+    /// Scan content for known secret patterns (built-in + custom).
+    ///
+    /// Returns `(found_labels, redacted_content)`. Labels are borrowed from
+    /// `LEAK_PATTERNS` (static) or `self.custom_patterns` (owned), hence the
+    /// mixed lifetime `Vec<&str>`.
+    fn scan_patterns<'a>(&'a self, content: &str) -> (Vec<&'a str>, String) {
         let mut redacted = content.to_string();
         let mut found_labels = Vec::new();
 
@@ -182,6 +189,13 @@ impl LeakDetector {
             }
         }
 
+        (found_labels, redacted)
+    }
+
+    /// Scan outbound content for known secret patterns.
+    pub fn scan_outbound(&self, content: &str) -> LeakDecision {
+        let (found_labels, redacted) = self.scan_patterns(content);
+
         if found_labels.is_empty() {
             LeakDecision::Allow
         } else {
@@ -194,29 +208,7 @@ impl LeakDetector {
 
     /// Scan inbound content for echoed secret values.
     pub fn scan_inbound(&self, content: &str) -> LeakDecision {
-        // Check built-in patterns first (redact ALL matching patterns)
-        let mut redacted = content.to_string();
-        let mut found_labels = Vec::new();
-
-        for (label, pattern) in LEAK_PATTERNS.iter() {
-            if pattern.is_match(&redacted) {
-                found_labels.push(*label);
-                redacted = pattern
-                    .replace_all(&redacted, "***LEAKED_REDACTED***")
-                    .to_string();
-            }
-        }
-
-        // Check custom patterns (additive)
-        for pattern in &self.custom_patterns {
-            if pattern.regex.is_match(&redacted) {
-                found_labels.push(&pattern.name);
-                redacted = pattern
-                    .regex
-                    .replace_all(&redacted, "***LEAKED_REDACTED***")
-                    .to_string();
-            }
-        }
+        let (found_labels, redacted) = self.scan_patterns(content);
 
         if !found_labels.is_empty() {
             return LeakDecision::Block {

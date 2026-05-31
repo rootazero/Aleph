@@ -152,13 +152,12 @@ impl SecretProvider for OnePasswordProvider {
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            let items: Vec<serde_json::Value> = match serde_json::from_str(&stdout) {
-                Ok(v) => v,
-                Err(e) => {
-                    debug!("Failed to parse `op item list` JSON output: {}", e);
-                    return Ok(vec![]);
+            let items: Vec<serde_json::Value> = serde_json::from_str(&stdout).map_err(|e| {
+                SecretError::ProviderError {
+                    provider: "1password".into(),
+                    message: format!("Failed to parse `op item list` JSON output: {}", e),
                 }
-            };
+            })?;
             Ok(items
                 .iter()
                 .filter_map(|item| {

@@ -132,6 +132,9 @@ pub enum SecretError {
 
     #[error("Provider '{provider}' not configured")]
     ProviderNotFound { provider: String },
+
+    #[error("Invalid secret placeholder: {0}")]
+    InvalidPlaceholder(String),
 }
 
 #[cfg(test)]

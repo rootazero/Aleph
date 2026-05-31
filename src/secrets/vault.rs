@@ -196,13 +196,20 @@ impl SecretVault {
     }
 
     /// Get the default vault path.
+    ///
+    /// Falls back to `secrets.vault` in the current working directory only
+    /// when the platform config directory cannot be determined (extremely
+    /// rare). Callers that need a guaranteed absolute path should verify
+    /// the result.
     pub fn default_path() -> PathBuf {
         crate::utils::paths::get_config_dir()
             .map(|d| d.join("secrets.vault"))
             .unwrap_or_else(|e| {
                 tracing::warn!(
-                    "Failed to determine config directory ({}), using relative path 'secrets.vault'",
-                    e
+                    error = %e,
+                    fallback = "secrets.vault",
+                    "Failed to determine config directory; vault will be created in the current working directory. \
+                     This is a fallback path — review permissions and ensure backups."
                 );
                 PathBuf::from("secrets.vault")
             })

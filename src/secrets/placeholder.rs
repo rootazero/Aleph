@@ -26,16 +26,16 @@ pub fn extract_secret_refs(input: &str) -> Result<Vec<SecretRef>, SecretError> {
         let name_start = start + PREFIX.len();
 
         let Some(close_offset) = input[name_start..].find(SUFFIX) else {
-            return Err(SecretError::Serialization(
-                "Malformed secret placeholder: missing closing '}}'".to_string(),
+            return Err(SecretError::InvalidPlaceholder(
+                "missing closing '}}'".to_string(),
             ));
         };
 
         let end = name_start + close_offset;
         let name = &input[name_start..end];
         if name.is_empty() {
-            return Err(SecretError::Serialization(
-                "Malformed secret placeholder: empty secret name".to_string(),
+            return Err(SecretError::InvalidPlaceholder(
+                "empty secret name".to_string(),
             ));
         }
 
@@ -43,8 +43,8 @@ pub fn extract_secret_refs(input: &str) -> Result<Vec<SecretRef>, SecretError> {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'));
         if !valid {
-            return Err(SecretError::Serialization(format!(
-                "Malformed secret placeholder: invalid secret name '{}'",
+            return Err(SecretError::InvalidPlaceholder(format!(
+                "invalid secret name '{}'",
                 name
             )));
         }
@@ -87,6 +87,6 @@ mod tests {
     #[test]
     fn test_extract_placeholders_rejects_malformed() {
         let err = extract_secret_refs("Bearer {{secret:oops").unwrap_err();
-        assert!(format!("{}", err).contains("Malformed secret placeholder"));
+        assert!(format!("{}", err).contains("Invalid secret placeholder"));
     }
 }

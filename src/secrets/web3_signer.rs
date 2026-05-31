@@ -1,10 +1,14 @@
 //! EVM-compatible signing module.
-#![allow(dead_code)]
 //!
 //! Signs messages and transactions using secp256k1 private keys
 //! stored in the encrypted vault (via SharedTokenManager). Private keys
 //! are decrypted only during the signing operation and never returned
 //! to the caller.
+//!
+//! NOTE: This module is currently exported but has no production callers.
+//! It is preserved for a future Web3 tool integration. The
+//! `SignIntent::Transaction` variant produces invalid signatures — do not
+//! use it on-chain.
 
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use std::fmt;
