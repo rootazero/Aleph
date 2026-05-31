@@ -130,7 +130,6 @@ pub fn add_job<C: Clock>(store: &mut CronStore, mut job: CronJob, clock: &C) -> 
     job.created_at = now;
     job.updated_at = now;
     job.state.consecutive_errors = 0;
-    job.state.schedule_error_count = 0;
 
     recompute_next_run_full(&mut job, clock);
     let id = job.id.clone();

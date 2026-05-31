@@ -41,6 +41,30 @@ use runtime_warmup::runtime_startup_warmup;
 
 // ── (subsystem initializer helpers extracted to start/helpers.rs) ────────────
 
+/// Build the shared task-result delivery engine with all built-in targets
+/// (Webhook / Gateway / Memory) registered.
+///
+/// Used by **both** the cron and heartbeat timer loops so every task type
+/// resolves the same target set — previously each subsystem registered the
+/// targets inline, and the cron alert path skipped the engine entirely
+/// (silently dropping `Webhook` / `Memory` failure-alert targets). Centralising
+/// it here keeps the registration single-source.
+fn build_task_delivery_engine(
+    channel_cell: alephcore::tasks::shared::targets::ChannelRegistryCell,
+    memory_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+) -> Arc<alephcore::tasks::shared::delivery::DeliveryEngine> {
+    use alephcore::tasks::shared::delivery::DeliveryEngine;
+    use alephcore::tasks::shared::targets::{GatewayDeliveryTarget, MemoryDeliveryTarget};
+
+    let mut engine = DeliveryEngine::new();
+    engine.register(Arc::new(
+        alephcore::tasks::cron::webhook_target::WebhookTarget::new(),
+    ));
+    engine.register(Arc::new(GatewayDeliveryTarget::new(channel_cell)));
+    engine.register(Arc::new(MemoryDeliveryTarget::new(memory_store)));
+    Arc::new(engine)
+}
+
 /// Start the gateway server
 pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     use alephcore::gateway::server::GatewayConfig as ServerConfig;
@@ -1481,8 +1505,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // RunRequest carries it as max_iterations_override.
                 cron_state.config.default_max_iterations,
             );
+            // Route cron failure alerts through the shared delivery engine so
+            // Webhook / Memory alert targets work (not just Gateway). Same
+            // engine wiring the heartbeat loop uses below.
+            let cron_delivery_engine =
+                build_task_delivery_engine(cron_channel_cell.clone(), memory_db.clone());
             let alert_dispatcher_fn =
-                alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(cron_channel_cell);
+                alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(
+                    cron_delivery_engine,
+                );
 
             let cron_config = cron_state.config.clone();
             tokio::spawn(async move {
@@ -1535,7 +1566,6 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             use alephcore::tasks::heartbeat::executor::DefaultHeartbeatAdapter;
             use alephcore::tasks::heartbeat::probe::DefaultProbeExecutor;
             use alephcore::tasks::heartbeat::service::timer::{run_heartbeat_loop, TickContext};
-            use alephcore::tasks::shared::delivery::DeliveryEngine;
 
             let hb_state = {
                 let guard = hb_svc.lock().await;
@@ -1591,25 +1621,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Build the delivery engine with all targets registered so
             // heartbeat L2 results actually reach the user (H2). Without this
             // every deliver() call hits the "target not registered" path.
-            let delivery_engine = {
-                let mut engine = DeliveryEngine::new();
-                engine.register(Arc::new(
-                    alephcore::tasks::cron::webhook_target::WebhookTarget::new(),
-                ));
-                let hb_channel_cell = agent_result
-                    .channel_registry_cell
-                    .clone()
-                    .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
-                engine.register(Arc::new(
-                    alephcore::tasks::shared::targets::GatewayDeliveryTarget::new(hb_channel_cell),
-                ));
-                let raw_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore> =
-                    memory_db.clone();
-                engine.register(Arc::new(
-                    alephcore::tasks::shared::targets::MemoryDeliveryTarget::new(raw_store),
-                ));
-                Arc::new(engine)
-            };
+            // Shared with the cron alert path via `build_task_delivery_engine`.
+            let hb_channel_cell = agent_result
+                .channel_registry_cell
+                .clone()
+                .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
+            let delivery_engine = build_task_delivery_engine(hb_channel_cell, memory_db.clone());
 
             let tick_ctx = Arc::new(TickContext {
                 probe_executor: Arc::new(DefaultProbeExecutor::new(Arc::clone(tool_reg))),

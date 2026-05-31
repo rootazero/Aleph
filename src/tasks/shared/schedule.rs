@@ -5,6 +5,8 @@
 
 use chrono::{DateTime, Utc};
 
+use super::retry_hint::RetryCategory;
+
 /// Minimum refire gap to prevent spin loops (2 seconds).
 pub const MIN_REFIRE_GAP_MS: i64 = 2_000;
 
@@ -16,6 +18,18 @@ pub const BACKOFF_TIERS_MS: &[i64] = &[
     900_000,   // 4th → 15 min
     3_600_000, // 5th+ → 60 min
 ];
+
+/// Minimum backoff floor (ms) for *window-bounded* provider limits.
+///
+/// `rate_limit` (HTTP 429) and `overloaded` (HTTP 529) responses from LLM
+/// providers are enforced over a rolling time window (per-minute / per-day
+/// token budgets). Retrying 30–60s later — the first two `BACKOFF_TIERS_MS`
+/// tiers — simply re-hits the same wall and burns another attempt, which is
+/// exactly how a momentary 8am throttle escalated into a "failed 3 times"
+/// alert. Flooring these two categories at the 5-minute tier gives the window
+/// time to reset before the next attempt. Other transient categories
+/// (network / timeout / 5xx) are *not* windowed and keep the fast ladder.
+pub const WINDOWED_BACKOFF_FLOOR_MS: i64 = 300_000; // 5 min
 
 /// Compute the next run time for an "every N ms" schedule, aligned to an anchor.
 ///
@@ -124,6 +138,30 @@ pub fn compute_backoff_ms(consecutive_errors: u32) -> i64 {
     }
     let idx = (consecutive_errors.saturating_sub(1) as usize).min(BACKOFF_TIERS_MS.len() - 1);
     BACKOFF_TIERS_MS[idx]
+}
+
+/// Compute backoff delay, raising the floor for *window-bounded* error
+/// categories.
+///
+/// Identical to [`compute_backoff_ms`] for non-windowed categories
+/// (network / timeout / server_error / unclassified). For [`RateLimit`] and
+/// [`Overloaded`] — which are enforced over a rolling provider time window —
+/// the result is floored at [`WINDOWED_BACKOFF_FLOOR_MS`] so a fast first-tier
+/// retry doesn't immediately re-hit the same limit.
+///
+/// [`RateLimit`]: RetryCategory::RateLimit
+/// [`Overloaded`]: RetryCategory::Overloaded
+pub fn compute_backoff_ms_for(category: Option<RetryCategory>, consecutive_errors: u32) -> i64 {
+    let base = compute_backoff_ms(consecutive_errors);
+    if base == 0 {
+        return 0;
+    }
+    match category {
+        Some(RetryCategory::RateLimit) | Some(RetryCategory::Overloaded) => {
+            base.max(WINDOWED_BACKOFF_FLOOR_MS)
+        }
+        _ => base,
+    }
 }
 
 #[cfg(test)]
@@ -244,6 +282,56 @@ mod tests {
     fn backoff_clamps_at_max() {
         assert_eq!(compute_backoff_ms(100), 3_600_000);
         assert_eq!(compute_backoff_ms(u32::MAX), 3_600_000);
+    }
+
+    // -- compute_backoff_ms_for (category-aware) --
+
+    #[test]
+    fn windowed_backoff_floors_rate_limit() {
+        // 1st rate-limit error would normally back off 30s; floored to 5 min
+        // so the retry doesn't immediately re-hit the same window.
+        assert_eq!(
+            compute_backoff_ms_for(Some(RetryCategory::RateLimit), 1),
+            WINDOWED_BACKOFF_FLOOR_MS
+        );
+        assert_eq!(
+            compute_backoff_ms_for(Some(RetryCategory::Overloaded), 2),
+            WINDOWED_BACKOFF_FLOOR_MS
+        );
+    }
+
+    #[test]
+    fn windowed_backoff_keeps_higher_tiers() {
+        // Once the natural tier exceeds the floor, the ladder wins.
+        assert_eq!(
+            compute_backoff_ms_for(Some(RetryCategory::RateLimit), 4),
+            900_000 // 15 min tier > 5 min floor
+        );
+        assert_eq!(
+            compute_backoff_ms_for(Some(RetryCategory::RateLimit), 5),
+            3_600_000 // 60 min tier
+        );
+    }
+
+    #[test]
+    fn non_windowed_categories_keep_fast_ladder() {
+        // Network/timeout/server_error are not window-bounded → unchanged.
+        for cat in [
+            RetryCategory::Network,
+            RetryCategory::Timeout,
+            RetryCategory::ServerError,
+        ] {
+            assert_eq!(compute_backoff_ms_for(Some(cat), 1), 30_000);
+            assert_eq!(compute_backoff_ms_for(Some(cat), 2), 60_000);
+        }
+        // Unclassified (permanent / None) also keeps the base ladder.
+        assert_eq!(compute_backoff_ms_for(None, 1), 30_000);
+    }
+
+    #[test]
+    fn windowed_backoff_zero_errors_is_zero() {
+        // No error → no delay, even for windowed categories.
+        assert_eq!(compute_backoff_ms_for(Some(RetryCategory::RateLimit), 0), 0);
     }
 
     // -- compute_next_cron --

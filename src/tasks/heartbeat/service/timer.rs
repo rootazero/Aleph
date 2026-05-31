@@ -10,7 +10,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info};
 
-use crate::tasks::heartbeat::config::{error_backoff_ms, HeartbeatTask};
+use crate::tasks::heartbeat::config::HeartbeatTask;
 use crate::tasks::heartbeat::dedup::{DedupEngine, DedupVerdict};
 use crate::tasks::heartbeat::executor::{
     build_heartbeat_prompt, HeartbeatExecutionAdapter, HeartbeatL2Status,
@@ -391,10 +391,12 @@ async fn writeback_one(
             task.state.last_error = None;
         }
 
-        // Recompute next due (wall-clock + interval + error backoff).
-        let interval = task.interval_ms as i64;
-        let backoff = error_backoff_ms(task.state.consecutive_errors) as i64;
-        task.state.next_due_ms = Some(now_ms.saturating_add(interval).saturating_add(backoff));
+        // Recompute next due via the shared schedule helper (wall-clock +
+        // interval + category-aware error backoff). Reuses `compute_next_due`
+        // rather than re-deriving the formula here, so a heartbeat that just
+        // recorded a 429 in `last_error` (line above) inherits the same
+        // 5-minute windowed floor as the cron path.
+        task.state.next_due_ms = super::ops::compute_next_due(task, now_ms);
 
         // Write history record.
         let run_record = HeartbeatRunRecord {

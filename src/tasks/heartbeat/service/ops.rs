@@ -4,24 +4,38 @@
 //! Write operations (`add_task`, `update_task`, `toggle_task`, `delete_task`)
 //! modify the store and recompute next due times as needed.
 
-use crate::tasks::heartbeat::config::{
-    error_backoff_ms, DedupConfig, HeartbeatTask, HeartbeatTaskView, ProbeConfig,
-};
+use crate::tasks::heartbeat::config::{DedupConfig, HeartbeatTask, HeartbeatTaskView, ProbeConfig};
 use crate::tasks::heartbeat::store::HeartbeatStore;
 use crate::tasks::shared::clock::Clock;
 use crate::tasks::shared::delivery::DeliveryConfig;
+use crate::tasks::shared::retry_hint::classify;
+use crate::tasks::shared::schedule::compute_backoff_ms_for;
 
 // ── Schedule computation ─────────────────────────────────────────────
 
 /// Compute next_due_ms for a task based on interval and error backoff.
 ///
 /// Returns `None` if the task is disabled.
+///
+/// Backoff is **category-aware** (shared with the cron path via
+/// [`compute_backoff_ms_for`]): a heartbeat L2 turn that hit a provider rate
+/// limit (HTTP 429) or overload (529) must not retry straight back into the
+/// same rolling window, so those categories are floored at 5 minutes. The
+/// category is recovered by classifying the last recorded error; non-error
+/// tasks (and the steady state where `consecutive_errors == 0`) get a zero
+/// backoff regardless, so the classification is a no-op on the happy path.
 pub fn compute_next_due(task: &HeartbeatTask, now_ms: i64) -> Option<i64> {
     if !task.enabled {
         return None;
     }
     let base = now_ms + task.interval_ms as i64;
-    let backoff = error_backoff_ms(task.state.consecutive_errors) as i64;
+    let category = task
+        .state
+        .last_error
+        .as_deref()
+        .map(classify)
+        .and_then(|hint| hint.category);
+    let backoff = compute_backoff_ms_for(category, task.state.consecutive_errors);
     Some(base + backoff)
 }
 
@@ -56,8 +70,7 @@ pub struct HeartbeatTaskUpdates {
     pub dedup: Option<DedupConfig>,
     /// `Some(Some(schedule))` to set, `Some(None)` to clear, `None` to leave alone.
     /// Mirrors the same convention used by `delivery_config`.
-    pub active_hours:
-        Option<Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>>,
+    pub active_hours: Option<Option<crate::tasks::shared::active_hours::ActiveHoursSchedule>>,
 }
 
 /// Add a new task to the store. Sets state defaults and computes next due time.
@@ -307,5 +320,30 @@ mod tests {
         // interval=60_000 + backoff for 2 errors = 60_000
         let next = compute_next_due(&task, 1_000_000).unwrap();
         assert_eq!(next, 1_000_000 + 60_000 + 60_000);
+    }
+
+    /// Parity with the cron path: a heartbeat L2 that hit a 429 rate limit
+    /// must back off at the 5-minute windowed floor, not the eager 30s tier,
+    /// so the retry doesn't re-hit the same provider window.
+    #[test]
+    fn compute_next_due_floors_rate_limited_backoff() {
+        let mut task = make_test_task("rate-limited");
+        task.state.consecutive_errors = 1; // base tier = 30s
+        task.state.last_error =
+            Some("Rate limit error: Anthropic API rate limited (429)".to_string());
+        let next = compute_next_due(&task, 1_000_000).unwrap();
+        // interval 60_000 + floored backoff 300_000 (not 30_000).
+        assert_eq!(next, 1_000_000 + 60_000 + 300_000);
+    }
+
+    /// A non-windowed error (e.g. timeout) keeps the fast ladder — the floor
+    /// only applies to rate-limit / overload categories.
+    #[test]
+    fn compute_next_due_keeps_fast_ladder_for_timeout() {
+        let mut task = make_test_task("timed-out");
+        task.state.consecutive_errors = 1;
+        task.state.last_error = Some("Run timed out".to_string());
+        let next = compute_next_due(&task, 1_000_000).unwrap();
+        assert_eq!(next, 1_000_000 + 60_000 + 30_000);
     }
 }
