@@ -76,36 +76,30 @@ pub(in crate::commands::start) fn initialize_auth(
     let device_store_path =
         paths::get_devices_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_devices.db"));
 
-    let device_store = Arc::new(DeviceStore::open(&device_store_path).unwrap_or_else(|e| {
-        eprintln!(
-            "Warning: Failed to load device store from {:?}: {}. Using in-memory.",
-            device_store_path, e
-        );
-        DeviceStore::in_memory().unwrap_or_else(|e| {
-            panic!(
-                "Fatal: Failed to create in-memory device store fallback: {}",
-                e
-            )
-        })
-    }));
+    let device_store = Arc::new(
+        DeviceStore::open(&device_store_path)
+            .or_else(|e| {
+                eprintln!(
+                    "Warning: Failed to load device store from {:?}: {}. Using in-memory.",
+                    device_store_path, e
+                );
+                DeviceStore::in_memory()
+            })
+            .expect("Fatal: Failed to create in-memory device store fallback"),
+    );
 
     let security_store_path =
         paths::get_security_db_path().unwrap_or_else(|_| PathBuf::from("/tmp/aleph_security.db"));
     let security_store = Arc::new(
-        alephcore::gateway::security::SecurityStore::open(&security_store_path).unwrap_or_else(
-            |e| {
+        alephcore::gateway::security::SecurityStore::open(&security_store_path)
+            .or_else(|e| {
                 eprintln!(
                     "Warning: Failed to load security store from {:?}: {}. Using in-memory.",
                     security_store_path, e
                 );
-                alephcore::gateway::security::SecurityStore::in_memory().unwrap_or_else(|e| {
-                    panic!(
-                        "Fatal: Failed to create in-memory security store fallback: {}",
-                        e
-                    )
-                })
-            },
-        ),
+                alephcore::gateway::security::SecurityStore::in_memory()
+            })
+            .expect("Fatal: Failed to create in-memory security store fallback"),
     );
 
     let token_manager = Arc::new(TokenManager::new(security_store.clone()));
@@ -239,13 +233,10 @@ pub(in crate::commands::start) fn initialize_auth(
 // ── load_app_config ──────────────────────────────────────────────────────────
 
 /// Load and return the application config.
-pub(in crate::commands::start) fn load_app_config() -> alephcore::Config {
+pub(in crate::commands::start) fn load_app_config() -> Result<alephcore::Config, Box<dyn std::error::Error>> {
     match alephcore::Config::load() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("Error loading application config: {}", e);
-            std::process::exit(1);
-        }
+        Ok(cfg) => Ok(cfg),
+        Err(e) => Err(format!("Error loading application config: {}", e).into()),
     }
 }
 

@@ -82,12 +82,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     match alephcore::utils::paths::get_config_dir() {
         Ok(config_dir) => {
             if let Err(e) = std::fs::create_dir_all(&config_dir) {
-                eprintln!(
+                return Err(format!(
                     "Error: cannot create config directory {}: {}",
                     config_dir.display(),
                     e
-                );
-                std::process::exit(1);
+                ).into());
             }
             // Deploy config guide files for LLM self-management
             if let Err(e) = alephcore::deploy_guides(&config_dir) {
@@ -95,8 +94,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         Err(e) => {
-            eprintln!("Error: cannot resolve config directory: {}", e);
-            std::process::exit(1);
+            return Err(format!("Error: cannot resolve config directory: {}", e).into());
         }
     }
 
@@ -131,7 +129,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     tokio::spawn(runtime_startup_warmup());
     validate_bind_address(args)?;
 
-    let (full_config, final_bind, final_port, final_max_connections) = load_gateway_config(args);
+    let (full_config, final_bind, final_port, final_max_connections) = load_gateway_config(args)?;
 
     let addr: SocketAddr = format!("{}:{}", final_bind, final_port)
         .parse()
@@ -158,7 +156,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let mut server = GatewayServer::with_config(addr, server_config);
 
     // Load app config early so we can pick the session store backend
-    let mut loaded_app_config = load_app_config();
+    let mut loaded_app_config = load_app_config()?;
 
     // Plugins are now installed via marketplace: `aleph plugin marketplace update && aleph plugin install <name>`
 
@@ -284,25 +282,20 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     }
 
     // Initialize memory backend (SQLite + sqlite-vec)
-    let memory_db: Arc<alephcore::memory::store::SqliteMemoryBackend> = {
-        let data_dir = match alephcore::utils::paths::get_data_dir() {
-            Ok(dir) => dir,
-            Err(e) => {
-                eprintln!("Error: Failed to resolve data directory: {}. Memory backend requires a persistent directory.", e);
-                std::process::exit(1);
-            }
-        };
-        let db_path = data_dir.join("memory.db");
+    let data_dir = alephcore::utils::paths::get_data_dir()
+        .map_err(|e| format!("Error: Failed to resolve data directory: {}. Memory backend requires a persistent directory.", e))?;
+    let db_path = data_dir.join("memory.db");
 
-        // Notify user if old LanceDB data directory exists
-        let lance_path = data_dir.join("memory.lance");
-        if lance_path.exists() {
-            println!(
-                "  Note: Old LanceDB data found at {:?}. Run: rm -rf {:?}",
-                lance_path, lance_path
-            );
-        }
+    // Notify user if old LanceDB data directory exists
+    let lance_path = data_dir.join("memory.lance");
+    if lance_path.exists() {
+        println!(
+            "  Note: Old LanceDB data found at {:?}. Run: rm -rf {:?}",
+            lance_path, lance_path
+        );
+    }
 
+    let memory_db: Arc<alephcore::memory::store::SqliteMemoryBackend> =
         match alephcore::memory::store::SqliteMemoryBackend::new(&db_path) {
             Ok(backend) => {
                 if !args.daemon {
@@ -311,11 +304,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 Arc::new(backend)
             }
             Err(e) => {
-                eprintln!("Error: Failed to initialize memory backend: {}", e);
-                std::process::exit(1);
+                return Err(format!("Error: Failed to initialize memory backend: {}", e).into());
             }
-        }
-    };
+        };
 
     let event_bus = server.event_bus().clone();
 
@@ -334,7 +325,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &loaded_app_config.general.session_store_backend,
         event_bus.clone(),
     )
-    .await;
+    .await?;
 
     // Spec 1 G3-A: inject raw-memory writer into SessionManager so the
     // disconnect hook captures session-end events (Task 8).
@@ -762,13 +753,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Construct NoteOrientation and bootstrap the default agent's SCHEMA.md (Spec 5 Task 12).
     // Must be built before register_agent_handlers so it can be threaded into DreamDaemon,
     // MemoryContextProvider, and the builtin tool registry.
-    let note_memory_dir = match alephcore::utils::paths::get_note_memory_dir() {
-        Ok(dir) => dir,
-        Err(e) => {
-            eprintln!("Error: Failed to resolve note memory directory: {}. Note storage requires a persistent directory.", e);
-            std::process::exit(1);
-        }
-    };
+    let note_memory_dir = alephcore::utils::paths::get_note_memory_dir()
+        .map_err(|e| format!("Error: Failed to resolve note memory directory: {}. Note storage requires a persistent directory.", e))?;
     let wiki: std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation> = {
         use alephcore::memory::notes::orientation::FsNoteOrientation;
         std::sync::Arc::new(FsNoteOrientation::new(
@@ -1884,15 +1870,16 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     let channel_pairing_store: Arc<dyn alephcore::gateway::pairing_store::PairingStore> = {
         let pairing_store_path = alephcore::utils::paths::get_pairing_db_path()
             .unwrap_or_else(|_| PathBuf::from("/tmp/aleph_pairing.db"));
-        Arc::new(
-            SqlitePairingStore::new(&pairing_store_path).unwrap_or_else(|e| {
+        let store = SqlitePairingStore::new(&pairing_store_path)
+            .or_else(|e| {
                 eprintln!(
                     "Warning: Failed to create pairing store: {}. Using in-memory.",
                     e
                 );
-                SqlitePairingStore::in_memory().expect("Failed to create in-memory pairing store")
-            }),
-        )
+                SqlitePairingStore::in_memory()
+            })
+            .map_err(|e| format!("Failed to create pairing store: {}", e))?;
+        Arc::new(store)
     };
 
     // Register channel pairing RPC handlers (uses same store as InboundMessageRouter)

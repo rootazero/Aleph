@@ -12,16 +12,17 @@ use crate::daemon::{expand_path, remove_pid_file};
 use alephcore::gateway::session_store::SessionStore;
 use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 
-/// Validate that the bind address is available, or exit if not.
+/// Validate that the bind address is available, or return an error if not.
 pub(super) fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = format!("{}:{}", args.bind, args.port)
         .parse()
         .map_err(|e| format!("Invalid address: {}", e))?;
     if !args.force {
         if let Err(e) = std::net::TcpListener::bind(addr) {
-            eprintln!("Error: Cannot bind to {}: {}", addr, e);
-            eprintln!("Hint: Use --force to attempt to start anyway, or choose a different port with --port");
-            std::process::exit(1);
+            return Err(format!(
+                "Error: Cannot bind to {}: {}\nHint: Use --force to attempt to start anyway, or choose a different port with --port",
+                addr, e
+            ).into());
         }
     }
     Ok(())
@@ -88,7 +89,9 @@ pub(super) fn initialize_tracing(args: &Args) {
 
 /// Load gateway configuration, apply CLI overrides, and return resolved values.
 /// Returns (full_config, final_bind, final_port, final_max_connections).
-pub(super) fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u16, usize) {
+pub(super) fn load_gateway_config(
+    args: &Args,
+) -> Result<(FullGatewayConfig, String, u16, usize), Box<dyn std::error::Error>> {
     let full_config = match &args.config {
         Some(config_path) => {
             let path = expand_path(&config_path.to_string_lossy());
@@ -100,8 +103,9 @@ pub(super) fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u1
                     cfg
                 }
                 Err(e) => {
-                    eprintln!("Error loading config from {}: {}", path.display(), e);
-                    std::process::exit(1);
+                    return Err(
+                        format!("Error loading config from {}: {}", path.display(), e).into(),
+                    );
                 }
             }
         }
@@ -133,7 +137,7 @@ pub(super) fn load_gateway_config(args: &Args) -> (FullGatewayConfig, String, u1
         full_config.gateway.max_connections
     };
 
-    (full_config, final_bind, final_port, final_max_connections)
+    Ok((full_config, final_bind, final_port, final_max_connections))
 }
 
 /// Initialize the session store backend based on configuration.
@@ -144,7 +148,7 @@ pub(super) async fn initialize_session_store(
     daemon: bool,
     backend: &str,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
-) -> (Arc<dyn SessionStore>, Option<SessionManager>) {
+) -> Result<(Arc<dyn SessionStore>, Option<SessionManager>), Box<dyn std::error::Error>> {
     match backend {
         "file" => {
             let config =
@@ -170,11 +174,10 @@ pub(super) async fn initialize_session_store(
                     if !daemon {
                         println!("Session store initialized (file backend)");
                     }
-                    (Arc::new(store), None)
+                    Ok((Arc::new(store), None))
                 }
                 Err(e) => {
-                    eprintln!("Error: Failed to initialize file session store: {}", e);
-                    std::process::exit(1);
+                    Err(format!("Error: Failed to initialize file session store: {}", e).into())
                 }
             }
         }
@@ -183,18 +186,17 @@ pub(super) async fn initialize_session_store(
             let sm = match SessionManager::with_defaults() {
                 Ok(sm) => sm,
                 Err(e) => {
-                    eprintln!(
+                    return Err(format!(
                         "Error: Failed to initialize SQLite session store: {}. Sessions are required.",
                         e
-                    );
-                    std::process::exit(1);
+                    ).into());
                 }
             };
             if !daemon {
                 println!("Session store initialized (SQLite backend)");
             }
             let dyn_store: Arc<dyn SessionStore> = Arc::new(sm.clone());
-            (dyn_store, Some(sm))
+            Ok((dyn_store, Some(sm)))
         }
     }
 }
