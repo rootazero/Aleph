@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 
 use super::os::TargetOs;
 use super::post_install;
@@ -28,6 +29,8 @@ pub enum BootstrapError {
     PostInstall(#[from] post_install::PostInstallError),
     #[error("unknown capability: {0}")]
     Unknown(String),
+    #[error("bootstrap timed out after {0}s")]
+    Timeout(u64),
 }
 
 /// Install a capability according to its spec. Assumes `deps` are already Ready
@@ -126,8 +129,15 @@ enum CmdOutcome {
     Failed { stderr: String },
 }
 
+/// Bootstrap command timeout — installs may download large binaries over the network.
+const BOOTSTRAP_TIMEOUT_SECS: u64 = 600;
+
 async fn run_cmd(cmd: &mut Command) -> Result<CmdOutcome, BootstrapError> {
-    let output = cmd.output().await?;
+    let output = match timeout(Duration::from_secs(BOOTSTRAP_TIMEOUT_SECS), cmd.output()).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => return Err(BootstrapError::Io(e)),
+        Err(_) => return Err(BootstrapError::Timeout(BOOTSTRAP_TIMEOUT_SECS)),
+    };
     Ok(if output.status.success() {
         CmdOutcome::Success
     } else {

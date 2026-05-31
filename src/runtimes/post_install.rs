@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use tokio::process::Command;
+use tokio::time::{timeout, Duration};
 use tracing::warn;
 
 use super::specs::PostInstallAction;
@@ -20,6 +21,8 @@ pub enum PostInstallError {
     RepairFailed,
     #[error("HOME or USERPROFILE environment variable not set")]
     HomeNotSet,
+    #[error("post-install timed out after {0}s")]
+    Timeout(u64),
 }
 
 /// Expand `$HOME` or `%USERPROFILE%` in a template path. On Windows also
@@ -41,6 +44,19 @@ fn expand_home(template: &str) -> Result<String, PostInstallError> {
         .replace('/', r"\");
 
     Ok(s)
+}
+
+/// Post-install command timeout — prevents hung subcommands from blocking indefinitely.
+const POST_INSTALL_TIMEOUT_SECS: u64 = 300;
+
+async fn run_cmd_with_timeout(
+    cmd: &mut Command,
+) -> Result<std::process::Output, PostInstallError> {
+    match timeout(Duration::from_secs(POST_INSTALL_TIMEOUT_SECS), cmd.output()).await {
+        Ok(Ok(output)) => Ok(output),
+        Ok(Err(e)) => Err(PostInstallError::Io(e)),
+        Err(_) => Err(PostInstallError::Timeout(POST_INSTALL_TIMEOUT_SECS)),
+    }
 }
 
 /// Run a single post-install action. `bin_path` is the just-installed
@@ -77,7 +93,7 @@ async fn run_subcommand(
         }
         cmd.arg(&expanded);
     }
-    let output = cmd.output().await?;
+    let output = run_cmd_with_timeout(&mut cmd).await?;
     if !output.status.success() {
         return Err(PostInstallError::SubcommandFailed {
             stderr: String::from_utf8_lossy(&output.stderr).into(),
@@ -88,7 +104,7 @@ async fn run_subcommand(
 
 async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
     // Parse `fnm list` output to find the just-installed version token.
-    let list = Command::new("fnm").args(["list"]).output().await?;
+    let list = run_cmd_with_timeout(Command::new("fnm").args(["list"])).await?;
     let text = String::from_utf8_lossy(&list.stdout);
     let version = text
         .lines()
@@ -104,10 +120,10 @@ async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
         })
         .next()
         .ok_or(PostInstallError::NoNodeVersion)?;
-    let output = Command::new("fnm")
-        .args(["alias", &version, alias_name])
-        .output()
-        .await?;
+    let output = run_cmd_with_timeout(
+        Command::new("fnm").args(["alias", &version, alias_name]),
+    )
+    .await?;
     if !output.status.success() {
         return Err(PostInstallError::SubcommandFailed {
             stderr: String::from_utf8_lossy(&output.stderr).into(),
@@ -129,10 +145,7 @@ async fn verify_or_repair(
         .iter()
         .map(|a| expand_home(a))
         .collect::<Result<Vec<_>, _>>()?;
-    let output = Command::new(bin_path)
-        .args(&expanded_repair)
-        .output()
-        .await?;
+    let output = run_cmd_with_timeout(Command::new(bin_path).args(&expanded_repair)).await?;
     if !output.status.success() {
         return Err(PostInstallError::RepairFailed);
     }

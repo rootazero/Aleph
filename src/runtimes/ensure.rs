@@ -51,21 +51,19 @@ async fn ensure_capability_recursive(
         ));
     }
 
-    // Fast path: already Ready
+    // Fast path: already Ready (use write lock to avoid TOCTOU race)
     {
-        let guard = ledger.read().await;
+        let mut guard = ledger.write().await;
         if guard.status(capability) == CapabilityStatus::Ready {
             if let Some(path) = guard.executable(capability) {
                 if path.exists() {
                     return Ok(path.to_path_buf());
                 }
                 // Path gone — mark stale, fall through to re-probe
-                drop(guard);
                 warn!(
                     "Capability {} path no longer exists, marking stale",
                     capability
                 );
-                let mut guard = ledger.write().await;
                 guard.update_status(capability, CapabilityStatus::Stale);
             }
         }
@@ -75,6 +73,12 @@ async fn ensure_capability_recursive(
     info!("Probing for capability: {}", capability);
     {
         let mut guard = ledger.write().await;
+        // Re-check: another task may have resolved this while we waited for the lock
+        if guard.status(capability) == CapabilityStatus::Ready {
+            if let Some(path) = guard.executable(capability) {
+                return Ok(path.to_path_buf());
+            }
+        }
         guard.update_status(capability, CapabilityStatus::Probing);
     }
 
@@ -132,6 +136,12 @@ async fn ensure_capability_recursive(
     info!("Bootstrapping capability: {}", capability);
     {
         let mut guard = ledger.write().await;
+        // Re-check after dependency resolution — another task may have finished
+        if guard.status(capability) == CapabilityStatus::Ready {
+            if let Some(path) = guard.executable(capability) {
+                return Ok(path.to_path_buf());
+            }
+        }
         guard.update_status(capability, CapabilityStatus::Bootstrapping);
     }
 
