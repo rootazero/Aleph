@@ -386,7 +386,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // the cached stable prefix anyway, and the read cost is dwarfed by
         // the LLM call that follows.
         if request.workspace_override.is_some() {
-            let blocks = collect_project_context_blocks(&effective_workspace);
+            let mut blocks = collect_project_context_blocks(&effective_workspace);
+            // Round 3: advertise the project's own skills so the model knows
+            // to `skill_read` them (the tool itself is project-aware now).
+            if let Some(skills_block) = collect_project_skill_block(&effective_workspace) {
+                blocks.push(skills_block);
+            }
             if !blocks.is_empty() {
                 let joined = blocks
                     .into_iter()
@@ -921,6 +926,16 @@ const PROJECT_CONTEXT_TOTAL_MAX_BYTES: usize = 128 * 1024;
 /// boundary and `$HOME` stops normally trip first.
 const PROJECT_CONTEXT_MAX_DEPTH: usize = 8;
 
+/// Upper bound on how many project-local skills are advertised in the
+/// `<project_skills>` reminder. A folder with hundreds of skills would
+/// otherwise crowd out the prompt; the model can still enumerate the full
+/// set via the `skill_list` tool.
+const PROJECT_SKILLS_MAX: usize = 50;
+
+/// Per-skill description cap (chars) inside the advertisement block so one
+/// verbose frontmatter line cannot dominate the listing.
+const PROJECT_SKILL_DESC_MAX_CHARS: usize = 200;
+
 /// Read project context files from the active workspace root, walking
 /// upward like Claude Code's `claudemd.ts`: each ancestor's `AGENTS.md`,
 /// `CLAUDE.md`, `.claude/CLAUDE.md` and `.aleph/CLAUDE.md` are loaded,
@@ -1001,6 +1016,91 @@ fn collect_project_context_blocks(workspace: &std::path::Path) -> Vec<String> {
     } else {
         vec![body]
     }
+}
+
+/// Advertise the project's own skills to the model (round 3).
+///
+/// `skill_read` / `skill_list` are wired to discover `<project>/.aleph/skills`
+/// and `<project>/.claude/skills` (walked to the git root) when a project run
+/// is active, but the model only invokes them if it knows those skills exist.
+/// This block enumerates the project-local skills (id + name + short
+/// description) so the model can proactively `skill_read` them — mirroring
+/// Claude Code, where project skills are surfaced as available capabilities.
+///
+/// The listed set is exactly the **project** subset of
+/// [`crate::utils::paths::get_all_skills_dirs`] (global `~/.aleph` / `~/.claude`
+/// skills are excluded — those are already covered by the global skill
+/// snapshot), so anything advertised here is guaranteed loadable via
+/// `skill_read`. Returns `None` when the project ships no skills.
+fn collect_project_skill_block(workspace: &std::path::Path) -> Option<String> {
+    let dirs = crate::utils::paths::get_all_skills_dirs(Some(workspace)).ok()?;
+    let home = crate::utils::paths::get_home_dir().ok();
+    let is_global = |dir: &std::path::Path| -> bool {
+        home.as_ref().is_some_and(|h| {
+            dir.starts_with(h.join(".aleph")) || dir.starts_with(h.join(".claude"))
+        })
+    };
+
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut lines: Vec<String> = Vec::new();
+
+    'outer: for dir in dirs.iter().filter(|d| !is_global(d)) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let skill_dir = entry.path();
+            if !skill_dir.is_dir() {
+                continue;
+            }
+            let Some(id) = skill_dir.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if id.starts_with('.') || seen.contains(id) {
+                continue;
+            }
+            let skill_md = skill_dir.join("SKILL.md");
+            let Ok(content) = std::fs::read_to_string(&skill_md) else {
+                continue;
+            };
+            let Ok(manifest) = crate::skill::parse_skill_content(
+                &content,
+                crate::domain::skill::SkillSource::Workspace,
+            ) else {
+                continue;
+            };
+            seen.insert(id.to_string());
+            let mut desc = manifest.description().trim().replace(['\n', '\r'], " ");
+            if desc.chars().count() > PROJECT_SKILL_DESC_MAX_CHARS {
+                desc = desc
+                    .chars()
+                    .take(PROJECT_SKILL_DESC_MAX_CHARS)
+                    .collect::<String>()
+                    + "…";
+            }
+            let name = manifest.name().trim();
+            lines.push(if desc.is_empty() {
+                format!("- `{id}` — {name}")
+            } else {
+                format!("- `{id}` — {name}: {desc}")
+            });
+            if lines.len() >= PROJECT_SKILLS_MAX {
+                break 'outer;
+            }
+        }
+    }
+
+    if lines.is_empty() {
+        return None;
+    }
+    lines.sort();
+    Some(format!(
+        "Project-local skills (under `.aleph/skills` / `.claude/skills`). Each is \
+        a task directive available through the `skill_read` tool — call \
+        `skill_read(skill_id=\"<id>\")` to load its full instructions, then follow \
+        them. Use `skill_list` to see the complete set including global skills.\n\n{}",
+        lines.join("\n")
+    ))
 }
 
 /// Walk from `start` upward, returning the chain in **ancestor → start**
@@ -1264,5 +1364,61 @@ mod project_context_tests {
             blocks[0].len(),
             allowed
         );
+    }
+
+    /// Write a minimal valid `<dir>/SKILL.md` with the given name/description.
+    fn write_skill(dir: &std::path::Path, name: &str, description: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\nbody\n"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn project_skill_block_lists_project_skills() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path();
+        anchor(project);
+        write_skill(
+            &project.join(".aleph").join("skills").join("refine-text"),
+            "Refine Text",
+            "Polish prose without changing meaning",
+        );
+        write_skill(
+            &project.join(".claude").join("skills").join("translate"),
+            "Translate",
+            "Translate text to another language",
+        );
+
+        let block = collect_project_skill_block(project).expect("project skills present");
+        assert!(block.contains("`refine-text` — Refine Text:"));
+        assert!(block.contains("`translate` — Translate:"));
+        assert!(block.contains("skill_read"));
+    }
+
+    #[test]
+    fn project_skill_block_none_when_no_project_skills() {
+        let tmp = tempdir().unwrap();
+        anchor(tmp.path());
+        assert!(collect_project_skill_block(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn project_skill_block_skips_dirs_without_manifest() {
+        let tmp = tempdir().unwrap();
+        let project = tmp.path();
+        anchor(project);
+        // A subdir with no SKILL.md must not appear.
+        std::fs::create_dir_all(project.join(".aleph").join("skills").join("empty-dir")).unwrap();
+        write_skill(
+            &project.join(".aleph").join("skills").join("real"),
+            "Real Skill",
+            "A genuine skill",
+        );
+        let block = collect_project_skill_block(project).expect("one real skill");
+        assert!(block.contains("`real` — Real Skill:"));
+        assert!(!block.contains("empty-dir"));
     }
 }

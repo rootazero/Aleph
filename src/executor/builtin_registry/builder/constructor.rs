@@ -17,9 +17,6 @@ use crate::builtin_tools::browser_tools::{
     BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSnapshotTool,
     BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
 };
-use crate::builtin_tools::skill_reader::{
-    ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
-};
 use crate::builtin_tools::{
     ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool, FileEditTool,
     FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool, MediaTool, MemoryBrowseTool,
@@ -100,9 +97,9 @@ impl BuiltinToolRegistry {
             PdfGenerateTool::new()
         };
 
-        // Skill listing tool (read_skill replaced by read_config_guide)
-        let list_skills_tool = SkillListTool::default();
-        let read_skill_tool = SkillReadTool::default();
+        // Skill list/read tools are constructed per dispatch in
+        // `registry.rs` from the active project root (round 3) — no shared
+        // field needed; see the `skill_list` / `skill_read` match arms.
 
         // Config guide tool (Progressive Disclosure for self-management)
         let config_guide_tool = ReadConfigGuideTool::default();
@@ -1429,8 +1426,6 @@ impl BuiltinToolRegistry {
             video_generate_tool,
             audio_generate_tool,
             speech_generate_tool,
-            list_skills_tool,
-            read_skill_tool,
             config_guide_tool,
             ctx_search_tool,
             recall_events_tool,
