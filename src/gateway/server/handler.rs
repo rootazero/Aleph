@@ -14,7 +14,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, RwLock};
 use tokio::time::{interval_at, Instant as TokioInstant, MissedTickBehavior};
@@ -31,7 +31,7 @@ use crate::gateway::middleware::MiddlewareChain;
 use crate::gateway::presence::{PresenceEntry, PresenceTracker};
 use crate::gateway::protocol::{
     JsonRpcRequest, JsonRpcResponse, AUTH_REQUIRED, IDEMPOTENCY_KEY_REQUIRED, INTERNAL_ERROR,
-    PARSE_ERROR, RATE_LIMITED,
+    PARSE_ERROR, PERMISSION_DENIED, RATE_LIMITED,
 };
 use crate::gateway::rate_limiter::{
     scope_for_method, RateLimitError, RateLimitKey, RateLimitScope, RateLimiter,
@@ -93,6 +93,12 @@ struct ConnectionContext {
     /// connections that authenticated via a device token (i.e. whose
     /// `ConnectionState.device_token_hash` is `Some`).
     token_manager: Option<Arc<TokenManager>>,
+    /// Resolved real client IP. Equals the socket peer IP unless the peer is a
+    /// configured trusted proxy, in which case it is taken from
+    /// `X-Forwarded-For`. Used for the per-IP connection cap, rate-limit
+    /// identity, and auth-failure lockout so those abuse protections key off
+    /// the actual client rather than a shared proxy address.
+    client_ip: IpAddr,
 }
 
 /// Extract the `aleph_session` cookie value from a request's `Cookie` header.
@@ -260,15 +266,48 @@ pub(super) async fn ws_upgrade_handler(
     State(state): State<Arc<GatewaySharedState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
-    // Check connection limit before upgrading
-    let current = state.connections.read().await.len();
-    if current >= state.max_connections {
-        warn!("Connection limit reached, rejecting {}", peer_addr);
-        return (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Connection limit reached",
-        )
-            .into_response();
+    // Resolve the real client IP up front. Equals the socket peer IP unless
+    // the peer is a configured trusted reverse proxy, in which case it is
+    // taken from `X-Forwarded-For`. All IP-keyed abuse protections (per-IP
+    // cap, rate limiting, auth-failure lockout) use this so they isolate the
+    // real client rather than a shared proxy address.
+    let client_ip = state.trusted_proxies.real_client_ip(peer_addr.ip(), &headers);
+
+    // Check connection limits before upgrading. One read guard covers both the
+    // global cap and the per-IP cap so we hold the lock once.
+    {
+        let conns = state.connections.read().await;
+        if conns.len() >= state.max_connections {
+            warn!("Connection limit reached, rejecting {}", peer_addr);
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Connection limit reached",
+            )
+                .into_response();
+        }
+
+        // Per-IP concurrent-connection cap: bounds a single client IP from
+        // exhausting global connection slots with sockets that never
+        // authenticate (preauth flood / slot exhaustion). Loopback (Panel,
+        // local CLI, desktop shell) is exempt — it legitimately opens several
+        // connections at once. `0` disables the cap. Established connections
+        // carry their resolved `client_ip`, so the count isolates real clients
+        // even when many share one reverse-proxy socket address.
+        let per_ip_cap = state.max_connections_per_ip;
+        if per_ip_cap > 0 && !client_ip.is_loopback() {
+            let same_ip = conns.values().filter(|c| c.client_ip == client_ip).count();
+            if same_ip >= per_ip_cap {
+                warn!(
+                    "Per-IP connection cap ({}) reached for {}, rejecting",
+                    per_ip_cap, client_ip
+                );
+                return (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "Per-IP connection limit reached",
+                )
+                    .into_response();
+            }
+        }
     }
 
     // Derive the channel class for Lane priority. Loopback connections
@@ -293,10 +332,9 @@ pub(super) async fn ws_upgrade_handler(
 
     ws.on_upgrade(move |socket| async move {
         let ctx = ConnectionContext {
-            middleware_chain: MiddlewareChain::new(
-                state.handlers.clone(),
-                state.rate_limiter.clone(),
-            ),
+            // Shared chain built once at server construction (cloning shares the
+            // global request-state registry instead of resetting it per connect).
+            middleware_chain: state.middleware_chain.clone(),
             event_bus: state.event_bus.clone(),
             connections: state.connections.clone(),
             subscription_manager: state.subscription_manager.clone(),
@@ -314,6 +352,7 @@ pub(super) async fn ws_upgrade_handler(
             require_idempotency_key: state.require_idempotency_key,
             bootstrap_shared_token,
             token_manager: state.token_manager.clone(),
+            client_ip,
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -347,7 +386,7 @@ async fn handle_connection(
     // Initialize connection state
     {
         let mut conns = ctx.connections.write().await;
-        conns.insert(conn_id.clone(), ConnectionState::new());
+        conns.insert(conn_id.clone(), ConnectionState::new(ctx.client_ip));
     }
 
     // Transport keep-alive: periodic Ping + inbound idle watchdog.
@@ -543,9 +582,27 @@ async fn handle_connection(
                                                         }
                                                     });
 
+                                                // Role drives the method-level authorization gate.
+                                                // Guest sessions are always "guest"; device connects
+                                                // carry the role from the connect response (currently
+                                                // always "operator"), defaulting to operator for the
+                                                // device path since every device token is operator.
+                                                let role = if guest_session_id.is_some() {
+                                                    Some("guest".to_string())
+                                                } else {
+                                                    Some(
+                                                        resp.result
+                                                            .as_ref()
+                                                            .and_then(|r| r.get("role"))
+                                                            .and_then(|v| v.as_str())
+                                                            .unwrap_or("operator")
+                                                            .to_string(),
+                                                    )
+                                                };
+
                                                 let mut conns = ctx.connections.write().await;
                                                 if let Some(state) = conns.get_mut(&conn_id) {
-                                                    state.authenticate(device_id.clone(), permissions);
+                                                    state.authenticate(device_id.clone(), permissions, role);
                                                     state.guest_session_id = guest_session_id.clone();
                                                     state.first_message = false;
                                                     // Capture the device-token hash ONLY when this
@@ -633,7 +690,7 @@ async fn handle_connection(
                                         // connections. (openclaw #87148)
                                         if auth_failed {
                                             if let Some(retry_after_ms) =
-                                                record_auth_failure_lockout(&ctx.rate_limiter, peer_addr.ip())
+                                                record_auth_failure_lockout(&ctx.rate_limiter, ctx.client_ip)
                                             {
                                                 warn!(
                                                     "Connection {} auth-failure rate limited by source IP, disconnecting",
@@ -660,11 +717,13 @@ async fn handle_connection(
 
                                     // --- Rate limit check ---
                                     // Loopback exemption is based on network origin
-                                    // (peer address), not identity (device_id). For
+                                    // (the resolved client IP, so a reverse proxy
+                                    // running on loopback never exempts the remote
+                                    // clients behind it), not identity (device_id). For
                                     // authenticated connections the rl_identity is the
                                     // device_id which never looks like a loopback IP.
-                                    if !peer_addr.ip().is_loopback() {
-                                    let peer_ip_str = peer_addr.ip().to_string();
+                                    if !ctx.client_ip.is_loopback() {
+                                    let peer_ip_str = ctx.client_ip.to_string();
                                     let rl_identity = {
                                         let conns = ctx.connections.read().await;
                                         conns.get(&conn_id)
@@ -700,6 +759,45 @@ async fn handle_connection(
                                         continue;
                                     }
                                     } // end loopback exemption
+
+                                    // --- Method-level authorization gate ---
+                                    // Authentication is binary at the transport
+                                    // layer, but a conservative set of
+                                    // administrative / secret-bearing
+                                    // control-plane methods additionally require
+                                    // operator role. Guest (and future node-role)
+                                    // connections are rejected from those so an
+                                    // invitation-scoped session cannot reach
+                                    // `config.apply`, `daemon.shutdown`,
+                                    // `secret.*`, etc. Only enforced when auth is
+                                    // required — a no-auth local daemon stays
+                                    // fully open (existing contract).
+                                    if ctx.auth_mode.is_auth_required()
+                                        && crate::gateway::method_authz::required_privilege(&req.method)
+                                            == crate::gateway::method_authz::MethodPrivilege::Operator
+                                    {
+                                        let is_operator = {
+                                            let conns = ctx.connections.read().await;
+                                            conns.get(&conn_id).is_some_and(|s| s.is_operator())
+                                        };
+                                        if !is_operator {
+                                            warn!(
+                                                "Connection {} (non-operator) denied operator-only method '{}'",
+                                                conn_id, req.method
+                                            );
+                                            let resp_str = serde_json::to_string(&JsonRpcResponse::error(
+                                                req.id.clone(),
+                                                PERMISSION_DENIED,
+                                                "Operator privileges required for this method",
+                                            ))
+                                            .unwrap_or_default();
+                                            if let Err(e) = write.send(WsMessage::Text(resp_str.into())).await {
+                                                error!("Failed to send authz-denied response to {}: {}", conn_id, e);
+                                                break;
+                                            }
+                                            continue;
+                                        }
+                                    }
 
                                     // Handle events.* methods specially (they need conn_id)
                                     if req.method == "events.subscribe" {
@@ -1174,9 +1272,37 @@ pub(super) async fn process_request(text: &str, middleware_chain: &MiddlewareCha
         }
     };
 
-    // Dispatch to middleware chain
-    let response = middleware_chain.serve(request).await;
-    serde_json::to_string(&response).unwrap_or_default()
+    // Distributed-trace context: honour an inbound W3C `traceparent` (carried
+    // in params) or mint a fresh root trace, so every log/span emitted while
+    // handling this request is correlatable. See `trace_context` for why this
+    // is a lightweight propagation layer rather than a full OTel integration.
+    let trace =
+        crate::gateway::trace_context::TraceContext::from_request_params(request.params.as_ref());
+    let span = tracing::info_span!(
+        "rpc",
+        trace_id = %trace.trace_id,
+        span_id = %trace.span_id,
+        method = %request.method,
+    );
+
+    // Dispatch to middleware chain inside the trace span.
+    let response = {
+        use tracing::Instrument;
+        middleware_chain.serve(request).instrument(span).await
+    };
+
+    // Echo the trace context back so the caller / a downstream hop can continue
+    // the trace (naming our span as the parent). `traceparent` is a non-standard
+    // sibling of the JSON-RPC envelope fields; serde clients ignore unknown
+    // fields, so this stays backward-compatible.
+    let mut value = serde_json::to_value(&response).unwrap_or(serde_json::Value::Null);
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "traceparent".to_string(),
+            serde_json::Value::String(trace.to_header()),
+        );
+    }
+    serde_json::to_string(&value).unwrap_or_default()
 }
 
 /// Pairing-wizard bootstrap bypass for the WS auth gate.

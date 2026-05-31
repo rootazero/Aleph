@@ -62,26 +62,31 @@ mod tests {
     use crate::gateway::handlers::HandlerRegistry;
     use crate::gateway::idempotency::IdempotencyGuard;
     use crate::gateway::lane::{LaneConfig, LaneManager};
+    use crate::gateway::middleware::MiddlewareChain;
     use crate::gateway::presence::PresenceTracker;
     use crate::gateway::rate_limiter::{RateLimitConfig, RateLimiter};
     use crate::gateway::state_version::StateVersionTracker;
+    use crate::gateway::trusted_proxy::TrustedProxies;
     use std::collections::HashMap;
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
     use tokio::sync::RwLock;
 
     fn make_shared(ready: bool) -> Arc<GatewaySharedState> {
+        let handlers = Arc::new(HandlerRegistry::new());
+        let rate_limiter = Arc::new(RateLimiter::new(RateLimitConfig::default()));
         Arc::new(GatewaySharedState {
-            handlers: Arc::new(HandlerRegistry::new()),
+            handlers: handlers.clone(),
             event_bus: Arc::new(GatewayEventBus::new()),
             connections: Arc::new(RwLock::new(HashMap::new())),
             subscription_manager: Arc::new(SubscriptionManager::new()),
             guest_session_manager: None,
             auth_mode: AuthMode::default(),
             max_connections: 1000,
+            max_connections_per_ip: 64,
             presence: Arc::new(PresenceTracker::new()),
             state_versions: Arc::new(StateVersionTracker::new()),
-            rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),
+            rate_limiter: rate_limiter.clone(),
             lane_manager: Arc::new(LaneManager::new(LaneConfig::default())),
             idempotency_guard: Arc::new(IdempotencyGuard::new(Duration::from_secs(300))),
             event_scope_guard: Arc::new(EventScopeGuard::default_rules()),
@@ -95,6 +100,8 @@ mod tests {
             session_mgr: None,
             shared_token_mgr: None,
             token_manager: None,
+            middleware_chain: MiddlewareChain::new(handlers, rate_limiter),
+            trusted_proxies: Arc::new(TrustedProxies::default()),
         })
     }
 

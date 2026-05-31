@@ -146,12 +146,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let server_config = ServerConfig {
         max_connections: final_max_connections,
+        max_connections_per_ip: full_config.gateway.max_connections_per_ip,
         auth_mode: full_config.gateway.auth.mode.clone(),
         timeout_secs: 300,
         ping_interval_secs: full_config.gateway.ping_interval_secs,
         idle_timeout_secs: full_config.gateway.idle_timeout_secs,
         lane: full_config.gateway.lane.clone(),
         require_idempotency_key: full_config.gateway.require_idempotency_key,
+        trusted_proxies: full_config.gateway.trusted_proxies.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 

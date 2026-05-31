@@ -9,6 +9,7 @@ use std::task::{Context, Poll};
 use tower::{Layer, Service};
 use uuid::Uuid;
 
+use crate::gateway::middleware::latency::LatencyHistogram;
 use crate::gateway::middleware::request_state::{RequestState, RequestStateRegistry};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
@@ -17,6 +18,7 @@ pub struct MetricsLayer {
     requests_total: Arc<AtomicU64>,
     requests_in_flight: Arc<AtomicU64>,
     state_registry: Arc<RequestStateRegistry>,
+    latency: Arc<LatencyHistogram>,
     processing_threshold: u64,
 }
 
@@ -26,6 +28,7 @@ impl MetricsLayer {
             requests_total: Arc::new(AtomicU64::new(0)),
             requests_in_flight: Arc::new(AtomicU64::new(0)),
             state_registry: Arc::new(RequestStateRegistry::new()),
+            latency: Arc::new(LatencyHistogram::new()),
             processing_threshold: 100,
         }
     }
@@ -35,12 +38,21 @@ impl MetricsLayer {
             requests_total: Arc::new(AtomicU64::new(0)),
             requests_in_flight: Arc::new(AtomicU64::new(0)),
             state_registry,
+            latency: Arc::new(LatencyHistogram::new()),
             processing_threshold: 100,
         }
     }
 
     pub fn with_threshold(mut self, threshold: u64) -> Self {
         self.processing_threshold = threshold;
+        self
+    }
+
+    /// Use a shared latency histogram so the `/metrics` reader and this writer
+    /// observe the same counters. Without it, the layer records into a private
+    /// histogram that nothing exports.
+    pub fn with_latency(mut self, latency: Arc<LatencyHistogram>) -> Self {
+        self.latency = latency;
         self
     }
 
@@ -88,6 +100,7 @@ impl<S> Layer<S> for MetricsLayer {
             requests_total: self.requests_total.clone(),
             requests_in_flight: self.requests_in_flight.clone(),
             state_registry: self.state_registry.clone(),
+            latency: self.latency.clone(),
             processing_threshold: self.processing_threshold,
         }
     }
@@ -99,6 +112,7 @@ pub struct MetricsService<S> {
     requests_total: Arc<AtomicU64>,
     requests_in_flight: Arc<AtomicU64>,
     state_registry: Arc<RequestStateRegistry>,
+    latency: Arc<LatencyHistogram>,
     processing_threshold: u64,
 }
 
@@ -108,6 +122,7 @@ impl<S> MetricsService<S> {
         requests_total: Arc<AtomicU64>,
         requests_in_flight: Arc<AtomicU64>,
         state_registry: Arc<RequestStateRegistry>,
+        latency: Arc<LatencyHistogram>,
         processing_threshold: u64,
     ) -> Self {
         Self {
@@ -115,6 +130,7 @@ impl<S> MetricsService<S> {
             requests_total,
             requests_in_flight,
             state_registry,
+            latency,
             processing_threshold,
         }
     }
@@ -139,6 +155,7 @@ where
         let requests_total = self.requests_total.clone();
         let requests_in_flight = self.requests_in_flight.clone();
         let state_registry = self.state_registry.clone();
+        let latency = self.latency.clone();
         let processing_threshold = self.processing_threshold;
 
         let request_id = Uuid::new_v4();
@@ -182,6 +199,7 @@ where
             let result = inner_mut.call(req).await;
             let elapsed_ms = start.elapsed().as_millis() as u64;
             requests_in_flight.fetch_sub(1, Ordering::SeqCst);
+            latency.observe(elapsed_ms);
 
             match &result {
                 Ok(resp) => {

@@ -412,6 +412,7 @@ dependencies = [
  "include_dir",
  "inquire",
  "insta",
+ "ipnet",
  "jsonpath-rust",
  "jsonschema",
  "jsonwebtoken",

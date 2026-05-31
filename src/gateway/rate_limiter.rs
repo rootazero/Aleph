@@ -269,6 +269,14 @@ impl RateLimiter {
         }
     }
 
+    /// Number of distinct `(identity, scope)` windows currently tracked.
+    ///
+    /// Read-only view used by the `/metrics` endpoint to surface limiter
+    /// memory pressure relative to [`RateLimitConfig::max_entries`].
+    pub fn tracked_entries(&self) -> usize {
+        self.windows.len()
+    }
+
     /// Check whether the request is allowed and, if so, record it.
     ///
     /// Returns `Ok(())` when the request is permitted, or a

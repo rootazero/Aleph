@@ -4,6 +4,7 @@
 //! to registered handlers.
 
 mod handler;
+mod metrics_endpoint;
 mod per_client_buffer;
 mod probe;
 
@@ -23,6 +24,7 @@ use super::event_scope::EventScopeGuard;
 use super::handlers::events::SubscriptionManager;
 use super::handlers::HandlerRegistry;
 use super::lane::{LaneConfig, LaneManager};
+use super::middleware::MiddlewareChain;
 use super::presence::PresenceTracker;
 use super::rate_limiter::{RateLimitConfig, RateLimiter};
 use super::security::SharedTokenManager;
@@ -51,6 +53,12 @@ pub struct ConnectionState {
     pub metadata: HashMap<String, String>,
     /// Device ID (set after successful connect)
     pub device_id: Option<String>,
+    /// Role this connection authenticated as: `"operator"` for device tokens,
+    /// `"guest"` for invitation-scoped guest sessions. `None` before connect or
+    /// in auth-disabled mode. Consulted by the method-level authorization gate
+    /// (`method_authz`) so non-operator connections cannot reach operator-only
+    /// control-plane RPCs. See [`ConnectionState::is_operator`].
+    pub role: Option<String>,
     /// Permissions (set after successful connect)
     pub permissions: Vec<String>,
     /// Guest session ID (set for guest connections)
@@ -65,11 +73,17 @@ pub struct ConnectionState {
     /// disconnected by it). When `Some`, the dispatch loop re-checks revocation
     /// on each request and closes the connection if the token was revoked.
     pub device_token_hash: Option<String>,
+    /// Resolved real client IP (socket peer IP, or the `X-Forwarded-For`
+    /// client when the peer is a trusted proxy). The per-IP connection cap
+    /// counts established connections by this value so it isolates real
+    /// clients even when many share one reverse-proxy socket address.
+    pub client_ip: std::net::IpAddr,
 }
 
 impl ConnectionState {
-    /// Create a new connection state
-    fn new() -> Self {
+    /// Create a new connection state for a connection from `client_ip`
+    /// (the resolved real client IP — see [`ConnectionState::client_ip`]).
+    fn new(client_ip: std::net::IpAddr) -> Self {
         Self {
             authenticated: false,
             first_message: true,
@@ -77,17 +91,31 @@ impl ConnectionState {
             subscriptions: vec![],
             metadata: HashMap::new(),
             device_id: None,
+            role: None,
             permissions: vec![],
             guest_session_id: None,
             device_token_hash: None,
+            client_ip,
         }
     }
 
-    /// Mark connection as authenticated
-    pub fn authenticate(&mut self, device_id: String, permissions: Vec<String>) {
+    /// Mark connection as authenticated.
+    ///
+    /// `role` is `"operator"` for device-token connections and `"guest"` for
+    /// invitation-scoped guest sessions; it drives the method-level
+    /// authorization gate. `None` leaves the connection non-operator.
+    pub fn authenticate(&mut self, device_id: String, permissions: Vec<String>, role: Option<String>) {
         self.authenticated = true;
         self.device_id = Some(device_id);
         self.permissions = permissions;
+        self.role = role;
+    }
+
+    /// Whether this connection authenticated as an operator (full control-plane
+    /// access). Guest / node connections return `false` and are barred from
+    /// operator-only RPC methods by the dispatch-time authorization gate.
+    pub fn is_operator(&self) -> bool {
+        self.role.as_deref() == Some("operator")
     }
 }
 
@@ -101,6 +129,9 @@ pub struct GatewaySharedState {
     pub guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     pub auth_mode: AuthMode,
     pub max_connections: usize,
+    /// Per-IP concurrent-connection cap enforced at WS upgrade. `0` disables.
+    /// Loopback is exempt. See [`GatewayConfig::max_connections_per_ip`].
+    pub max_connections_per_ip: usize,
     pub presence: Arc<PresenceTracker>,
     pub state_versions: Arc<StateVersionTracker>,
     pub rate_limiter: Arc<RateLimiter>,
@@ -145,6 +176,19 @@ pub struct GatewaySharedState {
     /// (e.g. auth-disabled mode or legacy wiring); the existing flow is
     /// untouched.
     pub token_manager: Option<Arc<TokenManager>>,
+    /// The JSON-RPC middleware chain, built **once** at server construction and
+    /// cloned per connection. Building it per-connection (the previous
+    /// behaviour) re-ran [`MiddlewareChain::new`], which reinstalls the global
+    /// [`RequestStateRegistry`] — so every new connection wiped the
+    /// request-lifecycle counters that `/metrics` reads and undercounted
+    /// in-flight requests from other connections. A single shared chain keeps
+    /// those metrics monotonic and drops a per-connect allocation.
+    pub middleware_chain: MiddlewareChain,
+    /// Trusted reverse-proxy IPs / CIDRs. When the socket peer matches one of
+    /// these, the real client IP is taken from `X-Forwarded-For` for the
+    /// per-IP connection cap and rate limiting. Empty (default) ⇒ the socket
+    /// peer address is used verbatim, and `X-Forwarded-For` is never trusted.
+    pub trusted_proxies: Arc<crate::gateway::trusted_proxy::TrustedProxies>,
 }
 
 /// Configuration for the Gateway server
@@ -152,6 +196,11 @@ pub struct GatewaySharedState {
 pub struct GatewayConfig {
     /// Maximum number of concurrent connections
     pub max_connections: usize,
+    /// Maximum concurrent connections from a single (non-loopback) remote IP.
+    /// Bounds preauth slot-exhaustion: a remote peer cannot consume all global
+    /// connection slots with sockets that never authenticate. `0` disables the
+    /// cap; loopback is always exempt.
+    pub max_connections_per_ip: usize,
     /// Authentication mode
     pub auth_mode: AuthMode,
     /// Connection timeout in seconds
@@ -173,16 +222,22 @@ pub struct GatewayConfig {
     /// carry an `idempotency_key` in params or are rejected before lane
     /// dispatch. See `GatewayServerConfig::require_idempotency_key`.
     pub require_idempotency_key: bool,
+    /// Trusted reverse-proxy IPs / CIDRs whose `X-Forwarded-For` header may be
+    /// trusted to carry the real client IP. Empty (default) ⇒ the socket peer
+    /// address is used verbatim. See `GatewayServerConfig::trusted_proxies`.
+    pub trusted_proxies: Vec<String>,
 }
 
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             max_connections: 1000,
+            max_connections_per_ip: 64,
             auth_mode: AuthMode::default(),
             timeout_secs: 300,
             ping_interval_secs: 30,
             idle_timeout_secs: 90,
+            trusted_proxies: Vec::new(),
             lane: LaneConfig::default(),
             require_idempotency_key: false,
         }
@@ -472,6 +527,16 @@ impl GatewayServer {
     /// Build a unified axum Router with WebSocket + ControlPlane UI routes.
     /// WebSocket connections are handled at `/ws`, everything else serves the Panel UI.
     pub fn build_router(&self) -> Router {
+        // Build the middleware chain ONCE here (cloned per connection) rather
+        // than per-connection, so the global request-state registry is
+        // installed a single time and its counters accumulate across
+        // connections instead of resetting on every connect.
+        let middleware_chain =
+            MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone());
+        let trusted_proxies = Arc::new(
+            crate::gateway::trusted_proxy::TrustedProxies::from_config(&self.config.trusted_proxies),
+        );
+
         let shared = Arc::new(GatewaySharedState {
             handlers: self.handlers.clone(),
             event_bus: self.event_bus.clone(),
@@ -480,6 +545,7 @@ impl GatewayServer {
             guest_session_manager: self.guest_session_manager.clone(),
             auth_mode: self.config.auth_mode.clone(),
             max_connections: self.config.max_connections,
+            max_connections_per_ip: self.config.max_connections_per_ip,
             presence: self.presence.clone(),
             state_versions: self.state_versions.clone(),
             rate_limiter: self.rate_limiter.clone(),
@@ -496,6 +562,8 @@ impl GatewayServer {
             session_mgr: self.session_mgr.clone(),
             shared_token_mgr: self.shared_token_mgr.clone(),
             token_manager: self.token_manager.clone(),
+            middleware_chain,
+            trusted_proxies,
         });
 
         let control_plane = create_control_plane_router();
@@ -524,6 +592,7 @@ impl GatewayServer {
             .route("/ws", get(handler::ws_upgrade_handler))
             .route("/health", get(probe::handle_health))
             .route("/ready", get(probe::handle_ready))
+            .route("/metrics", get(metrics_endpoint::handle_metrics))
             .fallback_service(control_plane)
             .with_state(shared)
             .merge(openai);
