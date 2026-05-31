@@ -166,9 +166,12 @@ where
         match current.parent() {
             Some(parent) => {
                 current = parent.to_path_buf();
-                // Keep canonicalization consistent with stop so the comparison works
-                if let Ok(canonical) = current.canonicalize() {
-                    current = canonical;
+                // Only canonicalize if the start path was canonicalized,
+                // otherwise stop-path comparison will diverge.
+                if current_canonicalized.is_some() {
+                    if let Ok(canonical) = current.canonicalize() {
+                        current = canonical;
+                    }
                 }
                 depth += 1;
             }
@@ -179,17 +182,43 @@ where
     results
 }
 
+/// Validate that a path component (filename or dirname) does not contain
+/// directory traversal or path separators.
+fn validate_path_component(name: &str) -> DiscoveryResult<()> {
+    if name.is_empty() {
+        return Err(DiscoveryError::InvalidPath(
+            "path component cannot be empty".to_string(),
+        ));
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(DiscoveryError::InvalidPath(format!(
+            "path component cannot contain path separators: {}",
+            name
+        )));
+    }
+    if name.contains("..") {
+        return Err(DiscoveryError::InvalidPath(format!(
+            "path component cannot contain parent directory references: {}",
+            name
+        )));
+    }
+    Ok(())
+}
+
 /// Find all occurrences of a file by traversing upward
 pub fn find_file_upward(
     filename: &str,
     start: &Path,
     stop: Option<&Path>,
     max_depth: usize,
-) -> Vec<PathBuf> {
-    find_upward(start, stop, max_depth, |dir| dir.join(filename).exists())
-        .into_iter()
-        .map(|dir| dir.join(filename))
-        .collect()
+) -> DiscoveryResult<Vec<PathBuf>> {
+    validate_path_component(filename)?;
+    Ok(
+        find_upward(start, stop, max_depth, |dir| dir.join(filename).exists())
+            .into_iter()
+            .map(|dir| dir.join(filename))
+            .collect(),
+    )
 }
 
 /// Find all occurrences of a directory by traversing upward
@@ -198,11 +227,14 @@ pub fn find_dir_upward(
     start: &Path,
     stop: Option<&Path>,
     max_depth: usize,
-) -> Vec<PathBuf> {
-    find_upward(start, stop, max_depth, |dir| dir.join(dirname).is_dir())
-        .into_iter()
-        .map(|dir| dir.join(dirname))
-        .collect()
+) -> DiscoveryResult<Vec<PathBuf>> {
+    validate_path_component(dirname)?;
+    Ok(
+        find_upward(start, stop, max_depth, |dir| dir.join(dirname).is_dir())
+            .into_iter()
+            .map(|dir| dir.join(dirname))
+            .collect(),
+    )
 }
 
 /// Ensure a directory exists, creating it if necessary
@@ -252,7 +284,7 @@ mod tests {
         std::fs::write(temp_path.join("aleph.jsonc"), "{}").unwrap();
         std::fs::write(level2.join("aleph.jsonc"), "{}").unwrap();
 
-        let files = find_file_upward("aleph.jsonc", &level3, Some(&temp_path), 10);
+        let files = find_file_upward("aleph.jsonc", &level3, Some(&temp_path), 10).unwrap();
 
         // Should find both files, project-level first
         assert_eq!(files.len(), 2);

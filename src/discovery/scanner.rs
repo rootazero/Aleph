@@ -99,7 +99,7 @@ impl DirectoryScanner {
                 &self.working_dir,
                 stop,
                 self.config.max_upward_depth,
-            );
+            )?;
 
             // Reverse to get proper priority (deeper = higher priority)
             for (i, dir) in claude_dirs.into_iter().rev().enumerate() {
@@ -132,7 +132,7 @@ impl DirectoryScanner {
                 &self.working_dir,
                 stop,
                 self.config.max_upward_depth,
-            );
+            )?;
 
             // Reverse so higher directories come first (lower priority)
             for config in project_configs.into_iter().rev() {
@@ -261,7 +261,11 @@ impl DirectoryScanner {
     pub fn discover_plugins(&self) -> DiscoveryResult<Vec<DiscoveredPath>> {
         let mut discovered = Vec::new();
         // Only scan Aleph plugins directory (not Claude)
-        self.scan_plugin_parent(&self.aleph_home.join(PLUGINS_DIR), &mut discovered);
+        self.scan_plugin_parent(
+            &self.aleph_home.join(PLUGINS_DIR),
+            &mut discovered,
+            DiscoverySource::AlephGlobal,
+        );
         trace!("Discovered {} plugins", discovered.len());
         Ok(discovered)
     }
@@ -275,9 +279,13 @@ impl DirectoryScanner {
         extra_parents: &[PathBuf],
     ) -> DiscoveryResult<Vec<DiscoveredPath>> {
         let mut discovered = Vec::new();
-        self.scan_plugin_parent(&self.aleph_home.join(PLUGINS_DIR), &mut discovered);
+        self.scan_plugin_parent(
+            &self.aleph_home.join(PLUGINS_DIR),
+            &mut discovered,
+            DiscoverySource::AlephGlobal,
+        );
         for parent in extra_parents {
-            self.scan_plugin_parent(parent, &mut discovered);
+            self.scan_plugin_parent(parent, &mut discovered, DiscoverySource::Project);
         }
         trace!(
             "Discovered {} plugins ({} extra parents)",
@@ -290,7 +298,12 @@ impl DirectoryScanner {
     /// Scan a single plugin-parent directory, pushing each plugin root (direct
     /// manifest or one-level monorepo subdir) into `discovered`. A missing or
     /// unreadable parent is a silent no-op.
-    fn scan_plugin_parent(&self, plugins_dir: &Path, discovered: &mut Vec<DiscoveredPath>) {
+    fn scan_plugin_parent(
+        &self,
+        plugins_dir: &Path,
+        discovered: &mut Vec<DiscoveredPath>,
+        source: DiscoverySource,
+    ) {
         if !plugins_dir.is_dir() {
             return;
         }
@@ -315,7 +328,7 @@ impl DirectoryScanner {
 
             if has_plugin_manifest(&path) {
                 // Direct plugin directory
-                discovered.push(DiscoveredPath::new(path, DiscoverySource::AlephGlobal, 10));
+                discovered.push(DiscoveredPath::new(path, source, 10));
             } else if let Ok(sub_entries) = std::fs::read_dir(&path) {
                 // Check subdirectories (monorepo layout)
                 for sub_entry in sub_entries {
@@ -330,11 +343,7 @@ impl DirectoryScanner {
                         continue;
                     }
                     if has_plugin_manifest(&sub_path) {
-                        discovered.push(DiscoveredPath::new(
-                            sub_path,
-                            DiscoverySource::AlephGlobal,
-                            10,
-                        ));
+                        discovered.push(DiscoveredPath::new(sub_path, source, 10));
                     }
                 }
             }

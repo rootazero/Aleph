@@ -127,11 +127,12 @@ impl RetryPolicy {
             return std::time::Duration::from_millis(self.initial_backoff_ms);
         }
 
+        let capped_attempt = attempt.min(63);
+        let exp = capped_attempt as i32;
+
         let backoff_ms = (self.initial_backoff_ms as f64
-            * self
-                .backoff_multiplier
-                .powi(attempt.try_into().unwrap_or(i32::MAX)))
-        .clamp(0.0, f64::MAX) as u64;
+            * self.backoff_multiplier.powi(exp))
+            .clamp(0.0, f64::MAX) as u64;
         let capped = backoff_ms.min(self.max_backoff_ms);
         std::time::Duration::from_millis(capped.max(self.initial_backoff_ms))
     }
