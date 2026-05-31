@@ -167,7 +167,11 @@ const MAX_REPLY_LENGTH: usize = 10_000;
 fn interpret_reply(request: &ClarificationRequest, reply: &str) -> ClarificationResult {
     let trimmed = reply.trim();
     let trimmed = if trimmed.len() > MAX_REPLY_LENGTH {
-        trimmed.get(..MAX_REPLY_LENGTH).unwrap_or(trimmed)
+        let mut end = MAX_REPLY_LENGTH;
+        while end > 0 && !trimmed.is_char_boundary(end) {
+            end -= 1;
+        }
+        &trimmed[..end]
     } else {
         trimmed
     };

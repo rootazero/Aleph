@@ -97,7 +97,7 @@ pub struct ModerationInfo {
 
 impl ModerationInfo {
     pub fn is_malware_blocked(&self) -> bool {
-        self.is_malware_blocked_flag || self.verdict == "malware"
+        self.is_malware_blocked_flag || self.verdict.eq_ignore_ascii_case("malware")
     }
 }
 

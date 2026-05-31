@@ -161,16 +161,20 @@ impl ClawHubClient {
             });
         }
 
-        // Fallback: browse endpoint returned empty. Return empty results rather than
-        // running a broad search that may return unrelated skills.
+        // Fallback: browse endpoint returned empty. Preserve next_cursor if present
+        // so callers can continue pagination.
         if api_resp.next_cursor.is_some() {
             warn!(
                 cursor = api_resp.next_cursor,
                 "Browse returned empty but has next_cursor; pagination may be broken"
             );
-        } else {
-            debug!("Browse returned empty results");
+            return Ok(BrowseResponse {
+                skills: Vec::new(),
+                cursor: api_resp.next_cursor,
+                has_more: true,
+            });
         }
+        debug!("Browse returned empty results");
         Ok(BrowseResponse {
             skills: Vec::new(),
             cursor: None,
@@ -256,7 +260,7 @@ impl ClawHubClient {
     }
 
     /// Compare versions: returns true if `remote` is newer than `local`.
-    /// Falls back to string inequality if semver parsing fails.
+    /// Falls back to conservative `false` if semver parsing fails.
     pub fn is_newer_version(local: &str, remote: &str) -> bool {
         match (
             semver::Version::parse(local),
@@ -266,9 +270,9 @@ impl ClawHubClient {
             _ => {
                 warn!(
                     local,
-                    remote, "Non-semver version strings, falling back to string compare"
+                    remote, "Non-semver version strings, cannot determine if remote is newer"
                 );
-                local != remote
+                false
             }
         }
     }
@@ -315,12 +319,6 @@ impl ClawHubClient {
     }
 }
 
-impl Default for ClawHubClient {
-    fn default() -> Self {
-        Self::new().expect("ClawHubClient::new() should not fail with standard config")
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,8 +333,8 @@ mod tests {
 
     #[test]
     fn test_is_newer_version_non_semver() {
-        // Falls back to string inequality
-        assert!(ClawHubClient::is_newer_version("v1", "v2"));
+        // Falls back to conservative false when semver parsing fails
+        assert!(!ClawHubClient::is_newer_version("v1", "v2"));
         assert!(!ClawHubClient::is_newer_version("v1", "v1"));
     }
 
@@ -409,7 +407,7 @@ mod tests {
     #[test]
     fn test_is_newer_version_empty_strings() {
         assert!(!ClawHubClient::is_newer_version("", ""));
-        assert!(ClawHubClient::is_newer_version("", "v1"));
+        assert!(!ClawHubClient::is_newer_version("", "v1"));
     }
 
     #[test]

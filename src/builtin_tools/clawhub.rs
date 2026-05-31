@@ -335,12 +335,6 @@ impl ClawHubTool {
     }
 }
 
-impl Default for ClawHubTool {
-    fn default() -> Self {
-        Self::new().expect("ClawHubTool::new() should not fail with standard config")
-    }
-}
-
 #[async_trait]
 impl AlephTool for ClawHubTool {
     const NAME: &'static str = "clawhub";
@@ -538,8 +532,8 @@ mod tests {
     }
 
     #[test]
-    fn test_clawhub_tool_default() {
-        let tool = ClawHubTool::default();
+    fn test_clawhub_tool_new_ok() {
+        let tool = ClawHubTool::new().unwrap();
         assert_eq!(tool.client.base_url(), "https://clawhub.ai");
     }
 
