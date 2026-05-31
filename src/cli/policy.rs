@@ -14,7 +14,7 @@ use crate::utils::instance_lock::{self, AcquireOutcome, InstanceLock};
 /// string comparison.
 #[derive(Debug)]
 pub struct LockHeldError {
-    pub pid: i32,
+    pub pid: u32,
     pub lock_path: std::path::PathBuf,
 }
 
@@ -84,7 +84,11 @@ fn acquire_or_held(data_dir: &Path) -> anyhow::Result<InstanceLock> {
         AcquireOutcome::Acquired(lock) => Ok(lock),
         AcquireOutcome::HeldByLive { pid, lock_path }
         | AcquireOutcome::HeldByOrphaned { pid, lock_path } => {
-            Err(LockHeldError { pid, lock_path }.into())
+            Err(LockHeldError {
+                pid: pid as u32,
+                lock_path,
+            }
+            .into())
         }
     }
 }

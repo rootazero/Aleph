@@ -49,10 +49,22 @@ pub fn write_endpoint(data_dir: &Path, endpoint: &IpcEndpoint) -> std::io::Resul
     Ok(())
 }
 
+const MAX_ENDPOINT_FILE_SIZE: u64 = 1_048_576;
+
 pub fn read_endpoint(data_dir: &Path) -> std::io::Result<Option<IpcEndpoint>> {
     let path = endpoint_path(data_dir);
     match std::fs::read(&path) {
         Ok(bytes) => {
+            if bytes.len() > MAX_ENDPOINT_FILE_SIZE as usize {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        ".ipc-endpoint.json exceeds size limit ({} > {} bytes)",
+                        bytes.len(),
+                        MAX_ENDPOINT_FILE_SIZE
+                    ),
+                ));
+            }
             let ep: IpcEndpoint = serde_json::from_slice(&bytes)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
             Ok(Some(ep))

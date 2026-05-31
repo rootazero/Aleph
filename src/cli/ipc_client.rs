@@ -4,6 +4,7 @@
 //! that races with the request.
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::Context;
 use reqwest::StatusCode;
@@ -14,12 +15,6 @@ use crate::gateway::security::read_current_token_readonly;
 use crate::utils::sqlite_open::open_sqlite_readonly;
 
 const SECURITY_DB_FILENAME: &str = "security.db";
-
-#[derive(Debug)]
-pub struct IpcResponse<T> {
-    pub status: StatusCode,
-    pub body: T,
-}
 
 pub fn forward_to_server<T>(
     data_dir: &Path,
@@ -53,7 +48,10 @@ where
             let resp2 = call_once(&url, method, &body, &fresh)?;
             return finalize::<T>(resp2);
         }
-        anyhow::bail!("authentication failed — bearer token rejected by server");
+        let text = resp
+            .text()
+            .unwrap_or_else(|e| format!("(failed to read response body: {e})"));
+        anyhow::bail!("authentication failed — bearer token rejected by server: {text}");
     }
     finalize::<T>(resp)
 }
@@ -73,9 +71,13 @@ fn call_once(
     body: &serde_json::Value,
     token: &str,
 ) -> anyhow::Result<reqwest::blocking::Response> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    let client = CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("reqwest client build should not fail with default config")
+    });
     let req = client
         .request(method.as_reqwest(), url)
         .bearer_auth(token)
