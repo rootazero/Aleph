@@ -246,7 +246,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) a2a_delegate_tool: Option<crate::builtin_tools::a2a_tools::A2ADelegateTool>,
     pub(crate) a2a_agents_tool: Option<crate::builtin_tools::a2a_tools::A2AAgentsTool>,
     /// ClawHub tool instance
-    pub(crate) clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool,
+    pub(crate) clawhub_tool: Option<crate::builtin_tools::clawhub::ClawHubTool>,
     pub(crate) gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool,
     /// Task coordination tools (optional — require CoordTaskStore)
     pub(crate) task_create_tool: Option<crate::builtin_tools::task_manage::TaskCreateTool>,
@@ -1430,7 +1430,12 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
 
             // ClawHub tool
-            "clawhub" => Box::pin(async move { self.clawhub_tool.call_json(arguments).await }),
+            "clawhub" => Box::pin(async move {
+                let tool = self.clawhub_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("clawhub not available: ClawHub client not configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
 
             "gateway_route" => {
                 Box::pin(async move { self.gateway_route_tool.call_json(arguments).await })

@@ -424,29 +424,32 @@ impl BuiltinToolRegistry {
         };
 
         // Add agent management tools (if AgentRegistry + AgentEnvStore are available)
+        let sm_for_agents = config
+            .gateway_context
+            .as_ref()
+            .map(|ctx| Arc::clone(ctx.session_store()))
+            .or_else(|| config.session_manager.clone())
+            .or_else(|| {
+                match crate::gateway::SessionManager::with_defaults() {
+                    Ok(sm) => Some(Arc::new(sm)),
+                    Err(e) => {
+                        warn!("Failed to create fallback SessionManager for agent tools: {}", e);
+                        None
+                    }
+                }
+            });
+
         let (agent_create_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
-            if let (Some(ref ar), Some(ref wm)) =
-                (&config.agent_registry, &config.workspace_manager)
+            if let (Some(ref ar), Some(ref wm), Some(ref sm)) =
+                (&config.agent_registry, &config.workspace_manager, &sm_for_agents)
             {
                 use crate::builtin_tools::agent_manage;
                 let ctx = agent_manage::new_session_context_handle();
-                let sm_for_agents = config
-                    .gateway_context
-                    .as_ref()
-                    .map(|ctx| Arc::clone(ctx.session_store()))
-                    .or_else(|| config.session_manager.clone())
-                    .unwrap_or_else(|| {
-                        Arc::new(
-                            crate::gateway::SessionManager::with_defaults().unwrap_or_else(|e| {
-                                panic!("fallback SessionManager for agent tools: {}", e)
-                            }),
-                        )
-                    });
                 let create = {
                     let tool = agent_manage::AgentCreateTool::new(
                         Arc::clone(ar),
                         Arc::clone(wm),
-                        Arc::clone(&sm_for_agents),
+                        Arc::clone(sm),
                     );
                     if let Some(ref am) = config.agent_manager {
                         tool.with_agent_manager(Arc::clone(am))
@@ -481,6 +484,9 @@ impl BuiltinToolRegistry {
                 info!("Registered agent management tools (agent.create, agent.list, agent.delete)");
                 (Some(create), Some(list), Some(delete), Some(ctx))
             } else {
+                if config.agent_registry.is_some() && config.workspace_manager.is_some() {
+                    warn!("Agent management tools disabled: SessionManager not available");
+                }
                 (None, None, None, None)
             };
 
@@ -500,15 +506,22 @@ impl BuiltinToolRegistry {
             use schemars::schema_for;
             let acp_schema = serde_json::to_value(schema_for!(
                 crate::builtin_tools::acp_tools::AcpDelegateArgs
-            ))
-            .unwrap_or_default();
+            )).unwrap_or_else(|e| {
+                warn!("Failed to serialize schema for acp_delegate: {}", e);
+                serde_json::Value::Object(Default::default())
+            });
             let acp_switch_schema =
                 serde_json::to_value(schema_for!(crate::builtin_tools::acp_tools::AcpSwitchArgs))
-                    .unwrap_or_default();
+                    .unwrap_or_else(|e| {
+                        warn!("Failed to serialize schema for acp_switch: {}", e);
+                        serde_json::Value::Object(Default::default())
+                    });
             let acp_session_control_schema = serde_json::to_value(schema_for!(
                 crate::builtin_tools::acp_tools::AcpSessionControlArgs
-            ))
-            .unwrap_or_default();
+            )).unwrap_or_else(|e| {
+                warn!("Failed to serialize schema for acp_session_control: {}", e);
+                serde_json::Value::Object(Default::default())
+            });
 
             let mut ut = UnifiedTool::new(
                 "builtin:acp_delegate",
@@ -671,20 +684,29 @@ impl BuiltinToolRegistry {
                 .as_ref()
                 .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
-                .unwrap_or_else(|| {
-                    Arc::new(
-                        crate::gateway::SessionManager::with_defaults().unwrap_or_else(|e| {
-                            panic!("fallback SessionManager for team tools: {}", e)
-                        }),
-                    )
+                .or_else(|| {
+                    match crate::gateway::SessionManager::with_defaults() {
+                        Ok(sm) => Some(Arc::new(sm)),
+                        Err(e) => {
+                            warn!("Failed to create fallback SessionManager for team tools: {}", e);
+                            None
+                        }
+                    }
                 });
-            let create = TeamCreateTool::new(
-                Arc::clone(store),
-                Arc::clone(&agent_registry),
-                config.agent_manager.clone(),
-                Arc::clone(&sm_for_teams),
-                current_agent_id.clone(),
-            );
+
+            if sm_for_teams.is_none() {
+                warn!("Team management tools disabled: SessionManager not available");
+            }
+
+            let create = sm_for_teams.as_ref().map(|sm| {
+                TeamCreateTool::new(
+                    Arc::clone(store),
+                    Arc::clone(&agent_registry),
+                    config.agent_manager.clone(),
+                    Arc::clone(sm),
+                    current_agent_id.clone(),
+                )
+            });
             let delegate = TeamDelegateTool::new(
                 Arc::clone(store),
                 Arc::clone(coord_store),
@@ -707,27 +729,33 @@ impl BuiltinToolRegistry {
             // team_from_template reuses the same agent_registry + session_store
             // wiring that team_create depends on, so we construct it here once
             // the TeamStore + CoordTaskStore guard is satisfied.
-            let from_template = TeamFromTemplateTool::new(
-                Arc::clone(store),
-                Arc::clone(coord_store),
-                Arc::clone(&agent_registry),
-                config.agent_manager.clone(),
-                Arc::clone(&sm_for_teams),
-                current_agent_id.clone(),
-            );
+            let from_template = sm_for_teams.as_ref().map(|sm| {
+                TeamFromTemplateTool::new(
+                    Arc::clone(store),
+                    Arc::clone(coord_store),
+                    Arc::clone(&agent_registry),
+                    config.agent_manager.clone(),
+                    Arc::clone(sm),
+                    current_agent_id.clone(),
+                )
+            });
 
             // Register parameter schemas for team tools
             {
                 use crate::tools::AlephTool;
-                let tool_defs = [
-                    create.definition(),
+                let mut tool_defs: Vec<crate::tool_metadata::ToolDefinition> = vec![
                     delegate.definition(),
                     status.definition(),
                     disband.definition(),
                     member_add.definition(),
                     member_remove.definition(),
-                    from_template.definition(),
                 ];
+                if let Some(ref c) = create {
+                    tool_defs.push(c.definition());
+                }
+                if let Some(ref ft) = from_template {
+                    tool_defs.push(ft.definition());
+                }
                 for td in &tool_defs {
                     let mut ut = UnifiedTool::new(
                         format!("builtin:{}", td.name),
@@ -740,15 +768,15 @@ impl BuiltinToolRegistry {
                 }
             }
 
-            info!("Registered team management tools (team_create, team_delegate, team_status, team_disband, team_member_add, team_member_remove, team_from_template)");
+            info!("Registered team management tools (team_create={:?}, team_delegate, team_status, team_disband, team_member_add, team_member_remove, team_from_template={:?})", create.is_some(), from_template.is_some());
             (
-                Some(create),
+                create,
                 Some(delegate),
                 Some(status),
                 Some(disband),
                 Some(member_add),
                 Some(member_remove),
-                Some(from_template),
+                from_template,
             )
         } else {
             (None, None, None, None, None, None, None)
@@ -1260,9 +1288,11 @@ impl BuiltinToolRegistry {
                 use crate::builtin_tools::arena::{
                     ArenaCreateTool, ArenaQueryTool, ArenaSettleTool,
                 };
-                let create = ArenaCreateTool::new(crate::sync_primitives::Arc::clone(arena_manager));
+                let create =
+                    ArenaCreateTool::new(crate::sync_primitives::Arc::clone(arena_manager));
                 let query = ArenaQueryTool::new(crate::sync_primitives::Arc::clone(arena_manager));
-                let settle = ArenaSettleTool::new(crate::sync_primitives::Arc::clone(arena_manager));
+                let settle =
+                    ArenaSettleTool::new(crate::sync_primitives::Arc::clone(arena_manager));
 
                 {
                     use crate::tools::AlephTool;
@@ -1437,8 +1467,10 @@ impl BuiltinToolRegistry {
             use crate::builtin_tools::RecallContextTool;
             let schema = serde_json::to_value(schemars::schema_for!(
                 crate::builtin_tools::recall_context::RecallContextArgs
-            ))
-            .unwrap_or_default();
+            )).unwrap_or_else(|e| {
+                warn!("Failed to serialize schema for recall_context: {}", e);
+                serde_json::Value::Object(Default::default())
+            });
             let mut ut = UnifiedTool::new(
                 format!("builtin:{}", RecallContextTool::NAME),
                 RecallContextTool::NAME,
@@ -1604,8 +1636,13 @@ impl BuiltinToolRegistry {
             // ClarificationManager is always injected via deferred wiring at
             // boot (created alongside channels) — start the cell empty.
             clarification_manager_cell: Arc::new(tokio::sync::OnceCell::new()),
-            clawhub_tool: crate::builtin_tools::clawhub::ClawHubTool::new()
-                .unwrap_or_else(|e| panic!("ClawHubTool::new() failed: {}", e)),
+            clawhub_tool: match crate::builtin_tools::clawhub::ClawHubTool::new() {
+                Ok(tool) => Some(tool),
+                Err(e) => {
+                    warn!("ClawHubTool disabled: {}", e);
+                    None
+                }
+            },
             gateway_route_tool: crate::builtin_tools::gateway_route::GatewayRouteTool::default(),
             task_create_tool,
             task_update_tool,

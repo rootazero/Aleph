@@ -30,7 +30,12 @@ impl BuiltinToolRegistry {
         note_schema_tool: &Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
         user_profile_tool: &Option<crate::builtin_tools::user_profile::UserProfileTool>,
     ) {
-        use schemars::schema_for;
+        fn schema<T: schemars::JsonSchema>(name: &str) -> serde_json::Value {
+            serde_json::to_value(schemars::schema_for!(T)).unwrap_or_else(|e| {
+                tracing::warn!("Failed to serialize schema for {}: {}", name, e);
+                serde_json::Value::Object(Default::default())
+            })
+        }
 
         // Helper: register tool with schema from schemars
         fn reg(
@@ -59,10 +64,7 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_search",
                     MemorySearchTool::DESCRIPTION,
-                    serde_json::to_value(schema_for!(
-                        crate::builtin_tools::memory_search::MemorySearchArgs
-                    ))
-                    .unwrap_or_default(),
+                    schema::<crate::builtin_tools::memory_search::MemorySearchArgs>("memory_search"),
                 );
                 info!("Registered memory_search tool in BuiltinToolRegistry");
             }
@@ -71,10 +73,7 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_browse",
                     MemoryBrowseTool::DESCRIPTION,
-                    serde_json::to_value(schema_for!(
-                        crate::builtin_tools::memory_browse::MemoryBrowseArgs
-                    ))
-                    .unwrap_or_default(),
+                    schema::<crate::builtin_tools::memory_browse::MemoryBrowseArgs>("memory_browse"),
                 );
                 info!("Registered memory.browse tool in BuiltinToolRegistry");
             }
@@ -83,10 +82,7 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_explore",
                     MemoryExploreTool::DESCRIPTION,
-                    serde_json::to_value(schema_for!(
-                        crate::builtin_tools::memory_explore::MemoryExploreArgs
-                    ))
-                    .unwrap_or_default(),
+                    schema::<crate::builtin_tools::memory_explore::MemoryExploreArgs>("memory_explore"),
                 );
                 info!("Registered memory_explore tool in BuiltinToolRegistry");
             }
@@ -95,10 +91,7 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_timeline",
                     crate::builtin_tools::MemoryTimelineTool::DESCRIPTION,
-                    serde_json::to_value(schema_for!(
-                        crate::builtin_tools::memory_timeline::MemoryTimelineArgs
-                    ))
-                    .unwrap_or_default(),
+                    schema::<crate::builtin_tools::memory_timeline::MemoryTimelineArgs>("memory_timeline"),
                 );
                 info!("Registered memory_timeline tool in BuiltinToolRegistry");
             }
@@ -112,10 +105,7 @@ impl BuiltinToolRegistry {
                 tools,
                 "flag_user_correction",
                 crate::builtin_tools::FlagUserCorrectionTool::DESCRIPTION,
-                serde_json::to_value(schema_for!(
-                    crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs>("flag_user_correction"),
             );
             info!("Registered flag_user_correction tool in BuiltinToolRegistry");
         }
@@ -128,8 +118,7 @@ impl BuiltinToolRegistry {
             tools,
             "remember",
             crate::builtin_tools::RememberTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::remember::RememberArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::remember::RememberArgs>("remember"),
         );
         info!("Registered remember tool in BuiltinToolRegistry");
 
@@ -139,10 +128,7 @@ impl BuiltinToolRegistry {
                 tools,
                 "vault_store",
                 VaultStoreTool::DESCRIPTION,
-                serde_json::to_value(schema_for!(
-                    crate::builtin_tools::vault_store::VaultStoreArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::vault_store::VaultStoreArgs>("vault_store"),
             );
             info!("Registered vault.store tool in BuiltinToolRegistry");
         }
@@ -155,8 +141,7 @@ impl BuiltinToolRegistry {
                     tools,
                     "image_generate",
                     ImageGenerateTool::DESCRIPTION,
-                    serde_json::to_value(schema_for!(crate::builtin_tools::ImageGenerateArgs))
-                        .unwrap_or_default(),
+                    schema::<crate::builtin_tools::ImageGenerateArgs>("image_generate"),
                 );
                 info!("Registered image.generate tool in BuiltinToolRegistry");
             }
@@ -170,10 +155,7 @@ impl BuiltinToolRegistry {
                         tools,
                         "video_generate",
                         crate::builtin_tools::generation::VideoGenerateTool::DESCRIPTION,
-                        serde_json::to_value(schemars::schema_for!(
-                            crate::builtin_tools::generation::VideoGenerateArgs
-                        ))
-                        .unwrap_or_default(),
+                        schema::<crate::builtin_tools::generation::VideoGenerateArgs>("video_generate"),
                     );
                     info!("Registered video_generate tool in BuiltinToolRegistry");
                 }
@@ -183,10 +165,7 @@ impl BuiltinToolRegistry {
                         tools,
                         "audio_generate",
                         crate::builtin_tools::generation::AudioGenerateTool::DESCRIPTION,
-                        serde_json::to_value(schemars::schema_for!(
-                            crate::builtin_tools::generation::AudioGenerateArgs
-                        ))
-                        .unwrap_or_default(),
+                        schema::<crate::builtin_tools::generation::AudioGenerateArgs>("audio_generate"),
                     );
                     info!("Registered audio_generate tool in BuiltinToolRegistry");
                 }
@@ -196,10 +175,7 @@ impl BuiltinToolRegistry {
                         tools,
                         "speech_generate",
                         crate::builtin_tools::generation::SpeechGenerateTool::DESCRIPTION,
-                        serde_json::to_value(schemars::schema_for!(
-                            crate::builtin_tools::generation::SpeechGenerateArgs
-                        ))
-                        .unwrap_or_default(),
+                        schema::<crate::builtin_tools::generation::SpeechGenerateArgs>("speech_generate"),
                     );
                     info!("Registered speech_generate tool in BuiltinToolRegistry");
                 }
@@ -212,17 +188,13 @@ impl BuiltinToolRegistry {
                 tools,
                 "list_tools",
                 ListToolsTool::DESCRIPTION,
-                serde_json::to_value(schema_for!(crate::builtin_tools::meta_tools::ListToolsArgs))
-                    .unwrap_or_default(),
+                schema::<crate::builtin_tools::meta_tools::ListToolsArgs>("list_tools"),
             );
             reg(
                 tools,
                 "get_tool_schema",
                 GetToolSchemaTool::DESCRIPTION,
-                serde_json::to_value(schema_for!(
-                    crate::builtin_tools::meta_tools::GetToolSchemaArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::meta_tools::GetToolSchemaArgs>("get_tool_schema"),
             );
             info!("Registered meta tools (list_tools, get_tool_schema) in BuiltinToolRegistry");
         }
@@ -354,10 +326,7 @@ impl BuiltinToolRegistry {
                 tools,
                 "session_search",
                 SessionSearchTool::DESCRIPTION,
-                serde_json::to_value(schemars::schema_for!(
-                    crate::builtin_tools::session_search::SessionSearchArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::session_search::SessionSearchArgs>("session_search"),
             );
             info!("Registered session_search tool in BuiltinToolRegistry");
         }
@@ -370,10 +339,7 @@ impl BuiltinToolRegistry {
                 tools,
                 "channel_pairing",
                 ChannelPairingTool::DESCRIPTION,
-                serde_json::to_value(schemars::schema_for!(
-                    crate::builtin_tools::channel_manage::ChannelPairingArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::channel_manage::ChannelPairingArgs>("channel_pairing"),
             );
             info!("Registered channel_pairing tool in BuiltinToolRegistry");
         }
@@ -386,10 +352,7 @@ impl BuiltinToolRegistry {
                 tools,
                 "channel_message",
                 ChannelMessageTool::DESCRIPTION,
-                serde_json::to_value(schemars::schema_for!(
-                    crate::builtin_tools::channel_message::ChannelMessageArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::channel_message::ChannelMessageArgs>("channel_message"),
             );
             info!("Registered channel_message tool in BuiltinToolRegistry");
         }
@@ -403,10 +366,7 @@ impl BuiltinToolRegistry {
                 tools,
                 "ask_user",
                 AskUserTool::DESCRIPTION,
-                serde_json::to_value(schemars::schema_for!(
-                    crate::builtin_tools::ask_user::AskUserArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::ask_user::AskUserArgs>("ask_user"),
             );
             info!("Registered ask_user tool in BuiltinToolRegistry");
         }
@@ -418,26 +378,23 @@ impl BuiltinToolRegistry {
             tools,
             "session_list",
             SessionsListTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::sessions::SessionsListArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::sessions::SessionsListArgs>("session_list"),
         );
         reg(
             tools,
             "session_send",
             SessionsSendTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::sessions::SessionsSendArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::sessions::SessionsSendArgs>("session_send"),
         );
         info!("Registered session.list + session.send in BuiltinToolRegistry");
 
         // Voice mode tool — toggle voice output on/off for a channel (R9)
-        reg(tools, "voice_mode_set",
+        reg(
+            tools,
+            "voice_mode_set",
             "Enable or disable voice mode for a channel. When enabled, all replies will be converted to speech audio. Use when user says 'turn on voice mode', 'switch to voice', 'enable voice replies', etc.",
-            serde_json::to_value(schema_for!(crate::builtin_tools::voice_tools::VoiceModeSetArgs)).unwrap_or_default());
+            schema::<crate::builtin_tools::voice_tools::VoiceModeSetArgs>("voice_mode_set"),
+        );
         info!("Registered voice_mode_set tool in BuiltinToolRegistry");
 
         // Wiki orientation tools (Spec 5 Task 12).
@@ -451,10 +408,7 @@ impl BuiltinToolRegistry {
                 "Read or write the SCHEMA.md file that describes the structure of the agent's \
                  long-term memory wiki. Use 'read' to inspect the current schema, 'write' to \
                  update it (include the expected_hash from your last read to prevent conflicts).",
-                serde_json::to_value(schema_for!(
-                    crate::builtin_tools::note_schema::NoteSchemaArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::note_schema::NoteSchemaArgs>("note_schema"),
             );
             info!("Registered note_schema tool in BuiltinToolRegistry");
         }
@@ -466,10 +420,7 @@ impl BuiltinToolRegistry {
                 "Fetch a compact orientation snapshot of the agent's memory wiki: SCHEMA, \
                  index, and recent log entries. Call this at the start of a task to understand \
                  what structured memory is available before searching or writing notes.",
-                serde_json::to_value(schema_for!(
-                    crate::builtin_tools::note_orient::NoteOrientArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::note_orient::NoteOrientArgs>("note_orient"),
             );
             info!("Registered note_orient tool in BuiltinToolRegistry");
         }
@@ -482,10 +433,7 @@ impl BuiltinToolRegistry {
                 "Read the current user profile (interests, preferences, context) or view \
                  its revision history. Use 'read' to get the latest profile, 'history' to \
                  inspect the revision log.",
-                serde_json::to_value(schema_for!(
-                    crate::builtin_tools::user_profile::UserProfileArgs
-                ))
-                .unwrap_or_default(),
+                schema::<crate::builtin_tools::user_profile::UserProfileArgs>("user_profile"),
             );
             info!("Registered user_profile tool in BuiltinToolRegistry");
         }

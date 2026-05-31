@@ -16,7 +16,12 @@ use super::BuiltinToolRegistry;
 impl BuiltinToolRegistry {
     /// Register always-available core tool metadata with JSON Schema parameters.
     pub(crate) fn register_core_tools(tools: &mut HashMap<String, UnifiedTool>) {
-        use schemars::schema_for;
+        fn schema<T: schemars::JsonSchema>(name: &str) -> serde_json::Value {
+            serde_json::to_value(schemars::schema_for!(T)).unwrap_or_else(|e| {
+                tracing::warn!("Failed to serialize schema for {}: {}", name, e);
+                serde_json::Value::Object(Default::default())
+            })
+        }
 
         // Helper: register tool with schema from schemars
         fn reg(
@@ -35,79 +40,61 @@ impl BuiltinToolRegistry {
             tools,
             "search",
             SearchTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::search::SearchArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::search::SearchArgs>("search"),
         );
         reg(
             tools,
             "web_fetch",
             "Fetch and read content from a URL",
-            serde_json::to_value(schema_for!(crate::builtin_tools::web_fetch::WebFetchArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::web_fetch::WebFetchArgs>("web_fetch"),
         );
         reg(
             tools,
             "file_ops",
             "File system operations - list, move, copy, delete, mkdir, search, batch_move, organize",
-            serde_json::to_value(schema_for!(crate::builtin_tools::file_ops::FileOpsArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::file_ops::FileOpsArgs>("file_ops"),
         );
         reg(
             tools,
             "file_read",
             FileReadTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::file_ops::read::FileReadArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::file_ops::read::FileReadArgs>("file_read"),
         );
         reg(
             tools,
             "file_write",
             FileWriteTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::file_ops::write::FileWriteArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::file_ops::write::FileWriteArgs>("file_write"),
         );
         reg(
             tools,
             "file_edit",
             FileEditTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::file_ops::edit::FileEditArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::file_ops::edit::FileEditArgs>("file_edit"),
         );
         reg(
             tools,
             "bash",
             "Execute bash/shell commands (convenience wrapper for code_exec with shell)",
-            serde_json::to_value(schema_for!(crate::builtin_tools::bash_exec::BashExecArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::bash_exec::BashExecArgs>("bash"),
         );
         reg(
             tools,
             "code_exec",
             CodeExecTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::code_exec::CodeExecArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::code_exec::CodeExecArgs>("code_exec"),
         );
         reg(
             tools,
             "code_check",
             crate::builtin_tools::code_check::CodeCheckTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::code_check::CodeCheckArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::code_check::CodeCheckArgs>("code_check"),
         );
         reg(
             tools,
             "pdf_generate",
             PdfGenerateTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::pdf_generate::PdfGenerateArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::pdf_generate::PdfGenerateArgs>("pdf_generate"),
         );
         reg(
             tools,
@@ -119,122 +106,91 @@ impl BuiltinToolRegistry {
             tools,
             "skill_read",
             SkillReadTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::skill_reader::ReadSkillArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::skill_reader::ReadSkillArgs>("skill_read"),
         );
         reg(
             tools,
             "read_config_guide",
             ReadConfigGuideTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::config_guide::ReadConfigGuideArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::config_guide::ReadConfigGuideArgs>("read_config_guide"),
         );
         reg(
             tools,
             "ctx_search",
             CtxSearchTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::ctx_search::CtxSearchArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::ctx_search::CtxSearchArgs>("ctx_search"),
         );
         reg(
             tools,
             "recall_events",
             RecallEventsTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::recall_events::RecallEventsArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::recall_events::RecallEventsArgs>("recall_events"),
         );
         reg(
             tools,
             "self_manage",
             SelfManageTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::self_manage::SelfManageArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::self_manage::SelfManageArgs>("self_manage"),
         );
         reg(
             tools,
             "self_config",
             crate::builtin_tools::self_config::SelfConfigTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::self_config::SelfConfigArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::self_config::SelfConfigArgs>("self_config"),
         );
         reg(
             tools,
             "desktop",
             DesktopTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::desktop::DesktopArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::desktop::DesktopArgs>("desktop"),
         );
         reg(
             tools,
             "pim",
             PimTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::pim::PimArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::pim::PimArgs>("pim"),
         );
         reg(
             tools,
             "system",
             SystemTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::system_tool::SystemArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::system_tool::SystemArgs>("system"),
         );
         reg(
             tools,
             "automation",
             AutomationTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::automation_tool::AutomationArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::automation_tool::AutomationArgs>("automation"),
         );
         reg(
             tools,
             "permission",
             PermissionTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::permission_tool::PermissionArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::permission_tool::PermissionArgs>("permission"),
         );
         reg(
             tools,
             "media",
             MediaTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::media_tool::MediaArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::media_tool::MediaArgs>("media"),
         );
         reg(
             tools,
             "scratchpad",
             ScratchpadTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(
-                crate::builtin_tools::scratchpad::ScratchpadArgs
-            ))
-            .unwrap_or_default(),
+            schema::<crate::builtin_tools::scratchpad::ScratchpadArgs>("scratchpad"),
         );
         reg(
             tools,
             "clawhub",
             crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::clawhub::ClawHubArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::clawhub::ClawHubArgs>("clawhub"),
         );
         reg(
             tools,
             "media_send",
             crate::builtin_tools::media_send::MediaSendTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::media_send::MediaSendArgs))
-                .unwrap_or_default(),
+            schema::<crate::builtin_tools::media_send::MediaSendArgs>("media_send"),
         );
     }
 }
