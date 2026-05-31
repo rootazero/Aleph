@@ -65,10 +65,7 @@ pub(super) struct ConnectRequest {
 /// Handle a single inbound SOCKS5 connection. The first byte (the version
 /// `0x05`) has already been peeked by the caller; this function consumes the
 /// connection from byte 0.
-pub(super) async fn handle(
-    inbound: TcpStream,
-    allowlist: AllowList,
-) -> Result<(), std::io::Error> {
+pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(), std::io::Error> {
     let (mut rd, mut wr) = inbound.into_split();
 
     // Greeting.

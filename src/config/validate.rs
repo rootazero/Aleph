@@ -475,8 +475,7 @@ impl Config {
                 // *before* vault injection (e.g. `engine_id` for Google,
                 // `base_url` for SearXNG) are still enforced here as hard
                 // errors — they're typos in TOML, not missing secrets.
-                let factory_registry =
-                    crate::search::ProviderFactoryRegistry::with_defaults();
+                let factory_registry = crate::search::ProviderFactoryRegistry::with_defaults();
                 let known_types = factory_registry.known_provider_types();
                 for (backend_name, backend_config) in &search_config.backends {
                     let provider_type = backend_config.provider_type.as_str();

@@ -425,7 +425,11 @@ fn flatten_trace(v: &Value) -> Vec<TimelineRow> {
     if let Some(runs) = v.get("runs").and_then(|x| x.as_array()) {
         for r in runs {
             let ts = r.get("started_at").and_then(|x| x.as_u64()).unwrap_or(0);
-            let agent = r.get("agent_id").and_then(|x| x.as_str()).unwrap_or("?").to_string();
+            let agent = r
+                .get("agent_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("?")
+                .to_string();
             let status = r.get("status").and_then(|x| x.as_str()).unwrap_or("?");
             let summary = r.get("summary").and_then(|x| x.as_str()).map(String::from);
             let error = r.get("error").and_then(|x| x.as_str()).map(String::from);
@@ -449,8 +453,16 @@ fn flatten_trace(v: &Value) -> Vec<TimelineRow> {
     if let Some(cs) = v.get("comments").and_then(|x| x.as_array()) {
         for c in cs {
             let ts = c.get("created_at").and_then(|x| x.as_u64()).unwrap_or(0);
-            let author = c.get("author").and_then(|x| x.as_str()).unwrap_or("?").to_string();
-            let body = c.get("body").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let author = c
+                .get("author")
+                .and_then(|x| x.as_str())
+                .unwrap_or("?")
+                .to_string();
+            let body = c
+                .get("body")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
             rows.push(TimelineRow {
                 ts,
                 kind: "note",
@@ -469,7 +481,11 @@ fn flatten_trace(v: &Value) -> Vec<TimelineRow> {
                 .and_then(|x| x.as_str())
                 .and_then(rfc3339_to_epoch)
                 .unwrap_or(0);
-            let agent = e.get("agent_id").and_then(|x| x.as_str()).unwrap_or("?").to_string();
+            let agent = e
+                .get("agent_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("?")
+                .to_string();
             let etype = e
                 .get("event_type")
                 .and_then(|x| x.as_str())
@@ -493,8 +509,16 @@ fn flatten_trace(v: &Value) -> Vec<TimelineRow> {
                 .and_then(|x| x.as_str())
                 .and_then(rfc3339_to_epoch)
                 .unwrap_or(0);
-            let agent = a.get("agent_id").and_then(|x| x.as_str()).unwrap_or("?").to_string();
-            let title = a.get("title").and_then(|x| x.as_str()).unwrap_or("artifact").to_string();
+            let agent = a
+                .get("agent_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("?")
+                .to_string();
+            let title = a
+                .get("title")
+                .and_then(|x| x.as_str())
+                .unwrap_or("artifact")
+                .to_string();
             let atype = a
                 .get("artifact_type")
                 .and_then(|x| x.as_str())

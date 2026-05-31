@@ -443,7 +443,8 @@ impl BrowserBackend for ChromeMcpBackend {
         if let Some(ua) = &opts.user_agent {
             args.insert("userAgent".into(), json!(ua));
         }
-        self.call("emulate", serde_json::Value::Object(args)).await?;
+        self.call("emulate", serde_json::Value::Object(args))
+            .await?;
         Ok(())
     }
 

@@ -61,6 +61,9 @@ mod tests {
 
     #[test]
     fn passes_through_unknown() {
-        assert_eq!(normalize_openai_model_id("some-future-model"), "some-future-model");
+        assert_eq!(
+            normalize_openai_model_id("some-future-model"),
+            "some-future-model"
+        );
     }
 }

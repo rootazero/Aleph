@@ -111,13 +111,20 @@ pub struct StopHookContext {
 #[derive(Debug)]
 pub enum StopHookVerdict {
     Allow,
-    Block { reason: String },
+    Block {
+        reason: String,
+    },
     /// Permanent stop signal — the harness exits the loop immediately and
     /// surfaces `reason` to the user. Mirrors claude-code's
     /// `preventContinuation: true` exit-protocol. Shell hooks emit this
     /// via exit code 3 (exit 2 still maps to the retry-style `Block`).
-    Halt { reason: String },
-    Error { hook_name: String, message: String },
+    Halt {
+        reason: String,
+    },
+    Error {
+        hook_name: String,
+        message: String,
+    },
 }
 
 /// Aggregated result of all stop hooks.

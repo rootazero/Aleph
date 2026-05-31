@@ -75,7 +75,8 @@ mod tests {
         let out = render_excerpt("**bold** and `code` and [x](https://example.com)");
         assert!(out.contains("<strong>bold</strong>"));
         assert!(out.contains("<code>code</code>"));
-        assert!(out.contains("<a target=\"_blank\" rel=\"noopener\" href=\"https://example.com\">x</a>"));
+        assert!(out
+            .contains("<a target=\"_blank\" rel=\"noopener\" href=\"https://example.com\">x</a>"));
     }
 
     #[test]

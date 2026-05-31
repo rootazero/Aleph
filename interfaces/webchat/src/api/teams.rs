@@ -318,7 +318,10 @@ impl TeamsApi {
         let result = state
             .rpc_call("teams.list_task_events", json!({ "task_id": task_id }))
             .await?;
-        let v = result.get("events").cloned().unwrap_or(Value::Array(vec![]));
+        let v = result
+            .get("events")
+            .cloned()
+            .unwrap_or(Value::Array(vec![]));
         serde_json::from_value(v).map_err(|e| e.to_string())
     }
 
@@ -378,7 +381,9 @@ impl TeamsApi {
         if v.is_null() {
             return Ok(None);
         }
-        serde_json::from_value(v).map(Some).map_err(|e| e.to_string())
+        serde_json::from_value(v)
+            .map(Some)
+            .map_err(|e| e.to_string())
     }
 
     /// teams.task.journal.list — all journals for a team, newest first.
@@ -412,9 +417,7 @@ impl TeamsApi {
         if let Some(u) = until {
             params.insert("until".into(), json!(u));
         }
-        let result = state
-            .rpc_call("teams.usage", Value::Object(params))
-            .await?;
+        let result = state.rpc_call("teams.usage", Value::Object(params)).await?;
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 }

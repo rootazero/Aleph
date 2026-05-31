@@ -499,7 +499,11 @@ mod tests {
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
 
         let opts = provider.build_options().unwrap();
-        assert_eq!(opts.top_p, Some(0.9), "configured top_p preserved when non-greedy");
+        assert_eq!(
+            opts.top_p,
+            Some(0.9),
+            "configured top_p preserved when non-greedy"
+        );
         assert_eq!(opts.top_k, Some(40), "configured top_k forwarded");
     }
 

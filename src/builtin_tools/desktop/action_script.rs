@@ -217,10 +217,7 @@ fn strip_quotes(s: &str) -> &str {
     }
 }
 
-fn build_action(
-    name: &str,
-    kw: &Kwargs<'_>,
-) -> Result<DesktopBatchAction, ScriptParseError> {
+fn build_action(name: &str, kw: &Kwargs<'_>) -> Result<DesktopBatchAction, ScriptParseError> {
     let mut action = blank_batch_action();
     match name {
         // ── Click family ────────────────────────────────────────
@@ -263,10 +260,12 @@ fn build_action(
 
         // ── Keyboard ────────────────────────────────────────────
         "type" => {
-            let content = kw.get("content").ok_or_else(|| ScriptParseError::MissingArg {
-                action: "type".into(),
-                arg: "content".into(),
-            })?;
+            let content = kw
+                .get("content")
+                .ok_or_else(|| ScriptParseError::MissingArg {
+                    action: "type".into(),
+                    arg: "content".into(),
+                })?;
             action.action = "type_text".into();
             action.text = Some(unescape(content));
         }
@@ -371,7 +370,10 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
     let raw = raw.trim();
 
     // <point>x y</point>
-    if let Some(inner) = raw.strip_prefix("<point>").and_then(|s| s.strip_suffix("</point>")) {
+    if let Some(inner) = raw
+        .strip_prefix("<point>")
+        .and_then(|s| s.strip_suffix("</point>"))
+    {
         let nums = parse_floats(inner);
         if nums.len() >= 2 {
             return Some((nums[0], nums[1]));
@@ -379,7 +381,10 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
         return None;
     }
     // <bbox>x1 y1 x2 y2</bbox>
-    if let Some(inner) = raw.strip_prefix("<bbox>").and_then(|s| s.strip_suffix("</bbox>")) {
+    if let Some(inner) = raw
+        .strip_prefix("<bbox>")
+        .and_then(|s| s.strip_suffix("</bbox>"))
+    {
         let nums = parse_floats(inner);
         if nums.len() >= 4 {
             return Some(((nums[0] + nums[2]) / 2.0, (nums[1] + nums[3]) / 2.0));
@@ -400,7 +405,11 @@ pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
 fn parse_floats(s: &str) -> Vec<f64> {
     s.split(|c: char| c == ',' || c.is_whitespace())
         .filter(|t| !t.is_empty())
-        .filter_map(|t| t.trim_matches(|c: char| c == '<' || c == '>').parse::<f64>().ok())
+        .filter_map(|t| {
+            t.trim_matches(|c: char| c == '<' || c == '>')
+                .parse::<f64>()
+                .ok()
+        })
         .collect()
 }
 
@@ -459,7 +468,8 @@ mod tests {
 
     #[test]
     fn click_with_bbox_tag() {
-        let parsed = parse_action_script("click(start_box='<bbox>100 200 300 400</bbox>')").unwrap();
+        let parsed =
+            parse_action_script("click(start_box='<bbox>100 200 300 400</bbox>')").unwrap();
         assert_eq!(parsed[0].x, Some(200.0));
         assert_eq!(parsed[0].y, Some(300.0));
     }
@@ -483,8 +493,7 @@ mod tests {
 
     #[test]
     fn drag_requires_both_boxes() {
-        let parsed =
-            parse_action_script("drag(start_box='(10,20)', end_box='(100,200)')").unwrap();
+        let parsed = parse_action_script("drag(start_box='(10,20)', end_box='(100,200)')").unwrap();
         assert_eq!(parsed[0].action, "drag");
         assert_eq!(parsed[0].start_x, Some(10.0));
         assert_eq!(parsed[0].end_y, Some(200.0));

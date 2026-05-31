@@ -59,9 +59,7 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
                     );
                 }
                 PairingRequest::Browser {
-                    code,
-                    origin_label,
-                    ..
+                    code, origin_label, ..
                 } => {
                     println!(
                         "{:<10} {:<8} {:<30} {}s",

@@ -57,7 +57,9 @@ struct ProcEntry {
 
 /// Outcome of a [`ProcessRegistry::poll`] call.
 pub enum PollOutcome {
-    Running { elapsed_ms: u64 },
+    Running {
+        elapsed_ms: u64,
+    },
     Done(Box<CodeExecOutput>),
     Killed,
     /// No such id for this caller (unknown, or owned by another session).
@@ -302,8 +304,14 @@ mod tests {
         let reg = ProcessRegistry::new();
         let id = reg.register_running("sleep 1", Some("owner".into()), live_handle().await);
         // A different session must not see it.
-        assert!(matches!(reg.poll(id, Some("intruder")), PollOutcome::NotFound));
-        assert!(matches!(reg.kill(id, Some("intruder")), KillOutcome::NotFound));
+        assert!(matches!(
+            reg.poll(id, Some("intruder")),
+            PollOutcome::NotFound
+        ));
+        assert!(matches!(
+            reg.kill(id, Some("intruder")),
+            KillOutcome::NotFound
+        ));
         // Owner still can.
         assert!(matches!(reg.kill(id, Some("owner")), KillOutcome::Killed));
     }
@@ -351,7 +359,10 @@ mod tests {
             reg.poll(first_done.unwrap(), None),
             PollOutcome::NotFound
         ));
-        assert!(matches!(reg.poll(newest, None), PollOutcome::Running { .. }));
+        assert!(matches!(
+            reg.poll(newest, None),
+            PollOutcome::Running { .. }
+        ));
     }
 
     #[test]

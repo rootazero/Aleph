@@ -65,10 +65,18 @@ pub struct TeamSnapshotArgs {
 #[serde(untagged)]
 pub enum TeamSnapshotOutput {
     Create(CreateSnapshotOutput),
-    List { snapshots: Vec<SnapshotMeta> },
-    Get { meta: SnapshotMeta, payload: TeamSnapshotPayload },
+    List {
+        snapshots: Vec<SnapshotMeta>,
+    },
+    Get {
+        meta: SnapshotMeta,
+        payload: TeamSnapshotPayload,
+    },
     Restore(RestoreDiff),
-    Delete { snapshot_id: String, existed: bool },
+    Delete {
+        snapshot_id: String,
+        existed: bool,
+    },
 }
 
 // =============================================================================
@@ -160,21 +168,15 @@ impl AlephTool for TeamSnapshotTool {
                 TeamSnapshotOutput::Create(out)
             }
             SnapshotAction::List => {
-                let snapshots = self
-                    .snapshot_store
-                    .list(args.team_id.as_deref())
-                    .await?;
+                let snapshots = self.snapshot_store.list(args.team_id.as_deref()).await?;
                 TeamSnapshotOutput::List { snapshots }
             }
             SnapshotAction::Get => {
                 let snapshot_id = args.snapshot_id.as_deref().ok_or_else(|| {
                     AlephError::other("team_snapshot(get): snapshot_id is required")
                 })?;
-                let (meta, payload) = self
-                    .snapshot_store
-                    .get(snapshot_id)
-                    .await?
-                    .ok_or_else(|| {
+                let (meta, payload) =
+                    self.snapshot_store.get(snapshot_id).await?.ok_or_else(|| {
                         AlephError::NotFound(format!("snapshot `{snapshot_id}` not found"))
                     })?;
                 TeamSnapshotOutput::Get { meta, payload }

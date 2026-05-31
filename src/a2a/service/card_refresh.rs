@@ -52,6 +52,16 @@ pub async fn refresh_all_cards(registry: &CardRegistry) -> usize {
                     error = %e,
                     "A2A card refresh: keeping placeholder card"
                 );
+                registry
+                    .upsert(RegisteredAgent {
+                        card: agent.card.clone(),
+                        trust_level: agent.trust_level,
+                        base_url: agent.base_url.clone(),
+                        last_seen: chrono::Utc::now(),
+                        health: AgentHealth::Unreachable,
+                        auth_token: agent.auth_token.clone(),
+                    })
+                    .await;
             }
         }
     }

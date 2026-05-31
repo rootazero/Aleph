@@ -38,10 +38,7 @@ where
 /// [`with_project_root`] scope or when the surrounding scope explicitly
 /// set `None` (non-project run).
 pub fn current() -> Option<PathBuf> {
-    CURRENT_PROJECT_ROOT
-        .try_with(|p| p.clone())
-        .ok()
-        .flatten()
+    CURRENT_PROJECT_ROOT.try_with(|p| p.clone()).ok().flatten()
 }
 
 #[cfg(test)]
@@ -56,10 +53,7 @@ mod tests {
     #[tokio::test]
     async fn current_returns_set_value_inside_scope() {
         let want = PathBuf::from("/tmp/aleph-project-fixture");
-        let observed = with_project_root(Some(want.clone()), async {
-            current()
-        })
-        .await;
+        let observed = with_project_root(Some(want.clone()), async { current() }).await;
         assert_eq!(observed, Some(want));
     }
 

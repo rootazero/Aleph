@@ -18,9 +18,9 @@ use reqwest_eventsource::{Event, EventSource};
 use tokio::sync::{mpsc, RwLock};
 
 use crate::error::{AlephError, Result};
-use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 #[cfg(test)]
 use crate::mcp::jsonrpc::JsonRpcError;
+use crate::mcp::jsonrpc::{JsonRpcNotification, JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::traits::{McpTransport, NotificationCallback};
 use crate::security::ssrf::{validate_url, SsrfPolicy};
 
@@ -571,7 +571,6 @@ impl SseTransport {
 
         Ok(())
     }
-
 }
 
 #[cfg(test)]

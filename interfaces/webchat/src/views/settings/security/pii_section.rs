@@ -90,4 +90,3 @@ pub(super) fn PIISection(config: RwSignal<SearchConfig>) -> impl IntoView {
         </div>
     }
 }
-

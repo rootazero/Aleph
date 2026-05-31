@@ -460,8 +460,7 @@ async fn list_tasks_derives_blocked_in_a_single_pass() {
         .await
         .unwrap();
 
-    let by_id: std::collections::HashMap<_, _> =
-        all.iter().map(|t| (t.id.clone(), t)).collect();
+    let by_id: std::collections::HashMap<_, _> = all.iter().map(|t| (t.id.clone(), t)).collect();
     assert_eq!(by_id[&a.id].status, CoordTaskStatus::Pending);
     assert_eq!(by_id[&b.id].status, CoordTaskStatus::Blocked);
     assert_eq!(by_id[&c.id].status, CoordTaskStatus::Blocked);

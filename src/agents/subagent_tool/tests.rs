@@ -53,8 +53,7 @@ impl AiProvider for MockAiProvider {
     fn process<'a>(
         &'a self,
         _payload: RequestPayload<'a>,
-    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
         Box::pin(async { Ok(ProviderResponse::text_only("mock response".to_string())) })
     }
 
@@ -266,7 +265,10 @@ fn test_parse_args_read_inbox() {
 async fn test_check_status_not_found() {
     let tool = make_tool();
     let result = tool
-        .execute(json!({ "request_id": "nonexistent" }), CancellationToken::new())
+        .execute(
+            json!({ "request_id": "nonexistent" }),
+            CancellationToken::new(),
+        )
         .await;
     match result {
         ToolResult::Error { error, .. } => {
@@ -623,8 +625,7 @@ impl AiProvider for PendingProvider {
     fn process<'a>(
         &'a self,
         _payload: RequestPayload<'a>,
-    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
         Box::pin(async move {
             std::future::pending::<()>().await;
             unreachable!()
@@ -724,8 +725,7 @@ impl AiProvider for UsageMockProvider {
     fn process<'a>(
         &'a self,
         _payload: RequestPayload<'a>,
-    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>>
-    {
+    ) -> Pin<Box<dyn Future<Output = crate::error::Result<ProviderResponse>> + Send + 'a>> {
         Box::pin(async {
             Ok(ProviderResponse {
                 text: Some("done".into()),
@@ -776,7 +776,10 @@ async fn foreground_subagent_inherits_trace_sink() {
     .with_trace_sink(sink.clone() as Arc<dyn crate::harness::TraceSink>);
 
     let _ = tool
-        .execute(serde_json::json!({ "task": "hi" }), CancellationToken::new())
+        .execute(
+            serde_json::json!({ "task": "hi" }),
+            CancellationToken::new(),
+        )
         .await;
 
     let events = sink.0.lock().unwrap();

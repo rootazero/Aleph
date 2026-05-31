@@ -125,10 +125,9 @@ pub async fn handle_allowed_roots(
 
 pub async fn handle_home_dir(request: JsonRpcRequest) -> JsonRpcResponse {
     match dirs::home_dir() {
-        Some(home) => JsonRpcResponse::success(
-            request.id,
-            json!({ "path": home.to_string_lossy() }),
-        ),
+        Some(home) => {
+            JsonRpcResponse::success(request.id, json!({ "path": home.to_string_lossy() }))
+        }
         None => JsonRpcResponse::error(request.id, INTERNAL_ERROR, "home directory unavailable"),
     }
 }
@@ -154,7 +153,11 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
             return JsonRpcResponse::error(request.id, INVALID_PARAMS, "params required");
         }
         Err(e) => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, &format!("invalid params: {e}"));
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                &format!("invalid params: {e}"),
+            );
         }
     };
 
@@ -176,10 +179,18 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
     let read = match std::fs::read_dir(&canon) {
         Ok(r) => r,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return JsonRpcResponse::error(request.id, NOT_FOUND, &format!("not found: {}", canon.display()));
+            return JsonRpcResponse::error(
+                request.id,
+                NOT_FOUND,
+                &format!("not found: {}", canon.display()),
+            );
         }
         Err(e) => {
-            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, &format!("read_dir failed: {e}"));
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                &format!("read_dir failed: {e}"),
+            );
         }
     };
 
@@ -253,7 +264,11 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
             return JsonRpcResponse::error(request.id, INVALID_PARAMS, "params required");
         }
         Err(e) => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, &format!("invalid params: {e}"));
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                &format!("invalid params: {e}"),
+            );
         }
     };
 
@@ -340,8 +355,12 @@ mod tests {
         let entries = result["entries"].as_array().unwrap();
         // 1 dir + 1 file = 2 (hidden dropped by default)
         assert_eq!(entries.len(), 2);
-        assert!(entries.iter().any(|e| e["name"] == "alpha" && e["is_dir"] == true));
-        assert!(entries.iter().any(|e| e["name"] == "readme.txt" && e["is_dir"] == false));
+        assert!(entries
+            .iter()
+            .any(|e| e["name"] == "alpha" && e["is_dir"] == true));
+        assert!(entries
+            .iter()
+            .any(|e| e["name"] == "readme.txt" && e["is_dir"] == false));
     }
 
     #[tokio::test]
@@ -356,10 +375,7 @@ mod tests {
             json!({ "path": root.to_string_lossy(), "show_hidden": true }),
         );
         let resp = handle_list_dir(r, cfg).await;
-        let entries = resp.result.unwrap()["entries"]
-            .as_array()
-            .unwrap()
-            .clone();
+        let entries = resp.result.unwrap()["entries"].as_array().unwrap().clone();
         assert!(entries.iter().any(|e| e["name"] == ".hidden"));
     }
 
@@ -409,13 +425,19 @@ mod tests {
         let r1 = req("fs.list_dir", json!({ "path": child.to_string_lossy() }));
         let resp1 = handle_list_dir(r1, cfg.clone()).await;
         let parent1 = resp1.result.unwrap()["parent"].clone();
-        assert!(parent1.is_string(), "expected parent in scope, got {parent1}");
+        assert!(
+            parent1.is_string(),
+            "expected parent in scope, got {parent1}"
+        );
 
         // At the root itself, parent is OUT of scope → returns null.
         let r2 = req("fs.list_dir", json!({ "path": root.to_string_lossy() }));
         let resp2 = handle_list_dir(r2, cfg).await;
         let parent2 = resp2.result.unwrap()["parent"].clone();
-        assert!(parent2.is_null(), "expected parent OUT of scope, got {parent2}");
+        assert!(
+            parent2.is_null(),
+            "expected parent OUT of scope, got {parent2}"
+        );
     }
 
     #[tokio::test]
@@ -490,6 +512,9 @@ mod tests {
         let r = req("fs.home_dir", json!({}));
         let resp = handle_home_dir(r).await;
         let path = resp.result.unwrap()["path"].as_str().unwrap().to_string();
-        assert!(PathBuf::from(&path).is_dir(), "home dir should exist: {path}");
+        assert!(
+            PathBuf::from(&path).is_dir(),
+            "home dir should exist: {path}"
+        );
     }
 }

@@ -164,10 +164,7 @@ async fn run_monitor(
     stop: Arc<Notify>,
 ) {
     let stale_threshold = chrono::Duration::seconds(config.stale_secs as i64);
-    let mut limiter = RestartLimiter::new(
-        Duration::from_secs(3600),
-        config.max_restarts_per_hour,
-    );
+    let mut limiter = RestartLimiter::new(Duration::from_secs(3600), config.max_restarts_per_hour);
     info!(
         "[CHANNEL-HEALTH] monitor started check_secs={} stale_secs={} max_restarts_per_hour={}",
         config.check_secs, config.stale_secs, config.max_restarts_per_hour
@@ -244,7 +241,11 @@ mod tests {
     fn idle_connected_channel_is_not_restarted() {
         // Stale but Connected (idle) → left alone, no storm.
         let threshold = chrono::Duration::seconds(300);
-        assert!(!should_restart(ChannelStatus::Connected, &stale(), threshold));
+        assert!(!should_restart(
+            ChannelStatus::Connected,
+            &stale(),
+            threshold
+        ));
     }
 
     #[test]
@@ -263,8 +264,16 @@ mod tests {
     #[test]
     fn disconnected_and_disabled_are_left_alone() {
         let threshold = chrono::Duration::seconds(300);
-        assert!(!should_restart(ChannelStatus::Disconnected, &stale(), threshold));
-        assert!(!should_restart(ChannelStatus::Disabled, &stale(), threshold));
+        assert!(!should_restart(
+            ChannelStatus::Disconnected,
+            &stale(),
+            threshold
+        ));
+        assert!(!should_restart(
+            ChannelStatus::Disabled,
+            &stale(),
+            threshold
+        ));
     }
 
     #[test]

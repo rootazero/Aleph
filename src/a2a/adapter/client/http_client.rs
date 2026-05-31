@@ -73,10 +73,14 @@ impl A2AClient {
         self
     }
 
-    /// Fetch the remote agent's Agent Card
+    /// Fetch the remote agent's Agent Card.
+    ///
+    /// Uses the client's configured `timeout` (default 120s) so that
+    /// slow or unreachable agents are handled consistently with other
+    /// outbound RPC calls.
     pub async fn fetch_agent_card(&self) -> A2AResult<AgentCard> {
         let url = format!("{}/.well-known/agent-card.json", self.base_url);
-        let mut req = self.http.get(&url).timeout(Duration::from_secs(10));
+        let mut req = self.http.get(&url).timeout(self.timeout);
         if let Some(ref token) = self.auth_token {
             req = req.bearer_auth(token);
         }

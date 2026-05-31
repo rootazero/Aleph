@@ -157,9 +157,7 @@ async fn resolve_last_session(client: &AlephClient) -> CliResult<String> {
     let sessions = listed
         .get("sessions")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            CliError::Other("sessions.list returned no `sessions` array".to_string())
-        })?;
+        .ok_or_else(|| CliError::Other("sessions.list returned no `sessions` array".to_string()))?;
 
     let mut best_key: Option<&str> = None;
     let mut best_ts: &str = "";

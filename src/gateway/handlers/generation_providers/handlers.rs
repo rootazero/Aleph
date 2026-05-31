@@ -703,8 +703,14 @@ mod list_presets_tests {
         // Every entry has the required UI fields.
         for entry in &arr {
             assert!(entry.get("id").and_then(|v| v.as_str()).is_some());
-            assert!(entry.get("provider_type").and_then(|v| v.as_str()).is_some());
-            assert!(entry.get("default_model").and_then(|v| v.as_str()).is_some());
+            assert!(entry
+                .get("provider_type")
+                .and_then(|v| v.as_str())
+                .is_some());
+            assert!(entry
+                .get("default_model")
+                .and_then(|v| v.as_str())
+                .is_some());
             assert!(entry.get("display_name").and_then(|v| v.as_str()).is_some());
             let mods = entry.get("modalities").and_then(|v| v.as_array()).unwrap();
             assert!(!mods.is_empty(), "modalities cannot be empty for {entry}");

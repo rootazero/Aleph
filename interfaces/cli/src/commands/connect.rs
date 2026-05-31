@@ -24,9 +24,8 @@ pub async fn run(
     config.device_name = device_name.to_string();
 
     let token = {
-        let _spin = (!json).then(|| {
-            output::Spinner::start(format!("Authenticating as '{device_name}'"))
-        });
+        let _spin =
+            (!json).then(|| output::Spinner::start(format!("Authenticating as '{device_name}'")));
         let result = client.authenticate(&config).await;
         if let Some(s) = _spin {
             s.stop().await;

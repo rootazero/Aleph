@@ -153,8 +153,8 @@ impl SignalSnapshot {
         // we clamp to 1.0 — the score saturates so further increases don't
         // pull strategy selection astray.
         const TOOL_VOLUME_SOFT_CAP: f64 = 500.0;
-        let tool_volume_score = ((m.tool_calls_total_24h as f64) / TOOL_VOLUME_SOFT_CAP)
-            .clamp(0.0, 1.0);
+        let tool_volume_score =
+            ((m.tool_calls_total_24h as f64) / TOOL_VOLUME_SOFT_CAP).clamp(0.0, 1.0);
         signals.push(DreamSignal {
             signal_type: SignalType::Quality,
             name: "tool_call_volume".into(),
@@ -164,8 +164,8 @@ impl SignalSnapshot {
         // Latency saturates at a 30-second soft cap (anything slower is
         // already a hard fail in the harness-level turn_timeout).
         const TOOL_LATENCY_SOFT_CAP_MS: f64 = 30_000.0;
-        let tool_latency_score = ((m.tool_avg_duration_ms_24h as f64) / TOOL_LATENCY_SOFT_CAP_MS)
-            .clamp(0.0, 1.0);
+        let tool_latency_score =
+            ((m.tool_avg_duration_ms_24h as f64) / TOOL_LATENCY_SOFT_CAP_MS).clamp(0.0, 1.0);
         signals.push(DreamSignal {
             signal_type: SignalType::Health,
             name: "tool_latency_score".into(),

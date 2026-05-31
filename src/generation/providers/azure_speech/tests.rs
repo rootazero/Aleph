@@ -13,13 +13,19 @@ fn rejects_empty_api_key() {
 #[test]
 fn rejects_missing_region() {
     let err = AzureSpeechProvider::new("k", None, None).unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[test]
 fn rejects_empty_region() {
     let err = AzureSpeechProvider::new("k", Some("   ".into()), None).unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[test]
@@ -85,7 +91,10 @@ async fn rejects_empty_input() {
     let p = AzureSpeechProvider::new("k", Some("eastus".into()), None).unwrap();
     let request = GenerationRequest::speech("");
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -94,7 +103,10 @@ async fn rejects_oversized_input() {
     let p = AzureSpeechProvider::new("k", Some("eastus".into()), None).unwrap();
     let request = GenerationRequest::speech(text);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -103,7 +115,10 @@ async fn rejects_unknown_format() {
     let params = GenerationParams::builder().format("flac").build();
     let request = GenerationRequest::speech("hi").with_params(params);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::UnsupportedFormatError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::UnsupportedFormatError { .. }
+    ));
 }
 
 #[test]
@@ -140,7 +155,10 @@ fn map_output_format_defaults_to_mp3() {
 
 #[test]
 fn xml_escape_covers_all_five_entities() {
-    assert_eq!(xml_escape(r#"<a href="x">A&B's</a>"#), "&lt;a href=&quot;x&quot;&gt;A&amp;B&apos;s&lt;/a&gt;");
+    assert_eq!(
+        xml_escape(r#"<a href="x">A&B's</a>"#),
+        "&lt;a href=&quot;x&quot;&gt;A&amp;B&apos;s&lt;/a&gt;"
+    );
 }
 
 #[test]

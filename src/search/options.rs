@@ -127,7 +127,11 @@ impl SearchOptions {
 
     /// Brave `safesearch` (`off`/`moderate`).
     pub fn brave_safesearch(&self) -> &'static str {
-        if self.safe_search { "moderate" } else { "off" }
+        if self.safe_search {
+            "moderate"
+        } else {
+            "off"
+        }
     }
 
     /// Bing `freshness` (`Day`/`Week`/`Month`). Bing has no `Year`.
@@ -142,7 +146,11 @@ impl SearchOptions {
 
     /// Bing `safeSearch` (`Off`/`Moderate`).
     pub fn bing_safesearch(&self) -> &'static str {
-        if self.safe_search { "Moderate" } else { "Off" }
+        if self.safe_search {
+            "Moderate"
+        } else {
+            "Off"
+        }
     }
 
     /// Google CSE `dateRestrict` (`d1`/`w1`/`m1`/`y1`).
@@ -158,7 +166,11 @@ impl SearchOptions {
 
     /// Google CSE `safe` (`active`/`off`).
     pub fn google_safe(&self) -> &'static str {
-        if self.safe_search { "active" } else { "off" }
+        if self.safe_search {
+            "active"
+        } else {
+            "off"
+        }
     }
 
     /// Google CSE `lr` language restrictor — Google requires the
@@ -183,7 +195,11 @@ impl SearchOptions {
     /// We expose only Off vs Moderate today; bumping to Strict requires
     /// a new SearchOptions field.
     pub fn searxng_safesearch(&self) -> u8 {
-        if self.safe_search { 1 } else { 0 }
+        if self.safe_search {
+            1
+        } else {
+            0
+        }
     }
 
     /// Tavily `days` integer (1/7/30/365) — Tavily doesn't take a
@@ -200,7 +216,11 @@ impl SearchOptions {
 
     /// DuckDuckGo `kp` (`1`=moderate, `-2`=off; strict is `-1`).
     pub fn ddg_kp(&self) -> &'static str {
-        if self.safe_search { "1" } else { "-2" }
+        if self.safe_search {
+            "1"
+        } else {
+            "-2"
+        }
     }
 
     /// DuckDuckGo `df` (`d`/`w`/`m`/`y`).

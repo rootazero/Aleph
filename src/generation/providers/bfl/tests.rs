@@ -65,7 +65,10 @@ async fn rejects_empty_prompt() {
     let p = BflProvider::new("k", None, None).unwrap();
     let request = GenerationRequest::image("");
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -74,7 +77,10 @@ async fn rejects_oversized_prompt() {
     let p = BflProvider::new("k", None, None).unwrap();
     let request = GenerationRequest::image(text);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -83,7 +89,10 @@ async fn rejects_unknown_format() {
     let params = GenerationParams::builder().format("webp").build();
     let request = GenerationRequest::image("a cat").with_params(params);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::UnsupportedFormatError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::UnsupportedFormatError { .. }
+    ));
 }
 
 #[test]

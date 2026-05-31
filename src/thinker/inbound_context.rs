@@ -107,8 +107,9 @@ impl InboundContext {
 
         // Channel — `kind` is a channel-supplied label; sanitize it. The
         // `group_chat`/`mentioned` tokens are code-controlled constants.
-        let mut channel_parts =
-            vec![crate::security::content_sanitizer::sanitize_label(&self.channel.kind)];
+        let mut channel_parts = vec![crate::security::content_sanitizer::sanitize_label(
+            &self.channel.kind,
+        )];
         if self.channel.is_group_chat {
             channel_parts.push("group_chat".to_string());
         }

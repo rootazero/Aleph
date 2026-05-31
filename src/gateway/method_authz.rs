@@ -162,7 +162,10 @@ mod tests {
     fn secret_namespace_is_fully_operator() {
         assert_eq!(required_privilege("secret.set"), MethodPrivilege::Operator);
         assert_eq!(required_privilege("secret.get"), MethodPrivilege::Operator);
-        assert_eq!(required_privilege("secrets.list"), MethodPrivilege::Operator);
+        assert_eq!(
+            required_privilege("secrets.list"),
+            MethodPrivilege::Operator
+        );
     }
 
     #[test]

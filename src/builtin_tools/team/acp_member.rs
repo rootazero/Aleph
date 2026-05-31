@@ -56,9 +56,17 @@ fn default_role() -> String {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case", tag = "action")]
 pub enum TeamAcpMemberOutput {
-    Add { member: TeamMember },
-    Remove { team_id: String, agent_id: String },
-    List { team_id: String, members: Vec<TeamMember> },
+    Add {
+        member: TeamMember,
+    },
+    Remove {
+        team_id: String,
+        agent_id: String,
+    },
+    List {
+        team_id: String,
+        members: Vec<TeamMember>,
+    },
 }
 
 #[derive(Clone)]
@@ -121,10 +129,7 @@ impl AlephTool for TeamAcpMemberTool {
                     .await?;
                 Ok(TeamAcpMemberOutput::Add { member })
             }
-            TeamAcpMemberArgs::Remove {
-                team_id,
-                agent_id,
-            } => {
+            TeamAcpMemberArgs::Remove { team_id, agent_id } => {
                 debug!(team_id = %team_id, agent_id = %agent_id, "team_acp_member: remove");
                 // Refuse to remove non-ACP rows via this tool so the LLM
                 // doesn't accidentally drop an in-process agent.
@@ -144,10 +149,7 @@ impl AlephTool for TeamAcpMemberTool {
                     }
                 }
                 self.store.remove_member(&team_id, &agent_id).await?;
-                Ok(TeamAcpMemberOutput::Remove {
-                    team_id,
-                    agent_id,
-                })
+                Ok(TeamAcpMemberOutput::Remove { team_id, agent_id })
             }
             TeamAcpMemberArgs::List { team_id } => {
                 debug!(team_id = %team_id, "team_acp_member: list");
@@ -168,7 +170,7 @@ impl AlephTool for TeamAcpMemberTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::teams::{SqliteTeamStore, NewTeam};
+    use crate::teams::{NewTeam, SqliteTeamStore};
 
     async fn setup() -> (Arc<dyn TeamStore>, String) {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

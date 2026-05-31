@@ -103,17 +103,26 @@ pub fn NodeCard(
             let sel_id = id.clone();
 
             // Reactive data-selected attribute (re-evaluated each render tick)
-            let is_selected_attr =
-                move || selected_id.with(|s| s.as_deref() == Some(sel_id.as_str())).to_string();
+            let is_selected_attr = move || {
+                selected_id
+                    .with(|s| s.as_deref() == Some(sel_id.as_str()))
+                    .to_string()
+            };
 
             // Non-reactive position style (x,y sampled reactively via screen_xy)
             let style_str = move || {
                 let (x, y) = screen_xy.get();
-                format!("transform: translate3d({:.1}px, {:.1}px, 0);", x - 140.0, y - 60.0)
+                format!(
+                    "transform: translate3d({:.1}px, {:.1}px, 0);",
+                    x - 140.0,
+                    y - 60.0
+                )
             };
 
-            let stripe_bar_style =
-                format!("height: 3px; background-color: {}; border-radius: 6px 6px 0 0;", stripe);
+            let stripe_bar_style = format!(
+                "height: 3px; background-color: {}; border-radius: 6px 6px 0 0;",
+                stripe
+            );
 
             view! {
                 <div
@@ -158,12 +167,19 @@ pub fn NodeCard(
             let sel_id = id.clone();
 
             // Reactive data-selected attribute — drives the golden halo CSS rule.
-            let is_selected_attr =
-                move || selected_id.with(|s| s.as_deref() == Some(sel_id.as_str())).to_string();
+            let is_selected_attr = move || {
+                selected_id
+                    .with(|s| s.as_deref() == Some(sel_id.as_str()))
+                    .to_string()
+            };
 
             let style_str = move || {
                 let (x, y) = screen_xy.get();
-                format!("transform: translate3d({:.1}px, {:.1}px, 0);", x - 70.0, y - 15.0)
+                format!(
+                    "transform: translate3d({:.1}px, {:.1}px, 0);",
+                    x - 70.0,
+                    y - 15.0
+                )
             };
 
             let stripe_sq_style = format!(

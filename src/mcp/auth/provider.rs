@@ -265,10 +265,8 @@ impl OAuthProvider {
             .code_verifier
             .ok_or_else(|| AlephError::IoError("No code verifier found".to_string()))?;
 
-        if !crate::security::secret_equal_bytes(
-            stored_state.as_bytes(),
-            received_state.as_bytes(),
-        ) {
+        if !crate::security::secret_equal_bytes(stored_state.as_bytes(), received_state.as_bytes())
+        {
             return Err(AlephError::IoError(
                 "State mismatch - possible CSRF attack".to_string(),
             ));

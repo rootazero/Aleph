@@ -75,21 +75,22 @@ impl ChatSendError {
     pub fn classify(msg: impl Into<String>) -> Self {
         let message = msg.into();
         let l = message.to_lowercase();
-        let code = if l.contains("disconnect") || l.contains("not connected") || l.contains("websocket") {
-            ChatSendErrorCode::SocketDisconnected
-        } else if l.contains("prompt_blocked") || l.contains("prompt injection") {
-            ChatSendErrorCode::PromptBlocked
-        } else if l.contains("prompt_review") {
-            ChatSendErrorCode::PromptReview
-        } else if l.contains("usage limit") || l.contains("quota") || l.contains("rate limit") {
-            ChatSendErrorCode::UsageLimitReached
-        } else if l.contains("safety timeout") || l.contains("timed out") {
-            ChatSendErrorCode::SafetyTimeout
-        } else if l.contains("cloud") || l.contains("http") || l.contains("provider") {
-            ChatSendErrorCode::CloudSendFailed
-        } else {
-            ChatSendErrorCode::Unknown
-        };
+        let code =
+            if l.contains("disconnect") || l.contains("not connected") || l.contains("websocket") {
+                ChatSendErrorCode::SocketDisconnected
+            } else if l.contains("prompt_blocked") || l.contains("prompt injection") {
+                ChatSendErrorCode::PromptBlocked
+            } else if l.contains("prompt_review") {
+                ChatSendErrorCode::PromptReview
+            } else if l.contains("usage limit") || l.contains("quota") || l.contains("rate limit") {
+                ChatSendErrorCode::UsageLimitReached
+            } else if l.contains("safety timeout") || l.contains("timed out") {
+                ChatSendErrorCode::SafetyTimeout
+            } else if l.contains("cloud") || l.contains("http") || l.contains("provider") {
+                ChatSendErrorCode::CloudSendFailed
+            } else {
+                ChatSendErrorCode::Unknown
+            };
         Self { code, message }
     }
 }
@@ -413,8 +414,12 @@ impl ChatState {
     /// Return the content of the most recent user message, if any. Used by
     /// the retry path to repopulate the composer.
     pub fn last_user_text(&self) -> Option<String> {
-        self.messages
-            .with(|msgs| msgs.iter().rev().find(|m| m.role == "user").map(|m| m.content.clone()))
+        self.messages.with(|msgs| {
+            msgs.iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.clone())
+        })
     }
 
     /// Clear all messages and reset state.

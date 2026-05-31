@@ -449,7 +449,9 @@ fn macos_set_window_bounds(
             ))
         }
     };
-    let (a, b) = position.or(size).expect("exactly one of position/size is Some");
+    let (a, b) = position
+        .or(size)
+        .expect("exactly one of position/size is Some");
 
     let script = format!(
         r#"on run argv

@@ -212,7 +212,11 @@ mod tests {
         let mat = materialize(&def, "x", "t", &store).await.unwrap();
         assert_eq!(mat.task_ids.len(), 4);
         // The final task "d" must be blocked until both b and c complete.
-        let last = store.get_task(mat.task_ids.last().unwrap()).await.unwrap().unwrap();
+        let last = store
+            .get_task(mat.task_ids.last().unwrap())
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(last.subject, "diamond:d");
         assert_eq!(last.status, CoordTaskStatus::Blocked);
     }

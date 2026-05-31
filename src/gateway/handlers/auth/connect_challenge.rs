@@ -49,7 +49,10 @@ mod tests {
         let req = JsonRpcRequest::with_id("connect.challenge", None, json!(1));
         let resp = handle_connect_challenge(req, ctx.clone()).await;
 
-        assert!(resp.is_success(), "connect.challenge must succeed: {resp:?}");
+        assert!(
+            resp.is_success(),
+            "connect.challenge must succeed: {resp:?}"
+        );
         let result = resp.result.expect("success has result");
         let nonce = result["nonce"].as_str().expect("nonce must be string");
         assert_eq!(nonce.len(), 64, "nonce should be 64 hex chars");

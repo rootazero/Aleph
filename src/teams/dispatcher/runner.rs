@@ -205,8 +205,8 @@ pub async fn execute_member_task(
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override,
         workspace_override: inherited_workspace,
-            max_iterations_override: None,
-            model_override: None,
+        max_iterations_override: None,
+        model_override: None,
     };
 
     let execution_adapter = Arc::clone(context.execution_adapter());
@@ -369,9 +369,9 @@ async fn execute_acp_member_task(
                 &task_text,
                 cwd,
                 session_name,
-                None,  // use harness default mode
-                true,  // reuse session for team continuity
-                None,  // streaming callback wired in B2/follow-up
+                None, // use harness default mode
+                true, // reuse session for team continuity
+                None, // streaming callback wired in B2/follow-up
             )
             .await
     };

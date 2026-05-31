@@ -30,13 +30,7 @@ pub fn info() -> CliResult<()> {
         .arg("sandbox-debug")
         .arg("--show-summary")
         .status()
-        .map_err(|e| {
-            CliError::Other(format!(
-                "failed to invoke {}: {}",
-                binary.display(),
-                e
-            ))
-        })?;
+        .map_err(|e| CliError::Other(format!("failed to invoke {}: {}", binary.display(), e)))?;
     if !status.success() {
         std::process::exit(status.code().unwrap_or(1));
     }
@@ -79,13 +73,9 @@ pub fn run(
         cmd.arg(arg);
     }
 
-    let status = cmd.status().map_err(|e| {
-        CliError::Other(format!(
-            "failed to invoke {}: {}",
-            binary.display(),
-            e
-        ))
-    })?;
+    let status = cmd
+        .status()
+        .map_err(|e| CliError::Other(format!("failed to invoke {}: {}", binary.display(), e)))?;
 
     // Propagate the inner exit code so shell pipelines can react.
     if !status.success() {

@@ -486,8 +486,7 @@ mod tests {
     /// `KnowledgeNote::to_markdown` reconstruction that only re-emits bullets).
     #[tokio::test]
     async fn update_note_persists_content_verbatim() {
-        let memory_dir =
-            std::env::temp_dir().join(format!("update_note_test_{}", Uuid::new_v4()));
+        let memory_dir = std::env::temp_dir().join(format!("update_note_test_{}", Uuid::new_v4()));
         let db = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), db.clone()));
 
@@ -511,14 +510,16 @@ mod tests {
     /// A node_id without a `category/` prefix is rejected with an error.
     #[tokio::test]
     async fn update_note_rejects_node_id_without_category() {
-        let memory_dir =
-            std::env::temp_dir().join(format!("update_note_test_{}", Uuid::new_v4()));
+        let memory_dir = std::env::temp_dir().join(format!("update_note_test_{}", Uuid::new_v4()));
         let db = make_db();
         let indexer = Arc::new(NoteIndexer::new(memory_dir, db));
 
         let req = update_note_request("NoCategory", "body", Some("default"));
         let resp = handle_update_note_impl(req, indexer).await;
-        assert!(resp.error.is_some(), "expected error for category-less node_id");
+        assert!(
+            resp.error.is_some(),
+            "expected error for category-less node_id"
+        );
     }
 
     fn neighbors_request(node_id: &str, depth: u8, limit: usize) -> JsonRpcRequest {

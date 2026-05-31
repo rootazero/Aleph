@@ -125,7 +125,10 @@ pub(super) fn NetworkAccessSection(config: RwSignal<Option<SecurityConfig>>) -> 
 }
 
 #[component]
-pub(super) fn PairedDevices(devices: RwSignal<Vec<DeviceInfo>>, state: DashboardState) -> impl IntoView {
+pub(super) fn PairedDevices(
+    devices: RwSignal<Vec<DeviceInfo>>,
+    state: DashboardState,
+) -> impl IntoView {
     let i18n = use_i18n();
     let revoke_device = move |device_id: String| {
         spawn_local(async move {

@@ -18,8 +18,8 @@
 //! API reference: <https://fal.ai/docs/model-endpoints>
 
 use crate::generation::{
-    GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProvider,
-    GenerationProgress, GenerationRequest, GenerationResult, GenerationType,
+    GenerationData, GenerationError, GenerationMetadata, GenerationOutput, GenerationProgress,
+    GenerationProvider, GenerationRequest, GenerationResult, GenerationType,
 };
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -232,7 +232,10 @@ impl FalProvider {
     fn map_http_error(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
         match status.as_u16() {
             401 | 403 => GenerationError::authentication(
-                format!("Fal auth failed: {}", body.chars().take(200).collect::<String>()),
+                format!(
+                    "Fal auth failed: {}",
+                    body.chars().take(200).collect::<String>()
+                ),
                 &self.name,
             ),
             429 => GenerationError::rate_limit("Fal rate limit exceeded", None),
@@ -254,11 +257,7 @@ impl FalProvider {
     }
 
     /// POST → request_id.
-    async fn submit(
-        &self,
-        model_path: &str,
-        input: &Value,
-    ) -> GenerationResult<FalSubmitResponse> {
+    async fn submit(&self, model_path: &str, input: &Value) -> GenerationResult<FalSubmitResponse> {
         let url = self.submit_url(model_path);
         debug!(url = %url, "fal submit");
         let resp = self
@@ -311,11 +310,7 @@ impl FalProvider {
         })
     }
 
-    async fn fetch_result(
-        &self,
-        model_path: &str,
-        request_id: &str,
-    ) -> GenerationResult<Value> {
+    async fn fetch_result(&self, model_path: &str, request_id: &str) -> GenerationResult<Value> {
         let url = self.result_url(model_path, request_id);
         let resp = self
             .client
@@ -354,15 +349,27 @@ fn extract_primary_url(result: &Value) -> Option<String> {
         return Some(url.to_string());
     }
     // video.url
-    if let Some(url) = result.get("video").and_then(|v| v.get("url")).and_then(|s| s.as_str()) {
+    if let Some(url) = result
+        .get("video")
+        .and_then(|v| v.get("url"))
+        .and_then(|s| s.as_str())
+    {
         return Some(url.to_string());
     }
     // audio.url
-    if let Some(url) = result.get("audio").and_then(|v| v.get("url")).and_then(|s| s.as_str()) {
+    if let Some(url) = result
+        .get("audio")
+        .and_then(|v| v.get("url"))
+        .and_then(|s| s.as_str())
+    {
         return Some(url.to_string());
     }
     // file.url (MusicGen + a few others)
-    if let Some(url) = result.get("file").and_then(|v| v.get("url")).and_then(|s| s.as_str()) {
+    if let Some(url) = result
+        .get("file")
+        .and_then(|v| v.get("url"))
+        .and_then(|s| s.as_str())
+    {
         return Some(url.to_string());
     }
     // Bare top-level "url" field
@@ -389,7 +396,10 @@ struct FalStatusResponse {
 
 impl FalStatusResponse {
     fn is_terminal(&self) -> bool {
-        matches!(self.status.as_str(), "COMPLETED" | "ERROR" | "FAILED" | "CANCELED")
+        matches!(
+            self.status.as_str(),
+            "COMPLETED" | "ERROR" | "FAILED" | "CANCELED"
+        )
     }
     fn is_success(&self) -> bool {
         self.status == "COMPLETED"
@@ -563,24 +573,26 @@ mod tests {
     #[test]
     fn build_input_carries_known_params() {
         let p = make_provider(vec![GenerationType::Image]);
-        let req = GenerationRequest::image("a fox")
-            .with_params(
-                GenerationParams::builder()
-                    .width(768)
-                    .height(1024)
-                    .seed(42)
-                    .steps(28)
-                    .guidance_scale(3.5)
-                    .aspect_ratio("9:16")
-                    .build(),
-            );
+        let req = GenerationRequest::image("a fox").with_params(
+            GenerationParams::builder()
+                .width(768)
+                .height(1024)
+                .seed(42)
+                .steps(28)
+                .guidance_scale(3.5)
+                .aspect_ratio("9:16")
+                .build(),
+        );
         let input = p.build_input(&req);
         assert_eq!(input["prompt"], "a fox");
         assert_eq!(input["seed"], 42);
         assert_eq!(input["num_inference_steps"], 28);
         assert_eq!(input["guidance_scale"], 3.5);
         assert_eq!(input["aspect_ratio"], "9:16");
-        assert_eq!(input["image_size"], serde_json::json!({"width": 768, "height": 1024}));
+        assert_eq!(
+            input["image_size"],
+            serde_json::json!({"width": 768, "height": 1024})
+        );
     }
 
     #[test]
@@ -593,8 +605,7 @@ mod tests {
         params
             .extra
             .insert("scheduler".into(), serde_json::json!("DDIM"));
-        let req = GenerationRequest::video("a sunset")
-            .with_params(params);
+        let req = GenerationRequest::video("a sunset").with_params(params);
         let input = p.build_input(&req);
         assert_eq!(input["cfg_scale"], 7.5);
         assert_eq!(input["scheduler"], "DDIM");
@@ -642,7 +653,8 @@ mod tests {
 
     #[test]
     fn extract_primary_url_handles_video_shape() {
-        let v = serde_json::json!({"video": {"url": "https://x/y.mp4", "content_type": "video/mp4"}});
+        let v =
+            serde_json::json!({"video": {"url": "https://x/y.mp4", "content_type": "video/mp4"}});
         assert_eq!(extract_primary_url(&v), Some("https://x/y.mp4".into()));
     }
 

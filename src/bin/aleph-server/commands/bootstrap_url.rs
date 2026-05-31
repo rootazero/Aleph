@@ -50,7 +50,8 @@ pub async fn handle_bootstrap_url() -> Result<(), Box<dyn Error>> {
     let vault_path = data_dir.join("secrets.vault");
 
     let token = {
-        let store = Arc::new(SecurityStore::open(&db_path).map_err(|e| format!("open store: {e}"))?);
+        let store =
+            Arc::new(SecurityStore::open(&db_path).map_err(|e| format!("open store: {e}"))?);
         let mgr = SharedTokenManager::new(store, vault_path);
         match mgr.try_load_token_from_db() {
             Some(t) => t,
@@ -125,8 +126,8 @@ async fn issue_nonce_url(token: &str) -> Result<String, String> {
     let result = resp
         .get("result")
         .ok_or_else(|| format!("issue response had no result: {resp}"))?;
-    let issued: IssueResult = serde_json::from_value(result.clone())
-        .map_err(|e| format!("parse issue result: {e}"))?;
+    let issued: IssueResult =
+        serde_json::from_value(result.clone()).map_err(|e| format!("parse issue result: {e}"))?;
 
     // Best-effort close.
     let _ = ws.close(None).await;

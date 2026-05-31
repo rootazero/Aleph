@@ -142,8 +142,10 @@ mod tests {
         ];
         let guides = detect_guides(drag, &candidates, SNAP_THRESHOLD);
         assert_eq!(guides.len(), 2);
-        let by_axis: std::collections::HashMap<_, _> =
-            guides.iter().map(|g| (g.axis, g.anchor_id.clone())).collect();
+        let by_axis: std::collections::HashMap<_, _> = guides
+            .iter()
+            .map(|g| (g.axis, g.anchor_id.clone()))
+            .collect();
         assert_eq!(by_axis[&Axis::Vertical], "x".to_string());
         assert_eq!(by_axis[&Axis::Horizontal], "y".to_string());
     }
@@ -203,6 +205,10 @@ mod tests {
         let drag = pos(100.0, 0.0);
         let candidates = vec![("edge".to_string(), pos(100.0 + SNAP_THRESHOLD, 0.0))];
         let guides = detect_guides(drag, &candidates, SNAP_THRESHOLD);
-        assert_eq!(guides.len(), 2, "exact threshold should match both axes (dy=0 too)");
+        assert_eq!(
+            guides.len(),
+            2,
+            "exact threshold should match both axes (dy=0 too)"
+        );
     }
 }

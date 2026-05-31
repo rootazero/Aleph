@@ -77,9 +77,7 @@ pub(super) async fn init_coord_and_snapshot(
 }
 
 /// Open `teams.db`, create the `SqliteTeamStore`, run migrations.
-pub(super) async fn init_team_store(
-    daemon: bool,
-) -> Option<Arc<dyn alephcore::teams::TeamStore>> {
+pub(super) async fn init_team_store(daemon: bool) -> Option<Arc<dyn alephcore::teams::TeamStore>> {
     use alephcore::teams::SqliteTeamStore;
     use alephcore::utils::paths::get_data_dir;
 
@@ -324,5 +322,10 @@ pub(super) fn build_team_components(
     let agent_message_bus: Option<Arc<alephcore::agents::swarm::AgentMessageBus>> =
         Some(Arc::new(alephcore::agents::swarm::AgentMessageBus::new()));
 
-    (message_router, inbox, session_coordinator, agent_message_bus)
+    (
+        message_router,
+        inbox,
+        session_coordinator,
+        agent_message_bus,
+    )
 }

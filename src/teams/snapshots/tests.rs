@@ -380,11 +380,7 @@ fn mk_task(
     }
 }
 
-fn mk_payload(
-    team: &Team,
-    members: Vec<TeamMember>,
-    tasks: Vec<CoordTask>,
-) -> TeamSnapshotPayload {
+fn mk_payload(team: &Team, members: Vec<TeamMember>, tasks: Vec<CoordTask>) -> TeamSnapshotPayload {
     TeamSnapshotPayload {
         team: team.clone(),
         members,

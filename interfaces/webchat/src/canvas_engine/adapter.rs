@@ -227,13 +227,20 @@ pub fn populate_orphans(nbhd: &mut Neighborhood, all_dtos: &[NoteNodeDto]) {
     // fit_to_content corrects the visible scale after seeding).
     let viewport = (800.0_f64, 600.0_f64);
     let orphan_ids: Vec<&str> = orphan_dtos.iter().map(|d| d.id.as_str()).collect();
-    let mut scattered: std::collections::HashMap<String, Vec2> =
-        std::collections::HashMap::new();
-    place_scattered(&orphan_ids, viewport, &std::collections::HashMap::new(), &mut scattered);
+    let mut scattered: std::collections::HashMap<String, Vec2> = std::collections::HashMap::new();
+    place_scattered(
+        &orphan_ids,
+        viewport,
+        &std::collections::HashMap::new(),
+        &mut scattered,
+    );
 
     let mut orphans = Vec::with_capacity(orphan_dtos.len());
     for dto in orphan_dtos {
-        let pos = scattered.get(dto.id.as_str()).copied().unwrap_or(Vec2::zero());
+        let pos = scattered
+            .get(dto.id.as_str())
+            .copied()
+            .unwrap_or(Vec2::zero());
         let mut node = note_dto_to_canvas(dto, ORPHAN_HOP_SENTINEL);
         node.position = pos;
         node.z = ORPHAN_Z;
@@ -601,8 +608,8 @@ mod tests {
     #[test]
     fn fixture_canvas_30nodes_parses() {
         let json = include_str!("../../tests/fixtures/canvas_30nodes.json");
-        let parsed: GraphNeighborsResponse = serde_json::from_str(json)
-            .expect("fixture must parse against current DTOs");
+        let parsed: GraphNeighborsResponse =
+            serde_json::from_str(json).expect("fixture must parse against current DTOs");
         assert_eq!(parsed.center.id, "n00");
         assert_eq!(parsed.nodes.len(), 29);
         assert_eq!(parsed.edges.len(), 45);

@@ -243,11 +243,12 @@ where
         }
     }
 
+    let got_terminal = final_state.is_some();
     let failed = matches!(
         final_state,
         Some(TaskState::Failed | TaskState::Rejected | TaskState::Canceled)
     );
-    let success = stream_error.is_none() && !failed;
+    let success = stream_error.is_none() && !failed && got_terminal;
 
     let body = if !artifacts.is_empty() {
         artifacts.join("\n")

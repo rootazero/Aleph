@@ -120,9 +120,7 @@ impl AlephTool for TaskExitJournalTool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::swarm::tasks::{
-        store::SqliteCoordTaskStore, NewCoordTask, Priority,
-    };
+    use crate::agents::swarm::tasks::{store::SqliteCoordTaskStore, NewCoordTask, Priority};
     use crate::sync_primitives::Arc;
 
     async fn setup() -> (Arc<dyn CoordTaskStore>, TaskExitJournalTool) {
@@ -258,8 +256,7 @@ mod tests {
 
         let list = store.list_team_journals("T").await.unwrap();
         assert_eq!(list.len(), 2);
-        let ids: std::collections::HashSet<_> =
-            list.iter().map(|j| j.task_id.clone()).collect();
+        let ids: std::collections::HashSet<_> = list.iter().map(|j| j.task_id.clone()).collect();
         assert!(ids.contains(&t1));
         assert!(ids.contains(&t2));
     }

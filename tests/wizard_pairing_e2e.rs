@@ -25,8 +25,8 @@ fn make_manager() -> Arc<WizardSessionManager> {
     let devices_f = devices.clone();
     let tokens_f = tokens.clone();
 
-    let factory: WizardFlowFactory =
-        Arc::new(move |wizard_type: &str, _initial: Option<serde_json::Value>| {
+    let factory: WizardFlowFactory = Arc::new(
+        move |wizard_type: &str, _initial: Option<serde_json::Value>| {
             if wizard_type == "pairing" {
                 Some(Box::new(PairingFlow::new(
                     "E2E Mac",
@@ -38,7 +38,8 @@ fn make_manager() -> Arc<WizardSessionManager> {
             } else {
                 None
             }
-        });
+        },
+    );
 
     Arc::new(WizardSessionManager::new(factory))
 }
@@ -54,11 +55,7 @@ async fn pairing_wizard_round_trip_returns_token() {
         Some(json!(1)),
     );
     let resp = handle_start(req, manager.clone()).await;
-    assert!(
-        resp.is_success(),
-        "wizard.start failed: {:?}",
-        resp.error
-    );
+    assert!(resp.is_success(), "wizard.start failed: {:?}", resp.error);
 
     let start_body: serde_json::Value = resp.result.unwrap();
     let session_id = start_body["session_id"]
@@ -67,7 +64,9 @@ async fn pairing_wizard_round_trip_returns_token() {
         .to_string();
 
     // The first step is the welcome note (prompt_no_wait → auto step ID).
-    let first_step = start_body["step"].as_object().expect("step must be present");
+    let first_step = start_body["step"]
+        .as_object()
+        .expect("step must be present");
     let welcome_step_id = first_step["id"]
         .as_str()
         .expect("step.id must be a string")
@@ -106,7 +105,9 @@ async fn pairing_wizard_round_trip_returns_token() {
         resp_next.error
     );
     let next_body: serde_json::Value = resp_next.result.unwrap();
-    let approve_step = next_body["step"].as_object().expect("confirm step must be present");
+    let approve_step = next_body["step"]
+        .as_object()
+        .expect("confirm step must be present");
     assert_eq!(
         approve_step["id"].as_str().unwrap(),
         "pairing-approve",
@@ -156,7 +157,9 @@ async fn pairing_wizard_round_trip_returns_token() {
         "wizard must be done after approve; got {:?}",
         final_body
     );
-    let data = final_body["data"].as_object().expect("data must be present");
+    let data = final_body["data"]
+        .as_object()
+        .expect("data must be present");
     let token = data["token"].as_str().expect("token must be a string");
     assert!(
         token.contains(':'),

@@ -88,7 +88,10 @@ pub fn AgentBindingSelector(
                         b.insert(value, ch_id.clone());
                     }
                     bindings.set(b);
-                    status_msg.set(Some((true, t_string!(i18n, common.binding_updated).to_string())));
+                    status_msg.set(Some((
+                        true,
+                        t_string!(i18n, common.binding_updated).to_string(),
+                    )));
                 }
                 Err(e) => {
                     status_msg.set(Some((false, e)));

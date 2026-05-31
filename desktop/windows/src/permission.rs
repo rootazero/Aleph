@@ -352,7 +352,10 @@ mod tests {
         assert_eq!(parse_consent_value("Deny"), PermissionStatus::Denied);
         assert_eq!(parse_consent_value(" Allow \n"), PermissionStatus::Granted);
         assert_eq!(parse_consent_value(""), PermissionStatus::NotDetermined);
-        assert_eq!(parse_consent_value("Prompt"), PermissionStatus::NotDetermined);
+        assert_eq!(
+            parse_consent_value("Prompt"),
+            PermissionStatus::NotDetermined
+        );
     }
 
     #[test]
@@ -421,10 +424,7 @@ mod tests {
     #[tokio::test]
     async fn guide_permission_carries_deep_link_and_steps() {
         let perm = WindowsPermission::new();
-        let guide = perm
-            .guide_permission(PermissionKind::Camera)
-            .await
-            .unwrap();
+        let guide = perm.guide_permission(PermissionKind::Camera).await.unwrap();
         assert_eq!(guide.deep_link, "ms-settings:privacy-webcam");
         assert!(!guide.human_readable_steps.is_empty());
         assert!(!guide.rationale.is_empty());

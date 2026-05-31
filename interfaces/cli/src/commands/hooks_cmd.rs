@@ -20,10 +20,7 @@ pub async fn list(server_url: &str, json_out: bool) -> CliResult<()> {
         return Ok(());
     }
 
-    let path = result
-        .get("path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
+    let path = result.get("path").and_then(|v| v.as_str()).unwrap_or("?");
     let exists = result
         .get("exists")
         .and_then(|v| v.as_bool())
@@ -34,7 +31,10 @@ pub async fn list(server_url: &str, json_out: bool) -> CliResult<()> {
         .cloned()
         .unwrap_or_default();
 
-    println!("hooks file : {path} ({})", if exists { "present" } else { "missing" });
+    println!(
+        "hooks file : {path} ({})",
+        if exists { "present" } else { "missing" }
+    );
     if events.is_empty() {
         println!();
         println!("No user hooks defined. Use `aleph hooks add` to create one.");
@@ -96,7 +96,10 @@ pub async fn add(
     json_out: bool,
 ) -> CliResult<()> {
     // Validate exactly-one client-side too so misuse is caught before the round-trip.
-    let count = [command, prompt, agent, url].iter().filter(|o| o.is_some()).count();
+    let count = [command, prompt, agent, url]
+        .iter()
+        .filter(|o| o.is_some())
+        .count();
     if count != 1 {
         return Err(CliError::Other(
             "must set exactly one of --command / --prompt / --agent / --url".into(),
@@ -159,12 +162,17 @@ pub async fn remove(
     }
 
     let (client, _events) = AlephClient::connect(server_url).await?;
-    let result: Value = client.call("hooks.remove", Some(Value::Object(body))).await?;
+    let result: Value = client
+        .call("hooks.remove", Some(Value::Object(body)))
+        .await?;
     if json_out {
         output::print_json(&result);
     } else {
         let removed = result.get("removed").and_then(|v| v.as_u64()).unwrap_or(0);
-        println!("✓ Removed {removed} hook entr{}", if removed == 1 { "y" } else { "ies" });
+        println!(
+            "✓ Removed {removed} hook entr{}",
+            if removed == 1 { "y" } else { "ies" }
+        );
     }
     client.close().await?;
     Ok(())

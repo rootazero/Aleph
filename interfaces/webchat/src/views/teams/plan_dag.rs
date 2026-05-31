@@ -141,20 +141,17 @@ fn compute_depths(tasks: &[CoordTaskDto]) -> HashMap<String, usize> {
 /// Map task status to a Tailwind hex colour. Matches kanban's column accents.
 fn status_fill(status: &str) -> &'static str {
     match status {
-        "pending" => "#9ca3af",      // gray-400
-        "blocked" => "#f97316",      // orange-500
-        "in_progress" => "#3b82f6",  // blue-500
-        "completed" => "#10b981",    // emerald-500
-        "failed" => "#ef4444",       // red-500
-        "cancelled" => "#6b7280",    // gray-500
+        "pending" => "#9ca3af",     // gray-400
+        "blocked" => "#f97316",     // orange-500
+        "in_progress" => "#3b82f6", // blue-500
+        "completed" => "#10b981",   // emerald-500
+        "failed" => "#ef4444",      // red-500
+        "cancelled" => "#6b7280",   // gray-500
         _ => "#9ca3af",
     }
 }
 
-fn render_dag(
-    tasks: Vec<CoordTaskDto>,
-    drawer: RwSignal<Option<CoordTaskDto>>,
-) -> impl IntoView {
+fn render_dag(tasks: Vec<CoordTaskDto>, drawer: RwSignal<Option<CoordTaskDto>>) -> impl IntoView {
     let depths = compute_depths(&tasks);
 
     // Group tasks by depth, preserving created-at order within each layer.
@@ -190,7 +187,9 @@ fn render_dag(
     // Pre-compute edge segments (dep_id -> task) so they render under nodes.
     let mut edges: Vec<(f32, f32, f32, f32)> = Vec::new();
     for t in &tasks {
-        let Some(&(tx, ty)) = positions.get(&t.id) else { continue };
+        let Some(&(tx, ty)) = positions.get(&t.id) else {
+            continue;
+        };
         for dep_id in &t.dependencies {
             if let Some(&(dx, dy)) = positions.get(dep_id) {
                 // From bottom-centre of dep to top-centre of task.
@@ -326,11 +325,7 @@ mod tests {
     #[test]
     fn linear_chain_increments_depth() {
         // a → b → c
-        let tasks = vec![
-            task("a", &[]),
-            task("b", &["a"]),
-            task("c", &["b"]),
-        ];
+        let tasks = vec![task("a", &[]), task("b", &["a"]), task("c", &["b"])];
         let depths = compute_depths(&tasks);
         assert_eq!(depths.get("a"), Some(&0));
         assert_eq!(depths.get("b"), Some(&1));
@@ -366,11 +361,7 @@ mod tests {
         // Same DAG, declared in reverse order — depths must match the
         // forward-order test above (the iterative pass must converge
         // regardless of source ordering).
-        let tasks = vec![
-            task("c", &["b"]),
-            task("b", &["a"]),
-            task("a", &[]),
-        ];
+        let tasks = vec![task("c", &["b"]), task("b", &["a"]), task("a", &[])];
         let depths = compute_depths(&tasks);
         assert_eq!(depths.get("a"), Some(&0));
         assert_eq!(depths.get("b"), Some(&1));
@@ -382,10 +373,7 @@ mod tests {
         // a ↔ b: an unresolvable cycle. compute_depths must still
         // terminate (the n+1 outer-loop cap is the guard) and produce
         // finite depths for every node.
-        let tasks = vec![
-            task("a", &["b"]),
-            task("b", &["a"]),
-        ];
+        let tasks = vec![task("a", &["b"]), task("b", &["a"])];
         let depths = compute_depths(&tasks);
         assert!(depths.contains_key("a"));
         assert!(depths.contains_key("b"));

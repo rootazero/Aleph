@@ -65,8 +65,7 @@ fn JsonNode(value: Value, depth: usize) -> impl IntoView {
             view! { <Composite kind=BracketKind::Object pairs=pairs depth=depth /> }.into_any()
         }
         Value::Array(arr) => {
-            let pairs: Vec<(Option<String>, Value)> =
-                arr.into_iter().map(|v| (None, v)).collect();
+            let pairs: Vec<(Option<String>, Value)> = arr.into_iter().map(|v| (None, v)).collect();
             view! { <Composite kind=BracketKind::Array pairs=pairs depth=depth /> }.into_any()
         }
         primitive => render_primitive(primitive),
@@ -101,7 +100,11 @@ impl BracketKind {
 }
 
 #[component]
-fn Composite(kind: BracketKind, pairs: Vec<(Option<String>, Value)>, depth: usize) -> impl IntoView {
+fn Composite(
+    kind: BracketKind,
+    pairs: Vec<(Option<String>, Value)>,
+    depth: usize,
+) -> impl IntoView {
     let open = RwSignal::new(depth <= DEFAULT_EXPANDED_DEPTH);
     let toggle = move |_| open.update(|o| *o = !*o);
 

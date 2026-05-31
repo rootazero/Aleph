@@ -220,4 +220,3 @@ pub(super) fn CustomPiiRulesSection(config: RwSignal<Option<SecurityConfig>>) ->
         </div>
     }
 }
-

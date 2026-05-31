@@ -86,10 +86,7 @@ pub enum WorkspaceContent {
     Empty,
     /// A specific tool call from a chat message is being inspected.
     /// Lookup happens via `ChatState.messages` for the matching tool_id.
-    ToolDetail {
-        run_id: String,
-        tool_id: String,
-    },
+    ToolDetail { run_id: String, tool_id: String },
 }
 
 impl Default for WorkspaceContent {
@@ -208,9 +205,7 @@ fn read_persisted_layout_mode() -> Option<LayoutMode> {
 }
 
 fn persist_layout_mode(mode: LayoutMode) {
-    let Some(storage) = web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten())
-    else {
+    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
         return;
     };
     let _ = storage.set_item(LAYOUT_MODE_KEY, mode.as_token());
@@ -279,10 +274,13 @@ mod tests {
         ws.record_tool_result("run-1", "tool-a", serde_json::json!({"ok": true}));
 
         assert!(ws.get_tool_payload("run-1", "tool-a").is_some());
-        assert_eq!(ws.content.get_untracked(), WorkspaceContent::ToolDetail {
-            run_id: "run-1".into(),
-            tool_id: "tool-a".into(),
-        });
+        assert_eq!(
+            ws.content.get_untracked(),
+            WorkspaceContent::ToolDetail {
+                run_id: "run-1".into(),
+                tool_id: "tool-a".into(),
+            }
+        );
 
         ws.reset();
 

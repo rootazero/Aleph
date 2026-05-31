@@ -103,9 +103,7 @@ pub(crate) fn aleph_home() -> PathBuf {
 /// Stable ID for a given path. Public so callers can pre-compute the ID
 /// without going through the store (e.g. UI cache lookups).
 pub fn project_id_for_path(path: &Path) -> String {
-    let canonical = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf());
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut hasher = Sha256::new();
     hasher.update(canonical.to_string_lossy().as_bytes());
     let digest = hasher.finalize();
@@ -189,21 +187,20 @@ impl ProjectStore {
     {
         self.ensure_parent()?;
         let lock_path = self.lock_path();
-        let result: Result<T, ProjectError> =
-            with_file_lock(&lock_path, |_| {
-                let mut file = self
-                    .read_unlocked()
-                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-                match f(&mut file) {
-                    Ok(value) => {
-                        self.write_unlocked(&file).map_err(|e| {
-                            std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-                        })?;
-                        Ok(Ok(value))
-                    }
-                    Err(e) => Ok(Err(e)),
+        let result: Result<T, ProjectError> = with_file_lock(&lock_path, |_| {
+            let mut file = self
+                .read_unlocked()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            match f(&mut file) {
+                Ok(value) => {
+                    self.write_unlocked(&file).map_err(|e| {
+                        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                    })?;
+                    Ok(Ok(value))
                 }
-            })?;
+                Err(e) => Ok(Err(e)),
+            }
+        })?;
         result
     }
 
@@ -318,7 +315,10 @@ fn canonical_dir(path: &Path) -> Result<PathBuf, ProjectError> {
     Ok(canonical)
 }
 
-fn resolve_display_name(path: &Path, override_name: Option<String>) -> Result<String, ProjectError> {
+fn resolve_display_name(
+    path: &Path,
+    override_name: Option<String>,
+) -> Result<String, ProjectError> {
     if let Some(name) = override_name {
         let trimmed = name.trim();
         if !trimmed.is_empty() {

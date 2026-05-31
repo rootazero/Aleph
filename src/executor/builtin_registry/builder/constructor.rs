@@ -19,11 +19,11 @@ use crate::builtin_tools::browser_tools::{
     BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::{
-    ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool, FileEditTool,
-    FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool, MediaTool, MemoryBrowseTool,
-    MemoryExploreTool, MemorySearchTool, PdfGenerateTool, PermissionTool, PimTool,
-    ReadConfigGuideTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool, VaultStoreTool,
-    WebFetchTool,
+    ApplyPatchTool, AutomationTool, BashExecTool, CodeCheckTool, CodeExecTool, DesktopTool,
+    FileEditTool, FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool, MediaTool,
+    MemoryBrowseTool, MemoryExploreTool, MemorySearchTool, PdfGenerateTool, PermissionTool,
+    PimTool, ReadConfigGuideTool, ScratchpadTool, SearchTool, SelfManageTool, SystemTool,
+    VaultStoreTool, WebFetchTool,
 };
 use crate::tool_metadata::{ToolSource, UnifiedTool};
 
@@ -757,35 +757,36 @@ impl BuiltinToolRegistry {
         // Build team_snapshot when TeamStore + CoordTaskStore + SqliteSnapshotStore
         // are all present. The snapshot store is constructed alongside coord
         // in the boot path so they share one Connection (see config.rs comment).
-        let team_snapshot_tool = if let (Some(ref team_store), Some(ref coord_store), Some(ref snap_store)) = (
-            &config.team_store,
-            &config.coord_task_store,
-            &config.snapshot_store,
-        ) {
-            use crate::builtin_tools::team::TeamSnapshotTool;
-            let tool = TeamSnapshotTool::new(
-                Arc::clone(team_store),
-                Arc::clone(coord_store),
-                Arc::clone(snap_store),
-                current_agent_id.clone(),
-            );
-            {
-                use crate::tools::AlephTool;
-                let td = tool.definition();
-                let mut ut = UnifiedTool::new(
-                    format!("builtin:{}", td.name),
-                    &td.name,
-                    &td.description,
-                    ToolSource::Builtin,
+        let team_snapshot_tool =
+            if let (Some(ref team_store), Some(ref coord_store), Some(ref snap_store)) = (
+                &config.team_store,
+                &config.coord_task_store,
+                &config.snapshot_store,
+            ) {
+                use crate::builtin_tools::team::TeamSnapshotTool;
+                let tool = TeamSnapshotTool::new(
+                    Arc::clone(team_store),
+                    Arc::clone(coord_store),
+                    Arc::clone(snap_store),
+                    current_agent_id.clone(),
                 );
-                ut = ut.with_parameters_schema(td.parameters.clone());
-                tools.insert(td.name.clone(), ut);
-            }
-            info!("Registered team_snapshot tool");
-            Some(tool)
-        } else {
-            None
-        };
+                {
+                    use crate::tools::AlephTool;
+                    let td = tool.definition();
+                    let mut ut = UnifiedTool::new(
+                        format!("builtin:{}", td.name),
+                        &td.name,
+                        &td.description,
+                        ToolSource::Builtin,
+                    );
+                    ut = ut.with_parameters_schema(td.parameters.clone());
+                    tools.insert(td.name.clone(), ut);
+                }
+                info!("Registered team_snapshot tool");
+                Some(tool)
+            } else {
+                None
+            };
 
         // Build team_usage when TeamStore + StateDatabase are both present.
         // The state.db lives in ~/.aleph/data and holds the task_traces rows
@@ -945,8 +946,7 @@ impl BuiltinToolRegistry {
         // trace + replay UI.
         let task_exit_journal_tool = if let Some(ref coord_store) = config.coord_task_store {
             use crate::builtin_tools::team::TaskExitJournalTool;
-            let tool =
-                TaskExitJournalTool::new(Arc::clone(coord_store), current_agent_id.clone());
+            let tool = TaskExitJournalTool::new(Arc::clone(coord_store), current_agent_id.clone());
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();

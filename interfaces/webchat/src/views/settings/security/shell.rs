@@ -385,4 +385,3 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
         </div>
     }
 }
-

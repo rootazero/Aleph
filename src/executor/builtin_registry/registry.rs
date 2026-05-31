@@ -265,8 +265,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_digest_tool: Option<crate::builtin_tools::team::TeamDigestTool>,
     /// One-shot team instantiation from a TOML blueprint (optional — requires
     /// TeamStore + CoordTaskStore + AgentRegistry + SessionStore).
-    pub(crate) team_from_template_tool:
-        Option<crate::builtin_tools::team::TeamFromTemplateTool>,
+    pub(crate) team_from_template_tool: Option<crate::builtin_tools::team::TeamFromTemplateTool>,
     /// Unified team-snapshot tool (optional — requires TeamStore + CoordTaskStore
     /// + SqliteSnapshotStore; the snapshot store is constructed alongside
     /// coord_task_store in the boot path so they share a connection).
@@ -292,14 +291,12 @@ pub struct BuiltinToolRegistry {
     /// Admin-context task control (R3 — ClawTeam parity). Pause/resume/
     /// retry/skip without going through reviewer flow. Optional —
     /// requires a CoordTaskStore.
-    pub(crate) team_task_control_tool:
-        Option<crate::builtin_tools::team::TeamTaskControlTool>,
+    pub(crate) team_task_control_tool: Option<crate::builtin_tools::team::TeamTaskControlTool>,
     /// Exit-journal tool (R3 — ClawTeam parity). The executing agent
     /// calls this on task wrap-up to leave a structured summary that
     /// feeds the unified trace + replay UI. Optional — requires a
     /// CoordTaskStore.
-    pub(crate) task_exit_journal_tool:
-        Option<crate::builtin_tools::team::TaskExitJournalTool>,
+    pub(crate) task_exit_journal_tool: Option<crate::builtin_tools::team::TaskExitJournalTool>,
     /// Team messaging tools (optional — require MessageRouter / Inbox)
     pub(crate) message_send_tool: Option<crate::builtin_tools::team::MessageSendTool>,
     pub(crate) inbox_read_tool: Option<crate::builtin_tools::team::InboxReadTool>,
@@ -597,7 +594,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "bash" => Box::pin(async move { self.bash_tool.call_json(arguments).await }),
             "code_exec" => Box::pin(async move { self.code_exec_tool.call_json(arguments).await }),
-            "code_check" => Box::pin(async move { self.code_check_tool.call_json(arguments).await }),
+            "code_check" => {
+                Box::pin(async move { self.code_check_tool.call_json(arguments).await })
+            }
             "pdf_generate" => {
                 Box::pin(async move { self.pdf_generate_tool.call_json(arguments).await })
             }
@@ -1247,9 +1246,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "team_usage" => Box::pin(async move {
                 let tool = self.team_usage_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool(
-                        "team_usage not available: TeamStore + StateDatabase required",
-                    )
+                    AlephError::tool("team_usage not available: TeamStore + StateDatabase required")
                 })?;
                 tool.call_json(arguments).await
             }),
@@ -1440,9 +1437,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "acp_session_control" => Box::pin(async move {
                 let tool = self.acp_session_control_tool.as_ref().ok_or_else(|| {
-                    AlephError::tool(
-                        "acp_session_control not available: ACP not configured",
-                    )
+                    AlephError::tool("acp_session_control not available: ACP not configured")
                 })?;
                 tool.call_json(arguments).await
             }),

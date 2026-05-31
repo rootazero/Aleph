@@ -589,8 +589,10 @@ mod tests {
 
         sink.on_delta(&ProviderDelta::TextDelta("answer <memory-".to_string()))
             .await;
-        sink.on_delta(&ProviderDelta::TextDelta("context>leaky body</memory-".to_string()))
-            .await;
+        sink.on_delta(&ProviderDelta::TextDelta(
+            "context>leaky body</memory-".to_string(),
+        ))
+        .await;
         sink.on_delta(&ProviderDelta::TextDelta("context> tail".to_string()))
             .await;
         sink.on_delta(&ProviderDelta::Done(StopReason::EndTurn))

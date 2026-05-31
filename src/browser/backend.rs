@@ -140,11 +140,7 @@ pub trait BrowserBackend: Send + Sync {
     /// Apply environment/device emulation overrides (color scheme, geolocation,
     /// network/CPU throttling, extra HTTP headers, user-agent) to a tab.
     /// Only the fields set in `opts` are applied. Default impl returns Unsupported.
-    async fn emulate(
-        &self,
-        _tab_id: &str,
-        _opts: &EmulateOptions,
-    ) -> Result<(), BrowserError> {
+    async fn emulate(&self, _tab_id: &str, _opts: &EmulateOptions) -> Result<(), BrowserError> {
         Err(BrowserError::ActionFailed("emulate not supported".into()))
     }
 
@@ -154,13 +150,17 @@ pub trait BrowserBackend: Send + Sync {
     /// Playwright backend implements it (the existing-session/MCP backend has no
     /// storage-state primitive).
     async fn save_state(&self, _path: &Path) -> Result<(), BrowserError> {
-        Err(BrowserError::ActionFailed("save_state not supported".into()))
+        Err(BrowserError::ActionFailed(
+            "save_state not supported".into(),
+        ))
     }
 
     /// Restore a previously-saved storage state from an absolute file path,
     /// re-establishing cookies + localStorage. Default impl returns Unsupported.
     async fn load_state(&self, _path: &Path) -> Result<(), BrowserError> {
-        Err(BrowserError::ActionFailed("load_state not supported".into()))
+        Err(BrowserError::ActionFailed(
+            "load_state not supported".into(),
+        ))
     }
 
     /// Run a cookie-management operation, returning the backend's textual output

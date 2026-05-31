@@ -168,12 +168,7 @@ impl LoopToolRegistry {
     ///
     /// `cancel` is forwarded verbatim to the resolved tool. See
     /// [`LoopTool::execute`] for the cancellation contract.
-    pub async fn execute(
-        &self,
-        name: &str,
-        input: Value,
-        cancel: CancellationToken,
-    ) -> ToolResult {
+    pub async fn execute(&self, name: &str, input: Value, cancel: CancellationToken) -> ToolResult {
         if let Some(tool) = self.get(name) {
             return tool.execute(input, cancel).await;
         }
@@ -334,11 +329,7 @@ mod tests {
 
         // Execute existing tool
         let result = registry
-            .execute(
-                "echo",
-                json!({ "message": "hi" }),
-                CancellationToken::new(),
-            )
+            .execute("echo", json!({ "message": "hi" }), CancellationToken::new())
             .await;
         match result {
             ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {

@@ -33,13 +33,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::about(app, Some("About Aleph"), None)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, ID_SHOW, "Show Aleph", true, None::<&str>)?,
-            &MenuItem::with_id(
-                app,
-                ID_OPEN_BROWSER,
-                "Open in Browser",
-                true,
-                None::<&str>,
-            )?,
+            &MenuItem::with_id(app, ID_OPEN_BROWSER, "Open in Browser", true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 ID_CHECK_UPDATE,
@@ -86,13 +80,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     // production users never need it, and a release menu item that
     // dead-ends would confuse them.
     let view_menu = {
-        let reload = MenuItem::with_id(
-            app,
-            ID_RELOAD_PANEL,
-            "Reload Panel",
-            true,
-            Some("Cmd+R"),
-        )?;
+        let reload = MenuItem::with_id(app, ID_RELOAD_PANEL, "Reload Panel", true, Some("Cmd+R"))?;
         #[cfg(debug_assertions)]
         {
             let devtools = MenuItem::with_id(
@@ -129,7 +117,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         "Help",
         true,
         &[
-            &MenuItem::with_id(app, ID_VISIT_REPO, "Visit GitHub Repository", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                ID_VISIT_REPO,
+                "Visit GitHub Repository",
+                true,
+                None::<&str>,
+            )?,
             &MenuItem::with_id(app, ID_REPORT_ISSUE, "Report an Issue…", true, None::<&str>)?,
         ],
     )?;

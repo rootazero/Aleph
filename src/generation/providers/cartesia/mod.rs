@@ -26,9 +26,9 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{
     CartesiaError, CartesiaErrorDetail, CartesiaOutputFormat, CartesiaTtsRequest,
@@ -110,13 +110,48 @@ impl CartesiaProvider {
     /// `params.voice`.
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         const VOICES: &[(&str, &str, &str, &str)] = &[
-            (DEFAULT_VOICE_ID, "American English", "female", "Sonic Turbo, en-US, female"),
-            ("a0e99841-438c-4a64-b679-ae501e7d6091", "Barbershop", "male", "Vintage, slightly raspy male"),
-            ("e00d0e4c-a5c8-443f-a8a3-473eb9a62355", "Sophie", "female", "Warm, conversational en-US female"),
-            ("79a125e8-cd45-4c13-8a67-188112f4dd22", "British Lady", "female", "RP British female"),
-            ("87748186-23bb-4158-a1eb-332911b0b708", "Wise Woman", "female", "Mature, calm female"),
-            ("2ee87190-8f84-4925-97da-e52547f9462c", "Child", "neutral", "Young voice, gender-neutral"),
-            ("248be419-c632-4f23-adf1-5324ed7dbf1d", "Tutorial Narrator", "male", "Clear, instructional"),
+            (
+                DEFAULT_VOICE_ID,
+                "American English",
+                "female",
+                "Sonic Turbo, en-US, female",
+            ),
+            (
+                "a0e99841-438c-4a64-b679-ae501e7d6091",
+                "Barbershop",
+                "male",
+                "Vintage, slightly raspy male",
+            ),
+            (
+                "e00d0e4c-a5c8-443f-a8a3-473eb9a62355",
+                "Sophie",
+                "female",
+                "Warm, conversational en-US female",
+            ),
+            (
+                "79a125e8-cd45-4c13-8a67-188112f4dd22",
+                "British Lady",
+                "female",
+                "RP British female",
+            ),
+            (
+                "87748186-23bb-4158-a1eb-332911b0b708",
+                "Wise Woman",
+                "female",
+                "Mature, calm female",
+            ),
+            (
+                "2ee87190-8f84-4925-97da-e52547f9462c",
+                "Child",
+                "neutral",
+                "Young voice, gender-neutral",
+            ),
+            (
+                "248be419-c632-4f23-adf1-5324ed7dbf1d",
+                "Tutorial Narrator",
+                "male",
+                "Clear, instructional",
+            ),
         ];
         VOICES
             .iter()
@@ -211,7 +246,9 @@ impl GenerationProvider for CartesiaProvider {
             let body = types::CartesiaTtsRequest {
                 transcript: request.prompt.clone(),
                 model_id: model.clone(),
-                voice: types::CartesiaVoiceSelector::Id { id: voice_id.clone() },
+                voice: types::CartesiaVoiceSelector::Id {
+                    id: voice_id.clone(),
+                },
                 language: Some(language.clone()),
                 output_format: types::CartesiaOutputFormat {
                     container: container.to_string(),
@@ -245,18 +282,16 @@ impl GenerationProvider for CartesiaProvider {
 
             let status = response.status();
             if !status.is_success() {
-                let body = response
-                    .text()
-                    .await
-                    .map_err(|e| GenerationError::network(format!("Failed to read error body: {}", e)))?;
+                let body = response.text().await.map_err(|e| {
+                    GenerationError::network(format!("Failed to read error body: {}", e))
+                })?;
                 error!(status = %status, body = %body, "Cartesia request failed");
                 return Err(self.parse_error(status, &body));
             }
 
-            let audio_bytes = response
-                .bytes()
-                .await
-                .map_err(|e| GenerationError::network(format!("Failed to read audio bytes: {}", e)))?;
+            let audio_bytes = response.bytes().await.map_err(|e| {
+                GenerationError::network(format!("Failed to read audio bytes: {}", e))
+            })?;
             if audio_bytes.is_empty() {
                 return Err(GenerationError::provider(
                     "Empty audio response from Cartesia",
@@ -280,9 +315,11 @@ impl GenerationProvider for CartesiaProvider {
                 "Cartesia TTS generation completed"
             );
 
-            let mut output =
-                GenerationOutput::new(GenerationType::Speech, GenerationData::bytes(audio_bytes.to_vec()))
-                    .with_metadata(metadata);
+            let mut output = GenerationOutput::new(
+                GenerationType::Speech,
+                GenerationData::bytes(audio_bytes.to_vec()),
+            )
+            .with_metadata(metadata);
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
             }

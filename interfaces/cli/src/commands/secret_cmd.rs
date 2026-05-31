@@ -29,11 +29,7 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
             println!("No secrets found");
         } else {
             let headers = &["NAME"];
-            let rows: Vec<Vec<String>> = response
-                .secrets
-                .iter()
-                .map(|n| vec![n.clone()])
-                .collect();
+            let rows: Vec<Vec<String>> = response.secrets.iter().map(|n| vec![n.clone()]).collect();
             output::print_table(headers, &rows, false, &result);
             println!();
             println!("Total: {} secrets", response.secrets.len());
@@ -43,12 +39,7 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
     Ok(())
 }
 
-pub async fn set(
-    server_url: &str,
-    name: &str,
-    value: Option<&str>,
-    json: bool,
-) -> CliResult<()> {
+pub async fn set(server_url: &str, name: &str, value: Option<&str>, json: bool) -> CliResult<()> {
     let resolved = match value {
         Some(v) if !v.is_empty() => v.to_string(),
         _ => prompt_for_secret(json)?,
@@ -63,10 +54,7 @@ pub async fn set(
     if json {
         output::print_json(&result);
     } else {
-        let stored = result
-            .get("key")
-            .and_then(|v| v.as_str())
-            .unwrap_or(name);
+        let stored = result.get("key").and_then(|v| v.as_str()).unwrap_or(name);
         println!("Stored secret '{stored}'");
     }
     client.close().await?;

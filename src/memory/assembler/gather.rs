@@ -103,7 +103,9 @@ impl Gatherer {
                 self.retrieval.retrieve(query, agent_id, limit).await
             } else {
                 let ids = crate::memory::project_scope::read_scope_ids(agent_id, &ns);
-                self.retrieval.retrieve_multi_agent(query, &ids, limit).await
+                self.retrieval
+                    .retrieve_multi_agent(query, &ids, limit)
+                    .await
             }
         } else {
             self.retrieval.retrieve(query, agent_id, limit).await

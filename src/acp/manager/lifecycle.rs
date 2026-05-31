@@ -392,7 +392,9 @@ impl AcpAdapterManager {
             })?;
             harness.build_config(Some(cwd)).timeout
         };
-        let entry = self.acquire_live_entry(harness_id, cwd, session_name).await?;
+        let entry = self
+            .acquire_live_entry(harness_id, cwd, session_name)
+            .await?;
         Ok((entry, timeout))
     }
 

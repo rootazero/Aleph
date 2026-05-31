@@ -277,8 +277,7 @@ impl Sandbox for WorkspaceSandbox {
         // `--unshare-net` strips the loopback that the host proxy lives
         // on. Phase B (netns→UDS→loopback bridge, ported from codex
         // `proxy_routing.rs`) will close the Linux gap.
-        let proxy_handle: Option<ProxyHandle> =
-            self.maybe_spawn_proxy(&mut cmd).await?;
+        let proxy_handle: Option<ProxyHandle> = self.maybe_spawn_proxy(&mut cmd).await?;
 
         // SP-4: pre-resolve any hostnames in AllowHosts to IPs before the
         // driver builds its profile. After the proxy rewrite above this
@@ -464,7 +463,9 @@ impl WorkspaceSandbox {
             ("all_proxy", proxy_url.as_str()),
         ];
         for (k, v) in inject_pairs {
-            cmd.env.entry(k.to_string()).or_insert_with(|| v.to_string());
+            cmd.env
+                .entry(k.to_string())
+                .or_insert_with(|| v.to_string());
         }
         // NO_PROXY exempts the loopback itself so curl/python clients
         // don't loop back through the proxy when talking to it.

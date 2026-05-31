@@ -395,7 +395,8 @@ fn cron_quick_create_presets() -> Vec<QuickCreatePreset> {
             label: "Weekly Monday review",
             description: "Mondays at 10:00",
             schedule_kind: serde_json::json!({"kind": "cron", "expr": "0 0 10 * * MON"}),
-            sample_prompt: "Prepare a weekly review of last week's accomplishments and this week's plan.",
+            sample_prompt:
+                "Prepare a weekly review of last week's accomplishments and this week's plan.",
         },
         QuickCreatePreset {
             label: "Every 5 minutes monitor",

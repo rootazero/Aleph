@@ -151,7 +151,12 @@ impl WizardSession {
 
     /// Build a Done result, carrying finish_data payload if set.
     pub(crate) fn done_result(&self) -> WizardNextResult {
-        match self.finish_data.read().unwrap_or_else(|e| e.into_inner()).clone() {
+        match self
+            .finish_data
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        {
             Some(data) => WizardNextResult::done_with_data(data),
             None => WizardNextResult::done(),
         }

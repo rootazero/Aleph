@@ -7,9 +7,7 @@ use crate::pii::engine::{FilterResult, PiiEngine};
 use crate::secrets::injection::{AsyncSecretResolver, InjectedSecret};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector as SecretLeakDetector};
 use crate::security::audit::{AuditEntry, AuditEventType, AuditSeverity, SecurityAuditLog};
-use crate::security::content_sanitizer::{
-    wrap_external_content_with_report, ContentSource,
-};
+use crate::security::content_sanitizer::{wrap_external_content_with_report, ContentSource};
 use crate::sync_primitives::{Arc, RwLock};
 use thiserror::Error;
 use tokio::sync::Mutex;

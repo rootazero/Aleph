@@ -52,11 +52,7 @@ impl SubscriptionManager {
 
     /// Add full subscription entries (pattern + optional `where_clause`
     /// field predicates) to a connection's filter.
-    pub async fn add_subscriptions(
-        &self,
-        conn_id: &str,
-        subscriptions: Vec<TopicSubscription>,
-    ) {
+    pub async fn add_subscriptions(&self, conn_id: &str, subscriptions: Vec<TopicSubscription>) {
         let mut subs = self.subscriptions.write().await;
         let filter = subs
             .entry(conn_id.to_string())
@@ -91,12 +87,7 @@ impl SubscriptionManager {
     /// and optional payload `data`. Field-predicate filters consult `data`
     /// — pass `None` only when payload context isn't available (subscriptions
     /// with predicates will then be skipped).
-    pub async fn should_receive(
-        &self,
-        conn_id: &str,
-        topic: &str,
-        data: Option<&Value>,
-    ) -> bool {
+    pub async fn should_receive(&self, conn_id: &str, topic: &str, data: Option<&Value>) -> bool {
         let subs = self.subscriptions.read().await;
         match subs.get(conn_id) {
             Some(filter) => filter.matches(topic, data),
@@ -355,7 +346,10 @@ mod tests {
             Some(json!(1)),
         );
         let response = handle_subscribe(request, "conn-field", manager.clone()).await;
-        assert!(response.is_success(), "subscribe should accept the mixed-shape payload: {response:?}");
+        assert!(
+            response.is_success(),
+            "subscribe should accept the mixed-shape payload: {response:?}"
+        );
 
         // Topic-only subscription still works for any payload.
         assert!(

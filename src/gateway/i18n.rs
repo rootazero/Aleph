@@ -29,9 +29,7 @@ impl Locale {
 /// All user-facing system messages that need translation.
 pub enum Msg<'a> {
     // --- /new command ---
-    NewSessionStarted {
-        topic_suffix: &'a str,
-    },
+    NewSessionStarted { topic_suffix: &'a str },
 
     // --- execution errors ---
     ErrRateLimit,
@@ -39,14 +37,10 @@ pub enum Msg<'a> {
     ErrTimeout,
     ErrNetwork,
     ErrServiceUnavailable,
-    ErrGeneric {
-        detail: &'a str,
-    },
+    ErrGeneric { detail: &'a str },
 
     // --- topic generation prompt (sent to LLM, not shown to user) ---
-    TopicGenerationPrompt {
-        conversation: &'a str,
-    },
+    TopicGenerationPrompt { conversation: &'a str },
 }
 
 /// Translate a message key to the target locale.
@@ -179,12 +173,12 @@ pub fn render_loop_halt(
              ({iterations} iterations completed)."
         ),
 
-        (TerminateReason::VerifierVeto { vetos }, Locale::Zh) => format!(
-            "抱歉，被验证器连续否决 {vetos} 次后退出（{iterations} 次迭代）。"
-        ),
-        (TerminateReason::VerifierVeto { vetos }, Locale::En) => format!(
-            "Sorry, exited after {vetos} verifier vetoes ({iterations} iterations)."
-        ),
+        (TerminateReason::VerifierVeto { vetos }, Locale::Zh) => {
+            format!("抱歉，被验证器连续否决 {vetos} 次后退出（{iterations} 次迭代）。")
+        }
+        (TerminateReason::VerifierVeto { vetos }, Locale::En) => {
+            format!("Sorry, exited after {vetos} verifier vetoes ({iterations} iterations).")
+        }
 
         (TerminateReason::EmptyResponseExhausted, Locale::Zh) => format!(
             "抱歉，模型连续返回空响应（{iterations} 次迭代），无法继续。\n\
@@ -218,17 +212,11 @@ pub fn render_loop_halt(
         // `reason` carries the underlying cap label ("hit_max_iterations",
         // "context_budget_exhausted", "max_output_tokens_exhausted") for
         // diagnostic surfacing.
-        (
-            TerminateReason::BudgetExhaustedPartialResult { reason, .. },
-            Locale::Zh,
-        ) => format!(
+        (TerminateReason::BudgetExhaustedPartialResult { reason, .. }, Locale::Zh) => format!(
             "抱歉，预算已用尽（{reason}），但已保留部分结果供下次续跑\
              （{iterations} 次迭代，{tool_calls} 次工具调用）。"
         ),
-        (
-            TerminateReason::BudgetExhaustedPartialResult { reason, .. },
-            Locale::En,
-        ) => format!(
+        (TerminateReason::BudgetExhaustedPartialResult { reason, .. }, Locale::En) => format!(
             "Sorry, the budget was exhausted ({reason}); partial result \
              preserved for resume ({iterations} iterations, \
              {tool_calls} tool calls)."
@@ -249,9 +237,9 @@ pub fn render_loop_halt(
         // (`TerminateReason` is `#[non_exhaustive]` for downstream crates but
         // exhaustive within this crate — a new variant added in dispatch.rs
         // will force this match to be updated.)
-        (TerminateReason::Completed | TerminateReason::Cancelled, Locale::Zh) => format!(
-            "抱歉，会话提前结束（{iterations} 次迭代，{tool_calls} 次工具调用）。"
-        ),
+        (TerminateReason::Completed | TerminateReason::Cancelled, Locale::Zh) => {
+            format!("抱歉，会话提前结束（{iterations} 次迭代，{tool_calls} 次工具调用）。")
+        }
         (TerminateReason::Completed | TerminateReason::Cancelled, Locale::En) => format!(
             "Sorry, the session ended early ({iterations} iterations, \
              {tool_calls} tool calls)."
@@ -393,9 +381,7 @@ mod tests {
     #[test]
     fn render_loop_halt_stall_timeout_mentions_elapsed_ms() {
         let msg = render_loop_halt(
-            &TerminateReason::StallTimeout {
-                elapsed_ms: 30_000,
-            },
+            &TerminateReason::StallTimeout { elapsed_ms: 30_000 },
             5,
             3,
             Locale::En,
@@ -428,12 +414,7 @@ mod tests {
 
     #[test]
     fn render_loop_halt_max_output_tokens_advises_token_knob() {
-        let msg = render_loop_halt(
-            &TerminateReason::MaxOutputTokensExhausted,
-            3,
-            0,
-            Locale::En,
-        );
+        let msg = render_loop_halt(&TerminateReason::MaxOutputTokensExhausted, 3, 0, Locale::En);
         assert!(msg.contains("max_output_tokens"), "{msg}");
         assert!(
             !msg.contains("max_iterations"),

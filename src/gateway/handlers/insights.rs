@@ -94,7 +94,10 @@ mod tests {
         // Absent params → all defaults.
         let p: ToolInsightsParams = serde_json::from_value(json!({})).unwrap();
         assert!(p.agent_id.is_none());
-        let window = p.window_seconds.filter(|w| *w > 0).unwrap_or(DEFAULT_WINDOW_SECONDS);
+        let window = p
+            .window_seconds
+            .filter(|w| *w > 0)
+            .unwrap_or(DEFAULT_WINDOW_SECONDS);
         let top_n = p.top_n.filter(|n| *n > 0).unwrap_or(DEFAULT_TOP_N);
         assert_eq!(window, DEFAULT_WINDOW_SECONDS);
         assert_eq!(top_n, DEFAULT_TOP_N);
@@ -102,7 +105,10 @@ mod tests {
         // Non-positive window / zero top_n fall back to defaults.
         let p2: ToolInsightsParams =
             serde_json::from_value(json!({"window_seconds": 0, "top_n": 0})).unwrap();
-        let window2 = p2.window_seconds.filter(|w| *w > 0).unwrap_or(DEFAULT_WINDOW_SECONDS);
+        let window2 = p2
+            .window_seconds
+            .filter(|w| *w > 0)
+            .unwrap_or(DEFAULT_WINDOW_SECONDS);
         let top_n2 = p2.top_n.filter(|n| *n > 0).unwrap_or(DEFAULT_TOP_N);
         assert_eq!(window2, DEFAULT_WINDOW_SECONDS);
         assert_eq!(top_n2, DEFAULT_TOP_N);

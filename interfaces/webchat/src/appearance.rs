@@ -142,11 +142,11 @@ impl Accent {
 /// every `rem` in the panel keys off of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FontScale {
-    Compact,  // 90%
-    Default,  // 100%
-    Cozy,     // 110%
-    Large,    // 125%
-    Largest,  // 140%
+    Compact, // 90%
+    Default, // 100%
+    Cozy,    // 110%
+    Large,   // 125%
+    Largest, // 140%
 }
 
 impl FontScale {

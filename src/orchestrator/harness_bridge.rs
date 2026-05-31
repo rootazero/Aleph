@@ -333,8 +333,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 // call fails. Same gating as the compactor (config-presence).
                 let pipeline = {
                     use crate::context::budget::cheap_passes::{
-                        FileOpSupersedeStage, HistoricalImageStrippingStage,
-                        ToolResultPruningStage,
+                        FileOpSupersedeStage, HistoricalImageStrippingStage, ToolResultPruningStage,
                     };
                     use crate::context::budget::preflight::{PreflightPipeline, PreflightStage};
                     // FileOpSupersedeStage runs first so its stubs shrink the
@@ -395,18 +394,17 @@ impl HarnessRunner for AgentHarnessRunner {
             // tool call completion flows into `raw_memories` for the
             // Dream cycle's metric aggregator to read. No store → no-op.
             tool_signal_sink: match self.memory_backend.clone() {
-                Some(store) => std::sync::Arc::new(
-                    crate::memory::tool_signal_sink::RawMemoryToolSink::new(
-                        store as std::sync::Arc<
-                            dyn crate::memory::store::raw_memory::RawMemoryStore,
-                        >,
+                Some(store) => {
+                    std::sync::Arc::new(crate::memory::tool_signal_sink::RawMemoryToolSink::new(
+                        store
+                            as std::sync::Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
                         spec.agent.clone(),
                         session_id.to_key_string(),
-                    ),
-                ) as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
-                None => std::sync::Arc::new(
-                    crate::memory::tool_signal_sink::NoopToolSignalSink,
-                ) as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
+                    ))
+                        as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>
+                }
+                None => std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink)
+                    as std::sync::Arc<dyn crate::memory::tool_signal_sink::ToolSignalSink>,
             },
             // opencode-parity parallel-dispatch fast path. `Some(8)` mirrors
             // opencode's `Effect.forEach({ concurrency: 10 })` default; the
@@ -458,9 +456,7 @@ impl HarnessRunner for AgentHarnessRunner {
         // re-trigger a crashed run in the same user-picked folder. The
         // field is omitted from the wire form when None (skip_serializing_if)
         // so legacy event logs stay byte-identical.
-        let project_root_str = workspace_override
-            .as_ref()
-            .map(|p| p.display().to_string());
+        let project_root_str = workspace_override.as_ref().map(|p| p.display().to_string());
         if let Err(e) = self
             .session_service
             .emit_event(
@@ -931,7 +927,11 @@ impl AgentHarnessRunner {
         // Phase 6 observability — confirm BUG-2/BUG-3 wiring at runtime.
         // Logs character counts (not contents) so prompts are observable
         // without leaking memory content to disk-side telemetry.
-        let stable_chars: usize = parts.iter().filter(|p| p.cache).map(|p| p.content.len()).sum();
+        let stable_chars: usize = parts
+            .iter()
+            .filter(|p| p.cache)
+            .map(|p| p.content.len())
+            .sum();
         let dynamic_chars: usize = parts
             .iter()
             .filter(|p| !p.cache)
@@ -1443,10 +1443,7 @@ mod tests {
     /// flow override and default. Zero on runtime layer falls through.
     #[test]
     fn resolve_max_iterations_runtime_override_wins_over_flow_override() {
-        assert_eq!(
-            super::resolve_max_iterations(Some(20), Some(50), 200),
-            20
-        );
+        assert_eq!(super::resolve_max_iterations(Some(20), Some(50), 200), 20);
     }
 
     #[test]

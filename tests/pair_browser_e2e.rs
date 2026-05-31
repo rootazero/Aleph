@@ -16,9 +16,7 @@ use std::sync::Arc;
 use alephcore::gateway::auth_middleware::{auth_routes, AuthState};
 use alephcore::gateway::bootstrap::BootstrapNonceManager;
 use alephcore::gateway::config::AuthMode;
-use alephcore::gateway::handlers::auth::{
-    handle_pairing_approve, AuthContext, TransportPolicy,
-};
+use alephcore::gateway::handlers::auth::{handle_pairing_approve, AuthContext, TransportPolicy};
 use alephcore::gateway::protocol::JsonRpcRequest;
 use alephcore::gateway::security::{
     InvitationManager, PairingManager, SecurityStore, SharedTokenManager, TokenManager,
@@ -44,7 +42,8 @@ fn setup() -> (Arc<AuthContext>, Arc<AuthState>) {
     let pairing_manager = Arc::new(PairingManager::new(store.clone()));
     let bootstrap_mgr = Arc::new(BootstrapNonceManager::default());
     let event_bus = Arc::new(alephcore::gateway::event_bus::GatewayEventBus::new());
-    let device_store = Arc::new(alephcore::gateway::device_store::DeviceStore::in_memory().unwrap());
+    let device_store =
+        Arc::new(alephcore::gateway::device_store::DeviceStore::in_memory().unwrap());
 
     // Provision a placeholder device so the TokenManager's FK constraints
     // are satisfied if the test ever issues device tokens.
@@ -66,9 +65,7 @@ fn setup() -> (Arc<AuthContext>, Arc<AuthState>) {
         device_store,
         security_store: store.clone(),
         invitation_manager: Arc::new(InvitationManager::new()),
-        guest_session_manager: Arc::new(
-            alephcore::gateway::security::GuestSessionManager::new(),
-        ),
+        guest_session_manager: Arc::new(alephcore::gateway::security::GuestSessionManager::new()),
         event_bus,
         auth_mode: AuthMode::Token,
         shared_token_mgr: shared_token_mgr.clone(),
@@ -174,7 +171,9 @@ async fn anonymous_rpc_starts_and_polls_browser_pairing() {
         .expect("poll");
     let body: serde_json::Value = poll.json().await.expect("json");
     assert_eq!(
-        body.get("result").and_then(|r| r.get("status")).and_then(|s| s.as_str()),
+        body.get("result")
+            .and_then(|r| r.get("status"))
+            .and_then(|s| s.as_str()),
         Some("pending"),
     );
 }
@@ -199,7 +198,9 @@ async fn other_rpc_methods_are_blocked_at_anonymous_endpoint() {
     let body: serde_json::Value = resp.json().await.expect("json");
     // -32601 method not allowed via /rpc
     assert_eq!(
-        body.get("error").and_then(|e| e.get("code")).and_then(|c| c.as_i64()),
+        body.get("error")
+            .and_then(|e| e.get("code"))
+            .and_then(|c| c.as_i64()),
         Some(-32601),
     );
 }

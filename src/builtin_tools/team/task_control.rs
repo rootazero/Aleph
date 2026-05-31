@@ -69,8 +69,7 @@ impl TeamTaskControlTool {
 #[async_trait]
 impl AlephTool for TeamTaskControlTool {
     const NAME: &'static str = "team_task_control";
-    const DESCRIPTION: &'static str =
-        "Admin-context task control. Pause/resume to gate dispatch; \
+    const DESCRIPTION: &'static str = "Admin-context task control. Pause/resume to gate dispatch; \
          hard-retry to re-queue a terminal task without going through review; \
          skip to mark a task as not required. Distinct from \
          `workflow_step_review` which is reviewer-context (requires a \
@@ -237,7 +236,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.status, "paused");
-        assert_eq!(store.get_task(&task_id).await.unwrap().unwrap().status, CoordTaskStatus::Paused);
+        assert_eq!(
+            store.get_task(&task_id).await.unwrap().unwrap().status,
+            CoordTaskStatus::Paused
+        );
 
         let out = tool
             .call(TeamTaskControlArgs::Resume {
@@ -246,7 +248,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.status, "pending");
-        assert_eq!(store.get_task(&task_id).await.unwrap().unwrap().status, CoordTaskStatus::Pending);
+        assert_eq!(
+            store.get_task(&task_id).await.unwrap().unwrap().status,
+            CoordTaskStatus::Pending
+        );
     }
 
     #[tokio::test]
@@ -320,6 +325,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out.status, "skipped");
-        assert_eq!(store.get_task(&task_id).await.unwrap().unwrap().status, CoordTaskStatus::Skipped);
+        assert_eq!(
+            store.get_task(&task_id).await.unwrap().unwrap().status,
+            CoordTaskStatus::Skipped
+        );
     }
 }

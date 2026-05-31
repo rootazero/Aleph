@@ -52,7 +52,9 @@ impl ConnectionPhase {
             };
         }
         if is_reconnecting {
-            let attempt = reconnect_count.saturating_add(1).min(MAX_RECONNECT_ATTEMPTS);
+            let attempt = reconnect_count
+                .saturating_add(1)
+                .min(MAX_RECONNECT_ATTEMPTS);
             return Self::Reconnecting {
                 attempt,
                 max: MAX_RECONNECT_ATTEMPTS,
@@ -173,14 +175,7 @@ mod tests {
         assert!(ConnectionPhase::Initial.is_pre_ready());
         assert!(ConnectionPhase::Connecting.is_pre_ready());
         assert!(!ConnectionPhase::Connected.is_pre_ready());
-        assert!(!ConnectionPhase::Reconnecting {
-            attempt: 1,
-            max: 5
-        }
-        .is_pre_ready());
-        assert!(!ConnectionPhase::Failed {
-            reason: "x".into()
-        }
-        .is_pre_ready());
+        assert!(!ConnectionPhase::Reconnecting { attempt: 1, max: 5 }.is_pre_ready());
+        assert!(!ConnectionPhase::Failed { reason: "x".into() }.is_pre_ready());
     }
 }

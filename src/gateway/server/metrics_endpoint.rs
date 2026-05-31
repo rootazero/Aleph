@@ -136,10 +136,7 @@ pub fn render_prometheus(s: &MetricsSnapshot) -> String {
 
     out.push_str("# HELP aleph_gateway_uptime_seconds Seconds since server start.\n");
     out.push_str("# TYPE aleph_gateway_uptime_seconds gauge\n");
-    out.push_str(&format!(
-        "aleph_gateway_uptime_seconds {}\n",
-        s.uptime_secs
-    ));
+    out.push_str(&format!("aleph_gateway_uptime_seconds {}\n", s.uptime_secs));
 
     out.push_str("# HELP aleph_gateway_connections_active Currently open WebSocket connections.\n");
     out.push_str("# TYPE aleph_gateway_connections_active gauge\n");
@@ -157,7 +154,9 @@ pub fn render_prometheus(s: &MetricsSnapshot) -> String {
         s.connections_authenticated
     ));
 
-    out.push_str("# HELP aleph_gateway_max_connections Configured maximum concurrent connections.\n");
+    out.push_str(
+        "# HELP aleph_gateway_max_connections Configured maximum concurrent connections.\n",
+    );
     out.push_str("# TYPE aleph_gateway_max_connections gauge\n");
     out.push_str(&format!(
         "aleph_gateway_max_connections {}\n",
@@ -250,7 +249,9 @@ mod tests {
     #[test]
     fn renders_build_info_with_labels() {
         let out = render_prometheus(&sample());
-        assert!(out.contains("aleph_gateway_build_info{version=\"26.5.31\",instance=\"abc-123\"} 1"));
+        assert!(
+            out.contains("aleph_gateway_build_info{version=\"26.5.31\",instance=\"abc-123\"} 1")
+        );
     }
 
     #[test]

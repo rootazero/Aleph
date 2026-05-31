@@ -140,8 +140,7 @@ impl StreamingContextScrubber {
                     None => {
                         // No close yet — hold back a possible partial close
                         // tail; drop everything else (it's inside the span).
-                        let tail_len =
-                            max_partial_suffix_ascii_ci(&work_bytes[cursor..], close);
+                        let tail_len = max_partial_suffix_ascii_ci(&work_bytes[cursor..], close);
                         if tail_len > 0 {
                             let start = work.len() - tail_len;
                             // start is on a char boundary: matched bytes are
@@ -166,8 +165,7 @@ impl StreamingContextScrubber {
                     None => {
                         // No open tag — hold back a possible partial open
                         // tail. Everything before that is emittable.
-                        let tail_len =
-                            max_partial_suffix_ascii_ci(&work_bytes[cursor..], open);
+                        let tail_len = max_partial_suffix_ascii_ci(&work_bytes[cursor..], open);
                         if tail_len > 0 {
                             let split = work.len() - tail_len;
                             out.push_str(&work[cursor..split]);
@@ -356,18 +354,12 @@ mod tests {
     #[test]
     fn max_partial_suffix_unit() {
         // "hello <me" + tag "<memory>" => 3 ("<me").
-        assert_eq!(
-            max_partial_suffix_ascii_ci(b"hello <me", b"<memory>"),
-            3
-        );
+        assert_eq!(max_partial_suffix_ascii_ci(b"hello <me", b"<memory>"), 3);
         // No suffix-prefix overlap.
         assert_eq!(max_partial_suffix_ascii_ci(b"hello", b"<memory>"), 0);
         // Exact-length-minus-one boundary: "<memory" (7) is a strict prefix
         // of "<memory>" (8); since loop iterates 1..=min(7,7), expect 7.
-        assert_eq!(
-            max_partial_suffix_ascii_ci(b"<memory", b"<memory>"),
-            7
-        );
+        assert_eq!(max_partial_suffix_ascii_ci(b"<memory", b"<memory>"), 7);
         // Single-character tag has no strict prefix worth holding.
         assert_eq!(max_partial_suffix_ascii_ci(b"x", b">"), 0);
         // Case-insensitive: "<MEM" should still count as prefix of "<memory>".

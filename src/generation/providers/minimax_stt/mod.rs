@@ -31,9 +31,9 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{MinimaxBaseResp, MinimaxSttResponse};
 
@@ -102,9 +102,7 @@ impl MinimaxSttProvider {
             if !parsed.base_resp.is_success() {
                 let msg = parsed.base_resp.best_message();
                 return match parsed.base_resp.status_code {
-                    1004 | 1042 => {
-                        GenerationError::authentication(msg, "minimax-stt")
-                    }
+                    1004 | 1042 => GenerationError::authentication(msg, "minimax-stt"),
                     1008 | 1030 => GenerationError::rate_limit(msg, None),
                     1000..=1999 => GenerationError::invalid_parameters(msg, None),
                     _ => GenerationError::provider(
@@ -210,10 +208,9 @@ impl GenerationProvider for MinimaxSttProvider {
                 })?;
 
             let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| GenerationError::network(format!("Failed to read response body: {}", e)))?;
+            let body = response.text().await.map_err(|e| {
+                GenerationError::network(format!("Failed to read response body: {}", e))
+            })?;
             if !status.is_success() {
                 error!(status = %status, body = %body, "MiniMax STT HTTP failure");
                 return Err(self.parse_error(status, &body));
@@ -365,10 +362,7 @@ fn decode_data_url(rest: &str) -> GenerationResult<(Vec<u8>, String, String)> {
     } else {
         payload.as_bytes().to_vec()
     };
-    let filename = format!(
-        "audio.{}",
-        mime.split('/').nth(1).unwrap_or("bin")
-    );
+    let filename = format!("audio.{}", mime.split('/').nth(1).unwrap_or("bin"));
     Ok((bytes, filename, mime))
 }
 

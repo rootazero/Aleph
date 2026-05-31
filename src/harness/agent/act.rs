@@ -321,10 +321,8 @@ impl AgentHarness {
                     // set — the LLM has demonstrably pivoted to a working
                     // strategy.
                     self.clear_failures();
-                    self.emit_tool_success(
-                        session_id, turn_id, &call, output, started, iteration,
-                    )
-                    .await?;
+                    self.emit_tool_success(session_id, turn_id, &call, output, started, iteration)
+                        .await?;
                 }
                 Err(e) => {
                     // Do NOT abort — continue processing remaining tool calls.
@@ -500,7 +498,10 @@ impl AgentHarness {
                 .await
                 .and_then(|d| d.metadata.max_duration_ms)
                 .map(std::time::Duration::from_millis);
-            budgets.push(resolve_effective_budget(per_tool_budget, self.deps.turn_timeout));
+            budgets.push(resolve_effective_budget(
+                per_tool_budget,
+                self.deps.turn_timeout,
+            ));
         }
 
         // PASS 1 — parallel: dispatch up to `parallelism` execute futures
@@ -510,11 +511,7 @@ impl AgentHarness {
         // `Effect.forEach({ concurrency: n })`. Per-call timeout is wrapped
         // INSIDE each future so the timeout is owned by the call, not the
         // batch.
-        let parallelism = self
-            .deps
-            .parallel_tool_concurrency
-            .unwrap_or(0)
-            .max(2);
+        let parallelism = self.deps.parallel_tool_concurrency.unwrap_or(0).max(2);
         type ExecOutcome =
             Result<Result<ToolOutput, crate::tools::service::ToolError>, std::time::Duration>;
         // Build per-original-index futures, leaving None at skipped indices
@@ -616,10 +613,8 @@ impl AgentHarness {
                     // Cross-batch dedup: any success clears the failure set —
                     // the LLM has demonstrably pivoted to a working strategy.
                     self.clear_failures();
-                    self.emit_tool_success(
-                        session_id, turn_id, call, output, started, iteration,
-                    )
-                    .await?;
+                    self.emit_tool_success(session_id, turn_id, call, output, started, iteration)
+                        .await?;
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }
@@ -705,12 +700,9 @@ impl AgentHarness {
             }
             // Same-turn newest spill: rewrite output BEFORE the SessionEvent
             // is emitted so the LLM sees the marker instead of the full text.
-            if let Some(marker) = store.persist_if_large(
-                &spill.call_id,
-                &spill.tool_name,
-                &spill.original_text,
-                0,
-            ) {
+            if let Some(marker) =
+                store.persist_if_large(&spill.call_id, &spill.tool_name, &spill.original_text, 0)
+            {
                 output.value = serde_json::Value::String(marker);
                 output.metadata.truncated = true;
             }

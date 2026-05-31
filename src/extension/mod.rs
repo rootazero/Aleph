@@ -89,9 +89,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tokio::sync::{Mutex, RwLock};
-use watcher::{
-    ExtensionChangeEvent, ExtensionChangeType, ExtensionWatcher, InternalWriteTracker,
-};
+use watcher::{ExtensionChangeEvent, ExtensionChangeType, ExtensionWatcher, InternalWriteTracker};
 
 // =============================================================================
 // Cache State
@@ -283,10 +281,7 @@ impl ExtensionManager {
     /// the `ServerStarted` events the sync triggers are observed and turned into
     /// tool registrations.
     pub fn set_mcp_handle(&self, handle: crate::mcp::McpManagerHandle) {
-        *self
-            .mcp_handle
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = Some(handle);
+        *self.mcp_handle.write().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
     /// Register every enabled MCP-kind plugin's `.mcp.json` servers with the
@@ -353,7 +348,10 @@ impl ExtensionManager {
         }
 
         if registered > 0 {
-            tracing::info!(count = registered, "registered plugin MCP servers (transient)");
+            tracing::info!(
+                count = registered,
+                "registered plugin MCP servers (transient)"
+            );
         }
         registered
     }
@@ -545,10 +543,7 @@ impl ExtensionManager {
         notify_cb: Option<Box<dyn Fn(ExtensionChangeEvent) + Send + Sync>>,
     ) -> ExtensionResult<()> {
         {
-            let guard = self
-                .watcher
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
             if guard.is_some() {
                 return Ok(());
             }
@@ -632,10 +627,7 @@ impl ExtensionManager {
             .start()
             .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
 
-        let mut guard = self
-            .watcher
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
         *guard = Some(Arc::new(watcher));
         Ok(())
     }
@@ -643,12 +635,10 @@ impl ExtensionManager {
     /// Stop the hot-reload watcher (no-op if not started). Tests use this
     /// to release watch handles before TempDir drops.
     pub fn stop_watcher(&self) -> ExtensionResult<()> {
-        let mut guard = self
-            .watcher
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut guard = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(w) = guard.take() {
-            w.stop().map_err(|e| ExtensionError::Runtime(e.to_string()))?;
+            w.stop()
+                .map_err(|e| ExtensionError::Runtime(e.to_string()))?;
         }
         Ok(())
     }
@@ -676,7 +666,10 @@ impl ExtensionManager {
                 projects
                     .into_iter()
                     .flat_map(|p| {
-                        [p.path.join(".aleph/plugins"), p.path.join(".aleph/plugins.local")]
+                        [
+                            p.path.join(".aleph/plugins"),
+                            p.path.join(".aleph/plugins.local"),
+                        ]
                     })
                     .collect()
             })

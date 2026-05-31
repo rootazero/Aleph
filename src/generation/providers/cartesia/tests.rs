@@ -64,7 +64,10 @@ async fn rejects_empty_input() {
     let p = CartesiaProvider::new("k", None, None, None).unwrap();
     let request = GenerationRequest::speech("   ");
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -73,7 +76,10 @@ async fn rejects_oversized_input() {
     let p = CartesiaProvider::new("k", None, None, None).unwrap();
     let request = GenerationRequest::speech(text);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -82,7 +88,10 @@ async fn rejects_unknown_format() {
     let params = GenerationParams::builder().format("flac").build();
     let request = GenerationRequest::speech("hi").with_params(params);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::UnsupportedFormatError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::UnsupportedFormatError { .. }
+    ));
 }
 
 #[test]

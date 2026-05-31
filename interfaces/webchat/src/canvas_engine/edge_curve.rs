@@ -17,21 +17,33 @@ pub(crate) const DIRECTIONAL_KINDS: &[&str] = &["refers", "derives", "follows"];
 /// the chord by `length × sag_coef`. Sign of `sag_coef` controls which
 /// side of the chord the curve bows toward.
 pub(crate) fn edge_control_point(from: Vec2, to: Vec2, sag_coef: f64) -> Vec2 {
-    let mid = Vec2 { x: (from.x + to.x) * 0.5, y: (from.y + to.y) * 0.5 };
+    let mid = Vec2 {
+        x: (from.x + to.x) * 0.5,
+        y: (from.y + to.y) * 0.5,
+    };
     let dir = {
         let dx = to.x - from.x;
         let dy = to.y - from.y;
         let len = (dx * dx + dy * dy).sqrt().max(1.0e-6);
-        Vec2 { x: dx / len, y: dy / len }
+        Vec2 {
+            x: dx / len,
+            y: dy / len,
+        }
     };
-    let perp = Vec2 { x: -dir.y, y: dir.x };  // 90° CCW
+    let perp = Vec2 {
+        x: -dir.y,
+        y: dir.x,
+    }; // 90° CCW
     let len = {
         let dx = to.x - from.x;
         let dy = to.y - from.y;
         (dx * dx + dy * dy).sqrt()
     };
     let sag = len * sag_coef;
-    Vec2 { x: mid.x + perp.x * sag, y: mid.y + perp.y * sag }
+    Vec2 {
+        x: mid.x + perp.x * sag,
+        y: mid.y + perp.y * sag,
+    }
 }
 
 /// Position along the Bézier at `t ∈ [0, 1]` for a quadratic curve
@@ -55,7 +67,10 @@ pub(crate) fn bezier_tangent(p0: Vec2, p1: Vec2, p2: Vec2, t: f64) -> f64 {
 
 /// Per-hop visual layer for edges.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HopLayer { One, Two }
+pub(crate) enum HopLayer {
+    One,
+    Two,
+}
 
 /// `(max_alpha, line_width)` tuple per layer.
 pub(crate) fn hop_style(layer: HopLayer) -> (f64, f64) {
@@ -70,7 +85,9 @@ pub(crate) fn hop_style(layer: HopLayer) -> (f64, f64) {
 mod tests {
     use super::*;
 
-    fn v(x: f64, y: f64) -> Vec2 { Vec2 { x, y } }
+    fn v(x: f64, y: f64) -> Vec2 {
+        Vec2 { x, y }
+    }
 
     #[test]
     fn bezier_control_point_deterministic() {

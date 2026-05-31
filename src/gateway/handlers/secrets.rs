@@ -76,10 +76,7 @@ struct SetParams {
     value: String,
 }
 
-pub async fn handle_secrets_set(
-    request: JsonRpcRequest,
-    ctx: Arc<AuthContext>,
-) -> JsonRpcResponse {
+pub async fn handle_secrets_set(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> JsonRpcResponse {
     let params: SetParams = match request
         .params
         .as_ref()

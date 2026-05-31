@@ -452,11 +452,7 @@ impl AgentHarness {
                         cache_control: None,
                     }],
                 });
-                tracing::debug!(
-                    iterations,
-                    cap,
-                    "max-iterations soft hint injected (G1)",
-                );
+                tracing::debug!(iterations, cap, "max-iterations soft hint injected (G1)",);
             }
         }
 
@@ -487,7 +483,13 @@ impl AgentHarness {
         // breaker — lives inside `deps.llm` itself (`providers::FailoverProvider`),
         // so the harness simply propagates whatever error survives it.
         let started = std::time::Instant::now();
-        let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref, session_id);
+        let payload = build_request_payload(
+            self.deps.system_prompt.as_deref(),
+            self.deps.system_prompt_parts.as_deref(),
+            &messages,
+            tools_ref,
+            session_id,
+        );
         let mut response = match self
             .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
             .await?
@@ -524,13 +526,15 @@ impl AgentHarness {
                 empty_retries,
                 "provider returned an empty response; retrying",
             );
-            let retry_payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref, session_id);
+            let retry_payload = build_request_payload(
+                self.deps.system_prompt.as_deref(),
+                self.deps.system_prompt_parts.as_deref(),
+                &messages,
+                tools_ref,
+                session_id,
+            );
             response = match self
-                .race_llm_call(
-                    self.deps.llm.process(retry_payload),
-                    parent_cancel,
-                    started,
-                )
+                .race_llm_call(self.deps.llm.process(retry_payload), parent_cancel, started)
                 .await?
             {
                 Ok(r) => r,
@@ -584,7 +588,13 @@ impl AgentHarness {
                 messages.push(UnifiedMessage::assistant(partial));
             }
             messages.push(UnifiedMessage::user(MAX_OUTPUT_TOKENS_RESUME_NUDGE));
-            let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), &messages, tools_ref, session_id);
+            let payload = build_request_payload(
+                self.deps.system_prompt.as_deref(),
+                self.deps.system_prompt_parts.as_deref(),
+                &messages,
+                tools_ref,
+                session_id,
+            );
             response = match self
                 .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
                 .await?
@@ -749,10 +759,7 @@ impl AgentHarness {
                 at: crate::session::events::now_ms(),
                 synthetic: true,
             };
-            self.deps
-                .session
-                .emit_event(session_id, halt_event)
-                .await?;
+            self.deps.session.emit_event(session_id, halt_event).await?;
             callback.on_stop_hook_halt(&reason);
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::StopHookHalt {
@@ -919,10 +926,12 @@ impl AgentHarness {
         //    slot. `try_reserve_reactive_compact` is a one-shot
         //    `compare_exchange` so concurrent paths can never both rescue.
         let Some(compactor) = self.deps.context_compactor.as_ref() else {
-            self.emit(|| crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                token_gap,
-                succeeded: false,
-            });
+            self.emit(
+                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                    token_gap,
+                    succeeded: false,
+                },
+            );
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
             );
@@ -934,10 +943,12 @@ impl AgentHarness {
                 MAX_REACTIVE_COMPACT_ATTEMPTS,
                 "reactive-compaction rescue cap reached; surfacing original error",
             );
-            self.emit(|| crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                token_gap,
-                succeeded: false,
-            });
+            self.emit(
+                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                    token_gap,
+                    succeeded: false,
+                },
+            );
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
             );
@@ -962,10 +973,12 @@ impl AgentHarness {
                 error = %e,
                 "reactive compactor failed; surfacing original provider error",
             );
-            self.emit(|| crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
-                token_gap,
-                succeeded: false,
-            });
+            self.emit(
+                || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                    token_gap,
+                    succeeded: false,
+                },
+            );
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
             );
@@ -973,18 +986,24 @@ impl AgentHarness {
         }
 
         // 4. Retry the LLM call once with the summarised history.
-        let payload = build_request_payload(self.deps.system_prompt.as_deref(), self.deps.system_prompt_parts.as_deref(), messages, tools_ref, session_id);
+        let payload = build_request_payload(
+            self.deps.system_prompt.as_deref(),
+            self.deps.system_prompt_parts.as_deref(),
+            messages,
+            tools_ref,
+            session_id,
+        );
         match self
             .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
             .await?
         {
             Ok(resp) => {
-                self.emit(|| {
-                    crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
                         token_gap,
                         succeeded: true,
-                    }
-                });
+                    },
+                );
                 Ok(resp)
             }
             Err(retry_err) => {
@@ -993,12 +1012,12 @@ impl AgentHarness {
                     error = %retry_err,
                     "reactive-compaction retry still failed; surfacing retry error",
                 );
-                self.emit(|| {
-                    crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
+                self.emit(
+                    || crate::harness::trace::LoopTraceEvent::ReactiveCompactionAttempted {
                         token_gap,
                         succeeded: false,
-                    }
-                });
+                    },
+                );
                 self.set_terminate_reason(
                     crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
                 );

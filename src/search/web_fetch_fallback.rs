@@ -96,8 +96,7 @@ const FALLBACK_MIRRORS: &[Mirror] = &[
         // Mobile UA → Lite endpoint serves the smaller payload reliably
         // and is less prone to challenge pages than the desktop HTML
         // endpoint.
-        user_agent:
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 \
+        user_agent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 \
              (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
     },
     Mirror {
@@ -107,8 +106,7 @@ const FALLBACK_MIRRORS: &[Mirror] = &[
         // Linux Chrome — deliberately different from
         // DuckDuckGoProvider::USER_AGENT (macOS Chrome) so the two
         // paths don't share a rate-limit bucket.
-        user_agent:
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
+        user_agent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 \
              (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
     },
 ];
@@ -151,11 +149,7 @@ impl WebFetchSerpFallback {
     /// mirror in the chain either errored, returned 0 results, or was
     /// cooling down. The aggregated error string lists the per-mirror
     /// reason so operators can diagnose which mirror is the bottleneck.
-    pub async fn search(
-        &self,
-        query: &str,
-        options: &SearchOptions,
-    ) -> Result<Vec<SearchResult>> {
+    pub async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let mut errors: Vec<String> = Vec::with_capacity(FALLBACK_MIRRORS.len());
         for mirror in FALLBACK_MIRRORS {
             if self.is_cooling_down(mirror.name) {
@@ -219,10 +213,9 @@ impl WebFetchSerpFallback {
             .await
             .map_err(|e| AlephError::network(e.to_string()))?;
         let response = check_status(response, mirror.name)?;
-        let body = response
-            .text()
-            .await
-            .map_err(|e| AlephError::provider(format!("Failed to read {} body: {}", mirror.name, e)))?;
+        let body = response.text().await.map_err(|e| {
+            AlephError::provider(format!("Failed to read {} body: {}", mirror.name, e))
+        })?;
 
         let parsed = match mirror.kind {
             MirrorKind::DdgHtml => parse_ddg_html(&body, options.validated_max_results()),
@@ -300,8 +293,7 @@ mod tests {
     fn fallback_mirror_names_are_unique() {
         // cool-down map keys mirror names — duplicates would silently
         // collapse independent mirrors' state.
-        let mut names: Vec<&'static str> =
-            FALLBACK_MIRRORS.iter().map(|m| m.name).collect();
+        let mut names: Vec<&'static str> = FALLBACK_MIRRORS.iter().map(|m| m.name).collect();
         names.sort();
         let pre = names.len();
         names.dedup();

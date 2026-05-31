@@ -2,10 +2,10 @@
 //! cap-grace + empty-then-text + later regressions. Shares mock types
 //! with [`super`] via `use super::*;`.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex as AsyncMutex;
@@ -839,7 +839,9 @@ impl AiProvider for MaxTokensThenTextProvider {
                     ..ProviderResponse::text_only(format!("partial-{n}"))
                 })
             } else {
-                Ok(ProviderResponse::text_only("final clean response".to_string()))
+                Ok(ProviderResponse::text_only(
+                    "final clean response".to_string(),
+                ))
             }
         })
     }
@@ -853,7 +855,10 @@ impl AiProvider for MaxTokensThenTextProvider {
 
 #[tokio::test]
 async fn max_output_tokens_recovery_eventually_returns_clean_text() {
-    let session = MockSession::new(vec![turn_started_event(), user_message_event("write a long answer")]);
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("write a long answer"),
+    ]);
     // 2 MaxTokens responses, then clean text — recovery should succeed
     // (RECOVERY_LIMIT=3 allows up to 3 retries).
     let provider = MaxTokensThenTextProvider::new(2);
@@ -901,7 +906,10 @@ async fn max_output_tokens_recovery_eventually_returns_clean_text() {
     );
     let reason = harness.terminate_reason();
     assert!(
-        matches!(reason, crate::orchestrator::dispatch::TerminateReason::Completed),
+        matches!(
+            reason,
+            crate::orchestrator::dispatch::TerminateReason::Completed
+        ),
         "recovery success must report Completed, not MaxOutputTokensExhausted; got {:?}",
         reason
     );
@@ -909,7 +917,10 @@ async fn max_output_tokens_recovery_eventually_returns_clean_text() {
 
 #[tokio::test]
 async fn max_output_tokens_recovery_exhausted_sets_dedicated_terminate_reason() {
-    let session = MockSession::new(vec![turn_started_event(), user_message_event("write forever")]);
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("write forever"),
+    ]);
     // 4 MaxTokens responses — exceeds RECOVERY_LIMIT=3, so the harness
     // gives up and reports MaxOutputTokensExhausted.
     let provider = MaxTokensThenTextProvider::new(10);

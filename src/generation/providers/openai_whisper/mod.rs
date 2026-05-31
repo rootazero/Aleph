@@ -36,9 +36,9 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{OpenAiError, OpenAiErrorResponse, WhisperResponse};
 
@@ -131,9 +131,7 @@ impl OpenAiWhisperProvider {
                     .get(source)
                     .send()
                     .await
-                    .map_err(|e| {
-                        GenerationError::network(format!("Failed to fetch audio: {}", e))
-                    })?
+                    .map_err(|e| GenerationError::network(format!("Failed to fetch audio: {}", e)))?
                     .error_for_status()
                     .map_err(|e| {
                         GenerationError::network(format!("Audio URL returned error: {}", e))
@@ -309,9 +307,11 @@ impl GenerationProvider for OpenAiWhisperProvider {
                 "Whisper transcription completed"
             );
 
-            let mut output =
-                GenerationOutput::new(GenerationType::Transcription, GenerationData::bytes(text.into_bytes()))
-                    .with_metadata(metadata);
+            let mut output = GenerationOutput::new(
+                GenerationType::Transcription,
+                GenerationData::bytes(text.into_bytes()),
+            )
+            .with_metadata(metadata);
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
             }

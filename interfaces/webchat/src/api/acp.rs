@@ -166,9 +166,7 @@ impl AcpApi {
 
     // ── Live session pool (Panel Teams → ACP Workers) ────────────────────
 
-    pub async fn list_sessions(
-        state: &DashboardState,
-    ) -> Result<Vec<AcpSessionSnapshot>, String> {
+    pub async fn list_sessions(state: &DashboardState) -> Result<Vec<AcpSessionSnapshot>, String> {
         let result = state.rpc_call("acp.sessions.list", Value::Null).await?;
         serde_json::from_value(result)
             .map_err(|e| format!("Failed to parse ACP session snapshots: {}", e))

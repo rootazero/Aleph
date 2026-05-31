@@ -152,22 +152,20 @@ impl CodeCheckTool {
     }
 
     async fn run(&self, args: CodeCheckArgs) -> Result<CodeCheckOutput> {
-        let sandbox = match self.sandbox.as_ref() {
-            Some(s) => s.clone(),
-            None => {
-                return Ok(unconfigured(
+        let sandbox =
+            match self.sandbox.as_ref() {
+                Some(s) => s.clone(),
+                None => return Ok(unconfigured(
                     "code_check: sandbox not configured — boot wiring must inject Arc<dyn Sandbox>",
-                ))
-            }
-        };
-        let session_id = match current_session() {
-            Some(sid) => sid,
-            None => {
-                return Ok(unconfigured(
+                )),
+            };
+        let session_id =
+            match current_session() {
+                Some(sid) => sid,
+                None => return Ok(unconfigured(
                     "code_check: no active session context — invoke via invoke_with_session_trace",
-                ))
-            }
-        };
+                )),
+            };
 
         let plan = build_plan(args.command.as_deref(), args.path.as_deref());
         let timeout_secs = args.timeout.unwrap_or(DEFAULT_TIMEOUT_SECS);
@@ -296,7 +294,10 @@ fn shell_single_quote(s: &str) -> String {
 
 /// Turn a sandbox result into the tool output, choosing the parser from the
 /// `ALEPH_TC=` marker the script emitted.
-fn interpret(result: std::result::Result<SandboxOutput, SandboxError>, plan: Plan) -> CodeCheckOutput {
+fn interpret(
+    result: std::result::Result<SandboxOutput, SandboxError>,
+    plan: Plan,
+) -> CodeCheckOutput {
     let (stdout, stderr) = match result {
         Ok(out) => (
             String::from_utf8_lossy(&out.stdout).to_string(),
@@ -459,9 +460,7 @@ fn parse_cargo_json(stdout: &str) -> Vec<Diagnostic> {
                         .unwrap_or("")
                         .to_string(),
                     sp.get("line_start").and_then(|l| l.as_u64()).unwrap_or(0) as u32,
-                    sp.get("column_start")
-                        .and_then(|c| c.as_u64())
-                        .unwrap_or(0) as u32,
+                    sp.get("column_start").and_then(|c| c.as_u64()).unwrap_or(0) as u32,
                 )
             })
             .unwrap_or_default();
@@ -496,12 +495,11 @@ fn parse_generic(text: &str) -> Vec<Diagnostic> {
         Err(_) => return Vec::new(),
     };
     // unix without severity (go vet / clang): path:line:col: message
-    let unix_plain = match Regex::new(
-        r"^(?P<file>[^:\s][^:]*):(?P<line>\d+):(?P<col>\d+):\s*(?P<msg>.+)$",
-    ) {
-        Ok(re) => re,
-        Err(_) => return Vec::new(),
-    };
+    let unix_plain =
+        match Regex::new(r"^(?P<file>[^:\s][^:]*):(?P<line>\d+):(?P<col>\d+):\s*(?P<msg>.+)$") {
+            Ok(re) => re,
+            Err(_) => return Vec::new(),
+        };
 
     let mut out = Vec::new();
     for raw in text.lines() {
@@ -659,7 +657,10 @@ not json at all"#;
 
     #[test]
     fn detect_marker_reads_first_marker() {
-        assert_eq!(detect_marker("ALEPH_TC=cargo\n{...}").as_deref(), Some("cargo"));
+        assert_eq!(
+            detect_marker("ALEPH_TC=cargo\n{...}").as_deref(),
+            Some("cargo")
+        );
         assert_eq!(detect_marker("noise\nALEPH_TC=go\n").as_deref(), Some("go"));
         assert_eq!(detect_marker("no marker here").as_deref(), None);
     }
@@ -694,7 +695,9 @@ not json at all"#;
     #[test]
     fn py_path_hint_builds_py_compile_fallback() {
         let plan = build_plan(None, Some("scripts/run.py"));
-        assert!(plan.script.contains("python3 -m py_compile 'scripts/run.py'"));
+        assert!(plan
+            .script
+            .contains("python3 -m py_compile 'scripts/run.py'"));
     }
 
     #[test]

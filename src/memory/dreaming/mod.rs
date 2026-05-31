@@ -860,12 +860,10 @@ impl DreamDaemon {
                         DEFAULT_AGENT_ID,
                     );
                     if !scoped.is_empty() {
-                        let project_pipeline =
-                            DreamPipeline::from_strategy(strategy, &self.config)
-                                .retain_project_stages();
+                        let project_pipeline = DreamPipeline::from_strategy(strategy, &self.config)
+                            .retain_project_stages();
                         for ns in &scoped {
-                            let ns_index =
-                                self.database.list_notes(ns).await.unwrap_or_default();
+                            let ns_index = self.database.list_notes(ns).await.unwrap_or_default();
                             let ns_notes: Vec<NoteEntry> =
                                 ns_index.iter().map(NoteEntry::from_index_entry).collect();
                             let mut ns_indexer =
@@ -1121,8 +1119,8 @@ mod tests {
         let cfg = crate::config::types::memory::DreamingConfig::default();
         // Synthesize is the richest pipeline — it contains all three
         // global-only stages plus the note-maintenance subset.
-        let project = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg)
-            .retain_project_stages();
+        let project =
+            DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg).retain_project_stages();
         let names: Vec<&str> = project.stages.iter().map(|s| s.name()).collect();
         // The three global-only stages must be gone...
         for global in DreamPipeline::GLOBAL_ONLY_STAGES {

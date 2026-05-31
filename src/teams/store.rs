@@ -158,7 +158,12 @@ impl SqliteTeamStore {
         // Older databases without these columns get them backfilled with
         // `kind = 'agent'` (default) so all existing rows continue to route
         // through the in-process registry.
-        add_column_if_missing(&conn, "team_members", "kind", "TEXT NOT NULL DEFAULT 'agent'")?;
+        add_column_if_missing(
+            &conn,
+            "team_members",
+            "kind",
+            "TEXT NOT NULL DEFAULT 'agent'",
+        )?;
         add_column_if_missing(&conn, "team_members", "acp_harness_id", "TEXT")?;
         add_column_if_missing(&conn, "team_members", "acp_cwd", "TEXT")?;
         add_column_if_missing(&conn, "team_members", "acp_session_name", "TEXT")?;

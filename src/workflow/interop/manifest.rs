@@ -208,7 +208,10 @@ mod tests {
         };
         let v = serde_json::to_value(&manifest).unwrap();
         assert!(v.get("whenToUse").is_some(), "whenToUse camelCase");
-        assert!(v["steps"][0].get("dependsOn").is_some(), "dependsOn camelCase");
+        assert!(
+            v["steps"][0].get("dependsOn").is_some(),
+            "dependsOn camelCase"
+        );
         // Empty extras are skipped on the wire.
         assert!(v.get("phases").is_none(), "empty phases skipped");
     }

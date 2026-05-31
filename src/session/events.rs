@@ -340,8 +340,7 @@ mod tests {
     /// (no `project_root` key) yields `None` thanks to `#[serde(default)]`.
     #[test]
     fn run_started_legacy_log_deserialises_with_none() {
-        let legacy =
-            r#"{"type":"run_started","run_id":"old","at":1700000000000}"#;
+        let legacy = r#"{"type":"run_started","run_id":"old","at":1700000000000}"#;
         let back: SessionEvent = serde_json::from_str(legacy).unwrap();
         match back {
             SessionEvent::RunStarted { project_root, .. } => {

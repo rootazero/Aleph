@@ -141,7 +141,6 @@ impl SearchProvider for GoogleProvider {
     }
 }
 
-
 /// Factory entry for the search provider registry.
 ///
 /// Co-located with the concrete provider so adding a new search
@@ -157,13 +156,20 @@ impl crate::search::ProviderFactory for GoogleFactory {
         &self,
         name: &str,
         backend: &crate::config::types::SearchBackendConfig,
-    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>> {
+    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
+    {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
-            log::warn!("search backend '{name}' ({}) skipped: no api_key in vault", NAME);
+            log::warn!(
+                "search backend '{name}' ({}) skipped: no api_key in vault",
+                NAME
+            );
             return Ok(None);
         };
         let Some(engine) = backend.engine_id.as_deref().filter(|s| !s.is_empty()) else {
-            log::warn!("search backend '{name}' ({}) skipped: engine_id missing", NAME);
+            log::warn!(
+                "search backend '{name}' ({}) skipped: engine_id missing",
+                NAME
+            );
             return Ok(None);
         };
         match GoogleProvider::new(key.to_string(), engine.to_string()) {

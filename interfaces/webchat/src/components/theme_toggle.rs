@@ -45,10 +45,11 @@ fn animated_apply(client_x: f64, client_y: f64, apply: impl FnOnce() + 'static) 
     };
 
     // Feature-detect document.startViewTransition (Safari < 18, Firefox).
-    let start_fn = js_sys::Reflect::get(document.as_ref(), &JsValue::from_str("startViewTransition"))
-        .ok()
-        .filter(JsValue::is_function)
-        .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
+    let start_fn =
+        js_sys::Reflect::get(document.as_ref(), &JsValue::from_str("startViewTransition"))
+            .ok()
+            .filter(JsValue::is_function)
+            .and_then(|v| v.dyn_into::<js_sys::Function>().ok());
 
     let Some(start_fn) = start_fn else {
         apply();
@@ -60,8 +61,16 @@ fn animated_apply(client_x: f64, client_y: f64, apply: impl FnOnce() + 'static) 
         .document_element()
         .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
     {
-        let vw = window.inner_width().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let vh = window.inner_height().ok().and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let vw = window
+            .inner_width()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let vh = window
+            .inner_height()
+            .ok()
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
         let (x, y) = reveal_origin(client_x, client_y, vw, vh);
         let style = html.style();
         let _ = style.set_property("--theme-x", &x);

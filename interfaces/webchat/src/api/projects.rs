@@ -23,7 +23,9 @@ pub struct ProjectsApi;
 impl ProjectsApi {
     /// List recent projects, most-recently-used first.
     pub async fn list(state: &DashboardState) -> Result<Vec<ProjectInfo>, String> {
-        let result = state.rpc_call("projects.list", serde_json::json!({})).await?;
+        let result = state
+            .rpc_call("projects.list", serde_json::json!({}))
+            .await?;
         let arr = result
             .get("projects")
             .cloned()

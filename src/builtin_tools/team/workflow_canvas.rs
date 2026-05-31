@@ -270,7 +270,8 @@ mod tests {
 
     #[test]
     fn args_import_with_canvas() {
-        let json = r#"{"action":"import","team_id":"t1","canvas":{"nodes":[],"edges":[]},"dry_run":true}"#;
+        let json =
+            r#"{"action":"import","team_id":"t1","canvas":{"nodes":[],"edges":[]},"dry_run":true}"#;
         let args: TeamWorkflowCanvasArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.action, WorkflowCanvasAction::Import);
         assert!(args.dry_run);

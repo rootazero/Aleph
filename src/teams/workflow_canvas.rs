@@ -240,15 +240,12 @@ pub fn canvas_to_new_tasks(doc: &Document, team_id: &str) -> Vec<NewCoordTask> {
         })
         .collect();
 
-    let text_ids: std::collections::HashSet<&str> =
-        text_nodes.iter().map(|(id, _)| *id).collect();
+    let text_ids: std::collections::HashSet<&str> = text_nodes.iter().map(|(id, _)| *id).collect();
 
     // Build dependency map: text_node_id → list of upstream text_node_ids.
     let mut deps: HashMap<&str, Vec<String>> = HashMap::new();
     for edge in &doc.edges {
-        if text_ids.contains(edge.from_node.as_str())
-            && text_ids.contains(edge.to_node.as_str())
-        {
+        if text_ids.contains(edge.from_node.as_str()) && text_ids.contains(edge.to_node.as_str()) {
             deps.entry(edge.to_node.as_str())
                 .or_default()
                 .push(edge.from_node.clone());
@@ -418,10 +415,7 @@ mod tests {
         assert_eq!(task_b.blocked_by, vec!["a".to_string()]);
         assert_eq!(task_b.team_id.as_deref(), Some("team-1"));
         // Metadata should carry the canvas node id so re-imports can update.
-        assert_eq!(
-            extract_canvas_task_id(&task_b.metadata),
-            Some("b"),
-        );
+        assert_eq!(extract_canvas_task_id(&task_b.metadata), Some("b"),);
     }
 
     #[test]

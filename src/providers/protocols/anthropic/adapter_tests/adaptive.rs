@@ -66,10 +66,7 @@ fn map_think_level_to_adaptive_effort_downgrades_xhigh_on_4_6() {
 fn map_think_level_to_adaptive_effort_maps_other_levels() {
     use crate::agents::thinking::ThinkLevel;
     assert_eq!(
-        AnthropicProtocol::map_think_level_to_adaptive_effort(
-            &ThinkLevel::Off,
-            "claude-opus-4-7"
-        ),
+        AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Off, "claude-opus-4-7"),
         None
     );
     assert_eq!(
@@ -80,10 +77,7 @@ fn map_think_level_to_adaptive_effort_maps_other_levels() {
         Some("low")
     );
     assert_eq!(
-        AnthropicProtocol::map_think_level_to_adaptive_effort(
-            &ThinkLevel::Low,
-            "claude-opus-4-7"
-        ),
+        AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::Low, "claude-opus-4-7"),
         Some("low")
     );
     assert_eq!(
@@ -94,10 +88,7 @@ fn map_think_level_to_adaptive_effort_maps_other_levels() {
         Some("medium")
     );
     assert_eq!(
-        AnthropicProtocol::map_think_level_to_adaptive_effort(
-            &ThinkLevel::High,
-            "claude-opus-4-7"
-        ),
+        AnthropicProtocol::map_think_level_to_adaptive_effort(&ThinkLevel::High, "claude-opus-4-7"),
         Some("high")
     );
 }
@@ -204,7 +195,10 @@ fn adjust_max_tokens_keeps_cap_when_already_above_budget() {
     };
     let adjusted =
         AnthropicProtocol::adjust_max_tokens_for_thinking_budget(16_384, Some(&thinking));
-    assert_eq!(adjusted, 16_384, "no thinking budget overflow → cap untouched");
+    assert_eq!(
+        adjusted, 16_384,
+        "no thinking budget overflow → cap untouched"
+    );
 }
 
 #[test]

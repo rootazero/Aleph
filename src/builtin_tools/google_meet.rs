@@ -216,7 +216,10 @@ impl GoogleMeetTool {
             .map(str::trim)
             .filter(|s| !s.is_empty())
             .ok_or_else(|| {
-                AlephError::tool(format!("`{}` is required for the `{}` action", field, action))
+                AlephError::tool(format!(
+                    "`{}` is required for the `{}` action",
+                    field, action
+                ))
             })
     }
 
@@ -301,7 +304,10 @@ impl GoogleMeetTool {
             });
         }
 
-        let result = body.get("result").cloned().unwrap_or(serde_json::Value::Null);
+        let result = body
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
         let meeting_url = result
             .get("meeting_url")
             .or_else(|| result.get("url"))
@@ -369,7 +375,10 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(args.action, GoogleMeetAction::Join);
-        assert_eq!(args.meeting.as_deref(), Some("https://meet.google.com/abc-defg-hij"));
+        assert_eq!(
+            args.meeting.as_deref(),
+            Some("https://meet.google.com/abc-defg-hij")
+        );
         assert!(args.transport.is_none());
     }
 

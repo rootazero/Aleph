@@ -34,6 +34,7 @@ impl CardRegistry {
     /// `fetch_card` once the HTTP client is wired.
     pub async fn load_from_config(&self, config: &A2AConfig) {
         let mut agents = self.agents.write().await;
+        let mut seen_slugs: std::collections::HashSet<String> = std::collections::HashSet::new();
         for entry in &config.agents {
             let trust_level = entry
                 .trust_level
@@ -46,8 +47,18 @@ impl CardRegistry {
                 })
                 .unwrap_or_else(|| TrustLevel::infer_from_url(&entry.url));
 
+            let slug = slug_from_name(&entry.name);
+            if !seen_slugs.insert(slug.clone()) {
+                tracing::warn!(
+                    name = %entry.name,
+                    slug = %slug,
+                    "A2A config agent skipped: duplicate slug ID"
+                );
+                continue;
+            }
+
             let card = AgentCard {
-                id: slug_from_name(&entry.name),
+                id: slug,
                 name: entry.name.clone(),
                 version: "unknown".to_string(),
                 description: None,

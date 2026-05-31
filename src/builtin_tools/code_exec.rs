@@ -572,7 +572,10 @@ mod tests {
         // The AlephTool::DESCRIPTION should be the same string as the
         // inherent const so there's no drift between the type API and
         // what the model actually sees in the prompt.
-        assert_eq!(CodeExecTool::DESCRIPTION, <CodeExecTool as AlephTool>::DESCRIPTION);
+        assert_eq!(
+            CodeExecTool::DESCRIPTION,
+            <CodeExecTool as AlephTool>::DESCRIPTION
+        );
     }
 
     #[test]
@@ -580,9 +583,18 @@ mod tests {
         let d = CodeExecTool::DESCRIPTION;
         assert!(d.contains("multi-line"), "should encourage multi-line code");
         assert!(d.contains("heredoc"), "should mention heredoc for shell");
-        assert!(d.contains("32 KB"), "should mention the stdin-pipe threshold");
-        assert!(d.contains("124"), "should document the POSIX timeout exit code");
-        assert!(d.contains("preserved"), "should promise partial output on kill");
+        assert!(
+            d.contains("32 KB"),
+            "should mention the stdin-pipe threshold"
+        );
+        assert!(
+            d.contains("124"),
+            "should document the POSIX timeout exit code"
+        );
+        assert!(
+            d.contains("preserved"),
+            "should promise partial output on kill"
+        );
         assert!(
             d.contains("stdout_truncated_bytes"),
             "should mention the explicit truncation byte fields"
@@ -771,10 +783,7 @@ mod tests {
         let cmd = &calls[0];
         assert_eq!(
             cmd.args,
-            vec![
-                "-c".to_string(),
-                "bash -c \"echo $(date)\"".to_string()
-            ]
+            vec!["-c".to_string(), "bash -c \"echo $(date)\"".to_string()]
         );
     }
 

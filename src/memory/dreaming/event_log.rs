@@ -195,9 +195,7 @@ mod tests {
 
     #[tokio::test]
     async fn distill_actions_survive_round_trip() {
-        use crate::memory::dreaming::distill_action::{
-            DistillActionRecord, DistillOutcome,
-        };
+        use crate::memory::dreaming::distill_action::{DistillActionRecord, DistillOutcome};
 
         let dir = tempdir().unwrap();
         let log = EventLog::new(dir.path().join("test_agent"));

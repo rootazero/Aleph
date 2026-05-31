@@ -52,9 +52,7 @@ pub fn project_namespace(project_root: Option<&Path>) -> String {
     let Some(root) = project_root else {
         return GLOBAL_NS.to_string();
     };
-    let canonical = root
-        .canonicalize()
-        .unwrap_or_else(|_| root.to_path_buf());
+    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let mut hasher = Sha256::new();
     hasher.update(canonical.to_string_lossy().as_bytes());
     let digest = hasher.finalize();
@@ -207,7 +205,10 @@ mod tests {
     #[test]
     fn read_scope_ids_in_project_unions_base_and_scoped() {
         let ids = read_scope_ids("main", "proj-deadbeef");
-        assert_eq!(ids, vec!["main".to_string(), "main__proj-deadbeef".to_string()]);
+        assert_eq!(
+            ids,
+            vec!["main".to_string(), "main__proj-deadbeef".to_string()]
+        );
     }
 
     #[test]

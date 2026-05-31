@@ -645,7 +645,10 @@ fn test_create_azure_speech_rejects_missing_region() {
     let result = create_provider("azure-speech", &config, GenerationType::Speech);
     assert!(result.is_err());
     let err = result.err().expect("error variant");
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 // === Round-3 Phase B2: direct generation providers ===

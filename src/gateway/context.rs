@@ -128,7 +128,13 @@ impl std::fmt::Debug for GatewayContext {
             .field("agent_registry", &"Arc<AgentRegistry>")
             .field("execution_adapter", &"Arc<dyn ExecutionAdapter>")
             .field("a2a_policy", &self.a2a_policy)
-            .field("acp_manager", &self.acp_manager.as_ref().map(|_| "<Arc<AcpAdapterManager>>"))
+            .field(
+                "acp_manager",
+                &self
+                    .acp_manager
+                    .as_ref()
+                    .map(|_| "<Arc<AcpAdapterManager>>"),
+            )
             .finish()
     }
 }

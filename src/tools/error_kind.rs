@@ -83,10 +83,7 @@ impl ToolErrorKind {
     pub fn is_transient(self) -> bool {
         matches!(
             self,
-            Self::Timeout
-                | Self::Transport
-                | Self::RateLimited
-                | Self::UpstreamServerError
+            Self::Timeout | Self::Transport | Self::RateLimited | Self::UpstreamServerError
         )
     }
 }

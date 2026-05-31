@@ -785,4 +785,3 @@ pub async fn handle_catalog(
 
     JsonRpcResponse::success(request.id, json!({ "items": items }))
 }
-

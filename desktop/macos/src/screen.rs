@@ -265,7 +265,9 @@ impl MacOSScreen {
             .bridge
             .call(METHOD_LIST_DISPLAYS, serde_json::Value::Null)
             .await
-            .map_err(|e| DesktopError::ScreenCapture(format!("bridge screen.list_displays: {e}")))?;
+            .map_err(|e| {
+                DesktopError::ScreenCapture(format!("bridge screen.list_displays: {e}"))
+            })?;
         Ok(rpc
             .displays
             .into_iter()

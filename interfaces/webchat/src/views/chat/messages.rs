@@ -70,8 +70,9 @@ pub(super) fn MessageList() -> impl IntoView {
     let on_scroll = move |_ev: web_sys::Event| {
         if let Some(el) = scroll_ref.get() {
             let el: &web_sys::HtmlElement = &el;
-            let distance =
-                f64::from(el.scroll_height()) - f64::from(el.scroll_top()) - f64::from(el.client_height());
+            let distance = f64::from(el.scroll_height())
+                - f64::from(el.scroll_top())
+                - f64::from(el.client_height());
             let near_bottom = distance <= STICK_THRESHOLD_PX;
             stuck_to_bottom.set(near_bottom);
             if near_bottom {

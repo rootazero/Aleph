@@ -147,8 +147,9 @@ pub(crate) async fn make_backend_and_tab_guarded(
 ) -> Result<(Box<dyn BrowserBackend>, String), BrowserError> {
     let backend = make_backend(manager, profile);
     let tabs_text = backend.list_tabs().await?;
-    let tab_id = parse_active_tab_id(&tabs_text)
-        .ok_or_else(|| BrowserError::ActionFailed("No tabs open. Use browser_open first.".into()))?;
+    let tab_id = parse_active_tab_id(&tabs_text).ok_or_else(|| {
+        BrowserError::ActionFailed("No tabs open. Use browser_open first.".into())
+    })?;
     if let Some(violation) = current_page_block(manager, &tabs_text, &tab_id) {
         return Err(BrowserError::NavigationFailed(format!(
             "current page blocked by SSRF policy ({violation}); \
@@ -223,7 +224,10 @@ mod tests {
     #[test]
     fn extract_tab_url_matches_id() {
         let text = "1: https://a.com\n2: http://10.0.0.1/x [selected]";
-        assert_eq!(extract_tab_url(text, "2").as_deref(), Some("http://10.0.0.1/x"));
+        assert_eq!(
+            extract_tab_url(text, "2").as_deref(),
+            Some("http://10.0.0.1/x")
+        );
         assert_eq!(extract_tab_url(text, "9"), None);
     }
 
@@ -233,12 +237,10 @@ mod tests {
         let manager = ProfileManager::new(BrowserSystemConfig::default());
 
         // Cloud metadata endpoint reached via redirect → blocked.
-        assert!(current_page_block(
-            &manager,
-            "1: http://169.254.169.254/latest/meta-data",
-            "1"
-        )
-        .is_some());
+        assert!(
+            current_page_block(&manager, "1: http://169.254.169.254/latest/meta-data", "1")
+                .is_some()
+        );
 
         // Loopback → blocked.
         assert!(current_page_block(&manager, "1: http://127.0.0.1:9000/", "1").is_some());

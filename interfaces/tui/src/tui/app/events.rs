@@ -13,7 +13,6 @@ use super::super::slash::ToolProgressMode;
 use super::{Action, AppState, ChatMessage};
 
 impl AppState {
-
     /// Request application quit. Sets should_quit flag.
     pub fn request_quit(&mut self) {
         self.should_quit = true;

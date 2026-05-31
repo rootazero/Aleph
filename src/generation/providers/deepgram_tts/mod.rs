@@ -23,9 +23,9 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{DeepgramError as DeepgramTtsError, SpeakRequest};
 
@@ -114,18 +114,68 @@ impl DeepgramTtsProvider {
     /// matches Deepgram's published voice cards (as of 2026-05).
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         const VOICES: &[(&str, &str, &str, &str)] = &[
-            ("aura-asteria-en", "Asteria", "female", "Clear and professional (US English)"),
-            ("aura-luna-en", "Luna", "female", "Polite and friendly (US English)"),
-            ("aura-stella-en", "Stella", "female", "Warm and engaging (US English)"),
-            ("aura-athena-en", "Athena", "female", "Mature and authoritative (UK English)"),
-            ("aura-hera-en", "Hera", "female", "Calm and assured (US English)"),
-            ("aura-orion-en", "Orion", "male", "Approachable and clear (US English)"),
-            ("aura-arcas-en", "Arcas", "male", "Natural and casual (US English)"),
-            ("aura-perseus-en", "Perseus", "male", "Confident and resonant (US English)"),
+            (
+                "aura-asteria-en",
+                "Asteria",
+                "female",
+                "Clear and professional (US English)",
+            ),
+            (
+                "aura-luna-en",
+                "Luna",
+                "female",
+                "Polite and friendly (US English)",
+            ),
+            (
+                "aura-stella-en",
+                "Stella",
+                "female",
+                "Warm and engaging (US English)",
+            ),
+            (
+                "aura-athena-en",
+                "Athena",
+                "female",
+                "Mature and authoritative (UK English)",
+            ),
+            (
+                "aura-hera-en",
+                "Hera",
+                "female",
+                "Calm and assured (US English)",
+            ),
+            (
+                "aura-orion-en",
+                "Orion",
+                "male",
+                "Approachable and clear (US English)",
+            ),
+            (
+                "aura-arcas-en",
+                "Arcas",
+                "male",
+                "Natural and casual (US English)",
+            ),
+            (
+                "aura-perseus-en",
+                "Perseus",
+                "male",
+                "Confident and resonant (US English)",
+            ),
             ("aura-angus-en", "Angus", "male", "Warm Irish accent"),
-            ("aura-orpheus-en", "Orpheus", "male", "Mellow and reassuring (US English)"),
+            (
+                "aura-orpheus-en",
+                "Orpheus",
+                "male",
+                "Mellow and reassuring (US English)",
+            ),
             ("aura-helios-en", "Helios", "male", "Crisp UK English"),
-            ("aura-zeus-en", "Zeus", "male", "Deep and commanding (US English)"),
+            (
+                "aura-zeus-en",
+                "Zeus",
+                "male",
+                "Deep and commanding (US English)",
+            ),
         ];
         VOICES
             .iter()
@@ -217,15 +267,18 @@ impl GenerationProvider for DeepgramTtsProvider {
                 _ => ("mp3", None, "audio/mpeg"),
             };
 
-            let mut query: Vec<(&str, String)> = vec![
-                ("model", model.clone()),
-                ("encoding", encoding.to_string()),
-            ];
+            let mut query: Vec<(&str, String)> =
+                vec![("model", model.clone()), ("encoding", encoding.to_string())];
             if let Some(c) = container {
                 query.push(("container", c.to_string()));
             }
             // Honour explicit sample_rate if present in params.extra.
-            if let Some(sr) = request.params.extra.get("sample_rate").and_then(|v| v.as_u64()) {
+            if let Some(sr) = request
+                .params
+                .extra
+                .get("sample_rate")
+                .and_then(|v| v.as_u64())
+            {
                 query.push(("sample_rate", sr.to_string()));
             }
 
@@ -254,18 +307,16 @@ impl GenerationProvider for DeepgramTtsProvider {
 
             let status = response.status();
             if !status.is_success() {
-                let body = response
-                    .text()
-                    .await
-                    .map_err(|e| GenerationError::network(format!("Failed to read error body: {}", e)))?;
+                let body = response.text().await.map_err(|e| {
+                    GenerationError::network(format!("Failed to read error body: {}", e))
+                })?;
                 error!(status = %status, body = %body, "Deepgram speak request failed");
                 return Err(self.parse_error(status, &body));
             }
 
-            let audio_bytes = response
-                .bytes()
-                .await
-                .map_err(|e| GenerationError::network(format!("Failed to read audio bytes: {}", e)))?;
+            let audio_bytes = response.bytes().await.map_err(|e| {
+                GenerationError::network(format!("Failed to read audio bytes: {}", e))
+            })?;
             if audio_bytes.is_empty() {
                 return Err(GenerationError::provider(
                     "Empty audio response from Deepgram",
@@ -288,9 +339,11 @@ impl GenerationProvider for DeepgramTtsProvider {
                 "Deepgram TTS generation completed"
             );
 
-            let mut output =
-                GenerationOutput::new(GenerationType::Speech, GenerationData::bytes(audio_bytes.to_vec()))
-                    .with_metadata(metadata);
+            let mut output = GenerationOutput::new(
+                GenerationType::Speech,
+                GenerationData::bytes(audio_bytes.to_vec()),
+            )
+            .with_metadata(metadata);
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
             }

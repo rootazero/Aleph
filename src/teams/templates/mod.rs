@@ -30,9 +30,10 @@ pub mod substitute;
 pub mod types;
 
 pub use loader::{load_template, TemplateRegistry};
-pub use materialize::{materialize_template, MaterializeDeps, MaterializeRequest, MaterializedTeam};
+pub use materialize::{
+    materialize_template, MaterializeDeps, MaterializeRequest, MaterializedTeam,
+};
 pub use substitute::substitute;
 pub use types::{
-    TemplateLeader, TemplateMember, TemplatePriority, TemplateTask, TeamTemplate,
-    TeamTemplateError,
+    TeamTemplate, TeamTemplateError, TemplateLeader, TemplateMember, TemplatePriority, TemplateTask,
 };

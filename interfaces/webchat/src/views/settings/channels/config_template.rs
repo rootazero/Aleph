@@ -150,10 +150,16 @@ pub fn ChannelConfigTemplate(
 
             match state.rpc_call("config.patch", params).await {
                 Ok(_) => {
-                    success.set(Some(t_string!(i18n, channel_config.toast_saved).to_string()));
+                    success.set(Some(
+                        t_string!(i18n, channel_config.toast_saved).to_string(),
+                    ));
                 }
                 Err(e) => {
-                    error.set(Some(format!("{}{}", t_string!(i18n, channel_config.toast_save_failed).to_string(), e)));
+                    error.set(Some(format!(
+                        "{}{}",
+                        t_string!(i18n, channel_config.toast_save_failed).to_string(),
+                        e
+                    )));
                 }
             }
             saving.set(false);
@@ -181,11 +187,17 @@ pub fn ChannelConfigTemplate(
             {
                 Ok(_) => {
                     channel_status.set(ChannelStatus::Connected);
-                    success.set(Some(t_string!(i18n, channel_config.toast_connected).to_string()));
+                    success.set(Some(
+                        t_string!(i18n, channel_config.toast_connected).to_string(),
+                    ));
                 }
                 Err(e) => {
                     channel_status.set(ChannelStatus::Error);
-                    error.set(Some(format!("{}{}", t_string!(i18n, channel_config.toast_connect_failed).to_string(), e)));
+                    error.set(Some(format!(
+                        "{}{}",
+                        t_string!(i18n, channel_config.toast_connect_failed).to_string(),
+                        e
+                    )));
                 }
             }
             connecting.set(false);
@@ -208,10 +220,16 @@ pub fn ChannelConfigTemplate(
             {
                 Ok(_) => {
                     channel_status.set(ChannelStatus::Disconnected);
-                    success.set(Some(t_string!(i18n, channel_config.toast_disconnected).to_string()));
+                    success.set(Some(
+                        t_string!(i18n, channel_config.toast_disconnected).to_string(),
+                    ));
                 }
                 Err(e) => {
-                    error.set(Some(format!("{}{}", t_string!(i18n, channel_config.toast_disconnect_failed).to_string(), e)));
+                    error.set(Some(format!(
+                        "{}{}",
+                        t_string!(i18n, channel_config.toast_disconnect_failed).to_string(),
+                        e
+                    )));
                 }
             }
         });
@@ -235,7 +253,11 @@ pub fn ChannelConfigTemplate(
                     }
                 }
                 Err(e) => {
-                    error.set(Some(format!("{}{}", t_string!(i18n, channel_config.toast_delete_failed).to_string(), e)));
+                    error.set(Some(format!(
+                        "{}{}",
+                        t_string!(i18n, channel_config.toast_delete_failed).to_string(),
+                        e
+                    )));
                     deleting.set(false);
                 }
             }
@@ -653,7 +675,9 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
     let on_approve = move || {
         let code = pairing_code_input.get().trim().to_uppercase();
         if code.is_empty() {
-            pairing_error.set(Some(t_string!(i18n, channel_config.pairing_enter_code).to_string()));
+            pairing_error.set(Some(
+                t_string!(i18n, channel_config.pairing_enter_code).to_string(),
+            ));
             return;
         }
         approving.set(true);
@@ -670,12 +694,18 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                 .await
             {
                 Ok(_) => {
-                    pairing_success.set(Some(t_string!(i18n, channel_config.pairing_approved).to_string()));
+                    pairing_success.set(Some(
+                        t_string!(i18n, channel_config.pairing_approved).to_string(),
+                    ));
                     pairing_code_input.set(String::new());
                     refresh_approved.update(|n| *n += 1);
                 }
                 Err(e) => {
-                    pairing_error.set(Some(format!("{}{}", t_string!(i18n, channel_config.pairing_approve_failed).to_string(), e)));
+                    pairing_error.set(Some(format!(
+                        "{}{}",
+                        t_string!(i18n, channel_config.pairing_approve_failed).to_string(),
+                        e
+                    )));
                 }
             }
             approving.set(false);

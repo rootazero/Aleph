@@ -28,7 +28,10 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
     if trimmed.starts_with('{') {
         let manifest: WorkflowManifest = serde_json::from_str(trimmed)
             .map_err(|e| AlephError::invalid_input(format!("manifest JSON parse failed: {e}")))?;
-        return Ok(ImportOutcome { manifest, dropped: Vec::new() });
+        return Ok(ImportOutcome {
+            manifest,
+            dropped: Vec::new(),
+        });
     }
 
     // Path 1: embedded lossless block.
@@ -36,7 +39,10 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
         let manifest: WorkflowManifest = serde_json::from_str(&json).map_err(|e| {
             AlephError::invalid_input(format!("embedded @aleph-workflow parse failed: {e}"))
         })?;
-        return Ok(ImportOutcome { manifest, dropped: Vec::new() });
+        return Ok(ImportOutcome {
+            manifest,
+            dropped: Vec::new(),
+        });
     }
 
     // Path 2: best-effort scan of a bare .workflow.js.
@@ -68,7 +74,10 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
     let skeleton = strip_string_literals(src);
     let mut dropped = Vec::new();
     for (needle, label) in [
-        ("pipeline(", "pipeline(...) — runtime item list not statically known"),
+        (
+            "pipeline(",
+            "pipeline(...) — runtime item list not statically known",
+        ),
         ("budget", "budget-driven control flow"),
         ("workflow(", "nested workflow() call"),
         ("for ", "for loop"),
@@ -97,7 +106,11 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
             id: format!("step_{}", i + 1),
             agent: "agent".to_string(),
             prompt: p.clone(),
-            depends_on: if i == 0 { Vec::new() } else { vec![format!("step_{i}")] },
+            depends_on: if i == 0 {
+                Vec::new()
+            } else {
+                vec![format!("step_{i}")]
+            },
             label: None,
             model: None,
             phase: None,
@@ -279,7 +292,10 @@ await agent('second step')
         assert_eq!(outcome.manifest.when_to_use, "when testing");
         assert_eq!(outcome.manifest.steps.len(), 2);
         assert_eq!(outcome.manifest.steps[0].prompt, "first step");
-        assert_eq!(outcome.manifest.steps[1].depends_on, vec!["step_1".to_string()]);
+        assert_eq!(
+            outcome.manifest.steps[1].depends_on,
+            vec!["step_1".to_string()]
+        );
     }
 
     #[test]
@@ -353,7 +369,10 @@ const r = await pipeline(items, s1, s2)
     #[test]
     fn strip_string_literals_blanks_bodies_keeps_skeleton() {
         // Bodies gone, delimiters + code kept; escaped quote does not close early.
-        assert_eq!(strip_string_literals("for (x) agent('a b')"), "for (x) agent('')");
+        assert_eq!(
+            strip_string_literals("for (x) agent('a b')"),
+            "for (x) agent('')"
+        );
         assert_eq!(strip_string_literals(r#"f("a \" b")"#), r#"f("")"#);
         assert_eq!(strip_string_literals("agent(`tpl text`)"), "agent(``)");
     }
@@ -377,7 +396,11 @@ const r = await pipeline(items, s1, s2)
                    await subagent('noise')\n\
                    await agent('real')";
         let outcome = parse_workflow_js(src).expect("scan bare js");
-        assert_eq!(outcome.manifest.steps.len(), 1, "only the real agent() counts");
+        assert_eq!(
+            outcome.manifest.steps.len(),
+            1,
+            "only the real agent() counts"
+        );
         assert_eq!(outcome.manifest.steps[0].prompt, "real");
     }
 }

@@ -200,11 +200,7 @@ async fn dispatch_proxy(action: ProxyAction, json: bool) -> CliResult<()> {
     }
 }
 
-async fn dispatch_pairing(
-    server_url: &str,
-    action: PairingAction,
-    json: bool,
-) -> CliResult<()> {
+async fn dispatch_pairing(server_url: &str, action: PairingAction, json: bool) -> CliResult<()> {
     use commands::pairing_cmd;
     match action {
         PairingAction::List => pairing_cmd::list(server_url, json).await,
@@ -213,11 +209,7 @@ async fn dispatch_pairing(
     }
 }
 
-async fn dispatch_devices(
-    server_url: &str,
-    action: DevicesAction,
-    json: bool,
-) -> CliResult<()> {
+async fn dispatch_devices(server_url: &str, action: DevicesAction, json: bool) -> CliResult<()> {
     use commands::devices_cmd;
     match action {
         DevicesAction::List => devices_cmd::list(server_url, json).await,
@@ -263,11 +255,7 @@ async fn dispatch_auth(server_url: &str, action: AuthAction, json: bool) -> CliR
     }
 }
 
-async fn dispatch_secret(
-    server_url: &str,
-    action: SecretAction,
-    json: bool,
-) -> CliResult<()> {
+async fn dispatch_secret(server_url: &str, action: SecretAction, json: bool) -> CliResult<()> {
     use commands::secret_cmd;
     match action {
         SecretAction::List => secret_cmd::list(server_url, json).await,
@@ -977,13 +965,7 @@ mod tests {
     #[test]
     fn parse_cron_update_with_enable() {
         assert!(Cli::try_parse_from([
-            "aleph",
-            "cron",
-            "update",
-            "id-1",
-            "--name",
-            "renamed",
-            "--enable"
+            "aleph", "cron", "update", "id-1", "--name", "renamed", "--enable"
         ])
         .is_ok());
     }
@@ -1000,9 +982,7 @@ mod tests {
 
     #[test]
     fn parse_session_truncate() {
-        assert!(
-            Cli::try_parse_from(["aleph", "session", "truncate", "abc", "-n", "10"]).is_ok()
-        );
+        assert!(Cli::try_parse_from(["aleph", "session", "truncate", "abc", "-n", "10"]).is_ok());
     }
 
     #[test]
@@ -1151,7 +1131,8 @@ mod tests {
         ])
         .is_err());
         // remove must supply --command or --index
-        assert!(Cli::try_parse_from(["aleph", "hooks", "remove", "before_tool_call"]).is_ok()); // parses; handler rejects
+        assert!(Cli::try_parse_from(["aleph", "hooks", "remove", "before_tool_call"]).is_ok());
+        // parses; handler rejects
     }
 
     #[test]

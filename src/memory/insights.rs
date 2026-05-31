@@ -214,7 +214,13 @@ mod tests {
     use async_trait::async_trait;
     use std::sync::Mutex;
 
-    fn tool_row(id: &str, tool: &str, success: bool, duration_ms: u64, created_at: i64) -> RawMemory {
+    fn tool_row(
+        id: &str,
+        tool: &str,
+        success: bool,
+        duration_ms: u64,
+        created_at: i64,
+    ) -> RawMemory {
         RawMemory {
             id: id.to_string(),
             content: String::new(),
@@ -316,7 +322,10 @@ mod tests {
             tool_row("6", "ccc", true, 1, 100),
         ];
         let report = build_report(&rows, 0, 3600, 2);
-        assert_eq!(report.distinct_tools, 3, "all tools counted before truncation");
+        assert_eq!(
+            report.distinct_tools, 3,
+            "all tools counted before truncation"
+        );
         assert_eq!(report.tools.len(), 2, "only top-2 returned");
         assert_eq!(report.tools[0].tool, "aaa"); // count 3
         assert_eq!(report.tools[1].tool, "bbb"); // count 2

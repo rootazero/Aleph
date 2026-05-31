@@ -22,11 +22,7 @@ fn within_cap(size: Option<u64>, max_bytes: u64) -> bool {
 /// Attachments that already hold inline bytes, or whose URL is HTTP / absent,
 /// are left for the generic pipeline and do not need limb hydration.
 fn needs_hydration(att: &Attachment) -> bool {
-    att.data.is_none()
-        && att
-            .url
-            .as_deref()
-            .is_some_and(|u| u.starts_with("mxc://"))
+    att.data.is_none() && att.url.as_deref().is_some_and(|u| u.starts_with("mxc://"))
 }
 
 /// Hydrate inbound `mxc://` attachments into inline [`Attachment::data`].
@@ -54,7 +50,10 @@ pub async fn hydrate_inbound_attachments(
             continue;
         }
 
-        let mxc = att.url.take().expect("mxc url present per needs_hydration guard");
+        let mxc = att
+            .url
+            .take()
+            .expect("mxc url present per needs_hydration guard");
         if !within_cap(att.size, max_bytes) {
             tracing::debug!(
                 "Matrix inbound media {} exceeds cap ({:?} > {} bytes), metadata only",
@@ -173,7 +172,11 @@ mod tests {
     fn needs_hydration_only_for_undownloaded_mxc() {
         assert!(needs_hydration(&att(Some("mxc://h/abc"), None, Some(1))));
         // already has bytes
-        assert!(!needs_hydration(&att(Some("mxc://h/abc"), Some(vec![1]), Some(1))));
+        assert!(!needs_hydration(&att(
+            Some("mxc://h/abc"),
+            Some(vec![1]),
+            Some(1)
+        )));
         // http url belongs to the generic pipeline
         assert!(!needs_hydration(&att(Some("https://h/abc"), None, Some(1))));
         // no url

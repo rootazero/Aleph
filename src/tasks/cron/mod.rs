@@ -106,10 +106,7 @@ impl CronService {
     /// Builder-style setter — services are constructed once at startup and the
     /// bus is wired in immediately after; callers that don't want push (tests,
     /// CLI tooling) can simply skip this.
-    pub fn with_event_bus(
-        mut self,
-        bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
-    ) -> Self {
+    pub fn with_event_bus(mut self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) -> Self {
         self.event_bus = Some(bus);
         self
     }

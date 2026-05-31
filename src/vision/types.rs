@@ -122,7 +122,11 @@ impl Rect {
 
     /// Return the area of the rectangle.
     pub fn area(&self) -> f64 {
-        if self.width < 0.0 || self.height < 0.0 || !self.width.is_finite() || !self.height.is_finite() {
+        if self.width < 0.0
+            || self.height < 0.0
+            || !self.width.is_finite()
+            || !self.height.is_finite()
+        {
             0.0
         } else {
             self.width * self.height

@@ -68,11 +68,11 @@ async fn plugin_change_triggers_full_reload() {
     std::fs::write(&plugin_path, b"{}").expect("write plugin.json");
 
     let mgr = Arc::clone(&manager);
-    let fired = wait_until("reload after plugin.json", || {
-        mgr.reload_count() > before
-    })
-    .await;
-    assert!(fired, "Plugin manifest change must trigger ExtensionManager::reload");
+    let fired = wait_until("reload after plugin.json", || mgr.reload_count() > before).await;
+    assert!(
+        fired,
+        "Plugin manifest change must trigger ExtensionManager::reload"
+    );
 
     let _ = manager.stop_watcher();
 }

@@ -495,7 +495,9 @@ mod usage_limit_tests {
         assert!(!is_usage_limit_body(
             r#"{"error":{"message":"invalid model: gpt-9","type":"invalid_request_error"}}"#
         ));
-        assert!(!is_usage_limit_body("400 Bad Request: missing field 'messages'"));
+        assert!(!is_usage_limit_body(
+            "400 Bad Request: missing field 'messages'"
+        ));
         assert!(!is_usage_limit_body(""));
     }
 }

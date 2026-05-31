@@ -361,9 +361,7 @@ impl BrowserBackend for PlaywrightCliBackend {
     async fn resize(&self, _tab_id: &str, width: u32, height: u32) -> Result<(), BrowserError> {
         let w = width.to_string();
         let h = height.to_string();
-        let _ = self
-            .run(&["resize", &w, &h], self.action_timeout())
-            .await?;
+        let _ = self.run(&["resize", &w, &h], self.action_timeout()).await?;
         Ok(())
     }
 
@@ -533,15 +531,11 @@ mod tests {
             vec!["cookie-list", "--domain", "example.com"]
         );
         assert_eq!(
-            cookie_argv(&CookieOp::Get {
-                name: "sid".into()
-            }),
+            cookie_argv(&CookieOp::Get { name: "sid".into() }),
             vec!["cookie-get", "sid"]
         );
         assert_eq!(
-            cookie_argv(&CookieOp::Delete {
-                name: "sid".into()
-            }),
+            cookie_argv(&CookieOp::Delete { name: "sid".into() }),
             vec!["cookie-delete", "sid"]
         );
         assert_eq!(cookie_argv(&CookieOp::Clear), vec!["cookie-clear"]);

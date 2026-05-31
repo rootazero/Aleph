@@ -409,8 +409,10 @@ impl PairingManager {
     /// a never-redirected browser from pinning memory.
     pub fn record_browser_session(&self, code: &str, session_id: &str) {
         self.gc_browser_state();
-        self.approved_browser_sessions
-            .insert(code.to_string(), (session_id.to_string(), current_timestamp_ms()));
+        self.approved_browser_sessions.insert(
+            code.to_string(),
+            (session_id.to_string(), current_timestamp_ms()),
+        );
     }
 
     /// Atomically remove and return the session_id stashed by
@@ -746,10 +748,7 @@ mod tests {
     #[test]
     fn poll_browser_pairing_unknown_is_expired() {
         let manager = create_test_manager();
-        assert_eq!(
-            manager.poll_browser_pairing("999999"),
-            PollState::Expired
-        );
+        assert_eq!(manager.poll_browser_pairing("999999"), PollState::Expired);
     }
 
     #[test]

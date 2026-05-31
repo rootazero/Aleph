@@ -157,17 +157,17 @@ impl A2ASubAgent {
                     )
                 };
 
-                // Spec 1 G2: record a successful delegation for parent-agent memory.
-                if result.success {
-                    if let Some(w) = self.raw_memory_writer.clone() {
-                        emit_delegation_raw_with_registry(
-                            w,
-                            request,
-                            &result,
-                            &agent.card.id,
-                            self.capture_registry.clone(),
-                        );
-                    }
+                // Spec 1 G2: record delegation outcome for parent-agent memory.
+                // Record unconditionally (matching sync path behaviour) so the
+                // parent sees failed attempts and can learn / retry.
+                if let Some(w) = self.raw_memory_writer.clone() {
+                    emit_delegation_raw_with_registry(
+                        w,
+                        request,
+                        &result,
+                        &agent.card.id,
+                        self.capture_registry.clone(),
+                    );
                 }
                 Ok(result)
             }

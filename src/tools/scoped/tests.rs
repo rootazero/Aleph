@@ -35,9 +35,7 @@ impl ToolService for NoopParentTools {
 
 fn in_mem_session() -> Arc<dyn crate::session::service::SessionService> {
     use crate::session::in_process::InProcessActorSessionService;
-    use crate::session::store::{
-        migrate_add_session_events, SessionEventStore, SqliteEventStore,
-    };
+    use crate::session::store::{migrate_add_session_events, SessionEventStore, SqliteEventStore};
     let conn = rusqlite::Connection::open_in_memory().unwrap();
     migrate_add_session_events(&conn).unwrap();
     let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
@@ -155,10 +153,7 @@ async fn list_applies_definition_rewriter() {
     let defs = svc.list().await;
     assert_eq!(defs.len(), 1);
     assert_eq!(defs[0].description, "[AGENT-A] stub");
-    assert_eq!(
-        defs[0].input_schema.get("x-agent"),
-        Some(&json!("agent-a"))
-    );
+    assert_eq!(defs[0].input_schema.get("x-agent"), Some(&json!("agent-a")));
 }
 
 #[tokio::test]
@@ -666,8 +661,14 @@ async fn before_tool_hook_context_wraps_tool_output_for_llm() {
         .value
         .as_str()
         .expect("hook contexts wrap result as a string");
-    assert!(s.contains("<system-reminder>"), "missing reminder wrapper: {s}");
-    assert!(s.contains("file auto-formatted"), "missing context line: {s}");
+    assert!(
+        s.contains("<system-reminder>"),
+        "missing reminder wrapper: {s}"
+    );
+    assert!(
+        s.contains("file auto-formatted"),
+        "missing context line: {s}"
+    );
     assert!(s.contains("lint passed"), "missing context line: {s}");
 }
 
@@ -786,8 +787,7 @@ fn metadata_schema_strips_unhealthy_tools_and_invalidates_on_flip() {
         health.register_probe("dead", Arc::new(AlwaysDead));
         health.refresh("dead").await;
     });
-    let svc =
-        ScopedToolService::new(registry, BTreeSet::new()).with_health(Arc::clone(&health));
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_health(Arc::clone(&health));
 
     let s1 = svc.metadata_schema();
     let names: Vec<&str> = s1.iter().map(|d| d.name.as_str()).collect();
@@ -1049,4 +1049,3 @@ async fn execute_with_cancel_runs_to_completion_when_token_never_fires() {
     };
     assert!(matches, "unexpected output shape: {:?}", out.value);
 }
-

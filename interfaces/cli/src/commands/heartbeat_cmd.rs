@@ -182,7 +182,9 @@ pub async fn update(
         body.insert("enabled".into(), Value::Bool(false));
     }
 
-    let result: Value = client.call("heartbeat.update", Some(Value::Object(body))).await?;
+    let result: Value = client
+        .call("heartbeat.update", Some(Value::Object(body)))
+        .await?;
     if json {
         output::print_json(&result);
     } else {
@@ -220,7 +222,9 @@ pub async fn toggle(
     } else if disable {
         body.insert("enabled".into(), Value::Bool(false));
     }
-    let result: Value = client.call("heartbeat.toggle", Some(Value::Object(body))).await?;
+    let result: Value = client
+        .call("heartbeat.toggle", Some(Value::Object(body)))
+        .await?;
     if json {
         output::print_json(&result);
     } else {
@@ -246,7 +250,9 @@ pub async fn wake(
     if let Some(r) = reason {
         body.insert("reason".into(), Value::String(r.to_string()));
     }
-    let result: Value = client.call("heartbeat.wake", Some(Value::Object(body))).await?;
+    let result: Value = client
+        .call("heartbeat.wake", Some(Value::Object(body)))
+        .await?;
     if json {
         output::print_json(&result);
     } else {

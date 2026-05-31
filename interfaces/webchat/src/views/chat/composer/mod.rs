@@ -23,7 +23,9 @@ use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use shared_ui_logic::safety::{check_prompt_injection, prompt_guard_message, PromptInjectionVerdict};
+use shared_ui_logic::safety::{
+    check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
+};
 
 /// Textarea + side buttons + palette popup + injection-guard banner.
 /// Mounted by [`super::view::ChatView`] at the viewport bottom.
@@ -200,8 +202,7 @@ pub(super) fn InputArea() -> impl IntoView {
                 if parts.len() == 2 {
                     let maybe_ns = parts[0];
                     let sub_query = parts[1];
-                    if let Some(parent) =
-                        cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace)
+                    if let Some(parent) = cmds.iter().find(|c| c.key == maybe_ns && c.is_namespace)
                     {
                         current_namespace.set(Some(parent.key.clone()));
                         let entries = build_palette_entries(
@@ -306,8 +307,7 @@ pub(super) fn InputArea() -> impl IntoView {
                             input_text.set("/".to_string());
                             let labels = palette_labels();
                             let cmds = all_commands.get_untracked();
-                            let new_entries =
-                                build_palette_entries(&cmds, &None, "", &labels);
+                            let new_entries = build_palette_entries(&cmds, &None, "", &labels);
                             palette_entries.set(new_entries);
                             selected_index.set(0);
                         } else {

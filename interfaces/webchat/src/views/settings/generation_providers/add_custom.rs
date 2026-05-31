@@ -320,4 +320,3 @@ pub(super) fn AddCustomProviderPanel(
         </div> // flex wrapper
     }
 }
-

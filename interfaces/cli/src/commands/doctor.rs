@@ -159,7 +159,10 @@ fn render_human(checks: &[DoctorCheck]) {
     if failed == 0 && warned == 0 {
         println!("All checks passed.");
     } else if failed == 0 {
-        println!("All required checks passed. {} optional warning(s).", warned);
+        println!(
+            "All required checks passed. {} optional warning(s).",
+            warned
+        );
     } else {
         println!(
             "{} required check(s) failed, {} optional warning(s).",
@@ -201,7 +204,10 @@ fn check_server_binary() -> DoctorCheck {
         )
     } else if !binary.is_absolute() {
         // PATH-resolved bare name — accept if it resolves via PATH probe.
-        match std::process::Command::new(&binary).arg("--version").output() {
+        match std::process::Command::new(&binary)
+            .arg("--version")
+            .output()
+        {
             Ok(o) if o.status.success() => DoctorCheck::ok(
                 "system",
                 "aleph-server",
@@ -247,7 +253,10 @@ fn check_aleph_home() -> DoctorCheck {
             "aleph-home",
             "~/.aleph data directory",
             true,
-            format!("{} missing — run `aleph daemon start` once to bootstrap", home.display()),
+            format!(
+                "{} missing — run `aleph daemon start` once to bootstrap",
+                home.display()
+            ),
         )
     }
 }

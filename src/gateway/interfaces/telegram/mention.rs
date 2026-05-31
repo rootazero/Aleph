@@ -90,8 +90,16 @@ mod tests {
     #[test]
     fn unknown_username_fails_open() {
         // Cannot gate without knowing our handle — never drop everything.
-        assert!(group_message_addresses_bot(Some("random chatter"), false, None));
-        assert!(group_message_addresses_bot(Some("random chatter"), false, Some("")));
+        assert!(group_message_addresses_bot(
+            Some("random chatter"),
+            false,
+            None
+        ));
+        assert!(group_message_addresses_bot(
+            Some("random chatter"),
+            false,
+            Some("")
+        ));
     }
 
     #[test]

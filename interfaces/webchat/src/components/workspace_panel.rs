@@ -93,12 +93,9 @@ fn ToolDetailView(run_id: String, tool_id: String) -> impl IntoView {
     let run_id_for_payload = run_id.clone();
     let tool_id_for_payload = tool_id.clone();
 
-    let entry = Memo::new(move |_| {
-        find_tool_entry(&chat, &run_id_for_entry, &tool_id_for_entry)
-    });
-    let payload = Memo::new(move |_| {
-        workspace.get_tool_payload(&run_id_for_payload, &tool_id_for_payload)
-    });
+    let entry = Memo::new(move |_| find_tool_entry(&chat, &run_id_for_entry, &tool_id_for_entry));
+    let payload =
+        Memo::new(move |_| workspace.get_tool_payload(&run_id_for_payload, &tool_id_for_payload));
 
     let run_id_for_missing = run_id.clone();
     let tool_id_for_missing = tool_id.clone();
@@ -247,8 +244,10 @@ mod tests {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
-        chat.messages
-            .set(vec![msg_with_tools("assistant-run1", vec![tool("t1", "search")])]);
+        chat.messages.set(vec![msg_with_tools(
+            "assistant-run1",
+            vec![tool("t1", "search")],
+        )]);
         assert!(find_tool_entry(&chat, "run1", "nope").is_none());
     }
 }

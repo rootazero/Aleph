@@ -8,12 +8,12 @@ use leptos_router::hooks::use_location;
 // Views
 use crate::views::agent_trace::AgentTrace;
 use crate::views::canvas::CanvasView;
-use crate::views::pairing_modal::PairingModal;
 use crate::views::chat::ChatView;
 use crate::views::cron::CronView;
 use crate::views::home::Home;
 use crate::views::logs::Logs;
 use crate::views::memory::Memory;
+use crate::views::pairing_modal::PairingModal;
 use crate::views::runtimes::RuntimesView;
 use crate::views::settings::*;
 use crate::views::tasks::TasksView;

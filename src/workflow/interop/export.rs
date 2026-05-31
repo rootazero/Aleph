@@ -52,11 +52,17 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
                     }
                 }
                 if layer.len() == 1 {
-                    out.push_str(&format!("await {}\n", render_agent_call(&manifest.steps[layer[0]])));
+                    out.push_str(&format!(
+                        "await {}\n",
+                        render_agent_call(&manifest.steps[layer[0]])
+                    ));
                 } else {
                     out.push_str("await parallel([\n");
                     for &i in layer {
-                        out.push_str(&format!("  () => {},\n", render_agent_call(&manifest.steps[i])));
+                        out.push_str(&format!(
+                            "  () => {},\n",
+                            render_agent_call(&manifest.steps[i])
+                        ));
                     }
                     out.push_str("])\n");
                 }

@@ -35,9 +35,7 @@ use crate::sync_primitives::Arc;
 use crate::tool_metadata::ToolHealthCache;
 use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
-use crate::tools::service::{
-    to_metadata_form, ToolDefinition, ToolError, ToolService, ToolSource,
-};
+use crate::tools::service::{to_metadata_form, ToolDefinition, ToolError, ToolService, ToolSource};
 
 // =============================================================================
 // ScopedToolService

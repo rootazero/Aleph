@@ -150,7 +150,9 @@ pub(crate) fn parse_ddg_html(body: &str, max_results: usize) -> Vec<SearchResult
         if out.len() >= max_results {
             break;
         }
-        let Some(title_a) = node.select(&title_sel).next() else { continue };
+        let Some(title_a) = node.select(&title_sel).next() else {
+            continue;
+        };
         let raw_href = title_a.value().attr("href").unwrap_or_default();
         let url = normalize_ddg_href(raw_href);
         if url.is_empty() {
@@ -277,7 +279,6 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-
 /// Factory entry for the search provider registry.
 ///
 /// Co-located with the concrete provider so adding a new search
@@ -293,7 +294,8 @@ impl crate::search::ProviderFactory for DuckDuckGoFactory {
         &self,
         name: &str,
         _backend: &crate::config::types::SearchBackendConfig,
-    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>> {
+    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
+    {
         match DuckDuckGoProvider::new() {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
@@ -468,6 +470,9 @@ mod tests {
         let results = parse_ddg_lite_html(html, 10);
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].snippet, "snippet for A only");
-        assert_eq!(results[1].snippet, "", "missing snippet must not drop the title row");
+        assert_eq!(
+            results[1].snippet, "",
+            "missing snippet must not drop the title row"
+        );
     }
 }

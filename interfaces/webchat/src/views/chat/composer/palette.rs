@@ -278,8 +278,7 @@ mod tests {
             param_hint: None,
             children: vec![leaf("new", "start a new session")],
         };
-        let entries =
-            build_palette_entries(&[parent], &Some("session".into()), "", &mk_labels());
+        let entries = build_palette_entries(&[parent], &Some("session".into()), "", &mk_labels());
         assert_eq!(entries.len(), 2);
         assert!(entries[0].is_back);
         assert_eq!(entries[1].label, "new");

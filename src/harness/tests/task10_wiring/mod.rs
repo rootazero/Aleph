@@ -37,7 +37,6 @@ use crate::verification::{StopHookVerifier, ToolLoopVerifier, VerifierChain};
 
 mod extras;
 
-
 #[derive(Default)]
 struct MockSessionInner {
     events: Vec<SessionEventRecord>,
@@ -931,4 +930,3 @@ async fn per_tool_budget_fires_before_global_turn_timeout() {
         "per-tool 50ms budget must fire well before the 60s global; saw {elapsed:?}",
     );
 }
-

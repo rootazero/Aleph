@@ -96,9 +96,7 @@ fn RadialCanvasView() -> impl IntoView {
                             gloo_timers::future::TimeoutFuture::new(RETRY_DELAY_MS).await;
                             continue;
                         }
-                        web_sys::console::error_1(
-                            &format!("Agents list failed: {e}").into(),
-                        );
+                        web_sys::console::error_1(&format!("Agents list failed: {e}").into());
                         break;
                     }
                 }
@@ -178,9 +176,7 @@ fn RadialCanvasView() -> impl IntoView {
     let detail_cache_eff = detail_cache.clone();
     Effect::new(move || {
         // selected_node wins; prefetch_request (hover) is fallback
-        let target = selected_node
-            .get()
-            .or_else(|| prefetch_request.get());
+        let target = selected_node.get().or_else(|| prefetch_request.get());
         let Some(id) = target else { return };
 
         let now = now_ms();

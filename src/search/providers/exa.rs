@@ -105,7 +105,6 @@ impl SearchProvider for ExaProvider {
     }
 }
 
-
 /// Factory entry for the search provider registry.
 ///
 /// Co-located with the concrete provider so adding a new search
@@ -121,9 +120,13 @@ impl crate::search::ProviderFactory for ExaFactory {
         &self,
         name: &str,
         backend: &crate::config::types::SearchBackendConfig,
-    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>> {
+    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
+    {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
-            log::warn!("search backend '{name}' ({}) skipped: no api_key in vault", NAME);
+            log::warn!(
+                "search backend '{name}' ({}) skipped: no api_key in vault",
+                NAME
+            );
             return Ok(None);
         };
         match ExaProvider::new(key.to_string()) {

@@ -80,10 +80,7 @@ pub(super) enum ProxyHttpError {
 /// Reads up to [`MAX_HEADER_BYTES`] looking for the `\r\n\r\n` terminator,
 /// parses the request line, enforces the allowlist, dials the upstream, and
 /// splices the streams. Returns when either side closes.
-pub(super) async fn handle(
-    inbound: TcpStream,
-    allowlist: AllowList,
-) -> Result<(), std::io::Error> {
+pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(), std::io::Error> {
     let (rd, mut wr) = inbound.into_split();
     let mut rd = BufReader::with_capacity(MAX_HEADER_BYTES, rd);
 

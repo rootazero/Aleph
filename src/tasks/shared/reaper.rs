@@ -372,7 +372,11 @@ mod tests {
         reap_once(&subs).await;
         assert_eq!(good_a.calls(), 1);
         assert_eq!(bad.calls(), 1);
-        assert_eq!(good_b.calls(), 1, "subsystem after failure must still be called");
+        assert_eq!(
+            good_b.calls(),
+            1,
+            "subsystem after failure must still be called"
+        );
     }
 
     // The next three tests all touch the process-wide `REAPER_STARTED`
@@ -415,8 +419,7 @@ mod tests {
         };
         let (tx, rx1) = watch::channel(false);
         let rx2 = rx1.clone();
-        let h1 = spawn_task_reaper(cfg.clone(), subs1, rx1)
-            .expect("first spawn returns a handle");
+        let h1 = spawn_task_reaper(cfg.clone(), subs1, rx1).expect("first spawn returns a handle");
         let h2 = spawn_task_reaper(cfg, subs2, rx2);
         assert!(h2.is_none(), "second spawn must be rejected as duplicate");
 

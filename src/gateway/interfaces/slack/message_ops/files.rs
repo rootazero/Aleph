@@ -251,9 +251,7 @@ mod tests {
     fn has_files_detects_presence_and_absence() {
         assert!(!has_files(&serde_json::json!({ "text": "hi" })));
         assert!(!has_files(&serde_json::json!({ "files": [] })));
-        assert!(has_files(
-            &serde_json::json!({ "files": [{ "id": "F1" }] })
-        ));
+        assert!(has_files(&serde_json::json!({ "files": [{ "id": "F1" }] })));
         // message_changed nesting
         assert!(has_files(&serde_json::json!({
             "subtype": "message_changed",

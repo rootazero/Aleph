@@ -135,7 +135,6 @@ impl SearchProvider for SearxngProvider {
     }
 }
 
-
 /// Factory entry for the search provider registry.
 ///
 /// Co-located with the concrete provider so adding a new search
@@ -151,9 +150,13 @@ impl crate::search::ProviderFactory for SearxngFactory {
         &self,
         name: &str,
         backend: &crate::config::types::SearchBackendConfig,
-    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>> {
+    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
+    {
         let Some(base) = backend.base_url.as_deref().filter(|s| !s.is_empty()) else {
-            log::warn!("search backend '{name}' ({}) skipped: base_url missing", NAME);
+            log::warn!(
+                "search backend '{name}' ({}) skipped: base_url missing",
+                NAME
+            );
             return Ok(None);
         };
         match SearxngProvider::new(base.to_string()) {

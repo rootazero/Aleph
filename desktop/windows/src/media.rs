@@ -87,7 +87,9 @@ async fn run_ffmpeg(args: &[String]) -> Result<()> {
         .args(args)
         .output()
         .await
-        .map_err(|e| DesktopError::PlatformError(format!("Failed to run ffmpeg (install ffmpeg): {e}")))?;
+        .map_err(|e| {
+            DesktopError::PlatformError(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
+        })?;
 
     if output.status.success() {
         Ok(())
@@ -486,7 +488,10 @@ mod tests {
         assert_eq!(audio.len(), 2, "video device must be excluded");
         assert_eq!(audio[0].name, "Mic A");
         assert!(audio[0].is_input);
-        assert!(audio[0].is_default, "first audio device is best-effort default");
+        assert!(
+            audio[0].is_default,
+            "first audio device is best-effort default"
+        );
         assert!(!audio[1].is_default);
     }
 

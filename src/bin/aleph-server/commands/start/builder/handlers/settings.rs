@@ -75,8 +75,18 @@ pub(in crate::commands::start) fn register_projects_handlers(
 ) {
     use alephcore::gateway::handlers::projects as projects_handlers;
 
-    register_handler!(server, "projects.list", projects_handlers::handle_list, project_store);
-    register_handler!(server, "projects.add", projects_handlers::handle_add, project_store);
+    register_handler!(
+        server,
+        "projects.list",
+        projects_handlers::handle_list,
+        project_store
+    );
+    register_handler!(
+        server,
+        "projects.add",
+        projects_handlers::handle_add,
+        project_store
+    );
     register_handler!(
         server,
         "projects.create_blank",
@@ -89,8 +99,18 @@ pub(in crate::commands::start) fn register_projects_handlers(
         projects_handlers::handle_remove,
         project_store
     );
-    register_handler!(server, "projects.touch", projects_handlers::handle_touch, project_store);
-    register_handler!(server, "projects.get", projects_handlers::handle_get, project_store);
+    register_handler!(
+        server,
+        "projects.touch",
+        projects_handlers::handle_touch,
+        project_store
+    );
+    register_handler!(
+        server,
+        "projects.get",
+        projects_handlers::handle_get,
+        project_store
+    );
 
     if !daemon {
         println!("Project methods:");
@@ -117,10 +137,20 @@ pub(in crate::commands::start) fn register_fs_handlers(
 ) {
     use alephcore::gateway::handlers::fs as fs_handlers;
 
-    register_handler!(server, "fs.allowed_roots", fs_handlers::handle_allowed_roots, config);
+    register_handler!(
+        server,
+        "fs.allowed_roots",
+        fs_handlers::handle_allowed_roots,
+        config
+    );
     register_handler!(server, "fs.home_dir", fs_handlers::handle_home_dir);
     register_handler!(server, "fs.list_dir", fs_handlers::handle_list_dir, config);
-    register_handler!(server, "fs.create_dir", fs_handlers::handle_create_dir, config);
+    register_handler!(
+        server,
+        "fs.create_dir",
+        fs_handlers::handle_create_dir,
+        config
+    );
 
     if !daemon {
         println!("Filesystem-browse methods (scoped by [projects].allowed_roots):");

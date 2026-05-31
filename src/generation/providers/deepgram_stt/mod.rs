@@ -26,9 +26,9 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{DeepgramAlternative, DeepgramError, DeepgramResponse, DeepgramResults};
 
@@ -143,7 +143,11 @@ impl GenerationProvider for DeepgramSttProvider {
             query.push(("punctuate", "true".to_string()));
 
             // Decide between URL mode and inline-bytes mode.
-            let (body_bytes, content_type, used_url): (Option<Vec<u8>>, &'static str, Option<String>) = {
+            let (body_bytes, content_type, used_url): (
+                Option<Vec<u8>>,
+                &'static str,
+                Option<String>,
+            ) = {
                 if let Some(ref src) = request.params.reference_audio {
                     if src.starts_with("http://") || src.starts_with("https://") {
                         (None, "application/json", Some(src.clone()))
@@ -190,9 +194,9 @@ impl GenerationProvider for DeepgramSttProvider {
             req = match (body_bytes, used_url) {
                 (Some(b), _) => req.body(b),
                 (None, Some(url)) => req.json(&serde_json::json!({ "url": url })),
-                (None, None) => unreachable!(
-                    "load_audio above guarantees one of bytes or URL is present"
-                ),
+                (None, None) => {
+                    unreachable!("load_audio above guarantees one of bytes or URL is present")
+                }
             };
 
             let response = req.send().await.map_err(|e| {
@@ -223,11 +227,7 @@ impl GenerationProvider for DeepgramSttProvider {
             })?;
 
             let channel = parsed.results.channels.first().ok_or_else(|| {
-                GenerationError::provider(
-                    "Deepgram response had no channels",
-                    None,
-                    "deepgram-stt",
-                )
+                GenerationError::provider("Deepgram response had no channels", None, "deepgram-stt")
             })?;
             let alt = channel.alternatives.first().ok_or_else(|| {
                 GenerationError::provider(
@@ -246,10 +246,9 @@ impl GenerationProvider for DeepgramSttProvider {
                 .with_size_bytes(text.len() as u64);
 
             if let Some(conf) = alt.confidence {
-                metadata.extra.insert(
-                    "confidence".into(),
-                    serde_json::Value::from(conf as f64),
-                );
+                metadata
+                    .extra
+                    .insert("confidence".into(), serde_json::Value::from(conf as f64));
             }
             if let Some(lang) = channel.detected_language.clone() {
                 metadata
@@ -270,9 +269,11 @@ impl GenerationProvider for DeepgramSttProvider {
                 "Deepgram transcription completed"
             );
 
-            let mut output =
-                GenerationOutput::new(GenerationType::Transcription, GenerationData::bytes(text.into_bytes()))
-                    .with_metadata(metadata);
+            let mut output = GenerationOutput::new(
+                GenerationType::Transcription,
+                GenerationData::bytes(text.into_bytes()),
+            )
+            .with_metadata(metadata);
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
             }

@@ -213,4 +213,3 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
         </div>
     }
 }
-

@@ -113,7 +113,10 @@ impl ApprovalHandler {
             vec![
                 ("KIND", "mcp_approval".to_string()),
                 ("SERVER_NAME", request.server_name.clone()),
-                ("MESSAGE", format!("MCP approval needed: {}", request.action)),
+                (
+                    "MESSAGE",
+                    format!("MCP approval needed: {}", request.action),
+                ),
             ],
         )
         .await;

@@ -330,8 +330,8 @@ pub async fn handle(
         pending_media,
         sandbox_override: None,
         workspace_override: None,
-            max_iterations_override: None,
-            model_override: None,
+        max_iterations_override: None,
+        model_override: None,
     };
 
     let is_streaming = req.stream.unwrap_or(false);

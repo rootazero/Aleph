@@ -109,7 +109,9 @@ fn parse_traceparent(header: &str) -> Option<(String, String, u8)> {
     if parent_id.len() != SPAN_ID_HEX || !is_hex(parent_id) || is_all_zero(parent_id) {
         return None;
     }
-    let flags_byte = u8::from_str_radix(flags, 16).ok().filter(|_| flags.len() == 2)?;
+    let flags_byte = u8::from_str_radix(flags, 16)
+        .ok()
+        .filter(|_| flags.len() == 2)?;
 
     Some((
         trace_id.to_ascii_lowercase(),
@@ -156,16 +158,28 @@ mod tests {
     fn rejects_malformed_headers() {
         assert!(parse_traceparent("garbage").is_none());
         assert!(parse_traceparent("00-tooshort-00f067aa0ba902b7-01").is_none());
-        assert!(parse_traceparent("ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").is_none()); // version ff
-        assert!(parse_traceparent("00-00000000000000000000000000000000-00f067aa0ba902b7-01").is_none()); // zero trace id
-        assert!(parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01").is_none()); // zero span id
-        assert!(parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra").is_none());
-        assert!(parse_traceparent("00-XYZ2f3577b34da6a3ce929d0e0e4736x-00f067aa0ba902b7-01").is_none()); // non-hex
+        assert!(
+            parse_traceparent("ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01").is_none()
+        ); // version ff
+        assert!(
+            parse_traceparent("00-00000000000000000000000000000000-00f067aa0ba902b7-01").is_none()
+        ); // zero trace id
+        assert!(
+            parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01").is_none()
+        ); // zero span id
+        assert!(
+            parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01-extra")
+                .is_none()
+        );
+        assert!(
+            parse_traceparent("00-XYZ2f3577b34da6a3ce929d0e0e4736x-00f067aa0ba902b7-01").is_none()
+        ); // non-hex
     }
 
     #[test]
     fn inbound_traceparent_is_adopted_with_fresh_span() {
-        let params = json!({ "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" });
+        let params =
+            json!({ "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" });
         let tc = TraceContext::from_request_params(Some(&params));
         assert_eq!(tc.trace_id, "4bf92f3577b34da6a3ce929d0e0e4736");
         assert_eq!(tc.parent_id.as_deref(), Some("00f067aa0ba902b7"));

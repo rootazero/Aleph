@@ -30,9 +30,9 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{
     classify_status, BflError, BflGenerateRequest, BflPollResponse, BflResult, BflSubmitResponse,
@@ -119,7 +119,11 @@ impl BflProvider {
         }
     }
 
-    async fn poll_result(&self, id: &str, override_url: Option<&str>) -> GenerationResult<types::BflResult> {
+    async fn poll_result(
+        &self,
+        id: &str,
+        override_url: Option<&str>,
+    ) -> GenerationResult<types::BflResult> {
         let url = override_url
             .map(|s| s.to_string())
             .unwrap_or_else(|| self.get_result_url(id));
@@ -134,10 +138,9 @@ impl BflProvider {
                 .await
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {}", e)))?;
             let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| GenerationError::network(format!("Failed to read poll body: {}", e)))?;
+            let body = response.text().await.map_err(|e| {
+                GenerationError::network(format!("Failed to read poll body: {}", e))
+            })?;
             if !status.is_success() {
                 error!(status = %status, body = %body, "BFL poll failed");
                 return Err(self.parse_error(status, &body));
@@ -198,12 +201,10 @@ impl BflProvider {
 
     async fn download(&self, url: &str) -> GenerationResult<Vec<u8>> {
         debug!(url, "downloading BFL image");
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| GenerationError::network(format!("Failed to download image: {}", e)))?;
+        let response =
+            self.client.get(url).send().await.map_err(|e| {
+                GenerationError::network(format!("Failed to download image: {}", e))
+            })?;
         if !response.status().is_success() {
             return Err(GenerationError::network(format!(
                 "Image download failed with status: {}",
@@ -273,10 +274,7 @@ impl GenerationProvider for BflProvider {
                     .get("guidance")
                     .and_then(|v| v.as_f64())
                     .map(|v| v as f32),
-                seed: request
-                    .params
-                    .seed
-                    .and_then(|s| u64::try_from(s).ok()),
+                seed: request.params.seed.and_then(|s| u64::try_from(s).ok()),
                 safety_tolerance: request
                     .params
                     .extra
@@ -320,7 +318,10 @@ impl GenerationProvider for BflProvider {
             }
 
             let submit: types::BflSubmitResponse = response.json().await.map_err(|e| {
-                GenerationError::serialization(format!("Failed to parse BFL submit response: {}", e))
+                GenerationError::serialization(format!(
+                    "Failed to parse BFL submit response: {}",
+                    e
+                ))
             })?;
             info!(id = %submit.id, model = %model, "BFL render submitted, polling");
 
@@ -357,9 +358,10 @@ impl GenerationProvider for BflProvider {
                     .extra
                     .insert("render_seconds".into(), serde_json::Value::from(d as f64));
             }
-            metadata
-                .extra
-                .insert("task_id".into(), serde_json::Value::String(submit.id.clone()));
+            metadata.extra.insert(
+                "task_id".into(),
+                serde_json::Value::String(submit.id.clone()),
+            );
 
             info!(
                 duration_ms = started_at.elapsed().as_millis(),
@@ -368,8 +370,9 @@ impl GenerationProvider for BflProvider {
                 "BFL FLUX generation completed"
             );
 
-            let mut output = GenerationOutput::new(GenerationType::Image, GenerationData::bytes(bytes))
-                .with_metadata(metadata);
+            let mut output =
+                GenerationOutput::new(GenerationType::Image, GenerationData::bytes(bytes))
+                    .with_metadata(metadata);
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
             }

@@ -28,12 +28,10 @@ use crate::builtin_tools::browser_tools::{
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
-    BashExecTool, CodeCheckTool, CodeExecTool, CtxSearchTool, DesktopAxQueryByRole, DesktopAxQueryFocused,
-    DesktopAxQueryTree,
-    ApplyPatchTool, DesktopAxSnapshot, DesktopBrowserOperator, DesktopCheckPermissions,
-    DesktopGuiLocate, DesktopSom, DesktopTool, FileEditTool,
-    FileOpsTool,
-    ConfigAuditTool, FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool,
+    ApplyPatchTool, BashExecTool, CodeCheckTool, CodeExecTool, ConfigAuditTool, CtxSearchTool,
+    DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree, DesktopAxSnapshot,
+    DesktopBrowserOperator, DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool,
+    FileEditTool, FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool,
     ReadConfigGuideTool, RecallEventsTool, SearchTool, SelfManageTool, VaultStoreTool,
     WebFetchTool,
 };

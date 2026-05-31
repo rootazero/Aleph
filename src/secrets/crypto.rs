@@ -4,8 +4,8 @@
 //! Inspired by IronClaw's SecretsCrypto design.
 
 use aes_gcm::{
-    Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
 };
 use hkdf::Hkdf;
 use secrecy::{ExposeSecret, SecretString};

@@ -144,7 +144,10 @@ make several coordinated edits at once."#;
         use crate::builtin_tools::{notify_tool_result, notify_tool_start};
 
         notify_tool_start(Self::NAME, "apply_patch");
-        info!(patch_bytes = args.patch.len(), "ApplyPatchTool::call invoked");
+        info!(
+            patch_bytes = args.patch.len(),
+            "ApplyPatchTool::call invoked"
+        );
 
         // Parse the whole envelope before touching the filesystem.
         let ops = parse_patch(&args.patch).map_err(ToolError::InvalidArgs)?;
@@ -202,12 +205,7 @@ make several coordinated edits at once."#;
         }
     }
 
-    fn do_add(
-        &self,
-        path: &str,
-        lines: &[String],
-        output_dir: Option<&Path>,
-    ) -> FileOutcome {
+    fn do_add(&self, path: &str, lines: &[String], output_dir: Option<&Path>) -> FileOutcome {
         let resolved = match self.resolve(path, output_dir) {
             Ok(p) => p,
             Err(msg) => return fail("add", path, msg),
@@ -246,7 +244,10 @@ make several coordinated edits at once."#;
                 path: resolved.display().to_string(),
                 op: "add",
                 success: true,
-                message: format!("created ({} bytes)", lines.iter().map(|l| l.len() + 1).sum::<usize>()),
+                message: format!(
+                    "created ({} bytes)",
+                    lines.iter().map(|l| l.len() + 1).sum::<usize>()
+                ),
             },
             Err(e) => fail("add", path, format!("write failed: {}", e)),
         }
@@ -258,7 +259,11 @@ make several coordinated edits at once."#;
             Err(msg) => return fail("delete", path, msg),
         };
         if !resolved.exists() {
-            return fail("delete", path, format!("{} does not exist", resolved.display()));
+            return fail(
+                "delete",
+                path,
+                format!("{} does not exist", resolved.display()),
+            );
         }
         match std::fs::remove_file(&resolved) {
             Ok(()) => FileOutcome {
@@ -283,7 +288,11 @@ make several coordinated edits at once."#;
             Err(msg) => return fail("update", path, msg),
         };
         if !resolved.exists() {
-            return fail("update", path, format!("{} does not exist", resolved.display()));
+            return fail(
+                "update",
+                path,
+                format!("{} does not exist", resolved.display()),
+            );
         }
 
         // Read + binary refusal mirrors `file_edit::read_text_file`.
@@ -295,7 +304,10 @@ make several coordinated edits at once."#;
             return fail(
                 "update",
                 path,
-                format!("{} is binary — apply_patch only edits text", resolved.display()),
+                format!(
+                    "{} is binary — apply_patch only edits text",
+                    resolved.display()
+                ),
             );
         }
         let mut content = match String::from_utf8(bytes) {
@@ -342,11 +354,7 @@ make several coordinated edits at once."#;
             let new_resolved = match self.resolve(new_path, output_dir) {
                 Ok(p) => p,
                 Err(msg) => {
-                    return fail(
-                        "update",
-                        path,
-                        format!("move-to path rejected: {}", msg),
-                    );
+                    return fail("update", path, format!("move-to path rejected: {}", msg));
                 }
             };
             if let Some(parent) = new_resolved.parent() {
@@ -354,7 +362,11 @@ make several coordinated edits at once."#;
                     return fail(
                         "update",
                         path,
-                        format!("failed to create move-to parent {}: {}", parent.display(), e),
+                        format!(
+                            "failed to create move-to parent {}: {}",
+                            parent.display(),
+                            e
+                        ),
                     );
                 }
             }
@@ -383,7 +395,11 @@ make several coordinated edits at once."#;
         }
     }
 
-    fn resolve(&self, path: &str, output_dir: Option<&Path>) -> std::result::Result<PathBuf, String> {
+    fn resolve(
+        &self,
+        path: &str,
+        output_dir: Option<&Path>,
+    ) -> std::result::Result<PathBuf, String> {
         if Path::new(path).is_absolute() {
             return Err(format!(
                 "absolute path `{}` is not allowed; apply_patch requires relative paths",
@@ -428,8 +444,13 @@ impl AlephTool for ApplyPatchTool {
 
 #[derive(Debug, Clone, PartialEq)]
 enum PatchOp {
-    Add { path: String, lines: Vec<String> },
-    Delete { path: String },
+    Add {
+        path: String,
+        lines: Vec<String>,
+    },
+    Delete {
+        path: String,
+    },
     Update {
         path: String,
         move_to: Option<String>,
@@ -569,7 +590,11 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
             let mut current: Option<Hunk> = None;
             loop {
                 match lines.peek() {
-                    Some(next) if next.starts_with("*** ") && !next.starts_with("*** End of File") => break,
+                    Some(next)
+                        if next.starts_with("*** ") && !next.starts_with("*** End of File") =>
+                    {
+                        break
+                    }
                     Some(_) => {
                         let raw = lines.next().unwrap().trim_end_matches('\r');
                         if let Some(rest) = raw.strip_prefix("@@") {
@@ -591,14 +616,22 @@ fn parse_patch(input: &str) -> std::result::Result<Vec<PatchOp>, String> {
                                 h.eof_anchor = true;
                             }
                         } else if let Some(c) = raw.strip_prefix(' ') {
-                            current_mut(&mut current).lines.push(HunkLine::Context(c.to_string()));
+                            current_mut(&mut current)
+                                .lines
+                                .push(HunkLine::Context(c.to_string()));
                         } else if let Some(c) = raw.strip_prefix('-') {
-                            current_mut(&mut current).lines.push(HunkLine::Remove(c.to_string()));
+                            current_mut(&mut current)
+                                .lines
+                                .push(HunkLine::Remove(c.to_string()));
                         } else if let Some(c) = raw.strip_prefix('+') {
-                            current_mut(&mut current).lines.push(HunkLine::Add(c.to_string()));
+                            current_mut(&mut current)
+                                .lines
+                                .push(HunkLine::Add(c.to_string()));
                         } else if raw.is_empty() {
                             // Blank lines inside hunks are valid context.
-                            current_mut(&mut current).lines.push(HunkLine::Context(String::new()));
+                            current_mut(&mut current)
+                                .lines
+                                .push(HunkLine::Context(String::new()));
                         } else {
                             return Err(format!(
                                 "Update File `{}`: unexpected line `{}` (each hunk line must start with ` `, `+`, or `-`)",
@@ -695,7 +728,11 @@ mod tests {
             other => panic!("expected Add, got {:?}", other),
         }
         match &ops[1] {
-            PatchOp::Update { path, move_to, hunks } => {
+            PatchOp::Update {
+                path,
+                move_to,
+                hunks,
+            } => {
                 assert_eq!(path, "src/app.py");
                 assert_eq!(move_to.as_deref(), Some("src/main.py"));
                 assert_eq!(hunks.len(), 1);
@@ -760,24 +797,24 @@ mod tests {
             ],
             eof_anchor: false,
         };
-        let outcome = tool.do_update(
-            app_py.to_str().unwrap(),
-            None,
-            &[hunk],
-            Some(dir.path()),
-        );
+        let outcome = tool.do_update(app_py.to_str().unwrap(), None, &[hunk], Some(dir.path()));
         // do_update will reject the absolute path; rerun with relative.
         assert!(!outcome.success);
-        let outcome2 = tool.do_update("app.py", None, &[Hunk {
-            header: None,
-            lines: vec![
-                HunkLine::Context("x = 1".into()),
-                HunkLine::Remove("y = 2".into()),
-                HunkLine::Add("y = 20".into()),
-                HunkLine::Context("z = 3".into()),
-            ],
-            eof_anchor: false,
-        }], Some(dir.path()));
+        let outcome2 = tool.do_update(
+            "app.py",
+            None,
+            &[Hunk {
+                header: None,
+                lines: vec![
+                    HunkLine::Context("x = 1".into()),
+                    HunkLine::Remove("y = 2".into()),
+                    HunkLine::Add("y = 20".into()),
+                    HunkLine::Context("z = 3".into()),
+                ],
+                eof_anchor: false,
+            }],
+            Some(dir.path()),
+        );
         assert!(outcome2.success, "{:?}", outcome2);
 
         let updated = std::fs::read_to_string(&app_py).unwrap();

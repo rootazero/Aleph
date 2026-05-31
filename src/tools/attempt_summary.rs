@@ -282,10 +282,7 @@ mod tests {
 
     #[test]
     fn resolves_tool_name_via_preceding_request() {
-        let events = vec![
-            tcr("call_a", "search"),
-            terr("call_a", "HTTP 429"),
-        ];
+        let events = vec![tcr("call_a", "search"), terr("call_a", "HTTP 429")];
         let groups = aggregate_failures(&events);
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].tool, "search");

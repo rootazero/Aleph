@@ -524,14 +524,7 @@ mod e2e_normalized {
         async fn launch_app(&self, _n: &str) -> DResult<()> {
             Ok(())
         }
-        async fn drag(
-            &self,
-            sx: f64,
-            sy: f64,
-            ex: f64,
-            ey: f64,
-            _d: Option<u64>,
-        ) -> DResult<()> {
+        async fn drag(&self, sx: f64, sy: f64, ex: f64, ey: f64, _d: Option<u64>) -> DResult<()> {
             *self.last_drag.lock().unwrap() = Some(((sx, sy), (ex, ey)));
             Ok(())
         }
@@ -580,8 +573,11 @@ mod e2e_normalized {
         }
     }
 
-    fn build_tool(display_w: u32, display_h: u32, scale: f64) -> (DesktopTool, Arc<TrackingPlatform>)
-    {
+    fn build_tool(
+        display_w: u32,
+        display_h: u32,
+        scale: f64,
+    ) -> (DesktopTool, Arc<TrackingPlatform>) {
         let platform = Arc::new(TrackingPlatform {
             screen: TrackingScreen {
                 last_click: Arc::new(Mutex::new(None)),
@@ -877,7 +873,11 @@ mod clipboard_image {
         let output = AlephTool::call(&tool, make_args("clipboard_read"))
             .await
             .unwrap();
-        assert!(output.success, "clipboard_read failed: {:?}", output.message);
+        assert!(
+            output.success,
+            "clipboard_read failed: {:?}",
+            output.message
+        );
 
         let data = output.data.expect("clipboard_read should return data");
         assert_eq!(data["text"], "hello");

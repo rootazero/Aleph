@@ -120,10 +120,7 @@ impl ToolFamily {
 /// The returned list is ordered most-promising-first. Empty when the
 /// kind doesn't admit a sensible alternative (e.g. `Duplicate` is a
 /// developer error, not a routing signal).
-pub fn suggest_alternatives(
-    tool_name: &str,
-    kind: ToolErrorKind,
-) -> Vec<FallbackSuggestion> {
+pub fn suggest_alternatives(tool_name: &str, kind: ToolErrorKind) -> Vec<FallbackSuggestion> {
     // Validation / Permission / ToolNotFound / Duplicate are not
     // routing signals — they need the caller to fix the call shape,
     // not switch tools. Returning empty here keeps the error hint
@@ -149,10 +146,7 @@ pub fn suggest_alternatives(
 
 /// Exact-name registry entries. Returns `None` to defer to the family
 /// fallback when the tool name isn't recognised.
-fn exact_suggestions(
-    tool_name: &str,
-    kind: ToolErrorKind,
-) -> Option<Vec<FallbackSuggestion>> {
+fn exact_suggestions(tool_name: &str, kind: ToolErrorKind) -> Option<Vec<FallbackSuggestion>> {
     use FallbackSuggestion as S;
     match tool_name {
         // `search` — the entry-point of the web-research ladder. Rule
@@ -163,7 +157,10 @@ fn exact_suggestions(
                 S::new("autocli", "use logged-in browser session for gated sites"),
             ],
             ToolErrorKind::EmptyResult => vec![
-                S::new("search", "retry with broader keywords or a different engine"),
+                S::new(
+                    "search",
+                    "retry with broader keywords or a different engine",
+                ),
                 S::new("web_fetch", "try a canonical URL of the resource directly"),
             ],
             ToolErrorKind::BlockedByPolicy | ToolErrorKind::UpstreamServerError => vec![
@@ -228,10 +225,7 @@ fn exact_suggestions(
 }
 
 /// Family-based fallback when the tool name isn't in the exact registry.
-fn family_suggestions(
-    family: ToolFamily,
-    kind: ToolErrorKind,
-) -> Vec<FallbackSuggestion> {
+fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSuggestion> {
     use FallbackSuggestion as S;
     match (family, kind) {
         (ToolFamily::Network, ToolErrorKind::Unauthorized)
@@ -245,22 +239,22 @@ fn family_suggestions(
             S::new("search", "broaden the query or pick a different engine"),
             S::new("web_fetch", "alternate source for the same resource"),
         ],
-        (ToolFamily::Network, _) => vec![
-            S::new("search", "approach the goal from a different source"),
-        ],
+        (ToolFamily::Network, _) => vec![S::new(
+            "search",
+            "approach the goal from a different source",
+        )],
 
         (ToolFamily::File, ToolErrorKind::UpstreamNotFound)
-        | (ToolFamily::File, ToolErrorKind::Execution) => vec![
-            S::new("file_ops", "stat / list the directory to confirm the path"),
-        ],
+        | (ToolFamily::File, ToolErrorKind::Execution) => vec![S::new(
+            "file_ops",
+            "stat / list the directory to confirm the path",
+        )],
         (ToolFamily::File, _) => Vec::new(),
 
-        (ToolFamily::Exec, ToolErrorKind::Timeout) => vec![
-            S::new(
-                "code_exec",
-                "longer-running runtime than bash for slow commands",
-            ),
-        ],
+        (ToolFamily::Exec, ToolErrorKind::Timeout) => vec![S::new(
+            "code_exec",
+            "longer-running runtime than bash for slow commands",
+        )],
         (ToolFamily::Exec, _) => Vec::new(),
 
         (ToolFamily::Memory, ToolErrorKind::EmptyResult) => vec![

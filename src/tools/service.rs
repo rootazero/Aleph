@@ -144,11 +144,7 @@ pub trait ToolService: Send + Sync + 'static {
     /// should override. The harness's parallel-dispatch fast path
     /// considers a batch parallelizable only when EVERY call in the batch
     /// returns `true` from this query.
-    async fn is_call_concurrent_safe(
-        &self,
-        _name: &str,
-        _input: &serde_json::Value,
-    ) -> bool {
+    async fn is_call_concurrent_safe(&self, _name: &str, _input: &serde_json::Value) -> bool {
         false
     }
 

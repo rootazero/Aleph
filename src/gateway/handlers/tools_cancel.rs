@@ -78,11 +78,7 @@ pub async fn handle_cancel(
     };
 
     if params.call_id.trim().is_empty() {
-        return JsonRpcResponse::error(
-            request.id,
-            INVALID_PARAMS,
-            "call_id must not be empty",
-        );
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "call_id must not be empty");
     }
 
     let cancelled = registry.cancel(&params.call_id);
@@ -140,8 +136,11 @@ mod tests {
         let token = CancellationToken::new();
         let _guard = reg.register("call-7", "bash", token.clone());
 
-        let resp = handle_cancel(req("tools.cancel_call", Some(json!({"call_id": "call-7"}))), reg)
-            .await;
+        let resp = handle_cancel(
+            req("tools.cancel_call", Some(json!({"call_id": "call-7"}))),
+            reg,
+        )
+        .await;
         let body = resp.result.expect("expected success");
         assert_eq!(body["cancelled"], true);
         assert_eq!(body["call_id"], "call-7");

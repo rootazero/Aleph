@@ -143,11 +143,7 @@ fn draw_digit(img: &mut RgbaImage, x: i64, y: i64, digit: usize, gs: i64, color:
 /// Draw a numbered badge with its top-left at `(x, y)`. Returns the badge size
 /// `(w, h)` so callers can keep it inside the image.
 fn draw_label(img: &mut RgbaImage, x: i64, y: i64, n: usize, gs: i64, bg: Rgba<u8>) -> (i64, i64) {
-    let digits: Vec<usize> = n
-        .to_string()
-        .bytes()
-        .map(|b| (b - b'0') as usize)
-        .collect();
+    let digits: Vec<usize> = n.to_string().bytes().map(|b| (b - b'0') as usize).collect();
     let digit_w = 3 * gs;
     let digit_h = 5 * gs;
     let gap = gs;
@@ -322,7 +318,10 @@ impl AlephTool for DesktopSom {
             }
         };
 
-        let max_depth = args.max_depth.unwrap_or(SOM_DEFAULT_DEPTH).min(SOM_MAX_DEPTH);
+        let max_depth = args
+            .max_depth
+            .unwrap_or(SOM_DEFAULT_DEPTH)
+            .min(SOM_MAX_DEPTH);
         let max_elements = args
             .max_elements
             .unwrap_or(SOM_DEFAULT_ELEMENTS)
@@ -501,7 +500,11 @@ mod tests {
     #[test]
     fn build_marks_keeps_only_bounded_elements_with_point_centers() {
         let els = vec![
-            leaf("AXButton", Some("Save"), Some(rect(100.0, 200.0, 80.0, 40.0))),
+            leaf(
+                "AXButton",
+                Some("Save"),
+                Some(rect(100.0, 200.0, 80.0, 40.0)),
+            ),
             leaf("AXTextField", None, None), // no bounds → dropped
         ];
         let refs: Vec<&AxElement> = els.iter().collect();

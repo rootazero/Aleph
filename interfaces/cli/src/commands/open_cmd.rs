@@ -25,9 +25,8 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
         let _spin = (!json).then(|| output::Spinner::start("Requesting bootstrap nonce"));
         let result = async {
             let (client, _events) = AlephClient::connect(server_url).await?;
-            let issued: BootstrapIssueResult = client
-                .call("gateway.bootstrap.issue", None::<()>)
-                .await?;
+            let issued: BootstrapIssueResult =
+                client.call("gateway.bootstrap.issue", None::<()>).await?;
             client.close().await?;
             Ok::<BootstrapIssueResult, aleph_client::CliError>(issued)
         }

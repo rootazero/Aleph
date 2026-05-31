@@ -81,10 +81,7 @@ impl ScopedToolService {
                     crate::extension::hooks::fire_global_observer(
                         crate::extension::HookEvent::PermissionRequest,
                         &self.hook_session_id,
-                        vec![
-                            ("TOOL_NAME", name.to_string()),
-                            ("REASON", reason.clone()),
-                        ],
+                        vec![("TOOL_NAME", name.to_string()), ("REASON", reason.clone())],
                     )
                     .await;
                     crate::extension::hooks::fire_global_observer(
@@ -279,10 +276,7 @@ impl ScopedToolService {
                     crate::extension::hooks::fire_global_observer(
                         crate::extension::HookEvent::PermissionRequest,
                         &self.hook_session_id,
-                        vec![
-                            ("TOOL_NAME", name.to_string()),
-                            ("REASON", reason.clone()),
-                        ],
+                        vec![("TOOL_NAME", name.to_string()), ("REASON", reason.clone())],
                     )
                     .await;
                     crate::extension::hooks::fire_global_observer(

@@ -806,10 +806,7 @@ mod outcome_tests {
         for r in cases {
             let label = r.as_static_str();
             let escalated = escalate_partial_result(r.clone(), Some("nontrivial partial"));
-            assert_eq!(
-                escalated, r,
-                "{label} must pass through unchanged",
-            );
+            assert_eq!(escalated, r, "{label} must pass through unchanged",);
         }
     }
 

@@ -28,7 +28,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             .with_homepage("https://platform.openai.com")
             .with_signup("https://platform.openai.com/api-keys")
             .with_aux_model("gpt-4o-mini")
-            .with_fallback_models(&["gpt-4o", "gpt-4o-mini", "o3-mini", "o1-mini"])
+            .with_fallback_models(&["gpt-4o", "gpt-4o-mini", "o3-mini", "o1-mini"]),
     ),
     (
         "chatgpt",
@@ -71,7 +71,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "claude-sonnet-4-5-20250514",
             "claude-opus-4-5-20250514",
             "claude-haiku-4-5-20251001",
-        ])
+        ]),
     ),
     (
         "amazon-bedrock",
@@ -97,7 +97,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "claude-sonnet-4@20250514",
         )
         .with_display("Vertex AI — Anthropic")
-        .with_homepage("https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude")
+        .with_homepage(
+            "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude",
+        )
         .with_signup("https://console.cloud.google.com")
         .with_description("Claude via GCP Vertex; region-specific base URL")
         .no_health_check(),
@@ -119,17 +121,22 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "gemini-2.5-pro",
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
-        ])
+        ]),
     ),
     // ─── DeepSeek / Moonshot ──────────────────────────────────────────────────
     (
         "deepseek",
-        ProviderPreset::new("https://api.deepseek.com", "openai", "#0066cc", "deepseek-chat")
-            .with_display("DeepSeek")
-            .with_homepage("https://platform.deepseek.com")
-            .with_signup("https://platform.deepseek.com/api_keys")
-            .with_aux_model("deepseek-chat")
-            .with_fallback_models(&["deepseek-chat", "deepseek-reasoner"])
+        ProviderPreset::new(
+            "https://api.deepseek.com",
+            "openai",
+            "#0066cc",
+            "deepseek-chat",
+        )
+        .with_display("DeepSeek")
+        .with_homepage("https://platform.deepseek.com")
+        .with_signup("https://platform.deepseek.com/api_keys")
+        .with_aux_model("deepseek-chat")
+        .with_fallback_models(&["deepseek-chat", "deepseek-reasoner"]),
     ),
     (
         "moonshot",
@@ -151,7 +158,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "moonshot-v1-128k",
             "moonshot-v1-32k",
             "moonshot-v1-8k",
-        ])
+        ]),
     ),
     // ─── Moonshot / Kimi (CN region, OpenAI protocol) ─────────────
     (
@@ -174,7 +181,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "moonshot-v1-128k",
             "moonshot-v1-32k",
             "moonshot-v1-8k",
-        ])
+        ]),
     ),
     (
         "kimi-for-coding",
@@ -204,7 +211,7 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
         .with_aliases(&["volcengine", "ark"])
         .with_display("Volcengine Doubao")
         .with_homepage("https://www.volcengine.com/product/ark")
-        .with_signup("https://console.volcengine.com/ark")
+        .with_signup("https://console.volcengine.com/ark"),
     ),
     (
         "siliconflow",
@@ -291,15 +298,22 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "4.0Ultra",
         )
         .with_display("Spark / 讯飞星火")
-        .with_homepage("https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html")
+        .with_homepage(
+            "https://www.xfyun.cn/doc/spark/HTTP%E8%B0%83%E7%94%A8%E6%96%87%E6%A1%A3.html",
+        )
         .with_description("V4 Ultra OpenAI-compatible endpoint"),
     ),
     (
         "stepfun",
-        ProviderPreset::new("https://api.stepfun.com/v1", "openai", "#0ea5e9", "step-1-8k")
-            .with_display("Stepfun")
-            .with_homepage("https://stepfun.com")
-            .with_signup("https://platform.stepfun.com"),
+        ProviderPreset::new(
+            "https://api.stepfun.com/v1",
+            "openai",
+            "#0ea5e9",
+            "step-1-8k",
+        )
+        .with_display("Stepfun")
+        .with_homepage("https://stepfun.com")
+        .with_signup("https://platform.stepfun.com"),
     ),
     (
         "t8star",
@@ -325,11 +339,16 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     ),
     (
         "cerebras",
-        ProviderPreset::new("https://api.cerebras.ai/v1", "openai", "#f97316", "llama-3.3-70b")
-            .with_display("Cerebras")
-            .with_homepage("https://cerebras.ai")
-            .with_signup("https://cloud.cerebras.ai")
-            .with_description("Ultra-fast Llama inference"),
+        ProviderPreset::new(
+            "https://api.cerebras.ai/v1",
+            "openai",
+            "#f97316",
+            "llama-3.3-70b",
+        )
+        .with_display("Cerebras")
+        .with_homepage("https://cerebras.ai")
+        .with_signup("https://cloud.cerebras.ai")
+        .with_description("Ultra-fast Llama inference"),
     ),
     (
         "together",
@@ -362,16 +381,26 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     ),
     (
         "fireworks",
-        ProviderPreset::new("https://api.fireworks.ai/inference/v1", "openai", "#ff6b35", "")
-            .with_display("Fireworks.ai")
-            .with_homepage("https://fireworks.ai")
-            .with_signup("https://fireworks.ai/account/api-keys"),
+        ProviderPreset::new(
+            "https://api.fireworks.ai/inference/v1",
+            "openai",
+            "#ff6b35",
+            "",
+        )
+        .with_display("Fireworks.ai")
+        .with_homepage("https://fireworks.ai")
+        .with_signup("https://fireworks.ai/account/api-keys"),
     ),
     (
         "anyscale",
-        ProviderPreset::new("https://api.endpoints.anyscale.com/v1", "openai", "#00d4aa", "")
-            .with_display("Anyscale")
-            .with_homepage("https://www.anyscale.com"),
+        ProviderPreset::new(
+            "https://api.endpoints.anyscale.com/v1",
+            "openai",
+            "#00d4aa",
+            "",
+        )
+        .with_display("Anyscale")
+        .with_homepage("https://www.anyscale.com"),
     ),
     (
         "replicate",
@@ -479,11 +508,16 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     ),
     (
         "lmstudio",
-        ProviderPreset::new("http://localhost:1234/v1", "openai", "#7c3aed", "local-model")
-            .with_display("LM Studio (Local)")
-            .with_homepage("https://lmstudio.ai")
-            .with_signup("https://lmstudio.ai")
-            .with_description("Local OpenAI-compatible server (default :1234)"),
+        ProviderPreset::new(
+            "http://localhost:1234/v1",
+            "openai",
+            "#7c3aed",
+            "local-model",
+        )
+        .with_display("LM Studio (Local)")
+        .with_homepage("https://lmstudio.ai")
+        .with_signup("https://lmstudio.ai")
+        .with_description("Local OpenAI-compatible server (default :1234)"),
     ),
     (
         "litellm",

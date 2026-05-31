@@ -184,7 +184,10 @@ mod tests {
         for _ in 0..256 {
             let mut b = RestartBackoff::new(policy.clone());
             let d = b.next_delay().unwrap();
-            assert!(d >= Duration::from_secs(1), "jitter dipped below base: {d:?}");
+            assert!(
+                d >= Duration::from_secs(1),
+                "jitter dipped below base: {d:?}"
+            );
             assert!(
                 d <= Duration::from_millis(1100),
                 "jitter exceeded base*(1+factor): {d:?}"

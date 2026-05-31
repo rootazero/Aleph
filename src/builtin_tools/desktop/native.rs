@@ -54,7 +54,9 @@ async fn fit_clipboard_image(png_base64: String) -> Result<String> {
 
     let raw = base64::engine::general_purpose::STANDARD
         .decode(&png_base64)
-        .map_err(|e| crate::error::AlephError::other(format!("clipboard image base64 decode: {e}")))?;
+        .map_err(|e| {
+            crate::error::AlephError::other(format!("clipboard image base64 decode: {e}"))
+        })?;
 
     let processed = tokio::task::spawn_blocking(move || {
         aleph_desktop::perception::process_screenshot(

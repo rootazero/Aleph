@@ -260,11 +260,7 @@ mod tests {
 
     #[test]
     fn topo_order_places_deps_before_dependents() {
-        let d = def(vec![
-            step("c", &["b"]),
-            step("b", &["a"]),
-            step("a", &[]),
-        ]);
+        let d = def(vec![step("c", &["b"]), step("b", &["a"]), step("a", &[])]);
         let order = d.topo_order().expect("acyclic");
         // Map back to ids and assert a precedes b precedes c.
         let ids: Vec<&str> = order.iter().map(|&i| d.steps[i].id.as_str()).collect();
@@ -275,7 +271,10 @@ mod tests {
 
     #[test]
     fn render_prompt_substitutes_input() {
-        assert_eq!(render_prompt("summarise {input}", "the logs"), "summarise the logs");
+        assert_eq!(
+            render_prompt("summarise {input}", "the logs"),
+            "summarise the logs"
+        );
         assert_eq!(render_prompt("no placeholder", "x"), "no placeholder");
         assert_eq!(render_prompt("{input} and {input}", "a"), "a and a");
     }

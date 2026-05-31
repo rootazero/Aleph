@@ -482,7 +482,11 @@ mod tests {
         assert_eq!(url.scheme(), "http");
         assert_eq!(url.host_str(), Some("127.0.0.1"));
         assert_eq!(url.port(), Some(18790));
-        assert!(url.query().is_none(), "expected no query, got {:?}", url.query());
+        assert!(
+            url.query().is_none(),
+            "expected no query, got {:?}",
+            url.query()
+        );
     }
 
     #[test]

@@ -18,9 +18,7 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::distill_action::referenced_path;
-use crate::memory::dreaming::{
-    DistillAction, DistillActionRecord, DistillOutcome, DreamContext,
-};
+use crate::memory::dreaming::{DistillAction, DistillActionRecord, DistillOutcome, DreamContext};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
 use crate::providers::adapter::RequestPayload;
@@ -145,13 +143,15 @@ impl DreamStage for FeedbackDistillStage {
         let candidate_set: std::collections::HashSet<&str> =
             candidate_paths.iter().map(String::as_str).collect();
         let mut applied = 0usize;
-        for raw_action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+        for raw_action in actions
+            .into_iter()
+            .take(self.max_per_cycle)
+            .map(clamp_action)
+        {
             // Spec 5 validation gate. Same wiring as SkillDistill so both
             // stages share one source of truth for what a legitimate
             // LLM-emitted action looks like.
-            use crate::memory::dreaming::skill_gate::{
-                validate_skill_action, SkillGateDecision,
-            };
+            use crate::memory::dreaming::skill_gate::{validate_skill_action, SkillGateDecision};
             let action = match validate_skill_action(raw_action.clone()) {
                 SkillGateDecision::Allow(a) => a,
                 SkillGateDecision::Reject(reason) => {
@@ -159,12 +159,14 @@ impl DreamStage for FeedbackDistillStage {
                         reason = %reason,
                         "FeedbackDistill: skill_gate rejected action; dropping"
                     );
-                    ctx.report.distill_actions.push(DistillActionRecord::from_action(
-                        "feedback_distill",
-                        &raw_action,
-                        DistillOutcome::FilteredInvalid,
-                        Some(reason),
-                    ));
+                    ctx.report
+                        .distill_actions
+                        .push(DistillActionRecord::from_action(
+                            "feedback_distill",
+                            &raw_action,
+                            DistillOutcome::FilteredInvalid,
+                            Some(reason),
+                        ));
                     continue;
                 }
             };
@@ -178,12 +180,14 @@ impl DreamStage for FeedbackDistillStage {
                         "FeedbackDistill: action references non-candidate path; \
                          dropping to prevent cross-category mutation"
                     );
-                    ctx.report.distill_actions.push(DistillActionRecord::from_action(
-                        "feedback_distill",
-                        &action,
-                        DistillOutcome::FilteredNonCandidate,
-                        None,
-                    ));
+                    ctx.report
+                        .distill_actions
+                        .push(DistillActionRecord::from_action(
+                            "feedback_distill",
+                            &action,
+                            DistillOutcome::FilteredNonCandidate,
+                            None,
+                        ));
                     continue;
                 }
             }
@@ -194,21 +198,25 @@ impl DreamStage for FeedbackDistillStage {
             {
                 Ok(_) => {
                     applied += 1;
-                    ctx.report.distill_actions.push(DistillActionRecord::from_action(
-                        "feedback_distill",
-                        &action,
-                        DistillOutcome::Applied,
-                        None,
-                    ));
+                    ctx.report
+                        .distill_actions
+                        .push(DistillActionRecord::from_action(
+                            "feedback_distill",
+                            &action,
+                            DistillOutcome::Applied,
+                            None,
+                        ));
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, "FeedbackDistill apply_distill_action failed");
-                    ctx.report.distill_actions.push(DistillActionRecord::from_action(
-                        "feedback_distill",
-                        &action,
-                        DistillOutcome::Error,
-                        Some(e.to_string()),
-                    ));
+                    ctx.report
+                        .distill_actions
+                        .push(DistillActionRecord::from_action(
+                            "feedback_distill",
+                            &action,
+                            DistillOutcome::Error,
+                            Some(e.to_string()),
+                        ));
                 }
             }
         }

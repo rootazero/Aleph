@@ -146,9 +146,8 @@ fn is_context_line(lower: &str) -> bool {
 /// trimming common surrounding punctuation (`-->`, parens, quotes, commas).
 fn extract_path(line: &str) -> Option<String> {
     for raw in line.split_whitespace() {
-        let tok = raw.trim_matches(|c: char| {
-            matches!(c, '(' | ')' | '\'' | '"' | ',' | '`' | '[' | ']')
-        });
+        let tok =
+            raw.trim_matches(|c: char| matches!(c, '(' | ')' | '\'' | '"' | ',' | '`' | '[' | ']'));
         // Must contain a path-ish dot before the first colon and a colon
         // followed by a digit.
         let Some(colon) = tok.find(':') else { continue };
@@ -157,7 +156,7 @@ fn extract_path(line: &str) -> Option<String> {
             continue;
         }
         let rest = &rest[1..]; // drop the ':'
-        // rest must start with digits (the line number).
+                               // rest must start with digits (the line number).
         let line_digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
         if line_digits.is_empty() {
             continue;
@@ -257,7 +256,11 @@ impl OutputDigest {
     /// budget); paths are always summarised on a trailing line.
     pub fn render(&self, max_salient: usize) -> String {
         let mut out = String::new();
-        let err_word = if self.error_count == 1 { "error" } else { "errors" };
+        let err_word = if self.error_count == 1 {
+            "error"
+        } else {
+            "errors"
+        };
         out.push_str(&format!(
             "[Output digest: {} lines, {} {} — full output truncated]\n",
             self.total_lines, self.error_count, err_word
@@ -410,7 +413,11 @@ mod tests {
         s.push_str(&format!("error: {}\n", "x".repeat(5000)));
         s.push_str("padding line to exceed min input size ".repeat(60).as_str());
         let digest = distill_output(&s).unwrap();
-        let err_line = digest.salient.iter().find(|l| l.contains("error:")).unwrap();
+        let err_line = digest
+            .salient
+            .iter()
+            .find(|l| l.contains("error:"))
+            .unwrap();
         assert!(err_line.chars().count() <= MAX_LINE_CHARS + 1); // +1 for the ellipsis
         assert!(err_line.ends_with('…'));
     }

@@ -102,10 +102,7 @@ pub fn visible_alerts(
 /// Count of alerts the bell badge should display. Same filter as
 /// [`visible_alerts`] but returns a count to avoid an unnecessary clone in
 /// the hot reactive path (the badge re-renders on every alert update).
-pub fn unread_count(
-    alerts: &HashMap<String, SystemAlert>,
-    dismissed: &HashSet<String>,
-) -> usize {
+pub fn unread_count(alerts: &HashMap<String, SystemAlert>, dismissed: &HashSet<String>) -> usize {
     alerts
         .values()
         .filter(|a| a.level != AlertLevel::None)

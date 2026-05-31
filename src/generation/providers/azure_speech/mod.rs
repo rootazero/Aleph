@@ -32,9 +32,9 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{AzureErrorDetail, AzureSpeechError};
 
@@ -122,14 +122,29 @@ impl AzureSpeechProvider {
     /// any voice name via `params.voice`.
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         const VOICES: &[(&str, &str, &str, &str)] = &[
-            ("en-US-JennyNeural", "Jenny", "female", "US English, conversational"),
+            (
+                "en-US-JennyNeural",
+                "Jenny",
+                "female",
+                "US English, conversational",
+            ),
             ("en-US-GuyNeural", "Guy", "male", "US English, news anchor"),
             ("en-US-AriaNeural", "Aria", "female", "US English, friendly"),
             ("en-US-DavisNeural", "Davis", "male", "US English, neutral"),
             ("en-GB-SoniaNeural", "Sonia", "female", "UK English"),
             ("en-GB-RyanNeural", "Ryan", "male", "UK English"),
-            ("zh-CN-XiaoxiaoNeural", "Xiaoxiao", "female", "Mandarin Chinese, cheerful"),
-            ("zh-CN-YunxiNeural", "Yunxi", "male", "Mandarin Chinese, lively"),
+            (
+                "zh-CN-XiaoxiaoNeural",
+                "Xiaoxiao",
+                "female",
+                "Mandarin Chinese, cheerful",
+            ),
+            (
+                "zh-CN-YunxiNeural",
+                "Yunxi",
+                "male",
+                "Mandarin Chinese, lively",
+            ),
             ("ja-JP-NanamiNeural", "Nanami", "female", "Japanese"),
             ("ja-JP-KeitaNeural", "Keita", "male", "Japanese"),
             ("ko-KR-SunHiNeural", "Sun-Hi", "female", "Korean"),
@@ -140,7 +155,12 @@ impl AzureSpeechProvider {
             ("de-DE-ConradNeural", "Conrad", "male", "German"),
             ("es-ES-ElviraNeural", "Elvira", "female", "Spanish (Spain)"),
             ("es-MX-DaliaNeural", "Dalia", "female", "Spanish (Mexico)"),
-            ("pt-BR-FranciscaNeural", "Francisca", "female", "Brazilian Portuguese"),
+            (
+                "pt-BR-FranciscaNeural",
+                "Francisca",
+                "female",
+                "Brazilian Portuguese",
+            ),
             ("it-IT-ElsaNeural", "Elsa", "female", "Italian"),
         ];
         VOICES
@@ -250,18 +270,16 @@ impl GenerationProvider for AzureSpeechProvider {
 
             let status = response.status();
             if !status.is_success() {
-                let body = response
-                    .text()
-                    .await
-                    .map_err(|e| GenerationError::network(format!("Failed to read error body: {}", e)))?;
+                let body = response.text().await.map_err(|e| {
+                    GenerationError::network(format!("Failed to read error body: {}", e))
+                })?;
                 error!(status = %status, body = %body, "Azure Speech request failed");
                 return Err(self.parse_error(status, &body));
             }
 
-            let audio_bytes = response
-                .bytes()
-                .await
-                .map_err(|e| GenerationError::network(format!("Failed to read audio bytes: {}", e)))?;
+            let audio_bytes = response.bytes().await.map_err(|e| {
+                GenerationError::network(format!("Failed to read audio bytes: {}", e))
+            })?;
             if audio_bytes.is_empty() {
                 return Err(GenerationError::provider(
                     "Empty audio response from Azure Speech",
@@ -284,9 +302,11 @@ impl GenerationProvider for AzureSpeechProvider {
                 "Azure Speech generation completed"
             );
 
-            let mut output =
-                GenerationOutput::new(GenerationType::Speech, GenerationData::bytes(audio_bytes.to_vec()))
-                    .with_metadata(metadata);
+            let mut output = GenerationOutput::new(
+                GenerationType::Speech,
+                GenerationData::bytes(audio_bytes.to_vec()),
+            )
+            .with_metadata(metadata);
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
             }
@@ -326,7 +346,10 @@ fn resolve_endpoint(input: &str) -> String {
             format!("{}/cognitiveservices/v1", trimmed.trim_end_matches('/'))
         }
     } else {
-        format!("https://{}.tts.speech.microsoft.com/cognitiveservices/v1", trimmed)
+        format!(
+            "https://{}.tts.speech.microsoft.com/cognitiveservices/v1",
+            trimmed
+        )
     }
 }
 

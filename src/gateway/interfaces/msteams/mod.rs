@@ -636,9 +636,7 @@ impl MsTeamsChannel {
                     .unwrap_or_default();
                 let bot_name = activity.recipient.as_ref().and_then(|r| r.name.as_deref());
                 let addressed = mention::was_bot_addressed(&activity, bot_id, bot_name)
-                    || self
-                        .is_reply_to_bot(activity.reply_to_id.as_deref())
-                        .await;
+                    || self.is_reply_to_bot(activity.reply_to_id.as_deref()).await;
                 if !addressed {
                     debug!(
                         conversation_id = %conversation.id,
@@ -1050,7 +1048,10 @@ mod tests {
         let channel = MsTeamsChannel::new("teams-1", config);
         let activity = group_activity("hello team, just chatting", None);
         let result = channel.handle_message(activity).await.unwrap();
-        assert!(result.is_empty(), "unaddressed group message should be dropped");
+        assert!(
+            result.is_empty(),
+            "unaddressed group message should be dropped"
+        );
     }
 
     #[tokio::test]
@@ -1097,6 +1098,10 @@ mod tests {
         let channel = MsTeamsChannel::new("teams-1", config);
         let activity = group_activity("no mention but should still pass", None);
         let result = channel.handle_message(activity).await.unwrap();
-        assert_eq!(result.len(), 1, "require_mention=false should let plain group messages through");
+        assert_eq!(
+            result.len(),
+            1,
+            "require_mention=false should let plain group messages through"
+        );
     }
 }

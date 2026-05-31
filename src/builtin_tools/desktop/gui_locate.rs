@@ -241,7 +241,10 @@ fn walk_ax(
     out: &mut Vec<AxMatch>,
 ) {
     // Bounds must be present and non-degenerate to be clickable.
-    let bounds = node.bounds.as_ref().filter(|b| b.width > 1.0 && b.height > 1.0);
+    let bounds = node
+        .bounds
+        .as_ref()
+        .filter(|b| b.width > 1.0 && b.height > 1.0);
 
     if let Some(b) = bounds {
         let title_text = node.title.as_deref().unwrap_or("");
@@ -343,10 +346,7 @@ struct OcrMatch {
     score: f64,
 }
 
-fn collect_ocr_matches(
-    lines: &[aleph_desktop::OcrLine],
-    needle: &str,
-) -> Vec<OcrMatch> {
+fn collect_ocr_matches(lines: &[aleph_desktop::OcrLine], needle: &str) -> Vec<OcrMatch> {
     let needle_lc = needle.to_lowercase();
     let mut out: Vec<OcrMatch> = lines
         .iter()
@@ -429,7 +429,12 @@ mod tests {
         }
     }
 
-    fn leaf(role: &str, title: Option<&str>, value: Option<&str>, bounds: Option<Region>) -> AxElement {
+    fn leaf(
+        role: &str,
+        title: Option<&str>,
+        value: Option<&str>,
+        bounds: Option<Region>,
+    ) -> AxElement {
         AxElement {
             role: role.to_string(),
             title: title.map(str::to_string),
@@ -449,8 +454,18 @@ mod tests {
             bounds: None,
             pid: 1,
             children: vec![
-                leaf("AXButton", Some("Send Now"), None, Some(rect(0.0, 0.0, 60.0, 30.0))),
-                leaf("AXButton", Some("Send"), None, Some(rect(100.0, 0.0, 60.0, 30.0))),
+                leaf(
+                    "AXButton",
+                    Some("Send Now"),
+                    None,
+                    Some(rect(0.0, 0.0, 60.0, 30.0)),
+                ),
+                leaf(
+                    "AXButton",
+                    Some("Send"),
+                    None,
+                    Some(rect(100.0, 0.0, 60.0, 30.0)),
+                ),
             ],
         };
         let matches = collect_ax_matches(&tree, "Send", None);
@@ -467,8 +482,18 @@ mod tests {
             bounds: None,
             pid: 1,
             children: vec![
-                leaf("AXLink", Some("Login"), None, Some(rect(0.0, 0.0, 60.0, 30.0))),
-                leaf("AXButton", Some("Login"), None, Some(rect(100.0, 0.0, 60.0, 30.0))),
+                leaf(
+                    "AXLink",
+                    Some("Login"),
+                    None,
+                    Some(rect(0.0, 0.0, 60.0, 30.0)),
+                ),
+                leaf(
+                    "AXButton",
+                    Some("Login"),
+                    None,
+                    Some(rect(100.0, 0.0, 60.0, 30.0)),
+                ),
             ],
         };
         let matches = collect_ax_matches(&tree, "Login", Some("AXButton"));
@@ -484,8 +509,18 @@ mod tests {
             bounds: None,
             pid: 1,
             children: vec![
-                leaf("AXStaticText", Some("Save"), None, Some(rect(0.0, 0.0, 60.0, 30.0))),
-                leaf("AXButton", Some("Save"), None, Some(rect(100.0, 0.0, 60.0, 30.0))),
+                leaf(
+                    "AXStaticText",
+                    Some("Save"),
+                    None,
+                    Some(rect(0.0, 0.0, 60.0, 30.0)),
+                ),
+                leaf(
+                    "AXButton",
+                    Some("Save"),
+                    None,
+                    Some(rect(100.0, 0.0, 60.0, 30.0)),
+                ),
             ],
         };
         let matches = collect_ax_matches(&tree, "Save", None);

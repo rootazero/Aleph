@@ -691,7 +691,7 @@ mod tests {
             }],
         };
         f.add_subscription(sub_a);
-        f.add_subscription(sub_b_same);   // dropped — exact dup
+        f.add_subscription(sub_b_same); // dropped — exact dup
         f.add_subscription(sub_c_diff_where); // kept — different predicate
         assert_eq!(f.subscriptions().len(), 2);
     }

@@ -211,7 +211,9 @@ pub(crate) fn score(query: &str, label: &str, keywords: &[&str]) -> u32 {
     if l.starts_with(&q) {
         best = best.max(100);
     } else if l.contains(&q) {
-        if l.split(|c: char| !c.is_alphanumeric()).any(|t| t.starts_with(&q)) {
+        if l.split(|c: char| !c.is_alphanumeric())
+            .any(|t| t.starts_with(&q))
+        {
             best = best.max(70);
         } else {
             best = best.max(40);
@@ -243,7 +245,11 @@ fn filter_and_group(actions: &[Action], query: &str) -> Vec<Row> {
         .iter()
         .filter_map(|a| {
             let s = score(query, &a.label, a.keywords);
-            if s == 0 { None } else { Some((s, a)) }
+            if s == 0 {
+                None
+            } else {
+                Some((s, a))
+            }
         })
         .collect();
 

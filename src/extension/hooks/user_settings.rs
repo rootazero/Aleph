@@ -317,7 +317,10 @@ mod tests {
         match &out[0].actions[0] {
             HookAction::Http { url, headers } => {
                 assert_eq!(url, "https://audit.example/log");
-                assert_eq!(headers.get("x-token").map(String::as_str), Some("secret-redacted"));
+                assert_eq!(
+                    headers.get("x-token").map(String::as_str),
+                    Some("secret-redacted")
+                );
             }
             _ => panic!("expected http action"),
         }

@@ -83,8 +83,8 @@ async fn test_simple_execution_engine_basic() {
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
         workspace_override: None,
-            max_iterations_override: None,
-            model_override: None,
+        max_iterations_override: None,
+        model_override: None,
     };
 
     let result = engine.execute(request, agent, emitter.clone()).await;
@@ -133,8 +133,8 @@ async fn test_simple_execution_engine_run() {
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
         workspace_override: None,
-            max_iterations_override: None,
-            model_override: None,
+        max_iterations_override: None,
+        model_override: None,
     };
 
     // This should succeed and complete quickly

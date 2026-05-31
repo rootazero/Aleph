@@ -142,11 +142,7 @@ impl AgentRegistry {
     /// project already applies in [`crate::agents::thinking::normalize_think_level`]
     /// and `ProtocolAdapter::normalize_model_id` — boundary input normalization,
     /// not LLM reasoning (R7-safe).
-    pub fn resolve(
-        &self,
-        id: &str,
-        project_root: Option<&std::path::Path>,
-    ) -> Option<AgentDef> {
+    pub fn resolve(&self, id: &str, project_root: Option<&std::path::Path>) -> Option<AgentDef> {
         if let Some(def) = self.lookup_with_overlay(id, project_root) {
             return Some(def);
         }
@@ -530,7 +526,14 @@ mod tests {
     fn resolve_exact_match_behaves_like_lookup() {
         let registry = AgentRegistry::with_builtins();
         // Exact, canonical ids resolve unchanged.
-        for id in ["explore", "plan", "verify", "researcher", "coder", "default"] {
+        for id in [
+            "explore",
+            "plan",
+            "verify",
+            "researcher",
+            "coder",
+            "default",
+        ] {
             assert_eq!(registry.resolve(id, None).unwrap().id, id, "exact {id}");
         }
     }
@@ -547,8 +550,14 @@ mod tests {
     fn resolve_maps_claude_code_aliases() {
         let registry = AgentRegistry::with_builtins();
         // The vocabulary a model trained on Claude Code naturally emits.
-        assert_eq!(registry.resolve("general-purpose", None).unwrap().id, "default");
-        assert_eq!(registry.resolve("general_purpose", None).unwrap().id, "default");
+        assert_eq!(
+            registry.resolve("general-purpose", None).unwrap().id,
+            "default"
+        );
+        assert_eq!(
+            registry.resolve("general_purpose", None).unwrap().id,
+            "default"
+        );
         assert_eq!(registry.resolve("planner", None).unwrap().id, "plan");
         assert_eq!(registry.resolve("verification", None).unwrap().id, "verify");
         assert_eq!(registry.resolve("explorer", None).unwrap().id, "explore");
@@ -573,7 +582,10 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         write_project_agent(project.path(), "explore", "project-tuned explore");
         assert_eq!(
-            registry.resolve("explore", Some(project.path())).unwrap().description,
+            registry
+                .resolve("explore", Some(project.path()))
+                .unwrap()
+                .description,
             "project-tuned explore"
         );
     }

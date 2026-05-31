@@ -167,7 +167,7 @@ const MAX_REPLY_LENGTH: usize = 10_000;
 fn interpret_reply(request: &ClarificationRequest, reply: &str) -> ClarificationResult {
     let trimmed = reply.trim();
     let trimmed = if trimmed.len() > MAX_REPLY_LENGTH {
-        &trimmed[..MAX_REPLY_LENGTH]
+        trimmed.get(..MAX_REPLY_LENGTH).unwrap_or(trimmed)
     } else {
         trimmed
     };
@@ -403,5 +403,30 @@ mod tests {
             result.get_value(),
             Some("x".repeat(MAX_REPLY_LENGTH).as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_long_multibyte_reply_truncates_at_char_boundary() {
+        let mgr = ClarificationManager::new();
+        let rx = mgr
+            .register("sess-utf8", text_request(), DEFAULT_CLARIFY_TIMEOUT)
+            .await;
+
+        // Chinese characters are 3 bytes each in UTF-8.
+        // Construct a reply where MAX_REPLY_LENGTH falls inside a character.
+        let char_len = "中".len(); // 3 bytes
+        let repeat_count = MAX_REPLY_LENGTH / char_len + 10;
+        let long_reply = "中".repeat(repeat_count);
+        assert!(mgr.resolve("sess-utf8", &long_reply).await);
+        let result = rx.await.unwrap();
+        let value = result.get_value().unwrap();
+        assert!(
+            value.len() <= MAX_REPLY_LENGTH,
+            "truncated value length {} exceeds MAX_REPLY_LENGTH {}",
+            value.len(),
+            MAX_REPLY_LENGTH
+        );
+        // Must be valid UTF-8 (no panic means we survived truncation).
+        assert!(value.chars().all(|c| c == '中'));
     }
 }

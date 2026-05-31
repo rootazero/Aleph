@@ -62,7 +62,11 @@ pub(crate) fn parse_chat_sse_event(
             .get("prompt_tokens_details")
             .and_then(|d| d.get("cached_tokens"))
             .and_then(|t| t.as_u64())
-            .or_else(|| usage.get("prompt_cache_hit_tokens").and_then(|t| t.as_u64()))
+            .or_else(|| {
+                usage
+                    .get("prompt_cache_hit_tokens")
+                    .and_then(|t| t.as_u64())
+            })
             .and_then(|t| t.try_into().ok());
         let thinking_tokens = usage
             .get("completion_tokens_details")

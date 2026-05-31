@@ -111,7 +111,10 @@ pub async fn execute_acp_member_task(
         Ok(Err(e)) => MemberRunOutcome {
             status: MemberRunStatus::Failed,
             reply: None,
-            error: Some(format!("ACP harness '{}' failed: {e}", member_ref.harness_id)),
+            error: Some(format!(
+                "ACP harness '{}' failed: {e}",
+                member_ref.harness_id
+            )),
         },
         Err(_) => MemberRunOutcome {
             status: MemberRunStatus::Timeout,

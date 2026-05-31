@@ -148,11 +148,7 @@ pub fn AppearanceView() -> impl IntoView {
 
 /// A titled settings card matching the styling used across the settings pages.
 #[component]
-fn SettingCard(
-    title: &'static str,
-    desc: &'static str,
-    children: Children,
-) -> impl IntoView {
+fn SettingCard(title: &'static str, desc: &'static str, children: Children) -> impl IntoView {
     view! {
         <div class="bg-surface-raised border border-border rounded-xl p-6">
             <h2 class="text-xl font-semibold text-text-primary mb-1">{title}</h2>

@@ -155,11 +155,7 @@ pub fn read(job_id: &str) -> std::io::Result<Option<CarryOver>> {
 /// Write `record` for `job_id` under `dir`. Creates the directory on
 /// demand. Atomic-rename via tempfile to avoid partial reads on crash —
 /// matches the [`crate::canvas_io::save_canvas`] pattern.
-pub fn write_at(
-    dir: &std::path::Path,
-    job_id: &str,
-    record: &CarryOver,
-) -> std::io::Result<()> {
+pub fn write_at(dir: &std::path::Path, job_id: &str, record: &CarryOver) -> std::io::Result<()> {
     fs::create_dir_all(dir)?;
     let dest = carryover_path_at(dir, job_id);
     let tmp = dest.with_extension("json.tmp");
@@ -265,10 +261,7 @@ pub fn sweep_stale_carryovers(dir: &Path, cutoff: Duration) -> usize {
         if !is_file {
             continue;
         }
-        let is_json = path
-            .extension()
-            .map(|ext| ext == "json")
-            .unwrap_or(false);
+        let is_json = path.extension().map(|ext| ext == "json").unwrap_or(false);
         if !is_json {
             continue;
         }
@@ -301,11 +294,7 @@ pub fn sweep_stale_carryovers(dir: &Path, cutoff: Duration) -> usize {
 ///
 /// Callers that want one-shot deterministic GC (admin CLI, test
 /// fixtures) should invoke [`sweep_stale_carryovers`] directly.
-pub fn spawn_periodic_carryover_sweeper(
-    dir: PathBuf,
-    retention: Duration,
-    interval: Duration,
-) {
+pub fn spawn_periodic_carryover_sweeper(dir: PathBuf, retention: Duration, interval: Duration) {
     if tokio::runtime::Handle::try_current().is_err() {
         tracing::debug!(
             dir = %dir.display(),
@@ -321,11 +310,10 @@ pub fn spawn_periodic_carryover_sweeper(
         loop {
             ticker.tick().await;
             let dir = dir.clone();
-            let removed = tokio::task::spawn_blocking(move || {
-                sweep_stale_carryovers(&dir, retention)
-            })
-            .await
-            .unwrap_or(0);
+            let removed =
+                tokio::task::spawn_blocking(move || sweep_stale_carryovers(&dir, retention))
+                    .await
+                    .unwrap_or(0);
             if removed > 0 {
                 tracing::info!(
                     removed,
@@ -429,7 +417,8 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("legacy.json");
         std::fs::write(&path, r#"{"partial_summary":"hello"}"#).unwrap();
-        let got: CarryOver = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let got: CarryOver =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(got.partial_summary, "hello");
         assert_eq!(got.reason, "");
         assert_eq!(got.saved_at_ms, 0);

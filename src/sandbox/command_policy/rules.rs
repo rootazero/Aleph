@@ -113,7 +113,8 @@ pub fn default_rules() -> Vec<PolicyRule> {
         },
         PolicyRule {
             name: "pipe_to_shell",
-            description: "download piped straight into an interpreter (curl|wget … | sh/bash/python)",
+            description:
+                "download piped straight into an interpreter (curl|wget … | sh/bash/python)",
             action: Warn,
             pattern: r"\b(?:curl|wget|fetch)\b[^\n|]*\|[^\n]*\b(?:sh|bash|zsh|ksh|python3?|perl|ruby|node)\b",
         },
@@ -125,7 +126,8 @@ pub fn default_rules() -> Vec<PolicyRule> {
         },
         PolicyRule {
             name: "write_sensitive_etc",
-            description: "writing to a sensitive system credential file (/etc/passwd, shadow, sudoers)",
+            description:
+                "writing to a sensitive system credential file (/etc/passwd, shadow, sudoers)",
             action: Warn,
             pattern: r"(?:>|>>|\btee\b[^\n]*)\s*/etc/(?:passwd|shadow|sudoers|gshadow)\b",
         },

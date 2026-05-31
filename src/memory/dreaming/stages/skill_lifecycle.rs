@@ -77,9 +77,7 @@ impl DreamStage for SkillLifecycleStage {
                 // Prefer the newest activity timestamp; fall back to
                 // `created_at` so a skill that was installed but never
                 // touched still ages from its install time.
-                let anchor = stats
-                    .latest_activity_at()
-                    .or(stats.created_at.as_deref());
+                let anchor = stats.latest_activity_at().or(stats.created_at.as_deref());
                 let anchor_ts = match anchor.and_then(parse_iso_utc) {
                     Some(t) => t,
                     None => continue,

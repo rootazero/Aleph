@@ -98,10 +98,7 @@ fn edge_id(from: &str, to: &str) -> String {
     format!("e:{from}->{to}")
 }
 
-fn edge_to_canvas(
-    link: &NoteLinkDto,
-    positions: &HashMap<String, Vec2>,
-) -> super::spec::Edge {
+fn edge_to_canvas(link: &NoteLinkDto, positions: &HashMap<String, Vec2>) -> super::spec::Edge {
     let directional = link
         .kind
         .as_deref()
@@ -115,7 +112,11 @@ fn edge_to_canvas(
         from_end: None,
         to_node: link.to.clone(),
         to_side,
-        to_end: Some(if directional { EndShape::Arrow } else { EndShape::None }),
+        to_end: Some(if directional {
+            EndShape::Arrow
+        } else {
+            EndShape::None
+        }),
         color: None,
         label: link.label.clone(),
     }
@@ -308,8 +309,8 @@ fn kind_from_arrow(to_end: Option<EndShape>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::spec::{BackgroundStyle, Edge as JcEdge};
+    use super::*;
 
     fn n(id: &str, name: &str, path: &str, category: &str) -> NoteNodeDto {
         NoteNodeDto {
@@ -334,7 +335,10 @@ mod tests {
     fn neighbors_fixture() -> GraphNeighborsResponse {
         GraphNeighborsResponse {
             center: n("c", "Centre", "center.md", "user"),
-            nodes: vec![n("a", "Alpha", "a.md", "project"), n("b", "Beta", "b.md", "feedback")],
+            nodes: vec![
+                n("a", "Alpha", "a.md", "project"),
+                n("b", "Beta", "b.md", "feedback"),
+            ],
             edges: vec![
                 link("c", "a", Some("refers"), Some("alpha link")),
                 link("c", "b", Some("related"), None),

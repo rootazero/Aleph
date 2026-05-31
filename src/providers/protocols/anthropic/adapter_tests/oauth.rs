@@ -168,7 +168,10 @@ fn prepend_claude_code_identity_with_existing_system_leads_with_identity() {
         "identity block stays uncached; breakpoint remains on the stable block"
     );
     assert_eq!(out[1].text, "Stable persona");
-    assert!(out[1].cache_control.is_some(), "stable block keeps its marker");
+    assert!(
+        out[1].cache_control.is_some(),
+        "stable block keeps its marker"
+    );
 }
 
 #[test]
@@ -209,7 +212,9 @@ fn build_request_oauth_injects_identity_even_without_system_prompt() {
     config.api_key = Some("sk-ant-oat01-token".to_string());
 
     let body = build_body(&payload, &config);
-    let system = body["system"].as_array().expect("OAuth must synthesize a system array");
+    let system = body["system"]
+        .as_array()
+        .expect("OAuth must synthesize a system array");
     assert_eq!(system[0]["text"], CLAUDE_CODE_IDENTITY);
 }
 

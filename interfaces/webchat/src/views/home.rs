@@ -39,9 +39,7 @@ fn classify_topic(topic: &str) -> Option<ActivitySeverity> {
         | "agent.tool.update"
         | "channel.typing" => None,
 
-        "agent.run.error" | "channel.error" | "approval.expired" => {
-            Some(ActivitySeverity::Danger)
-        }
+        "agent.run.error" | "channel.error" | "approval.expired" => Some(ActivitySeverity::Danger),
 
         "approval.requested" | "pairing.requested" => Some(ActivitySeverity::Warning),
 

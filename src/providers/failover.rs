@@ -411,9 +411,8 @@ impl AiProvider for FailoverProvider {
                                     // hitting the same overloaded provider don't
                                     // retry in lockstep and reignite the spike.
                                     // Equal-jitter shape via `apply_jitter`.
-                                    let jittered = crate::providers::retry::apply_jitter(
-                                        delay, 0.25,
-                                    );
+                                    let jittered =
+                                        crate::providers::retry::apply_jitter(delay, 0.25);
                                     tracing::warn!(
                                         provider = %cand.name, model = ?model, attempt,
                                         delay_ms = jittered.as_millis() as u64,

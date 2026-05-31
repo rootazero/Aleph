@@ -105,10 +105,7 @@ pub fn save_at(dir: &Path, name: &str, doc: &Document) -> Result<PathBuf, AlephE
 
     let tmp_path = final_path.with_extension(format!("{CANVAS_EXT}.tmp"));
     fs::write(&tmp_path, body).map_err(|e| {
-        AlephError::config(format!(
-            "canvas write {} failed: {e}",
-            tmp_path.display()
-        ))
+        AlephError::config(format!("canvas write {} failed: {e}", tmp_path.display()))
     })?;
     fs::rename(&tmp_path, &final_path).map_err(|e| {
         // Best-effort cleanup of the temp on rename failure — ignore secondary
@@ -140,12 +137,10 @@ pub fn load(name: &str) -> Result<Document, AlephError> {
 
 /// Load a canvas from an explicit path.
 pub fn load_path(path: &Path) -> Result<Document, AlephError> {
-    let body = fs::read_to_string(path).map_err(|e| {
-        AlephError::config(format!("canvas read {} failed: {e}", path.display()))
-    })?;
-    parse(&body).map_err(|e| {
-        AlephError::config(format!("canvas parse {} failed: {e}", path.display()))
-    })
+    let body = fs::read_to_string(path)
+        .map_err(|e| AlephError::config(format!("canvas read {} failed: {e}", path.display())))?;
+    parse(&body)
+        .map_err(|e| AlephError::config(format!("canvas parse {} failed: {e}", path.display())))
 }
 
 /// List canvases under `dir`. Missing directory → empty list (not an error —
@@ -154,12 +149,8 @@ pub fn list_at(dir: &Path) -> Result<Vec<CanvasMeta>, AlephError> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
-    let entries = fs::read_dir(dir).map_err(|e| {
-        AlephError::config(format!(
-            "canvas listing {} failed: {e}",
-            dir.display()
-        ))
-    })?;
+    let entries = fs::read_dir(dir)
+        .map_err(|e| AlephError::config(format!("canvas listing {} failed: {e}", dir.display())))?;
 
     let mut out = Vec::new();
     for entry in entries.flatten() {
@@ -337,9 +328,6 @@ mod tests {
         // If ALEPH_HOME is set, the returned path starts with it; otherwise it
         // falls back to a home-dir-rooted path. We only assert the suffix.
         let dir = canvas_dir();
-        assert_eq!(
-            dir.file_name().and_then(|s| s.to_str()),
-            Some("canvases")
-        );
+        assert_eq!(dir.file_name().and_then(|s| s.to_str()), Some("canvases"));
     }
 }

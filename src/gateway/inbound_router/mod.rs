@@ -761,9 +761,7 @@ impl InboundMessageRouter {
                     }
                     // Slash-command access tiering — backward-compat: empty
                     // `allow_admin_from` keeps gating OFF for that scope.
-                    if let Some(cfg) =
-                        self.channel_configs.get(ctx.message.channel_id.as_str())
-                    {
+                    if let Some(cfg) = self.channel_configs.get(ctx.message.channel_id.as_str()) {
                         let decision = cfg.slash_command_gate(
                             &ctx.sender_normalized,
                             &parsed.command_name,
@@ -788,10 +786,7 @@ impl InboundMessageRouter {
                                 inline_keyboard: None,
                                 metadata: Default::default(),
                             };
-                            let _ = self
-                                .channel_registry
-                                .send(&msg.channel_id, reply)
-                                .await;
+                            let _ = self.channel_registry.send(&msg.channel_id, reply).await;
                             return Ok(());
                         }
                     }

@@ -66,10 +66,8 @@ pub fn ModelPicker() -> impl IntoView {
     };
 
     let select_entry = move |provider: String, model: String| {
-        chat.selected_model.set(Some(ModelOverride::Qualified {
-            provider,
-            model,
-        }));
+        chat.selected_model
+            .set(Some(ModelOverride::Qualified { provider, model }));
         open.set(false);
     };
 

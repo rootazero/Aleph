@@ -94,9 +94,6 @@ impl BackgroundAgentTracker {
         cancel_token: CancellationToken,
         task_description: String,
     ) {
-        // C1 — opportunistically prune stale completed results so they don't
-        // accumulate unbounded when callers never poll `result_snapshot`.
-        self.cleanup(BACKGROUND_RESULT_TTL);
         let mut running = self.running.write().unwrap_or_else(|e| e.into_inner());
         running.insert(
             request_id,
@@ -107,6 +104,8 @@ impl BackgroundAgentTracker {
                 progress: VecDeque::with_capacity(50),
             },
         );
+        drop(running);
+        self.cleanup(BACKGROUND_RESULT_TTL);
     }
 
     /// Mark a background agent as finished and store its outcome.

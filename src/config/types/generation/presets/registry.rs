@@ -395,12 +395,16 @@ const PROFILES: &[(&str, GenerationPreset)] = &[
     // ─── Transcription (STT) ──────────────────────────────────────────────────
     (
         "openai-whisper",
-        GenerationPreset::new("openai_whisper", "whisper-1", Some("https://api.openai.com"))
-            .with_modalities(TRANSCRIPTION)
-            .with_display("OpenAI Whisper")
-            .with_description("whisper-1 multilingual STT")
-            .with_homepage("https://platform.openai.com/docs/guides/speech-to-text")
-            .with_signup("https://platform.openai.com/api-keys"),
+        GenerationPreset::new(
+            "openai_whisper",
+            "whisper-1",
+            Some("https://api.openai.com"),
+        )
+        .with_modalities(TRANSCRIPTION)
+        .with_display("OpenAI Whisper")
+        .with_description("whisper-1 multilingual STT")
+        .with_homepage("https://platform.openai.com/docs/guides/speech-to-text")
+        .with_signup("https://platform.openai.com/api-keys"),
     ),
     (
         "deepgram-stt",

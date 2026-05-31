@@ -122,13 +122,18 @@ impl SmartRouter {
         None
     }
 
-    /// Tier 2: Match by skill ID or skill name
+    /// Tier 2: Match by skill ID or skill name.
+    ///
+    /// Uses word-boundary matching to avoid false positives
+    /// (e.g. "code" should not match inside "decode").
     fn try_exact_skill(&self, intent: &str, agents: &[RegisteredAgent]) -> Option<RoutingDecision> {
         let intent_lower = intent.to_lowercase();
         for agent in agents {
             for skill in &agent.card.skills {
-                if intent_lower.contains(&skill.id.to_lowercase())
-                    || intent_lower.contains(&skill.name.to_lowercase())
+                let skill_id_lower = skill.id.to_lowercase();
+                let skill_name_lower = skill.name.to_lowercase();
+                if Self::has_word_match(&intent_lower, &skill_id_lower)
+                    || Self::has_word_match(&intent_lower, &skill_name_lower)
                 {
                     return Some(RoutingDecision {
                         agent: agent.clone(),
@@ -140,6 +145,29 @@ impl SmartRouter {
             }
         }
         None
+    }
+
+    /// Return true if `needle` appears as a whole word inside `haystack`.
+    /// A "word" is defined as a maximal contiguous run of alphanumeric chars.
+    fn has_word_match(haystack: &str, needle: &str) -> bool {
+        if needle.is_empty() {
+            return false;
+        }
+        let needle_bytes = needle.as_bytes();
+        haystack
+            .as_bytes()
+            .windows(needle_bytes.len())
+            .any(|window| {
+                if window != needle_bytes {
+                    return false;
+                }
+                let start = window.as_ptr() as usize - haystack.as_bytes().as_ptr() as usize;
+                let end = start + needle_bytes.len();
+                let left_ok = start == 0 || !haystack.as_bytes()[start - 1].is_ascii_alphanumeric();
+                let right_ok =
+                    end >= haystack.len() || !haystack.as_bytes()[end].is_ascii_alphanumeric();
+                left_ok && right_ok
+            })
     }
 }
 

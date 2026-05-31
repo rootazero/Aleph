@@ -258,7 +258,10 @@ impl AcpSession {
             .to_string();
 
         info!(harness_id = %self.harness_id, session_id = %session_id, "ACP session created");
-        *self.acp_session_id.write().unwrap_or_else(|e| e.into_inner()) = Some(session_id.clone());
+        *self
+            .acp_session_id
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(session_id.clone());
         Ok(session_id)
     }
 
@@ -282,8 +285,10 @@ impl AcpSession {
                     .unwrap_or(session_id)
                     .to_string();
                 info!(harness_id = %self.harness_id, session_id = %sid, "ACP session loaded");
-                *self.acp_session_id.write().unwrap_or_else(|e| e.into_inner()) =
-                    Some(sid.clone());
+                *self
+                    .acp_session_id
+                    .write()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(sid.clone());
                 Ok(sid)
             }
             Err(e) => {
@@ -553,13 +558,11 @@ impl AcpSession {
 /// remote returned `-32601` / `-32602` / `invalid params`, matching acpx's
 /// `isLikelySessionControlUnsupportedError` heuristic. Other errors pass
 /// through unchanged.
-fn map_session_control_error(err: crate::error::AlephError, op: &'static str) -> crate::error::AlephError {
-    if let crate::error::AlephError::AcpError {
-        code,
-        message,
-        ..
-    } = &err
-    {
+fn map_session_control_error(
+    err: crate::error::AlephError,
+    op: &'static str,
+) -> crate::error::AlephError {
+    if let crate::error::AlephError::AcpError { code, message, .. } = &err {
         if code == "protocol_error" {
             let lower = message.to_lowercase();
             if lower.contains("invalid params")

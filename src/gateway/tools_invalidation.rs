@@ -35,10 +35,7 @@ pub struct ToolsChangedSink {
 
 impl ToolsChangedSink {
     /// Construct a new sink wired to the live trackers.
-    pub fn new(
-        state_versions: Arc<StateVersionTracker>,
-        event_bus: Arc<GatewayEventBus>,
-    ) -> Self {
+    pub fn new(state_versions: Arc<StateVersionTracker>, event_bus: Arc<GatewayEventBus>) -> Self {
         Self {
             state_versions,
             event_bus,
@@ -70,7 +67,11 @@ impl ToolsChangedSink {
 mod tests {
     use super::*;
 
-    fn sink() -> (ToolsChangedSink, Arc<StateVersionTracker>, Arc<GatewayEventBus>) {
+    fn sink() -> (
+        ToolsChangedSink,
+        Arc<StateVersionTracker>,
+        Arc<GatewayEventBus>,
+    ) {
         let sv = Arc::new(StateVersionTracker::new());
         let eb = Arc::new(GatewayEventBus::new());
         (ToolsChangedSink::new(sv.clone(), eb.clone()), sv, eb)

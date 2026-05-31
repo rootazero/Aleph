@@ -219,8 +219,7 @@ impl ProtocolAdapter for AnthropicProtocol {
         // 400s when the budget meets/exceeds the cap. Raise the cap to keep a
         // visible answer's worth of output above the budget. No-op for adaptive
         // thinking (budget_tokens: None) and for non-thinking turns.
-        let max_tokens =
-            Self::adjust_max_tokens_for_thinking_budget(max_tokens, thinking.as_ref());
+        let max_tokens = Self::adjust_max_tokens_for_thinking_budget(max_tokens, thinking.as_ref());
 
         // Convert tool definitions to Anthropic format. Tool names must satisfy
         // Anthropic's regex `^[a-zA-Z][a-zA-Z0-9_-]{0,127}$`; we sanitize on

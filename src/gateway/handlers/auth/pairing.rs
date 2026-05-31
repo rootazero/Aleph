@@ -77,9 +77,7 @@ pub async fn handle_pairing_approve(
             );
         }
         PairingRequest::Browser {
-            code,
-            origin_label,
-            ..
+            code, origin_label, ..
         } => {
             // Mint a session keyed to the shared-token HMAC (mirrors
             // auth_middleware::handle_bootstrap_consume). The session_id
@@ -97,10 +95,7 @@ pub async fn handle_pairing_approve(
                     );
                 }
             };
-            let hash = crate::gateway::security::hmac_sign(
-                ctx.shared_token_mgr.secret(),
-                &shared,
-            );
+            let hash = crate::gateway::security::hmac_sign(ctx.shared_token_mgr.secret(), &shared);
             let session_id = match ctx.session_mgr.create_session(&hash) {
                 Ok(id) => id,
                 Err(e) => {
@@ -112,7 +107,8 @@ pub async fn handle_pairing_approve(
                     );
                 }
             };
-            ctx.pairing_manager.record_browser_session(code, &session_id);
+            ctx.pairing_manager
+                .record_browser_session(code, &session_id);
 
             // Light up the PairingCompleted event so the Panel notification
             // can be dismissed cleanly (paired with pairing.rejected for the
@@ -476,19 +472,13 @@ pub async fn handle_pairing_poll(
     };
 
     match ctx.pairing_manager.poll_browser_pairing(&params.code) {
-        PollState::Pending => {
-            JsonRpcResponse::success(request.id, json!({"status": "pending"}))
-        }
+        PollState::Pending => JsonRpcResponse::success(request.id, json!({"status": "pending"})),
         PollState::Approved { session_id } => JsonRpcResponse::success(
             request.id,
             json!({"status": "approved", "session_id": session_id}),
         ),
-        PollState::Rejected => {
-            JsonRpcResponse::success(request.id, json!({"status": "rejected"}))
-        }
-        PollState::Expired => {
-            JsonRpcResponse::success(request.id, json!({"status": "expired"}))
-        }
+        PollState::Rejected => JsonRpcResponse::success(request.id, json!({"status": "rejected"})),
+        PollState::Expired => JsonRpcResponse::success(request.id, json!({"status": "expired"})),
     }
 }
 
@@ -558,7 +548,11 @@ mod tests {
             ctx.clone(),
         )
         .await;
-        assert!(start.is_success(), "start_browser must succeed: {:?}", start);
+        assert!(
+            start.is_success(),
+            "start_browser must succeed: {:?}",
+            start
+        );
         let code = start
             .result
             .as_ref()
@@ -694,7 +688,12 @@ mod tests {
         )
         .await;
         assert_eq!(
-            poll.result.unwrap().get("status").unwrap().as_str().unwrap(),
+            poll.result
+                .unwrap()
+                .get("status")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "rejected"
         );
     }

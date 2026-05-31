@@ -114,7 +114,6 @@ impl SearchProvider for JinaProvider {
     }
 }
 
-
 /// Factory entry for the search provider registry.
 ///
 /// Co-located with the concrete provider so adding a new search
@@ -130,9 +129,13 @@ impl crate::search::ProviderFactory for JinaFactory {
         &self,
         name: &str,
         backend: &crate::config::types::SearchBackendConfig,
-    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>> {
+    ) -> crate::error::Result<Option<crate::sync_primitives::Arc<dyn crate::search::SearchProvider>>>
+    {
         let Some(key) = backend.api_key.as_deref().filter(|s| !s.is_empty()) else {
-            log::warn!("search backend '{name}' ({}) skipped: no api_key in vault", NAME);
+            log::warn!(
+                "search backend '{name}' ({}) skipped: no api_key in vault",
+                NAME
+            );
             return Ok(None);
         };
         match JinaProvider::new(key.to_string()) {
@@ -196,6 +199,9 @@ mod tests {
         }"#;
         let parsed: JinaResponse = serde_json::from_str(body).expect("parses");
         assert!(parsed.data.is_none());
-        assert_eq!(parsed.message.as_deref(), Some("Rate limit exceeded for your free tier"));
+        assert_eq!(
+            parsed.message.as_deref(),
+            Some("Rate limit exceeded for your free tier")
+        );
     }
 }

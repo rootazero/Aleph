@@ -11,15 +11,15 @@ const RECENT_VISITED_CAPACITY: usize = 8;
 
 #[derive(Clone, Copy)]
 pub struct MemoryState {
-    pub agent_id:           RwSignal<String>,
-    pub agents:             RwSignal<Vec<AgentSummary>>,
-    pub search_query:       RwSignal<String>,
-    pub fold_threshold:     RwSignal<usize>,
-    pub selected_node:      RwSignal<Option<String>>,
-    pub focus_id:           RwSignal<Option<String>>,
+    pub agent_id: RwSignal<String>,
+    pub agents: RwSignal<Vec<AgentSummary>>,
+    pub search_query: RwSignal<String>,
+    pub fold_threshold: RwSignal<usize>,
+    pub selected_node: RwSignal<Option<String>>,
+    pub focus_id: RwSignal<Option<String>>,
     pub breadcrumb_entries: RwSignal<Vec<String>>,
-    pub recent_visited:     RwSignal<VecDeque<String>>,
-    pub sidebar_collapsed:  RwSignal<bool>,
+    pub recent_visited: RwSignal<VecDeque<String>>,
+    pub sidebar_collapsed: RwSignal<bool>,
 }
 
 impl MemoryState {
@@ -37,25 +37,20 @@ impl MemoryState {
         // reactive owner is always present.
         Effect::new(move |_| {
             let v = sidebar_collapsed.get();
-            if let Some(s) = web_sys::window()
-                .and_then(|w| w.local_storage().ok().flatten())
-            {
-                let _ = s.set_item(
-                    "aleph.sidebar.collapsed",
-                    if v { "1" } else { "0" },
-                );
+            if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+                let _ = s.set_item("aleph.sidebar.collapsed", if v { "1" } else { "0" });
             }
         });
 
         Self {
-            agent_id:           RwSignal::new("main".into()),
-            agents:             RwSignal::new(Vec::new()),
-            search_query:       RwSignal::new(String::new()),
-            fold_threshold:     RwSignal::new(3),
-            selected_node:      RwSignal::new(None),
-            focus_id:           RwSignal::new(None),
+            agent_id: RwSignal::new("main".into()),
+            agents: RwSignal::new(Vec::new()),
+            search_query: RwSignal::new(String::new()),
+            fold_threshold: RwSignal::new(3),
+            selected_node: RwSignal::new(None),
+            focus_id: RwSignal::new(None),
             breadcrumb_entries: RwSignal::new(Vec::new()),
-            recent_visited:     RwSignal::new(VecDeque::with_capacity(RECENT_VISITED_CAPACITY)),
+            recent_visited: RwSignal::new(VecDeque::with_capacity(RECENT_VISITED_CAPACITY)),
             sidebar_collapsed,
         }
     }

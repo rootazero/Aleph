@@ -163,10 +163,7 @@ impl Drop for InFlightGuard {
 /// Try to register `id` as in-flight. Returns `None` if the cap is full or the
 /// id is already being fetched (de-dup). The caller owns the guard for the
 /// lifetime of the async work.
-pub fn try_acquire_in_flight(
-    set: &Rc<RefCell<InFlightSet>>,
-    id: &str,
-) -> Option<InFlightGuard> {
+pub fn try_acquire_in_flight(set: &Rc<RefCell<InFlightSet>>, id: &str) -> Option<InFlightGuard> {
     let mut s = set.borrow_mut();
     if s.ids.contains(id) || s.ids.len() >= s.cap {
         return None;

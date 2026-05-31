@@ -125,7 +125,6 @@ pub async fn write_request(stdin: &SharedStdin, req: &AcpRequest) -> Result<()> 
 }
 
 impl StdioTransport {
-
     /// Receive the next parsed event from the reader channel.
     pub async fn recv(&mut self) -> Option<Result<AcpResponse>> {
         self.event_rx.recv().await

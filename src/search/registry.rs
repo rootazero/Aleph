@@ -83,7 +83,9 @@ impl SearchRegistry {
     /// disabled, or no usable backend was constructed — caller should
     /// then leave `BuiltinToolConfig.search_registry = None` and the
     /// `search` tool falls back to its legacy TAVILY_API_KEY path.
-    pub fn from_config(config: Option<&crate::config::types::SearchConfigInternal>) -> Option<Self> {
+    pub fn from_config(
+        config: Option<&crate::config::types::SearchConfigInternal>,
+    ) -> Option<Self> {
         Self::from_config_with_factories(
             config,
             &crate::search::ProviderFactoryRegistry::with_defaults(),
@@ -239,10 +241,7 @@ impl SearchRegistry {
                     }
                     Err(e) => {
                         let kind = classify_search_error(&e);
-                        let msg = format!(
-                            "Provider '{}' [{}] failed: {}",
-                            provider_name, kind, e
-                        );
+                        let msg = format!("Provider '{}' [{}] failed: {}", provider_name, kind, e);
                         log::warn!(
                             target: "search",
                             "provider={} kind={} {}",
@@ -379,10 +378,7 @@ mod tests {
     #[test]
     fn classify_search_error_covers_observable_kinds() {
         let cases: &[(AlephError, &'static str)] = &[
-            (
-                AlephError::authentication("brave", "bad token"),
-                "auth",
-            ),
+            (AlephError::authentication("brave", "bad token"), "auth"),
             (AlephError::rate_limit("429 too many"), "rate-limit"),
             (AlephError::network("dns failure"), "network"),
             (AlephError::provider("5xx upstream"), "provider"),
@@ -586,7 +582,10 @@ mod tests {
         // (so any call would deterministically fail), and confirming
         // search() still returns success.
         let mut registry = SearchRegistry::new("primary".to_string());
-        registry.add_provider("primary".to_string(), Arc::new(MockProvider::new("primary", false, 3)));
+        registry.add_provider(
+            "primary".to_string(),
+            Arc::new(MockProvider::new("primary", false, 3)),
+        );
 
         let fb = WebFetchSerpFallback::new().expect("construct");
         // Pre-cool every mirror — any actual call would error.
@@ -595,8 +594,15 @@ mod tests {
         registry.set_web_fetch_fallback(Some(Arc::new(fb)));
         assert!(registry.has_web_fetch_fallback());
 
-        let results = registry.search("rust", &SearchOptions::default()).await.unwrap();
-        assert_eq!(results.len(), 3, "primary results should be returned without touching fallback");
+        let results = registry
+            .search("rust", &SearchOptions::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            results.len(),
+            3,
+            "primary results should be returned without touching fallback"
+        );
         assert_eq!(results[0].provider, Some("primary".to_string()));
     }
 
@@ -607,8 +613,14 @@ mod tests {
         // failures AND the `web-fetch-fallback` line so operators
         // know the last-resort branch was actually attempted.
         let mut registry = SearchRegistry::new("primary".to_string());
-        registry.add_provider("primary".to_string(), Arc::new(MockProvider::new("primary", true, 0)));
-        registry.add_provider("fallback1".to_string(), Arc::new(MockProvider::new("fallback1", true, 0)));
+        registry.add_provider(
+            "primary".to_string(),
+            Arc::new(MockProvider::new("primary", true, 0)),
+        );
+        registry.add_provider(
+            "fallback1".to_string(),
+            Arc::new(MockProvider::new("fallback1", true, 0)),
+        );
         registry.set_fallback_providers(vec!["fallback1".to_string()]);
 
         let fb = WebFetchSerpFallback::new().unwrap();
@@ -621,9 +633,18 @@ mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("All search providers failed"), "missing provider failure prefix: {err}");
-        assert!(err.contains("web-fetch-fallback"), "fallback attempt missing from aggregate: {err}");
-        assert!(err.contains("ddg-lite") || err.contains("ddg-html"), "fallback mirror name missing: {err}");
+        assert!(
+            err.contains("All search providers failed"),
+            "missing provider failure prefix: {err}"
+        );
+        assert!(
+            err.contains("web-fetch-fallback"),
+            "fallback attempt missing from aggregate: {err}"
+        );
+        assert!(
+            err.contains("ddg-lite") || err.contains("ddg-html"),
+            "fallback mirror name missing: {err}"
+        );
     }
 
     #[test]

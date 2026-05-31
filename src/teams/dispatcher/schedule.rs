@@ -198,7 +198,9 @@ impl TeamDispatcher {
             self.running.lock().await.insert(task.id.clone());
             let dispatcher = Arc::clone(self);
             tokio::spawn(async move {
-                dispatcher.run_task(task, owner, dispatch_target, permit).await;
+                dispatcher
+                    .run_task(task, owner, dispatch_target, permit)
+                    .await;
             });
         }
     }
@@ -241,13 +243,13 @@ impl TeamDispatcher {
                     agent_id: owner.to_string(),
                 })
             }
-            TeamMemberKind::AcpSession => MemberDispatchTarget::from_member(member).ok_or_else(
-                || {
+            TeamMemberKind::AcpSession => {
+                MemberDispatchTarget::from_member(member).ok_or_else(|| {
                     format!(
                         "ACP member '{owner}' is missing required routing fields (harness_id/cwd)"
                     )
-                },
-            ),
+                })
+            }
         }
     }
 
@@ -313,9 +315,7 @@ impl TeamDispatcher {
             }
             self.fail_task(
                 &task,
-                &format!(
-                    "zombie timeout: no progress for {elapsed}s (limit {zombie_ttl}s)"
-                ),
+                &format!("zombie timeout: no progress for {elapsed}s (limit {zombie_ttl}s)"),
             )
             .await;
         }
@@ -416,11 +416,7 @@ impl TeamDispatcher {
         // survives any future retries and is the source of truth for the
         // attempt-by-attempt UI.
         let (run_status, run_summary, run_error) = match &outcome.status {
-            MemberRunStatus::Completed => (
-                TaskRunStatus::Completed,
-                outcome.reply.clone(),
-                None,
-            ),
+            MemberRunStatus::Completed => (TaskRunStatus::Completed, outcome.reply.clone(), None),
             MemberRunStatus::Failed => (TaskRunStatus::Failed, None, outcome.error.clone()),
             MemberRunStatus::Timeout => (TaskRunStatus::Timeout, None, outcome.error.clone()),
         };

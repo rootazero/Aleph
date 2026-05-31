@@ -13,9 +13,7 @@ use async_trait::async_trait;
 
 use crate::error::AlephError;
 use crate::memory::dreaming::distill_action::referenced_path;
-use crate::memory::dreaming::{
-    DistillAction, DistillActionRecord, DistillOutcome, DreamContext,
-};
+use crate::memory::dreaming::{DistillAction, DistillActionRecord, DistillOutcome, DreamContext};
 use crate::memory::notes::find_similar_notes;
 use crate::memory::notes::store::NoteStore;
 use crate::providers::adapter::RequestPayload;
@@ -113,7 +111,11 @@ impl DreamStage for SkillDistillStage {
             let actions = parse_distill_response(&response.text_content());
             let candidate_set: std::collections::HashSet<&str> =
                 candidates.iter().map(|(p, _)| p.as_str()).collect();
-            for raw_action in actions.into_iter().take(self.max_per_cycle).map(clamp_action) {
+            for raw_action in actions
+                .into_iter()
+                .take(self.max_per_cycle)
+                .map(clamp_action)
+            {
                 // Spec 5 validation gate: format / semantic / safety checks.
                 // Rejections never reach the indexer; downgrades (severity
                 // softening on low confidence) pass through silently.
@@ -127,12 +129,14 @@ impl DreamStage for SkillDistillStage {
                             reason = %reason,
                             "SkillDistill: skill_gate rejected action; dropping"
                         );
-                        ctx.report.distill_actions.push(DistillActionRecord::from_action(
-                            "skill_distill",
-                            &raw_action,
-                            DistillOutcome::FilteredInvalid,
-                            Some(reason),
-                        ));
+                        ctx.report
+                            .distill_actions
+                            .push(DistillActionRecord::from_action(
+                                "skill_distill",
+                                &raw_action,
+                                DistillOutcome::FilteredInvalid,
+                                Some(reason),
+                            ));
                         continue;
                     }
                 };
@@ -147,12 +151,14 @@ impl DreamStage for SkillDistillStage {
                             "SkillDistill: action references non-candidate path; \
                              dropping to prevent cross-category mutation"
                         );
-                        ctx.report.distill_actions.push(DistillActionRecord::from_action(
-                            "skill_distill",
-                            &action,
-                            DistillOutcome::FilteredNonCandidate,
-                            None,
-                        ));
+                        ctx.report
+                            .distill_actions
+                            .push(DistillActionRecord::from_action(
+                                "skill_distill",
+                                &action,
+                                DistillOutcome::FilteredNonCandidate,
+                                None,
+                            ));
                         continue;
                     }
                 }
@@ -163,21 +169,25 @@ impl DreamStage for SkillDistillStage {
                 {
                     Ok(_) => {
                         applied += 1;
-                        ctx.report.distill_actions.push(DistillActionRecord::from_action(
-                            "skill_distill",
-                            &action,
-                            DistillOutcome::Applied,
-                            None,
-                        ));
+                        ctx.report
+                            .distill_actions
+                            .push(DistillActionRecord::from_action(
+                                "skill_distill",
+                                &action,
+                                DistillOutcome::Applied,
+                                None,
+                            ));
                     }
                     Err(e) => {
                         tracing::warn!(path, error = %e, "apply_distill_action failed");
-                        ctx.report.distill_actions.push(DistillActionRecord::from_action(
-                            "skill_distill",
-                            &action,
-                            DistillOutcome::Error,
-                            Some(e.to_string()),
-                        ));
+                        ctx.report
+                            .distill_actions
+                            .push(DistillActionRecord::from_action(
+                                "skill_distill",
+                                &action,
+                                DistillOutcome::Error,
+                                Some(e.to_string()),
+                            ));
                     }
                 }
             }

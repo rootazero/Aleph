@@ -23,11 +23,7 @@ pub fn is_path_within(base: &Path, target: &Path) -> bool {
     match normalized.strip_prefix(base) {
         Ok(remainder) => {
             remainder.as_os_str().is_empty()
-                || remainder
-                    .as_os_str()
-                    .as_encoded_bytes()
-                    .first()
-                    == Some(&b'/')
+                || remainder.as_os_str().as_encoded_bytes().first() == Some(&b'/')
         }
         Err(_) => false,
     }
@@ -54,10 +50,7 @@ mod tests {
             &base,
             &PathBuf::from("/skills/demonstration/x.md")
         ));
-        assert!(!is_path_within(
-            &base,
-            &PathBuf::from("/skills/demo2/x.md")
-        ));
+        assert!(!is_path_within(&base, &PathBuf::from("/skills/demo2/x.md")));
     }
 
     #[test]

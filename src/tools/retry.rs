@@ -117,8 +117,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use crate::sync_primitives::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Build a successful `ToolOutput` for assertion paths.
     fn ok_output() -> ToolOutput {

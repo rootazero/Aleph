@@ -85,9 +85,7 @@ pub(super) fn read_file_list_into(
 /// pending attachment. Each chip carries its own ✕ — clearing the
 /// draft text does NOT drop chips (composer-level decision).
 #[component]
-pub(super) fn AttachmentPreviewBar(
-    attachments: RwSignal<Vec<PendingAttachment>>,
-) -> impl IntoView {
+pub(super) fn AttachmentPreviewBar(attachments: RwSignal<Vec<PendingAttachment>>) -> impl IntoView {
     let i18n = use_i18n();
     let on_remove = move |idx: usize| {
         attachments.update(|list| {

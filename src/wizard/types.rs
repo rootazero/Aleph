@@ -369,7 +369,11 @@ mod tests {
         assert!(result.done);
         assert_eq!(result.status, WizardStatus::Done);
         assert_eq!(
-            result.data.as_ref().and_then(|v| v.get("token")).and_then(|t| t.as_str()),
+            result
+                .data
+                .as_ref()
+                .and_then(|v| v.get("token"))
+                .and_then(|t| t.as_str()),
             Some("abc")
         );
 

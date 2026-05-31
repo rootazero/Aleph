@@ -5,7 +5,9 @@ use leptos::task::spawn_local;
 use leptos::*;
 use std::rc::Rc;
 
-use crate::api::{GenerationProviderConfig, GenerationProviderEntry, GenerationProvidersApi, VoiceInfo};
+use crate::api::{
+    GenerationProviderConfig, GenerationProviderEntry, GenerationProvidersApi, VoiceInfo,
+};
 use crate::components::ui::SecretInput;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
@@ -589,4 +591,3 @@ pub(super) fn ProviderDetailView(
         </div> // flex wrapper
     }
 }
-

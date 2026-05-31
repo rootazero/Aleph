@@ -11,7 +11,9 @@ use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use aleph_desktop::permission_types::{PermissionInfo, PermissionKind, PermissionStatus, TCC_MANAGED};
+use aleph_desktop::permission_types::{
+    PermissionInfo, PermissionKind, PermissionStatus, TCC_MANAGED,
+};
 use aleph_desktop::traits::PermissionCapability;
 use aleph_desktop::Result;
 use aleph_desktop::SwiftBridge;
@@ -27,8 +29,7 @@ use objc2_av_foundation::{
 };
 use objc2_speech::{SFSpeechRecognizer, SFSpeechRecognizerAuthorizationStatus};
 use objc2_user_notifications::{
-    UNAuthorizationOptions, UNAuthorizationStatus, UNNotificationSettings,
-    UNUserNotificationCenter,
+    UNAuthorizationOptions, UNAuthorizationStatus, UNNotificationSettings, UNUserNotificationCenter,
 };
 
 // ---------------------------------------------------------------------------
@@ -378,10 +379,7 @@ impl PermissionCapability for MacOSPermission {
 
     async fn check_all(&self) -> Result<Vec<PermissionInfo>> {
         let results = tokio::task::spawn_blocking(|| {
-            TCC_MANAGED
-                .iter()
-                .map(|&p| do_check(p))
-                .collect::<Vec<_>>()
+            TCC_MANAGED.iter().map(|&p| do_check(p)).collect::<Vec<_>>()
         })
         .await
         .unwrap_or_else(|_| {

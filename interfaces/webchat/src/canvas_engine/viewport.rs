@@ -278,8 +278,14 @@ mod hit_test_tests {
         v.scale = 2.0;
         let nodes = vec![node_at(0.0, 0.0, 5.0)];
         // World point 7 units away → radius 5 + world-tolerance 3 = 8 → hit.
-        assert_eq!(v.hit_test(v.world_to_screen(Vec2::new(7.0, 0.0)), &nodes), Some(0));
+        assert_eq!(
+            v.hit_test(v.world_to_screen(Vec2::new(7.0, 0.0)), &nodes),
+            Some(0)
+        );
         // World point 9 units away → outside 8 → miss.
-        assert_eq!(v.hit_test(v.world_to_screen(Vec2::new(9.0, 0.0)), &nodes), None);
+        assert_eq!(
+            v.hit_test(v.world_to_screen(Vec2::new(9.0, 0.0)), &nodes),
+            None
+        );
     }
 }

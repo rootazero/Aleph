@@ -7,8 +7,8 @@
 //! because the manager refreshes its own state more frequently — the
 //! prompt-side gate only needs to be coarsely accurate.
 
-use std::borrow::Cow;
 use crate::sync_primitives::Arc;
+use std::borrow::Cow;
 
 use async_trait::async_trait;
 

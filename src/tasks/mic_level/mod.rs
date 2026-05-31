@@ -230,11 +230,7 @@ mod tests {
     #[tokio::test]
     async fn collect_returns_none_without_media_capability() {
         let bus = GatewayEventBus::new();
-        let r = MicLevelReporter::new(
-            Arc::new(NoMediaPlatform),
-            bus,
-            MicLevelConfig::default(),
-        );
+        let r = MicLevelReporter::new(Arc::new(NoMediaPlatform), bus, MicLevelConfig::default());
         assert!(r.collect_once().await.is_none());
     }
 

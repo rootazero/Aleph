@@ -358,8 +358,7 @@ impl AlephTool for AcpSessionControlTool {
                 format!("config option {key} updated")
             }
             AcpSessionAction::Authenticate => {
-                let method_id =
-                    require_field(&args.method_id, "method_id", "authenticate")?;
+                let method_id = require_field(&args.method_id, "method_id", "authenticate")?;
                 let credential = match args.credential.as_deref() {
                     Some(c) => c.to_string(),
                     None => read_auth_env(method_id).ok_or_else(|| {
@@ -393,11 +392,7 @@ impl AlephTool for AcpSessionControlTool {
     }
 }
 
-fn require_field<'a>(
-    field: &'a Option<String>,
-    name: &str,
-    op: &str,
-) -> Result<&'a str> {
+fn require_field<'a>(field: &'a Option<String>, name: &str, op: &str) -> Result<&'a str> {
     field.as_deref().filter(|s| !s.is_empty()).ok_or_else(|| {
         crate::acp::protocol::AcpOperationError::new(
             crate::acp::protocol::AcpErrorCode::ProtocolError { code: -32602 },

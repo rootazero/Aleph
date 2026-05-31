@@ -88,10 +88,7 @@ fn PairingModalInner() -> impl IntoView {
                 // PairingFlow auto-advances past the note, so we need to call
                 // wizard.next once to get the confirm step with the code.
                 match state
-                    .rpc_call(
-                        "wizard.next",
-                        serde_json::json!({ "session_id": sid }),
-                    )
+                    .rpc_call("wizard.next", serde_json::json!({ "session_id": sid }))
                     .await
                 {
                     Err(e) => {
@@ -110,17 +107,21 @@ fn PairingModalInner() -> impl IntoView {
                             step_id.set(Some(sid_val));
 
                             // Message contains "本机配对码：XXXXXX\n..."
-                            let code = step
-                                .get("message")
-                                .and_then(|v| v.as_str())
-                                .and_then(|msg| {
-                                    // Extract code between "配对码：" and "\n"
-                                    let prefix = "配对码：";
-                                    msg.find(prefix).map(|idx| {
-                                        let rest = &msg[idx + prefix.len()..];
-                                        rest.split('\n').next().unwrap_or(rest).trim().to_string()
-                                    })
-                                });
+                            let code =
+                                step.get("message")
+                                    .and_then(|v| v.as_str())
+                                    .and_then(|msg| {
+                                        // Extract code between "配对码：" and "\n"
+                                        let prefix = "配对码：";
+                                        msg.find(prefix).map(|idx| {
+                                            let rest = &msg[idx + prefix.len()..];
+                                            rest.split('\n')
+                                                .next()
+                                                .unwrap_or(rest)
+                                                .trim()
+                                                .to_string()
+                                        })
+                                    });
                             pairing_code.set(code);
                         } else {
                             error_msg.set(Some(

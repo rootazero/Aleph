@@ -53,7 +53,10 @@ async fn rejects_missing_audio_source() {
     let provider = OpenAiWhisperProvider::new("sk-test", None, None, None).unwrap();
     let request = GenerationRequest::new(GenerationType::Transcription, "");
     let err = provider.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[test]
@@ -91,8 +94,10 @@ async fn rejects_oversized_file() {
 
     let provider = OpenAiWhisperProvider::new("sk-test", None, None, None).unwrap();
     let params = GenerationParams::builder().reference_audio(url).build();
-    let request = GenerationRequest::new(GenerationType::Transcription, "")
-        .with_params(params);
+    let request = GenerationRequest::new(GenerationType::Transcription, "").with_params(params);
     let err = provider.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }

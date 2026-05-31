@@ -13,22 +13,13 @@ use super::types::{TeamTemplate, TeamTemplateError};
 /// Embedded built-in templates. Each entry is `(name, toml_source)`.
 /// Adding a builtin is a single line here plus a sibling `.toml` file.
 const BUILTIN_TEMPLATES: &[(&str, &str)] = &[
-    (
-        "software-dev",
-        include_str!("builtin/software-dev.toml"),
-    ),
+    ("software-dev", include_str!("builtin/software-dev.toml")),
     (
         "research-paper",
         include_str!("builtin/research-paper.toml"),
     ),
-    (
-        "code-review",
-        include_str!("builtin/code-review.toml"),
-    ),
-    (
-        "strategy-room",
-        include_str!("builtin/strategy-room.toml"),
-    ),
+    ("code-review", include_str!("builtin/code-review.toml")),
+    ("strategy-room", include_str!("builtin/strategy-room.toml")),
 ];
 
 // --------------------------------------------------------------------------
@@ -62,10 +53,7 @@ pub fn load_template(name: &str) -> Result<TeamTemplate, TeamTemplateError> {
     registry.get(name).cloned().ok_or_else(|| {
         TeamTemplateError::NotFound(format!(
             "no template named `{name}` (try: {})",
-            registry
-                .names()
-                .collect::<Vec<_>>()
-                .join(", ")
+            registry.names().collect::<Vec<_>>().join(", ")
         ))
     })
 }
@@ -213,7 +201,8 @@ id = "worker"
     #[test]
     fn malformed_user_template_is_skipped_not_fatal() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join("broken.toml"), "this is not valid toml [[[").expect("write");
+        std::fs::write(tmp.path().join("broken.toml"), "this is not valid toml [[[")
+            .expect("write");
 
         let r = TemplateRegistry::discover(tmp.path());
         // Builtins still load.

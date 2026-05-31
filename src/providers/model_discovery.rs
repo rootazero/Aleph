@@ -86,11 +86,7 @@ impl CachedDiscovery {
     /// Returns the same `CachedDiscovery` shape as [`Self::new`] but with
     /// `preset.fallback_models` already attached. Unknown preset names
     /// silently keep an empty fallback (matches legacy `new`).
-    pub fn from_preset(
-        inner: Box<dyn ModelDiscovery>,
-        preset_name: &str,
-        ttl: Duration,
-    ) -> Self {
+    pub fn from_preset(inner: Box<dyn ModelDiscovery>, preset_name: &str, ttl: Duration) -> Self {
         let fallback = crate::providers::presets::get_preset(preset_name)
             .map(|p| p.fallback_models)
             .unwrap_or(&[]);

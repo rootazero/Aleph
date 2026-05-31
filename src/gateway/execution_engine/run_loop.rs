@@ -364,13 +364,10 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         let reminders = hr
                             .additional_contexts
                             .iter()
-                            .map(|c| {
-                                format!("<system-reminder>\n{}\n</system-reminder>", c.trim())
-                            })
+                            .map(|c| format!("<system-reminder>\n{}\n</system-reminder>", c.trim()))
                             .collect::<Vec<_>>()
                             .join("\n");
-                        effective_user_input =
-                            format!("{reminders}\n\n{}", effective_user_input);
+                        effective_user_input = format!("{reminders}\n\n{}", effective_user_input);
                     }
                 }
                 Err(e) => warn!(run_id = run_id, error = %e, "UserPromptSubmit hook failed"),
@@ -727,10 +724,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             let flow_input = if request.metadata.get("resume").map(String::as_str) == Some("true") {
                 crate::orchestrator::FlowInput::Resume
             } else {
-                super::helpers::history_to_flow_input(
-                    history.clone(),
-                    effective_user_input.clone(),
-                )
+                super::helpers::history_to_flow_input(history.clone(), effective_user_input.clone())
             };
 
             // Phase 4 (F4): derive the channel's InteractionManifest from
@@ -1211,7 +1205,11 @@ mod project_context_tests {
     fn reads_agents_md_when_present() {
         let dir = tempdir().unwrap();
         anchor(dir.path());
-        std::fs::write(dir.path().join("AGENTS.md"), "# Project rules\nNo force push.\n").unwrap();
+        std::fs::write(
+            dir.path().join("AGENTS.md"),
+            "# Project rules\nNo force push.\n",
+        )
+        .unwrap();
         let blocks = collect_project_context_blocks(dir.path());
         assert_eq!(blocks.len(), 1);
         assert!(blocks[0].contains("Active project"));
@@ -1349,11 +1347,7 @@ mod project_context_tests {
         for i in 0..7 {
             cur = cur.join(format!("lvl{i}"));
             std::fs::create_dir_all(&cur).unwrap();
-            std::fs::write(
-                cur.join("CLAUDE.md"),
-                "x".repeat(PROJECT_CONTEXT_MAX_BYTES),
-            )
-            .unwrap();
+            std::fs::write(cur.join("CLAUDE.md"), "x".repeat(PROJECT_CONTEXT_MAX_BYTES)).unwrap();
         }
         let blocks = collect_project_context_blocks(&cur);
         // Overshoot is bounded by one block (~32 KB) + a small header.

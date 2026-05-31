@@ -59,9 +59,7 @@ impl PairingFlow {
 impl WizardFlow for PairingFlow {
     async fn run(&self, prompter: &RpcPrompter) -> Result<(), WizardSessionError> {
         // 1. user-visible greeting — note() uses prompt_no_wait; no answer expected
-        prompter
-            .note("为本机桌面配对 Aleph 守护进程", None)
-            .await?;
+        prompter.note("为本机桌面配对 Aleph 守护进程", None).await?;
 
         // 2. internal: request a pairing code (uses a placeholder pubkey;
         // confirm() consumes the row regardless of pubkey content for

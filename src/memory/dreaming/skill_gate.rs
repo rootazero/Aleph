@@ -107,7 +107,10 @@ pub fn validate_skill_action(action: DistillAction) -> SkillGateDecision {
                 source_facts,
             })
         }
-        DistillAction::Skip { source_fact, reason } => {
+        DistillAction::Skip {
+            source_fact,
+            reason,
+        } => {
             // Skip carries no filesystem effect and no claim about a skill;
             // any non-pathological string is fine. Length-cap reason so it
             // doesn't bloat the JSONL audit log.
@@ -117,7 +120,10 @@ pub fn validate_skill_action(action: DistillAction) -> SkillGateDecision {
             } else {
                 reason
             };
-            SkillGateDecision::Allow(DistillAction::Skip { source_fact, reason })
+            SkillGateDecision::Allow(DistillAction::Skip {
+                source_fact,
+                reason,
+            })
         }
     }
 }
@@ -173,11 +179,7 @@ fn check_target_path(path: &str, field: &str) -> Result<(), String> {
 /// downgrade severity to Med so an unconvinced model can't force a
 /// loud skill into the notes layer. Logs the downgrade for the audit
 /// trail. Returns the (possibly downgraded) severity.
-fn downgrade_if_low_confidence(
-    severity: Severity,
-    confidence: f32,
-    title: &str,
-) -> Severity {
+fn downgrade_if_low_confidence(severity: Severity, confidence: f32, title: &str) -> Severity {
     let high_severity = matches!(severity, Severity::High | Severity::Critical);
     if high_severity && confidence < MIN_CONFIDENCE_FOR_HIGH_SEVERITY {
         tracing::info!(

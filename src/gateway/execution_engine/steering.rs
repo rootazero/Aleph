@@ -132,7 +132,11 @@ pub(super) async fn try_inject_steering(
         synthetic: false,
     };
 
-    match orchestrator.session_service.emit_event(&session_id, event).await {
+    match orchestrator
+        .session_service
+        .emit_event(&session_id, event)
+        .await
+    {
         Ok(_) => {
             tracing::info!(
                 session = %request.session_key.to_key_string(),

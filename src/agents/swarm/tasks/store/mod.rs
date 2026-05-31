@@ -59,10 +59,7 @@ mod review_tests {
             .await
             .unwrap();
 
-        let run_id = store
-            .start_task_run(&task.id, "worker")
-            .await
-            .unwrap();
+        let run_id = store.start_task_run(&task.id, "worker").await.unwrap();
         store
             .finish_task_run(&run_id, TaskRunStatus::Completed, Some("ok".into()), None)
             .await
@@ -451,8 +448,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             load_task(&conn, id).map_err(db_err)?
         };
 
-        let task = task_opt
-            .ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
+        let task = task_opt.ok_or_else(|| db_err(format!("task not found after update: {id}")))?;
         let verb = match task.status {
             CoordTaskStatus::Completed => "completed",
             CoordTaskStatus::Failed => "failed",
@@ -719,11 +715,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
 
     // --- Run history -------------------------------------------------------
 
-    async fn start_task_run(
-        &self,
-        task_id: &str,
-        agent_id: &str,
-    ) -> crate::error::Result<String> {
+    async fn start_task_run(&self, task_id: &str, agent_id: &str) -> crate::error::Result<String> {
         let conn = self.conn.lock().await;
         let id = uuid::Uuid::new_v4().to_string();
         let now = now_epoch();
@@ -798,9 +790,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                     review_verdict: review_verdict
                         .as_deref()
                         .and_then(ReviewVerdict::from_stored),
-                    reviewer_kind: reviewer_kind
-                        .as_deref()
-                        .and_then(ReviewerKind::from_stored),
+                    reviewer_kind: reviewer_kind.as_deref().and_then(ReviewerKind::from_stored),
                     reviewer_id: row.get(10).ok(),
                 })
             })
@@ -914,15 +904,12 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         &self,
         input: crate::agents::swarm::tasks::NewTaskExitJournal,
     ) -> crate::error::Result<crate::agents::swarm::tasks::TaskExitJournal> {
-        let decisions_json = serde_json::to_string(&input.decisions).map_err(|e| {
-            db_err(format!("decisions serialize failed: {e}"))
-        })?;
-        let artifacts_json = serde_json::to_string(&input.artifacts_ref).map_err(|e| {
-            db_err(format!("artifacts_ref serialize failed: {e}"))
-        })?;
-        let next_steps_json = serde_json::to_string(&input.next_steps).map_err(|e| {
-            db_err(format!("next_steps serialize failed: {e}"))
-        })?;
+        let decisions_json = serde_json::to_string(&input.decisions)
+            .map_err(|e| db_err(format!("decisions serialize failed: {e}")))?;
+        let artifacts_json = serde_json::to_string(&input.artifacts_ref)
+            .map_err(|e| db_err(format!("artifacts_ref serialize failed: {e}")))?;
+        let next_steps_json = serde_json::to_string(&input.next_steps)
+            .map_err(|e| db_err(format!("next_steps serialize failed: {e}")))?;
         let now = now_epoch();
         let confidence_i: Option<i64> = input.confidence.map(|v| v.min(100) as i64);
         let conn = self.conn.lock().await;
@@ -986,8 +973,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                     serde_json::from_str(&decisions_raw).unwrap_or_default();
                 let artifacts_ref: Vec<String> =
                     serde_json::from_str(&artifacts_raw).unwrap_or_default();
-                let next_steps: Vec<String> =
-                    serde_json::from_str(&next_raw).unwrap_or_default();
+                let next_steps: Vec<String> = serde_json::from_str(&next_raw).unwrap_or_default();
                 Ok(crate::agents::swarm::tasks::TaskExitJournal {
                     task_id: row.get(0)?,
                     agent_id: row.get(1)?,
@@ -1031,8 +1017,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                     serde_json::from_str(&decisions_raw).unwrap_or_default();
                 let artifacts_ref: Vec<String> =
                     serde_json::from_str(&artifacts_raw).unwrap_or_default();
-                let next_steps: Vec<String> =
-                    serde_json::from_str(&next_raw).unwrap_or_default();
+                let next_steps: Vec<String> = serde_json::from_str(&next_raw).unwrap_or_default();
                 Ok(crate::agents::swarm::tasks::TaskExitJournal {
                     task_id: row.get(0)?,
                     agent_id: row.get(1)?,

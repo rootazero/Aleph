@@ -141,7 +141,11 @@ pub fn print_detail(pairs: &[(&str, String)], json_mode: bool, raw: &Value) {
         return;
     }
 
-    let max_key_width = pairs.iter().map(|(k, _)| display_width(k)).max().unwrap_or(0);
+    let max_key_width = pairs
+        .iter()
+        .map(|(k, _)| display_width(k))
+        .max()
+        .unwrap_or(0);
 
     for (key, value) in pairs {
         let pad = max_key_width.saturating_sub(display_width(key));

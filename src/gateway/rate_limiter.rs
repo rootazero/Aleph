@@ -628,7 +628,10 @@ mod tests {
         // First 3 unique identities each create an entry and are served.
         for i in 0..3 {
             let key = RateLimitKey::new(&format!("10.0.0.{i}"), RateLimitScope::RpcDefault);
-            assert!(limiter.check_and_record(&key).is_ok(), "entry {i} should fit");
+            assert!(
+                limiter.check_and_record(&key).is_ok(),
+                "entry {i} should fit"
+            );
         }
         assert_eq!(limiter.windows.len(), 3);
 

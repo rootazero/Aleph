@@ -411,7 +411,11 @@ fn test_build_request_sets_service_tier_on_official_endpoint() {
     config.base_url = Some("https://api.openai.com/v1".to_string());
     config.service_tier = Some("priority".to_string());
 
-    let built = protocol.build_request(&payload, &config).unwrap().build().unwrap();
+    let built = protocol
+        .build_request(&payload, &config)
+        .unwrap()
+        .build()
+        .unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
     assert_eq!(body["service_tier"], "priority");
@@ -427,7 +431,11 @@ fn test_build_request_strips_service_tier_on_custom_endpoint() {
     config.base_url = Some("https://my-proxy.example.com/v1".to_string());
     config.service_tier = Some("priority".to_string());
 
-    let built = protocol.build_request(&payload, &config).unwrap().build().unwrap();
+    let built = protocol
+        .build_request(&payload, &config)
+        .unwrap()
+        .build()
+        .unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
     assert!(
@@ -447,7 +455,11 @@ fn test_build_request_sets_prompt_cache_key_from_session_metadata() {
     config.api_key = Some("test-key".to_string());
     config.base_url = Some("https://api.openai.com/v1".to_string());
 
-    let built = protocol.build_request(&payload, &config).unwrap().build().unwrap();
+    let built = protocol
+        .build_request(&payload, &config)
+        .unwrap()
+        .build()
+        .unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
     assert_eq!(body["prompt_cache_key"], "sess-abc");
@@ -464,7 +476,11 @@ fn test_build_request_strips_prompt_cache_key_on_custom_endpoint() {
     config.api_key = Some("test-key".to_string());
     config.base_url = Some("https://my-proxy.example.com/v1".to_string());
 
-    let built = protocol.build_request(&payload, &config).unwrap().build().unwrap();
+    let built = protocol
+        .build_request(&payload, &config)
+        .unwrap()
+        .build()
+        .unwrap();
     let body: serde_json::Value =
         serde_json::from_slice(built.body().unwrap().as_bytes().unwrap()).unwrap();
     assert!(

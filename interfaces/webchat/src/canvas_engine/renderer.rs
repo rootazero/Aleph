@@ -393,8 +393,14 @@ fn draw_edges_for_node(
             }
 
             let cp = edge_control_point(
-                Vec2 { x: from_pos.0 as f64, y: from_pos.1 as f64 },
-                Vec2 { x: to_pos.0 as f64,   y: to_pos.1 as f64 },
+                Vec2 {
+                    x: from_pos.0 as f64,
+                    y: from_pos.1 as f64,
+                },
+                Vec2 {
+                    x: to_pos.0 as f64,
+                    y: to_pos.1 as f64,
+                },
                 DEFAULT_SAG,
             );
 
@@ -415,11 +421,7 @@ fn draw_edges_for_node(
             ctx.begin_path();
             ctx.move_to(from_pos.0 as f64, from_pos.1 as f64);
             // Quadratic Bézier via degenerate cubic: both control points coincide.
-            ctx.bezier_curve_to(
-                cp.x, cp.y,
-                cp.x, cp.y,
-                to_pos.0 as f64, to_pos.1 as f64,
-            );
+            ctx.bezier_curve_to(cp.x, cp.y, cp.x, cp.y, to_pos.0 as f64, to_pos.1 as f64);
             ctx.stroke();
         }
     }

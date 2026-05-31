@@ -61,9 +61,7 @@ impl FsApi {
     /// Server's $HOME — used as the default initial path when the user
     /// has no other context (e.g. first-time picker open).
     pub async fn home_dir(state: &DashboardState) -> Result<String, String> {
-        let result = state
-            .rpc_call("fs.home_dir", serde_json::json!({}))
-            .await?;
+        let result = state.rpc_call("fs.home_dir", serde_json::json!({})).await?;
         result
             .get("path")
             .and_then(|v| v.as_str())

@@ -104,7 +104,12 @@ impl ConnectionState {
     /// `role` is `"operator"` for device-token connections and `"guest"` for
     /// invitation-scoped guest sessions; it drives the method-level
     /// authorization gate. `None` leaves the connection non-operator.
-    pub fn authenticate(&mut self, device_id: String, permissions: Vec<String>, role: Option<String>) {
+    pub fn authenticate(
+        &mut self,
+        device_id: String,
+        permissions: Vec<String>,
+        role: Option<String>,
+    ) {
         self.authenticated = true;
         self.device_id = Some(device_id);
         self.permissions = permissions;
@@ -533,9 +538,9 @@ impl GatewayServer {
         // connections instead of resetting on every connect.
         let middleware_chain =
             MiddlewareChain::new(self.handlers.clone(), self.rate_limiter.clone());
-        let trusted_proxies = Arc::new(
-            crate::gateway::trusted_proxy::TrustedProxies::from_config(&self.config.trusted_proxies),
-        );
+        let trusted_proxies = Arc::new(crate::gateway::trusted_proxy::TrustedProxies::from_config(
+            &self.config.trusted_proxies,
+        ));
 
         let shared = Arc::new(GatewaySharedState {
             handlers: self.handlers.clone(),

@@ -15,9 +15,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Serializes to lowercase (`"full"` / `"compact"` / `"minimal"`) so it can be
 /// read directly from `[execution] prompt_mode` in `aleph.toml`.
-#[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum PromptMode {
     /// All layers participate — maximum context.

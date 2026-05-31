@@ -69,8 +69,7 @@ pub struct SubagentTool {
     pub(super) parent_agent_id: String,
     /// Spec 1 G2 — threaded into child `AgentRuntime`s so the spawner emits
     /// `RawMemory(Delegation)` after each successful local subagent run.
-    pub(super) raw_memory_writer:
-        Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
+    pub(super) raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
     /// Optional capture-filter registry threaded with the writer.
     pub(super) capture_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
     /// Parent session id stamped onto emitted Delegation rows. `None` leaves

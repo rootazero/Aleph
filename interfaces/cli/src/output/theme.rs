@@ -35,13 +35,13 @@ impl Style {
     fn sgr(self) -> &'static str {
         match self {
             Style::Default => "",
-            Style::Header => "\x1b[1;36m",  // bold cyan
-            Style::Success => "\x1b[32m",   // green
-            Style::Error => "\x1b[31m",     // red
-            Style::Warning => "\x1b[33m",   // yellow
-            Style::Info => "\x1b[36m",      // cyan
-            Style::Muted => "\x1b[90m",     // bright black / grey
-            Style::Bold => "\x1b[1m",       // bold
+            Style::Header => "\x1b[1;36m", // bold cyan
+            Style::Success => "\x1b[32m",  // green
+            Style::Error => "\x1b[31m",    // red
+            Style::Warning => "\x1b[33m",  // yellow
+            Style::Info => "\x1b[36m",     // cyan
+            Style::Muted => "\x1b[90m",    // bright black / grey
+            Style::Bold => "\x1b[1m",      // bold
         }
     }
 }

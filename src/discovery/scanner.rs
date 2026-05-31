@@ -586,15 +586,21 @@ mod tests {
         // Global plugin under ~/.aleph/plugins.
         let global = root.join(".aleph/plugins/global-plugin");
         std::fs::create_dir_all(&global).unwrap();
-        std::fs::write(global.join("aleph.plugin.toml"), "[plugin]\nid = \"global-plugin\"")
-            .unwrap();
+        std::fs::write(
+            global.join("aleph.plugin.toml"),
+            "[plugin]\nid = \"global-plugin\"",
+        )
+        .unwrap();
 
         // Project-local plugin under <project>/.aleph/plugins.
         let project = root.join("workspace/proj-a");
         let proj_plugin = project.join(".aleph/plugins/proj-plugin");
         std::fs::create_dir_all(&proj_plugin).unwrap();
-        std::fs::write(proj_plugin.join("aleph.plugin.toml"), "[plugin]\nid = \"proj-plugin\"")
-            .unwrap();
+        std::fs::write(
+            proj_plugin.join("aleph.plugin.toml"),
+            "[plugin]\nid = \"proj-plugin\"",
+        )
+        .unwrap();
 
         let scanner = DirectoryScanner {
             aleph_home: root.join(".aleph"),

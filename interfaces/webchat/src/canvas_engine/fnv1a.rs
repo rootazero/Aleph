@@ -36,7 +36,12 @@ mod tests {
 
     #[test]
     fn hash_jitter_in_range() {
-        for id in ["", "a", "foo", "very-long-identifier-that-keeps-going-and-going"] {
+        for id in [
+            "",
+            "a",
+            "foo",
+            "very-long-identifier-that-keeps-going-and-going",
+        ] {
             let j = hash_jitter(id);
             assert!((-1.0..=1.0).contains(&j), "out of range: {}", j);
         }

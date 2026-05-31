@@ -1742,9 +1742,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // path. `tools.cancel_call` fires the harness-issued per-call
         // CancellationToken keyed by `tool_call_id`; `tools.in_flight` lists
         // every live registration for CLI / panel diagnostics.
-        if let Some(reg) =
-            alephcore::tools::in_flight::global_in_flight_tool_calls()
-        {
+        if let Some(reg) = alephcore::tools::in_flight::global_in_flight_tool_calls() {
             let reg_cancel = reg.clone();
             server
                 .handlers_mut()
@@ -1988,7 +1986,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Concrete Arc<SqliteArtifactStore> upcast to the trait object so
         // `register_teams_handlers` can consume it without knowing the
         // concrete impl. SqliteArtifactStore impls ArtifactStore.
-        artifact_store: artifact_store.clone().map(|s| s as Arc<dyn alephcore::teams::artifacts::ArtifactStore>),
+        artifact_store: artifact_store
+            .clone()
+            .map(|s| s as Arc<dyn alephcore::teams::artifacts::ArtifactStore>),
         message_router: message_router.clone(),
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,

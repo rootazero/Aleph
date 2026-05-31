@@ -78,7 +78,10 @@ pub struct PresetCatalog {
 impl PresetCatalog {
     pub fn from_dtos(dtos: Vec<PresetProviderDto>) -> Self {
         Self {
-            presets: dtos.into_iter().map(PresetProviderDto::into_preset).collect(),
+            presets: dtos
+                .into_iter()
+                .map(PresetProviderDto::into_preset)
+                .collect(),
         }
     }
 

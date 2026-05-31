@@ -297,7 +297,10 @@ mod tests {
     use crate::teams::messages::types::{MessageType, NewMessage, Recipient, RecipientRole};
     use rusqlite::Connection;
 
-    async fn setup() -> (Arc<MessageRouter>, Arc<dyn crate::teams::messages::MessageStore>) {
+    async fn setup() -> (
+        Arc<MessageRouter>,
+        Arc<dyn crate::teams::messages::MessageStore>,
+    ) {
         let msg_conn = Connection::open_in_memory().unwrap();
         let msg_store = Arc::new(SqliteMessageStore::new(msg_conn));
         msg_store.migrate().await.unwrap();

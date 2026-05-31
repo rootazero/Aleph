@@ -271,7 +271,9 @@ pub(super) async fn ws_upgrade_handler(
     // taken from `X-Forwarded-For`. All IP-keyed abuse protections (per-IP
     // cap, rate limiting, auth-failure lockout) use this so they isolate the
     // real client rather than a shared proxy address.
-    let client_ip = state.trusted_proxies.real_client_ip(peer_addr.ip(), &headers);
+    let client_ip = state
+        .trusted_proxies
+        .real_client_ip(peer_addr.ip(), &headers);
 
     // Check connection limits before upgrading. One read guard covers both the
     // global cap and the per-IP cap so we hold the lock once.
@@ -1385,7 +1387,7 @@ mod tests {
 
         assert!(record_auth_failure_lockout(&rl, a).is_none()); // a: 1 ok
         assert!(record_auth_failure_lockout(&rl, a).is_some()); // a: locked
-        // A different source IP has its own independent budget.
+                                                                // A different source IP has its own independent budget.
         assert!(record_auth_failure_lockout(&rl, b).is_none()); // b: 1 ok
     }
 
@@ -1429,7 +1431,10 @@ mod tests {
             "memory.search"
         ));
         assert!(!allow_unauth_loopback_wizard(&sa("127.0.0.1"), "connect"));
-        assert!(!allow_unauth_loopback_wizard(&sa("127.0.0.1"), "agents.list"));
+        assert!(!allow_unauth_loopback_wizard(
+            &sa("127.0.0.1"),
+            "agents.list"
+        ));
     }
 
     #[test]
@@ -1485,7 +1490,8 @@ mod tests {
 
     #[test]
     fn inject_skips_when_no_bootstrap_token() {
-        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"device_name":"Web Panel"}}"#;
+        let text =
+            r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"device_name":"Web Panel"}}"#;
         let req = parse_req(text);
         let out = maybe_inject_bootstrap_shared_token(text, &req, None);
         assert_eq!(out, text);
@@ -1528,7 +1534,8 @@ mod tests {
 
     #[test]
     fn inject_adds_shared_token_to_anonymous_connect() {
-        let text = r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"device_name":"Web Panel"}}"#;
+        let text =
+            r#"{"jsonrpc":"2.0","id":1,"method":"connect","params":{"device_name":"Web Panel"}}"#;
         let req = parse_req(text);
         let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();

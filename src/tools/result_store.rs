@@ -385,10 +385,7 @@ pub fn spawn_periodic_sweeper(root: PathBuf, retention: Duration, interval: Dura
                     .await
                     .unwrap_or(0);
             if removed > 0 {
-                tracing::info!(
-                    removed,
-                    "tool_result sweeper reclaimed stale session dirs"
-                );
+                tracing::info!(removed, "tool_result sweeper reclaimed stale session dirs");
             }
         }
     });

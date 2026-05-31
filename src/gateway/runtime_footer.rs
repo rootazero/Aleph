@@ -136,10 +136,7 @@ pub fn set_global_config(cfg: RuntimeFooterConfig) {
 /// Read the global footer configuration. Returns a disabled config when
 /// nothing has been installed yet (test/boot-without-server paths).
 pub fn global_config() -> RuntimeFooterConfig {
-    GLOBAL_FOOTER_CONFIG
-        .get()
-        .cloned()
-        .unwrap_or_default()
+    GLOBAL_FOOTER_CONFIG.get().cloned().unwrap_or_default()
 }
 
 /// Top-level entry. Returns the rendered footer (with the conventional

@@ -267,9 +267,9 @@ fn handle_process_action(action: &str, process_id: Option<u64>) -> CodeExecOutpu
                     "process_id": id,
                     "status": "killed",
                 })),
-                PollOutcome::NotFound => {
-                    error_output(format!("bash: no background process #{id} for this session"))
-                }
+                PollOutcome::NotFound => error_output(format!(
+                    "bash: no background process #{id} for this session"
+                )),
             }
         }
         "kill" => {
@@ -285,9 +285,9 @@ fn handle_process_action(action: &str, process_id: Option<u64>) -> CodeExecOutpu
                     "process_id": id,
                     "status": "already_finished",
                 })),
-                KillOutcome::NotFound => {
-                    error_output(format!("bash: no background process #{id} for this session"))
-                }
+                KillOutcome::NotFound => error_output(format!(
+                    "bash: no background process #{id} for this session"
+                )),
             }
         }
         other => error_output(format!(
@@ -339,8 +339,14 @@ mod tests {
     fn description_teaches_stateless_sessions_and_partial_output() {
         let d = <BashExecTool as AlephTool>::DESCRIPTION;
         // Stateless reality
-        assert!(d.contains("stateless"), "should warn about stateless sessions");
-        assert!(d.contains("do NOT carry over"), "should call out lost state");
+        assert!(
+            d.contains("stateless"),
+            "should warn about stateless sessions"
+        );
+        assert!(
+            d.contains("do NOT carry over"),
+            "should call out lost state"
+        );
         // Multi-line + heredoc encouragement
         assert!(d.contains("Multi-line scripts"), "should bless multi-line");
         assert!(d.contains("heredoc"), "should mention heredoc pattern");
@@ -351,7 +357,10 @@ mod tests {
         );
         assert!(d.contains("ARG_MAX"), "should explain why the pipe exists");
         // Timeout + POSIX exit-code-124 contract
-        assert!(d.contains("60s") || d.contains("60 seconds"), "default timeout");
+        assert!(
+            d.contains("60s") || d.contains("60 seconds"),
+            "default timeout"
+        );
         assert!(d.contains("180s"), "ceiling");
         assert!(d.contains("124"), "POSIX timeout exit code");
         // Partial-output guarantee
@@ -364,9 +373,15 @@ mod tests {
     #[test]
     fn description_teaches_background_mode() {
         let d = <BashExecTool as AlephTool>::DESCRIPTION;
-        assert!(d.contains("BACKGROUND MODE"), "should document backgrounding");
+        assert!(
+            d.contains("BACKGROUND MODE"),
+            "should document backgrounding"
+        );
         assert!(d.contains("process_id"), "should mention the handle");
-        assert!(d.contains("process_action"), "should mention management verbs");
+        assert!(
+            d.contains("process_action"),
+            "should mention management verbs"
+        );
         assert!(
             d.contains("\"poll\"") && d.contains("\"kill\"") && d.contains("\"list\""),
             "should enumerate poll/kill/list"
@@ -396,28 +411,44 @@ mod tests {
     async fn poll_without_id_is_a_clear_error() {
         let out = bash(args_action("poll", None)).await;
         assert!(!out.success);
-        assert!(out.stderr.contains("requires `process_id`"), "{}", out.stderr);
+        assert!(
+            out.stderr.contains("requires `process_id`"),
+            "{}",
+            out.stderr
+        );
     }
 
     #[tokio::test]
     async fn kill_without_id_is_a_clear_error() {
         let out = bash(args_action("kill", None)).await;
         assert!(!out.success);
-        assert!(out.stderr.contains("requires `process_id`"), "{}", out.stderr);
+        assert!(
+            out.stderr.contains("requires `process_id`"),
+            "{}",
+            out.stderr
+        );
     }
 
     #[tokio::test]
     async fn unknown_action_is_rejected() {
         let out = bash(args_action("frobnicate", None)).await;
         assert!(!out.success);
-        assert!(out.stderr.contains("unknown process_action"), "{}", out.stderr);
+        assert!(
+            out.stderr.contains("unknown process_action"),
+            "{}",
+            out.stderr
+        );
     }
 
     #[tokio::test]
     async fn poll_unknown_id_reports_not_found() {
         let out = bash(args_action("poll", Some(u64::MAX))).await;
         assert!(!out.success);
-        assert!(out.stderr.contains("no background process"), "{}", out.stderr);
+        assert!(
+            out.stderr.contains("no background process"),
+            "{}",
+            out.stderr
+        );
     }
 
     #[tokio::test]

@@ -134,9 +134,7 @@ impl AlephTool for TeamUsageTool {
             .get_team(&args.team_id)
             .await
             .map_err(|e| AlephError::other(format!("team_usage: load team failed: {e}")))?
-            .ok_or_else(|| {
-                AlephError::NotFound(format!("team `{}` not found", args.team_id))
-            })?;
+            .ok_or_else(|| AlephError::NotFound(format!("team `{}` not found", args.team_id)))?;
 
         let members = self
             .team_store
@@ -156,13 +154,13 @@ impl AlephTool for TeamUsageTool {
             total.call_count = total.call_count.saturating_add(row.call_count);
             total.input_tokens = total.input_tokens.saturating_add(row.input_tokens);
             total.output_tokens = total.output_tokens.saturating_add(row.output_tokens);
-            total.cache_read_tokens =
-                total.cache_read_tokens.saturating_add(row.cache_read_tokens);
+            total.cache_read_tokens = total
+                .cache_read_tokens
+                .saturating_add(row.cache_read_tokens);
             total.cache_creation_tokens = total
                 .cache_creation_tokens
                 .saturating_add(row.cache_creation_tokens);
-            total.reasoning_tokens =
-                total.reasoning_tokens.saturating_add(row.reasoning_tokens);
+            total.reasoning_tokens = total.reasoning_tokens.saturating_add(row.reasoning_tokens);
         }
         // Derive ratio after the sum so the rollup denominator matches the
         // per-agent rows. Reusing the per-row formula keeps OpenAI/DeepSeek

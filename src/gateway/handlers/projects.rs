@@ -44,10 +44,7 @@ impl From<Project> for ProjectView {
 // projects.list
 // ============================================================================
 
-pub async fn handle_list(
-    request: JsonRpcRequest,
-    store: Arc<ProjectStore>,
-) -> JsonRpcResponse {
+pub async fn handle_list(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
     match store.list() {
         Ok(projects) => {
             let view: Vec<ProjectView> = projects.into_iter().map(Into::into).collect();
@@ -68,10 +65,7 @@ pub struct AddParams {
     pub name: Option<String>,
 }
 
-pub async fn handle_add(
-    request: JsonRpcRequest,
-    store: Arc<ProjectStore>,
-) -> JsonRpcResponse {
+pub async fn handle_add(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
     let params: AddParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -121,10 +115,7 @@ pub struct RemoveParams {
     pub id: String,
 }
 
-pub async fn handle_remove(
-    request: JsonRpcRequest,
-    store: Arc<ProjectStore>,
-) -> JsonRpcResponse {
+pub async fn handle_remove(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
     let params: RemoveParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -144,10 +135,7 @@ pub struct TouchParams {
     pub id: String,
 }
 
-pub async fn handle_touch(
-    request: JsonRpcRequest,
-    store: Arc<ProjectStore>,
-) -> JsonRpcResponse {
+pub async fn handle_touch(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
     let params: TouchParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -167,10 +155,7 @@ pub struct GetParams {
     pub id: String,
 }
 
-pub async fn handle_get(
-    request: JsonRpcRequest,
-    store: Arc<ProjectStore>,
-) -> JsonRpcResponse {
+pub async fn handle_get(request: JsonRpcRequest, store: Arc<ProjectStore>) -> JsonRpcResponse {
     let params: GetParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -192,10 +177,7 @@ pub async fn handle_get(
 // Helpers
 // ============================================================================
 
-fn project_error_response(
-    id: Option<serde_json::Value>,
-    err: ProjectError,
-) -> JsonRpcResponse {
+fn project_error_response(id: Option<serde_json::Value>, err: ProjectError) -> JsonRpcResponse {
     let (code, msg) = match &err {
         ProjectError::NotFound(_) => (RESOURCE_NOT_FOUND, err.to_string()),
         ProjectError::NotAbsolute(_)

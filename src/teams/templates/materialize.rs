@@ -155,11 +155,7 @@ pub async fn materialize_template(
     info!(team_id = %team.id, template = %tpl.name, leader = %leader_id, "team_template: team created");
 
     // --- 4. Enroll leader + members --------------------------------------
-    let leader_role = tpl
-        .leader
-        .role
-        .clone()
-        .unwrap_or_else(|| "leader".into());
+    let leader_role = tpl.leader.role.clone().unwrap_or_else(|| "leader".into());
     deps.team_store
         .add_member(NewTeamMember {
             team_id: team.id.clone(),
@@ -239,10 +235,7 @@ pub async fn materialize_template(
             })
             .await
             .map_err(|e| {
-                TeamTemplateError::Materialize(format!(
-                    "create_task `{}` failed: {e}",
-                    task.key
-                ))
+                TeamTemplateError::Materialize(format!("create_task `{}` failed: {e}", task.key))
             })?;
         key_to_id.insert(task.key.clone(), coord_task.id.clone());
         task_ids.push((task.key.clone(), coord_task.id));
@@ -346,10 +339,7 @@ async fn provision_member(
     // Create inline. Mirrors team_create::create_inline_agent's I/O steps but
     // takes addendum text directly rather than a role name.
     crate::builtin_tools::agent_manage::create::validate_agent_id(&member.id).map_err(|e| {
-        TeamTemplateError::Materialize(format!(
-            "invalid member id `{}`: {e}",
-            member.id
-        ))
+        TeamTemplateError::Materialize(format!("invalid member id `{}`: {e}", member.id))
     })?;
 
     let agents_root = aleph_home().join("agents");
@@ -375,12 +365,14 @@ async fn provision_member(
         ))
     })?;
 
-    tokio::fs::create_dir_all(&workspace_path).await.map_err(|e| {
-        TeamTemplateError::Materialize(format!(
-            "create workspace for `{}` failed: {e}",
-            member.id
-        ))
-    })?;
+    tokio::fs::create_dir_all(&workspace_path)
+        .await
+        .map_err(|e| {
+            TeamTemplateError::Materialize(format!(
+                "create workspace for `{}` failed: {e}",
+                member.id
+            ))
+        })?;
 
     // Resolve the model: explicit override → caller's model → default.
     let caller_model = deps
@@ -407,10 +399,7 @@ async fn provision_member(
     if !body.is_empty() {
         let soul_path = agent_state_dir.join("SOUL.md");
         tokio::fs::write(&soul_path, &body).await.map_err(|e| {
-            TeamTemplateError::Materialize(format!(
-                "write SOUL.md for `{}` failed: {e}",
-                member.id
-            ))
+            TeamTemplateError::Materialize(format!("write SOUL.md for `{}` failed: {e}", member.id))
         })?;
     }
 
@@ -425,13 +414,12 @@ async fn provision_member(
         ..Default::default()
     };
 
-    let instance =
-        AgentInstance::new(config, Arc::clone(&deps.session_store)).map_err(|e| {
-            TeamTemplateError::Materialize(format!(
-                "AgentInstance::new for `{}` failed: {e}",
-                member.id
-            ))
-        })?;
+    let instance = AgentInstance::new(config, Arc::clone(&deps.session_store)).map_err(|e| {
+        TeamTemplateError::Materialize(format!(
+            "AgentInstance::new for `{}` failed: {e}",
+            member.id
+        ))
+    })?;
 
     deps.registry.register(instance).await;
 
@@ -467,7 +455,9 @@ async fn inject_strategy_prompt(deps: &MaterializeDeps, agent_id: &str, body: &s
     let soul_path = instance.agent_dir().join("SOUL.md");
     let section = format!("\n\n---\n\n## Team Strategy\n\n{body}\n");
     let result = if soul_path.exists() {
-        let existing = tokio::fs::read_to_string(&soul_path).await.unwrap_or_default();
+        let existing = tokio::fs::read_to_string(&soul_path)
+            .await
+            .unwrap_or_default();
         if existing.contains("## Team Strategy") {
             return;
         }
@@ -485,12 +475,7 @@ async fn inject_strategy_prompt(deps: &MaterializeDeps, agent_id: &str, body: &s
 }
 
 /// Append a role prompt section to an existing agent's SOUL.md, idempotently.
-async fn inject_role_prompt(
-    deps: &MaterializeDeps,
-    agent_id: &str,
-    role: &str,
-    body: &str,
-) {
+async fn inject_role_prompt(deps: &MaterializeDeps, agent_id: &str, role: &str, body: &str) {
     let Some(instance) = deps.registry.get(agent_id).await else {
         return;
     };
@@ -498,7 +483,9 @@ async fn inject_role_prompt(
     let section = format!("\n\n---\n\n## Team Role ({role})\n\n{body}\n");
 
     let result = if soul_path.exists() {
-        let existing = tokio::fs::read_to_string(&soul_path).await.unwrap_or_default();
+        let existing = tokio::fs::read_to_string(&soul_path)
+            .await
+            .unwrap_or_default();
         if existing.contains(&format!("## Team Role ({role})")) {
             return;
         }
@@ -535,7 +522,7 @@ impl From<AlephError> for TeamTemplateError {
 mod tests {
     use super::*;
     use crate::teams::templates::types::{
-        TemplateLeader, TemplateMember, TemplatePriority, TemplateTask, TeamTemplate,
+        TeamTemplate, TemplateLeader, TemplateMember, TemplatePriority, TemplateTask,
     };
 
     fn dag_template() -> TeamTemplate {

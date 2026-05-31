@@ -393,8 +393,7 @@ impl StateDatabase {
 
         // Build positional placeholders ?1..?N for the IN clause, then ?N+1
         // and ?N+2 for the optional time bounds (omitted when absent).
-        let placeholders: Vec<String> =
-            (1..=agent_ids.len()).map(|i| format!("?{i}")).collect();
+        let placeholders: Vec<String> = (1..=agent_ids.len()).map(|i| format!("?{i}")).collect();
         let in_list = placeholders.join(", ");
         let mut next_pos = agent_ids.len() + 1;
         let mut where_extras: Vec<String> = Vec::new();
@@ -660,39 +659,32 @@ mod tests {
     async fn aggregate_usage_returns_empty_when_no_agents_supplied() {
         let db = StateDatabase::in_memory().unwrap();
         seed_usage(&db, "t1", 0, "alice", 100, 50, None, None, None, 1000).await;
-        let rows = db
-            .aggregate_usage_by_agents(&[], None, None)
-            .await
-            .unwrap();
+        let rows = db.aggregate_usage_by_agents(&[], None, None).await.unwrap();
         assert!(rows.is_empty(), "empty agent_ids must short-circuit");
     }
 
     #[tokio::test]
     async fn aggregate_usage_sums_per_agent() {
         let db = StateDatabase::in_memory().unwrap();
-        seed_usage(&db, "t1", 0, "alice", 100, 50, Some(20), Some(10), Some(5), 1000).await;
         seed_usage(
             &db,
             "t1",
-            1,
+            0,
             "alice",
-            200,
-            80,
-            Some(30),
-            None,
-            None,
-            1100,
+            100,
+            50,
+            Some(20),
+            Some(10),
+            Some(5),
+            1000,
         )
         .await;
+        seed_usage(&db, "t1", 1, "alice", 200, 80, Some(30), None, None, 1100).await;
         seed_usage(&db, "t2", 0, "bob", 50, 20, None, None, None, 1200).await;
         // Carol is in agent_ids but produced no usage — must be omitted from
         // the result rows (caller is responsible for zero-filling).
         let rows = db
-            .aggregate_usage_by_agents(
-                &["alice".into(), "bob".into(), "carol".into()],
-                None,
-                None,
-            )
+            .aggregate_usage_by_agents(&["alice".into(), "bob".into(), "carol".into()], None, None)
             .await
             .unwrap();
         assert_eq!(rows.len(), 2, "carol must not appear with zero usage");

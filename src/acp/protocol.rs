@@ -1,9 +1,9 @@
 //! ACP protocol message types (NDJSON-based JSON-RPC 2.0)
 
+use crate::sync_primitives::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
-use crate::sync_primitives::{AtomicU64, Ordering};
 
 /// Global request ID counter for JSON-RPC requests.
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
@@ -134,11 +134,7 @@ impl AcpRequest {
 
     /// Create a `session/set_config_option` request — sets an adapter-specific
     /// runtime knob (e.g. `temperature`, `tools.allowFileWrite`).
-    pub fn set_config_option(
-        session_id: &str,
-        key: &str,
-        value: serde_json::Value,
-    ) -> Self {
+    pub fn set_config_option(session_id: &str, key: &str, value: serde_json::Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
             id: next_id(),
@@ -334,7 +330,9 @@ pub enum AcpErrorCode {
     HarnessDenied,
     SessionDead,
     Timeout,
-    ProtocolError { code: i64 },
+    ProtocolError {
+        code: i64,
+    },
     ModeUnsupported,
     Cancelled,
     SpawnFailed,
@@ -708,11 +706,7 @@ mod tests {
 
     #[test]
     fn test_set_config_option_request() {
-        let req = AcpRequest::set_config_option(
-            "sess-1",
-            "temperature",
-            serde_json::json!(0.7),
-        );
+        let req = AcpRequest::set_config_option("sess-1", "temperature", serde_json::json!(0.7));
         assert_eq!(req.method, "session/set_config_option");
         let p = req.params.unwrap();
         assert_eq!(p["sessionId"], "sess-1");

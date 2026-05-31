@@ -52,10 +52,7 @@ impl HeartbeatService {
     }
 
     /// Builder: attach an event bus for `HeartbeatTaskChanged` push.
-    pub fn with_event_bus(
-        mut self,
-        bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
-    ) -> Self {
+    pub fn with_event_bus(mut self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) -> Self {
         self.event_bus = Some(bus);
         self
     }

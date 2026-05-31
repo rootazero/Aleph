@@ -74,7 +74,10 @@ impl LatencyHistogram {
         }
         let count = self.count.load(Ordering::Relaxed);
         out.push_str(&format!("{name}_bucket{{le=\"+Inf\"}} {count}\n"));
-        out.push_str(&format!("{name}_sum {}\n", self.sum_ms.load(Ordering::Relaxed)));
+        out.push_str(&format!(
+            "{name}_sum {}\n",
+            self.sum_ms.load(Ordering::Relaxed)
+        ));
         out.push_str(&format!("{name}_count {count}\n"));
         out
     }

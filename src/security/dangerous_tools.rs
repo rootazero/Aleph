@@ -77,7 +77,16 @@ mod tests {
 
     #[test]
     fn flags_rce_and_mutation_and_control_plane() {
-        for t in ["exec", "bash", "process", "fs_write", "fs_edit", "agent_manage", "provider_config", "channel_config"] {
+        for t in [
+            "exec",
+            "bash",
+            "process",
+            "fs_write",
+            "fs_edit",
+            "agent_manage",
+            "provider_config",
+            "channel_config",
+        ] {
             assert!(is_dangerous_tool(t), "{t} should be dangerous");
         }
     }

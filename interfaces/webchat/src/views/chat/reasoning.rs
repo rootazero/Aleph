@@ -44,7 +44,10 @@ pub(super) fn ReasoningPanel() -> impl IntoView {
     let active = move || chat.phase.get() == ChatPhase::Thinking;
 
     // Trailing-lines preview, UTF-8 safe (line iteration, never byte slicing).
-    let preview = move || chat.reasoning_text.with(|full| tail_lines(full, PREVIEW_TAIL_LINES));
+    let preview = move || {
+        chat.reasoning_text
+            .with(|full| tail_lines(full, PREVIEW_TAIL_LINES))
+    };
 
     let toggle = move |_: web_sys::MouseEvent| expanded.update(|e| *e = !*e);
 
@@ -129,6 +132,9 @@ mod tests {
     #[test]
     fn tail_lines_is_utf8_safe() {
         // Multi-byte chars must not be sliced mid-codepoint.
-        assert_eq!(tail_lines("第一行\n第二行\n第三行\n第四行", 2), "第三行\n第四行");
+        assert_eq!(
+            tail_lines("第一行\n第二行\n第三行\n第四行", 2),
+            "第三行\n第四行"
+        );
     }
 }

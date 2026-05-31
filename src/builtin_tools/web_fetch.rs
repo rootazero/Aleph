@@ -182,10 +182,7 @@ fn cache_store(key: CacheKey, result: WebFetchResult) {
 
 #[cfg(test)]
 fn cache_clear() {
-    URL_CACHE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .clear();
+    URL_CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
 }
 
 /// Prepend a `[fetch_focus: ...]` marker to the result's content when
@@ -1043,7 +1040,10 @@ mod tests {
         let key = cache_key("https://cache-test.invalid/a", &ExtractMode::Markdown);
         assert!(cache_lookup(&key).is_none(), "fresh cache should miss");
 
-        cache_store(key.clone(), dummy_result("https://cache-test.invalid/a", "hi"));
+        cache_store(
+            key.clone(),
+            dummy_result("https://cache-test.invalid/a", "hi"),
+        );
         let got = cache_lookup(&key).expect("should hit");
         assert_eq!(got.content, "hi");
     }
@@ -1096,15 +1096,17 @@ mod tests {
     #[test]
     fn args_accept_prompt_field_with_back_compat_default() {
         // Pre-existing TOML/JSON without the prompt key must still parse.
-        let bare: WebFetchArgs =
-            serde_json::from_str(r#"{"url": "https://x.test/"}"#).unwrap();
+        let bare: WebFetchArgs = serde_json::from_str(r#"{"url": "https://x.test/"}"#).unwrap();
         assert_eq!(bare.prompt, None);
 
         let with_prompt: WebFetchArgs = serde_json::from_str(
             r#"{"url": "https://x.test/", "prompt": "find the pricing table"}"#,
         )
         .unwrap();
-        assert_eq!(with_prompt.prompt.as_deref(), Some("find the pricing table"));
+        assert_eq!(
+            with_prompt.prompt.as_deref(),
+            Some("find the pricing table")
+        );
     }
 
     #[test]
@@ -1112,7 +1114,9 @@ mod tests {
         let original = dummy_result("https://x.test/", "PAGE BODY");
         let with_focus = apply_focus_prompt(original, Some("show pricing"));
         assert!(
-            with_focus.content.starts_with("[fetch_focus: show pricing]\n\n"),
+            with_focus
+                .content
+                .starts_with("[fetch_focus: show pricing]\n\n"),
             "marker not prepended; got: {:?}",
             with_focus.content
         );
@@ -1122,10 +1126,7 @@ mod tests {
     #[test]
     fn apply_focus_prompt_is_noop_for_none_or_blank() {
         let original = dummy_result("https://x.test/", "PAGE");
-        assert_eq!(
-            apply_focus_prompt(original.clone(), None).content,
-            "PAGE",
-        );
+        assert_eq!(apply_focus_prompt(original.clone(), None).content, "PAGE",);
         assert_eq!(
             apply_focus_prompt(original.clone(), Some("   ")).content,
             "PAGE",

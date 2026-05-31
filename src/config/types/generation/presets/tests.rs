@@ -43,11 +43,24 @@ fn test_fal_presets_share_provider_type_and_endpoint() {
 
 #[test]
 fn test_fal_video_presets_advertise_video_modality() {
-    let video_names = ["fal-kling-video", "fal-luma", "fal-runway", "fal-pika", "fal-hailuo", "fal-jimeng"];
+    let video_names = [
+        "fal-kling-video",
+        "fal-luma",
+        "fal-runway",
+        "fal-pika",
+        "fal-hailuo",
+        "fal-jimeng",
+    ];
     for name in video_names {
         let meta = generation_metadata(name).expect(name);
-        assert!(meta.supports(Modality::Video), "{name} should support Video");
-        assert!(!meta.supports(Modality::Image), "{name} should not advertise Image");
+        assert!(
+            meta.supports(Modality::Video),
+            "{name} should support Video"
+        );
+        assert!(
+            !meta.supports(Modality::Image),
+            "{name} should not advertise Image"
+        );
     }
 }
 
@@ -139,8 +152,7 @@ fn test_get_merged_generation_preset_new_provider() {
         },
     );
 
-    let preset =
-        get_merged_generation_preset("my-video-gen", "custom-video", &overrides).unwrap();
+    let preset = get_merged_generation_preset("my-video-gen", "custom-video", &overrides).unwrap();
     assert_eq!(preset.provider_type, "custom-video");
     assert_eq!(preset.default_model, "video-v1");
     assert_eq!(
@@ -152,9 +164,7 @@ fn test_get_merged_generation_preset_new_provider() {
 #[test]
 fn test_get_merged_generation_preset_not_found() {
     let overrides = crate::config::presets_override::GenerationPresetsOverride::default();
-    assert!(
-        get_merged_generation_preset("nonexistent", "nonexistent-type", &overrides).is_none()
-    );
+    assert!(get_merged_generation_preset("nonexistent", "nonexistent-type", &overrides).is_none());
 }
 
 #[test]
@@ -244,7 +254,13 @@ fn high_value_generation_presets_have_display_name() {
 
 #[test]
 fn high_value_generation_presets_have_homepage_and_signup() {
-    for name in ["openai-dalle", "stability-ai", "elevenlabs", "fal", "deepgram-tts"] {
+    for name in [
+        "openai-dalle",
+        "stability-ai",
+        "elevenlabs",
+        "fal",
+        "deepgram-tts",
+    ] {
         let p = get_preset(name).unwrap_or_else(|| panic!("missing preset {name}"));
         assert!(p.homepage.is_some(), "{name} should declare a homepage");
         assert!(

@@ -386,7 +386,12 @@ pub fn resolve_pair_loop_settings(
 mod tests {
     use super::*;
 
-    fn facts<'a>(scope: &'a str, conv: &'a str, sender: &'a str, recv: &'a str) -> PairLoopFacts<'a> {
+    fn facts<'a>(
+        scope: &'a str,
+        conv: &'a str,
+        sender: &'a str,
+        recv: &'a str,
+    ) -> PairLoopFacts<'a> {
         PairLoopFacts {
             scope_id: scope,
             conversation_id: conv,

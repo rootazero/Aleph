@@ -180,7 +180,10 @@ fn resolve_event(msg: &Value) -> Option<(String, Value)> {
         let data = params.get("data").cloned().unwrap_or(Value::Null);
         Some((topic.to_string(), data))
     } else if method.starts_with("stream.") {
-        Some((method.to_string(), msg.get("params").cloned().unwrap_or(Value::Null)))
+        Some((
+            method.to_string(),
+            msg.get("params").cloned().unwrap_or(Value::Null),
+        ))
     } else {
         None
     }
@@ -208,14 +211,19 @@ fn decide_notification(topic: &str, data: &Value, focused: bool) -> Option<Prepa
     match topic {
         TOPIC_APPROVAL => Some(PreparedNotification {
             title: "Aleph needs your approval",
-            body: extract_text(data).unwrap_or_else(|| "A tool call is waiting for you.".to_string()),
+            body: extract_text(data)
+                .unwrap_or_else(|| "A tool call is waiting for you.".to_string()),
         }),
         TOPIC_ASK_USER => Some(PreparedNotification {
             title: "Aleph has a question",
-            body: extract_text(data).unwrap_or_else(|| "Aleph is waiting for your reply.".to_string()),
+            body: extract_text(data)
+                .unwrap_or_else(|| "Aleph is waiting for your reply.".to_string()),
         }),
         TOPIC_RUN_COMPLETE => {
-            let duration_ms = data.get("total_duration_ms").and_then(Value::as_u64).unwrap_or(0);
+            let duration_ms = data
+                .get("total_duration_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             if duration_ms < COMPLETION_NOTIFY_MIN_MS {
                 return None;
             }

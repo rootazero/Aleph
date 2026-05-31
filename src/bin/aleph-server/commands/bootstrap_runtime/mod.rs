@@ -10,9 +10,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
-use alephcore::runtimes::{
-    self, ensure_capability, find_spec, CapabilityLedger, CapabilityStatus,
-};
+use alephcore::runtimes::{self, ensure_capability, find_spec, CapabilityLedger, CapabilityStatus};
 use tokio::sync::RwLock;
 
 use crate::cli::BootstrapRuntimeArgs;

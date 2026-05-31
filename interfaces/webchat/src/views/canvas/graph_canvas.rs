@@ -8,16 +8,17 @@ use wasm_bindgen::JsCast;
 
 use leptos::callback::Callback;
 
-use crate::i18n::*;
 use crate::canvas_engine::drag::{DragState, ReleaseOutcome};
-use crate::canvas_engine::edge_curve::{bezier_point, bezier_tangent, edge_control_point,
-    DEFAULT_SAG};
+use crate::canvas_engine::edge_curve::{
+    bezier_point, bezier_tangent, edge_control_point, DEFAULT_SAG,
+};
 use crate::canvas_engine::interaction::{CanvasEvent, InteractionState};
 use crate::canvas_engine::navigation::NavController;
 use crate::canvas_engine::renderer::draw_neighborhood;
 use crate::canvas_engine::tween::build_interpolated_neighborhood;
 use crate::canvas_engine::types::*;
 use crate::canvas_engine::viewport::Viewport;
+use crate::i18n::*;
 use crate::views::canvas::edge_label::EdgeLabel;
 use crate::views::canvas::node_card::NodeCard;
 
@@ -181,17 +182,17 @@ pub fn GraphCanvas(
         let is_visible_obs = is_visible_for_effect.clone();
         let observer_cb: Closure<dyn FnMut(js_sys::Array)> =
             Closure::new(move |entries: js_sys::Array| {
-                if let Some(entry_val) = entries.get(0).dyn_into::<
-                    web_sys::IntersectionObserverEntry,
-                >()
-                .ok()
+                if let Some(entry_val) = entries
+                    .get(0)
+                    .dyn_into::<web_sys::IntersectionObserverEntry>()
+                    .ok()
                 {
                     is_visible_obs.set(entry_val.is_intersecting());
                 }
             });
-        if let Ok(observer) = web_sys::IntersectionObserver::new(
-            observer_cb.as_ref().unchecked_ref(),
-        ) {
+        if let Ok(observer) =
+            web_sys::IntersectionObserver::new(observer_cb.as_ref().unchecked_ref())
+        {
             observer.observe(&canvas);
         }
         // Leak the observer callback for the panel's lifetime — same
@@ -356,7 +357,9 @@ pub fn GraphCanvas(
                 // materialized when the visible set actually changes (below).
                 let visible_layers: Option<&Neighborhood> = match &nav_state {
                     NavState::Active { neighborhood, .. } => Some(neighborhood),
-                    NavState::Animating { to_neighborhood, .. } => Some(to_neighborhood),
+                    NavState::Animating {
+                        to_neighborhood, ..
+                    } => Some(to_neighborhood),
                     _ => None,
                 };
                 let visible_iter = || {
@@ -419,13 +422,13 @@ pub fn GraphCanvas(
                                 .map(|n| (n.id.as_str(), n.position))
                                 .collect()
                         }
-                        NavState::Animating { to_neighborhood, .. } => {
-                            std::iter::once(&to_neighborhood.center)
-                                .chain(to_neighborhood.one_hop.iter())
-                                .chain(to_neighborhood.two_hop.iter())
-                                .map(|n| (n.id.as_str(), n.position))
-                                .collect()
-                        }
+                        NavState::Animating {
+                            to_neighborhood, ..
+                        } => std::iter::once(&to_neighborhood.center)
+                            .chain(to_neighborhood.one_hop.iter())
+                            .chain(to_neighborhood.two_hop.iter())
+                            .map(|n| (n.id.as_str(), n.position))
+                            .collect(),
                         _ => HashMap::new(),
                     };
 
@@ -440,9 +443,9 @@ pub fn GraphCanvas(
                         .edges
                         .iter()
                         .filter_map(|e| {
-                            e.label.as_ref().map(|lbl| {
-                                (e.from_id.clone(), e.to_id.clone(), lbl.clone())
-                            })
+                            e.label
+                                .as_ref()
+                                .map(|lbl| (e.from_id.clone(), e.to_id.clone(), lbl.clone()))
                         })
                         .collect();
 
@@ -459,10 +462,8 @@ pub fn GraphCanvas(
                         let mid_screen = viewport.world_to_screen(mid_world);
 
                         let tangent_clamped = bezier_tangent(from_world, cp, to_world, 0.5)
-                            .clamp(
-                                -(std::f64::consts::FRAC_PI_4),
-                                std::f64::consts::FRAC_PI_4,
-                            ) as f32;
+                            .clamp(-(std::f64::consts::FRAC_PI_4), std::f64::consts::FRAC_PI_4)
+                            as f32;
 
                         let is_visible = current_zoom >= 0.7
                             && highlight
@@ -470,8 +471,10 @@ pub fn GraphCanvas(
                                 .unwrap_or(false);
 
                         let key = (from_id.clone(), to_id.clone());
-                        let existing = edge_label_state_inner
-                            .with(|m| m.get(&key).map(|e| (e.pos_sig, e.tangent_sig, e.visible_sig)));
+                        let existing = edge_label_state_inner.with(|m| {
+                            m.get(&key)
+                                .map(|e| (e.pos_sig, e.tangent_sig, e.visible_sig))
+                        });
 
                         if let Some((pos_sig, tan_sig, vis_sig)) = existing {
                             pos_sig.set((mid_screen.x as f32, mid_screen.y as f32));
@@ -482,12 +485,15 @@ pub fn GraphCanvas(
                             let tangent_sig = RwSignal::new(tangent_clamped);
                             let visible_sig = RwSignal::new(is_visible);
                             edge_label_state_inner.update(|m| {
-                                m.insert(key, EdgeLabelEntry {
-                                    label: label_text,
-                                    pos_sig,
-                                    tangent_sig,
-                                    visible_sig,
-                                });
+                                m.insert(
+                                    key,
+                                    EdgeLabelEntry {
+                                        label: label_text,
+                                        pos_sig,
+                                        tangent_sig,
+                                        visible_sig,
+                                    },
+                                );
                             });
                         }
                     }

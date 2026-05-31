@@ -50,8 +50,8 @@ fn read_hooks_file() -> Result<(PathBuf, bool, Map<String, Value>), String> {
         return Ok((path, false, Map::new()));
     }
     let raw = fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let parsed: Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("parse {}: {e}", path.display()))?;
+    let parsed: Value =
+        serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
     let events = parsed
         .get("hooks")
         .and_then(|v| v.as_object())
@@ -82,8 +82,7 @@ fn write_hooks_file(path: &PathBuf, events: &Map<String, Value>) -> Result<(), S
         mgr.mark_self_write(path.as_path());
     }
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("create {}: {e}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
     // Write atomically: temp + rename so a partial write never corrupts
     // the file readers see during the swap.
@@ -152,7 +151,9 @@ fn build_action(p: &AddParams) -> Result<Value, String> {
     if let Some(c) = &p.command {
         let mut obj = json!({ "type": "command", "command": c });
         if let Some(t) = p.timeout_secs {
-            obj.as_object_mut().unwrap().insert("timeout_secs".into(), json!(t));
+            obj.as_object_mut()
+                .unwrap()
+                .insert("timeout_secs".into(), json!(t));
         }
         return Ok(obj);
     }
@@ -165,7 +166,9 @@ fn build_action(p: &AddParams) -> Result<Value, String> {
     if let Some(u) = &p.url {
         let mut obj = json!({ "type": "http", "url": u });
         if let Some(t) = p.timeout_secs {
-            obj.as_object_mut().unwrap().insert("timeout_secs".into(), json!(t));
+            obj.as_object_mut()
+                .unwrap()
+                .insert("timeout_secs".into(), json!(t));
         }
         return Ok(obj);
     }
@@ -229,7 +232,11 @@ pub async fn handle_hooks_add(request: JsonRpcRequest) -> JsonRpcResponse {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                format!("hooks.{} is not an array in {}", params.event, path.display()),
+                format!(
+                    "hooks.{} is not an array in {}",
+                    params.event,
+                    path.display()
+                ),
             );
         }
     };
@@ -337,7 +344,10 @@ fn group_matches_substring(group: &Value, needle: &str) -> bool {
     };
     for a in actions {
         for key in ["command", "url", "prompt", "agent"] {
-            if a.get(key).and_then(|v| v.as_str()).is_some_and(|s| s.contains(needle)) {
+            if a.get(key)
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.contains(needle))
+            {
                 return true;
             }
         }

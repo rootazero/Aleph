@@ -40,9 +40,7 @@ const INFO_CHANNEL_CAPACITY: usize = 1000;
 /// }
 /// ```
 pub struct AgentMessageBus {
-    /// Broadcast channels for each tier
-    channels: Arc<RwLock<BusChannels>>,
-    /// Event statistics
+    channels: Arc<BusChannels>,
     stats: Arc<RwLock<BusStatistics>>,
 }
 
@@ -71,11 +69,11 @@ impl AgentMessageBus {
         let (info_tx, _) = broadcast::channel(INFO_CHANNEL_CAPACITY);
 
         Self {
-            channels: Arc::new(RwLock::new(BusChannels {
+            channels: Arc::new(BusChannels {
                 critical: critical_tx,
                 important: important_tx,
                 info: info_tx,
-            })),
+            }),
             stats: Arc::new(RwLock::new(BusStatistics::default())),
         }
     }
@@ -85,13 +83,12 @@ impl AgentMessageBus {
     /// This is a non-blocking operation. If no subscribers exist,
     /// the event is silently dropped.
     pub async fn publish(&self, event: AgentEvent) -> Result<()> {
-        let channels = self.channels.read().await;
         let tier = event.tier();
 
         let result = match &event {
-            AgentEvent::Critical(_) => channels.critical.send(event),
-            AgentEvent::Important(_) => channels.important.send(event),
-            AgentEvent::Info(_) => channels.info.send(event),
+            AgentEvent::Critical(_) => self.channels.critical.send(event),
+            AgentEvent::Important(_) => self.channels.important.send(event),
+            AgentEvent::Info(_) => self.channels.info.send(event),
         };
 
         // Update statistics
@@ -127,12 +124,10 @@ impl AgentMessageBus {
     ///
     /// Returns a receiver that will receive all future events of the specified tier.
     pub async fn subscribe(&self, tier: EventTier) -> Result<broadcast::Receiver<AgentEvent>> {
-        let channels = self.channels.read().await;
-
         let rx = match tier {
-            EventTier::Critical => channels.critical.subscribe(),
-            EventTier::Important => channels.important.subscribe(),
-            EventTier::Info => channels.info.subscribe(),
+            EventTier::Critical => self.channels.critical.subscribe(),
+            EventTier::Important => self.channels.important.subscribe(),
+            EventTier::Info => self.channels.info.subscribe(),
         };
 
         info!("New subscriber for {} events", tier);
@@ -149,12 +144,10 @@ impl AgentMessageBus {
         broadcast::Receiver<AgentEvent>,
         broadcast::Receiver<AgentEvent>,
     )> {
-        let channels = self.channels.read().await;
-
         Ok((
-            channels.critical.subscribe(),
-            channels.important.subscribe(),
-            channels.info.subscribe(),
+            self.channels.critical.subscribe(),
+            self.channels.important.subscribe(),
+            self.channels.info.subscribe(),
         ))
     }
 
@@ -171,12 +164,10 @@ impl AgentMessageBus {
 
     /// Get subscriber count for a tier
     pub async fn subscriber_count(&self, tier: EventTier) -> usize {
-        let channels = self.channels.read().await;
-
         match tier {
-            EventTier::Critical => channels.critical.receiver_count(),
-            EventTier::Important => channels.important.receiver_count(),
-            EventTier::Info => channels.info.receiver_count(),
+            EventTier::Critical => self.channels.critical.receiver_count(),
+            EventTier::Important => self.channels.important.receiver_count(),
+            EventTier::Info => self.channels.info.receiver_count(),
         }
     }
 }

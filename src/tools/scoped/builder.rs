@@ -16,9 +16,7 @@ use crate::sync_primitives::Arc;
 use crate::tool_metadata::ToolHealthCache;
 use crate::tools::refresh::ToolRefreshSource;
 use crate::tools::runtime::{LoopTool, LoopToolRegistry};
-use crate::tools::service::{
-    ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource,
-};
+use crate::tools::service::{ToolDefinition, ToolDefinitionMetadata, ToolError, ToolSource};
 
 use super::traits::{ToolDefinitionRewriter, ToolHookDecorator};
 use super::ScopedToolService;
@@ -52,10 +50,7 @@ impl ScopedToolService {
     /// order on every `list()` / `metadata_schema()` build (the latter
     /// only on cache miss; call [`Self::bump_cache_generation`] when
     /// external state that the rewriter consults has changed).
-    pub fn with_definition_rewriter(
-        mut self,
-        rewriter: Arc<dyn ToolDefinitionRewriter>,
-    ) -> Self {
+    pub fn with_definition_rewriter(mut self, rewriter: Arc<dyn ToolDefinitionRewriter>) -> Self {
         self.definition_rewriters.push(rewriter);
         self
     }

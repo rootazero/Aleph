@@ -12,7 +12,9 @@ use tracing::{debug, error, info};
 use crate::sync_primitives::Arc;
 
 use crate::tasks::cron::config::{ExecutionResult, JobSnapshot, SessionTarget};
-use crate::tasks::cron::service::concurrency::{phase1_mark_due_jobs, phase3_writeback, PendingAlert};
+use crate::tasks::cron::service::concurrency::{
+    phase1_mark_due_jobs, phase3_writeback, PendingAlert,
+};
 use crate::tasks::cron::service::state::ServiceState;
 use crate::tasks::shared::clock::Clock;
 
@@ -27,11 +29,8 @@ pub type JobExecutorFn =
 /// the alerts are dropped on the floor, which is the pre-D4 silent-failure
 /// bug. Callers without a dispatcher (e.g. unit tests for the timer loop)
 /// pass `None`.
-pub type AlertDispatcherFn = Arc<
-    dyn Fn(Vec<PendingAlert>) -> Pin<Box<dyn Future<Output = ()> + Send>>
-        + Send
-        + Sync,
->;
+pub type AlertDispatcherFn =
+    Arc<dyn Fn(Vec<PendingAlert>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 /// RAII guard that clears the `is_running` flag on drop.
 ///

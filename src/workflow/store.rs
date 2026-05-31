@@ -72,8 +72,9 @@ pub fn save_at(dir: &Path, manifest: &WorkflowManifest) -> Result<PathBuf> {
         .map_err(|e| AlephError::config(format!("workflow serialise failed: {e}")))?;
 
     let tmp_path = final_path.with_extension(format!("{WORKFLOW_EXT}.tmp"));
-    fs::write(&tmp_path, body)
-        .map_err(|e| AlephError::config(format!("workflow write {} failed: {e}", tmp_path.display())))?;
+    fs::write(&tmp_path, body).map_err(|e| {
+        AlephError::config(format!("workflow write {} failed: {e}", tmp_path.display()))
+    })?;
     fs::rename(&tmp_path, &final_path).map_err(|e| {
         let _ = fs::remove_file(&tmp_path);
         AlephError::config(format!(
@@ -136,8 +137,9 @@ pub fn list_at(dir: &Path) -> Result<Vec<WorkflowMeta>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
-    let entries = fs::read_dir(dir)
-        .map_err(|e| AlephError::config(format!("workflow listing {} failed: {e}", dir.display())))?;
+    let entries = fs::read_dir(dir).map_err(|e| {
+        AlephError::config(format!("workflow listing {} failed: {e}", dir.display()))
+    })?;
 
     let mut out = Vec::new();
     for entry in entries.flatten() {
@@ -288,7 +290,11 @@ mod tests {
         save_at(tmp.path(), &sample("zebra")).unwrap();
         save_at(tmp.path(), &sample("alpha")).unwrap();
         fs::write(tmp.path().join("notes.txt"), "ignore me").unwrap();
-        let names: Vec<String> = list_at(tmp.path()).unwrap().into_iter().map(|m| m.name).collect();
+        let names: Vec<String> = list_at(tmp.path())
+            .unwrap()
+            .into_iter()
+            .map(|m| m.name)
+            .collect();
         assert_eq!(names, vec!["alpha".to_string(), "zebra".to_string()]);
     }
 

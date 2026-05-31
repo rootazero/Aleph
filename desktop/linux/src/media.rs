@@ -77,9 +77,7 @@ async fn run_ffmpeg(args: &[String]) -> Result<()> {
         .output()
         .await
         .map_err(|e| {
-            DesktopError::PlatformError(format!(
-                "Failed to run ffmpeg (install ffmpeg): {e}"
-            ))
+            DesktopError::PlatformError(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
         })?;
 
     if output.status.success() {
@@ -313,7 +311,7 @@ mod tests {
     fn quality_maps_to_qv_range() {
         assert_eq!(quality_to_qv(1.0), 2); // best
         assert!(quality_to_qv(0.05) >= 29); // worst end
-        // monotonic: lower quality -> higher (worse) qv
+                                            // monotonic: lower quality -> higher (worse) qv
         assert!(quality_to_qv(0.3) > quality_to_qv(0.9));
         // out-of-range inputs are clamped, never panic
         assert_eq!(quality_to_qv(5.0), 2);

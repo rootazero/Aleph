@@ -157,10 +157,7 @@ mod tests {
 
     #[test]
     fn dedups_all_and_everyone_into_one_sentinel() {
-        assert_eq!(
-            extract_mentions("@all @everyone @all"),
-            vec![MENTION_ALL]
-        );
+        assert_eq!(extract_mentions("@all @everyone @all"), vec![MENTION_ALL]);
     }
 
     #[test]

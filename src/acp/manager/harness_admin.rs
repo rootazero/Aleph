@@ -394,11 +394,7 @@ impl AcpAdapterManager {
         for (key, entry) in entries {
             let (alive, state, sid) = match entry.session.try_lock() {
                 Ok(mut s) => (s.is_alive(), s.state(), s.acp_session_id()),
-                Err(_) => (
-                    true,
-                    crate::acp::protocol::AcpSessionState::Busy,
-                    None,
-                ),
+                Err(_) => (true, crate::acp::protocol::AcpSessionState::Busy, None),
             };
             out.push(SessionSnapshot {
                 harness_id: key.harness_id.clone(),

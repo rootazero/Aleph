@@ -29,9 +29,9 @@ use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 
-pub mod types;
 #[cfg(test)]
 mod tests;
+pub mod types;
 
 pub use types::{SunoClip, SunoError, SunoGenerateRequest};
 
@@ -133,10 +133,9 @@ impl SunoProvider {
                 .map_err(|e| GenerationError::network(format!("Poll request failed: {}", e)))?;
 
             let status = response.status();
-            let body = response
-                .text()
-                .await
-                .map_err(|e| GenerationError::network(format!("Failed to read poll body: {}", e)))?;
+            let body = response.text().await.map_err(|e| {
+                GenerationError::network(format!("Failed to read poll body: {}", e))
+            })?;
             if !status.is_success() {
                 error!(status = %status, body = %body, "Suno poll failed");
                 return Err(self.parse_error(status, &body));
@@ -147,9 +146,7 @@ impl SunoProvider {
             })?;
 
             // All complete? Return.
-            if !clips.is_empty()
-                && clips.iter().all(|c| c.is_complete() || c.is_error())
-            {
+            if !clips.is_empty() && clips.iter().all(|c| c.is_complete() || c.is_error()) {
                 return Ok(clips);
             }
 
@@ -163,12 +160,10 @@ impl SunoProvider {
 
     async fn download(&self, url: &str) -> GenerationResult<Vec<u8>> {
         debug!(url, "downloading Suno audio");
-        let response = self
-            .client
-            .get(url)
-            .send()
-            .await
-            .map_err(|e| GenerationError::network(format!("Failed to download audio: {}", e)))?;
+        let response =
+            self.client.get(url).send().await.map_err(|e| {
+                GenerationError::network(format!("Failed to download audio: {}", e))
+            })?;
         if !response.status().is_success() {
             return Err(GenerationError::network(format!(
                 "Audio download failed with status: {}",
@@ -278,7 +273,10 @@ impl GenerationProvider for SunoProvider {
             }
 
             let initial_clips: Vec<types::SunoClip> = response.json().await.map_err(|e| {
-                GenerationError::serialization(format!("Failed to parse Suno submit response: {}", e))
+                GenerationError::serialization(format!(
+                    "Failed to parse Suno submit response: {}",
+                    e
+                ))
             })?;
             if initial_clips.is_empty() {
                 return Err(GenerationError::provider(
@@ -350,8 +348,9 @@ impl GenerationProvider for SunoProvider {
                 "Suno generation completed"
             );
 
-            let mut output = GenerationOutput::new(GenerationType::Audio, GenerationData::bytes(bytes))
-                .with_metadata(metadata);
+            let mut output =
+                GenerationOutput::new(GenerationType::Audio, GenerationData::bytes(bytes))
+                    .with_metadata(metadata);
             if let Some(id) = request.request_id {
                 output = output.with_request_id(id);
             }

@@ -259,8 +259,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             .as_deref()
             .unwrap_or_else(|| config.default_model());
         let actual_model = self.normalize_model_id(raw_model);
-        let request =
-            Self::build_responses_request(payload, &actual_model, &self.variant, config);
+        let request = Self::build_responses_request(payload, &actual_model, &self.variant, config);
 
         let api_key = config
             .api_key

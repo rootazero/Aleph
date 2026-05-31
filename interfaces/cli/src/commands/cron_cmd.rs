@@ -393,7 +393,9 @@ pub async fn toggle(
         body.insert("enabled".into(), Value::Bool(false));
     }
 
-    let result: Value = client.call("cron.toggle", Some(Value::Object(body))).await?;
+    let result: Value = client
+        .call("cron.toggle", Some(Value::Object(body)))
+        .await?;
 
     if json {
         output::print_json(&result);
@@ -421,9 +423,8 @@ mod tests {
 
     #[test]
     fn create_body_with_cron_expr_emits_legacy_schedule_field() {
-        let body =
-            build_create_body("job", Some("*/5 * * * *"), None, "main", "ping", None, None)
-                .expect("valid");
+        let body = build_create_body("job", Some("*/5 * * * *"), None, "main", "ping", None, None)
+            .expect("valid");
         assert_eq!(body["name"], "job");
         assert_eq!(body["agent_id"], "main");
         assert_eq!(body["schedule"], "*/5 * * * *");
@@ -514,7 +515,18 @@ mod tests {
     #[test]
     fn update_body_timeout_secs_emits_ms() {
         let body = build_update_body(
-            "id-1", None, None, None, None, None, None, None, false, false, Some(600), false,
+            "id-1",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+            Some(600),
+            false,
         )
         .unwrap();
         assert_eq!(body["timeout_ms"], 600_000);

@@ -39,9 +39,7 @@ pub fn CronSparklines() -> impl IntoView {
                         list.into_iter().take(MAX_VISIBLE_JOBS).collect();
                     let mut runs_map: HashMap<String, Vec<JobRunInfo>> = HashMap::new();
                     for job in &visible {
-                        if let Ok(runs) =
-                            CronApi::runs(&state, &job.id, SPARK_CELLS as i32).await
-                        {
+                        if let Ok(runs) = CronApi::runs(&state, &job.id, SPARK_CELLS as i32).await {
                             runs_map.insert(job.id.clone(), runs);
                         }
                     }
@@ -147,13 +145,11 @@ fn render_cell(maybe: Option<JobRunInfo>) -> impl IntoView {
     let (cls, tooltip): (&'static str, String) = match maybe {
         None => ("bg-text-tertiary/20", "\u{2014}".to_string()),
         Some(r) => match r.status.as_str() {
-            "success" | "ok" | "completed" => {
-                ("bg-success", format!("success \u{00b7} {}ms", r.duration_ms))
-            }
-            "failed" | "error" => (
-                "bg-danger",
-                r.error.unwrap_or_else(|| "failed".to_string()),
+            "success" | "ok" | "completed" => (
+                "bg-success",
+                format!("success \u{00b7} {}ms", r.duration_ms),
             ),
+            "failed" | "error" => ("bg-danger", r.error.unwrap_or_else(|| "failed".to_string())),
             "skipped" | "missed" => ("bg-warning", format!("skipped @ {}", r.started_at)),
             "running" => ("bg-primary animate-pulse", "running".to_string()),
             other => ("bg-text-tertiary/50", other.to_string()),

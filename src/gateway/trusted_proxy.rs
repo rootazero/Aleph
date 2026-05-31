@@ -80,10 +80,7 @@ impl TrustedProxies {
         if self.nets.is_empty() || !self.contains(peer) {
             return peer;
         }
-        let Some(xff) = headers
-            .get("x-forwarded-for")
-            .and_then(|v| v.to_str().ok())
-        else {
+        let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) else {
             return peer;
         };
         for hop in xff.rsplit(',') {
@@ -131,7 +128,10 @@ mod tests {
         let tp = TrustedProxies::from_config(&["10.0.0.1".into()]);
         let peer = ip("10.0.0.1");
         // Single client hop behind the proxy.
-        assert_eq!(tp.real_client_ip(peer, &xff("198.51.100.23")), ip("198.51.100.23"));
+        assert_eq!(
+            tp.real_client_ip(peer, &xff("198.51.100.23")),
+            ip("198.51.100.23")
+        );
     }
 
     #[test]

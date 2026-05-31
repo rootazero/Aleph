@@ -173,8 +173,7 @@ pub(crate) fn build_prompt(
     // Computed from `events[tail_start..]` so it stays scoped to what
     // the model already sees in this turn's context — never persisted,
     // recomputed fresh every Think.
-    if let Some(summary) =
-        crate::tools::attempt_summary::render_run_summary(&events[tail_start..])
+    if let Some(summary) = crate::tools::attempt_summary::render_run_summary(&events[tail_start..])
     {
         messages.push(UnifiedMessage::user(&summary));
     }
@@ -398,9 +397,10 @@ mod tests {
 
         let messages = build_prompt(&events, 1);
         assert!(
-            !messages
-                .iter()
-                .any(|m| matches!(m, crate::providers::message::UnifiedMessage::Assistant { .. })),
+            !messages.iter().any(|m| matches!(
+                m,
+                crate::providers::message::UnifiedMessage::Assistant { .. }
+            )),
             "no assistant message should be emitted when only orphans + thinking remain",
         );
         assert_eq!(messages.len(), 1, "expected only the new user message");

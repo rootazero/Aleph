@@ -175,7 +175,10 @@ fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
     let alive_label = t_string!(i18n, teams.workers_state_alive).to_string();
     let dead_label = t_string!(i18n, teams.workers_state_dead).to_string();
     let liveness_chip = if alive {
-        (alive_label, "bg-green-50 text-green-700 border border-green-200")
+        (
+            alive_label,
+            "bg-green-50 text-green-700 border border-green-200",
+        )
     } else {
         (dead_label, "bg-red-50 text-red-700 border border-red-200")
     };

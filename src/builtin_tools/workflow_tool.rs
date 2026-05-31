@@ -160,8 +160,10 @@ impl AlephTool for WorkflowTool {
                 ))
             }
             WorkflowArgs::List {} => {
-                let names: Vec<String> =
-                    workflow::store::list()?.into_iter().map(|m| m.name).collect();
+                let names: Vec<String> = workflow::store::list()?
+                    .into_iter()
+                    .map(|m| m.name)
+                    .collect();
                 Ok(WorkflowToolOutput {
                     action: "list".into(),
                     message: format!("{} workflow(s)", names.len()),
@@ -206,8 +208,8 @@ impl AlephTool for WorkflowTool {
                 // id/agent/prompt/depends_on (R10: the executor never sees the
                 // interchange metadata).
                 let def = workflow::store::load(&name)?.to_def();
-                let mat =
-                    workflow::materialize(&def, &input, &team_id, self.coord_store.as_ref()).await?;
+                let mat = workflow::materialize(&def, &input, &team_id, self.coord_store.as_ref())
+                    .await?;
                 if let Some(signal) = &self.dispatch_signal {
                     signal.notify_one();
                 }
@@ -353,7 +355,11 @@ mod tests {
             serde_json::from_value(serde_json::json!({"action":"run","name":"p","team_id":"t"}))
                 .expect("deserialise run without input");
         match args {
-            WorkflowArgs::Run { name, team_id, input } => {
+            WorkflowArgs::Run {
+                name,
+                team_id,
+                input,
+            } => {
                 assert_eq!(name, "p");
                 assert_eq!(team_id, "t");
                 assert_eq!(input, "", "missing input defaults to empty string");
@@ -387,14 +393,15 @@ mod tests {
 
     #[test]
     fn deserialize_list_unit_variant() {
-        let args: WorkflowArgs = serde_json::from_value(serde_json::json!({"action":"list"}))
-            .expect("deserialise list");
+        let args: WorkflowArgs =
+            serde_json::from_value(serde_json::json!({"action":"list"})).expect("deserialise list");
         assert!(matches!(args, WorkflowArgs::List {}));
     }
 
     #[test]
     fn deserialize_rejects_unknown_action() {
-        let err = serde_json::from_value::<WorkflowArgs>(serde_json::json!({"action":"frobnicate"}));
+        let err =
+            serde_json::from_value::<WorkflowArgs>(serde_json::json!({"action":"frobnicate"}));
         assert!(err.is_err(), "unknown action must not deserialise");
     }
 
@@ -426,7 +433,8 @@ mod tests {
             unsafe {
                 std::env::set_var("ALEPH_HOME", tmp.path());
             }
-            workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save under temp ALEPH_HOME");
+            workflow::store::save(&WorkflowManifest::from_def(&linear_def()))
+                .expect("save under temp ALEPH_HOME");
             let r = t
                 .call(WorkflowArgs::Run {
                     name: "pipeline".into(),
@@ -458,7 +466,10 @@ mod tests {
         let gather = cstore.get_task(&ids[0]).await.unwrap().unwrap();
         let write = cstore.get_task(&ids[1]).await.unwrap().unwrap();
         assert_eq!(gather.subject, "pipeline:gather");
-        assert_eq!(gather.description, "research quantum", "{{input}} substituted");
+        assert_eq!(
+            gather.description, "research quantum",
+            "{{input}} substituted"
+        );
         assert_eq!(gather.status, CoordTaskStatus::Pending);
         assert_eq!(write.subject, "pipeline:write");
         assert_eq!(write.status, CoordTaskStatus::Blocked);
@@ -612,7 +623,8 @@ mod tests {
                 std::env::set_var("ALEPH_HOME", tmp.path());
             }
 
-            workflow::store::save(&WorkflowManifest::from_def(&linear_def())).expect("save template");
+            workflow::store::save(&WorkflowManifest::from_def(&linear_def()))
+                .expect("save template");
 
             // export (no write_file) populates `rendered`, not task_ids/definition.
             let exported = t
@@ -624,7 +636,10 @@ mod tests {
                 .expect("export");
             // import the rendered text back (no save) → definition equals the
             // core, dropped is empty for the lossless embedded path.
-            let js = exported.rendered.clone().expect("export populates rendered");
+            let js = exported
+                .rendered
+                .clone()
+                .expect("export populates rendered");
             let imported = t
                 .call(WorkflowArgs::Import {
                     source: js,
@@ -644,12 +659,18 @@ mod tests {
         };
 
         assert_eq!(exported.action, "export");
-        let js = exported.rendered.as_ref().expect("export populates rendered");
+        let js = exported
+            .rendered
+            .as_ref()
+            .expect("export populates rendered");
         assert!(js.contains("export const meta = {"));
         assert!(exported.task_ids.is_none() && exported.definition.is_none());
 
         assert_eq!(imported.action, "import");
-        let def = imported.definition.as_ref().expect("import populates definition");
+        let def = imported
+            .definition
+            .as_ref()
+            .expect("import populates definition");
         assert_eq!(def, &linear_def());
         assert_eq!(imported.dropped.as_deref(), Some(&[][..]));
     }
@@ -712,15 +733,27 @@ mod tests {
             exported
         };
 
-        let js = exported.rendered.as_ref().expect("export populates rendered");
+        let js = exported
+            .rendered
+            .as_ref()
+            .expect("export populates rendered");
         // meta block carries whenToUse + both phases.
-        assert!(js.contains("whenToUse: \"on any subsystem\""), "whenToUse: {js}");
-        assert!(js.contains("title: \"Scan\"") && js.contains("title: \"Fix\""), "phases: {js}");
+        assert!(
+            js.contains("whenToUse: \"on any subsystem\""),
+            "whenToUse: {js}"
+        );
+        assert!(
+            js.contains("title: \"Scan\"") && js.contains("title: \"Fix\""),
+            "phases: {js}"
+        );
         // per-step metadata survived: schema, model, label, phase markers.
         assert!(js.contains("schema: {\"type\":\"object\"}"), "schema: {js}");
         assert!(js.contains("model: \"haiku\""), "model: {js}");
         assert!(js.contains("label: \"scan:a\""), "label: {js}");
-        assert!(js.contains("phase(\"Scan\")") && js.contains("phase(\"Fix\")"), "phase markers: {js}");
+        assert!(
+            js.contains("phase(\"Scan\")") && js.contains("phase(\"Fix\")"),
+            "phase markers: {js}"
+        );
     }
 
     #[tokio::test]
@@ -782,9 +815,18 @@ mod tests {
             .await
             .expect_err("whitespace name must fail validation");
         let msg = err.to_string();
-        assert!(msg.contains("name must not be empty"), "validation cause: {msg}");
-        assert!(msg.contains("dropped"), "dropped diagnostics preserved: {msg}");
-        assert!(msg.contains("for loop"), "specific dropped construct named: {msg}");
+        assert!(
+            msg.contains("name must not be empty"),
+            "validation cause: {msg}"
+        );
+        assert!(
+            msg.contains("dropped"),
+            "dropped diagnostics preserved: {msg}"
+        );
+        assert!(
+            msg.contains("for loop"),
+            "specific dropped construct named: {msg}"
+        );
     }
 
     #[tokio::test]
@@ -871,7 +913,10 @@ mod tests {
             .await
             .expect("describe");
         assert_eq!(described.action, "describe");
-        let def = described.definition.as_ref().expect("describe populates definition");
+        let def = described
+            .definition
+            .as_ref()
+            .expect("describe populates definition");
         assert_eq!(def, &linear_def());
         assert!(described.message.contains("2 step"));
         assert!(described.names.is_none() && described.task_ids.is_none());
@@ -879,7 +924,10 @@ mod tests {
         // serde wire shape: describe omits the None fields entirely.
         let wire = serde_json::to_value(&described).unwrap();
         assert!(wire.get("definition").is_some());
-        assert!(wire.get("names").is_none(), "skip_serializing_if drops None names");
+        assert!(
+            wire.get("names").is_none(),
+            "skip_serializing_if drops None names"
+        );
         assert!(wire.get("task_ids").is_none());
 
         // delete present → "deleted" message; delete again → idempotent branch.
@@ -896,7 +944,10 @@ mod tests {
             })
             .await
             .expect("delete absent");
-        assert!(del2.message.contains("did not exist"), "idempotent delete branch");
+        assert!(
+            del2.message.contains("did not exist"),
+            "idempotent delete branch"
+        );
 
         // after delete the list is empty again.
         let after = t.call(WorkflowArgs::List {}).await.expect("list");

@@ -243,7 +243,10 @@ mod tests {
         let s = serde_json::to_string(&doc).unwrap();
         assert!(!s.contains("\"edges\""), "empty edges must be omitted");
         assert!(!s.contains("\"color\""), "missing color must be omitted");
-        assert!(!s.contains("\"subpath\""), "missing subpath must be omitted");
+        assert!(
+            !s.contains("\"subpath\""),
+            "missing subpath must be omitted"
+        );
     }
 
     #[test]

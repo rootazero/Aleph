@@ -69,11 +69,7 @@ pub fn r_two_hop(n: usize, viewport_w_px: f32) -> f32 {
 /// with deterministic per-id jitter in angle (±17°) and radius (±15%).
 ///
 /// Writes positions into `out`. Skips ids already present.
-pub(crate) fn place_perturbed_ring(
-    ids: &[&str],
-    base_r: f64,
-    out: &mut HashMap<String, Vec2>,
-) {
+pub(crate) fn place_perturbed_ring(ids: &[&str], base_r: f64, out: &mut HashMap<String, Vec2>) {
     if ids.is_empty() {
         return;
     }
@@ -82,14 +78,17 @@ pub(crate) fn place_perturbed_ring(
         if out.contains_key(*id) {
             continue;
         }
-        let j_angle = 0.30 * hash_jitter(id);              // ±17.2°
+        let j_angle = 0.30 * hash_jitter(id); // ±17.2°
         let j_radius = 0.15 * hash_jitter(&format!("r:{id}")); // ±15%, decorrelated
         let angle = ((i as f32 / n) * TAU + j_angle) as f64;
         let radius = base_r * (1.0 + j_radius as f64);
-        out.insert((*id).into(), Vec2 {
-            x: radius * angle.cos(),
-            y: radius * angle.sin(),
-        });
+        out.insert(
+            (*id).into(),
+            Vec2 {
+                x: radius * angle.cos(),
+                y: radius * angle.sin(),
+            },
+        );
     }
 }
 
@@ -130,7 +129,10 @@ pub fn compute_target_positions(
     place_perturbed_ring(&one_hop_ids, r1, &mut xy);
     for id in &one_hop_ids {
         if let Some(p) = xy.remove(*id) {
-            out.insert((*id).to_string(), Vec3::new(p.x as f32, p.y as f32, Z_ONE_HOP));
+            out.insert(
+                (*id).to_string(),
+                Vec3::new(p.x as f32, p.y as f32, Z_ONE_HOP),
+            );
         }
     }
 
@@ -140,13 +142,15 @@ pub fn compute_target_positions(
     place_perturbed_ring(&two_hop_ids, r2, &mut xy);
     for id in &two_hop_ids {
         if let Some(p) = xy.remove(*id) {
-            out.insert((*id).to_string(), Vec3::new(p.x as f32, p.y as f32, Z_TWO_HOP));
+            out.insert(
+                (*id).to_string(),
+                Vec3::new(p.x as f32, p.y as f32, Z_TWO_HOP),
+            );
         }
     }
 
     out
 }
-
 
 #[cfg(test)]
 mod radial_tests {
@@ -396,7 +400,9 @@ mod radial_tests {
 
     #[test]
     fn known_seed_layout_matches_baseline() {
-        use crate::canvas_engine::adapter::{populate_orphans, to_neighborhood, GraphNeighborsResponse};
+        use crate::canvas_engine::adapter::{
+            populate_orphans, to_neighborhood, GraphNeighborsResponse,
+        };
         use std::collections::HashMap;
 
         let json = include_str!("../../tests/fixtures/canvas_30nodes.json");
@@ -436,12 +442,16 @@ mod radial_tests {
             assert!(
                 (actual.x - expected.0).abs() < 0.01,
                 "id={} x drift: actual={} expected={}",
-                id, actual.x, expected.0
+                id,
+                actual.x,
+                expected.0
             );
             assert!(
                 (actual.y - expected.1).abs() < 0.01,
                 "id={} y drift: actual={} expected={}",
-                id, actual.y, expected.1
+                id,
+                actual.y,
+                expected.1
             );
         }
 

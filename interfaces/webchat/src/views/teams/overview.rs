@@ -160,7 +160,9 @@ pub fn OverviewView() -> impl IntoView {
         let team_name = ft_team_name.get_untracked();
         let goal_raw = ft_goal.get_untracked();
         if template.is_empty() || team_name.trim().is_empty() {
-            ft_error.set(Some(t_string!(i18n, teams.from_template.required_fields).to_string()));
+            ft_error.set(Some(
+                t_string!(i18n, teams.from_template.required_fields).to_string(),
+            ));
             return;
         }
         let goal = if goal_raw.trim().is_empty() {
@@ -172,9 +174,13 @@ pub fn OverviewView() -> impl IntoView {
         spawn_local(async move {
             ft_submitting.set(true);
             ft_error.set(None);
-            let result =
-                TeamsApi::create_from_template(&state, &template, team_name.trim(), goal.as_deref())
-                    .await;
+            let result = TeamsApi::create_from_template(
+                &state,
+                &template,
+                team_name.trim(),
+                goal.as_deref(),
+            )
+            .await;
             ft_submitting.set(false);
             match result {
                 Ok(_team_id) => {

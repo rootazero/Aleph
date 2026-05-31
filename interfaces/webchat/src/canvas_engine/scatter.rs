@@ -41,8 +41,7 @@ pub(crate) fn place_scattered(
     let spill = ids.len() > SPILL_THRESHOLD;
 
     for (i, id) in ids.iter().enumerate() {
-        let (best, _) =
-            best_candidate(id, i, half_w, half_h, excl_w, excl_h, existing, out, spill);
+        let (best, _) = best_candidate(id, i, half_w, half_h, excl_w, excl_h, existing, out, spill);
         out.insert((*id).into(), best);
     }
 }
@@ -111,11 +110,7 @@ enum Band {
     Outer,
 }
 
-fn min_distance(
-    p: Vec2,
-    existing: &HashMap<String, Vec2>,
-    placed: &HashMap<String, Vec2>,
-) -> f64 {
+fn min_distance(p: Vec2, existing: &HashMap<String, Vec2>, placed: &HashMap<String, Vec2>) -> f64 {
     let mut best = f64::INFINITY;
     for q in existing.values().chain(placed.values()) {
         let dx = p.x - q.x;
@@ -198,7 +193,10 @@ mod tests {
             .collect();
         let mut out = HashMap::new();
         place_scattered(&ids, vp(), &HashMap::new(), &mut out);
-        let mut radii: Vec<f64> = out.values().map(|p| (p.x * p.x + p.y * p.y).sqrt()).collect();
+        let mut radii: Vec<f64> = out
+            .values()
+            .map(|p| (p.x * p.x + p.y * p.y).sqrt())
+            .collect();
         radii.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let max_r = *radii.last().unwrap();
         let median = radii[radii.len() / 2];

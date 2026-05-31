@@ -1,6 +1,5 @@
 use super::*;
 
-
 #[test]
 fn test_presets_contain_known_vendors() {
     // OpenAI-compatible (original)
@@ -325,7 +324,9 @@ fn high_value_presets_have_signup_url() {
 
 #[test]
 fn high_value_presets_have_fallback_models() {
-    for name in ["openai", "claude", "deepseek", "moonshot", "gemini", "qwen", "xai"] {
+    for name in [
+        "openai", "claude", "deepseek", "moonshot", "gemini", "qwen", "xai",
+    ] {
         let p = get_preset(name).unwrap();
         assert!(
             !p.fallback_models.is_empty(),
@@ -351,11 +352,17 @@ fn aux_model_falls_back_to_default_model_when_unset() {
 fn resolve_models_url_uses_override_then_base_url() {
     // Claude declares a custom models endpoint.
     let claude = get_preset("claude").unwrap();
-    assert_eq!(claude.resolve_models_url(), "https://api.anthropic.com/v1/models");
+    assert_eq!(
+        claude.resolve_models_url(),
+        "https://api.anthropic.com/v1/models"
+    );
 
     // OpenAI uses the {base_url}/models default.
     let openai = get_preset("openai").unwrap();
-    assert_eq!(openai.resolve_models_url(), "https://api.openai.com/v1/models");
+    assert_eq!(
+        openai.resolve_models_url(),
+        "https://api.openai.com/v1/models"
+    );
 }
 
 #[test]
@@ -369,7 +376,14 @@ fn kimi_for_coding_omits_temperature() {
 #[test]
 fn new_hermes_parity_presets_are_present() {
     // Pulled in from hermes-agent plugins/model-providers.
-    for name in ["ai-gateway", "azure-foundry", "gmi", "nous", "zai", "ollama-cloud"] {
+    for name in [
+        "ai-gateway",
+        "azure-foundry",
+        "gmi",
+        "nous",
+        "zai",
+        "ollama-cloud",
+    ] {
         assert!(
             PRESETS.contains_key(name),
             "{name} should be in the registry after the hermes-parity import"
@@ -381,7 +395,14 @@ fn new_hermes_parity_presets_are_present() {
 fn no_health_check_propagated_for_resource_placeholders() {
     // Presets that ship with `YOUR-RESOURCE` / `ACCOUNT_ID` placeholders or
     // OAuth-only endpoints must opt out of `/models` health probing.
-    for name in ["chatgpt", "azure-openai", "azure-foundry", "amazon-bedrock", "vertex-anthropic", "ai-gateway"] {
+    for name in [
+        "chatgpt",
+        "azure-openai",
+        "azure-foundry",
+        "amazon-bedrock",
+        "vertex-anthropic",
+        "ai-gateway",
+    ] {
         let p = get_preset(name).unwrap();
         assert!(
             !p.supports_health_check,
@@ -411,7 +432,10 @@ fn aliases_resolve_via_get_preset_for_all_groups() {
         let c = get_preset(canonical).expect(canonical);
         for a in aliases {
             let entry = get_preset(a).unwrap_or_else(|| panic!("{a} missing"));
-            assert_eq!(entry.base_url, c.base_url, "alias {a} should mirror {canonical}");
+            assert_eq!(
+                entry.base_url, c.base_url,
+                "alias {a} should mirror {canonical}"
+            );
         }
     }
 }

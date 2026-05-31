@@ -155,7 +155,11 @@ impl AlephTool for TeamMemberAddTool {
                 acp_session_name: member_ref.session_name.clone(),
             }
         } else {
-            NewTeamMember::for_agent(args.team_id.clone(), args.agent_id.clone(), args.role.clone())
+            NewTeamMember::for_agent(
+                args.team_id.clone(),
+                args.agent_id.clone(),
+                args.role.clone(),
+            )
         };
         self.store.add_member(new_member).await?;
 

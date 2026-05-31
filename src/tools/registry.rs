@@ -1,7 +1,7 @@
 //! ToolHandlerRegistry — ArcSwap-backed name → handler map.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 use arc_swap::ArcSwap;
 use tokio::sync::broadcast;

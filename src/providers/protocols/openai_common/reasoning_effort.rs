@@ -176,13 +176,22 @@ mod tests {
 
     #[test]
     fn codex_supports_xhigh_not_minimal() {
-        assert_eq!(clamp_effort("gpt-5-codex", "xhigh").as_deref(), Some("xhigh"));
-        assert_eq!(clamp_effort("gpt-5-codex", "minimal").as_deref(), Some("low"));
+        assert_eq!(
+            clamp_effort("gpt-5-codex", "xhigh").as_deref(),
+            Some("xhigh")
+        );
+        assert_eq!(
+            clamp_effort("gpt-5-codex", "minimal").as_deref(),
+            Some("low")
+        );
     }
 
     #[test]
     fn gpt5_pro_pins_to_high() {
-        assert_eq!(clamp_effort("gpt-5-pro", "minimal").as_deref(), Some("high"));
+        assert_eq!(
+            clamp_effort("gpt-5-pro", "minimal").as_deref(),
+            Some("high")
+        );
         assert_eq!(clamp_effort("gpt-5-pro", "low").as_deref(), Some("high"));
         assert_eq!(clamp_effort("gpt-5-pro", "xhigh").as_deref(), Some("high"));
     }

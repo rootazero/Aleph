@@ -161,8 +161,14 @@ fn enrich_path_for_reprobe() {
         candidates.push(home_path.join(".fnm"));
         #[cfg(windows)]
         {
-            candidates
-                .push(PathBuf::from(&h).join("AppData").join("Local").join("Microsoft").join("WinGet").join("Links"));
+            candidates.push(
+                PathBuf::from(&h)
+                    .join("AppData")
+                    .join("Local")
+                    .join("Microsoft")
+                    .join("WinGet")
+                    .join("Links"),
+            );
         }
     }
     #[cfg(target_os = "macos")]

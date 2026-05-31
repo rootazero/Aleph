@@ -106,7 +106,10 @@ impl ChannelMessageTool {
             .as_deref()
             .filter(|s| !s.trim().is_empty())
             .ok_or_else(|| {
-                AlephError::tool(format!("`{}` is required for the `{}` action", field, action))
+                AlephError::tool(format!(
+                    "`{}` is required for the `{}` action",
+                    field, action
+                ))
             })
     }
 }
@@ -141,11 +144,7 @@ impl AlephTool for ChannelMessageTool {
             ChannelMessageAction::Send => {
                 let text = Self::require(&args.text, "text", "send")?;
                 let mut outbound = OutboundMessage::text(args.conversation_id.clone(), text);
-                if let Some(reply_to) = args
-                    .reply_to
-                    .as_deref()
-                    .filter(|s| !s.trim().is_empty())
-                {
+                if let Some(reply_to) = args.reply_to.as_deref().filter(|s| !s.trim().is_empty()) {
                     outbound = outbound.with_reply_to(reply_to);
                 }
 

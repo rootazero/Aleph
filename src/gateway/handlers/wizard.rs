@@ -423,9 +423,11 @@ pub fn handlers(manager: Arc<WizardSessionManager>) -> Vec<(&'static str, Handle
         F: Fn(JsonRpcRequest) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = JsonRpcResponse> + Send + 'static,
     {
-        Arc::new(move |req| -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> {
-            Box::pin(f(req))
-        })
+        Arc::new(
+            move |req| -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send>> {
+                Box::pin(f(req))
+            },
+        )
     }
 
     let m1 = manager.clone();
@@ -438,10 +440,7 @@ pub fn handlers(manager: Arc<WizardSessionManager>) -> Vec<(&'static str, Handle
             "wizard.start",
             wrap(move |req| handle_start(req, m1.clone())),
         ),
-        (
-            "wizard.next",
-            wrap(move |req| handle_next(req, m2.clone())),
-        ),
+        ("wizard.next", wrap(move |req| handle_next(req, m2.clone()))),
         (
             "wizard.answer",
             wrap(move |req| handle_answer(req, m3.clone())),
@@ -572,7 +571,9 @@ mod tests {
         // Assert payload shape: cancelled must be true.
         let result = resp.result.expect("expected result payload");
         assert_eq!(
-            result["cancelled"].as_bool().expect("cancelled must be a bool"),
+            result["cancelled"]
+                .as_bool()
+                .expect("cancelled must be a bool"),
             true,
             "cancelled must be true"
         );

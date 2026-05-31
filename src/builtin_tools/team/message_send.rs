@@ -110,10 +110,7 @@ impl AlephTool for MessageSendTool {
         let mentions = extract_mentions(&args.content);
         let mention_all = mentions.iter().any(|m| m == MENTION_ALL);
         let effective_broadcast = args.broadcast || mention_all;
-        let mention_ids: Vec<String> = mentions
-            .into_iter()
-            .filter(|m| m != MENTION_ALL)
-            .collect();
+        let mention_ids: Vec<String> = mentions.into_iter().filter(|m| m != MENTION_ALL).collect();
 
         let to = if effective_broadcast {
             // Fan out to every member except the sender. Plain @mentions
@@ -143,8 +140,7 @@ impl AlephTool for MessageSendTool {
                 .map_err(|e| {
                     AlephError::other(format!("Failed to resolve mention recipients: {e}"))
                 })?;
-            let member_ids: HashSet<String> =
-                members.into_iter().map(|m| m.agent_id).collect();
+            let member_ids: HashSet<String> = members.into_iter().map(|m| m.agent_id).collect();
             let mut to = args.to;
             let already: HashSet<&str> = to.iter().map(|s| s.as_str()).collect();
             let mut additions: Vec<String> = Vec::new();

@@ -12,8 +12,7 @@ fn rejects_empty_api_key() {
 
 #[test]
 fn base_url_strips_trailing_slash() {
-    let p =
-        SunoProvider::new("k", Some("https://api.sunoaiapi.com//".into()), None).unwrap();
+    let p = SunoProvider::new("k", Some("https://api.sunoaiapi.com//".into()), None).unwrap();
     assert_eq!(p.base_url, "https://api.sunoaiapi.com");
     assert_eq!(p.generate_url(), "https://api.sunoaiapi.com/api/generate");
     assert_eq!(
@@ -52,7 +51,10 @@ async fn rejects_empty_prompt() {
     let p = SunoProvider::new("k", None, None).unwrap();
     let request = GenerationRequest::new(GenerationType::Audio, "");
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -61,7 +63,10 @@ async fn rejects_oversized_prompt() {
     let p = SunoProvider::new("k", None, None).unwrap();
     let request = GenerationRequest::new(GenerationType::Audio, text);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[test]
@@ -82,7 +87,10 @@ fn clip_is_complete_requires_status_and_url() {
     assert!(clip.is_complete());
 
     clip.audio_url = Some(String::new());
-    assert!(!clip.is_complete(), "empty audio_url should not be complete");
+    assert!(
+        !clip.is_complete(),
+        "empty audio_url should not be complete"
+    );
 
     clip.audio_url = Some("https://example.com/a.mp3".into());
     clip.status = Some("streaming".into());

@@ -179,7 +179,9 @@ pub async fn invoke(
     }
 
     let (client, _events) = AlephClient::connect(server_url).await?;
-    let result: Value = client.call("tools.invoke", Some(Value::Object(body))).await?;
+    let result: Value = client
+        .call("tools.invoke", Some(Value::Object(body)))
+        .await?;
     client.close().await?;
 
     if json {

@@ -386,10 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_delegation_notify_returns_ok() {
-        let caller = Arc::new(CannedCaller::new(vec![(
-            "memory.on_delegation",
-            json!({}),
-        )]));
+        let caller = Arc::new(CannedCaller::new(vec![("memory.on_delegation", json!({}))]));
         let ext = McpMemoryExtension::new("t", caller);
         let ctx = DelegationCtx {
             agent_id: "a".into(),

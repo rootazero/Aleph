@@ -58,10 +58,9 @@ impl AlephTool for BrowserUploadTool {
                 "browser_upload requires at least one file path in `paths`",
             ));
         }
-        let target = args
-            .ref_id
-            .as_ref()
-            .map(|rid| ActionTarget::Ref { ref_id: rid.clone() });
+        let target = args.ref_id.as_ref().map(|rid| ActionTarget::Ref {
+            ref_id: rid.clone(),
+        });
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.upload(&tab_id, target, &args.paths).await {
                 Ok(()) => Ok(BrowserUploadOutput {

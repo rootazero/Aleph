@@ -16,8 +16,7 @@ use serde_json::json;
 use tracing::debug;
 
 use crate::agents::swarm::tasks::{
-    CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, ReviewVerdict,
-    ReviewerKind,
+    CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, ReviewVerdict, ReviewerKind,
 };
 use crate::resilience::{AgentUsageTotal, StateDatabase};
 use crate::sync_primitives::Arc;
@@ -478,10 +477,7 @@ pub async fn handle_add_task_comment(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!(
-                "Failed to add comment to task '{}': {}",
-                params.task_id, e
-            ),
+            format!("Failed to add comment to task '{}': {}", params.task_id, e),
         ),
     }
 }
@@ -970,7 +966,10 @@ pub async fn handle_acp_member_add(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to add ACP member to team '{}': {}", params.team_id, e),
+            format!(
+                "Failed to add ACP member to team '{}': {}",
+                params.team_id, e
+            ),
         ),
     }
 }
@@ -1024,10 +1023,7 @@ pub async fn handle_acp_member_remove(
         }
     }
 
-    match store
-        .remove_member(&params.team_id, &params.agent_id)
-        .await
-    {
+    match store.remove_member(&params.team_id, &params.agent_id).await {
         Ok(()) => JsonRpcResponse::success(request.id, json!({ "success": true })),
         Err(e) => JsonRpcResponse::error(
             request.id,
@@ -1060,7 +1056,10 @@ pub async fn handle_acp_member_list(
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to list ACP members for team '{}': {}", params.team_id, e),
+            format!(
+                "Failed to list ACP members for team '{}': {}",
+                params.team_id, e
+            ),
         ),
     }
 }
@@ -1111,9 +1110,7 @@ pub async fn handle_workflow_approve_step(
     };
     let reviewer_kind = match parse_reviewer_kind(&params.reviewer_kind) {
         Ok(k) => k,
-        Err(msg) => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg.to_string())
-        }
+        Err(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg.to_string()),
     };
 
     if let Err(e) = coord_store
@@ -1179,9 +1176,7 @@ pub async fn handle_workflow_reject_step(
     };
     let reviewer_kind = match parse_reviewer_kind(&params.reviewer_kind) {
         Ok(k) => k,
-        Err(msg) => {
-            return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg.to_string())
-        }
+        Err(msg) => return JsonRpcResponse::error(request.id, INVALID_PARAMS, msg.to_string()),
     };
 
     if let Err(e) = coord_store
@@ -1815,7 +1810,9 @@ mod snapshot_handler_tests {
         let coord_conn = Connection::open_in_memory().unwrap();
         let coord = Arc::new(SqliteCoordTaskStore::new(coord_conn));
         coord.migrate().await.unwrap();
-        let snap = Arc::new(SqliteSnapshotStore::new_from_shared(coord.connection_handle()));
+        let snap = Arc::new(SqliteSnapshotStore::new_from_shared(
+            coord.connection_handle(),
+        ));
 
         let teams_conn = Connection::open_in_memory().unwrap();
         let teams = Arc::new(SqliteTeamStore::new(teams_conn));
@@ -1887,9 +1884,11 @@ mod snapshot_handler_tests {
         assert_eq!(arr[0]["id"].as_str().unwrap(), sid);
 
         // get
-        let resp =
-            handle_snapshot_get(req("teams.snapshot.get", json!({ "snapshot_id": sid })), snap.clone())
-                .await;
+        let resp = handle_snapshot_get(
+            req("teams.snapshot.get", json!({ "snapshot_id": sid })),
+            snap.clone(),
+        )
+        .await;
         assert!(resp.error.is_none());
         let payload = resp.result.as_ref().unwrap()["payload"].clone();
         assert_eq!(payload["team"]["id"].as_str().unwrap(), team_id);
@@ -1934,9 +1933,11 @@ mod snapshot_handler_tests {
         );
 
         // get after delete → not found
-        let resp =
-            handle_snapshot_get(req("teams.snapshot.get", json!({ "snapshot_id": sid })), snap.clone())
-                .await;
+        let resp = handle_snapshot_get(
+            req("teams.snapshot.get", json!({ "snapshot_id": sid })),
+            snap.clone(),
+        )
+        .await;
         assert!(resp.error.is_some());
         assert_eq!(resp.error.as_ref().unwrap().code, RESOURCE_NOT_FOUND);
     }
@@ -1955,12 +1956,10 @@ mod snapshot_handler_tests {
         )
         .await;
         assert!(resp.error.is_none());
-        assert!(
-            resp.result.as_ref().unwrap()["snapshots"]
-                .as_array()
-                .unwrap()
-                .is_empty()
-        );
+        assert!(resp.result.as_ref().unwrap()["snapshots"]
+            .as_array()
+            .unwrap()
+            .is_empty());
     }
 }
 

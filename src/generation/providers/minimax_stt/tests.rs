@@ -78,7 +78,10 @@ async fn rejects_missing_audio_source() {
     let p = MinimaxSttProvider::new("k", None, None).unwrap();
     let request = GenerationRequest::new(GenerationType::Transcription, "").with_params(params);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -93,7 +96,10 @@ async fn rejects_http_audio_url() {
     let p = MinimaxSttProvider::new("k", None, None).unwrap();
     let request = GenerationRequest::new(GenerationType::Transcription, "").with_params(params);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[tokio::test]
@@ -113,7 +119,10 @@ async fn rejects_oversized_inline_audio() {
     let p = MinimaxSttProvider::new("k", None, None).unwrap();
     let request = GenerationRequest::new(GenerationType::Transcription, "").with_params(params);
     let err = p.generate(request).await.unwrap_err();
-    assert!(matches!(err, GenerationError::InvalidParametersError { .. }));
+    assert!(matches!(
+        err,
+        GenerationError::InvalidParametersError { .. }
+    ));
 }
 
 #[test]

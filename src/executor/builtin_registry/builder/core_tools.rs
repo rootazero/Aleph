@@ -144,8 +144,10 @@ impl BuiltinToolRegistry {
             tools,
             "recall_events",
             RecallEventsTool::DESCRIPTION,
-            serde_json::to_value(schema_for!(crate::builtin_tools::recall_events::RecallEventsArgs))
-                .unwrap_or_default(),
+            serde_json::to_value(schema_for!(
+                crate::builtin_tools::recall_events::RecallEventsArgs
+            ))
+            .unwrap_or_default(),
         );
         reg(
             tools,

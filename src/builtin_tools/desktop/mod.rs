@@ -10,8 +10,8 @@ mod interactable;
 mod native;
 mod perm;
 mod safety;
-mod set_of_marks;
 pub mod session_lock;
+mod set_of_marks;
 mod types;
 mod wait_visual;
 

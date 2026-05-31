@@ -348,7 +348,8 @@ impl ProtocolAdapter for GeminiProtocol {
             let mut parts = rest.splitn(3, '-');
             if let (Some(a), Some(b)) = (parts.next(), parts.next()) {
                 let is_family = matches!(a, "pro" | "flash" | "ultra");
-                let is_version = b.contains('.') && b.chars().next().is_some_and(|c| c.is_ascii_digit());
+                let is_version =
+                    b.contains('.') && b.chars().next().is_some_and(|c| c.is_ascii_digit());
                 if is_family && is_version {
                     let tail = parts.next();
                     let canonical = match tail {
@@ -392,14 +393,8 @@ mod normalize_model_id_tests {
     #[test]
     fn flips_legacy_family_first_ordering() {
         let a = p();
-        assert_eq!(
-            a.normalize_model_id("gemini-pro-1.5"),
-            "gemini-1.5-pro"
-        );
-        assert_eq!(
-            a.normalize_model_id("gemini-flash-1.5"),
-            "gemini-1.5-flash"
-        );
+        assert_eq!(a.normalize_model_id("gemini-pro-1.5"), "gemini-1.5-pro");
+        assert_eq!(a.normalize_model_id("gemini-flash-1.5"), "gemini-1.5-flash");
     }
 
     #[test]

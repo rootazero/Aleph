@@ -122,11 +122,7 @@ async fn handle_bootstrap_consume(
     let session_id = match state.session_mgr.create_session(&hash) {
         Ok(id) => id,
         Err(_) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "session creation failed",
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, "session creation failed").into_response();
         }
     };
     let max_age = state.session_mgr.expiry_hours() * 3600;
@@ -236,9 +232,7 @@ async fn handle_anonymous_rpc(
         "pairing.start_browser" => {
             crate::gateway::handlers::auth::handle_pairing_start_browser(req, ctx).await
         }
-        "pairing.poll" => {
-            crate::gateway::handlers::auth::handle_pairing_poll(req, ctx).await
-        }
+        "pairing.poll" => crate::gateway::handlers::auth::handle_pairing_poll(req, ctx).await,
         other => crate::gateway::protocol::JsonRpcResponse::error(
             req.id.clone(),
             -32601,
@@ -470,7 +464,12 @@ mod tests {
 
         let resp_get = app
             .clone()
-            .oneshot(Request::builder().uri("/login").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/login")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -504,7 +503,10 @@ mod tests {
         use crate::gateway::session::HttpSessionManager;
 
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        let shared = Arc::new(SharedTokenManager::new(store.clone(), "/tmp/aleph_phase4.vault"));
+        let shared = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_phase4.vault",
+        ));
         let session_mgr = Arc::new(HttpSessionManager::new(store.clone(), 24));
         let bootstrap_mgr = Arc::new(BootstrapNonceManager::default());
         let pairing_mgr = Arc::new(PairingManager::new(store));

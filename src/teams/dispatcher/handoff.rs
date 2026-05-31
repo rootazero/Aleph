@@ -74,8 +74,7 @@ pub async fn build_handoff_context(
                 tracing::warn!(task_id = %task.id, dep_id = %dep_id, error = %e, "Handoff: failed to fetch dependency");
                 dep_section.push_str(&format!(
                     "### Dependency `{}`\n*(fetch error: {})*\n",
-                    dep_id,
-                    e
+                    dep_id, e
                 ));
             }
         }

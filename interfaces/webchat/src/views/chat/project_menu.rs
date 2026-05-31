@@ -179,7 +179,9 @@ pub fn ProjectMenu() -> impl IntoView {
     };
 
     let modal_title = move || match purpose.get() {
-        BrowserPurpose::PickExisting => t_string!(i18n, chat.project_modal_pick_existing).to_string(),
+        BrowserPurpose::PickExisting => {
+            t_string!(i18n, chat.project_modal_pick_existing).to_string()
+        }
         BrowserPurpose::NewBlank => t_string!(i18n, chat.project_modal_new_blank).to_string(),
     };
     let modal_confirm = move || match purpose.get() {

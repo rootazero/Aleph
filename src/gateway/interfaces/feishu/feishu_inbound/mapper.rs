@@ -226,7 +226,10 @@ mod tests {
     #[test]
     fn test_post_message_parsed() {
         let content = r#"{"title":"T","content":[[{"tag":"text","text":"hello world"}]]}"#;
-        assert_eq!(extract_message_text("post", content, &[]), "T\n\nhello world");
+        assert_eq!(
+            extract_message_text("post", content, &[]),
+            "T\n\nhello world"
+        );
     }
 
     #[test]

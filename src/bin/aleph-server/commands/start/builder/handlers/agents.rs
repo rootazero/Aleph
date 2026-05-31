@@ -258,10 +258,30 @@ pub(in crate::commands::start) fn register_teams_handlers(
     // any task state (admin-context), complementing the reviewer-context
     // workflow.* family. See `team_task_control` builtin for the
     // LLM-facing equivalent.
-    register_handler!(server, "teams.task.pause", teams::handle_task_pause, coord_store);
-    register_handler!(server, "teams.task.resume", teams::handle_task_resume, coord_store);
-    register_handler!(server, "teams.task.retry", teams::handle_task_retry, coord_store);
-    register_handler!(server, "teams.task.skip", teams::handle_task_skip, coord_store);
+    register_handler!(
+        server,
+        "teams.task.pause",
+        teams::handle_task_pause,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.task.resume",
+        teams::handle_task_resume,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.task.retry",
+        teams::handle_task_retry,
+        coord_store
+    );
+    register_handler!(
+        server,
+        "teams.task.skip",
+        teams::handle_task_skip,
+        coord_store
+    );
 
     // R3 — teams.task.trace: unified audit timeline aggregating runs +
     // comments + events + artifacts in one round-trip. Both optional
@@ -273,12 +293,14 @@ pub(in crate::commands::start) fn register_teams_handlers(
         let cs = Arc::clone(coord_store);
         let es = event_store.cloned();
         let ar = artifact_store.cloned();
-        server.handlers_mut().register("teams.task.trace", move |req| {
-            let cs = Arc::clone(&cs);
-            let es = es.clone();
-            let ar = ar.clone();
-            async move { teams::handle_task_trace(req, cs, es, ar).await }
-        });
+        server
+            .handlers_mut()
+            .register("teams.task.trace", move |req| {
+                let cs = Arc::clone(&cs);
+                let es = es.clone();
+                let ar = ar.clone();
+                async move { teams::handle_task_trace(req, cs, es, ar).await }
+            });
     }
 
     // R3 — exit journal read surface. Write is via the
@@ -299,7 +321,12 @@ pub(in crate::commands::start) fn register_teams_handlers(
     // ACP-backed team member operations — attach an external coding CLI
     // session (Claude Code, Codex, ...) as a first-class team member so
     // the autonomous dispatcher can route tasks to it.
-    register_handler!(server, "teams.acp_member.add", teams::handle_acp_member_add, store);
+    register_handler!(
+        server,
+        "teams.acp_member.add",
+        teams::handle_acp_member_add,
+        store
+    );
     register_handler!(
         server,
         "teams.acp_member.remove",
@@ -339,8 +366,18 @@ pub(in crate::commands::start) fn register_teams_handlers(
             coord_store,
             snap
         );
-        register_handler!(server, "teams.snapshot.list", teams::handle_snapshot_list, snap);
-        register_handler!(server, "teams.snapshot.get", teams::handle_snapshot_get, snap);
+        register_handler!(
+            server,
+            "teams.snapshot.list",
+            teams::handle_snapshot_list,
+            snap
+        );
+        register_handler!(
+            server,
+            "teams.snapshot.get",
+            teams::handle_snapshot_get,
+            snap
+        );
         register_handler!(
             server,
             "teams.snapshot.restore",
@@ -349,7 +386,12 @@ pub(in crate::commands::start) fn register_teams_handlers(
             coord_store,
             snap
         );
-        register_handler!(server, "teams.snapshot.delete", teams::handle_snapshot_delete, snap);
+        register_handler!(
+            server,
+            "teams.snapshot.delete",
+            teams::handle_snapshot_delete,
+            snap
+        );
     }
 
     // teams.usage — per-team provider token aggregation. Requires state.db
@@ -369,7 +411,9 @@ pub(in crate::commands::start) fn register_graph_handlers(
     _default_agent_id: &str,
     indexer: Option<
         &::std::sync::Arc<
-            alephcore::memory::notes::NoteIndexer<alephcore::memory::store::sqlite::SqliteMemoryBackend>,
+            alephcore::memory::notes::NoteIndexer<
+                alephcore::memory::store::sqlite::SqliteMemoryBackend,
+            >,
         >,
     >,
 ) {
