@@ -26,8 +26,7 @@ fn test_build_system_prompt_with_soul() {
     );
 
     // Standard sections should still be present
-    assert!(prompt.contains("Response Format"));
-    assert!(prompt.contains("JSON"));
+    assert!(prompt.contains("Your Role"), "Missing role section");
 }
 
 #[test]
@@ -173,8 +172,8 @@ fn phase3_with_provider_protocol_anthropic_stays_silent_on_basic_path() {
         "Anthropic protocol must not emit tool-use enforcement (Claude is well-behaved)"
     );
     assert!(
-        !prompt.contains("## Execution Discipline"),
-        "Anthropic protocol must not emit execution discipline"
+        !prompt.contains("## Execution Discipline — OpenAI Family"),
+        "Anthropic protocol must not emit OpenAI-family execution discipline"
     );
     assert!(
         !prompt.contains("## Google Model Operational Directives"),
@@ -490,10 +489,6 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
 
     // Standard sections should still be present
     assert!(prompt.contains("Your Role"), "Missing role section");
-    assert!(
-        prompt.contains("Response Format"),
-        "Missing response format section"
-    );
 
     // Verify ordering: Environment -> Protocol -> Guidelines -> Citations -> RuntimeContext(dynamic)
     let env_pos = prompt.find("## Environment").unwrap();
@@ -592,10 +587,6 @@ fn test_interactive_prompt_minimal_token_overhead() {
 
     // Standard sections should be present
     assert!(prompt.contains("Your Role"), "Missing role section");
-    assert!(
-        prompt.contains("Response Format"),
-        "Missing response format section"
-    );
 }
 
 #[test]

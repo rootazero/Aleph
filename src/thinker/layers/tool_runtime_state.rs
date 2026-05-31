@@ -7,6 +7,7 @@
 //! prompt, not in the wire-format schema.
 
 use crate::thinker::prompt_layer::{AssemblyPath, LayerInput, PromptLayer};
+use crate::thinker::prompt_mode::PromptMode;
 
 pub struct ToolRuntimeStateLayer;
 
@@ -26,6 +27,10 @@ impl PromptLayer for ToolRuntimeStateLayer {
             AssemblyPath::Context,
             AssemblyPath::Cached,
         ]
+    }
+
+    fn supports_mode(&self, mode: PromptMode) -> bool {
+        mode != PromptMode::Minimal
     }
 
     fn inject(&self, output: &mut String, input: &LayerInput) {

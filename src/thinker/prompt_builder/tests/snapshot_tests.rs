@@ -96,8 +96,8 @@ fn build_from_snapshot_equals_stable_plus_dynamic() {
     );
     // 2. Fork result contains standard sections from both stable and dynamic zones
     assert!(
-        fork_result.contains("Response Format"),
-        "fork result should contain Response Format (stable layer)"
+        fork_result.contains("Your Role"),
+        "fork result should contain Role section (stable layer)"
     );
     // 3. Fork result is non-empty and at least as long as stable prefix
     assert!(

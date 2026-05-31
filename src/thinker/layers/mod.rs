@@ -16,7 +16,6 @@ mod runtime_capabilities;
 mod skill_instructions;
 
 // --- Behavior layers ---
-mod response_format;
 mod skill_mode;
 mod thinking_guidance;
 
@@ -80,7 +79,6 @@ pub use mcp_instructions::McpInstructionsLayer;
 pub use runtime_capabilities::RuntimeCapabilitiesLayer;
 pub use skill_instructions::SkillInstructionsLayer;
 
-pub use response_format::ResponseFormatLayer;
 pub use skill_mode::SkillModeLayer;
 pub use thinking_guidance::ThinkingGuidanceLayer;
 
