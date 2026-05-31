@@ -104,10 +104,12 @@ fn default_enable_warnings() -> bool {
 impl MetricsPolicy {
     /// Get the warning threshold for a given target in milliseconds
     pub fn warning_threshold_ms(&self, target_ms: u64) -> u64 {
-        if !self.warning_multiplier.is_finite() || self.warning_multiplier < 0.0 {
-            return target_ms;
-        }
-        (target_ms as f64 * self.warning_multiplier).clamp(0.0, f64::MAX) as u64
+        let multiplier = if self.warning_multiplier.is_finite() && self.warning_multiplier >= 0.0 {
+            self.warning_multiplier
+        } else {
+            default_warning_multiplier()
+        };
+        (target_ms as f64 * multiplier).clamp(0.0, f64::MAX) as u64
     }
 
     /// Check if a duration exceeds the warning threshold for hotkey->clipboard
@@ -138,10 +140,10 @@ impl MetricsPolicy {
     /// Get total target latency for the full pipeline
     pub fn total_target_ms(&self) -> u64 {
         self.target_hotkey_to_clipboard_ms
-            + self.target_clipboard_to_memory_ms
-            + self.target_memory_to_ai_ms
-            + self.target_ai_to_paste_ms
-            + self.target_paste_to_complete_ms
+            .saturating_add(self.target_clipboard_to_memory_ms)
+            .saturating_add(self.target_memory_to_ai_ms)
+            .saturating_add(self.target_ai_to_paste_ms)
+            .saturating_add(self.target_paste_to_complete_ms)
     }
 }
 
