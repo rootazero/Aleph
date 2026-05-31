@@ -85,8 +85,13 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
                 // Filter by level if specified
                 if let Some(ref level) = params.level {
                     let level_upper = level.to_uppercase();
-                    let pattern = format!(" {} ", level_upper);
-                    lines.retain(|line| line.contains(&pattern));
+                    // Match level as a standalone word to avoid partial matches
+                    // (e.g., "ERROR" shouldn't match "WARN" or "INFO").
+                    lines.retain(|line| {
+                        line.contains(&format!(" {} ", level_upper))
+                            || line.contains(&format!("[{}]", level_upper))
+                            || line.ends_with(&format!(" {}", level_upper))
+                    });
                 }
 
                 // Take last N lines

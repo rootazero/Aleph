@@ -18,6 +18,8 @@ pub fn expand_path(path: &str) -> PathBuf {
         // Windows has no `/tmp` and `temp_dir()` is already per-user.
         #[cfg(unix)]
         {
+            // SAFETY: getuid() always succeeds and returns the real user ID
+            // of the calling process. It is async-signal-safe.
             let uid = unsafe { libc::getuid() };
             eprintln!(
                 "Warning: cannot determine home directory; using /tmp/.aleph-{uid} as fallback"
@@ -44,6 +46,8 @@ pub fn expand_path(path: &str) -> PathBuf {
 /// `false` if the process does not exist (ESRCH).
 #[cfg(unix)]
 pub fn is_process_running(pid: i32) -> bool {
+    // SAFETY: kill(pid, 0) performs error checking without sending a signal.
+    // It is async-signal-safe and the only way to check process existence on Unix.
     match unsafe { libc::kill(pid, 0) } {
         0 => true,
         _ => {
@@ -92,6 +96,8 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
             #[cfg(unix)]
             {
                 println!("Sending SIGTERM to gateway process (PID {})", pid);
+                // SAFETY: kill() with SIGTERM is the standard way to request graceful
+                // process termination on Unix. PID was validated by is_process_running().
                 if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
                     eprintln!(
                         "Warning: failed to send SIGTERM to PID {}: {}",
@@ -111,6 +117,8 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 println!("Gateway did not stop gracefully, sending SIGKILL");
+                // SAFETY: kill() with SIGKILL is the standard way to forcefully terminate
+                // a process on Unix. PID was validated at the start of this function.
                 if unsafe { libc::kill(pid, libc::SIGKILL) } != 0 {
                     return Err(format!(
                         "Failed to send SIGKILL to PID {}: {}",
@@ -188,7 +196,8 @@ pub fn daemonize(
         }
     }
 
-    // Fork the process
+    // SAFETY: fork() is the standard Unix primitive for process creation.
+    // We are single-threaded here (called before tokio runtime starts).
     match unsafe { libc::fork() } {
         -1 => return Err("Fork failed".into()),
         0 => {
@@ -200,12 +209,14 @@ pub fn daemonize(
         }
     }
 
-    // Create new session
+    // SAFETY: setsid() creates a new session and detaches from the controlling
+    // terminal. This is standard Unix daemonization practice.
     if unsafe { libc::setsid() } == -1 {
         return Err("setsid failed".into());
     }
 
-    // Fork again to prevent terminal reattachment
+    // SAFETY: Second fork ensures the daemon cannot reacquire a controlling terminal.
+    // Standard double-fork daemonization pattern.
     match unsafe { libc::fork() } {
         -1 => return Err("Second fork failed".into()),
         0 => {
@@ -216,10 +227,11 @@ pub fn daemonize(
         }
     }
 
-    // Set umask so file permissions are deterministic
+    // SAFETY: umask() sets file mode creation mask. 0o022 yields 0o644 files / 0o755 dirs.
     unsafe { libc::umask(0o022) };
 
-    // Change to root directory to avoid holding references to mount points
+    // SAFETY: chdir("/") avoids holding references to mount points.
+    // The null-terminated byte string is valid C string.
     if unsafe { libc::chdir(b"/\0".as_ptr() as *const libc::c_char) } == -1 {
         return Err("chdir to / failed".into());
     }
@@ -239,8 +251,11 @@ pub fn daemonize(
         use std::os::unix::io::AsRawFd;
         let fd = log_file.as_raw_fd();
 
+        // SAFETY: dup2 duplicates the file descriptor. fd is valid (from open file).
+        // Redirect all stdio to detach from terminal.
         unsafe {
-            if libc::dup2(fd, libc::STDOUT_FILENO) == -1
+            if libc::dup2(fd, libc::STDIN_FILENO) == -1
+                || libc::dup2(fd, libc::STDOUT_FILENO) == -1
                 || libc::dup2(fd, libc::STDERR_FILENO) == -1
             {
                 return Err("dup2 failed".into());
@@ -252,8 +267,11 @@ pub fn daemonize(
         let dev_null = std::fs::File::open("/dev/null")?;
         let fd = dev_null.as_raw_fd();
 
+        // SAFETY: dup2 duplicates the file descriptor. fd is valid (from open file).
+        // Also redirect stdin to /dev/null to fully detach from terminal.
         unsafe {
-            if libc::dup2(fd, libc::STDOUT_FILENO) == -1
+            if libc::dup2(fd, libc::STDIN_FILENO) == -1
+                || libc::dup2(fd, libc::STDOUT_FILENO) == -1
                 || libc::dup2(fd, libc::STDERR_FILENO) == -1
             {
                 return Err("dup2 failed".into());
