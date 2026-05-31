@@ -139,24 +139,6 @@ impl EligibilityService {
             EligibilityResult::Ineligible(reasons)
         }
     }
-
-    /// Evaluate all skills in an iterator.
-    ///
-    /// `config` is passed through to `evaluate`; use `&serde_json::json!({})`
-    /// when no config context is available.
-    pub fn evaluate_all<'a>(
-        &self,
-        skills: impl IntoIterator<Item = &'a SkillManifest>,
-        config: &serde_json::Value,
-    ) -> Vec<(&'a SkillManifest, EligibilityResult)> {
-        skills
-            .into_iter()
-            .map(|m| {
-                let result = self.evaluate(m, config);
-                (m, result)
-            })
-            .collect()
-    }
 }
 
 /// Resolve a dot-separated path within a JSON value.

@@ -633,38 +633,8 @@ fn guess_source(path: &Path) -> SkillSource {
 }
 
 // ---------------------------------------------------------------------------
-// Self-growth: SkillExtraction
+// Self-growth: learned-skill validation
 // ---------------------------------------------------------------------------
-
-/// Structured skill extraction from LLM reflection output.
-///
-/// Produced by the reflection stage and consumed by `SkillManageTool` to
-/// persist learned skills as `NoteType::Skill` facts in MemoryStore.
-#[derive(Debug, Clone)]
-pub struct SkillExtraction {
-    /// Kebab-case identifier (e.g., "rust-lifetime-debugging")
-    pub name: String,
-    /// Category: coding, debugging, workflow, knowledge, communication
-    pub category: String,
-    /// One-line description (max 100 chars)
-    pub description: String,
-    /// Full markdown body (When to Use, Steps, Pitfalls)
-    pub content: String,
-    /// True if this is an update to an existing skill
-    pub is_update: bool,
-}
-
-impl SkillExtraction {
-    /// Build the VFS path for this skill.
-    pub fn vfs_path(&self) -> String {
-        format!("aleph://skills/{}/{}/", self.category, self.name)
-    }
-
-    /// Build the full fact content with description header.
-    pub fn fact_content(&self) -> String {
-        format!("{}\n\n{}", self.description, self.content)
-    }
-}
 
 /// Valid skill categories.
 pub const SKILL_CATEGORIES: &[&str] = &[
@@ -716,21 +686,6 @@ mod tests {
         assert!(is_valid_category("coding"));
         assert!(is_valid_category("debugging"));
         assert!(!is_valid_category("invalid"));
-    }
-
-    #[test]
-    fn vfs_path_format() {
-        let skill = SkillExtraction {
-            name: "rust-lifetime-debugging".to_string(),
-            category: "coding".to_string(),
-            description: "Debug lifetime errors".to_string(),
-            content: "# Steps\n1. Check borrow scope".to_string(),
-            is_update: false,
-        };
-        assert_eq!(
-            skill.vfs_path(),
-            "aleph://skills/coding/rust-lifetime-debugging/"
-        );
     }
 
     #[test]

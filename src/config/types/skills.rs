@@ -20,10 +20,6 @@ pub struct SkillsConfig {
     /// Skills directory path (relative to config dir or absolute)
     #[serde(default = "default_skills_dir")]
     pub skills_dir: String,
-
-    /// Enable auto-matching skills based on user input
-    #[serde(default = "default_auto_match_enabled")]
-    pub auto_match_enabled: bool,
 }
 
 pub fn default_skills_enabled() -> bool {
@@ -34,16 +30,11 @@ pub fn default_skills_dir() -> String {
     "skills".to_string()
 }
 
-pub fn default_auto_match_enabled() -> bool {
-    false // Off by default, explicit /skill command required
-}
-
 impl Default for SkillsConfig {
     fn default() -> Self {
         Self {
             enabled: default_skills_enabled(),
             skills_dir: default_skills_dir(),
-            auto_match_enabled: default_auto_match_enabled(),
         }
     }
 }
