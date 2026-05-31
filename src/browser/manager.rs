@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::sync_primitives::RwLock;
+use crate::sync_primitives::{AtomicBool, Ordering, RwLock};
 
 use super::backend::BrowserBackend;
 use super::chrome_mcp::ChromeMcpDriver;
@@ -24,7 +24,7 @@ pub struct ProfileManager {
     config: BrowserSystemConfig,
     chrome_mcp_driver: Arc<ChromeMcpDriver>,
     playwright_cli_driver: Arc<PlaywrightCliDriver>,
-    idle_reaper_started: std::sync::atomic::AtomicBool,
+    idle_reaper_started: AtomicBool,
 }
 
 struct ManagedProfile {
@@ -104,7 +104,7 @@ impl ProfileManager {
             config,
             chrome_mcp_driver,
             playwright_cli_driver,
-            idle_reaper_started: std::sync::atomic::AtomicBool::new(false),
+            idle_reaper_started: AtomicBool::new(false),
         }
     }
 
@@ -113,7 +113,6 @@ impl ProfileManager {
     /// tears down Chrome MCP sessions whose profile is past its idle timeout,
     /// and resets state to `Idle`. Idempotent — subsequent calls are no-ops.
     pub fn spawn_idle_reaper(self: &Arc<Self>, interval_secs: u64) {
-        use std::sync::atomic::Ordering;
         if self.idle_reaper_started.swap(true, Ordering::AcqRel) {
             return;
         }
