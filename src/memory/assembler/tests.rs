@@ -100,6 +100,7 @@ fn default_cfg() -> AssemblerConfig {
         force_fallback: false,
         fallback_skeleton: FallbackSkeleton::default(),
         assembly_log: AssemblyLogConfig::default(),
+        project_scoped: false,
     }
 }
 

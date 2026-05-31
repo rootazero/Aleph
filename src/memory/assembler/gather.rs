@@ -29,6 +29,12 @@ pub(crate) struct Gatherer {
     pub backend: MemoryBackend,
     pub profile: Arc<UserProfileLoader>,
     pub feedback_floor: Arc<FeedbackFloorLoader>,
+    /// Mirror of `MemoryConfig.project_scoped`. When true and a project root is
+    /// active for the run, note retrieval unions the project's namespace with
+    /// the agent's global namespace so project-authored notes surface alongside
+    /// cross-project knowledge. The profile/feedback floors are loaded under the
+    /// base id regardless, keeping them global.
+    pub project_scoped: bool,
 }
 
 impl Gatherer {
@@ -83,7 +89,26 @@ impl Gatherer {
     }
 
     async fn fetch_notes(&self, query: &str, agent_id: &str, limit: usize) -> Vec<Candidate> {
-        match self.retrieval.retrieve(query, agent_id, limit).await {
+        // Project-scoped reads union the active project's namespace with the
+        // agent's global namespace (via the existing multi-agent path) so a
+        // project sees its own notes plus cross-project knowledge. With the
+        // feature off, or outside any project, `read_scope_ids` collapses to
+        // `[agent_id]` and we take the single-agent fast path — byte-identical
+        // to the pre-feature behaviour.
+        let fetched = if self.project_scoped {
+            let ns = crate::memory::project_scope::project_namespace(
+                crate::projects::current_project_root().as_deref(),
+            );
+            if crate::memory::project_scope::is_global(&ns) {
+                self.retrieval.retrieve(query, agent_id, limit).await
+            } else {
+                let ids = crate::memory::project_scope::read_scope_ids(agent_id, &ns);
+                self.retrieval.retrieve_multi_agent(query, &ids, limit).await
+            }
+        } else {
+            self.retrieval.retrieve(query, agent_id, limit).await
+        };
+        match fetched {
             Ok(results) => results
                 .into_iter()
                 .map(|sf| {

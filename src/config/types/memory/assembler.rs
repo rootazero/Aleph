@@ -21,6 +21,13 @@ pub struct AssemblerConfig {
     pub fallback_skeleton: FallbackSkeleton,
     #[serde(default)]
     pub assembly_log: AssemblyLogConfig,
+
+    /// Mirror of `MemoryConfig.project_scoped`, populated by the server builder.
+    /// When true and a project root is active, note retrieval unions the
+    /// project's namespace with the agent's global namespace (the always-on
+    /// profile/feedback floors stay global). Default `false`.
+    #[serde(default)]
+    pub project_scoped: bool,
 }
 
 impl Default for AssemblerConfig {
@@ -35,6 +42,7 @@ impl Default for AssemblerConfig {
             force_fallback: false,
             fallback_skeleton: FallbackSkeleton::default(),
             assembly_log: AssemblyLogConfig::default(),
+            project_scoped: false,
         }
     }
 }

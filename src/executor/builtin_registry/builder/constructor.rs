@@ -1290,7 +1290,8 @@ impl BuiltinToolRegistry {
                     })
             });
             let mut tool =
-                crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone());
+                crate::builtin_tools::note_manage::NoteManageTool::new(memory_dir, db.clone())
+                    .with_project_scoping(config.memory_project_scoped);
             // Wire the event-sourcing handler so note create/update/delete
             // actions feed the per-note event log that the memory_timeline
             // tool reads. Event-log only (no note_indexer) — note_manage owns

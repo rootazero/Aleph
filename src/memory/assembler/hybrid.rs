@@ -93,6 +93,7 @@ impl HybridAssembler {
                 backend,
                 profile,
                 feedback_floor,
+                project_scoped: config.project_scoped,
             },
             reranker,
             config,

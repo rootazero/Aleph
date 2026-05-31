@@ -32,6 +32,7 @@ pub mod insights;
 pub mod namespace;
 pub mod note_retrieval;
 pub mod notes;
+pub mod project_scope;
 pub mod reembed;
 pub mod reflector;
 pub mod rerank;

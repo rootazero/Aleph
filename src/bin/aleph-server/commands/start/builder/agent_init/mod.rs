@@ -472,6 +472,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             session_manager: Some(session_store.clone()),
             shared_token_manager: Some(shared_token_mgr.clone()),
             memory_similarity_threshold: Some(app_config.memory.similarity_threshold),
+            memory_project_scoped: app_config.memory.project_scoped,
             injection_mode: app_config.memory.injection_mode,
             coord_task_store: coord_store.clone(),
             snapshot_store: snapshot_store.clone(),
@@ -620,7 +621,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 memory_db,
                 emb,
                 Some(prov.clone()),
-                app_config.memory.assembler.clone(),
+                app_config.memory.assembler_config(),
             );
             let reflector_assembler = reflector_mcp.assembler();
 
@@ -974,7 +975,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 memory_db,
                 emb.clone(),
                 default_prov.clone(),
-                app_config.memory.assembler.clone(),
+                app_config.memory.assembler_config(),
                 Some(memory_ext_registry.clone()),
                 orientation.clone(),
                 profile_synth.clone(),

@@ -131,6 +131,7 @@ mod integration_tests {
             force_fallback: true, // skeleton path — no LLM needed
             fallback_skeleton: Default::default(),
             assembly_log: Default::default(),
+            project_scoped: false,
         };
         HybridAssembler::new(
             retrieval,
