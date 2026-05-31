@@ -352,6 +352,27 @@ mod tests {
     }
 
     #[test]
+    fn test_subagent_hook_events_wire_contract() {
+        use crate::extension::types::HookEvent;
+
+        // Canonical wire form is snake_case (plugin JSON-RPC surface).
+        assert_eq!(
+            serde_json::to_string(&HookEvent::SubagentStart).unwrap(),
+            "\"subagent_start\""
+        );
+        assert_eq!(
+            serde_json::to_string(&HookEvent::SubagentStop).unwrap(),
+            "\"subagent_stop\""
+        );
+
+        // PascalCase aliases stay accepted for codex-style hooks.json configs.
+        let start: HookEvent = serde_json::from_str("\"SubagentStart\"").unwrap();
+        assert_eq!(start, HookEvent::SubagentStart);
+        let stop: HookEvent = serde_json::from_str("\"SubagentStop\"").unwrap();
+        assert_eq!(stop, HookEvent::SubagentStop);
+    }
+
+    #[test]
     fn test_all_hook_events_serialize() {
         use crate::extension::types::HookEvent;
 
@@ -375,6 +396,9 @@ mod tests {
             HookEvent::GatewayStop,
             HookEvent::Notification,
             HookEvent::PermissionRequest,
+            HookEvent::UserPromptSubmit,
+            HookEvent::SubagentStart,
+            HookEvent::SubagentStop,
         ];
 
         for event in events {

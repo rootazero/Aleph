@@ -487,6 +487,8 @@ Hooks allow plugins to intercept and respond to system events.
 |-------|-------------|
 | `before_tool_call` | Before any tool is invoked |
 | `after_tool_call` | After tool execution completes |
+| `subagent_start` | When a sub-agent is spawned (observer-only; env: `SUBAGENT_ID`, `SUBAGENT_TYPE`, `TASK`, `PARENT_AGENT_ID`, `CHAIN_DEPTH`) |
+| `subagent_stop` | When a sub-agent completes (observer-only; env: `SUBAGENT_ID`, `SUBAGENT_TYPE`, `OUTCOME`, `ITERATIONS`, `DURATION_MS`, `TOKENS_USED`, `KEY_FINDINGS`) |
 | `on_message` | When a user message is received |
 | `on_response` | Before response is sent to user |
 | `on_error` | When an error occurs |
