@@ -36,7 +36,7 @@
 
 pub mod agents;
 pub mod approval;
-pub(crate) mod arena;
+pub mod arena;
 pub mod browser;
 pub mod builtin_tools;
 pub mod bundled;

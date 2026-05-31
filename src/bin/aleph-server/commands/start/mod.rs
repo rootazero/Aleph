@@ -806,6 +806,13 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
+    if let Some(ref arena_mgr) = agent_result.arena_manager {
+        register_arena_handlers(&mut server, arena_mgr);
+        if !args.daemon {
+            println!("  arena handlers: wired");
+        }
+    }
+
     // MCP tool bridge — now that `agent_result.tool_catalog` exists,
     // spawn the bridge with the tool-catalog handle so each registered MCP
     // tool also gets an `McpServerProbe` attached to the shared

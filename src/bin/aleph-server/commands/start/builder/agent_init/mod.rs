@@ -101,6 +101,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// `ContextCompactor` can reuse hierarchical session summaries for
     /// zero-API-cost compaction.
     pub memory_backend: Option<alephcore::memory::store::MemoryBackend>,
+    /// Arena manager for collaborative multi-agent arenas (R3).
+    pub arena_manager: Option<Arc<RwLock<alephcore::arena::ArenaManager>>>,
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
@@ -163,6 +165,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // events scoped to a team's members. `None` in the simulated branch (no
     // state.db == no historical usage to aggregate).
     let mut state_db_out: Option<Arc<alephcore::resilience::StateDatabase>> = None;
+
+    let arena_manager = Arc::new(RwLock::new(alephcore::arena::ArenaManager::new()));
 
     // Coord + snapshot stores (single shared connection to coord.db).
     let (coord_store, snapshot_store) = init_coord_and_snapshot(event_bus.clone(), daemon).await;
@@ -500,6 +504,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             profile_synthesizer: profile_synth.clone(),
             // Phase 3 Task 8: sandbox for exec-class tools.
             sandbox: sandbox.clone(),
+            arena_manager: Some(arena_manager.clone()),
             // Without the live Config arc, BuiltinToolRegistry constructor at
             // executor/builtin_registry/builder/constructor.rs:50 falls back to
             // SsrfPolicy::default() (enabled=true) for WebFetchTool — making
@@ -1993,5 +1998,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         orchestrator_cell: orch_cell_out,
         memory_context_provider: mcp_for_orchestrator,
         memory_backend: Some(memory_db.clone()),
+        arena_manager: Some(arena_manager),
     }
 }

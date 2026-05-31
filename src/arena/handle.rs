@@ -91,6 +91,12 @@ impl ArenaHandle {
         current: Option<String>,
         completed: Option<usize>,
     ) -> Result<(), String> {
+        if !self.permissions.can_write_own_slot {
+            return Err(format!(
+                "Agent '{}' ({:?}) does not have write permission",
+                self.agent_id, self.role
+            ));
+        }
         let mut arena = self.arena.write().unwrap_or_else(|e| e.into_inner());
         arena.report_progress(&self.agent_id, current, completed)?;
         Ok(())

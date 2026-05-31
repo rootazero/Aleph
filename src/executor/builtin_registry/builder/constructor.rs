@@ -1254,6 +1254,36 @@ impl BuiltinToolRegistry {
             (collaborate, turn, read)
         };
 
+        // Arena collaboration tools (optional — requires ArenaManager)
+        let (arena_create_tool, arena_query_tool, arena_settle_tool) =
+            if let Some(ref arena_manager) = config.arena_manager {
+                use crate::builtin_tools::arena::{
+                    ArenaCreateTool, ArenaQueryTool, ArenaSettleTool,
+                };
+                let create = ArenaCreateTool::new(crate::sync_primitives::Arc::clone(arena_manager));
+                let query = ArenaQueryTool::new(crate::sync_primitives::Arc::clone(arena_manager));
+                let settle = ArenaSettleTool::new(crate::sync_primitives::Arc::clone(arena_manager));
+
+                {
+                    use crate::tools::AlephTool;
+                    let tool_defs = [create.definition(), query.definition(), settle.definition()];
+                    for td in &tool_defs {
+                        let mut ut = UnifiedTool::new(
+                            format!("builtin:{}", td.name),
+                            &td.name,
+                            &td.description,
+                            ToolSource::Builtin,
+                        );
+                        ut = ut.with_parameters_schema(td.parameters.clone());
+                        tools.insert(td.name.clone(), ut);
+                    }
+                }
+                info!("Registered arena tools (arena_create, arena_query, arena_settle)");
+                (Some(create), Some(query), Some(settle))
+            } else {
+                (None, None, None)
+            };
+
         // Skill management tools — always available
         // Phase 2: use the process-wide shared SkillSystem instead of a
         // throwaway empty instance; skill_status previously always reported 0.
@@ -1610,6 +1640,9 @@ impl BuiltinToolRegistry {
             session_collaborate_tool,
             session_turn_tool,
             session_read_tool,
+            arena_create_tool,
+            arena_query_tool,
+            arena_settle_tool,
             google_meet_tool,
             skill_status_tool,
             skill_install_tool,

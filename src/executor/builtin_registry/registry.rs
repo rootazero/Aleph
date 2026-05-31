@@ -191,6 +191,9 @@ pub struct BuiltinToolRegistry {
 
     pub(crate) agent_list_tool: Option<crate::builtin_tools::agent_manage::AgentListTool>,
     pub(crate) agent_delete_tool: Option<crate::builtin_tools::agent_manage::AgentDeleteTool>,
+    pub(crate) arena_create_tool: Option<crate::builtin_tools::arena::ArenaCreateTool>,
+    pub(crate) arena_query_tool: Option<crate::builtin_tools::arena::ArenaQueryTool>,
+    pub(crate) arena_settle_tool: Option<crate::builtin_tools::arena::ArenaSettleTool>,
     /// agent_info — always available (read-only, depends only on the agent
     /// definition catalog, which is built unconditionally).
     pub(crate) agent_info_tool: crate::builtin_tools::agent_manage::AgentInfoTool,
@@ -1328,6 +1331,24 @@ impl ToolRegistry for BuiltinToolRegistry {
             "session_read" => Box::pin(async move {
                 let tool = self.session_read_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("session_read not available: no SessionStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "arena_create" => Box::pin(async move {
+                let tool = self.arena_create_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("arena_create not available: no ArenaManager configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "arena_query" => Box::pin(async move {
+                let tool = self.arena_query_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("arena_query not available: no ArenaManager configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "arena_settle" => Box::pin(async move {
+                let tool = self.arena_settle_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("arena_settle not available: no ArenaManager configured")
                 })?;
                 tool.call_json(arguments).await
             }),

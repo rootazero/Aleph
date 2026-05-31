@@ -88,6 +88,7 @@ macro_rules! register_handler {
 }
 
 mod agents;
+mod arena;
 mod auth;
 mod config;
 mod mcp;
@@ -97,6 +98,7 @@ mod settings;
 mod system;
 
 pub(in crate::commands::start) use agents::*;
+pub(in crate::commands::start) use arena::*;
 pub(in crate::commands::start) use auth::*;
 pub(in crate::commands::start) use config::*;
 pub(in crate::commands::start) use mcp::*;
