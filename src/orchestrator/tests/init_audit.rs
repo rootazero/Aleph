@@ -4,7 +4,7 @@
 //! `TraceSink::on_init_seam` events in declared order, with `configured`
 //! flags reflecting which Stage 1-6 / P0 rescue seams have wired impls.
 
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 
 use crate::harness::trace::LoopTraceEvent;
 use crate::harness::trace_sink::TraceSink;

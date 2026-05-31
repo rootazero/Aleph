@@ -527,9 +527,6 @@ impl Orchestrator {
 
     /// Seven-step dispatch. See design §6.
     pub async fn dispatch(&self, req: FlowRequest) -> Result<FlowHandle, FlowError> {
-        // Step 2: depth guard (cheap, first, to reject runaway callers).
-        depth_guard(req.depth)?;
-
         // Step 1: resolve flow_id → FlowSpec.
         let flow_id = match &req.flow_id {
             Some(id) => id.clone(),
@@ -544,6 +541,9 @@ impl Orchestrator {
             .flow_registry
             .resolve(&flow_id)
             .ok_or_else(|| FlowError::UnknownFlow(flow_id.clone()))?;
+
+        // Step 2: depth guard.
+        depth_guard(req.depth)?;
 
         // Step 3: agent lookup deferred to harness (it holds the AgentRegistry).
 
