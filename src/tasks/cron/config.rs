@@ -310,8 +310,6 @@ pub struct JobStateV2 {
     pub last_duration_ms: Option<i64>,
     #[serde(default)]
     pub consecutive_errors: u32,
-    #[serde(default)]
-    pub schedule_error_count: u32,
     pub last_failure_alert_at_ms: Option<i64>,
     pub last_delivery_status: Option<DeliveryStatus>,
     /// Output text of the previous run — feeds the `{{last_output}}`
@@ -783,7 +781,6 @@ mod tests {
         assert!(state.last_error_reason.is_none());
         assert!(state.last_duration_ms.is_none());
         assert_eq!(state.consecutive_errors, 0);
-        assert_eq!(state.schedule_error_count, 0);
         assert!(state.last_failure_alert_at_ms.is_none());
         assert!(state.last_delivery_status.is_none());
         assert!(state.last_output.is_none());
@@ -872,7 +869,10 @@ mod tests {
         assert!(job.enabled);
         assert_eq!(job.schedule_kind, kind);
         assert_eq!(job.session_target, SessionTarget::Isolated);
-        assert!(job.timeout_ms.is_none(), "new jobs have no timeout override");
+        assert!(
+            job.timeout_ms.is_none(),
+            "new jobs have no timeout override"
+        );
         assert_eq!(job.effective_timeout_ms(), 900_000);
 
         let mut overridden = job.clone();

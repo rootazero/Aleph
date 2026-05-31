@@ -214,20 +214,6 @@ pub struct HeartbeatState {
     pub last_error: Option<String>,
 }
 
-// ── error_backoff_ms ─────────────────────────────────────────────────────────
-
-/// Calculate exponential backoff delay based on consecutive error count.
-///
-/// Returns 0 for no errors, otherwise returns a capped delay in milliseconds.
-pub fn error_backoff_ms(consecutive_errors: u32) -> u64 {
-    const BACKOFF_MS: [u64; 5] = [30_000, 60_000, 300_000, 900_000, 3_600_000];
-    if consecutive_errors == 0 {
-        return 0;
-    }
-    let idx = (consecutive_errors.saturating_sub(1) as usize).min(BACKOFF_MS.len() - 1);
-    BACKOFF_MS[idx]
-}
-
 // ── HeartbeatTaskView ────────────────────────────────────────────────────────
 
 /// Read-only view of a HeartbeatTask for API responses
@@ -294,15 +280,6 @@ mod tests {
         assert_eq!(config.tick_interval_secs, 10);
         assert_eq!(config.max_concurrent, 3);
         assert_eq!(config.job_timeout_secs, 120);
-    }
-
-    #[test]
-    fn test_error_backoff_ms() {
-        assert_eq!(error_backoff_ms(0), 0);
-        assert_eq!(error_backoff_ms(1), 30_000);
-        assert_eq!(error_backoff_ms(2), 60_000);
-        assert_eq!(error_backoff_ms(5), 3_600_000);
-        assert_eq!(error_backoff_ms(100), 3_600_000);
     }
 
     #[test]
