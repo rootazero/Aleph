@@ -11,7 +11,7 @@
 pub mod config;
 pub mod snapshot;
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use aleph_desktop::DesktopPlatform;
 use chrono::Utc;
