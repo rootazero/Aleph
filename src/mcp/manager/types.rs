@@ -509,6 +509,14 @@ pub enum McpCommand {
         respond_to: oneshot::Sender<Vec<McpPrompt>>,
     },
 
+    /// Get aggregated server-provided `instructions` from all servers.
+    /// Feeds `McpInstructionsLayer` so each connected server's usage guidance
+    /// reaches the system prompt.
+    AggregateInstructions {
+        /// Response channel
+        respond_to: oneshot::Sender<Vec<crate::thinker::prompt_layer::McpServerInstruction>>,
+    },
+
     /// Reload configuration from disk
     ReloadConfig {
         /// Response channel
@@ -581,6 +589,7 @@ impl std::fmt::Debug for McpCommand {
             Self::AggregateTools { .. } => f.debug_struct("AggregateTools").finish(),
             Self::AggregateResources { .. } => f.debug_struct("AggregateResources").finish(),
             Self::AggregatePrompts { .. } => f.debug_struct("AggregatePrompts").finish(),
+            Self::AggregateInstructions { .. } => f.debug_struct("AggregateInstructions").finish(),
             Self::ReloadConfig { .. } => f.debug_struct("ReloadConfig").finish(),
             Self::Shutdown { .. } => f.debug_struct("Shutdown").finish(),
             Self::SetSamplingCallback { .. } => f.debug_struct("SetSamplingCallback").finish(),

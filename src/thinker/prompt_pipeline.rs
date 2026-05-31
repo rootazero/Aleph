@@ -236,7 +236,6 @@ impl PromptPipeline {
     /// 1702  ChainContextLayer
     /// 1704  AgentCatalogLayer
     /// 1705  McpInstructionsLayer
-    /// 1706  McpToolIndexLayer
     /// 1710  VoiceModeLayer
     /// 1720  RuntimeContextLayer
     /// 1730  IdentityFilesLayer
@@ -252,7 +251,6 @@ impl PromptPipeline {
             Box::new(InboundContextLayer),
             Box::new(ChainContextLayer),
             Box::new(McpInstructionsLayer),
-            Box::new(McpToolIndexLayer),
             Box::new(VoiceModeLayer),
             Box::new(ProfileLayer),
             Box::new(RoleLayer),
@@ -478,9 +476,9 @@ mod tests {
         let pipeline = PromptPipeline::default_layers();
         // 38 after ToolRuntimeStateLayer was added (Phase 5, 2026-05-21).
         // Previous counts: 36 → 37 (SessionBudgetLayer, Phase 4, 2026-05-20)
-        // → 38 (ToolRuntimeStateLayer). See `default_layers` for the full
-        // layer table.
-        assert_eq!(pipeline.layer_count(), 38);
+        // → 38 (ToolRuntimeStateLayer) → 37 (McpToolIndexLayer removed as dead
+        // code, 2026-05-31). See `default_layers` for the full layer table.
+        assert_eq!(pipeline.layer_count(), 37);
     }
 
     #[test]
@@ -538,7 +536,6 @@ mod mode_tests {
             "generation_models",
             "skill_instructions",
             "mcp_instructions",
-            "mcp_tool_index",
             "agent_catalog",
             "chain_context",
             "session_resume",
@@ -842,15 +839,14 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"session_context_guide"));
         assert!(dynamic_names.contains(&"session_resume"));
         assert!(dynamic_names.contains(&"mcp_instructions"));
-        assert!(dynamic_names.contains(&"mcp_tool_index"));
         assert!(dynamic_names.contains(&"agent_catalog"));
         // Phase 2 (2026-05-20): ChainContextLayer rendered subagent
         // delegation depth per request — naturally dynamic.
         assert!(dynamic_names.contains(&"chain_context"));
         assert_eq!(
             dynamic_names.len(),
-            12,
-            "Exactly 12 dynamic layers expected"
+            11,
+            "Exactly 11 dynamic layers expected"
         );
     }
 

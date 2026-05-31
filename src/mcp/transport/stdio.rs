@@ -35,6 +35,48 @@ use crate::mcp::transport::{McpTransport, NotificationCallback};
 /// Default timeout for RPC calls (30 seconds)
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
+/// Environment-variable keys that change how an interpreter or dynamic loader
+/// bootstraps a process. A third-party MCP server's `env` block must never set
+/// these against the child we spawn: they enable code-prelude injection,
+/// arbitrary library preloading, and debugger/inspector attachment. We strip
+/// them at spawn time so a malicious or careless server config cannot escalate
+/// from "run this command" to "run this command with my prelude/loader hooks".
+/// (Ported from openclaw's stdio MCP env hardening.)
+const UNSAFE_ENV_KEYS: &[&str] = &[
+    // Dynamic-loader hijacking (glibc / macOS dyld)
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FRAMEWORK_PATH",
+    // Interpreter prelude / module injection
+    "NODE_OPTIONS",
+    "NODE_REPL_EXTERNAL_MODULE",
+    "PYTHONSTARTUP",
+    "PYTHONPATH",
+    "PYTHONINSPECT",
+    "PERL5OPT",
+    "PERL5LIB",
+    "RUBYOPT",
+    "RUBYLIB",
+    // Shell startup / tracing hooks
+    "BASH_ENV",
+    "ENV",
+    "SHELLOPTS",
+    "PS4",
+    "GIT_EXTERNAL_DIFF",
+];
+
+/// Returns `true` if `key` is an interpreter/loader bootstrap variable that
+/// must not be forwarded to a spawned MCP server process. Case-insensitive to
+/// match OS env-var lookup semantics on case-insensitive platforms.
+fn is_unsafe_env_key(key: &str) -> bool {
+    UNSAFE_ENV_KEYS
+        .iter()
+        .any(|denied| denied.eq_ignore_ascii_case(key))
+}
+
 /// Map of in-flight request ids to the channel awaiting their response.
 type PendingMap = StdMutex<HashMap<u64, oneshot::Sender<JsonRpcResponse>>>;
 
@@ -90,6 +132,14 @@ impl StdioTransport {
             .kill_on_drop(true);
 
         for (key, value) in env {
+            if is_unsafe_env_key(key) {
+                tracing::warn!(
+                    server = %name,
+                    key = %key,
+                    "Refusing to forward unsafe interpreter/loader env var to MCP server"
+                );
+                continue;
+            }
             cmd.env(key, value);
         }
         if let Some(dir) = cwd {
@@ -451,6 +501,28 @@ impl Drop for StdioTransport {
 mod tests {
     use super::*;
     use crate::sync_primitives::{AtomicBool, Ordering};
+
+    #[test]
+    fn unsafe_env_keys_are_rejected() {
+        // Loader + interpreter bootstrap vars must be filtered.
+        assert!(is_unsafe_env_key("LD_PRELOAD"));
+        assert!(is_unsafe_env_key("DYLD_INSERT_LIBRARIES"));
+        assert!(is_unsafe_env_key("NODE_OPTIONS"));
+        assert!(is_unsafe_env_key("PYTHONPATH"));
+        assert!(is_unsafe_env_key("BASH_ENV"));
+        // Case-insensitive match (OS env lookup semantics).
+        assert!(is_unsafe_env_key("node_options"));
+        assert!(is_unsafe_env_key("Ld_Preload"));
+    }
+
+    #[test]
+    fn ordinary_env_keys_are_allowed() {
+        assert!(!is_unsafe_env_key("PATH"));
+        assert!(!is_unsafe_env_key("HOME"));
+        assert!(!is_unsafe_env_key("GITHUB_TOKEN"));
+        assert!(!is_unsafe_env_key("MY_SERVER_API_KEY"));
+        assert!(!is_unsafe_env_key(""));
+    }
 
     #[tokio::test]
     async fn test_spawn_echo_server() {
