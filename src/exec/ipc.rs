@@ -316,6 +316,9 @@ impl IpcServer {
         Ok(())
     }
 
+    /// Maximum allowed message size (1 MiB) to prevent DoS via memory exhaustion.
+    const MAX_MESSAGE_SIZE: usize = 1_048_576;
+
     /// Receive a message
     async fn recv_message(
         reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
@@ -324,6 +327,12 @@ impl IpcServer {
         let n = reader.read_line(&mut line).await?;
         if n == 0 {
             return Err(IpcError::ConnectionClosed);
+        }
+        if line.len() > Self::MAX_MESSAGE_SIZE {
+            return Err(IpcError::InvalidMessage(format!(
+                "message exceeds maximum size of {} bytes",
+                Self::MAX_MESSAGE_SIZE
+            )));
         }
         let msg: IpcMessage = serde_json::from_str(&line)?;
         Ok(msg)

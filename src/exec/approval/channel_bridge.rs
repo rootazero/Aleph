@@ -142,15 +142,17 @@ impl ChannelApprovalBridge {
             }
         };
 
-        self.pending_approvals
-            .write()
-            .await
-            .push(PendingApprovalState {
+        {
+            let mut approvals = self.pending_approvals.write().await;
+            let now = Utc::now();
+            approvals.retain(|p| p.expires_at > now);
+            approvals.push(PendingApprovalState {
                 approval_id: pending.approval_id.clone(),
                 channel_id: channel_id.clone(),
                 conversation_id: conversation_id.clone(),
                 expires_at: pending.expires_at,
             });
+        }
 
         Some(ChannelApprovalResult {
             approval_id: pending.approval_id,
@@ -220,15 +222,17 @@ impl ChannelApprovalBridge {
                             Ok(_result) => {
                                 let expires_at = chrono::Utc::now() + chrono::Duration::minutes(5);
 
-                                self.pending_approvals
-                                    .write()
-                                    .await
-                                    .push(PendingApprovalState {
+                                {
+                                    let mut approvals = self.pending_approvals.write().await;
+                                    let now = Utc::now();
+                                    approvals.retain(|p| p.expires_at > now);
+                                    approvals.push(PendingApprovalState {
                                         approval_id: pending_approval_id.clone(),
                                         channel_id: channel_id.clone(),
                                         conversation_id: conversation_id.clone(),
                                         expires_at,
                                     });
+                                }
 
                                 Some(ChannelApprovalResult {
                                     approval_id: pending_approval_id,

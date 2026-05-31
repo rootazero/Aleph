@@ -54,16 +54,20 @@ fn contains_unquoted_redirect(command: &str) -> bool {
     let mut in_single = false;
     let mut in_double = false;
     let mut escaped = false;
+    let mut prev = '\0';
 
     for ch in command.chars() {
         if escaped {
             escaped = false;
+            prev = ch;
             continue;
         }
 
         match ch {
             '\\' if !in_single => {
                 escaped = true;
+                prev = ch;
+                continue;
             }
             '\'' if !in_double => {
                 in_single = !in_single;
@@ -75,14 +79,15 @@ fn contains_unquoted_redirect(command: &str) -> bool {
                 return true;
             }
             '&' if !in_single && !in_double => {
-                // Could be part of >& or <& (fd duplication redirects)
-                // We check the previous char in the next iteration via peek, but
-                // for simplicity we flag bare & in unquoted context as suspicious
-                // since shell fd redirects like `2>&1` contain & adjacent to >
-                return true;
+                // Only flag & when it follows > or < (fd duplication redirects like 2>&1)
+                // Do NOT flag && (chain operator) or bare & (background operator)
+                if prev == '>' || prev == '<' {
+                    return true;
+                }
             }
             _ => {}
         }
+        prev = ch;
     }
     false
 }

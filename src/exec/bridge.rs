@@ -116,6 +116,9 @@ impl ApprovalBridge {
         }
     }
 
+    /// Maximum number of approval entries to retain in memory.
+    const MAX_TRACKED_APPROVALS: usize = 10_000;
+
     /// Track a sent approval message
     pub async fn track_sent_message(&self, msg: SentApprovalMessage) {
         let mut messages = self.sent_messages.write().await;
@@ -123,6 +126,14 @@ impl ApprovalBridge {
             .entry(msg.approval_id.clone())
             .or_default()
             .push(msg);
+        // Prevent unbounded growth: evict oldest entries when over limit.
+        while messages.len() > Self::MAX_TRACKED_APPROVALS {
+            if let Some(oldest) = messages.keys().next().cloned() {
+                messages.remove(&oldest);
+            } else {
+                break;
+            }
+        }
     }
 
     /// Get sent messages for an approval
