@@ -226,10 +226,16 @@ impl BuiltinToolRegistry {
             memory_workspace_handle,
             memory_session_key_handle,
         ) = if let (Some(ref db), Some(ref embedder)) = (&config.memory_db, &config.embedder) {
+            // Cross-encoder rerank config (disabled by default → no behaviour change).
+            let rerank_cfg: Option<crate::memory::rerank::RerankConfig> = match &config.config {
+                Some(cfg) => Some(cfg.read().await.memory.rerank.clone()),
+                None => None,
+            };
             let search_tool = MemorySearchTool::new_with_config(
                 db.clone(),
                 Arc::clone(embedder),
                 config.memory_similarity_threshold,
+                rerank_cfg.as_ref(),
             );
             let ws_handle = search_tool.default_workspace_handle();
             let sk_handle = search_tool.default_session_key_handle();

@@ -191,14 +191,19 @@ impl MemorySearchTool {
         database: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,
     ) -> Self {
-        Self::new_with_config(database, embedder, None)
+        Self::new_with_config(database, embedder, None, None)
     }
 
     /// Create a new MemorySearchTool with explicit similarity threshold from config.
+    ///
+    /// `rerank_config`: when `Some` and enabled, attaches a cross-encoder
+    /// reranker to the long-term recall path. `None` / disabled leaves recall
+    /// behaviour unchanged.
     pub fn new_with_config(
         database: MemoryBackend,
         embedder: Arc<dyn EmbeddingProvider>,
         similarity_threshold: Option<f32>,
+        rerank_config: Option<&crate::memory::rerank::RerankConfig>,
     ) -> Self {
         let _threshold = similarity_threshold.unwrap_or(Self::DEFAULT_SIMILARITY_THRESHOLD);
 
@@ -210,7 +215,11 @@ impl MemorySearchTool {
                 .join("note")
         });
         let note_indexer = Arc::new(NoteIndexer::new(memory_dir, database.clone()));
-        let note_retrieval = Arc::new(NoteFactRetrieval::new(note_indexer, Arc::clone(&embedder)));
+        let mut retrieval = NoteFactRetrieval::new(note_indexer, Arc::clone(&embedder));
+        if let Some(cfg) = rerank_config {
+            retrieval = retrieval.with_rerank_config(cfg);
+        }
+        let note_retrieval = Arc::new(retrieval);
 
         let comptroller_config = ComptrollerConfig::default();
         let comptroller = Arc::new(ContextComptroller::new(comptroller_config));
