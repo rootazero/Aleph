@@ -326,7 +326,9 @@ impl InitializationCoordinator {
         let toml_str = toml::to_string_pretty(&default_config)
             .map_err(|e| InitError::new("config", format!("Failed to serialize config: {}", e)))?;
 
-        let temp_path = config_path.with_extension("tmp");
+        // Use process-specific temp filename to avoid collisions with concurrent
+        // or crashed initialization attempts.
+        let temp_path = config_path.with_extension(format!("tmp.{}", std::process::id()));
         tokio::fs::write(&temp_path, toml_str).await.map_err(|e| {
             InitError::new("config", format!("Failed to write temporary config: {}", e))
         })?;
