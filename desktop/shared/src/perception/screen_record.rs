@@ -1,4 +1,9 @@
-//! macOS screen recording implementation (SCRecordingOutput + screencapture CLI fallback).
+//! Screen recording implementations.
+//!
+//! - **macOS**: `SCRecordingOutput` (macOS 15+) with a `screencapture -V` CLI
+//!   fallback (macOS 13–14).
+//! - **Linux**: `ffmpeg -f x11grab` for X11 / XWayland sessions, with graceful
+//!   `NotImplemented` degradation on pure Wayland.
 
 use crate::error::{DesktopError, Result};
 use tracing::debug;
@@ -90,7 +95,7 @@ pub fn screen_record(
 }
 
 /// Generate the output file path: `~/.aleph/data/_media/screen_record_{timestamp}.mp4`
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn screen_record_output_path() -> Result<std::path::PathBuf> {
     let home = dirs::home_dir()
         .ok_or_else(|| DesktopError::ScreenCapture("Cannot determine home directory".into()))?;
@@ -360,4 +365,176 @@ fn screencapture_cli_record(
         duration_secs: config.duration_secs,
         has_audio: config.with_audio,
     })
+}
+
+/// Build the `ffmpeg` argument vector for an x11grab screen recording.
+///
+/// Pure function (no I/O) so the argument assembly can be unit-tested without a
+/// display server. `display` is the X11 `DISPLAY` value (e.g. ":0.0").
+#[cfg(any(target_os = "linux", test))]
+fn build_x11grab_args(
+    display: &str,
+    config: &crate::screen_types::ScreenRecordConfig,
+    output: &str,
+) -> Vec<String> {
+    let mut args: Vec<String> = vec![
+        "-y".into(),
+        "-f".into(),
+        "x11grab".into(),
+        "-framerate".into(),
+        config.fps.to_string(),
+    ];
+
+    // Region capture uses an explicit size plus a +X,Y input offset; full-screen
+    // omits the size and lets x11grab capture the whole root window.
+    let input = match &config.region {
+        Some(r) => {
+            args.push("-video_size".into());
+            args.push(format!("{}x{}", r.width, r.height));
+            format!("{display}+{},{}", r.x, r.y)
+        }
+        None => display.to_string(),
+    };
+    args.push("-i".into());
+    args.push(input);
+
+    // Optional system audio from the default PulseAudio source (mirrors
+    // media.rs::record_audio).
+    if config.with_audio {
+        args.push("-f".into());
+        args.push("pulse".into());
+        args.push("-i".into());
+        args.push("default".into());
+    }
+
+    args.push("-t".into());
+    args.push(format!("{:.3}", config.duration_secs));
+    // H.264 + yuv420p for broad MP4 player compatibility.
+    args.push("-c:v".into());
+    args.push("libx264".into());
+    args.push("-pix_fmt".into());
+    args.push("yuv420p".into());
+    args.push(output.to_string());
+    args
+}
+
+/// Record the primary display (or a region) to MP4 via `ffmpeg -f x11grab`.
+///
+/// Linux desktop capture is fragmented by display server:
+/// - **X11 / XWayland** (`DISPLAY` set): handled here via ffmpeg x11grab — the
+///   single most broadly-available mechanism, reusing the same `ffmpeg` binary
+///   `media.rs` already shells out to (no new crate dependency, R3).
+/// - **pure Wayland** (no X server): returns [`DesktopError::NotImplemented`]
+///   with a hint, since x11grab cannot read native Wayland surfaces. Mirrors the
+///   graceful X11/Wayland degradation in `LinuxSystem::user_idle_seconds`.
+#[cfg(target_os = "linux")]
+pub fn screen_record(
+    config: &crate::screen_types::ScreenRecordConfig,
+) -> Result<crate::screen_types::ScreenRecordResult> {
+    use std::process::Command;
+
+    let config = config.clone().clamped();
+
+    let display = match std::env::var("DISPLAY") {
+        Ok(d) if !d.is_empty() => d,
+        _ => {
+            return Err(DesktopError::NotImplemented(
+                "Screen recording needs an X server (X11 or XWayland; DISPLAY is unset). \
+                 On pure Wayland use a compositor-native recorder such as wf-recorder \
+                 (wlroots) or the xdg-desktop-portal ScreenCast API."
+                    .into(),
+            ));
+        }
+    };
+
+    let output_path = screen_record_output_path()?;
+    let output_str = output_path.to_string_lossy().into_owned();
+    let args = build_x11grab_args(&display, &config, &output_str);
+
+    let output = Command::new("ffmpeg").args(&args).output().map_err(|e| {
+        DesktopError::ScreenCapture(format!("Failed to run ffmpeg (install ffmpeg): {e}"))
+    })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(DesktopError::ScreenCapture(format!(
+            "ffmpeg x11grab recording failed: {}",
+            stderr.trim()
+        )));
+    }
+    if !output_path.exists() {
+        return Err(DesktopError::ScreenCapture(
+            "ffmpeg completed but the output file was not created".into(),
+        ));
+    }
+
+    debug!(
+        "Screen recording (ffmpeg x11grab) complete: {}",
+        output_path.display()
+    );
+
+    Ok(crate::screen_types::ScreenRecordResult {
+        file_path: output_str,
+        duration_secs: config.duration_secs,
+        has_audio: config.with_audio,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::screen_types::ScreenRecordConfig;
+    use crate::ScreenRegion;
+
+    #[test]
+    fn x11grab_fullscreen_omits_video_size() {
+        let cfg = ScreenRecordConfig {
+            duration_secs: 5.0,
+            fps: 30,
+            with_audio: false,
+            region: None,
+        };
+        let args = build_x11grab_args(":0.0", &cfg, "/tmp/out.mp4");
+        assert!(args.iter().any(|a| a == "x11grab"));
+        assert!(!args.iter().any(|a| a == "-video_size"));
+        let i = args.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(args[i + 1], ":0.0");
+        assert_eq!(args.last().unwrap(), "/tmp/out.mp4");
+        assert!(!args.iter().any(|a| a == "pulse"));
+    }
+
+    #[test]
+    fn x11grab_region_sets_size_and_offset() {
+        let cfg = ScreenRecordConfig {
+            duration_secs: 3.0,
+            fps: 24,
+            with_audio: false,
+            region: Some(ScreenRegion {
+                x: 100,
+                y: 50,
+                width: 640,
+                height: 480,
+            }),
+        };
+        let args = build_x11grab_args(":1", &cfg, "/tmp/r.mp4");
+        let vs = args.iter().position(|a| a == "-video_size").unwrap();
+        assert_eq!(args[vs + 1], "640x480");
+        let i = args.iter().position(|a| a == "-i").unwrap();
+        assert_eq!(args[i + 1], ":1+100,50");
+        let fr = args.iter().position(|a| a == "-framerate").unwrap();
+        assert_eq!(args[fr + 1], "24");
+    }
+
+    #[test]
+    fn x11grab_audio_adds_pulse_input() {
+        let cfg = ScreenRecordConfig {
+            duration_secs: 2.0,
+            fps: 30,
+            with_audio: true,
+            region: None,
+        };
+        let args = build_x11grab_args(":0", &cfg, "/tmp/a.mp4");
+        assert!(args.iter().any(|a| a == "pulse"));
+        assert!(args.iter().any(|a| a == "default"));
+    }
 }

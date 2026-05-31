@@ -661,12 +661,12 @@ impl super::DesktopTool {
                 }
             }
             "clipboard_read" => match platform.system() {
-                // Prefer the system capability: on macOS it surfaces clipboard
-                // images (PNG/TIFF→base64 PNG) decoded natively in the limb,
-                // which the text-only screen path silently drops. Linux/Windows
-                // return text only (has_image=false), so this stays backward
-                // compatible while letting vision-capable agents see a copied
-                // image.
+                // Prefer the system capability: macOS (NSPasteboard PNG/TIFF)
+                // and Linux (wl-paste/xclip image/*) surface clipboard images as
+                // base64 PNG decoded natively in the limb, which the text-only
+                // screen path silently drops. Windows still returns text only
+                // (has_image=false), so this stays backward compatible while
+                // letting vision-capable agents see a copied image.
                 Some(system) => match system.clipboard_read().await {
                     Ok(content) => {
                         let mut obj = serde_json::Map::new();
