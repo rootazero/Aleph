@@ -100,15 +100,16 @@ impl MediaAttachment {
             // Strip whitespace (newlines, spaces) before calculating to handle
             // PEM-style or RFC 2045 wrapped base64 strings correctly.
             ContentEncoding::Base64 => {
-                let clean_len = data.chars().filter(|c| !c.is_whitespace()).count();
-                let padding = data
-                    .chars()
+                let bytes = data.as_bytes();
+                let clean_len = bytes.iter().filter(|&&b| !b.is_ascii_whitespace()).count();
+                let padding = bytes
+                    .iter()
                     .rev()
-                    .filter(|c| !c.is_whitespace())
+                    .filter(|&&b| !b.is_ascii_whitespace())
                     .take(2)
-                    .filter(|&c| c == '=')
+                    .filter(|&&b| b == b'=')
                     .count();
-                ((clean_len - padding).saturating_mul(3) / 4) as u64
+                ((clean_len.saturating_sub(padding)).saturating_mul(3) / 4) as u64
             }
             ContentEncoding::Utf8 => data.len() as u64,
         };
@@ -178,4 +179,95 @@ pub struct MemoryEntry {
     pub timestamp: i64,
     /// Cosine similarity score from vector search, if applicable
     pub similarity_score: Option<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn media_attachment_base64_empty() {
+        let attachment = MediaAttachment::new(
+            MediaType::Image,
+            "image/png",
+            "",
+            ContentEncoding::Base64,
+            None,
+        );
+        assert_eq!(attachment.size_bytes, 0);
+    }
+
+    #[test]
+    fn media_attachment_base64_whitespace_only() {
+        let attachment = MediaAttachment::new(
+            MediaType::Image,
+            "image/png",
+            "   \n\t  ",
+            ContentEncoding::Base64,
+            None,
+        );
+        assert_eq!(attachment.size_bytes, 0);
+    }
+
+    #[test]
+    fn media_attachment_base64_with_padding() {
+        // "SGVsbG8=" is "Hello" in base64 (5 bytes)
+        let attachment = MediaAttachment::new(
+            MediaType::Image,
+            "image/png",
+            "SGVsbG8=",
+            ContentEncoding::Base64,
+            None,
+        );
+        assert_eq!(attachment.size_bytes, 5);
+    }
+
+    #[test]
+    fn media_attachment_base64_without_padding() {
+        // "SGVsbG8" is base64 without padding
+        let attachment = MediaAttachment::new(
+            MediaType::Image,
+            "image/png",
+            "SGVsbG8",
+            ContentEncoding::Base64,
+            None,
+        );
+        // (7 * 3) / 4 = 5 (integer division truncates)
+        assert_eq!(attachment.size_bytes, 5);
+    }
+
+    #[test]
+    fn media_attachment_utf8_multibyte() {
+        let attachment = MediaAttachment::new(
+            MediaType::Document,
+            "text/plain",
+            "\u{4f60}\u{597d}\u{4e16}\u{754c}",
+            ContentEncoding::Utf8,
+            None,
+        );
+        assert_eq!(attachment.size_bytes, 12); // 4 chars * 3 bytes each in UTF-8
+    }
+
+    #[test]
+    fn media_attachment_utf8_ascii() {
+        let attachment = MediaAttachment::new(
+            MediaType::Document,
+            "text/plain",
+            "Hello",
+            ContentEncoding::Utf8,
+            None,
+        );
+        assert_eq!(attachment.size_bytes, 5);
+    }
+
+    #[test]
+    fn memory_entry_default() {
+        let entry = MemoryEntry::default();
+        assert!(entry.id.is_empty());
+        assert!(entry.window_title.is_empty());
+        assert!(entry.user_input.is_empty());
+        assert!(entry.ai_output.is_empty());
+        assert_eq!(entry.timestamp, 0);
+        assert!(entry.similarity_score.is_none());
+    }
 }

@@ -99,15 +99,17 @@ fn test_generate_summary_empty_session() {
     assert!(summary.contains("[No original request found]"));
 }
 
-#[test]
-fn test_replace_with_summary() {
+#[tokio::test]
+async fn test_replace_with_summary() {
     let compactor = SessionCompactor::with_keep_recent(5);
     let mut session = create_test_session();
 
     let original_count = session.parts.len();
     let summary = "Test summary content".to_string();
 
-    compactor.replace_with_summary(&mut session, summary.clone());
+    compactor
+        .replace_with_summary(&mut session, summary.clone())
+        .await;
 
     // Should have 1 summary + 5 kept parts = 6 total
     assert_eq!(session.parts.len(), 6);
@@ -263,7 +265,7 @@ async fn test_check_and_compact_no_overflow() {
     let mut session = create_test_session();
     session.total_tokens = 1000; // Well below threshold
 
-    let result = compactor.check_and_compact(&mut session).await;
+    let result = compactor.check_and_compact(&mut session, None).await;
 
     assert!(result.is_none());
 }
@@ -282,7 +284,7 @@ async fn test_check_and_compact_overflow() {
     // Manually set high token count to trigger compaction
     session.total_tokens = 110000;
 
-    let result = compactor.check_and_compact(&mut session).await;
+    let result = compactor.check_and_compact(&mut session, None).await;
 
     assert!(result.is_some());
     let info = result.unwrap();
