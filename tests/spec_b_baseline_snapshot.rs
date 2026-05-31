@@ -12,6 +12,7 @@
 use std::path::Path;
 
 use alephcore::memory::assembler::hybrid::LlmReranker;
+use alephcore::memory::assembler::FeedbackFloorLoader;
 use alephcore::memory::assembler::{
     AssemblyBudget, HybridAssembler, ItemSource, MemoryEnvelope, UserProfileLoader,
     WorkingMemoryAssembler,
@@ -22,7 +23,6 @@ use alephcore::memory::notes::NoteIndexer;
 use alephcore::memory::session_resume::reader::SnapshotReader;
 use alephcore::memory::session_search_summary::FactSourceFilter;
 use alephcore::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
-use alephcore::memory::assembler::FeedbackFloorLoader;
 use alephcore::memory::{MemoryBackend, SqliteMemoryBackend};
 use alephcore::{AlephError, AssemblerConfig};
 use async_trait::async_trait;

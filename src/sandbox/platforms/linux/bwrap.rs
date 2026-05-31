@@ -575,7 +575,8 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
                     unsafe {
                         cmd.pre_exec(move || {
                             crate::sandbox::cgroup_v2::CgroupV2Scope::write_current_pid_to_path(
-                                &procs_path)
+                                &procs_path,
+                            )
                         });
                     }
                 }

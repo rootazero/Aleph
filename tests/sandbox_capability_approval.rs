@@ -174,7 +174,13 @@ fn build_test_sandbox(
         Some(Arc::from(requester) as Arc<dyn ApprovalRequester>),
     ));
     let shell_security = alephcore::ShellSecurityConfig::default();
-    let sandbox = build_sandbox(&cfg, driver_trait, gate, SandboxRateLimitConfig::default(), &shell_security);
+    let sandbox = build_sandbox(
+        &cfg,
+        driver_trait,
+        gate,
+        SandboxRateLimitConfig::default(),
+        &shell_security,
+    );
     (sandbox, run_count, calls, last_mem, last_net, tmp)
 }
 

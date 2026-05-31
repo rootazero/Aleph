@@ -40,8 +40,8 @@ use crate::error::{AlephError, Result};
 use crate::search::providers::base::{build_client, check_status};
 use crate::search::providers::duckduckgo::{parse_ddg_html, parse_ddg_lite_html};
 use crate::search::{SearchOptions, SearchResult};
-use reqwest::Client;
 use crate::sync_primitives::Mutex;
+use reqwest::Client;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 

@@ -320,10 +320,7 @@ mod tests {
 
         assert!(find_fence_at(&spans, 3).is_none());
         assert!(find_fence_at(&spans, 12).is_some());
-        assert_eq!(
-            find_fence_at(&spans, 12).unwrap().language(),
-            Some("rust")
-        );
+        assert_eq!(find_fence_at(&spans, 12).unwrap().language(), Some("rust"));
     }
 
     #[test]

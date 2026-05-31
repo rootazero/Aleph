@@ -296,7 +296,12 @@ fn topo_sort(tpl: &TeamTemplate) -> Result<Vec<&super::types::TemplateTask>, Tea
         let mut newly_ready: Vec<&str> = Vec::new();
         for other in &tpl.tasks {
             if other.depends_on.iter().any(|d| d == k) {
-                let entry = in_deg.get_mut(other.key.as_str()).expect("known key");
+                let entry = in_deg.get_mut(other.key.as_str()).ok_or_else(|| {
+                    TeamTemplateError::Materialize(format!(
+                        "topo sort: unknown dependency key '{}' for task '{}'",
+                        k, other.key
+                    ))
+                })?;
                 *entry -= 1;
                 if *entry == 0 {
                     newly_ready.push(other.key.as_str());

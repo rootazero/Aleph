@@ -150,8 +150,8 @@ fn merge_agent_id(mut arguments: Value, agent_id: Option<&str>) -> Value {
 mod tests {
     use super::*;
     use crate::error::Result as AlephResult;
-    use crate::tool_metadata::UnifiedTool;
     use crate::sync_primitives::Mutex;
+    use crate::tool_metadata::UnifiedTool;
     use std::collections::HashMap;
 
     /// Minimal in-test ToolRegistry returning canned values keyed by tool name.

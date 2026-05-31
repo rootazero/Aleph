@@ -344,7 +344,10 @@ mod tests {
         };
         let m = manifest_with_eligibility(spec);
         let result = svc.evaluate(&m, &serde_json::json!({}));
-        assert!(!result.is_eligible(), "enabled=false must override always=true");
+        assert!(
+            !result.is_eligible(),
+            "enabled=false must override always=true"
+        );
         match result {
             EligibilityResult::Ineligible(reasons) => {
                 assert_eq!(reasons.len(), 1);

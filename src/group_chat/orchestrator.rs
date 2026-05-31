@@ -110,7 +110,9 @@ impl GroupChatOrchestrator {
             source_session_key.clone(),
         );
         let handle = Arc::new(tokio::sync::Mutex::new(session));
-        self.sessions.lock().unwrap_or_else(|e| e.into_inner())
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(session_id.clone(), Arc::clone(&handle));
 
         // 6. Persist to database if available
@@ -158,7 +160,8 @@ impl GroupChatOrchestrator {
     /// caller can still read its final state. Returns `None` if the session
     /// was not found.
     pub fn end_session(&mut self, session_id: &str) -> Option<SharedSession> {
-        let handle = self.sessions
+        let handle = self
+            .sessions
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(session_id)?;

@@ -243,7 +243,12 @@ impl CgroupV2Scope {
         path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
         path_buf[path_bytes.len()] = b'\0';
 
-        let fd = unsafe { libc::open(path_buf.as_ptr() as *const i8, libc::O_WRONLY | libc::O_CLOEXEC) };
+        let fd = unsafe {
+            libc::open(
+                path_buf.as_ptr() as *const i8,
+                libc::O_WRONLY | libc::O_CLOEXEC,
+            )
+        };
         if fd < 0 {
             return Err(std::io::Error::last_os_error());
         }
@@ -264,7 +269,11 @@ impl CgroupV2Scope {
         let mut written = 0;
         while written < pid_slice.len() {
             let ret = unsafe {
-                libc::write(fd, pid_slice[written..].as_ptr() as *const libc::c_void, pid_slice.len() - written)
+                libc::write(
+                    fd,
+                    pid_slice[written..].as_ptr() as *const libc::c_void,
+                    pid_slice.len() - written,
+                )
             };
             if ret < 0 {
                 let _ = unsafe { libc::close(fd) };

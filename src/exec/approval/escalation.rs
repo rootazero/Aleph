@@ -116,16 +116,24 @@ fn normalize_path_components(path: &Path) -> PathBuf {
 /// Check if path is in sensitive directory
 pub fn is_sensitive_directory(path: &Path) -> bool {
     let sensitive_components = [
-        ".ssh", ".gnupg", ".aws", ".docker", ".kube", ".azure", ".oci",
-        ".netrc", ".npmrc", ".pypirc", ".git-credentials",
-        ".bash_history", ".zsh_history", ".python_history",
+        ".ssh",
+        ".gnupg",
+        ".aws",
+        ".docker",
+        ".kube",
+        ".azure",
+        ".oci",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        ".git-credentials",
+        ".bash_history",
+        ".zsh_history",
+        ".python_history",
         "Keychain.app",
     ];
     // Multi-segment sensitive paths that must match as complete path components
-    let sensitive_path_segments = [
-        (".config", "gcloud"),
-        (".config", "gh"),
-    ];
+    let sensitive_path_segments = [(".config", "gcloud"), (".config", "gh")];
 
     // Check path components for exact directory matches
     let has_sensitive_component = path.components().any(|comp| {

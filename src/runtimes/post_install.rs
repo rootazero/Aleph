@@ -49,9 +49,7 @@ fn expand_home(template: &str) -> Result<String, PostInstallError> {
 /// Post-install command timeout — prevents hung subcommands from blocking indefinitely.
 const POST_INSTALL_TIMEOUT_SECS: u64 = 300;
 
-async fn run_cmd_with_timeout(
-    cmd: &mut Command,
-) -> Result<std::process::Output, PostInstallError> {
+async fn run_cmd_with_timeout(cmd: &mut Command) -> Result<std::process::Output, PostInstallError> {
     match timeout(Duration::from_secs(POST_INSTALL_TIMEOUT_SECS), cmd.output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(e)) => Err(PostInstallError::Io(e)),
@@ -120,10 +118,8 @@ async fn create_fnm_alias(alias_name: &str) -> Result<(), PostInstallError> {
         })
         .next()
         .ok_or(PostInstallError::NoNodeVersion)?;
-    let output = run_cmd_with_timeout(
-        Command::new("fnm").args(["alias", &version, alias_name]),
-    )
-    .await?;
+    let output =
+        run_cmd_with_timeout(Command::new("fnm").args(["alias", &version, alias_name])).await?;
     if !output.status.success() {
         return Err(PostInstallError::SubcommandFailed {
             stderr: String::from_utf8_lossy(&output.stderr).into(),

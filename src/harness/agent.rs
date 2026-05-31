@@ -488,7 +488,9 @@ impl Harness for AgentHarness {
                                     self.hit_limit.store(true, Ordering::Relaxed);
                                     self.set_terminate_reason(
                                         TerminateReason::ConsecutiveFailureCap {
-                                            consecutive: consecutive_failure_turns.try_into().unwrap_or(u32::MAX),
+                                            consecutive: consecutive_failure_turns
+                                                .try_into()
+                                                .unwrap_or(u32::MAX),
                                         },
                                     );
                                     callback.on_complete();
@@ -533,7 +535,10 @@ impl Harness for AgentHarness {
                             // No-op when the last assistant turn already has
                             // text — well-behaved capped runs pay nothing.
                             self.fire_max_iterations_grace_turn(
-                                &current_session, callback, iterations, cancel,
+                                &current_session,
+                                callback,
+                                iterations,
+                                cancel,
                             )
                             .await;
                             callback.on_complete();

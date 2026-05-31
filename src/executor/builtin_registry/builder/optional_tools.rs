@@ -64,7 +64,9 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_search",
                     MemorySearchTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::memory_search::MemorySearchArgs>("memory_search"),
+                    schema::<crate::builtin_tools::memory_search::MemorySearchArgs>(
+                        "memory_search",
+                    ),
                 );
                 info!("Registered memory_search tool in BuiltinToolRegistry");
             }
@@ -73,7 +75,9 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_browse",
                     MemoryBrowseTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::memory_browse::MemoryBrowseArgs>("memory_browse"),
+                    schema::<crate::builtin_tools::memory_browse::MemoryBrowseArgs>(
+                        "memory_browse",
+                    ),
                 );
                 info!("Registered memory.browse tool in BuiltinToolRegistry");
             }
@@ -82,7 +86,9 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_explore",
                     MemoryExploreTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::memory_explore::MemoryExploreArgs>("memory_explore"),
+                    schema::<crate::builtin_tools::memory_explore::MemoryExploreArgs>(
+                        "memory_explore",
+                    ),
                 );
                 info!("Registered memory_explore tool in BuiltinToolRegistry");
             }
@@ -91,7 +97,9 @@ impl BuiltinToolRegistry {
                     tools,
                     "memory_timeline",
                     crate::builtin_tools::MemoryTimelineTool::DESCRIPTION,
-                    schema::<crate::builtin_tools::memory_timeline::MemoryTimelineArgs>("memory_timeline"),
+                    schema::<crate::builtin_tools::memory_timeline::MemoryTimelineArgs>(
+                        "memory_timeline",
+                    ),
                 );
                 info!("Registered memory_timeline tool in BuiltinToolRegistry");
             }
@@ -105,7 +113,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "flag_user_correction",
                 crate::builtin_tools::FlagUserCorrectionTool::DESCRIPTION,
-                schema::<crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs>("flag_user_correction"),
+                schema::<crate::builtin_tools::flag_user_correction::FlagUserCorrectionArgs>(
+                    "flag_user_correction",
+                ),
             );
             info!("Registered flag_user_correction tool in BuiltinToolRegistry");
         }
@@ -155,7 +165,9 @@ impl BuiltinToolRegistry {
                         tools,
                         "video_generate",
                         crate::builtin_tools::generation::VideoGenerateTool::DESCRIPTION,
-                        schema::<crate::builtin_tools::generation::VideoGenerateArgs>("video_generate"),
+                        schema::<crate::builtin_tools::generation::VideoGenerateArgs>(
+                            "video_generate",
+                        ),
                     );
                     info!("Registered video_generate tool in BuiltinToolRegistry");
                 }
@@ -165,7 +177,9 @@ impl BuiltinToolRegistry {
                         tools,
                         "audio_generate",
                         crate::builtin_tools::generation::AudioGenerateTool::DESCRIPTION,
-                        schema::<crate::builtin_tools::generation::AudioGenerateArgs>("audio_generate"),
+                        schema::<crate::builtin_tools::generation::AudioGenerateArgs>(
+                            "audio_generate",
+                        ),
                     );
                     info!("Registered audio_generate tool in BuiltinToolRegistry");
                 }
@@ -175,7 +189,9 @@ impl BuiltinToolRegistry {
                         tools,
                         "speech_generate",
                         crate::builtin_tools::generation::SpeechGenerateTool::DESCRIPTION,
-                        schema::<crate::builtin_tools::generation::SpeechGenerateArgs>("speech_generate"),
+                        schema::<crate::builtin_tools::generation::SpeechGenerateArgs>(
+                            "speech_generate",
+                        ),
                     );
                     info!("Registered speech_generate tool in BuiltinToolRegistry");
                 }
@@ -339,7 +355,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "channel_pairing",
                 ChannelPairingTool::DESCRIPTION,
-                schema::<crate::builtin_tools::channel_manage::ChannelPairingArgs>("channel_pairing"),
+                schema::<crate::builtin_tools::channel_manage::ChannelPairingArgs>(
+                    "channel_pairing",
+                ),
             );
             info!("Registered channel_pairing tool in BuiltinToolRegistry");
         }
@@ -352,7 +370,9 @@ impl BuiltinToolRegistry {
                 tools,
                 "channel_message",
                 ChannelMessageTool::DESCRIPTION,
-                schema::<crate::builtin_tools::channel_message::ChannelMessageArgs>("channel_message"),
+                schema::<crate::builtin_tools::channel_message::ChannelMessageArgs>(
+                    "channel_message",
+                ),
             );
             info!("Registered channel_message tool in BuiltinToolRegistry");
         }

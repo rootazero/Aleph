@@ -370,7 +370,12 @@ impl TeamStore for SqliteTeamStore {
                     "team {id} must be disbanded before deletion"
                 )))
             }
-            _ => {}
+            Some("disbanded") => {}
+            Some(other) => {
+                return Err(domain_err(format!(
+                    "team {id} has unexpected status '{other}'; cannot delete"
+                )))
+            }
         }
 
         conn.execute("DELETE FROM teams WHERE id = ?1", params![id])
@@ -397,7 +402,13 @@ impl TeamStore for SqliteTeamStore {
                     input.team_id
                 )))
             }
-            _ => {}
+            Some("active") => {}
+            Some(other) => {
+                return Err(domain_err(format!(
+                    "team {} has unexpected status '{other}'; cannot add member",
+                    input.team_id
+                )))
+            }
         }
 
         let now = now_epoch();

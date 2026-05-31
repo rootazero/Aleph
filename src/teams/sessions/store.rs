@@ -333,9 +333,11 @@ impl SessionStore for SqliteSessionStore {
             None => return Err(db_err(format!("session not found: {session_id}"))),
         };
 
-        if status_str != "active" {
+        let status = SessionStatus::from_stored(&status_str);
+        if status != SessionStatus::Active {
             return Err(db_err(format!(
-                "cannot add turn to {status_str} session: {session_id}"
+                "cannot add turn to {} session: {session_id}",
+                status.as_str()
             )));
         }
 

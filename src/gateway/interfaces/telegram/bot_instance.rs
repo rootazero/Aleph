@@ -8,34 +8,32 @@ use tokio::sync::{mpsc, oneshot};
 
 fn create_bot_with_proxy(token: &str, proxy_url: Option<&str>) -> Bot {
     match proxy_url {
-        Some(url) if !url.is_empty() => {
-            match reqwest_legacy::Proxy::all(url) {
-                Ok(proxy) => {
-                    match teloxide::net::default_reqwest_settings()
-                        .proxy(proxy)
-                        .build()
-                    {
-                        Ok(client) => Bot::with_client(token, client),
-                        Err(e) => {
-                            tracing::warn!(
-                                proxy_url = %url,
-                                error = %e,
-                                "Failed to build HTTP client with proxy; falling back to no proxy"
-                            );
-                            Bot::new(token)
-                        }
+        Some(url) if !url.is_empty() => match reqwest_legacy::Proxy::all(url) {
+            Ok(proxy) => {
+                match teloxide::net::default_reqwest_settings()
+                    .proxy(proxy)
+                    .build()
+                {
+                    Ok(client) => Bot::with_client(token, client),
+                    Err(e) => {
+                        tracing::warn!(
+                            proxy_url = %url,
+                            error = %e,
+                            "Failed to build HTTP client with proxy; falling back to no proxy"
+                        );
+                        Bot::new(token)
                     }
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        proxy_url = %url,
-                        error = %e,
-                        "Invalid proxy URL; falling back to no proxy"
-                    );
-                    Bot::new(token)
-                }
             }
-        }
+            Err(e) => {
+                tracing::warn!(
+                    proxy_url = %url,
+                    error = %e,
+                    "Invalid proxy URL; falling back to no proxy"
+                );
+                Bot::new(token)
+            }
+        },
         _ => Bot::new(token),
     }
 }

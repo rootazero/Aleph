@@ -148,12 +148,12 @@ impl PiiEngine {
             "ssh_key" => &config.ssh_key,
             _ => {
                 // Look up custom rule action by name
-                    config
-                        .custom_rules
-                        .iter()
-                        .find(|r| r.name == rule_name)
-                        .map(|r| &r.action)
-                        .unwrap_or_else(|| &PiiAction::Block)
+                config
+                    .custom_rules
+                    .iter()
+                    .find(|r| r.name == rule_name)
+                    .map(|r| &r.action)
+                    .unwrap_or_else(|| &PiiAction::Block)
             }
         }
     }

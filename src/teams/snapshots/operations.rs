@@ -236,7 +236,14 @@ pub async fn restore_snapshot(
     // 2. Members. Preserve `kind` and ACP routing fields so external CLI
     // members survive snapshot/restore round-trips.
     for agent_id in &members_to_add {
-        let snap_m = snap_member_ids[agent_id];
+        let snap_m = snap_member_ids.get(agent_id).ok_or_else(|| {
+            AlephError::ConfigError {
+                message: format!(
+                    "snapshot restore: member {agent_id} in members_to_add but not in snap_member_ids"
+                ),
+                suggestion: None,
+            }
+        })?;
         team_store
             .add_member(NewTeamMember {
                 team_id: team_id.clone(),

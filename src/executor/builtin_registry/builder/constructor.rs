@@ -429,20 +429,23 @@ impl BuiltinToolRegistry {
             .as_ref()
             .map(|ctx| Arc::clone(ctx.session_store()))
             .or_else(|| config.session_manager.clone())
-            .or_else(|| {
-                match crate::gateway::SessionManager::with_defaults() {
-                    Ok(sm) => Some(Arc::new(sm)),
-                    Err(e) => {
-                        warn!("Failed to create fallback SessionManager for agent tools: {}", e);
-                        None
-                    }
+            .or_else(|| match crate::gateway::SessionManager::with_defaults() {
+                Ok(sm) => Some(Arc::new(sm)),
+                Err(e) => {
+                    warn!(
+                        "Failed to create fallback SessionManager for agent tools: {}",
+                        e
+                    );
+                    None
                 }
             });
 
         let (agent_create_tool, agent_list_tool, agent_delete_tool, session_context_handle) =
-            if let (Some(ref ar), Some(ref wm), Some(ref sm)) =
-                (&config.agent_registry, &config.workspace_manager, &sm_for_agents)
-            {
+            if let (Some(ref ar), Some(ref wm), Some(ref sm)) = (
+                &config.agent_registry,
+                &config.workspace_manager,
+                &sm_for_agents,
+            ) {
                 use crate::builtin_tools::agent_manage;
                 let ctx = agent_manage::new_session_context_handle();
                 let create = {
@@ -506,7 +509,8 @@ impl BuiltinToolRegistry {
             use schemars::schema_for;
             let acp_schema = serde_json::to_value(schema_for!(
                 crate::builtin_tools::acp_tools::AcpDelegateArgs
-            )).unwrap_or_else(|e| {
+            ))
+            .unwrap_or_else(|e| {
                 warn!("Failed to serialize schema for acp_delegate: {}", e);
                 serde_json::Value::Object(Default::default())
             });
@@ -518,7 +522,8 @@ impl BuiltinToolRegistry {
                     });
             let acp_session_control_schema = serde_json::to_value(schema_for!(
                 crate::builtin_tools::acp_tools::AcpSessionControlArgs
-            )).unwrap_or_else(|e| {
+            ))
+            .unwrap_or_else(|e| {
                 warn!("Failed to serialize schema for acp_session_control: {}", e);
                 serde_json::Value::Object(Default::default())
             });
@@ -684,13 +689,14 @@ impl BuiltinToolRegistry {
                 .as_ref()
                 .map(|ctx| Arc::clone(ctx.session_store()))
                 .or_else(|| config.session_manager.clone())
-                .or_else(|| {
-                    match crate::gateway::SessionManager::with_defaults() {
-                        Ok(sm) => Some(Arc::new(sm)),
-                        Err(e) => {
-                            warn!("Failed to create fallback SessionManager for team tools: {}", e);
-                            None
-                        }
+                .or_else(|| match crate::gateway::SessionManager::with_defaults() {
+                    Ok(sm) => Some(Arc::new(sm)),
+                    Err(e) => {
+                        warn!(
+                            "Failed to create fallback SessionManager for team tools: {}",
+                            e
+                        );
+                        None
                     }
                 });
 
@@ -1467,7 +1473,8 @@ impl BuiltinToolRegistry {
             use crate::builtin_tools::RecallContextTool;
             let schema = serde_json::to_value(schemars::schema_for!(
                 crate::builtin_tools::recall_context::RecallContextArgs
-            )).unwrap_or_else(|e| {
+            ))
+            .unwrap_or_else(|e| {
                 warn!("Failed to serialize schema for recall_context: {}", e);
                 serde_json::Value::Object(Default::default())
             });

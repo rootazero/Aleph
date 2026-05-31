@@ -255,10 +255,7 @@ impl Sandbox for WorkspaceSandbox {
                     .await;
                 match outcome {
                     ApprovalOutcome::Approved => {
-                        ws.granted_elevations
-                            .write()
-                            .await
-                            .insert(normalized_caps);
+                        ws.granted_elevations.write().await.insert(normalized_caps);
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
                         let err = SandboxError::CapabilityDenied {

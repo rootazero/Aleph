@@ -28,7 +28,10 @@ pub fn substitute(input: &str, vars: &HashMap<&str, &str>) -> String {
         // SAFETY: byte index `i` always lies on a UTF-8 char boundary because
         // we only advance past whole `{...}` segments (ASCII) above, otherwise
         // we copy one char at a time below.
-        let ch = input[i..].chars().next().expect("char at i");
+        let ch = match input[i..].chars().next() {
+            Some(c) => c,
+            None => break,
+        };
         out.push(ch);
         i += ch.len_utf8();
     }

@@ -51,7 +51,10 @@ mod tests {
 
     #[test]
     fn init_phase_display_name_returns_human_readable() {
-        assert_eq!(InitPhase::Directories.display_name(), "Creating directories");
+        assert_eq!(
+            InitPhase::Directories.display_name(),
+            "Creating directories"
+        );
         assert_eq!(InitPhase::Config.display_name(), "Generating configuration");
         assert_eq!(InitPhase::Database.display_name(), "Initializing database");
         assert_eq!(InitPhase::Runtimes.display_name(), "Installing runtimes");
