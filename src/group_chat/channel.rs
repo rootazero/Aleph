@@ -69,11 +69,11 @@ impl GroupChatCommandParser for DefaultGroupChatCommandParser {
 
         let after = trimmed.strip_prefix("/groupchat")?.trim();
 
-        if after.starts_with("start") {
-            let args = after.strip_prefix("start")?.trim();
+        if after == "start" || after.starts_with("start ") {
+            let args = after.strip_prefix("start").unwrap().trim();
             parse_start_command(args)
-        } else if after.starts_with("end") {
-            let session_id = after.strip_prefix("end")?.trim().to_string();
+        } else if after == "end" || after.starts_with("end ") {
+            let session_id = after.strip_prefix("end").unwrap().trim().to_string();
             Some(GroupChatRequest::End { session_id })
         } else {
             None
@@ -99,12 +99,13 @@ fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
         match tokens[i].as_str() {
             "--preset" => {
                 i += 1;
-                if i < tokens.len() {
-                    for id in tokens[i].split(',') {
-                        let id = id.trim();
-                        if !id.is_empty() {
-                            personas.push(PersonaSource::Preset(id.to_string()));
-                        }
+                if i >= tokens.len() {
+                    return None;
+                }
+                for id in tokens[i].split(',') {
+                    let id = id.trim();
+                    if !id.is_empty() {
+                        personas.push(PersonaSource::Preset(id.to_string()));
                     }
                 }
             }
@@ -119,9 +120,10 @@ fn parse_start_command(args: &str) -> Option<GroupChatRequest> {
             }
             "--topic" => {
                 i += 1;
-                if i < tokens.len() {
-                    topic = tokens[i].clone();
+                if i >= tokens.len() {
+                    return None;
                 }
+                topic = tokens[i].clone();
             }
             _ => {
                 message_parts.push(tokens[i].clone());

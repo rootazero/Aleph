@@ -246,7 +246,7 @@ impl GroupChatExecutor {
             };
             session.add_turn(round, speaker.clone(), persona_response.clone());
 
-            let sequence = i as u32 + seq_offset;
+            let sequence = i.try_into().unwrap_or(u32::MAX).saturating_add(seq_offset);
             self.persist_turn(&session.id, round, sequence, &speaker, &persona_response);
 
             // Accumulate prior discussion for the next persona

@@ -70,6 +70,9 @@ impl GroupChatSession {
     ///
     /// Updates `current_round` if the given round is higher than the current one.
     pub fn add_turn(&mut self, round: u32, speaker: Speaker, content: String) {
+        if self.status != GroupChatStatus::Active {
+            return;
+        }
         let turn = GroupChatTurn {
             round,
             speaker,
@@ -95,7 +98,9 @@ impl GroupChatSession {
 
     /// End this session, setting its status to `Ended`.
     pub fn end(&mut self) {
-        self.status = GroupChatStatus::Ended;
+        if self.status != GroupChatStatus::Ended {
+            self.status = GroupChatStatus::Ended;
+        }
     }
 }
 

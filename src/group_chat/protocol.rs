@@ -217,9 +217,9 @@ impl FromStr for GroupChatStatus {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "active" => Ok(GroupChatStatus::Active),
-            "paused" => Ok(GroupChatStatus::Paused),
-            "ended" => Ok(GroupChatStatus::Ended),
+            s if s.eq_ignore_ascii_case("active") => Ok(GroupChatStatus::Active),
+            s if s.eq_ignore_ascii_case("paused") => Ok(GroupChatStatus::Paused),
+            s if s.eq_ignore_ascii_case("ended") => Ok(GroupChatStatus::Ended),
             _ => Err(format!("unknown group chat status: '{}'", s)),
         }
     }

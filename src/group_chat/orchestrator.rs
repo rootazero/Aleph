@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::config::types::{GroupChatConfig, PersonaConfig};
 use crate::resilience::database::StateDatabase;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 
 use super::persona::PersonaRegistry;
 use super::protocol::{GroupChatError, PersonaSource};
@@ -29,7 +29,7 @@ pub type SharedSession = Arc<tokio::sync::Mutex<GroupChatSession>>;
 pub struct GroupChatOrchestrator {
     config: GroupChatConfig,
     persona_registry: PersonaRegistry,
-    sessions: HashMap<String, SharedSession>,
+    sessions: Mutex<HashMap<String, SharedSession>>,
     db: Option<Arc<StateDatabase>>,
 }
 
@@ -39,7 +39,7 @@ impl GroupChatOrchestrator {
         Self {
             config,
             persona_registry: PersonaRegistry::from_configs(persona_configs),
-            sessions: HashMap::new(),
+            sessions: Mutex::new(HashMap::new()),
             db: None,
         }
     }
@@ -110,7 +110,7 @@ impl GroupChatOrchestrator {
             source_session_key.clone(),
         );
         let handle = Arc::new(tokio::sync::Mutex::new(session));
-        self.sessions
+        self.sessions.lock().unwrap_or_else(|e| e.into_inner())
             .insert(session_id.clone(), Arc::clone(&handle));
 
         // 6. Persist to database if available
@@ -145,7 +145,11 @@ impl GroupChatOrchestrator {
     /// The caller should drop the orchestrator lock before awaiting the
     /// session lock.
     pub fn get_session(&self, session_id: &str) -> Option<SharedSession> {
-        self.sessions.get(session_id).cloned()
+        self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(session_id)
+            .cloned()
     }
 
     /// End a session and remove it from the active sessions map.
@@ -154,7 +158,14 @@ impl GroupChatOrchestrator {
     /// caller can still read its final state. Returns `None` if the session
     /// was not found.
     pub fn end_session(&mut self, session_id: &str) -> Option<SharedSession> {
-        let handle = self.sessions.remove(session_id)?;
+        let handle = self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(session_id)?;
+
+        if let Ok(mut session) = handle.try_lock() {
+            session.end();
+        }
 
         // Persist status change to database
         if let Some(db) = &self.db {
@@ -220,6 +231,8 @@ impl GroupChatOrchestrator {
     /// The caller can then lock each session individually to inspect status.
     pub fn all_sessions(&self) -> Vec<(String, SharedSession)> {
         self.sessions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
             .iter()
             .map(|(id, handle)| (id.clone(), Arc::clone(handle)))
             .collect()
@@ -386,9 +399,7 @@ mod tests {
         );
 
         let session = handle.lock().await;
-        // Note: end_session removes from map but doesn't call session.end() —
-        // the caller should end the session before calling end_session, or
-        // end it after via the returned handle.
+        assert_eq!(session.status, GroupChatStatus::Ended);
         drop(session);
     }
 
