@@ -297,6 +297,17 @@ impl McpManagerActor {
                 let result = self.remove_server(&server_id).await;
                 let _ = respond_to.send(result);
             }
+            McpCommand::AddTransientServer { config, respond_to } => {
+                let result = self.add_transient_server(config).await;
+                let _ = respond_to.send(result);
+            }
+            McpCommand::RemoveTransientServer {
+                server_id,
+                respond_to,
+            } => {
+                let result = self.remove_transient_server(&server_id).await;
+                let _ = respond_to.send(result);
+            }
             McpCommand::RestartServer {
                 server_id,
                 respond_to,
@@ -482,6 +493,50 @@ impl McpManagerActor {
         });
 
         tracing::info!(server_id = %server_id, "Server removed");
+        Ok(())
+    }
+
+    /// Add a transient (runtime-only) server.
+    ///
+    /// Starts the server connection without upserting or persisting the config
+    /// to disk — the opposite of [`Self::add_server`]. Plugin-owned MCP servers
+    /// flow through here so they never pollute the user's MCP config file.
+    /// Idempotent: returns `Ok` immediately if a client with the same ID is
+    /// already running, so re-syncing the plugin set never double-spawns.
+    async fn add_transient_server(&mut self, config: McpManagerConfig) -> Result<(), String> {
+        if self.clients.contains_key(&config.id) {
+            // Already running (e.g. a previous sync). Nothing to do.
+            return Ok(());
+        }
+
+        // `start_server_internal` inserts into `clients`/`health_states` and
+        // emits `ServerStarted`, which the tool bridge turns into tool
+        // registrations — exactly the path persisted servers use, minus the
+        // `self.config` upsert + disk save.
+        self.start_server_internal(&config).await?;
+
+        tracing::info!(server_id = %config.id, "Transient server added");
+        Ok(())
+    }
+
+    /// Remove a transient server without touching the persisted config.
+    ///
+    /// Stops the running client (if any), drops its health state, and emits
+    /// `ServerRemoved` so the tool bridge unregisters the server's tools. A
+    /// no-op for an unknown ID. Never reads or writes the on-disk config.
+    async fn remove_transient_server(&mut self, server_id: &str) -> Result<(), String> {
+        let was_running = self.clients.contains_key(server_id);
+        self.stop_server_internal(server_id).await;
+        // Transient servers have no config-backed health entry to retain.
+        self.health_states.remove(server_id);
+
+        if was_running {
+            let _ = self.event_tx.send(McpManagerEvent::ServerRemoved {
+                server_id: server_id.to_string(),
+                server_name: server_id.to_string(),
+            });
+            tracing::info!(server_id = %server_id, "Transient server removed");
+        }
         Ok(())
     }
 
@@ -744,6 +799,30 @@ impl McpManagerActor {
             });
         }
 
+        // Transient servers (plugin-owned, runtime-only) live in `clients` but
+        // not in `self.config`. Surface them too so `mcp.list` reflects reality
+        // and the tool bridge's lag-recovery `resync_all` can re-fetch their
+        // tools after a dropped event.
+        for (id, client) in &self.clients {
+            if self.config.servers.contains_key(id) {
+                continue;
+            }
+            let health = self
+                .health_states
+                .get(id)
+                .map(|h| h.status.clone())
+                .unwrap_or(HealthStatus::Healthy);
+            servers.push(McpServerInfo {
+                id: id.clone(),
+                name: id.clone(),
+                transport: McpTransportType::Stdio,
+                tool_count: client.list_tools().await.len(),
+                resource_count: client.list_resources().await.len(),
+                prompt_count: client.list_prompts().await.len(),
+                health,
+            });
+        }
+
         servers
     }
 
@@ -975,6 +1054,71 @@ mod tests {
         let (actor, _handle) = McpManagerActor::new(Some(config_path)).await.unwrap();
         let servers = actor.list_servers().await;
         assert!(servers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_transient_server_is_idempotent_and_never_persists() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("mcp_config.json");
+        let (mut actor, _handle) = McpManagerActor::new(Some(config_path)).await.unwrap();
+
+        // Simulate an already-running transient server (plugin-owned id).
+        let id = "plugin:demo/srv";
+        actor
+            .clients
+            .insert(id.to_string(), Arc::new(McpClient::new()));
+
+        // Same id already running → Ok without re-spawning, and crucially the
+        // persisted config is never written for a transient server.
+        let cfg = McpManagerConfig::stdio(id, "demo", "echo");
+        assert!(actor.add_transient_server(cfg).await.is_ok());
+        assert!(
+            actor.config.servers.is_empty(),
+            "transient server must never be persisted to config"
+        );
+    }
+
+    #[tokio::test]
+    async fn remove_transient_server_drops_client_without_touching_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("mcp_config.json");
+        let (mut actor, _handle) = McpManagerActor::new(Some(config_path)).await.unwrap();
+
+        let id = "plugin:demo/srv";
+        actor
+            .clients
+            .insert(id.to_string(), Arc::new(McpClient::new()));
+        actor
+            .health_states
+            .insert(id.to_string(), ServerHealth::healthy());
+
+        assert!(actor.remove_transient_server(id).await.is_ok());
+        assert!(!actor.clients.contains_key(id), "client should be removed");
+        assert!(
+            !actor.health_states.contains_key(id),
+            "health state should be dropped"
+        );
+        assert!(actor.config.servers.is_empty());
+
+        // Removing an unknown id is a harmless no-op.
+        assert!(actor.remove_transient_server("plugin:nope/x").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn list_servers_includes_transient_clients() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("mcp_config.json");
+        let (mut actor, _handle) = McpManagerActor::new(Some(config_path)).await.unwrap();
+
+        // A transient server lives in `clients` but not in `config`.
+        let id = "plugin:demo/srv";
+        actor
+            .clients
+            .insert(id.to_string(), Arc::new(McpClient::new()));
+
+        let servers = actor.list_servers().await;
+        assert_eq!(servers.len(), 1, "transient client should be listed");
+        assert_eq!(servers[0].id, id);
     }
 
     #[tokio::test]

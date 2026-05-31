@@ -176,6 +176,14 @@ pub struct ExtensionManager {
         Option<crate::sync_primitives::Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
     >,
 
+    /// Live MCP manager handle, used to register plugin-owned MCP servers as
+    /// **transient** (runtime-only) servers. `None` until [`Self::set_mcp_handle`]
+    /// is called at server boot — CLI/test paths leave it unset, so plugin MCP
+    /// registration simply no-ops there. Wrapped in `RwLock<Option<_>>` because
+    /// the manager is behind an `Arc` by the time the MCP actor materialises,
+    /// mirroring the `memory_registry` injection pattern.
+    mcp_handle: crate::sync_primitives::RwLock<Option<crate::mcp::McpManagerHandle>>,
+
     /// File watcher for hot-reloading commands/agents/plugins/hooks.json.
     /// `None` until [`Self::start_watcher`] is called (test/CLI paths skip
     /// the watcher entirely).
@@ -225,6 +233,7 @@ impl ExtensionManager {
             plugin_tool_revision: Arc::new(AtomicU64::new(0)),
             load_guard: Mutex::new(()),
             memory_registry: crate::sync_primitives::RwLock::new(None),
+            mcp_handle: crate::sync_primitives::RwLock::new(None),
             watcher: StdMutex::new(None),
             internal_writes: Arc::new(InternalWriteTracker::default()),
             reload_count: AtomicU64::new(0),
@@ -264,6 +273,89 @@ impl ExtensionManager {
             .memory_registry
             .write()
             .unwrap_or_else(|e| e.into_inner()) = Some(registry);
+    }
+
+    /// Inject the live MCP manager handle after construction.
+    ///
+    /// Safe to call on `&Arc<ExtensionManager>`. Stores the handle so that
+    /// [`Self::sync_mcp_plugin_servers`] can register plugin-owned MCP servers.
+    /// Call it once at server boot — *after* the MCP tool bridge is spawned, so
+    /// the `ServerStarted` events the sync triggers are observed and turned into
+    /// tool registrations.
+    pub fn set_mcp_handle(&self, handle: crate::mcp::McpManagerHandle) {
+        *self
+            .mcp_handle
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Some(handle);
+    }
+
+    /// Register every enabled MCP-kind plugin's `.mcp.json` servers with the
+    /// attached MCP manager as **transient** (runtime-only) servers.
+    ///
+    /// This is the wiring that makes MCP plugins actually run: `PluginLoader`
+    /// reads each plugin's `.mcp.json` into memory, and this method hands those
+    /// configs to `McpManager::add_transient_server`, whose `ServerStarted`
+    /// events the tool bridge converts into live tool registrations.
+    ///
+    /// Idempotent and non-fatal: a no-op (returns 0) when no handle is attached;
+    /// servers already running are skipped by the manager. Returns the number of
+    /// server configs handed to the manager this call.
+    pub async fn sync_mcp_plugin_servers(&self) -> usize {
+        let handle = {
+            let guard = self.mcp_handle.read().unwrap_or_else(|e| e.into_inner());
+            match guard.as_ref() {
+                Some(h) => h.clone(),
+                None => return 0,
+            }
+        };
+
+        if let Err(e) = self.ensure_loaded().await {
+            tracing::warn!(error = %e, "sync_mcp_plugin_servers: ensure_loaded failed");
+            return 0;
+        }
+
+        // Snapshot active plugins (id + root_dir). `PluginRecord.kind` is always
+        // `Static` after `load_all` (the adapter doesn't carry runtime kind), so
+        // we re-parse each manifest to find the true MCP-kind plugins.
+        let candidates: Vec<(String, PathBuf)> = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .list_plugins()
+                .into_iter()
+                .filter(|r| r.status.is_active())
+                .map(|r| (r.id.clone(), r.root_dir.clone()))
+                .collect()
+        };
+
+        for (id, root) in &candidates {
+            match manifest::parse_manifest_from_dir_sync(root) {
+                Ok(m) if m.kind == PluginKind::Mcp => {
+                    if let Err(e) = self.ensure_plugin_loaded(id).await {
+                        tracing::warn!(plugin = %id, error = %e, "sync_mcp_plugin_servers: failed to load MCP plugin");
+                    }
+                }
+                Ok(_) => {} // non-MCP plugin: nothing to register here
+                Err(e) => {
+                    tracing::debug!(plugin = %id, error = %e, "sync_mcp_plugin_servers: manifest parse failed");
+                }
+            }
+        }
+
+        let configs = self.plugin_loader.read().await.all_mcp_configs_map();
+        let mut registered = 0usize;
+        for (server_id, config) in configs {
+            match handle.add_transient_server(config).await {
+                Ok(()) => registered += 1,
+                Err(e) => {
+                    tracing::warn!(server_id = %server_id, error = %e, "sync_mcp_plugin_servers: add_transient_server failed");
+                }
+            }
+        }
+
+        if registered > 0 {
+            tracing::info!(count = registered, "registered plugin MCP servers (transient)");
+        }
+        registered
     }
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
@@ -393,7 +485,14 @@ impl ExtensionManager {
         *self.hook_executor.write().await =
             HookExecutor::empty().with_consent(ShellHookConsent::shared());
 
-        self.load_all().await
+        let summary = self.load_all().await?;
+
+        // Re-register plugin MCP servers after a hot-reload so a plugin
+        // installed/edited at runtime starts its servers without a restart.
+        // No-op when no MCP handle is attached (CLI/test paths).
+        self.sync_mcp_plugin_servers().await;
+
+        Ok(summary)
     }
 
     /// Record that Aleph itself just wrote `path`. The hot-reload watcher
@@ -803,6 +902,15 @@ pub fn default_plugins_dir() -> std::path::PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn sync_mcp_plugin_servers_is_noop_without_handle() {
+        // With no MCP manager attached (the default for CLI/test paths), the
+        // sync must short-circuit to 0 *before* touching the loader/registry —
+        // so it never even forces an extension load.
+        let manager = ExtensionManager::with_defaults().await.unwrap();
+        assert_eq!(manager.sync_mcp_plugin_servers().await, 0);
+    }
 
     #[tokio::test]
     async fn test_extension_manager_has_plugin_loader() {

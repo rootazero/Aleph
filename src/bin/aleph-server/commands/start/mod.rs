@@ -829,6 +829,23 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             tool_registry_phase2.clone(),
             agent_result.tool_catalog.clone(),
         );
+
+        // Wire MCP-type plugins into the live manager: hand each plugin's
+        // `.mcp.json` servers to the manager as transient (runtime-only)
+        // servers. Their `ServerStarted` events flow through the tool bridge
+        // just spawned above, registering the plugin's tools. Done on a
+        // background task — starting MCP server subprocesses must never block
+        // boot. No-op if no plugins declare MCP servers.
+        if let Some(em) = alephcore::extension::try_extension_manager() {
+            let handle = h.clone();
+            tokio::spawn(async move {
+                em.set_mcp_handle(handle);
+                let n = em.sync_mcp_plugin_servers().await;
+                if n > 0 {
+                    tracing::info!(count = n, "plugin MCP servers registered at boot");
+                }
+            });
+        }
         // Sibling publisher: subscribe to the same manager event stream and
         // emit `tools.changed` whenever an MCP server announces a catalog
         // mutation (start / stop / crash / list_changed). Lives next to the

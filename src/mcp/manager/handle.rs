@@ -97,6 +97,46 @@ impl McpManagerHandle {
             .map_err(AlephError::other)
     }
 
+    /// Add a **transient** (runtime-only) MCP server.
+    ///
+    /// Like [`Self::add_server`] but the config is never persisted to disk and
+    /// disappears when the process exits. Intended for plugin-owned servers
+    /// whose lifecycle is governed by the plugin system. Idempotent: a no-op if
+    /// a server with the same ID is already running.
+    pub async fn add_transient_server(&self, config: McpManagerConfig) -> Result<()> {
+        let (respond_to, rx) = oneshot::channel();
+
+        self.tx
+            .send(McpCommand::AddTransientServer { config, respond_to })
+            .await
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
+
+        rx.await
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
+            .map_err(AlephError::other)
+    }
+
+    /// Remove a transient server by ID without touching the persisted config.
+    ///
+    /// Stops the running client (if any). Safe to call for plugin-owned servers
+    /// on plugin unload/uninstall — the user's MCP config file is never read or
+    /// written.
+    pub async fn remove_transient_server(&self, server_id: impl Into<String>) -> Result<()> {
+        let (respond_to, rx) = oneshot::channel();
+
+        self.tx
+            .send(McpCommand::RemoveTransientServer {
+                server_id: server_id.into(),
+                respond_to,
+            })
+            .await
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
+
+        rx.await
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))?
+            .map_err(AlephError::other)
+    }
+
     /// Restart a specific server
     ///
     /// This will stop the server (if running) and start it again.
