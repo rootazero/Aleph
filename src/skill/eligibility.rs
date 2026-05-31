@@ -84,14 +84,12 @@ impl EligibilityService {
         spec: &EligibilitySpec,
         config: &serde_json::Value,
     ) -> EligibilityResult {
-        // 1. always flag
-        if spec.always {
-            return EligibilityResult::Eligible;
-        }
-
-        // 2. enabled override
         if spec.enabled == Some(false) {
             return EligibilityResult::Ineligible(vec![IneligibilityReason::Disabled]);
+        }
+
+        if spec.always {
+            return EligibilityResult::Eligible;
         }
 
         let mut reasons = Vec::new();
@@ -334,5 +332,25 @@ mod tests {
             "skill should be eligible on current OS: {:?}",
             current
         );
+    }
+
+    #[test]
+    fn enabled_false_takes_precedence_over_always() {
+        let svc = EligibilityService::new();
+        let spec = EligibilitySpec {
+            always: true,
+            enabled: Some(false),
+            ..Default::default()
+        };
+        let m = manifest_with_eligibility(spec);
+        let result = svc.evaluate(&m, &serde_json::json!({}));
+        assert!(!result.is_eligible(), "enabled=false must override always=true");
+        match result {
+            EligibilityResult::Ineligible(reasons) => {
+                assert_eq!(reasons.len(), 1);
+                assert_eq!(reasons[0], IneligibilityReason::Disabled);
+            }
+            _ => panic!("expected Ineligible"),
+        }
     }
 }

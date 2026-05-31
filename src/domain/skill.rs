@@ -30,11 +30,17 @@ impl SkillId {
     }
 
     /// Return the plugin prefix (part before `:`) if present.
+    ///
+    /// For malformed IDs containing multiple colons (e.g. `a:b:c`),
+    /// this returns the substring before the first colon.
     pub fn plugin_prefix(&self) -> Option<&str> {
         self.0.split_once(':').map(|(prefix, _)| prefix)
     }
 
     /// Return the skill name (part after `:`, or the whole id if no prefix).
+    ///
+    /// For malformed IDs containing multiple colons (e.g. `a:b:c`),
+    /// this returns the substring after the first colon.
     pub fn skill_name(&self) -> &str {
         self.0
             .split_once(':')
@@ -89,6 +95,11 @@ impl PluginId {
     /// Return the underlying string slice.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Check whether the plugin ID is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -162,6 +173,13 @@ impl ValueObject for Os {}
 /// Error returned when parsing an unknown OS string.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseOsError(String);
+
+impl ParseOsError {
+    /// Return the input string that failed to parse.
+    pub fn input(&self) -> &str {
+        &self.0
+    }
+}
 
 impl fmt::Display for ParseOsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -379,6 +397,11 @@ impl SkillContent {
     /// Check if the content is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Check if the content is empty or contains only whitespace.
+    pub fn is_blank(&self) -> bool {
+        self.0.trim().is_empty()
     }
 }
 
