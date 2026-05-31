@@ -164,16 +164,16 @@ impl AgentManager {
         if let Some(ref params) = def.params {
             let mut t = Table::new();
             if let Some(temp) = params.temperature {
-                t["temperature"] = toml_edit::value(temp as f64);
+                t["temperature"] = toml_edit::value(f64::from(temp));
             }
             if let Some(max_tok) = params.max_tokens {
-                t["max_tokens"] = toml_edit::value(max_tok as i64);
+                t["max_tokens"] = toml_edit::value(i64::from(max_tok));
             }
             if let Some(top_p) = params.top_p {
-                t["top_p"] = toml_edit::value(top_p as f64);
+                t["top_p"] = toml_edit::value(f64::from(top_p));
             }
             if let Some(top_k) = params.top_k {
-                t["top_k"] = toml_edit::value(top_k as i64);
+                t["top_k"] = toml_edit::value(i64::from(top_k));
             }
             agent["params"] = Item::Table(t);
         }

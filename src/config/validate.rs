@@ -305,25 +305,47 @@ impl Config {
                 ));
             }
 
-            if NaiveTime::parse_from_str(&self.memory.dreaming.window_start_local, "%H:%M").is_err()
-            {
+            let start = match NaiveTime::parse_from_str(
+                &self.memory.dreaming.window_start_local,
+                "%H:%M",
+            ) {
+                Ok(t) => t,
+                Err(_) => {
+                    error!(
+                        window_start = %self.memory.dreaming.window_start_local,
+                        "Invalid dreaming window_start_local"
+                    );
+                    return Err(AlephError::invalid_config(format!(
+                        "memory.dreaming.window_start_local must be HH:MM, got {}",
+                        self.memory.dreaming.window_start_local
+                    )));
+                }
+            };
+
+            let end =
+                match NaiveTime::parse_from_str(&self.memory.dreaming.window_end_local, "%H:%M") {
+                    Ok(t) => t,
+                    Err(_) => {
+                        error!(
+                            window_end = %self.memory.dreaming.window_end_local,
+                            "Invalid dreaming window_end_local"
+                        );
+                        return Err(AlephError::invalid_config(format!(
+                            "memory.dreaming.window_end_local must be HH:MM, got {}",
+                            self.memory.dreaming.window_end_local
+                        )));
+                    }
+                };
+
+            if start >= end {
                 error!(
                     window_start = %self.memory.dreaming.window_start_local,
-                    "Invalid dreaming window_start_local"
-                );
-                return Err(AlephError::invalid_config(format!(
-                    "memory.dreaming.window_start_local must be HH:MM, got {}",
-                    self.memory.dreaming.window_start_local
-                )));
-            }
-
-            if NaiveTime::parse_from_str(&self.memory.dreaming.window_end_local, "%H:%M").is_err() {
-                error!(
                     window_end = %self.memory.dreaming.window_end_local,
-                    "Invalid dreaming window_end_local"
+                    "Dreaming window start must be before end"
                 );
                 return Err(AlephError::invalid_config(format!(
-                    "memory.dreaming.window_end_local must be HH:MM, got {}",
+                    "memory.dreaming.window_start_local ({}) must be earlier than window_end_local ({})",
+                    self.memory.dreaming.window_start_local,
                     self.memory.dreaming.window_end_local
                 )));
             }

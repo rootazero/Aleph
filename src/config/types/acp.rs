@@ -432,32 +432,26 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
 impl AcpAdapterEntry {
     /// Preset: Claude Code (Anthropic CLI)
     pub fn preset_claude_code() -> Self {
-        Self::from(
-            HARNESS_PRESETS
-                .iter()
-                .find(|p| p.id == "claude-code")
-                .expect("claude-code preset must exist"),
-        )
+        Self::preset_by_id("claude-code").unwrap_or_else(|| {
+            tracing::error!("claude-code preset missing from HARNESS_PRESETS");
+            Self::default()
+        })
     }
 
     /// Preset: Codex (OpenAI CLI)
     pub fn preset_codex() -> Self {
-        Self::from(
-            HARNESS_PRESETS
-                .iter()
-                .find(|p| p.id == "codex")
-                .expect("codex preset must exist"),
-        )
+        Self::preset_by_id("codex").unwrap_or_else(|| {
+            tracing::error!("codex preset missing from HARNESS_PRESETS");
+            Self::default()
+        })
     }
 
     /// Preset: Gemini (Google CLI)
     pub fn preset_gemini() -> Self {
-        Self::from(
-            HARNESS_PRESETS
-                .iter()
-                .find(|p| p.id == "gemini")
-                .expect("gemini preset must exist"),
-        )
+        Self::preset_by_id("gemini").unwrap_or_else(|| {
+            tracing::error!("gemini preset missing from HARNESS_PRESETS");
+            Self::default()
+        })
     }
 
     /// Look up a preset by ID.
