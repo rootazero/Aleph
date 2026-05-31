@@ -61,8 +61,7 @@ pub enum McpScopeError {
     InlineShutdown { name: String, reason: String },
 }
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 
 /// RAII handle for a single inline MCP server process spawned for one
 /// subagent's lifetime (P3 Stage I).
@@ -458,7 +457,7 @@ mod tests {
 
     #[test]
     fn inline_mcp_handle_drop_without_cleanup_logs_leak() {
-        use std::sync::atomic::Ordering;
+        use crate::sync_primitives::Ordering;
         let handle = InlineMcpHandle::new_for_test("zombie".into());
         let cleaned = handle.cleaned_up.clone();
         drop(handle);
@@ -470,7 +469,7 @@ mod tests {
 
     #[test]
     fn inline_mcp_handle_mark_cleaned_skips_drop_safety_net() {
-        use std::sync::atomic::Ordering;
+        use crate::sync_primitives::Ordering;
         let handle = InlineMcpHandle::new_for_test("clean".into());
         let cleaned = handle.cleaned_up.clone();
         handle.mark_cleaned();
@@ -484,7 +483,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_scope_provision_reference_resolves_from_global() {
         use crate::agents::{AgentDef, AgentMode, McpServerSpec};
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let mut registry = make_registry_with_plugin("global-mcp");
         let tool = ToolRegistration {
@@ -515,7 +514,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_scope_provision_reference_not_found_fails_loud() {
         use crate::agents::{AgentDef, AgentMode, McpServerSpec};
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let registry = make_registry_with_plugin("only-this");
         let global = Arc::new(registry);
@@ -534,7 +533,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_scope_provision_inline_name_conflict_at_spawn_time() {
         use crate::agents::{AgentDef, AgentMode, McpInlineConfig, McpServerSpec};
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let registry = make_registry_with_plugin("github");
         let global = Arc::new(registry);
@@ -559,7 +558,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_scope_tools_includes_referenced_global_tools() {
         use crate::agents::{AgentDef, AgentMode, McpServerSpec};
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let mut registry = make_registry_with_plugin("global-mcp");
         registry.register_tool(ToolRegistration {
@@ -593,7 +592,7 @@ mod tests {
     #[tokio::test]
     async fn mcp_scope_provision_inline_failed_start_returns_inline_startup() {
         use crate::agents::{AgentDef, AgentMode, McpInlineConfig, McpServerSpec};
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let registry = PluginRegistry::new();
         let global = Arc::new(registry);

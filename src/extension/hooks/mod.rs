@@ -884,7 +884,7 @@ mod tests {
 
     #[tokio::test]
     async fn unapproved_shell_hook_is_skipped_and_recorded_pending() {
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
         let dir = tempfile::tempdir().expect("tempdir");
         let consent = Arc::new(ShellHookConsent::with_path(
             dir.path().join("allowlist.json"),
@@ -910,7 +910,7 @@ mod tests {
 
     #[tokio::test]
     async fn approved_shell_hook_runs_normally() {
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
         let dir = tempfile::tempdir().expect("tempdir");
         let consent = Arc::new(ShellHookConsent::with_path(
             dir.path().join("allowlist.json"),
