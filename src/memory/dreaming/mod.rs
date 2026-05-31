@@ -209,6 +209,24 @@ impl DreamPipeline {
         Self::new(stage_list)
     }
 
+    /// Stages that operate on global, cross-project state and therefore run
+    /// only for the base agent — never per project namespace:
+    /// - `feedback_distill`: the user-feedback floor is always-on and global
+    ///   (a project must not fork the floor — see `project_scope`).
+    /// - `skill_lifecycle`: ages skills in the global usage store.
+    /// - `daily_digest`: writes a single global daily insight.
+    const GLOBAL_ONLY_STAGES: &'static [&'static str] =
+        &["feedback_distill", "skill_lifecycle", "daily_digest"];
+
+    /// Drop the global-only stages, leaving the note-maintenance subset that is
+    /// safe to run per project namespace. Built from the same `from_strategy`
+    /// list so the project fan-out never drifts from the base pipeline.
+    pub fn retain_project_stages(mut self) -> Self {
+        self.stages
+            .retain(|s| !Self::GLOBAL_ONLY_STAGES.contains(&s.name()));
+        self
+    }
+
     /// Run the pipeline, returning the final `DreamReport`.
     pub async fn run(&self, mut ctx: DreamContext) -> Result<DreamReport, AlephError> {
         let mut executed: Vec<String> = Vec::new();
@@ -445,6 +463,12 @@ pub struct DreamDaemon {
     selector: crate::sync_primitives::Mutex<StrategySelector>,
     /// Mutation gate tracking evolution pathologies.
     mutation_gate: crate::sync_primitives::Mutex<MutationGate>,
+    /// Whether per-project memory namespacing is enabled (mirrors
+    /// `MemoryConfig.project_scoped`). When on, the daemon additionally fans
+    /// the note-maintenance stages over each `{base}__proj-*` namespace so
+    /// project-local notes written by `note_manage` are linted, consolidated
+    /// and synthesised too. Default-off → no fan-out → unchanged behaviour.
+    project_scoped: bool,
 }
 
 impl DreamDaemon {
@@ -464,6 +488,7 @@ impl DreamDaemon {
             orientation: None,
             selector: crate::sync_primitives::Mutex::new(StrategySelector::new()),
             mutation_gate: crate::sync_primitives::Mutex::new(MutationGate::new()),
+            project_scoped: config.project_scoped,
         })
     }
 
@@ -808,19 +833,80 @@ impl DreamDaemon {
                     agent_id: DEFAULT_AGENT_ID.to_string(),
                     database: self.database.clone(),
                     indexer,
-                    provider,
-                    embedder,
+                    provider: provider.clone(),
+                    embedder: embedder.clone(),
                     report: DreamReport {
                         pipeline_type: strategy.to_string(),
                         started_at: run_start,
                         ..Default::default()
                     },
                     pipeline_type: strategy.to_string(),
-                    activity_checker,
+                    activity_checker: activity_checker.clone(),
                     strategy,
                     orientation: self.orientation.clone(),
                 };
                 let mut report = pipeline.run(ctx).await?;
+
+                // Per-project namespace maintenance (gated). The base agent ran
+                // the full pipeline above; project namespaces created by
+                // `note_manage` under `{base}__proj-*` get the note-maintenance
+                // subset so their notes are linted/consolidated/synthesised too.
+                // The global-only stages (feedback floor, skill lifecycle, daily
+                // digest) are excluded — those stay cross-project. Per-namespace
+                // failures are logged, never aborting the base cycle.
+                if self.project_scoped {
+                    let scoped = crate::memory::project_scope::list_scoped_agent_ids(
+                        &memory_dir,
+                        DEFAULT_AGENT_ID,
+                    );
+                    if !scoped.is_empty() {
+                        let project_pipeline =
+                            DreamPipeline::from_strategy(strategy, &self.config)
+                                .retain_project_stages();
+                        for ns in &scoped {
+                            let ns_index =
+                                self.database.list_notes(ns).await.unwrap_or_default();
+                            let ns_notes: Vec<NoteEntry> =
+                                ns_index.iter().map(NoteEntry::from_index_entry).collect();
+                            let mut ns_indexer =
+                                NoteIndexer::new(memory_dir.clone(), self.database.clone());
+                            if let Some(orientation) = &self.orientation {
+                                ns_indexer = ns_indexer.with_orientation(orientation.clone());
+                            }
+                            let ns_ctx = DreamContext {
+                                notes: ns_notes,
+                                note_contents: HashMap::new(),
+                                agent_id: ns.clone(),
+                                database: self.database.clone(),
+                                indexer: ns_indexer,
+                                provider: provider.clone(),
+                                embedder: embedder.clone(),
+                                report: DreamReport {
+                                    pipeline_type: strategy.to_string(),
+                                    started_at: run_start,
+                                    ..Default::default()
+                                },
+                                pipeline_type: strategy.to_string(),
+                                activity_checker: activity_checker.clone(),
+                                strategy,
+                                orientation: self.orientation.clone(),
+                            };
+                            match project_pipeline.run(ns_ctx).await {
+                                Ok(r) => info!(
+                                    agent = %ns,
+                                    stages = ?r.stages_executed,
+                                    "project namespace dream complete"
+                                ),
+                                Err(e) => warn!(
+                                    agent = %ns,
+                                    error = %e,
+                                    "project namespace dream failed"
+                                ),
+                            }
+                        }
+                    }
+                }
+
                 report.finished_at = now_timestamp();
                 report.duration_ms = ((report.finished_at - run_start).max(0) as u64) * 1000;
                 let status = if report.status == DreamReportStatus::Interrupted {
@@ -1026,6 +1112,34 @@ mod tests {
                 "skill_distill",
                 "feedback_distill",
                 "daily_digest"
+            ]
+        );
+    }
+
+    #[test]
+    fn retain_project_stages_drops_global_only_stages() {
+        let cfg = crate::config::types::memory::DreamingConfig::default();
+        // Synthesize is the richest pipeline — it contains all three
+        // global-only stages plus the note-maintenance subset.
+        let project = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg)
+            .retain_project_stages();
+        let names: Vec<&str> = project.stages.iter().map(|s| s.name()).collect();
+        // The three global-only stages must be gone...
+        for global in DreamPipeline::GLOBAL_ONLY_STAGES {
+            assert!(
+                !names.contains(global),
+                "{global} must not run per project namespace"
+            );
+        }
+        // ...and the note-maintenance subset must remain, in order.
+        assert_eq!(
+            names,
+            vec![
+                "note_lint",
+                "note_review",
+                "note_consolidate",
+                "note_synthesis",
+                "skill_distill",
             ]
         );
     }

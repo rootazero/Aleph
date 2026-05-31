@@ -100,6 +100,33 @@ pub fn read_scope_ids(base: &str, ns: &str) -> Vec<String> {
     }
 }
 
+/// Enumerate the project-scoped composed agent ids that already have memory on
+/// disk for a given base agent.
+///
+/// The note store lays memory out as `note/{agent_id}/…`, so the scoped
+/// namespaces created by [`scoped_agent_id`] surface as sibling directories
+/// named `{base}__proj-<hex>`. This scans `memory_dir` and returns exactly
+/// those names (sorted for deterministic iteration), letting the dream daemon
+/// fan its per-namespace maintenance over the projects that actually have
+/// notes — a project the user never wrote a note in needs no maintenance, and
+/// the base directory itself is intentionally excluded (the caller maintains
+/// the base separately). Returns an empty vec when the dir is absent or
+/// unreadable, so an off / fresh install is a clean no-op.
+pub fn list_scoped_agent_ids(memory_dir: &Path, base: &str) -> Vec<String> {
+    let prefix = format!("{base}{NS_SEP}proj-");
+    let Ok(entries) = std::fs::read_dir(memory_dir) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| name.starts_with(&prefix))
+        .collect();
+    ids.sort();
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,5 +193,35 @@ mod tests {
     fn read_scope_ids_in_project_unions_base_and_scoped() {
         let ids = read_scope_ids("main", "proj-deadbeef");
         assert_eq!(ids, vec!["main".to_string(), "main__proj-deadbeef".to_string()]);
+    }
+
+    #[test]
+    fn list_scoped_agent_ids_missing_dir_is_empty() {
+        let missing = PathBuf::from("/no/such/aleph/memory/dir");
+        assert!(list_scoped_agent_ids(&missing, "main").is_empty());
+    }
+
+    #[test]
+    fn list_scoped_agent_ids_returns_only_project_dirs_for_base() {
+        let dir = tempdir().unwrap();
+        let root = dir.path();
+        // Project namespaces for the base agent — should be returned.
+        std::fs::create_dir(root.join("main__proj-aaaaaaaa")).unwrap();
+        std::fs::create_dir(root.join("main__proj-bbbbbbbb")).unwrap();
+        // Base agent dir itself — excluded (maintained separately).
+        std::fs::create_dir(root.join("main")).unwrap();
+        // A different base agent's project — excluded (wrong base).
+        std::fs::create_dir(root.join("other__proj-cccccccc")).unwrap();
+        // A stray file with the right prefix — excluded (not a dir).
+        std::fs::write(root.join("main__proj-notadir"), b"x").unwrap();
+
+        let ids = list_scoped_agent_ids(root, "main");
+        assert_eq!(
+            ids,
+            vec![
+                "main__proj-aaaaaaaa".to_string(),
+                "main__proj-bbbbbbbb".to_string()
+            ]
+        );
     }
 }
