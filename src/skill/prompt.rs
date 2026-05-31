@@ -12,7 +12,74 @@ pub const DEFERRED_LOADING_GUIDANCE: &str =
      When a user's request matches a skill's <when> trigger, proactively \
      invoke that skill without waiting for an explicit request.";
 
+/// Default cap on the number of skills listed in the injected prompt index.
+///
+/// Mirrors the budgeting that codex (token budget) and openclaw
+/// (`maxSkillsInPrompt`) apply: a large skill library (the host's
+/// `~/.aleph/skills` plus `~/.claude/skills` can hold 100+) must not bloat
+/// every system prompt. Skills beyond the cap are still fully usable — the
+/// model is told to call `skill_list` to enumerate them.
+pub const DEFAULT_MAX_SKILLS_IN_PROMPT: usize = 64;
+
+/// Default cap on the total character length of the rendered `<skill>` body.
+/// ~12k chars ≈ 3k tokens — a generous ceiling that bounds worst-case bloat.
+pub const DEFAULT_MAX_SKILLS_PROMPT_CHARS: usize = 12_000;
+
+/// Budget controlling how many skills (and how many characters) the
+/// `<available_skills>` index may consume in a system prompt.
+///
+/// A field set to `0` means "unlimited" for that dimension.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SkillPromptBudget {
+    /// Maximum number of `<skill>` entries to render (`0` = unlimited).
+    pub max_skills: usize,
+    /// Maximum total characters across all `<skill>` fragments (`0` = unlimited).
+    pub max_chars: usize,
+}
+
+impl Default for SkillPromptBudget {
+    fn default() -> Self {
+        Self {
+            max_skills: DEFAULT_MAX_SKILLS_IN_PROMPT,
+            max_chars: DEFAULT_MAX_SKILLS_PROMPT_CHARS,
+        }
+    }
+}
+
+impl SkillPromptBudget {
+    /// A budget that imposes no limits (renders every skill).
+    pub fn unlimited() -> Self {
+        Self {
+            max_skills: 0,
+            max_chars: 0,
+        }
+    }
+}
+
+/// Render a single skill to its indented `<skill>…</skill>` XML fragment.
+fn render_skill_fragment(skill: &SkillManifest) -> String {
+    let mut buf = String::from("  <skill>\n");
+    buf.push_str("    <name>");
+    buf.push_str(&escape_xml(skill.name()));
+    buf.push_str("</name>\n");
+    buf.push_str("    <description>");
+    buf.push_str(&escape_xml(skill.description()));
+    buf.push_str("</description>\n");
+    if let Some(when) = skill.when_to_use() {
+        buf.push_str("    <when>");
+        buf.push_str(&escape_xml(when));
+        buf.push_str("</when>\n");
+    }
+    buf.push_str("  </skill>\n");
+    buf
+}
+
 /// Build an XML fragment listing the given skills for injection into a system prompt.
+///
+/// Applies [`SkillPromptBudget::default`]; see
+/// [`build_skills_prompt_xml_with_budget`] for the budgeting semantics.
+/// When the skill set fits within the default budget the output is identical
+/// to rendering every skill in input order.
 ///
 /// Returns an empty string if the slice is empty.
 ///
@@ -26,28 +93,94 @@ pub const DEFERRED_LOADING_GUIDANCE: &str =
 /// </available_skills>
 /// ```
 pub fn build_skills_prompt_xml(skills: &[&SkillManifest]) -> String {
+    build_skills_prompt_xml_with_budget(skills, &SkillPromptBudget::default())
+}
+
+/// Build the `<available_skills>` XML, bounded by `budget`.
+///
+/// Fast path: when the full set fits within both budget dimensions the skills
+/// are emitted in their original input order (byte-identical to an uncapped
+/// render). Over budget, entries are selected by descending [`SkillSource`]
+/// priority (Workspace > Plugin > Global > Bundled, then name) so the most
+/// specific / user-authored skills survive truncation, and a `<note>` element
+/// tells the model how many were omitted and to call `skill_list`.
+///
+/// [`SkillSource`]: crate::domain::skill::SkillSource
+pub fn build_skills_prompt_xml_with_budget(
+    skills: &[&SkillManifest],
+    budget: &SkillPromptBudget,
+) -> String {
     if skills.is_empty() {
         return String::new();
     }
 
-    let mut buf = String::from("<available_skills>\n");
+    let fragments: Vec<String> = skills.iter().map(|s| render_skill_fragment(s)).collect();
+    let total_chars: usize = fragments.iter().map(String::len).sum();
 
-    for skill in skills {
-        buf.push_str("  <skill>\n");
-        buf.push_str("    <name>");
-        buf.push_str(&escape_xml(skill.name()));
-        buf.push_str("</name>\n");
-        buf.push_str("    <description>");
-        buf.push_str(&escape_xml(skill.description()));
-        buf.push_str("</description>\n");
-        if let Some(when) = skill.when_to_use() {
-            buf.push_str("    <when>");
-            buf.push_str(&escape_xml(when));
-            buf.push_str("</when>\n");
-        }
-        buf.push_str("  </skill>\n");
+    let count_ok = budget.max_skills == 0 || skills.len() <= budget.max_skills;
+    let chars_ok = budget.max_chars == 0 || total_chars <= budget.max_chars;
+
+    // Fast path: everything fits — preserve input order, render all.
+    if count_ok && chars_ok {
+        return wrap_skills(fragments.iter().map(String::as_str), 0);
     }
 
+    // Over budget: select by descending source priority, then name ascending,
+    // so higher-value skills survive. Stable on ties via name.
+    let mut order: Vec<usize> = (0..skills.len()).collect();
+    order.sort_by(|&a, &b| {
+        skills[b]
+            .priority()
+            .cmp(&skills[a].priority())
+            .then_with(|| skills[a].name().cmp(skills[b].name()))
+    });
+
+    let cap_skills = if budget.max_skills == 0 {
+        usize::MAX
+    } else {
+        budget.max_skills
+    };
+    let cap_chars = if budget.max_chars == 0 {
+        usize::MAX
+    } else {
+        budget.max_chars
+    };
+
+    let mut selected: Vec<&str> = Vec::new();
+    let mut used = 0usize;
+    for &idx in &order {
+        if selected.len() >= cap_skills {
+            break;
+        }
+        let frag = fragments[idx].as_str();
+        // Always include at least one skill, even if it alone exceeds cap_chars.
+        if !selected.is_empty() && used + frag.len() > cap_chars {
+            break;
+        }
+        used += frag.len();
+        selected.push(frag);
+    }
+
+    let omitted = skills.len() - selected.len();
+    wrap_skills(selected.into_iter(), omitted)
+}
+
+/// Wrap rendered `<skill>` fragments in the `<available_skills>` envelope,
+/// appending an omission `<note>` when `omitted > 0`.
+fn wrap_skills<'a>(fragments: impl Iterator<Item = &'a str>, omitted: usize) -> String {
+    let mut buf = String::from("<available_skills>\n");
+    for frag in fragments {
+        buf.push_str(frag);
+    }
+    if omitted > 0 {
+        buf.push_str("  <note>");
+        buf.push_str(&format!(
+            "{} additional skill(s) omitted to conserve context; \
+             call `skill_list` to enumerate all available skills.",
+            omitted
+        ));
+        buf.push_str("</note>\n");
+    }
     buf.push_str("</available_skills>");
     buf
 }
@@ -175,5 +308,122 @@ mod tests {
             DEFERRED_LOADING_GUIDANCE.contains("<when>"),
             "Guidance should reference the <when> trigger tag"
         );
+    }
+
+    fn make_skill_with_source(name: &str, source: SkillSource) -> SkillManifest {
+        SkillManifest::new(
+            SkillId::new(name.to_lowercase().replace(' ', "-")),
+            name,
+            format!("{name} description"),
+            SkillContent::new("content"),
+            source,
+        )
+    }
+
+    #[test]
+    fn under_budget_renders_all_in_input_order_no_note() {
+        let s1 = make_skill("Bravo", "second alphabetically");
+        let s2 = make_skill("Alpha", "first alphabetically");
+        let refs = [&s1, &s2];
+        let budget = SkillPromptBudget {
+            max_skills: 10,
+            max_chars: 0,
+        };
+
+        let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
+        // No omission note when everything fits.
+        assert!(!xml.contains("<note>"));
+        // Input order preserved (Bravo before Alpha) — fast path does not sort.
+        let bravo = xml.find("Bravo").unwrap();
+        let alpha = xml.find("Alpha").unwrap();
+        assert!(bravo < alpha, "fast path must preserve input order");
+    }
+
+    #[test]
+    fn default_wrapper_matches_unlimited_when_small() {
+        // The default-budget wrapper must be byte-identical to an explicit
+        // unlimited render for a small skill set (backward compatibility).
+        let s1 = make_skill("Git Commit", "Write commits");
+        let s2 = make_skill("Docker Build", "Build images");
+        let refs = [&s1, &s2];
+
+        let via_default = build_skills_prompt_xml(&refs);
+        let via_unlimited =
+            build_skills_prompt_xml_with_budget(&refs, &SkillPromptBudget::unlimited());
+        assert_eq!(via_default, via_unlimited);
+    }
+
+    #[test]
+    fn count_budget_truncates_and_emits_note() {
+        let skills: Vec<SkillManifest> = (0..5)
+            .map(|i| make_skill(&format!("Skill{i}"), "d"))
+            .collect();
+        let refs: Vec<&SkillManifest> = skills.iter().collect();
+        let budget = SkillPromptBudget {
+            max_skills: 2,
+            max_chars: 0,
+        };
+
+        let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
+        assert_eq!(xml.matches("<skill>").count(), 2);
+        assert!(xml.contains("<note>"));
+        assert!(xml.contains("3 additional skill(s) omitted"));
+        assert!(xml.contains("skill_list"));
+    }
+
+    #[test]
+    fn char_budget_truncates() {
+        // Each fragment is well over 40 chars; a 1-char budget keeps exactly one.
+        let skills: Vec<SkillManifest> = (0..4)
+            .map(|i| make_skill(&format!("Skill{i}"), "d"))
+            .collect();
+        let refs: Vec<&SkillManifest> = skills.iter().collect();
+        let budget = SkillPromptBudget {
+            max_skills: 0,
+            max_chars: 1,
+        };
+
+        let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
+        // Always include at least one even if it alone exceeds the char cap.
+        assert_eq!(xml.matches("<skill>").count(), 1);
+        assert!(xml.contains("3 additional skill(s) omitted"));
+    }
+
+    #[test]
+    fn truncation_prefers_higher_source_priority() {
+        // Workspace(4) > Plugin(3) > Global(2) > Bundled(1): when truncating to
+        // 2, the two highest-priority skills must survive regardless of order.
+        let bundled = make_skill_with_source("BundledSkill", SkillSource::Bundled);
+        let workspace = make_skill_with_source("WorkspaceSkill", SkillSource::Workspace);
+        let global = make_skill_with_source("GlobalSkill", SkillSource::Global);
+        let refs = [&bundled, &workspace, &global];
+        let budget = SkillPromptBudget {
+            max_skills: 2,
+            max_chars: 0,
+        };
+
+        let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
+        assert!(
+            xml.contains("WorkspaceSkill"),
+            "highest priority must survive"
+        );
+        assert!(xml.contains("GlobalSkill"), "second priority must survive");
+        assert!(
+            !xml.contains("BundledSkill"),
+            "lowest priority must be dropped"
+        );
+        assert!(xml.contains("1 additional skill(s) omitted"));
+    }
+
+    #[test]
+    fn unlimited_budget_renders_everything() {
+        let skills: Vec<SkillManifest> = (0..100)
+            .map(|i| make_skill(&format!("Skill{i}"), "d"))
+            .collect();
+        let refs: Vec<&SkillManifest> = skills.iter().collect();
+
+        let xml = build_skills_prompt_xml_with_budget(&refs, &SkillPromptBudget::unlimited());
+        assert_eq!(xml.matches("<skill>").count(), 100);
+        assert!(!xml.contains("<note>"));
     }
 }
