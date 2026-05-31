@@ -1,6 +1,6 @@
 //! ACP session — manages a single CLI subprocess lifecycle.
 
-use std::sync::{Arc, RwLock as StdRwLock};
+use crate::sync_primitives::{Arc, RwLock};
 use std::time::Duration;
 use tokio::process::{Child, Command};
 use tracing::{debug, error, info, warn};
@@ -80,7 +80,7 @@ pub struct AcpSession {
     /// Wrapped in `Arc<RwLock>` so a `CancelHandle` cloned by the manager
     /// can read the current id without acquiring the session mutex held by
     /// an in-flight prompt. Always read via the `acp_session_id()` accessor.
-    acp_session_id: Arc<StdRwLock<Option<String>>>,
+    acp_session_id: Arc<RwLock<Option<String>>>,
     /// Background task reading stderr for diagnostic logging.
     _stderr_handle: Option<tokio::task::JoinHandle<()>>,
 }
@@ -94,7 +94,7 @@ pub struct AcpSession {
 pub struct CancelHandle {
     harness_id: String,
     stdin: SharedStdin,
-    acp_session_id: Arc<StdRwLock<Option<String>>>,
+    acp_session_id: Arc<RwLock<Option<String>>>,
 }
 
 impl CancelHandle {
@@ -186,7 +186,7 @@ impl AcpSession {
             transport,
             state: AcpSessionState::Idle,
             initialized: false,
-            acp_session_id: Arc::new(StdRwLock::new(None)),
+            acp_session_id: Arc::new(RwLock::new(None)),
             _stderr_handle: stderr_handle,
         })
     }

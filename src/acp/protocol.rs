@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU64, Ordering};
 
 /// Global request ID counter for JSON-RPC requests.
 static REQUEST_ID: AtomicU64 = AtomicU64::new(1);
