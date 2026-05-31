@@ -55,6 +55,10 @@ impl Default for RoutingPatternsConfig {
     }
 }
 
+/// Maximum message length to attempt regex matching against.
+/// Messages longer than this are skipped to prevent regex DoS.
+const MAX_CLASSIFY_MESSAGE_LEN: usize = 10_000;
+
 /// Compiled routing rules for zero-latency classification.
 #[derive(Debug, Clone)]
 pub struct RoutingRules {
@@ -78,8 +82,18 @@ impl RoutingRules {
     /// Classify a message using rule-based pattern matching.
     ///
     /// Priority order: collaborative > critical > multi_step > simple.
-    /// Returns `None` if no pattern matches.
+    /// Returns `None` if no pattern matches or the message exceeds the
+    /// length limit (prevents regex DoS on adversarially long input).
     pub fn classify(&self, message: &str) -> Option<TaskRoute> {
+        if message.len() > MAX_CLASSIFY_MESSAGE_LEN {
+            warn!(
+                message_len = message.len(),
+                max = MAX_CLASSIFY_MESSAGE_LEN,
+                "message too long for rule-based classification, skipping"
+            );
+            return None;
+        }
+
         // Collaborative (highest priority)
         if self.collaborative.iter().any(|r| r.is_match(message)) {
             let strategy = infer_collab_strategy(message);
@@ -114,14 +128,23 @@ impl RoutingRules {
 }
 
 /// Compile a list of pattern strings, skipping invalid ones.
+///
+/// Both `size_limit` and `dfa_size_limit` are set to 1 MiB to bound
+/// memory usage and mitigate regex-based denial of service.
 fn compile_patterns(patterns: &[String]) -> Vec<regex::Regex> {
     patterns
         .iter()
-        .filter_map(|p| match RegexBuilder::new(p).size_limit(1 << 20).build() {
-            Ok(r) => Some(r),
-            Err(e) => {
-                warn!(pattern = %p, error = %e, "skipping invalid routing pattern");
-                None
+        .filter_map(|p| {
+            match RegexBuilder::new(p)
+                .size_limit(1 << 20)
+                .dfa_size_limit(1 << 20)
+                .build()
+            {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    warn!(pattern = %p, error = %e, "skipping invalid routing pattern");
+                    None
+                }
             }
         })
         .collect()

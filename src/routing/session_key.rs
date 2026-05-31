@@ -432,7 +432,10 @@ impl SessionKey {
         let last = rest.last()?;
         let n_str = last.strip_prefix('s')?;
         let n = n_str.parse::<u32>().ok()?;
-        if n > 0 && rest.len() > 1 {
+        // Accept epoch 0 (s0) so that keys like agent:id:main:s0 are
+        // parsed as Main with epoch 0 rather than falling through to
+        // the [task_type, task_id] catch-all and becoming a Task.
+        if rest.len() > 1 {
             Some((&rest[..rest.len() - 1], n))
         } else {
             None
@@ -556,7 +559,7 @@ impl SessionKey {
     pub fn from_legacy(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(':').collect();
 
-        if parts.len() < 3 || parts[0] != "agent" {
+        if parts.len() < 3 || !parts[0].eq_ignore_ascii_case("agent") {
             return None;
         }
 
@@ -619,7 +622,7 @@ fn sanitize_component(s: &str) -> String {
     if trimmed.is_empty() {
         return String::new();
     }
-    trimmed
+    let normalized: String = trimmed
         .to_lowercase()
         .chars()
         .map(|c| {
@@ -629,7 +632,14 @@ fn sanitize_component(s: &str) -> String {
                 '-'
             }
         })
-        .collect()
+        .collect();
+
+    // Cap component length to prevent unbounded session key growth.
+    if normalized.len() > 64 {
+        normalized.chars().take(64).collect()
+    } else {
+        normalized
+    }
 }
 
 impl fmt::Display for SessionKey {

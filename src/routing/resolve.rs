@@ -237,12 +237,15 @@ fn matches_peer(rule: &MatchRule, peer: &RoutePeer) -> bool {
 fn matches_guild(rule: &MatchRule, guild_id: &str) -> bool {
     rule.guild_id
         .as_ref()
-        .map(|g| g == guild_id)
+        .map(|g| g.eq_ignore_ascii_case(guild_id))
         .unwrap_or(false)
 }
 
 fn matches_team(rule: &MatchRule, team_id: &str) -> bool {
-    rule.team_id.as_ref().map(|t| t == team_id).unwrap_or(false)
+    rule.team_id
+        .as_ref()
+        .map(|t| t.eq_ignore_ascii_case(team_id))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
