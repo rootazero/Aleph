@@ -43,7 +43,7 @@ impl EventHandler for SessionCompactor {
                     // Return a placeholder - in full impl, would return SessionCompacted event
                     // Example (pseudo-code):
                     // let session = ctx.get_session(&loop_state.session_id).await;
-                    // if let Some(compaction_info) = self.check_and_compact(&mut session).await {
+                    // if let Some(compaction_info) = self.check_and_compact(&mut session, None).await {
                     //     return Ok(vec![AlephEvent::SessionCompacted(compaction_info)]);
                     // }
                 }

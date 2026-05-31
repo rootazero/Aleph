@@ -301,8 +301,9 @@ impl EventHandler for TaskPlanner {
 
         // Generate plan based on mode
         let plan = if self.use_llm {
-            // TODO: Implement LLM-based planning
-            // For now, fall back to rule-based planning
+            tracing::warn!(
+                "LLM-based planning is not yet implemented; falling back to rule-based planning"
+            );
             self.generate_plan_from_steps(request)
         } else {
             self.generate_plan_from_steps(request)

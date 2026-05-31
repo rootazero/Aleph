@@ -100,10 +100,9 @@ async fn replace_with_summary_emits_pre_compress_raw_memory() {
     // 5 tool calls + 1 user input = 6 parts; keep_recent=3 → compact_count=3
     let mut session = fake_session_with_parts(5);
 
-    compactor.replace_with_summary(&mut session, "synthetic summary".into());
-
-    // Give the fire-and-forget spawn time to run.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    compactor
+        .replace_with_summary(&mut session, "synthetic summary".into())
+        .await;
 
     let captured = fake.0.lock().unwrap();
     assert_eq!(
@@ -139,8 +138,9 @@ async fn replace_with_summary_no_emit_when_nothing_to_compact() {
     let compactor = SessionCompactor::with_keep_recent(100).with_raw_memory_writer(writer);
     let mut session = fake_session_with_parts(2);
 
-    compactor.replace_with_summary(&mut session, "summary".into());
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    compactor
+        .replace_with_summary(&mut session, "summary".into())
+        .await;
 
     let captured = fake.0.lock().unwrap();
     assert_eq!(
@@ -156,7 +156,9 @@ async fn replace_with_summary_no_emit_without_writer() {
     let compactor = SessionCompactor::with_keep_recent(3);
     let mut session = fake_session_with_parts(5);
 
-    compactor.replace_with_summary(&mut session, "summary".into());
+    compactor
+        .replace_with_summary(&mut session, "summary".into())
+        .await;
     // Just verify it doesn't panic and session is in expected state
     // 1 summary + 3 kept = 4 parts
     assert_eq!(session.parts.len(), 4);

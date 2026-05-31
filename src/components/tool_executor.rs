@@ -307,6 +307,7 @@ impl EventHandler for ToolExecutor {
                 Ok(vec![AlephEvent::ToolCallFailed(ToolCallError {
                     call_id,
                     tool: request.tool.clone(),
+                    input: request.parameters.clone(),
                     error,
                     error_kind,
                     is_retryable: self.is_retryable(error_kind),

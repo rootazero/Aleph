@@ -398,6 +398,7 @@ pub struct ToolCallResult {
 pub struct ToolCallError {
     pub call_id: String,
     pub tool: String,
+    pub input: Value,
     pub error: String,
     pub error_kind: ErrorKind,
     pub is_retryable: bool,

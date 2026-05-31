@@ -246,6 +246,7 @@ fn test_event_to_part_tool_failed() {
     let event = AlephEvent::ToolCallFailed(ToolCallError {
         call_id: "call-002".to_string(),
         tool: "file_read".to_string(),
+        input: serde_json::json!({"path": "/missing.txt"}),
         error: "File not found".to_string(),
         error_kind: ErrorKind::NotFound,
         is_retryable: false,

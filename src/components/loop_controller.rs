@@ -3,10 +3,8 @@
 //! Subscribes to: ToolCallCompleted, ToolCallFailed, PlanCreated
 //! Publishes: LoopContinue, LoopStop, ToolCallRequested
 
+use crate::sync_primitives::{AsyncRwLock as RwLock, AtomicU32, Ordering};
 use async_trait::async_trait;
-use tokio::sync::RwLock;
-
-use crate::sync_primitives::{AtomicU32, Ordering};
 
 use crate::components::types::{ExecutionSession, ToolCallRecord};
 use crate::event::{
@@ -938,6 +936,7 @@ mod tests {
         let error = crate::event::ToolCallError {
             call_id: "call-1".to_string(),
             tool: "search".to_string(),
+            input: serde_json::json!({"query": "test"}),
             error: "Connection failed".to_string(),
             error_kind: crate::event::ErrorKind::Timeout,
             is_retryable: true,

@@ -538,7 +538,7 @@ impl SessionCompactor {
     ///
     /// Keeps the most recent parts (based on keep_recent_tools) and replaces
     /// older parts with a SummaryPart containing the generated summary.
-    pub fn replace_with_summary(&self, session: &mut ExecutionSession, summary: String) {
+    pub async fn replace_with_summary(&self, session: &mut ExecutionSession, summary: String) {
         // Count how many parts we have
         let total_parts = session.parts.len();
 
@@ -574,35 +574,27 @@ impl SessionCompactor {
                 .with_agent(session.agent_id.clone())
                 .with_session(session.id.clone());
 
-                // Fire-and-forget; extraction happens later in CompressionService.
-                // Errors are logged but must not block compaction.
+                // Await raw-memory write inline; errors are logged but must not block compaction.
                 let registry_opt = self.capture_registry.clone();
                 let cap_agent = session.agent_id.clone();
                 let cap_session = session.id.clone();
-                // Erase to trait object once so both branches can share the same Arc.
                 let store: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore> = writer;
-                if let Ok(rt) = tokio::runtime::Handle::try_current() {
-                    rt.spawn(async move {
-                        if let Some(registry) = registry_opt {
-                            let ctx = crate::memory::extensions::types::CaptureCtx {
-                                agent_id: cap_agent,
-                                namespace: crate::memory::namespace::NamespaceScope::Owner,
-                                session_id: Some(cap_session),
-                                source_hint: "pre_compress".into(),
-                            };
-                            if let Err(e) = crate::memory::extensions::insert_with_capture_filter(
-                                &store, &registry, &ctx, raw,
-                            )
-                            .await
-                            {
-                                tracing::warn!("pre_compress raw_memory write failed: {e}");
-                            }
-                        } else if let Err(e) = store.insert_raw_memory(&raw).await {
-                            tracing::warn!("pre_compress raw_memory write failed: {e}");
-                        }
-                    });
-                } else {
-                    tracing::warn!("no tokio runtime for pre_compress emit; skipping");
+                if let Some(registry) = registry_opt {
+                    let ctx = crate::memory::extensions::types::CaptureCtx {
+                        agent_id: cap_agent,
+                        namespace: crate::memory::namespace::NamespaceScope::Owner,
+                        session_id: Some(cap_session),
+                        source_hint: "pre_compress".into(),
+                    };
+                    if let Err(e) = crate::memory::extensions::insert_with_capture_filter(
+                        &store, &registry, &ctx, raw,
+                    )
+                    .await
+                    {
+                        tracing::warn!("pre_compress raw_memory write failed: {e}");
+                    }
+                } else if let Err(e) = store.insert_raw_memory(&raw).await {
+                    tracing::warn!("pre_compress raw_memory write failed: {e}");
                 }
             }
         }
@@ -791,6 +783,13 @@ impl SessionCompactor {
     /// 2. If still overflowing, generate summary and replace old parts
     ///
     /// Returns true if compaction was performed
+    /// Compact the session to reduce token usage.
+    ///
+    /// Performs compaction in two stages:
+    /// 1. Prune old tool outputs
+    /// 2. If still overflowing, generate summary and replace old parts
+    ///
+    /// Returns true if compaction was performed.
     pub fn compact(&self, session: &mut ExecutionSession) -> bool {
         let tokens_before = session.total_tokens;
 
@@ -802,20 +801,36 @@ impl SessionCompactor {
         if self.token_tracker.is_overflow(session) {
             // Stage 2: Generate summary and replace old parts
             let summary = self.generate_summary(session);
-            self.replace_with_summary(session, summary);
-            self.recalculate_tokens(session);
+            let keep_count = self.keep_recent_tools.min(session.parts.len());
+            let compact_count = session.parts.len().saturating_sub(keep_count);
+            if compact_count > 0 {
+                let summary_part = SessionPart::Summary(SummaryPart {
+                    content: summary,
+                    original_count: u32::try_from(compact_count).unwrap_or(u32::MAX),
+                    compacted_at: chrono::Utc::now().timestamp(),
+                });
+                let kept_parts: Vec<SessionPart> = session.parts.drain(compact_count..).collect();
+                session.parts.clear();
+                session.parts.push(summary_part);
+                session.parts.extend(kept_parts);
+                self.recalculate_tokens(session);
+            }
         }
 
         // Return true if we actually reduced tokens
         session.total_tokens < tokens_before
     }
 
-    /// Check if compaction is needed and perform it
+    /// Check if compaction is needed and perform it.
     ///
-    /// Returns Some(CompactionInfo) if compaction was performed, None otherwise
+    /// Uses `generate_llm_summary` when `llm_callback` is provided, otherwise falls
+    /// back to the template-based `generate_summary`.
+    ///
+    /// Returns Some(CompactionInfo) if compaction was performed, None otherwise.
     pub async fn check_and_compact(
         &self,
         session: &mut ExecutionSession,
+        llm_callback: Option<&LlmCallback>,
     ) -> Option<CompactionInfo> {
         // Check if we're approaching the limit
         if !self.token_tracker.is_overflow(session) {
@@ -829,8 +844,23 @@ impl SessionCompactor {
         let original_status = session.status.clone();
         session.status = SessionStatus::Compacting;
 
-        // Perform compaction
-        let compacted = self.compact(session);
+        // Stage 1: Prune old tool outputs
+        self.prune_old_tool_outputs(session);
+        self.recalculate_tokens(session);
+
+        // Stage 2: Summarize if still overflowing
+        let compacted = if self.token_tracker.is_overflow(session) {
+            let summary = if let Some(callback) = llm_callback {
+                self.generate_llm_summary(session, Some(callback)).await
+            } else {
+                self.generate_summary(session)
+            };
+            self.replace_with_summary(session, summary).await;
+            self.recalculate_tokens(session);
+            session.total_tokens < tokens_before
+        } else {
+            session.total_tokens < tokens_before
+        };
 
         // Restore status
         session.status = original_status;

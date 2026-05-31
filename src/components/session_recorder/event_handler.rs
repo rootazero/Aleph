@@ -177,7 +177,7 @@ impl SessionRecorder {
         SessionPart::ToolCall(ToolCallPart {
             id: error.call_id.clone(),
             tool_name: error.tool.clone(),
-            input: serde_json::Value::Null,
+            input: error.input.clone(),
             status: ToolCallStatus::Failed,
             output: None,
             error: Some(error.error.clone()),

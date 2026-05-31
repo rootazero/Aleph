@@ -475,6 +475,7 @@ mod tests {
         let error = ToolCallError {
             call_id: "call-1".to_string(),
             tool: "search".to_string(),
+            input: serde_json::json!({"query": "test"}),
             error: "Connection timeout".to_string(),
             error_kind: ErrorKind::Timeout,
             is_retryable: true,
