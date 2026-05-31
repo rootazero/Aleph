@@ -36,6 +36,31 @@ struct OpenFence {
 }
 
 impl FenceSpan {
+    /// Byte offset of the opening fence line start.
+    pub fn start(&self) -> usize {
+        self.start
+    }
+
+    /// Byte offset of the closing fence line start (or text end if unclosed).
+    pub fn end(&self) -> usize {
+        self.end
+    }
+
+    /// The fence marker (e.g., "```" or "~~~~").
+    pub fn marker(&self) -> &str {
+        &self.marker
+    }
+
+    /// Leading indentation (0-3 spaces).
+    pub fn indent(&self) -> &str {
+        &self.indent
+    }
+
+    /// Language tag if present (e.g., "rust", "javascript").
+    pub fn language(&self) -> Option<&str> {
+        self.language.as_deref()
+    }
+
     /// Check if a byte index falls strictly inside this fence span.
     ///
     /// Returns `true` if `index` is strictly between `start` and `end`
@@ -73,6 +98,10 @@ pub struct FenceSplit {
 /// Scans line-by-line for fence markers, tracking open/close pairs.
 /// Unclosed fences extend to end of text.
 ///
+/// **Note:** This parser recognizes `\n` and `\r\n` line endings. Legacy Mac
+/// `\r`-only line endings are not supported and will cause the entire text to
+/// be treated as a single line.
+///
 /// # Example
 ///
 /// ```
@@ -81,7 +110,7 @@ pub struct FenceSplit {
 /// let text = "Hello\n```rust\nfn main() {}\n```\nWorld";
 /// let spans = parse_fence_spans(text);
 /// assert_eq!(spans.len(), 1);
-/// assert_eq!(spans[0].language, Some("rust".to_string()));
+/// assert_eq!(spans[0].language(), Some("rust"));
 /// ```
 pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
     let mut spans = Vec::new();
@@ -197,9 +226,9 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].language, Some("rust".to_string()));
-        assert_eq!(spans[0].marker, "```");
-        assert_eq!(spans[0].indent, "");
+        assert_eq!(spans[0].language(), Some("rust"));
+        assert_eq!(spans[0].marker(), "```");
+        assert_eq!(spans[0].indent(), "");
     }
 
     #[test]
@@ -208,8 +237,8 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].language, Some("python".to_string()));
-        assert_eq!(spans[0].marker, "~~~");
+        assert_eq!(spans[0].language(), Some("python"));
+        assert_eq!(spans[0].marker(), "~~~");
     }
 
     #[test]
@@ -218,8 +247,8 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].indent, "  ");
-        assert_eq!(spans[0].language, Some("js".to_string()));
+        assert_eq!(spans[0].indent(), "  ");
+        assert_eq!(spans[0].language(), Some("js"));
     }
 
     #[test]
@@ -228,7 +257,7 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].end, text.len());
+        assert_eq!(spans[0].end(), text.len());
     }
 
     #[test]
@@ -237,8 +266,8 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 2);
-        assert_eq!(spans[0].language, Some("rust".to_string()));
-        assert_eq!(spans[1].language, Some("python".to_string()));
+        assert_eq!(spans[0].language(), Some("rust"));
+        assert_eq!(spans[1].language(), Some("python"));
     }
 
     #[test]
@@ -247,7 +276,7 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].language, None);
+        assert_eq!(spans[0].language(), None);
     }
 
     #[test]
@@ -268,7 +297,7 @@ mod tests {
 
         assert_eq!(spans.len(), 1);
         // Fence extends to end because ``` doesn't close ````
-        assert_eq!(spans[0].end, text.len());
+        assert_eq!(spans[0].end(), text.len());
     }
 
     #[test]
@@ -292,8 +321,8 @@ mod tests {
         assert!(find_fence_at(&spans, 3).is_none());
         assert!(find_fence_at(&spans, 12).is_some());
         assert_eq!(
-            find_fence_at(&spans, 12).unwrap().language,
-            Some("rust".to_string())
+            find_fence_at(&spans, 12).unwrap().language(),
+            Some("rust")
         );
     }
 
@@ -338,7 +367,7 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].marker, "~~~");
+        assert_eq!(spans[0].marker(), "~~~");
     }
 
     #[test]
@@ -362,7 +391,7 @@ mod tests {
 
         assert_eq!(spans.len(), 1);
         // Info string without whitespace is stored as-is
-        assert_eq!(spans[0].language, Some("rust,ignore".to_string()));
+        assert_eq!(spans[0].language(), Some("rust,ignore"));
     }
 
     #[test]
@@ -371,9 +400,9 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].start, 0);
-        assert_eq!(spans[0].end, 4);
-        assert_eq!(spans[0].language, None);
+        assert_eq!(spans[0].start(), 0);
+        assert_eq!(spans[0].end(), 4);
+        assert_eq!(spans[0].language(), None);
     }
 
     #[test]
@@ -385,11 +414,11 @@ mod tests {
         // Before fence - should return None
         assert!(get_fence_split(&spans, 3).is_none());
         // After fence - should return None
-        assert!(get_fence_split(&spans, span.end + 1).is_none());
+        assert!(get_fence_split(&spans, span.end() + 1).is_none());
         // At exact fence boundary (start) - should return None
-        assert!(get_fence_split(&spans, span.start).is_none());
+        assert!(get_fence_split(&spans, span.start()).is_none());
         // At exact fence boundary (end) - should return None
-        assert!(get_fence_split(&spans, span.end).is_none());
+        assert!(get_fence_split(&spans, span.end()).is_none());
     }
 
     #[test]
@@ -401,10 +430,10 @@ mod tests {
         assert_eq!(spans.len(), 1);
         // "Hello 🦀" = 10 bytes (🦀 is 4 bytes), plus \n = 1 byte
         // So fence starts at byte offset 11
-        assert_eq!(spans[0].start, 11);
+        assert_eq!(spans[0].start(), 11);
         // Verify byte indexing is consistent
-        assert!(spans[0].contains(spans[0].start + 1));
-        assert!(!spans[0].contains(spans[0].start));
+        assert!(spans[0].contains(spans[0].start() + 1));
+        assert!(!spans[0].contains(spans[0].start()));
     }
 
     #[test]
@@ -414,16 +443,16 @@ mod tests {
         let span = &spans[0];
 
         // Boundary positions are NOT inside fence (exclusive bounds)
-        assert!(!span.contains(span.start));
-        assert!(!span.contains(span.end));
+        assert!(!span.contains(span.start()));
+        assert!(!span.contains(span.end()));
 
         // One byte inside boundaries IS inside fence
-        assert!(span.contains(span.start + 1));
-        assert!(span.contains(span.end - 1));
+        assert!(span.contains(span.start() + 1));
+        assert!(span.contains(span.end() - 1));
 
         // Outside boundaries is NOT inside fence
-        assert!(!span.contains(span.start - 1));
-        assert!(!span.contains(span.end + 1));
+        assert!(!span.contains(span.start() - 1));
+        assert!(!span.contains(span.end() + 1));
     }
 
     #[test]
@@ -440,11 +469,11 @@ mod tests {
         let spans = parse_fence_spans(text);
         let span = &spans[0];
 
-        assert_eq!(span.start, 0);
-        assert_eq!(span.end, 13);
+        assert_eq!(span.start(), 0);
+        assert_eq!(span.end(), 13);
 
-        assert!(!span.contains(span.start));
-        assert!(!span.contains(span.end));
+        assert!(!span.contains(span.start()));
+        assert!(!span.contains(span.end()));
         assert!(span.contains(8));
 
         assert!(!span.contains(13));
@@ -462,7 +491,7 @@ mod tests {
         let spans = parse_fence_spans(text);
 
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].language, Some("rust".to_string()));
+        assert_eq!(spans[0].language(), Some("rust"));
     }
 
     #[test]
@@ -470,7 +499,7 @@ mod tests {
         let text = "```   \ncode\n```";
         let spans = parse_fence_spans(text);
         assert_eq!(spans.len(), 1);
-        assert_eq!(spans[0].language, None);
+        assert_eq!(spans[0].language(), None);
     }
 
     #[test]
