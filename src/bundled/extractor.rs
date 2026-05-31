@@ -112,6 +112,7 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
             || name == ".."
             || name.contains('/')
             || name.contains('\\')
+            || name.len() > 255
         {
             warn!(skill = %name, "Skipping bundled skill with invalid name");
             continue;
@@ -180,10 +181,22 @@ fn extract_plugins(bundled: &Dir, cache_dir: &Path) -> bool {
     // Extract all files and directories into the temp directory
     match extract_dir_contents(bundled, &tmp_dir) {
         Ok(()) => {
-            // Atomically swap the old cache for the new one
+            // Atomically swap the old cache for the new one.
+            // On Windows rename cannot overwrite, so remove destination first.
             if let Err(e) = std::fs::rename(&tmp_dir, cache_dir) {
-                warn!(error = %e, "Failed to atomically swap plugin cache");
-                return false;
+                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                    if let Err(e) = std::fs::remove_dir_all(cache_dir) {
+                        warn!(error = %e, "Failed to remove old plugin cache before swap");
+                        return false;
+                    }
+                    if let Err(e) = std::fs::rename(&tmp_dir, cache_dir) {
+                        warn!(error = %e, "Failed to atomically swap plugin cache after removing old");
+                        return false;
+                    }
+                } else {
+                    warn!(error = %e, "Failed to atomically swap plugin cache");
+                    return false;
+                }
             }
             info!("Extracted bundled plugins to marketplace cache");
             true
@@ -263,8 +276,9 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
         // The temp name includes a nanosecond timestamp so concurrent extractors
         // (e.g. rapid server restart) cannot collide on the same temp file.
         let tmp_name = format!(
-            ".{}.tmp.{}",
+            ".{}.tmp.{}.{}",
             name.to_string_lossy(),
+            std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -273,9 +287,17 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
         let tmp = target.join(&tmp_name);
         std::fs::write(&tmp, file.contents())?;
         if let Err(e) = std::fs::rename(&tmp, &dest) {
-            // Clean up the temp file so we don't leak partial extractions.
-            let _ = std::fs::remove_file(&tmp);
-            return Err(e);
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                let _ = std::fs::remove_file(&dest);
+                if let Err(e) = std::fs::rename(&tmp, &dest) {
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(e);
+                }
+            } else {
+                // Clean up the temp file so we don't leak partial extractions.
+                let _ = std::fs::remove_file(&tmp);
+                return Err(e);
+            }
         }
     }
 

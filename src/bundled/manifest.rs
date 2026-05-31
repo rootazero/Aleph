@@ -69,7 +69,9 @@ impl InstallRegistry {
     pub fn save(&self, skills_dir: &Path) -> std::io::Result<()> {
         let path = skills_dir.join("manifest.json");
         let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
-        std::fs::write(&path, content)?;
+        let tmp_path = path.with_extension("tmp");
+        std::fs::write(&tmp_path, content)?;
+        std::fs::rename(&tmp_path, &path)?;
         debug!(path = %path.display(), "Saved skills manifest");
         Ok(())
     }
