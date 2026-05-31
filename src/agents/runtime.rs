@@ -273,6 +273,25 @@ impl AgentRuntime {
             "SubagentStart: launching sub-agent"
         );
 
+        // SubagentStart lifecycle hook (observer-only — the child has already
+        // launched). Reuses the process-global fire-and-forget helper; a silent
+        // no-op when no hooks are registered, so it is safe on every spawn.
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::SubagentStart,
+            self.parent_session_id.as_deref().unwrap_or_default(),
+            vec![
+                ("SUBAGENT_ID", agent_id.clone()),
+                ("SUBAGENT_TYPE", agent_type.clone()),
+                ("TASK", task_summary.clone()),
+                (
+                    "PARENT_AGENT_ID",
+                    self.parent_agent_id.clone().unwrap_or_default(),
+                ),
+                ("CHAIN_DEPTH", self.child_chain.depth.to_string()),
+            ],
+        )
+        .await;
+
         let result = self.execute_via_harness(&config).await;
 
         let duration_ms = start.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
@@ -327,6 +346,24 @@ impl AgentRuntime {
         );
 
         persist_transcript(&transcript, &self.child_chain.chain_id);
+
+        // SubagentStop lifecycle hook (observer-only). Carries the completion
+        // outcome so hooks can react to delegation results without re-reading
+        // the transcript store.
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::SubagentStop,
+            self.parent_session_id.as_deref().unwrap_or_default(),
+            vec![
+                ("SUBAGENT_ID", transcript.agent_id.clone()),
+                ("SUBAGENT_TYPE", transcript.agent_type.clone()),
+                ("OUTCOME", format_outcome(&transcript.outcome).to_string()),
+                ("ITERATIONS", transcript.iterations.to_string()),
+                ("DURATION_MS", transcript.duration_ms.to_string()),
+                ("TOKENS_USED", transcript.tokens_used.to_string()),
+                ("KEY_FINDINGS", transcript.key_findings.clone()),
+            ],
+        )
+        .await;
 
         result
     }

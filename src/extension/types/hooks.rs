@@ -99,6 +99,16 @@ pub enum HookEvent {
     /// abort the run before any provider call.
     #[serde(alias = "UserPromptSubmit")]
     UserPromptSubmit,
+    /// When a sub-agent is spawned and begins execution. Observer-only: the
+    /// child has already launched, so blocking here is meaningless. Lets hooks
+    /// witness delegation fan-out (notify, audit, budget tracking).
+    #[serde(alias = "SubagentStart")]
+    SubagentStart,
+    /// When a sub-agent completes (success, timeout, or error). Observer-only.
+    /// Carries outcome, iterations, duration, tokens, and key findings so hooks
+    /// can react to delegation results without re-reading the transcript store.
+    #[serde(alias = "SubagentStop")]
+    SubagentStop,
 }
 
 /// Hook execution kind - determines how the hook is executed
