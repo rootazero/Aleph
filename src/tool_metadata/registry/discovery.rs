@@ -2,7 +2,7 @@
 //!
 //! Methods for generating tool indices and smart prompts.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::super::types::{ToolIndex, ToolIndexCategory, ToolIndexEntry, UnifiedTool};
 use super::health::{HealthSnapshot, ToolHealthCache};

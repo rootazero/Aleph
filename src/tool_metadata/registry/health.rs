@@ -24,9 +24,9 @@
 //!   catalog subscribes to [`crate::tools::registry::RegistryChange`]
 //!   and calls it on every tool registration / unregistration.
 
+use crate::sync_primitives::{AtomicU64, Ordering};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -208,9 +208,6 @@ impl ToolHealthCache {
             })
             .await
             .clone();
-        // Free the single-flight slot so the next TTL window gets a
-        // fresh attempt (otherwise the OnceCell would memoize forever).
-        self.inflight.remove(name);
 
         let cached = CachedProbe {
             result: result.clone(),
@@ -223,6 +220,12 @@ impl ToolHealthCache {
             Arc::new(next)
         });
         self.generation.fetch_add(1, Ordering::Release);
+
+        // Free the single-flight slot AFTER the result is cached so
+        // concurrent callers that missed the OnceCell still see a fresh
+        // entry instead of spawning a redundant probe.
+        self.inflight.remove(name);
+
         result
     }
 }
