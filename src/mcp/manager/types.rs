@@ -419,6 +419,32 @@ pub enum McpCommand {
         respond_to: oneshot::Sender<Result<(), String>>,
     },
 
+    /// Add a **transient** (runtime-only) server.
+    ///
+    /// Unlike [`McpCommand::AddServer`], the config is NOT persisted to the
+    /// on-disk MCP config and survives only for the life of the process. Used
+    /// for plugin-owned MCP servers whose lifecycle is governed by the plugin
+    /// system, not the user's MCP config file. Idempotent: a no-op if a server
+    /// with the same ID is already running.
+    AddTransientServer {
+        /// Server configuration (not persisted)
+        config: McpManagerConfig,
+        /// Response channel
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
+
+    /// Remove a transient server by ID without touching the persisted config.
+    ///
+    /// Stops the running client (if any) and drops its health state. A no-op
+    /// if the server is not running. The persisted MCP config is never read or
+    /// written, so this is safe to call for plugin-owned servers.
+    RemoveTransientServer {
+        /// Transient server ID to remove
+        server_id: String,
+        /// Response channel
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
+
     /// Restart a specific server
     RestartServer {
         /// Server ID to restart
@@ -521,6 +547,14 @@ impl std::fmt::Debug for McpCommand {
             }
             Self::RemoveServer { server_id, .. } => f
                 .debug_struct("RemoveServer")
+                .field("server_id", server_id)
+                .finish(),
+            Self::AddTransientServer { config, .. } => f
+                .debug_struct("AddTransientServer")
+                .field("config", config)
+                .finish(),
+            Self::RemoveTransientServer { server_id, .. } => f
+                .debug_struct("RemoveTransientServer")
                 .field("server_id", server_id)
                 .finish(),
             Self::RestartServer { server_id, .. } => f

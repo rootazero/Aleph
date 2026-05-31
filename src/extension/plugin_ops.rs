@@ -137,8 +137,43 @@ impl ExtensionManager {
     }
 
     /// Unload a runtime plugin.
+    ///
+    /// For MCP plugins, the loader drops the in-memory `.mcp.json` configs on
+    /// unload, so we capture the server IDs *first* and then ask the MCP manager
+    /// to tear down those transient servers — otherwise they would keep running
+    /// (and their tools stay registered) after the plugin is gone.
     pub async fn unload_runtime_plugin(&self, plugin_id: &str) -> ExtensionResult<()> {
-        self.plugin_loader.write().await.unload_plugin(plugin_id)
+        let server_ids: Vec<String> = {
+            let loader = self.plugin_loader.read().await;
+            loader
+                .get_mcp_configs(plugin_id)
+                .map(|servers| servers.keys().cloned().collect())
+                .unwrap_or_default()
+        };
+
+        let result = self.plugin_loader.write().await.unload_plugin(plugin_id);
+
+        if result.is_ok() && !server_ids.is_empty() {
+            let handle = self
+                .mcp_handle
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some(handle) = handle {
+                for server_id in server_ids {
+                    if let Err(e) = handle.remove_transient_server(&server_id).await {
+                        tracing::warn!(
+                            plugin_id = plugin_id,
+                            server_id = %server_id,
+                            error = %e,
+                            "failed to remove transient MCP server on plugin unload"
+                        );
+                    }
+                }
+            }
+        }
+
+        result
     }
 
     /// Get all plugin info from PluginRegistry.
