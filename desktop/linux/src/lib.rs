@@ -1,4 +1,5 @@
 mod automation;
+mod clipboard;
 mod escape_listener;
 mod media;
 mod permission;

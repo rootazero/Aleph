@@ -3,8 +3,6 @@
 //! Uses standard POSIX / freedesktop CLI tools with graceful fallbacks.
 //! Tested on Debian/Ubuntu; should work on most distributions.
 
-use std::io::Write;
-
 use aleph_desktop::system_types::{AppInfo, ClipboardContent, SystemInfo};
 use aleph_desktop::traits::SystemCapability;
 use aleph_desktop::{DesktopError, Result};
@@ -169,77 +167,18 @@ impl SystemCapability for LinuxSystem {
     }
 
     async fn clipboard_read(&self) -> Result<ClipboardContent> {
-        tokio::task::spawn_blocking(|| {
-            // Try wl-paste first (Wayland), then xclip/xsel (X11).
-            let output = std::process::Command::new("wl-paste")
-                .arg("--no-newline")
-                .output()
-                .or_else(|_| {
-                    std::process::Command::new("xclip")
-                        .args(["-selection", "clipboard", "-o"])
-                        .output()
-                })
-                .or_else(|_| {
-                    std::process::Command::new("xsel")
-                        .args(["--clipboard", "--output"])
-                        .output()
-                })
-                .map_err(|e| {
-                    DesktopError::InputFailed(format!(
-                        "Failed to read clipboard (install wl-clipboard, xclip, or xsel): {e}"
-                    ))
-                })?;
-
-            let text = String::from_utf8_lossy(&output.stdout).into_owned();
-            Ok(ClipboardContent {
-                text: Some(text),
-                has_image: false,
-                image_base64: None,
-            })
-        })
-        .await
-        .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+        // Delegates to the `clipboard` module, which reads text plus an
+        // optional image (base64 PNG) — see desktop/linux/src/clipboard.rs.
+        tokio::task::spawn_blocking(crate::clipboard::read)
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
 
     async fn clipboard_write(&self, text: &str) -> Result<()> {
         let text = text.to_string();
-        tokio::task::spawn_blocking(move || {
-            // Try wl-copy first (Wayland), then xclip/xsel (X11).
-            let mut child = std::process::Command::new("wl-copy")
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .or_else(|_| {
-                    std::process::Command::new("xclip")
-                        .args(["-selection", "clipboard"])
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                })
-                .or_else(|_| {
-                    std::process::Command::new("xsel")
-                        .args(["--clipboard", "--input"])
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                })
-                .map_err(|e| {
-                    DesktopError::InputFailed(format!(
-                        "Failed to write clipboard (install wl-clipboard, xclip, or xsel): {e}"
-                    ))
-                })?;
-
-            if let Some(ref mut stdin) = child.stdin {
-                stdin.write_all(text.as_bytes()).map_err(|e| {
-                    DesktopError::InputFailed(format!("Clipboard write failed: {e}"))
-                })?;
-            }
-
-            child
-                .wait()
-                .map_err(|e| DesktopError::InputFailed(format!("Clipboard process failed: {e}")))?;
-
-            Ok(())
-        })
-        .await
-        .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+        tokio::task::spawn_blocking(move || crate::clipboard::write(&text))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
 
     async fn system_info(&self) -> Result<SystemInfo> {
