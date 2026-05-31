@@ -94,7 +94,7 @@ impl CommandPolicy {
         for (name, description, action, pattern) in rules {
             // Validate each pattern individually first so we can name the
             // culprit — RegexSet's aggregate error does not say which one.
-            if let Err(e) = regex::Regex::new(&pattern) {
+            if let Err(e) = crate::security::safe_regex::bounded_builder(&pattern).build() {
                 return Err(format!("rule '{name}': {e}"));
             }
             patterns.push(pattern);

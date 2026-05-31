@@ -13,6 +13,7 @@ pub mod context_id_hasher;
 pub mod dangerous_tools;
 pub mod headers;
 pub mod runtime_guard;
+pub mod safe_regex;
 pub mod secret_equal;
 pub mod ssrf;
 

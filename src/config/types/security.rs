@@ -90,7 +90,7 @@ impl ShellSecurityConfig {
         let compile = |patterns: &[CustomRiskPattern]| -> Result<Vec<Regex>, regex::Error> {
             patterns
                 .iter()
-                .map(|p| Regex::new(&p.pattern))
+                .map(|p| crate::security::safe_regex::bounded_builder(&p.pattern).build())
                 .collect::<Result<Vec<_>, _>>()
         };
 

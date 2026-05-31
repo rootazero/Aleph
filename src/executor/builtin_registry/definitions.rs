@@ -32,8 +32,9 @@ use crate::builtin_tools::{
     ApplyPatchTool, DesktopAxSnapshot, DesktopBrowserOperator, DesktopCheckPermissions,
     DesktopGuiLocate, DesktopTool, FileEditTool,
     FileOpsTool,
-    FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool,
-    RecallEventsTool, SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
+    ConfigAuditTool, FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool,
+    ReadConfigGuideTool, RecallEventsTool, SearchTool, SelfManageTool, VaultStoreTool,
+    WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -195,6 +196,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         name: "read_config_guide",
         description: "Get Aleph configuration manual for self-management operations",
         requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "config_audit",
+        description: "Audit the live security posture (SSRF, sandbox, shell safety, PII filtering) and return structured findings — read-only",
+        requires_config: true, // Requires the live Config handle
     },
     BuiltinToolDefinition {
         name: "self_manage",
@@ -778,6 +784,9 @@ pub fn create_tool_boxed(
         }
         "skill_list" => Some(Box::new(SkillListTool::default())),
         "read_config_guide" => Some(Box::new(ReadConfigGuideTool::default())),
+        "config_audit" => config
+            .and_then(|c| c.config.as_ref())
+            .map(|cfg| Box::new(ConfigAuditTool::new(Arc::clone(cfg))) as Box<dyn AlephToolDyn>),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
         "desktop_ax_query_focused" => Some(Box::new(DesktopAxQueryFocused::new())),

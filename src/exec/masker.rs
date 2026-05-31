@@ -24,8 +24,10 @@ impl SecretMasker {
 
     /// Add a custom pattern with replacement.
     pub fn add_pattern(&mut self, pattern: &str, replacement: &str) -> Result<(), regex::Error> {
-        self.custom_patterns
-            .push((Regex::new(pattern)?, replacement.to_string()));
+        self.custom_patterns.push((
+            crate::security::safe_regex::bounded_builder(pattern).build()?,
+            replacement.to_string(),
+        ));
         Ok(())
     }
 

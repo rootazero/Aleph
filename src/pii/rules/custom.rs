@@ -20,7 +20,7 @@ impl CustomRegexRule {
     ///
     /// Returns `Err(regex::Error)` if the pattern is invalid.
     pub fn new(config: CustomPiiRule) -> Result<Self, regex::Error> {
-        let regex = Regex::new(&config.pattern)?;
+        let regex = crate::security::safe_regex::bounded_builder(&config.pattern).build()?;
         Ok(Self { config, regex })
     }
 }

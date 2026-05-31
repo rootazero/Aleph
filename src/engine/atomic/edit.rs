@@ -5,7 +5,6 @@
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
-use regex::Regex;
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -164,7 +163,8 @@ impl EditOps for EditOpsHandler {
         // Pre-compile regex once if needed
         let regex = match pattern {
             SearchPattern::Regex { pattern: regex_str } => Some(
-                Regex::new(regex_str)
+                crate::security::safe_regex::bounded_builder(regex_str)
+                    .build()
                     .map_err(|e| AlephError::tool(format!("Invalid regex pattern: {}", e)))?,
             ),
             _ => None,
