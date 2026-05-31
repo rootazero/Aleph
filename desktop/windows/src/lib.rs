@@ -2,6 +2,7 @@
 
 mod automation;
 mod escape_listener;
+mod media;
 mod permission;
 mod pim;
 mod sleep_inhibitor;
@@ -9,6 +10,7 @@ mod system;
 
 pub use automation::WindowsAutomation;
 pub use escape_listener::WindowsEscapeListener;
+pub use media::WindowsMedia;
 pub use permission::WindowsPermission;
 pub use pim::WindowsPim;
 pub use sleep_inhibitor::WindowsPower;
@@ -30,6 +32,7 @@ pub struct WindowsPlatform {
     escape: WindowsEscapeListener,
     pim: WindowsPim,
     permission: WindowsPermission,
+    media: WindowsMedia,
 }
 
 impl WindowsPlatform {
@@ -43,6 +46,7 @@ impl WindowsPlatform {
             escape: WindowsEscapeListener::new(),
             pim: WindowsPim::new(),
             permission: WindowsPermission::new(),
+            media: WindowsMedia::new(),
         }
     }
 }
@@ -79,7 +83,7 @@ impl DesktopPlatform for WindowsPlatform {
     }
 
     fn media(&self) -> Option<&dyn MediaCapability> {
-        None
+        Some(&self.media)
     }
 
     fn power(&self) -> Option<&dyn PowerCapability> {
@@ -111,6 +115,6 @@ mod tests {
         assert!(platform.escape_listener().is_some());
         assert!(platform.pim().is_some());
         assert!(platform.permission().is_some());
-        assert!(platform.media().is_none());
+        assert!(platform.media().is_some());
     }
 }
