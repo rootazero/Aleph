@@ -103,6 +103,13 @@ pub struct GatewayServerConfig {
     /// never authenticate). `0` disables the cap; loopback is always exempt.
     /// Default 64. The struct-level `#[serde(default)]` keeps old TOML loading.
     pub max_connections_per_ip: usize,
+    /// Trusted reverse-proxy IPs / CIDRs (e.g. `["10.0.0.0/8", "::1"]`). When
+    /// the WebSocket socket peer matches one of these, the real client IP is
+    /// read from `X-Forwarded-For` and used for the per-IP connection cap,
+    /// rate limiting, and auth-failure lockout. Empty (default) ⇒ the socket
+    /// peer address is used verbatim and `X-Forwarded-For` is never trusted.
+    #[serde(default)]
+    pub trusted_proxies: Vec<String>,
     /// Legacy field — kept for TOML backward compat
     #[serde(default)]
     pub require_auth: bool,
@@ -218,6 +225,7 @@ impl Default for GatewayServerConfig {
             port: 18790,
             max_connections: 100,
             max_connections_per_ip: 64,
+            trusted_proxies: Vec::new(),
             require_auth: false,
             protocol_version: 1,
             auth: AuthConfig::default(),

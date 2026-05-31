@@ -410,6 +410,46 @@ per-IP concurrent-connection cap (`gateway.max_connections_per_ip`, default 64,
 `0` disables, loopback exempt) bounds preauth slot-exhaustion — a remote peer
 opening many sockets that never authenticate.
 
+### Trusted reverse proxies
+
+The IP-keyed abuse protections (per-IP cap, rate limiter, auth-failure lockout)
+key off the client IP. Behind a reverse proxy the socket peer is the *proxy*, so
+every client collapses to one address. Configure `gateway.trusted_proxies` with
+the proxy IPs/CIDRs (e.g. `["10.0.0.0/8", "::1"]`) and, **only** when the socket
+peer matches the allowlist, the real client IP is read from `X-Forwarded-For`
+(rightmost non-proxy hop). Empty (default) ⇒ the socket peer is used verbatim and
+`X-Forwarded-For` is never trusted (it is client-spoofable, so the allowlist is
+the whole security boundary). Implemented in `src/gateway/trusted_proxy.rs`.
+
+### Method-level authorization
+
+Authentication is binary at the transport layer, but a conservative set of
+administrative / secret-bearing control-plane methods (`config.apply`,
+`daemon.shutdown`, `secret.*`, `devices.remove`, `plugins.install`, `cron.create`,
+`dreaming.run_now`, …) additionally require **operator** role. Guest
+(invitation-scoped) and future node-role connections are rejected from those with
+`PERMISSION_DENIED`, while everything they legitimately need (chat, agent runs,
+memory/session/graph reads) stays open. Only enforced when auth is required; a
+no-auth local daemon is unchanged. The classifier lives in
+`src/gateway/method_authz.rs`.
+
+### Distributed-trace correlation
+
+Each JSON-RPC request resolves a [W3C `traceparent`](https://www.w3.org/TR/trace-context/):
+an inbound `params.traceparent` is honoured (its trace id adopted), otherwise a
+fresh 128-bit root trace is minted. The dispatch chokepoint opens a `tracing`
+span carrying `trace_id`/`span_id`, and the response echoes a `traceparent`
+naming the server's span as the parent so a multi-hop call graph stitches
+together. This is a lightweight propagation layer (`src/gateway/trace_context.rs`),
+**not** an OpenTelemetry integration — the OTel SDK would violate core
+minimalism (R3) for what is, given Aleph's own trace persistence and `tracing`
+logging, a correlation feature.
+
+> Note: the JSON-RPC middleware chain is built once at server construction and
+> cloned per connection. Building it per-connection previously reinstalled the
+> global request-state registry on every connect, zeroing the `/metrics`
+> request-lifecycle counters and undercounting in-flight requests.
+
 ---
 
 ## See Also
