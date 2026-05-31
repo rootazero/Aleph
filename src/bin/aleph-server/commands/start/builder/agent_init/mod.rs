@@ -943,7 +943,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let mut compactor = alephcore::memory::session_compactor::SessionCompactor::new(
                     memory_db.clone(),
                     sc_config,
-                );
+                )
+                .with_project_scoping(app_config.memory.project_scoped);
                 if let Some(ref prov) = default_prov {
                     compactor = compactor.with_provider(prov.clone());
                 }

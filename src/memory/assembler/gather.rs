@@ -217,18 +217,34 @@ impl Gatherer {
 
     /// Fetch all `SessionCompressed` raw memories for an agent, regardless of
     /// session. Used by the cross-session `session_search` path.
+    ///
+    /// Mirrors [`Self::fetch_notes`]: when project scoping is on inside a
+    /// project, sessions written under the project's composed id are unioned
+    /// with the agent's global sessions (`read_scope_ids`). Off / outside a
+    /// project this collapses to the single base id — one query, unchanged.
     async fn fetch_session_compressed(&self, agent_id: &str) -> Vec<Candidate> {
-        match self
-            .backend
-            .get_raw_by_source(RawMemorySource::SessionCompressed, agent_id, 20)
-            .await
-        {
-            Ok(raws) => raws.into_iter().map(raw_to_candidate).collect(),
-            Err(e) => {
-                warn!(error = %e, agent = agent_id, "assembler.gather: session_compressed fetch failed");
-                Vec::new()
+        let ids = if self.project_scoped {
+            let ns = crate::memory::project_scope::project_namespace(
+                crate::projects::current_project_root().as_deref(),
+            );
+            crate::memory::project_scope::read_scope_ids(agent_id, &ns)
+        } else {
+            vec![agent_id.to_string()]
+        };
+        let mut out = Vec::new();
+        for id in &ids {
+            match self
+                .backend
+                .get_raw_by_source(RawMemorySource::SessionCompressed, id, 20)
+                .await
+            {
+                Ok(raws) => out.extend(raws.into_iter().map(raw_to_candidate)),
+                Err(e) => {
+                    warn!(error = %e, agent = %id, "assembler.gather: session_compressed fetch failed");
+                }
             }
         }
+        out
     }
 }
 

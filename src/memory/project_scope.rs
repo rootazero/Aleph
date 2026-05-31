@@ -100,6 +100,21 @@ pub fn read_scope_ids(base: &str, ns: &str) -> Vec<String> {
     }
 }
 
+/// Resolve the storage agent id for a memory write given the base agent id,
+/// whether project scoping is enabled, and the active project root.
+///
+/// This is the single composition chokepoint shared by every write seam (the
+/// `note_manage` tool and post-turn session compaction). With scoping off it
+/// returns the base id unchanged — byte-for-byte the pre-feature behaviour —
+/// so callers can route every write through it unconditionally.
+pub fn scoped_or_base(base: &str, project_scoped: bool, project_root: Option<&Path>) -> String {
+    if project_scoped {
+        scoped_agent_id(base, &project_namespace(project_root))
+    } else {
+        base.to_string()
+    }
+}
+
 /// Enumerate the project-scoped composed agent ids that already have memory on
 /// disk for a given base agent.
 ///
@@ -193,6 +208,23 @@ mod tests {
     fn read_scope_ids_in_project_unions_base_and_scoped() {
         let ids = read_scope_ids("main", "proj-deadbeef");
         assert_eq!(ids, vec!["main".to_string(), "main__proj-deadbeef".to_string()]);
+    }
+
+    #[test]
+    fn scoped_or_base_off_is_identity_regardless_of_project() {
+        let dir = tempdir().unwrap();
+        assert_eq!(scoped_or_base("main", false, Some(dir.path())), "main");
+        assert_eq!(scoped_or_base("main", false, None), "main");
+    }
+
+    #[test]
+    fn scoped_or_base_on_composes_only_with_active_project() {
+        // On + no project → base (global namespace collapses to base).
+        assert_eq!(scoped_or_base("main", true, None), "main");
+        // On + project → composed scoped id.
+        let dir = tempdir().unwrap();
+        let scoped = scoped_or_base("main", true, Some(dir.path()));
+        assert!(scoped.starts_with("main__proj-"), "got {scoped}");
     }
 
     #[test]

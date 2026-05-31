@@ -147,21 +147,6 @@ pub struct NoteManageResult {
 // Tool struct
 // =============================================================================
 
-/// Compose the storage partition key for a note operation.
-///
-/// Pure gate decision, factored out of [`NoteManageTool::resolve_agent_id`] so
-/// it can be unit-tested without a backend: when `project_scoped` is on and a
-/// project root is active, the base id is composed with the project namespace;
-/// otherwise the base id is returned unchanged.
-fn scoped_or_base(base: &str, project_scoped: bool, project_root: Option<&std::path::Path>) -> String {
-    if project_scoped {
-        let ns = crate::memory::project_scope::project_namespace(project_root);
-        crate::memory::project_scope::scoped_agent_id(base, &ns)
-    } else {
-        base.to_string()
-    }
-}
-
 /// Unified tool for managing knowledge notes across all categories.
 #[derive(Clone)]
 pub struct NoteManageTool {
@@ -283,7 +268,7 @@ impl NoteManageTool {
     /// agent-scoped operation.
     fn resolve_agent_id(&self, args: &NoteManageArgs) -> String {
         let base = args.agent_id.as_deref().unwrap_or_else(|| self.agent_id());
-        scoped_or_base(
+        crate::memory::project_scope::scoped_or_base(
             base,
             self.project_scoped,
             crate::projects::current_project_root().as_deref(),
@@ -828,30 +813,5 @@ mod tests {
         assert!(validate_category("subagent-run").is_ok());
         assert!(validate_category("unknown-cat").is_err());
         assert!(validate_category("").is_err());
-    }
-
-    #[test]
-    fn scoped_or_base_off_is_identity() {
-        // Feature off → base id unchanged regardless of an active project.
-        let p = std::path::Path::new("/tmp/aleph/projA");
-        assert_eq!(scoped_or_base("main", false, Some(p)), "main");
-        assert_eq!(scoped_or_base("main", false, None), "main");
-    }
-
-    #[test]
-    fn scoped_or_base_on_without_project_is_base() {
-        // Feature on but no project active → global sentinel collapses to base.
-        assert_eq!(scoped_or_base("main", true, None), "main");
-    }
-
-    #[test]
-    fn scoped_or_base_on_with_project_composes() {
-        let p = std::path::Path::new("/tmp/aleph/projA");
-        let scoped = scoped_or_base("main", true, Some(p));
-        assert_ne!(scoped, "main", "must be partitioned for the project");
-        assert!(scoped.starts_with("main__proj-"), "got {scoped}");
-        // Distinct projects compose to distinct partitions.
-        let other = scoped_or_base("main", true, Some(std::path::Path::new("/tmp/aleph/projB")));
-        assert_ne!(scoped, other);
     }
 }
