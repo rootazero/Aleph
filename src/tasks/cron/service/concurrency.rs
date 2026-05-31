@@ -21,9 +21,22 @@ use crate::tasks::cron::store::CronStore;
 use crate::tasks::cron::template::resolve_job_prompt;
 use crate::tasks::shared::clock::Clock;
 use crate::tasks::shared::retry_hint::RetryHint;
-use crate::tasks::shared::schedule::compute_backoff_ms;
+use crate::tasks::shared::schedule::compute_backoff_ms_for;
 
 use super::ops::{advance_next_run, recompute_next_run_maintenance};
+
+/// Consecutive *transient* failures required before alerting the user.
+///
+/// Permanent failures (auth, missing agent, validation) alert on the first
+/// error — they need operator intervention and won't self-heal. Transient
+/// failures (rate-limit / overload / network / timeout / 5xx) are expected to
+/// recover on their own, so the scheduler perseveres silently through the
+/// backoff ladder and only escalates once they persist across `5` consecutive
+/// runs — by which point the windowed-backoff floor has spread those attempts
+/// across ≈30 minutes, a strong signal the provider window is genuinely
+/// exhausted rather than momentarily throttled. This is what keeps a 8am 429
+/// blip from firing a "failed 3 times" alarm.
+const TRANSIENT_ALERT_FLOOR: u32 = 5;
 
 /// A pending failure alert returned from [`phase3_writeback`] for the caller to
 /// dispatch via the shared delivery pipeline. The phase3 path itself does not
@@ -329,7 +342,7 @@ pub async fn phase3_writeback<C: Clock>(
             job.state.next_run_at_ms = None;
             continue;
         }
-        let backoff = compute_backoff_ms(job.state.consecutive_errors);
+        let backoff = compute_backoff_ms_for(hint.category, job.state.consecutive_errors);
         if backoff > 0 {
             let floor = backoff_now.saturating_add(backoff);
             let next = job.state.next_run_at_ms.map_or(floor, |n| n.max(floor));
@@ -389,6 +402,12 @@ pub async fn phase3_writeback<C: Clock>(
                 job.id,
                 job.state.last_error.as_deref().unwrap_or("unknown")
             ))
+        } else if job.state.consecutive_errors < TRANSIENT_ALERT_FLOOR {
+            // Transient failure still within the perseverance window — keep
+            // retrying with backoff, don't alarm the user over a self-healing
+            // throttle. (A momentary rate-limit that succeeds on the next
+            // attempt resets `consecutive_errors` to 0 and never reaches here.)
+            None
         } else {
             should_send_alert(job, &alert_cfg, now_alert)
         };
@@ -584,7 +603,9 @@ mod tests {
         let result = make_execution_result(RunStatus::Ok);
         let results = vec![("completed-job".to_string(), result)];
 
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let job = guard.get_job("completed-job").unwrap();
@@ -633,7 +654,9 @@ mod tests {
         let result = make_execution_result(RunStatus::Error);
         let results = vec![("error-job".to_string(), result)];
 
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let job = guard.get_job("error-job").unwrap();
@@ -661,7 +684,9 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -690,7 +715,9 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Error))];
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -719,7 +746,9 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Error))];
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -750,7 +779,9 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -780,7 +811,9 @@ mod tests {
         }
 
         let results = vec![("job-a".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let b = guard.get_job("job-b").unwrap();
@@ -964,7 +997,9 @@ mod tests {
         }
 
         let results = vec![("oneshot".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         assert!(
@@ -1000,7 +1035,9 @@ mod tests {
         }
 
         let results = vec![("keep".to_string(), make_execution_result(RunStatus::Ok))];
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let job = guard.get_job("keep").expect("job should be kept");
@@ -1028,7 +1065,9 @@ mod tests {
         }
 
         let results = vec![("flaky".to_string(), make_execution_result(RunStatus::Error))];
-        phase3_writeback(&store, &clock, &results, false).await.unwrap();
+        phase3_writeback(&store, &clock, &results, false)
+            .await
+            .unwrap();
 
         let guard = store.lock().await;
         let job = guard.get_job("flaky").unwrap();
@@ -1129,7 +1168,9 @@ mod tests {
         let alert = &alerts[0];
         assert_eq!(alert.job_id, "silent-failer");
         match &alert.target {
-            crate::tasks::cron::config::DeliveryTargetConfig::Gateway { channel, chat_id, .. } => {
+            crate::tasks::cron::config::DeliveryTargetConfig::Gateway {
+                channel, chat_id, ..
+            } => {
                 assert_eq!(channel, "AlephzBot");
                 assert_eq!(chat_id, "123456");
             }
@@ -1194,18 +1235,101 @@ mod tests {
             retry_hint: Some(crate::tasks::shared::retry_hint::RetryHint::permanent()),
             ..make_execution_result(RunStatus::Error)
         };
-        let alerts = phase3_writeback(
-            &store,
-            &clock,
-            &[("no-channel".to_string(), result)],
-            true,
-        )
-        .await
-        .unwrap();
+        let alerts = phase3_writeback(&store, &clock, &[("no-channel".to_string(), result)], true)
+            .await
+            .unwrap();
         assert!(
             alerts.is_empty(),
             "no synthesis without source_channel_id+conversation_id"
         );
+    }
+
+    /// Build a failed result whose retry hint is a transient rate-limit —
+    /// the exact shape produced when Anthropic returns HTTP 429.
+    fn rate_limited_result() -> ExecutionResult {
+        ExecutionResult {
+            status: RunStatus::Error,
+            error: Some("Rate limit error: Anthropic API rate limited (429)".to_string()),
+            retry_hint: Some(crate::tasks::shared::retry_hint::RetryHint::transient(
+                crate::tasks::shared::retry_hint::RetryCategory::RateLimit,
+            )),
+            ..make_execution_result(RunStatus::Error)
+        }
+    }
+
+    /// Regression (user-reported): a momentary 8am 429 must NOT fire a
+    /// "failed N times" alert while still inside the transient perseverance
+    /// window, and its retry must be floored to the 5-minute windowed backoff
+    /// rather than the eager 30s/60s tiers that re-hit the same limit.
+    #[tokio::test]
+    async fn phase3_rate_limit_below_floor_does_not_alert_and_floors_backoff() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("news-summary"); // Every 60s (recurring)
+            job.source_channel_id = Some("AlephzBot".to_string());
+            job.source_conversation_id = Some("123456".to_string());
+            assert!(job.failure_alert.is_none());
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("news-summary").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            j.state.next_run_at_ms = Some(1_120_000); // phase1-advanced, soon
+            j.state.consecutive_errors = 2; // becomes 3 after this error
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("news-summary".to_string(), rate_limited_result())];
+        // notify_on_failure_default = true → would synthesize an after:1 alert,
+        // but the transient floor must suppress it at 3 consecutive errors.
+        let alerts = phase3_writeback(&store, &clock, &results, true)
+            .await
+            .unwrap();
+
+        assert!(
+            alerts.is_empty(),
+            "a transient 429 below the floor must not alarm the user (got {alerts:?})"
+        );
+
+        let guard = store.lock().await;
+        let job = guard.get_job("news-summary").unwrap();
+        assert_eq!(job.state.consecutive_errors, 3);
+        let next = job.state.next_run_at_ms.unwrap();
+        assert!(
+            next >= 1_100_000 + 300_000,
+            "rate-limit backoff must be floored to 5 min, got next={next}"
+        );
+    }
+
+    /// Complement: once transient failures persist past the floor (provider
+    /// window genuinely exhausted), the alert fires so the operator finds out.
+    #[tokio::test]
+    async fn phase3_rate_limit_at_floor_does_alert() {
+        let (store, _dir) = make_store();
+        let clock = FakeClock::new(1_100_000);
+        {
+            let mut guard = store.lock().await;
+            let mut job = make_test_job("news-summary");
+            job.source_channel_id = Some("AlephzBot".to_string());
+            job.source_conversation_id = Some("123456".to_string());
+            add_job(&mut guard, job, &clock);
+            let j = guard.get_job_mut("news-summary").unwrap();
+            j.state.running_at_ms = Some(1_000_000);
+            j.state.consecutive_errors = 4; // becomes 5 == TRANSIENT_ALERT_FLOOR
+            guard.persist().unwrap();
+        }
+
+        let results = vec![("news-summary".to_string(), rate_limited_result())];
+        let alerts = phase3_writeback(&store, &clock, &results, true)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            alerts.len(),
+            1,
+            "sustained transient failure at the floor must alert"
+        );
+        assert!(alerts[0].message.contains("5 times"));
     }
 
     /// D1: per-job override also applies on the manual-trigger path.
