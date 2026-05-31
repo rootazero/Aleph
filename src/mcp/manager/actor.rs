@@ -577,10 +577,10 @@ impl McpManagerActor {
         // Stop the server
         self.stop_server_internal(server_id).await;
 
-        // Wait before restarting
-        tokio::time::sleep(self.health_config.restart_delay).await;
-
-        // Start the server
+        // Start the server immediately — the delay was removed because
+        // `restart_server` is called from `health_check_pass` inside the
+        // actor's `tokio::select!` loop. A sleep here would block the
+        // actor from processing commands for `restart_delay` seconds.
         self.start_server_internal(&config).await?;
 
         tracing::info!(server_id = %server_id, "Server restarted");

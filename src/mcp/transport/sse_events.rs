@@ -57,8 +57,10 @@ impl SseEvent {
             "message" | "" => {
                 // Try to parse as JSON-RPC
                 if let Ok(value) = serde_json::from_str::<Value>(data) {
-                    // Check if it's a request (has id) or notification (no id)
-                    if value.get("id").is_some() && value.get("method").is_some() {
+                    // Check if it's a request (has non-null id) or notification (no id)
+                    if value.get("id").filter(|v| !v.is_null()).is_some()
+                        && value.get("method").is_some()
+                    {
                         if let Ok(req) = serde_json::from_value(value) {
                             return SseEvent::Request(req);
                         }

@@ -66,6 +66,11 @@ const UNSAFE_ENV_KEYS: &[&str] = &[
     "SHELLOPTS",
     "PS4",
     "GIT_EXTERNAL_DIFF",
+    // JVM / Java agent injection
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "JAVA_OPTS",
+    "JVM_OPTS",
 ];
 
 /// Returns `true` if `key` is an interpreter/loader bootstrap variable that

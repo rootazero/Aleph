@@ -270,6 +270,28 @@ impl McpClient {
         result
     }
 
+    /// Find the server connection that owns `name` by looking for the
+    /// longest matching "server_name:" prefix.  This handles server ids
+    /// that themselves contain colons (e.g. "my:server:tool").
+    fn find_server_by_prefix<'a>(
+        &self,
+        name: &str,
+        servers: &'a HashMap<String, Arc<McpServerConnection>>,
+    ) -> Option<&'a Arc<McpServerConnection>> {
+        if !name.contains(':') {
+            return None;
+        }
+        let mut best: Option<&Arc<McpServerConnection>> = None;
+        for (id, conn) in servers {
+            if name.starts_with(&format!("{}:", id)) {
+                if best.as_ref().map(|b| b.name().len() < id.len()).unwrap_or(true) {
+                    best = Some(conn);
+                }
+            }
+        }
+        best
+    }
+
     /// Read a resource by URI
     ///
     /// The URI should include the server prefix (e.g., "server_name:file:///path")
@@ -278,12 +300,8 @@ impl McpClient {
         let (direct_match, all_connections) = {
             let servers = self.external_servers.read().await;
 
-            // Check if URI has server prefix
-            let direct = if let Some((server_name, _resource_uri)) = uri.split_once(':') {
-                servers.get(server_name).cloned()
-            } else {
-                None
-            };
+            // Check if URI has server prefix (handles colons inside server ids)
+            let direct = self.find_server_by_prefix(uri, &servers).cloned();
 
             let all: Vec<_> = servers.values().cloned().collect();
             (direct, all)
