@@ -227,16 +227,16 @@ pub fn detect_by_magic(bytes: &[u8]) -> MediaType {
 
 /// Detect from file path: try magic bytes first, fall back to extension.
 pub fn detect_from_path(path: &std::path::Path) -> Result<MediaType, MediaError> {
-    if path.exists() {
-        if let Ok(mut f) = std::fs::File::open(path) {
-            use std::io::Read;
-            let mut buf = [0u8; 16];
-            let n = f.read(&mut buf).unwrap_or(0);
-            if n >= 4 {
-                let magic_result = detect_by_magic(&buf[..n]);
-                if magic_result != MediaType::Unknown {
-                    return Ok(magic_result);
-                }
+    // Try magic bytes first — open may fail if path doesn't exist or is not readable;
+    // we simply fall back to extension detection in that case.
+    if let Ok(mut f) = std::fs::File::open(path) {
+        use std::io::Read;
+        let mut buf = [0u8; 16];
+        let n = f.read(&mut buf).unwrap_or(0);
+        if n >= 4 {
+            let magic_result = detect_by_magic(&buf[..n]);
+            if magic_result != MediaType::Unknown {
+                return Ok(magic_result);
             }
         }
     }

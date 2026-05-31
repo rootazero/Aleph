@@ -25,10 +25,20 @@ impl MediaProvider for TextDocumentProvider {
     }
 
     fn supported_types(&self) -> Vec<MediaType> {
-        vec![MediaType::Document {
-            format: DocFormat::Txt,
-            pages: None,
-        }]
+        vec![
+            MediaType::Document {
+                format: DocFormat::Txt,
+                pages: None,
+            },
+            MediaType::Document {
+                format: DocFormat::Markdown,
+                pages: None,
+            },
+            MediaType::Document {
+                format: DocFormat::Html,
+                pages: None,
+            },
+        ]
     }
 
     fn supports(&self, media_type: &MediaType) -> bool {

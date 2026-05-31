@@ -105,7 +105,7 @@ impl TranscriptionService for WhisperTranscription {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = resp.text().await.unwrap_or_else(|e| format!("<failed to read body: {}>", e));
             anyhow::bail!("Whisper API error {status}: {body}");
         }
 

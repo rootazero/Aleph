@@ -24,6 +24,14 @@ pub struct MediaPolicy {
     #[serde(default = "default_max_video_duration")]
     pub max_video_duration: u64,
 
+    /// Maximum video file size in bytes (default: 500 MB).
+    #[serde(default = "default_max_video_bytes")]
+    pub max_video_bytes: u64,
+
+    /// Maximum document file size in bytes (default: 50 MB).
+    #[serde(default = "default_max_document_bytes")]
+    pub max_document_bytes: u64,
+
     /// Maximum document pages (default: 200).
     #[serde(default = "default_max_document_pages")]
     pub max_document_pages: u32,
@@ -46,6 +54,12 @@ fn default_max_audio_bytes() -> u64 {
 fn default_max_video_duration() -> u64 {
     1800
 }
+fn default_max_video_bytes() -> u64 {
+    500 * 1024 * 1024
+}
+fn default_max_document_bytes() -> u64 {
+    50 * 1024 * 1024
+}
 fn default_max_document_pages() -> u32 {
     200
 }
@@ -65,6 +79,8 @@ impl Default for MediaPolicy {
             max_image_bytes: default_max_image_bytes(),
             max_audio_bytes: default_max_audio_bytes(),
             max_video_duration: default_max_video_duration(),
+            max_video_bytes: default_max_video_bytes(),
+            max_document_bytes: default_max_document_bytes(),
             max_document_pages: default_max_document_pages(),
             temp_dir: default_temp_dir(),
             temp_ttl_secs: default_temp_ttl_secs(),
@@ -106,6 +122,14 @@ impl MediaPolicy {
                 }
             }
             MediaType::Video { duration_secs, .. } => {
+                if file_size_bytes > self.max_video_bytes {
+                    return Err(MediaError::SizeLimitExceeded {
+                        message: format!(
+                            "Video file size {} bytes exceeds limit of {} bytes",
+                            file_size_bytes, self.max_video_bytes
+                        ),
+                    });
+                }
                 if let Some(dur) = duration_secs {
                     if !dur.is_finite() || *dur > self.max_video_duration as f64 {
                         return Err(MediaError::SizeLimitExceeded {
@@ -118,6 +142,14 @@ impl MediaPolicy {
                 }
             }
             MediaType::Document { pages, .. } => {
+                if file_size_bytes > self.max_document_bytes {
+                    return Err(MediaError::SizeLimitExceeded {
+                        message: format!(
+                            "Document file size {} bytes exceeds limit of {} bytes",
+                            file_size_bytes, self.max_document_bytes
+                        ),
+                    });
+                }
                 if let Some(p) = pages {
                     if *p > self.max_document_pages {
                         return Err(MediaError::SizeLimitExceeded {
@@ -158,6 +190,8 @@ mod tests {
         assert_eq!(p.max_image_bytes, 20 * 1024 * 1024);
         assert_eq!(p.max_audio_bytes, 100 * 1024 * 1024);
         assert_eq!(p.max_video_duration, 1800);
+        assert_eq!(p.max_video_bytes, 500 * 1024 * 1024);
+        assert_eq!(p.max_document_bytes, 50 * 1024 * 1024);
         assert_eq!(p.max_document_pages, 200);
         assert_eq!(p.temp_ttl(), Duration::from_secs(3600));
     }
@@ -201,7 +235,17 @@ mod tests {
             format: VideoFormat::Mp4,
             duration_secs: Some(2000.0),
         };
-        assert!(p.check_size(&mt, 0).is_err());
+        assert!(p.check_size(&mt, 1024).is_err());
+    }
+
+    #[test]
+    fn check_size_video_file_size_exceeds() {
+        let p = MediaPolicy::default();
+        let mt = MediaType::Video {
+            format: VideoFormat::Mp4,
+            duration_secs: Some(60.0),
+        };
+        assert!(p.check_size(&mt, 501 * 1024 * 1024).is_err());
     }
 
     #[test]
@@ -211,7 +255,17 @@ mod tests {
             format: DocFormat::Pdf,
             pages: Some(300),
         };
-        assert!(p.check_size(&mt, 0).is_err());
+        assert!(p.check_size(&mt, 1024).is_err());
+    }
+
+    #[test]
+    fn check_size_document_file_size_exceeds() {
+        let p = MediaPolicy::default();
+        let mt = MediaType::Document {
+            format: DocFormat::Pdf,
+            pages: Some(10),
+        };
+        assert!(p.check_size(&mt, 51 * 1024 * 1024).is_err());
     }
 
     #[test]

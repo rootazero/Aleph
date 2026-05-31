@@ -387,8 +387,9 @@ fn session_dir(session_id: &str) -> PathBuf {
 fn ensure_session_dir(session_id: &str) -> Result<PathBuf, std::io::Error> {
     let dir = session_dir(session_id);
     let marker = dir.join(".created_at");
-    if !dir.exists() {
-        std::fs::create_dir_all(&dir)?;
+    // create_dir_all is idempotent — avoids TOCTOU between exists() check and creation.
+    std::fs::create_dir_all(&dir)?;
+    if !marker.exists() {
         // Best-effort marker — if it fails, cleanup_stale falls back to mtime
         let _ = std::fs::write(&marker, "");
     }
