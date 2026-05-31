@@ -35,7 +35,7 @@ impl ApprovalCallbackSink for ManagerCallbackSink {
         let response_text = if resolved {
             ApprovalBridge::decision_response_text(&decision).to_string()
         } else {
-            "该审批已过期或已处理。".to_string()
+            "This approval has expired or already been processed.".to_string()
         };
         Some(ApprovalCallbackResult {
             resolved,
@@ -76,7 +76,7 @@ mod tests {
             .await
             .expect("is an approval callback");
         assert!(!out.resolved);
-        assert!(out.response_text.contains("过期"));
+        assert!(out.response_text.contains("expired"));
     }
 
     #[tokio::test]

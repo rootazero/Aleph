@@ -55,7 +55,7 @@ pub struct PolicyRule {
 ///
 /// This intentionally mirrors the logic in `exec/approval/binding.rs`.
 fn glob_to_regex_str(pattern: &str) -> String {
-    let mut regex_str = String::with_capacity(pattern.len() * 2);
+    let mut regex_str = String::with_capacity(pattern.len() * 4);
     regex_str.push('^');
 
     let mut chars = pattern.chars().peekable();
@@ -91,6 +91,10 @@ fn glob_to_regex_str(pattern: &str) -> String {
 }
 
 /// Match a value against a glob pattern.
+///
+/// **Performance note:** This function compiles a fresh `regex::Regex` on every
+/// call. For hot paths or repeated matching, use [`ConfigApprovalPolicy`] which
+/// pre-compiles rules once at construction time.
 ///
 /// Public for use in tests. The hot path in [`ConfigApprovalPolicy::check`]
 /// uses pre-compiled regexes instead.

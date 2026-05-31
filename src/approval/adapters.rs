@@ -61,7 +61,7 @@ impl ChannelApprovalBridgeAdapter {
     }
 
     /// Override the default approval timeout. Useful for tests.
-    pub fn with_timeout_ms(mut self, timeout_ms: u64) -> Self {
+    pub fn with_timeout_ms(&mut self, timeout_ms: u64) -> &mut Self {
         self.timeout_ms = timeout_ms;
         self
     }
@@ -223,7 +223,8 @@ mod tests {
 
         let registry = Arc::new(ChannelRegistry::new());
         let bridge = Arc::new(ChannelApprovalBridge::new(registry));
-        let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager()).with_timeout_ms(50);
+        let mut adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
+        adapter.with_timeout_ms(50);
 
         let out = TURN_CONTEXT
             .scope(routable_turn(), async {

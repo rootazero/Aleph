@@ -20,7 +20,7 @@ pub(crate) fn channel_route(key: &SessionKey) -> Option<(ChannelId, Conversation
 }
 
 fn channel_route_inner(key: &SessionKey, depth: usize) -> Option<(ChannelId, ConversationId)> {
-    if depth > MAX_SUBAGENT_DEPTH {
+    if depth >= MAX_SUBAGENT_DEPTH {
         warn!(
             "Subagent nesting depth exceeded {MAX_SUBAGENT_DEPTH}, stopping channel route resolution"
         );
