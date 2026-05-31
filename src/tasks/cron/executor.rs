@@ -20,9 +20,11 @@ use crate::tasks::cron::config::{
     DeliveryStatus, ErrorReason, ExecutionResult, JobSnapshot, RunStatus, SessionTarget,
     TriggerSource,
 };
-use crate::tasks::cron::config::DeliveryTargetConfig;
 use crate::tasks::cron::service::concurrency::PendingAlert;
 use crate::tasks::cron::service::timer::{AlertDispatcherFn, JobExecutorFn};
+use crate::tasks::shared::delivery::{
+    DeliveryConfig, DeliveryEngine, DeliveryMode, DeliveryPayload,
+};
 use crate::tasks::shared::retry_hint::{classify, RetryHint};
 
 /// Deferred channel registry reference — set after channels are initialized.
@@ -47,38 +49,53 @@ pub fn build_cron_executor_fn(
         let registry = Arc::clone(&agent_registry);
         let ch_cell = Arc::clone(&channel_registry_cell);
         let max_iter = default_max_iterations;
-        Box::pin(async move {
-            execute_cron_job(adapter, registry, ch_cell, snapshot, max_iter).await
-        })
+        Box::pin(
+            async move { execute_cron_job(adapter, registry, ch_cell, snapshot, max_iter).await },
+        )
     })
 }
 
 /// Build the alert dispatcher used by `run_timer_loop` to actually deliver
-/// `PendingAlert`s. Reuses `deliver_to_channel` for Gateway targets so cron
-/// alerts and cron success messages share the same delivery path. Non-Gateway
-/// targets (Webhook/Memory) are logged but not yet implemented at this layer.
-pub fn build_cron_alert_dispatcher_fn(
-    channel_registry_cell: ChannelRegistryCell,
-) -> AlertDispatcherFn {
+/// `PendingAlert`s.
+///
+/// Routes every alert through the shared [`DeliveryEngine`] (the same engine
+/// the heartbeat loop uses), so a job's `failure_alert.target` is honoured for
+/// **all** target kinds — Gateway, Webhook, and Memory — instead of only
+/// Gateway. Previously this hand-rolled a Gateway-only match and silently
+/// dropped Webhook/Memory targets even though both `DeliveryTarget`
+/// implementations already exist.
+pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> AlertDispatcherFn {
     Arc::new(move |alerts: Vec<PendingAlert>| {
-        let cell = Arc::clone(&channel_registry_cell);
+        let engine = Arc::clone(&delivery_engine);
         Box::pin(async move {
             for alert in alerts {
-                match &alert.target {
-                    DeliveryTargetConfig::Gateway {
-                        channel, chat_id, ..
-                    } => {
-                        let body = format!("⚠️ {}: {}", alert.job_name, alert.message);
-                        let _ =
-                            deliver_to_channel(&cell, channel, chat_id, &body, &alert.job_id).await;
-                    }
-                    other => {
-                        warn!(
-                            job_id = %alert.job_id,
-                            target = ?other,
-                            "cron alert target not supported by dispatcher; alert dropped"
-                        );
-                    }
+                let payload = DeliveryPayload {
+                    source_type: "cron".to_string(),
+                    task_name: alert.job_name.clone(),
+                    agent_id: String::new(),
+                    // Gateway targets render `output` verbatim; keep the ⚠️
+                    // prefix the previous dispatcher produced. Webhook targets
+                    // additionally receive task_name / metadata as structured
+                    // JSON fields.
+                    output: format!("⚠️ {}: {}", alert.job_name, alert.message),
+                    channel_id: None,
+                    metadata: serde_json::json!({
+                        "job_id": alert.job_id,
+                        "kind": "failure_alert",
+                    }),
+                };
+                let config = DeliveryConfig {
+                    mode: DeliveryMode::Primary,
+                    targets: vec![alert.target.clone()],
+                    fallback_target: None,
+                };
+                let outcomes = engine.deliver(&payload, &config).await;
+                if outcomes.iter().any(|o| !o.success) {
+                    warn!(
+                        job_id = %alert.job_id,
+                        ?outcomes,
+                        "cron failure alert delivery reported failures"
+                    );
                 }
             }
         })
@@ -192,9 +209,7 @@ async fn execute_cron_job(
             // form. The label is single-source from
             // `TerminateReason::as_static_str()`.
             if let Some((label, detail)) = extract_terminate_reason(&collector).await {
-                if label
-                    == crate::orchestrator::dispatch::BUDGET_PARTIAL_RESULT_LABEL
-                {
+                if label == crate::orchestrator::dispatch::BUDGET_PARTIAL_RESULT_LABEL {
                     if let Some(ref text) = final_response {
                         // Prefer the granular cap label exposed via
                         // `terminate_detail` (`"hit_max_iterations"` /
@@ -203,12 +218,9 @@ async fn execute_cron_job(
                         // the umbrella token when an older binary on the
                         // emitter side did not populate the detail field.
                         let reason = detail.unwrap_or_else(|| label.clone());
-                        let record = crate::tasks::cron::carryover::CarryOver::new(
-                            text.clone(),
-                            reason,
-                        );
-                        if let Err(e) =
-                            crate::tasks::cron::carryover::write(&snapshot.id, &record)
+                        let record =
+                            crate::tasks::cron::carryover::CarryOver::new(text.clone(), reason);
+                        if let Err(e) = crate::tasks::cron::carryover::write(&snapshot.id, &record)
                         {
                             warn!(
                                 job_id = %snapshot.id,
@@ -284,9 +296,8 @@ async fn execute_cron_job(
             let ended_at = chrono::Utc::now().timestamp_millis();
             // Agent-busy is a temporary local-side condition, treat as transient
             // network-shaped backpressure regardless of the message text.
-            let hint = RetryHint::transient(
-                crate::tasks::shared::retry_hint::RetryCategory::Overloaded,
-            );
+            let hint =
+                RetryHint::transient(crate::tasks::shared::retry_hint::RetryCategory::Overloaded);
             ExecutionResult {
                 started_at,
                 ended_at,
