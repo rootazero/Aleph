@@ -186,7 +186,7 @@ pub struct JwtValidator {
     /// Cached RSA decoding keys (sync RwLock — validate() is sync)
     keys: Arc<RwLock<Vec<DecodingKey>>>,
     /// Signal that keys should be refreshed (set when no key matches)
-    refresh_needed: Arc<std::sync::atomic::AtomicBool>,
+    refresh_needed: Arc<crate::sync_primitives::AtomicBool>,
     http: Client,
 }
 
@@ -196,7 +196,7 @@ impl JwtValidator {
         Self {
             app_id,
             keys: Arc::new(RwLock::new(Vec::new())),
-            refresh_needed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            refresh_needed: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
             http: Client::new(),
         }
     }
@@ -204,7 +204,7 @@ impl JwtValidator {
     /// Returns true if keys need refreshing (signature mismatch detected).
     pub fn key_refresh_needed(&self) -> bool {
         self.refresh_needed
-            .load(std::sync::atomic::Ordering::SeqCst)
+            .load(crate::sync_primitives::Ordering::SeqCst)
     }
 
     /// Validate an inbound Bearer JWT token. Returns `true` if valid.
@@ -277,7 +277,7 @@ impl JwtValidator {
 
         warn!("JWT rejected: no key matched the signature — signaling key refresh");
         self.refresh_needed
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+            .store(true, crate::sync_primitives::Ordering::SeqCst);
         false
     }
 
@@ -332,7 +332,7 @@ impl JwtValidator {
             guard.len()
         );
         self.refresh_needed
-            .store(false, std::sync::atomic::Ordering::SeqCst);
+            .store(false, crate::sync_primitives::Ordering::SeqCst);
         Ok(())
     }
 

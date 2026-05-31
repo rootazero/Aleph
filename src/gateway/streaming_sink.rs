@@ -13,7 +13,7 @@
 //! fenced span is stripped before it reaches the user — closing the leak the
 //! scrubber was built for.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use crate::sync_primitives::{AtomicBool, AtomicU32, Ordering};
 use std::time::Instant;
 
 use async_trait::async_trait;
@@ -232,7 +232,7 @@ mod tests {
     use super::*;
     use crate::gateway::event_emitter::{CollectingEventEmitter, StreamEvent};
     use crate::providers::adapter::StopReason;
-    use std::sync::atomic::AtomicBool;
+    use crate::sync_primitives::AtomicBool;
 
     /// Helper: create a sink backed by a CollectingEventEmitter
     fn make_sink(

@@ -6,7 +6,7 @@
 //! server's revision counter and, on change, snapshots each `AlephToolDyn`
 //! tool into a `LoopTool` so the agent loop can invoke them.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use crate::sync_primitives::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use serde_json::Value;

@@ -146,7 +146,7 @@ pub struct GatewaySharedState {
     pub audit_log: Option<crate::security::audit::SecurityAuditLog>,
     /// Readiness flag — flipped to true after agent_init.rs completes
     /// phase-2 wiring. Read by `/ready` HTTP probe.
-    pub ready: Arc<std::sync::atomic::AtomicBool>,
+    pub ready: Arc<crate::sync_primitives::AtomicBool>,
     /// Per-process instance identifier (UUID v4). Stable for the lifetime
     /// of the server; regenerated on every restart. Clients use it to
     /// detect server restart vs same-server-came-back.
@@ -303,7 +303,7 @@ pub struct GatewayServer {
     pub started_at_unix: i64,
     /// Readiness flag — flipped to true after boot phase-2 completes.
     /// Read by `/ready` HTTP probe.
-    pub ready: Arc<std::sync::atomic::AtomicBool>,
+    pub ready: Arc<crate::sync_primitives::AtomicBool>,
     /// Optional A2A server state (set during startup if A2A is enabled)
     a2a_state: Option<Arc<crate::a2a::adapter::server::A2AServerState>>,
     /// Execution adapter for OpenAI-compatible agent completions
@@ -382,7 +382,7 @@ impl GatewayServer {
             start_time: Instant::now(),
             instance_id: uuid::Uuid::new_v4().to_string(),
             started_at_unix: chrono::Utc::now().timestamp(),
-            ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ready: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
             a2a_state: None,
             execution_adapter: None,
             openai_agent_registry: None,
@@ -432,7 +432,7 @@ impl GatewayServer {
             start_time: Instant::now(),
             instance_id: uuid::Uuid::new_v4().to_string(),
             started_at_unix: chrono::Utc::now().timestamp(),
-            ready: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ready: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
             a2a_state: None,
             execution_adapter: None,
             openai_agent_registry: None,

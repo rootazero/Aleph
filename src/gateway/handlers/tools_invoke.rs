@@ -151,8 +151,8 @@ mod tests {
     use super::*;
     use crate::error::Result as AlephResult;
     use crate::tool_metadata::UnifiedTool;
+    use crate::sync_primitives::Mutex;
     use std::collections::HashMap;
-    use std::sync::Mutex;
 
     /// Minimal in-test ToolRegistry returning canned values keyed by tool name.
     /// Returns an error for unknown tools so we can exercise the error path.

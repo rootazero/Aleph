@@ -140,7 +140,7 @@ pub async fn deliver_message(
             content: chunk.clone(),
             markdown: None,
             media: None,
-            msg_seq: Some(idx as u16),
+            msg_seq: Some(idx.try_into().unwrap_or(u16::MAX)),
         };
 
         let result = match target_type {
@@ -165,7 +165,7 @@ pub async fn deliver_message(
                         content: chunk.clone(),
                         markdown: None,
                         media: None,
-                        msg_seq: Some(idx as u16),
+            msg_seq: Some(idx.try_into().unwrap_or(u16::MAX)),
                     };
                     match target_type {
                         "c2c" => api.send_c2c_message(target_id, payload2).await,

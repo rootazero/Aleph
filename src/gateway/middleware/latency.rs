@@ -12,8 +12,8 @@
 //! startup (mirroring the global request-state registry) so both the writer
 //! (`MetricsService`) and the reader (`/metrics`) reach the same counters.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, OnceLock, RwLock};
+use crate::sync_primitives::{Arc, AtomicU64, Ordering, RwLock};
+use std::sync::OnceLock;
 
 /// Upper bounds (inclusive, milliseconds) for the histogram buckets. An
 /// observation falls into the first bucket whose bound is `>= value`; anything

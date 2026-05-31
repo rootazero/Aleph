@@ -2,19 +2,39 @@ use super::config_resolver::ResolvedConfig;
 use super::config_v2::TelegramAccountConfig;
 use super::offset::OffsetTracker;
 use crate::gateway::channel::{CallbackQuery, ChannelState};
-use crate::sync_primitives::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use crate::sync_primitives::{Arc, AtomicBool, Ordering};
 use teloxide::{prelude::Requester, Bot};
 use tokio::sync::{mpsc, oneshot};
 
 fn create_bot_with_proxy(token: &str, proxy_url: Option<&str>) -> Bot {
     match proxy_url {
         Some(url) if !url.is_empty() => {
-            let client = teloxide::net::default_reqwest_settings()
-                .proxy(reqwest_legacy::Proxy::all(url).expect("Invalid proxy URL"))
-                .build()
-                .expect("Failed to build HTTP client with proxy");
-            Bot::with_client(token, client)
+            match reqwest_legacy::Proxy::all(url) {
+                Ok(proxy) => {
+                    match teloxide::net::default_reqwest_settings()
+                        .proxy(proxy)
+                        .build()
+                    {
+                        Ok(client) => Bot::with_client(token, client),
+                        Err(e) => {
+                            tracing::warn!(
+                                proxy_url = %url,
+                                error = %e,
+                                "Failed to build HTTP client with proxy; falling back to no proxy"
+                            );
+                            Bot::new(token)
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        proxy_url = %url,
+                        error = %e,
+                        "Invalid proxy URL; falling back to no proxy"
+                    );
+                    Bot::new(token)
+                }
+            }
         }
         _ => Bot::new(token),
     }

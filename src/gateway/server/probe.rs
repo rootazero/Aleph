@@ -5,8 +5,7 @@
 //! - `/ready` returns 200 once boot phase-2 completes, 503 before that
 //!   (and during graceful shutdown). Used as a k8s readiness probe.
 
-use std::sync::atomic::Ordering;
-use std::sync::Arc;
+use crate::sync_primitives::{Arc, Ordering};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -67,8 +66,8 @@ mod tests {
     use crate::gateway::rate_limiter::{RateLimitConfig, RateLimiter};
     use crate::gateway::state_version::StateVersionTracker;
     use crate::gateway::trusted_proxy::TrustedProxies;
+    use crate::sync_primitives::AtomicBool;
     use std::collections::HashMap;
-    use std::sync::atomic::AtomicBool;
     use std::time::Duration;
     use tokio::sync::RwLock;
 

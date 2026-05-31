@@ -55,8 +55,9 @@
 //! semantics are unchanged.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+use crate::sync_primitives::Mutex;
 
 use serde::{Deserialize, Serialize};
 

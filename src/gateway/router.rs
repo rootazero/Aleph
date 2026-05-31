@@ -73,13 +73,13 @@ impl AgentRouter {
     pub fn from_bindings(bindings: Vec<RouteBinding>, default_agent: impl Into<String>) -> Self {
         let default = default_agent.into();
 
-        // Extract unique agent IDs
-        let mut agent_ids: Vec<String> = vec![default.clone()];
+        // Extract unique agent IDs (HashSet for O(n) dedup, then collect)
+        let mut agent_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::from([default.clone()]);
         for b in &bindings {
-            if !agent_ids.contains(&b.agent_id) {
-                agent_ids.push(b.agent_id.clone());
-            }
+            agent_ids.insert(b.agent_id.clone());
         }
+        let agent_ids: Vec<String> = agent_ids.into_iter().collect();
 
         // Convert to internal format: use "channel:*" or "channel:team_id" patterns
         let internal_bindings: Vec<RoutingBinding> = bindings
