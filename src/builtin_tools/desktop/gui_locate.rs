@@ -31,31 +31,8 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
+use super::interactable::INTERACTABLE_ROLES;
 use super::types::DesktopOutput;
-
-/// Mirror of the snapshot tool's interactable-role allowlist — kept local to
-/// avoid pulling in the snapshot module's private list.
-const INTERACTABLE_ROLES: &[&str] = &[
-    "AXButton",
-    "AXMenuButton",
-    "AXPopUpButton",
-    "AXMenuItem",
-    "AXMenuBarItem",
-    "AXCheckBox",
-    "AXRadioButton",
-    "AXDisclosureTriangle",
-    "AXTextField",
-    "AXTextArea",
-    "AXSearchField",
-    "AXSecureTextField",
-    "AXComboBox",
-    "AXLink",
-    "AXSlider",
-    "AXIncrementor",
-    "AXStepper",
-    "AXColorWell",
-    "AXSegmentedControl",
-];
 
 const SEARCH_MAX_DEPTH: u32 = 32;
 const MAX_CANDIDATES: usize = 5;

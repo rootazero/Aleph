@@ -134,7 +134,7 @@ pub use desktop::{
     DesktopAxQueryFocused, DesktopAxQueryFocusedArgs, DesktopAxQueryTree, DesktopAxQueryTreeArgs,
     DesktopAxSnapshot, DesktopAxSnapshotArgs, DesktopBrowserOperator, DesktopBrowserOperatorArgs,
     DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopGuiLocate, DesktopGuiLocateArgs,
-    DesktopOutput, DesktopTool,
+    DesktopOutput, DesktopSom, DesktopSomArgs, DesktopTool,
 };
 pub use error::ToolError;
 pub use file_ops::{

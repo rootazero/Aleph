@@ -21,6 +21,7 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
+use super::interactable::{collect_interactable, usable_bounds};
 use super::types::DesktopOutput;
 
 // ── Argument types ───────────────────────────────────────────────────────────
@@ -235,30 +236,6 @@ impl AlephTool for DesktopAxQueryByRole {
 
 // ── desktop_ax_snapshot ─────────────────────────────────────────────────────
 
-/// AX roles a user can act on. Containers and decorative text are excluded so
-/// the snapshot stays a short, actionable list rather than a wall of nodes.
-const INTERACTABLE_ROLES: &[&str] = &[
-    "AXButton",
-    "AXMenuButton",
-    "AXPopUpButton",
-    "AXMenuItem",
-    "AXMenuBarItem",
-    "AXCheckBox",
-    "AXRadioButton",
-    "AXDisclosureTriangle",
-    "AXTextField",
-    "AXTextArea",
-    "AXSearchField",
-    "AXSecureTextField",
-    "AXComboBox",
-    "AXLink",
-    "AXSlider",
-    "AXIncrementor",
-    "AXStepper",
-    "AXColorWell",
-    "AXSegmentedControl",
-];
-
 const SNAPSHOT_DEFAULT_DEPTH: u32 = 16;
 const SNAPSHOT_MAX_DEPTH: u32 = 32;
 const SNAPSHOT_DEFAULT_ELEMENTS: usize = 200;
@@ -291,30 +268,6 @@ fn truncate(s: &str, max_chars: usize) -> String {
         format!("{kept}…")
     } else {
         s.to_string()
-    }
-}
-
-/// Return `(x, y, width, height)` when the element has a non-degenerate
-/// bounding rectangle — elements with no bounds or a zero-size rect cannot
-/// be clicked and are excluded from the snapshot.
-fn usable_bounds(node: &AxElement) -> Option<(f64, f64, f64, f64)> {
-    node.bounds.as_ref().and_then(|b| {
-        if b.width > 1.0 && b.height > 1.0 {
-            Some((b.x, b.y, b.width, b.height))
-        } else {
-            None
-        }
-    })
-}
-
-/// Depth-first collection of interactable, clickable elements in document
-/// order (the order a person reads the UI).
-fn collect_interactable<'a>(node: &'a AxElement, out: &mut Vec<&'a AxElement>) {
-    if INTERACTABLE_ROLES.contains(&node.role.as_str()) && usable_bounds(node).is_some() {
-        out.push(node);
-    }
-    for child in &node.children {
-        collect_interactable(child, out);
     }
 }
 

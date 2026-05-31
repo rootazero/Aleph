@@ -121,6 +121,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) desktop_ax_query_by_role_tool: crate::builtin_tools::DesktopAxQueryByRole,
     /// Accessibility snapshot tool — flat indexed interactable-element list.
     pub(crate) desktop_ax_snapshot_tool: crate::builtin_tools::DesktopAxSnapshot,
+    /// Visual set-of-marks tool — annotated screenshot with numbered elements.
+    pub(crate) desktop_som_tool: crate::builtin_tools::DesktopSom,
     /// Visual grounding tool — natural-language target → on-screen coordinates (AX + OCR).
     pub(crate) desktop_gui_locate_tool: crate::builtin_tools::DesktopGuiLocate,
     /// Browser operator manifest tool — declarative strategy picker for browser tasks.
@@ -695,6 +697,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }),
             "desktop_ax_snapshot" => {
                 Box::pin(async move { self.desktop_ax_snapshot_tool.call_json(arguments).await })
+            }
+            "desktop_som" => {
+                Box::pin(async move { self.desktop_som_tool.call_json(arguments).await })
             }
             "desktop_gui_locate" => {
                 Box::pin(async move { self.desktop_gui_locate_tool.call_json(arguments).await })

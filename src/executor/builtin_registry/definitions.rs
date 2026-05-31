@@ -30,7 +30,7 @@ use crate::builtin_tools::{
     BashExecTool, CodeCheckTool, CodeExecTool, CtxSearchTool, DesktopAxQueryByRole, DesktopAxQueryFocused,
     DesktopAxQueryTree,
     ApplyPatchTool, DesktopAxSnapshot, DesktopBrowserOperator, DesktopCheckPermissions,
-    DesktopGuiLocate, DesktopTool, FileEditTool,
+    DesktopGuiLocate, DesktopSom, DesktopTool, FileEditTool,
     FileOpsTool,
     FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool, ReadConfigGuideTool,
     RecallEventsTool, SearchTool, SelfManageTool, VaultStoreTool, WebFetchTool,
@@ -174,6 +174,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "desktop_ax_snapshot",
         description: "Snapshot an app's interactable UI as a flat indexed element list with pre-computed click centers (set-of-marks GUI targeting)",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "desktop_som",
+        description: "Capture the screen with every clickable element outlined and numbered (visual set-of-marks); returns the annotated image plus an indexed element list with ready-to-click centers",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -784,6 +789,7 @@ pub fn create_tool_boxed(
         "desktop_ax_query_tree" => Some(Box::new(DesktopAxQueryTree::new())),
         "desktop_ax_query_by_role" => Some(Box::new(DesktopAxQueryByRole::new())),
         "desktop_ax_snapshot" => Some(Box::new(DesktopAxSnapshot::new())),
+        "desktop_som" => Some(Box::new(DesktopSom::new())),
         "desktop_gui_locate" => Some(Box::new(DesktopGuiLocate::new())),
         "desktop_browser_operator" => Some(Box::new(DesktopBrowserOperator::new())),
         "desktop_check_permissions" => Some(Box::new(DesktopCheckPermissions::new())),

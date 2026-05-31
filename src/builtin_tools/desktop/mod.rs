@@ -6,9 +6,11 @@ mod ax;
 mod browser_operator;
 mod coord_resolve;
 mod gui_locate;
+mod interactable;
 mod native;
 mod perm;
 mod safety;
+mod set_of_marks;
 pub mod session_lock;
 mod types;
 mod wait_visual;
@@ -26,6 +28,7 @@ pub use browser_operator::{
 };
 pub use gui_locate::{DesktopGuiLocate, DesktopGuiLocateArgs};
 pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};
+pub use set_of_marks::{DesktopSom, DesktopSomArgs};
 pub use types::{DesktopArgs, DesktopOutput};
 
 use crate::sync_primitives::{Arc, Mutex};
