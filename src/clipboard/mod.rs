@@ -91,7 +91,7 @@ impl ImageData {
 
         let has_base64_param = header
             .strip_prefix("data:")
-            .unwrap_or(header)
+            .expect("starts_with already checked")
             .split(';')
             .any(|param| param.trim().eq_ignore_ascii_case("base64"));
 
@@ -104,13 +104,10 @@ impl ImageData {
 
         let mime_type = header
             .strip_prefix("data:")
-            .and_then(|h| h.split(';').next())
-            .ok_or_else(|| {
-                AlephError::other(format!(
-                    "Invalid Base64 data URI format: cannot extract MIME type from: {}",
-                    header
-                ))
-            })?;
+            .expect("starts_with already checked")
+            .split(';')
+            .next()
+            .expect("split always returns at least one element");
 
         let format = match mime_type.trim().to_ascii_lowercase().as_str() {
             "image/png" => ImageFormat::Png,
@@ -318,5 +315,44 @@ mod tests {
 
         assert_eq!(image.data, data);
         assert_eq!(image.format, ImageFormat::Gif);
+    }
+
+    #[test]
+    fn from_base64_empty_input() {
+        let result = ImageData::from_base64("");
+        assert!(result.is_err(), "Empty input should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("missing comma separator"),
+            "Error should mention missing comma: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn from_base64_exact_size_limit() {
+        // 20MB of zeros -> base64 encoded = ceil(20MB / 3) * 4 = 27,866,667 bytes
+        let data = vec![0u8; MAX_IMAGE_SIZE_BYTES];
+        let encoded = general_purpose::STANDARD.encode(&data);
+        let data_uri = format!("data:image/png;base64,{}", encoded);
+        let result = ImageData::from_base64(&data_uri);
+        assert!(result.is_ok(), "Exact size limit should be accepted");
+        assert_eq!(result.unwrap().data.len(), MAX_IMAGE_SIZE_BYTES);
+    }
+
+    #[test]
+    fn from_base64_over_size_limit() {
+        // 20MB + 1 byte -> should be rejected after decoding
+        let data = vec![0u8; MAX_IMAGE_SIZE_BYTES + 1];
+        let encoded = general_purpose::STANDARD.encode(&data);
+        let data_uri = format!("data:image/png;base64,{}", encoded);
+        let result = ImageData::from_base64(&data_uri);
+        assert!(result.is_err(), "Over size limit should be rejected");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("too large") || err.contains("exceeds maximum"),
+            "Error should mention size limit: {}",
+            err
+        );
     }
 }
