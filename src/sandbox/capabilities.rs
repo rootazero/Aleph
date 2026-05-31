@@ -68,6 +68,17 @@ impl SandboxCapabilities {
         Self::default()
     }
 
+    /// Return a copy with `fs_read` and `fs_write` sorted so that
+    /// `Hash`/`Eq` are order-independent. Used before storing in
+    /// `granted_elevations` cache to prevent duplicate entries for
+    /// the same capability set with different path order.
+    pub fn normalized(&self) -> Self {
+        let mut copy = self.clone();
+        copy.fs_read.sort();
+        copy.fs_write.sort();
+        copy
+    }
+
     /// Is `self` ⊆ `baseline` (fs subset; Network ordered None ⊆ AllowHosts ⊆ AllowAll;
     /// spawn monotonic; resource limits at least as tight as baseline)?
     ///

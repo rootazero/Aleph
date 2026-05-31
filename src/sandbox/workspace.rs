@@ -204,9 +204,21 @@ impl Sandbox for WorkspaceSandbox {
                 // comparison is symlink-aware; a cwd that cannot be
                 // resolved (missing directory / dangling link) is
                 // treated as outside and denied.
-                let real_root = tokio::fs::canonicalize(&ws.cwd)
-                    .await
-                    .unwrap_or_else(|_| ws.cwd.clone());
+                let real_root = match tokio::fs::canonicalize(&ws.cwd).await {
+                    Ok(r) => r,
+                    Err(_) => {
+                        let err = SandboxError::CapabilityDenied {
+                            reason: "workspace root cannot be resolved".into(),
+                        };
+                        self.hooks
+                            .run_after(
+                                &SandboxHookContext::new(&cmd.program, &cmd),
+                                Err("workspace root cannot be resolved"),
+                            )
+                            .await;
+                        return Err(err);
+                    }
+                };
                 let resolved = tokio::fs::canonicalize(&normalized)
                     .await
                     .ok()
@@ -229,10 +241,11 @@ impl Sandbox for WorkspaceSandbox {
             }
         };
 
+        let normalized_caps = cmd.capabilities.normalized();
         if !cmd.capabilities.is_within(&ws.baseline) {
             let already_granted = {
                 let granted = ws.granted_elevations.read().await;
-                granted.iter().any(|g| cmd.capabilities.is_within(g))
+                granted.iter().any(|g| normalized_caps.is_within(g))
             };
             if !already_granted {
                 let reason = format_capability_request(&cmd.program, &cmd.capabilities);
@@ -245,7 +258,7 @@ impl Sandbox for WorkspaceSandbox {
                         ws.granted_elevations
                             .write()
                             .await
-                            .insert(cmd.capabilities.clone());
+                            .insert(normalized_caps);
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
                         let err = SandboxError::CapabilityDenied {

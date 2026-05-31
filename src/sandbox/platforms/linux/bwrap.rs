@@ -574,8 +574,8 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
                     let procs_path = s.procs_path();
                     unsafe {
                         cmd.pre_exec(move || {
-                            let pid = std::process::id();
-                            std::fs::write(&procs_path, pid.to_string().as_bytes())
+                            crate::sandbox::cgroup_v2::CgroupV2Scope::write_current_pid_to_path(
+                                &procs_path)
                         });
                     }
                 }

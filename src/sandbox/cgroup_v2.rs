@@ -229,20 +229,56 @@ impl CgroupV2Scope {
         Ok(())
     }
 
-    /// Write the current process's PID into `<scope>/cgroup.procs`.
-    /// Intended for use inside a `pre_exec` callback in the parent's
-    /// `Command::spawn` — the child's PID at that moment is what we
-    /// want to attach.
-    ///
-    /// This is `async-signal-safe` in the strict sense: it does
-    /// `getpid` + a single `write()` syscall, both AS-safe per POSIX.
-    /// The `format!` allocates, which is technically not AS-safe — but
-    /// `pre_exec` is single-threaded in the child (post-fork), so the
-    /// usual AS-safety concern (allocator lock interleaving with signal
-    /// handlers) does not apply.
-    pub fn attach_current_pid(&self) -> std::io::Result<()> {
+    /// Async-signal-safe helper: write the current PID into `path`.
+    fn write_current_pid_to_path(path: &std::path::Path) -> std::io::Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+        let path_bytes = path.as_os_str().as_bytes();
+        let mut path_buf = [0u8; 512];
+        if path_bytes.len() >= path_buf.len() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "cgroup.procs path too long",
+            ));
+        }
+        path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
+        path_buf[path_bytes.len()] = b'\0';
+
+        let fd = unsafe { libc::open(path_buf.as_ptr() as *const i8, libc::O_WRONLY | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         let pid = std::process::id();
-        std::fs::write(self.path.join("cgroup.procs"), pid.to_string().as_bytes())
+        let mut pid_buf = [0u8; 16];
+        let mut n = pid;
+        let mut i = 0;
+        loop {
+            pid_buf[15 - i] = b'0' + (n % 10) as u8;
+            n /= 10;
+            i += 1;
+            if n == 0 {
+                break;
+            }
+        }
+        pid_buf[15 - i] = b'\n';
+        let pid_slice = &pid_buf[15 - i..16];
+        let mut written = 0;
+        while written < pid_slice.len() {
+            let ret = unsafe {
+                libc::write(fd, pid_slice[written..].as_ptr() as *const libc::c_void, pid_slice.len() - written)
+            };
+            if ret < 0 {
+                let _ = unsafe { libc::close(fd) };
+                return Err(std::io::Error::last_os_error());
+            }
+            written += ret as usize;
+        }
+        let _ = unsafe { libc::close(fd) };
+        Ok(())
+    }
+
+    /// Write the current process's PID into `<scope>/cgroup.procs`.
+    pub fn attach_current_pid(&self) -> std::io::Result<()> {
+        Self::write_current_pid_to_path(&self.path.join("cgroup.procs"))
     }
 }
 
