@@ -267,14 +267,14 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 /// Get builtin commands (system commands)
 fn get_builtin_commands() -> Vec<CommandNode> {
     vec![
-        CommandNode::new("search", "Web search", CommandType::Action)
+        CommandNode::new_with_source("search", "Web search", ToolSourceType::Builtin)
             .with_icon("magnifyingglass")
             .with_hint("Search the web")
-            .with_source_type(ToolSourceType::Builtin),
-        CommandNode::new("webfetch", "Fetch web page", CommandType::Action)
+            .with_node_type(CommandType::Action),
+        CommandNode::new_with_source("webfetch", "Fetch web page", ToolSourceType::Builtin)
             .with_icon("globe")
             .with_hint("Fetch and parse a URL")
-            .with_source_type(ToolSourceType::Builtin),
+            .with_node_type(CommandType::Action),
     ]
 }
 

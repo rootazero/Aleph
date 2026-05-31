@@ -102,9 +102,14 @@ pub struct CommandNode {
 impl CommandNode {
     /// Create a new command node
     ///
-    /// **Note**: The `source_type` defaults to `Custom`. For proper categorization,
-    /// prefer [`CommandNode::new_with_source`] which requires an explicit source type,
-    /// or chain `.with_source_type(...)` after this constructor.
+    /// **Deprecated**: The `source_type` defaults to `Custom`, which often leads to
+    /// incorrect UI categorization. Use [`CommandNode::new_with_source`] for proper
+    /// source type initialization, or chain `.with_source_type(...)` after this
+    /// constructor if you must use this method.
+    #[deprecated(
+        since = "26.5.30",
+        note = "Use `new_with_source` for explicit source type, or chain `.with_source_type()`"
+    )]
     pub fn new(
         key: impl Into<String>,
         description: impl Into<String>,
@@ -242,7 +247,7 @@ impl CommandTriggers {
 
     /// Get total trigger count
     pub fn len(&self) -> usize {
-        self.manual.len().saturating_add(self.auto_extracted.len())
+        self.manual.len() + self.auto_extracted.len()
     }
 
     /// Check if empty
@@ -317,6 +322,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_command_node_builder() {
         let node = CommandNode::new("test", "Test command", CommandType::Action)
             .with_icon("star")
@@ -362,6 +368,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_flat_namespace_no_children() {
         // In flat namespace mode, all nodes have has_children = false
         let node = CommandNode::new("test", "Test", CommandType::Prompt);

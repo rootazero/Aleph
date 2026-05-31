@@ -13,7 +13,6 @@ mod dispatcher;
 mod parser;
 mod types;
 
-pub use dispatcher::{CommandDispatcher, DirectHandler};
 pub use parser::{CommandContext, CommandParser, ParsedCommand};
 pub use types::{CommandExecutionResult, CommandNode, CommandTriggers, CommandType};
 

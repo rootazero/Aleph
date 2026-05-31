@@ -9,7 +9,7 @@ use super::types::CommandExecutionResult;
 
 /// Handler for a direct-mode command
 #[async_trait]
-pub trait DirectHandler: Send + Sync {
+pub(crate) trait DirectHandler: Send + Sync {
     /// Execute the command with optional arguments
     async fn execute(&self, args: Option<&str>) -> CommandExecutionResult;
 }
@@ -20,25 +20,33 @@ pub trait DirectHandler: Send + Sync {
 /// for concurrent registration. `register` requires `&mut self`, while `execute`
 /// only needs `&self`. If you need runtime handler registration from multiple
 /// threads/tasks, wrap this dispatcher in an `RwLock` or `Mutex`.
-pub struct CommandDispatcher {
+pub(crate) struct CommandDispatcher {
     handlers: HashMap<String, Box<dyn DirectHandler>>,
 }
 
 impl CommandDispatcher {
     /// Create a new empty dispatcher
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             handlers: HashMap::new(),
         }
     }
 
     /// Register a handler for a command name
-    pub fn register(&mut self, name: impl Into<String>, handler: impl DirectHandler + 'static) {
+    pub(crate) fn register(
+        &mut self,
+        name: impl Into<String>,
+        handler: impl DirectHandler + 'static,
+    ) {
         self.handlers.insert(name.into(), Box::new(handler));
     }
 
     /// Execute a direct command by name
-    pub async fn execute(&self, command_name: &str, args: Option<&str>) -> CommandExecutionResult {
+    pub(crate) async fn execute(
+        &self,
+        command_name: &str,
+        args: Option<&str>,
+    ) -> CommandExecutionResult {
         match self.handlers.get(command_name) {
             Some(handler) => handler.execute(args).await,
             None => CommandExecutionResult::error(format!(
@@ -49,7 +57,7 @@ impl CommandDispatcher {
     }
 
     /// Check if a handler exists for a command
-    pub fn has_handler(&self, command_name: &str) -> bool {
+    pub(crate) fn has_handler(&self, command_name: &str) -> bool {
         self.handlers.contains_key(command_name)
     }
 }
