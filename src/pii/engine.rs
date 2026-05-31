@@ -148,12 +148,12 @@ impl PiiEngine {
             "ssh_key" => &config.ssh_key,
             _ => {
                 // Look up custom rule action by name
-                config
-                    .custom_rules
-                    .iter()
-                    .find(|r| r.name == rule_name)
-                    .map(|r| &r.action)
-                    .unwrap_or(&PiiAction::Block)
+                    config
+                        .custom_rules
+                        .iter()
+                        .find(|r| r.name == rule_name)
+                        .map(|r| &r.action)
+                        .unwrap_or_else(|| &PiiAction::Block)
             }
         }
     }
@@ -234,7 +234,7 @@ impl PiiEngine {
             let action = Self::action_for_rule(config, &detection.rule_name);
             match action {
                 PiiAction::Block => {
-                    if detection.start <= detection.end
+                    if detection.start < detection.end
                         && detection.end <= result.len()
                         && result.is_char_boundary(detection.start)
                         && result.is_char_boundary(detection.end)

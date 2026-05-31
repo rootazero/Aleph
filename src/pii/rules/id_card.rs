@@ -84,13 +84,19 @@ impl IdCardRule {
     /// Validate ISO 7064 MOD 11-2 checksum
     fn is_valid_checksum(id: &str) -> bool {
         let bytes = id.as_bytes();
-        if bytes.len() < 18 {
+        if bytes.len() != 18 {
             return false;
         }
         let sum: u32 = bytes
             .iter()
+            .take(17)
             .zip(WEIGHTS.iter())
-            .map(|(&b, &w)| (b - b'0') as u32 * w)
+            .map(|(&b, &w)| {
+                if !b.is_ascii_digit() {
+                    return 0;
+                }
+                (b - b'0') as u32 * w
+            })
             .sum();
         let expected = CHECK_CODES[(sum % 11) as usize];
         let last = match id.chars().last() {

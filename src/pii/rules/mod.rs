@@ -31,14 +31,15 @@ pub trait PiiRule: Send + Sync {
     fn detect(&self, text: &str) -> Vec<PiiMatch>;
 }
 
-/// Build all rules ordered by severity (Critical first).
+/// Build all rules with built-ins first, then custom rules.
 ///
 /// Built-in rules are always included. Custom rules from config are
 /// appended after built-ins. Invalid custom regex patterns are logged
 /// and skipped.
 ///
-/// Rules are sorted by severity in descending order so that higher-severity
-/// matches win during overlap deduplication in `dedup_overlapping`.
+/// All rules (built-in + custom) are sorted by severity in descending
+/// order so that higher-severity matches win during overlap
+/// deduplication in `dedup_overlapping`.
 pub(crate) fn build_rules(custom_configs: &[CustomPiiRule]) -> Vec<Box<dyn PiiRule>> {
     let mut rules: Vec<Box<dyn PiiRule>> = vec![
         Box::new(api_key::ApiKeyRule::new()),
