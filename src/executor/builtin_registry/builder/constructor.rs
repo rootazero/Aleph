@@ -11,11 +11,12 @@ use tracing::{info, warn};
 
 use super::{BuiltinToolConfig, BuiltinToolRegistry};
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserDialogTool, BrowserDragTool, BrowserEvaluateTool,
-    BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
-    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool, BrowserResizeTool,
-    BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSnapshotTool,
-    BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
+    BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
+    BrowserEmulateTool, BrowserEvaluateTool, BrowserFillFormTool, BrowserHoverTool,
+    BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool,
+    BrowserProfileTool, BrowserResizeTool, BrowserScreenshotTool, BrowserScrollTool,
+    BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool,
+    BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::skill_reader::{
     ListSkillsTool as SkillListTool, ReadSkillTool as SkillReadTool,
@@ -214,6 +215,9 @@ impl BuiltinToolRegistry {
         let browser_drag_tool = BrowserDragTool::new(Arc::clone(&browser_profile_manager));
         let browser_upload_tool = BrowserUploadTool::new(Arc::clone(&browser_profile_manager));
         let browser_resize_tool = BrowserResizeTool::new(Arc::clone(&browser_profile_manager));
+        let browser_emulate_tool = BrowserEmulateTool::new(Arc::clone(&browser_profile_manager));
+        let browser_cookies_tool = BrowserCookiesTool::new(Arc::clone(&browser_profile_manager));
+        let browser_session_tool = BrowserSessionTool::new(Arc::clone(&browser_profile_manager));
         // Start the idle-profile reaper (sweeps stale browsers every 60s).
         browser_profile_manager.spawn_idle_reaper(60);
         let browser_profile_tool = BrowserProfileTool::new(browser_profile_manager);
@@ -356,6 +360,9 @@ impl BuiltinToolRegistry {
                 browser_drag_tool.definition(),
                 browser_upload_tool.definition(),
                 browser_resize_tool.definition(),
+                browser_emulate_tool.definition(),
+                browser_cookies_tool.definition(),
+                browser_session_tool.definition(),
                 browser_profile_tool.definition(),
             ];
             for td in &browser_tool_defs {
@@ -1543,6 +1550,9 @@ impl BuiltinToolRegistry {
             browser_drag_tool,
             browser_upload_tool,
             browser_resize_tool,
+            browser_emulate_tool,
+            browser_cookies_tool,
+            browser_session_tool,
             browser_profile_tool,
             agent_create_tool,
             agent_list_tool,

@@ -12,7 +12,8 @@ use super::chrome_mcp::ChromeMcpDriver;
 use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::types::{
-    ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
+    ActionTarget, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
+    SnapshotOutput, TabId,
 };
 
 pub struct ChromeMcpBackend {
@@ -405,6 +406,44 @@ impl BrowserBackend for ChromeMcpBackend {
         self.select_page(tab_id).await?;
         self.call("resize_page", json!({ "width": width, "height": height }))
             .await?;
+        Ok(())
+    }
+
+    async fn emulate(&self, tab_id: &str, opts: &EmulateOptions) -> Result<(), BrowserError> {
+        opts.validate().map_err(BrowserError::ActionFailed)?;
+        self.select_page(tab_id).await?;
+        // chrome-devtools-mcp exposes a single `emulate` tool covering every
+        // override; build its argument object from the set fields only.
+        let mut args = serde_json::Map::new();
+        if let Some(cs) = opts.color_scheme {
+            args.insert("colorScheme".into(), json!(cs.as_mcp()));
+        }
+        if let Some(geo) = &opts.geolocation {
+            args.insert(
+                "geolocation".into(),
+                json!(format!("{},{}", geo.latitude, geo.longitude)),
+            );
+        }
+        if let Some(nc) = opts.network_condition {
+            // `Online` is expressed by omitting the field (no throttling).
+            if let Some(v) = nc.as_mcp() {
+                args.insert("networkConditions".into(), json!(v));
+            }
+        }
+        if let Some(rate) = opts.cpu_throttle {
+            args.insert("cpuThrottlingRate".into(), json!(rate));
+        }
+        if let Some(headers) = &opts.extra_http_headers {
+            // The MCP contract wants the header map as a JSON *string*.
+            let encoded = serde_json::to_string(headers).map_err(|e| {
+                BrowserError::ActionFailed(format!("encode extra_http_headers: {e}"))
+            })?;
+            args.insert("extraHttpHeaders".into(), json!(encoded));
+        }
+        if let Some(ua) = &opts.user_agent {
+            args.insert("userAgent".into(), json!(ua));
+        }
+        self.call("emulate", serde_json::Value::Object(args)).await?;
         Ok(())
     }
 

@@ -4,8 +4,10 @@
 
 pub mod click;
 pub mod console;
+pub mod cookies;
 pub mod dialog;
 pub mod drag;
+pub mod emulate;
 pub mod evaluate;
 pub mod fill_form;
 pub mod hover;
@@ -19,6 +21,7 @@ pub mod resize;
 pub mod screenshot;
 pub mod scroll;
 pub mod select;
+pub mod session;
 pub mod snapshot;
 pub mod tabs;
 pub mod type_text;
@@ -157,8 +160,10 @@ pub(crate) async fn make_backend_and_tab_guarded(
 
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
 pub use console::{BrowserConsoleArgs, BrowserConsoleOutput, BrowserConsoleTool};
+pub use cookies::{BrowserCookiesArgs, BrowserCookiesOutput, BrowserCookiesTool};
 pub use dialog::{BrowserDialogArgs, BrowserDialogOutput, BrowserDialogTool};
 pub use drag::{BrowserDragArgs, BrowserDragOutput, BrowserDragTool};
+pub use emulate::{BrowserEmulateArgs, BrowserEmulateOutput, BrowserEmulateTool};
 pub use evaluate::{BrowserEvaluateArgs, BrowserEvaluateOutput, BrowserEvaluateTool};
 pub use fill_form::{BrowserFillFormArgs, BrowserFillFormOutput, BrowserFillFormTool};
 pub use hover::{BrowserHoverArgs, BrowserHoverOutput, BrowserHoverTool};
@@ -172,6 +177,7 @@ pub use resize::{BrowserResizeArgs, BrowserResizeOutput, BrowserResizeTool};
 pub use screenshot::{BrowserScreenshotArgs, BrowserScreenshotOutput, BrowserScreenshotTool};
 pub use scroll::{BrowserScrollArgs, BrowserScrollOutput, BrowserScrollTool};
 pub use select::{BrowserSelectArgs, BrowserSelectOutput, BrowserSelectTool};
+pub use session::{BrowserSessionArgs, BrowserSessionOutput, BrowserSessionTool};
 pub use snapshot::{BrowserSnapshotArgs, BrowserSnapshotOutput, BrowserSnapshotTool};
 pub use tabs::{BrowserTabsArgs, BrowserTabsOutput, BrowserTabsTool};
 pub use type_text::{BrowserTypeArgs, BrowserTypeOutput, BrowserTypeTool};

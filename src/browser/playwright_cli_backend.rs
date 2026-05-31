@@ -11,7 +11,8 @@ use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::playwright_cli::{CliOutput, PlaywrightCliDriver};
 use super::types::{
-    ActionTarget, ScreenshotOpts, ScreenshotOutput, ScrollDirection, SnapshotOutput, TabId,
+    ActionTarget, CookieOp, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
+    SnapshotOutput, TabId,
 };
 
 pub struct PlaywrightCliBackend {
@@ -55,6 +56,67 @@ fn target_ref(target: &ActionTarget) -> Result<&str, BrowserError> {
         ActionTarget::Coordinates { .. } => Err(BrowserError::ActionFailed(
             "this action requires a snapshot ref; coordinates unsupported for this op".into(),
         )),
+    }
+}
+
+/// Translate a [`CookieOp`] into the `playwright-cli cookie-*` argv.
+///
+/// Pure so the presence-flag (`--httpOnly`/`--secure`) vs value-flag
+/// (`--domain`/`--path`/`--expires`/`--sameSite`) wiring is unit-testable
+/// without spawning a browser.
+fn cookie_argv(op: &CookieOp) -> Vec<String> {
+    match op {
+        CookieOp::List { domain, path } => {
+            let mut a = vec!["cookie-list".to_string()];
+            if let Some(d) = domain {
+                a.push("--domain".into());
+                a.push(d.clone());
+            }
+            if let Some(p) = path {
+                a.push("--path".into());
+                a.push(p.clone());
+            }
+            a
+        }
+        CookieOp::Get { name } => vec!["cookie-get".into(), name.clone()],
+        CookieOp::Set {
+            name,
+            value,
+            domain,
+            path,
+            expires,
+            http_only,
+            secure,
+            same_site,
+        } => {
+            let mut a = vec!["cookie-set".into(), name.clone(), value.clone()];
+            if let Some(d) = domain {
+                a.push("--domain".into());
+                a.push(d.clone());
+            }
+            if let Some(p) = path {
+                a.push("--path".into());
+                a.push(p.clone());
+            }
+            if let Some(e) = expires {
+                a.push("--expires".into());
+                a.push(e.to_string());
+            }
+            // httpOnly / secure are presence flags: pass when true, omit otherwise.
+            if *http_only == Some(true) {
+                a.push("--httpOnly".into());
+            }
+            if *secure == Some(true) {
+                a.push("--secure".into());
+            }
+            if let Some(ss) = same_site {
+                a.push("--sameSite".into());
+                a.push(ss.as_cli().to_string());
+            }
+            a
+        }
+        CookieOp::Delete { name } => vec!["cookie-delete".into(), name.clone()],
+        CookieOp::Clear => vec!["cookie-clear".into()],
     }
 }
 
@@ -304,6 +366,95 @@ impl BrowserBackend for PlaywrightCliBackend {
             .await?;
         Ok(())
     }
+
+    async fn switch_tab(&self, tab_id: &str) -> Result<(), BrowserError> {
+        let _ = self
+            .run(&["tab-select", tab_id], self.action_timeout())
+            .await?;
+        Ok(())
+    }
+
+    async fn handle_dialog(
+        &self,
+        _tab_id: &str,
+        action: &str,
+        prompt_text: Option<&str>,
+    ) -> Result<(), BrowserError> {
+        match action.to_ascii_lowercase().as_str() {
+            "accept" | "ok" | "confirm" => {
+                let mut args = vec!["dialog-accept"];
+                if let Some(text) = prompt_text {
+                    args.push(text);
+                }
+                let _ = self.run(&args, self.action_timeout()).await?;
+                Ok(())
+            }
+            "dismiss" | "cancel" | "reject" => {
+                let _ = self.run(&["dialog-dismiss"], self.action_timeout()).await?;
+                Ok(())
+            }
+            other => Err(BrowserError::ActionFailed(format!(
+                "unknown dialog action '{other}' — expected 'accept' or 'dismiss'"
+            ))),
+        }
+    }
+
+    async fn emulate(&self, _tab_id: &str, opts: &EmulateOptions) -> Result<(), BrowserError> {
+        opts.validate().map_err(BrowserError::ActionFailed)?;
+        // The managed Playwright CLI can only toggle online/offline at runtime;
+        // color scheme, geolocation, CPU throttling, HTTP headers and user-agent
+        // are context-construction options it does not expose as live commands.
+        if opts.color_scheme.is_some()
+            || opts.geolocation.is_some()
+            || opts.cpu_throttle.is_some()
+            || opts.extra_http_headers.is_some()
+            || opts.user_agent.is_some()
+        {
+            return Err(BrowserError::ActionFailed(
+                "managed profile only supports network_condition emulation; for color scheme, \
+                 geolocation, CPU throttle, HTTP headers or user-agent use an existing-session \
+                 profile (e.g. 'user')"
+                    .into(),
+            ));
+        }
+        match opts.network_condition {
+            Some(cond) => match cond.as_playwright_state() {
+                Some(state) => {
+                    let _ = self
+                        .run(&["network-state-set", state], self.action_timeout())
+                        .await?;
+                    Ok(())
+                }
+                None => Err(BrowserError::ActionFailed(format!(
+                    "managed profile supports only offline/online network emulation, not {cond:?}; \
+                     use an existing-session profile for throttled tiers"
+                ))),
+            },
+            // validate() already guaranteed at least one field is set, and the
+            // block above rejected every non-network field, so this is unreachable.
+            None => Err(BrowserError::ActionFailed(
+                "emulate requires at least one option".into(),
+            )),
+        }
+    }
+
+    async fn save_state(&self, path: &Path) -> Result<(), BrowserError> {
+        let p = path.to_string_lossy().to_string();
+        self.run(&["state-save", &p], self.action_timeout()).await?;
+        Ok(())
+    }
+
+    async fn load_state(&self, path: &Path) -> Result<(), BrowserError> {
+        let p = path.to_string_lossy().to_string();
+        self.run(&["state-load", &p], self.action_timeout()).await?;
+        Ok(())
+    }
+
+    async fn cookies(&self, op: &CookieOp) -> Result<String, BrowserError> {
+        let argv = cookie_argv(op);
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        Ok(self.run(&refs, self.action_timeout()).await?.stdout)
+    }
 }
 
 #[cfg(test)]
@@ -340,5 +491,107 @@ mod tests {
             .navigate("last", "http://127.0.0.1:8080/secret")
             .await;
         assert!(matches!(result, Err(BrowserError::NavigationFailed(_))));
+    }
+
+    #[tokio::test]
+    async fn test_emulate_rejects_mcp_only_fields_before_spawn() {
+        use crate::browser::types::{ColorScheme, EmulateOptions};
+        // color_scheme is an existing-session-only override; the managed backend
+        // must reject it up-front (without spawning the CLI) and point to 'user'.
+        let backend = test_backend();
+        let opts = EmulateOptions {
+            color_scheme: Some(ColorScheme::Dark),
+            ..Default::default()
+        };
+        let err = backend.emulate("last", &opts).await.unwrap_err();
+        match err {
+            BrowserError::ActionFailed(msg) => {
+                assert!(msg.contains("existing-session"), "got: {msg}");
+            }
+            other => panic!("expected ActionFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_emulate_rejects_empty_options() {
+        use crate::browser::types::EmulateOptions;
+        let backend = test_backend();
+        let err = backend
+            .emulate("last", &EmulateOptions::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, BrowserError::ActionFailed(_)));
+    }
+
+    #[test]
+    fn test_cookie_argv_list_and_mutations() {
+        assert_eq!(
+            cookie_argv(&CookieOp::List {
+                domain: Some("example.com".into()),
+                path: None,
+            }),
+            vec!["cookie-list", "--domain", "example.com"]
+        );
+        assert_eq!(
+            cookie_argv(&CookieOp::Get {
+                name: "sid".into()
+            }),
+            vec!["cookie-get", "sid"]
+        );
+        assert_eq!(
+            cookie_argv(&CookieOp::Delete {
+                name: "sid".into()
+            }),
+            vec!["cookie-delete", "sid"]
+        );
+        assert_eq!(cookie_argv(&CookieOp::Clear), vec!["cookie-clear"]);
+    }
+
+    #[test]
+    fn test_cookie_argv_set_presence_and_value_flags() {
+        use crate::browser::types::SameSite;
+        // httpOnly true → flag present; secure false → flag omitted; expires &
+        // sameSite are value flags.
+        let argv = cookie_argv(&CookieOp::Set {
+            name: "token".into(),
+            value: "abc".into(),
+            domain: Some("example.com".into()),
+            path: Some("/".into()),
+            expires: Some(1_900_000_000),
+            http_only: Some(true),
+            secure: Some(false),
+            same_site: Some(SameSite::Lax),
+        });
+        assert_eq!(
+            argv,
+            vec![
+                "cookie-set",
+                "token",
+                "abc",
+                "--domain",
+                "example.com",
+                "--path",
+                "/",
+                "--expires",
+                "1900000000",
+                "--httpOnly",
+                "--sameSite",
+                "Lax",
+            ]
+        );
+        // Minimal set: no optional attributes, secure omitted when None.
+        assert_eq!(
+            cookie_argv(&CookieOp::Set {
+                name: "k".into(),
+                value: "v".into(),
+                domain: None,
+                path: None,
+                expires: None,
+                http_only: None,
+                secure: None,
+                same_site: None,
+            }),
+            vec!["cookie-set", "k", "v"]
+        );
     }
 }

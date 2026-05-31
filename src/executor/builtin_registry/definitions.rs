@@ -19,11 +19,12 @@
 use crate::sync_primitives::Arc;
 
 use crate::builtin_tools::browser_tools::{
-    BrowserClickTool, BrowserConsoleTool, BrowserDialogTool, BrowserDragTool, BrowserEvaluateTool,
-    BrowserFillFormTool, BrowserHoverTool, BrowserNavigateTool, BrowserNetworkTool,
-    BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool, BrowserProfileTool, BrowserResizeTool,
-    BrowserScreenshotTool, BrowserScrollTool, BrowserSelectTool, BrowserSnapshotTool,
-    BrowserTabsTool, BrowserTypeTool, BrowserUploadTool, BrowserWaitForTool,
+    BrowserClickTool, BrowserConsoleTool, BrowserCookiesTool, BrowserDialogTool, BrowserDragTool,
+    BrowserEmulateTool, BrowserEvaluateTool, BrowserFillFormTool, BrowserHoverTool,
+    BrowserNavigateTool, BrowserNetworkTool, BrowserOpenTool, BrowserPdfTool, BrowserPressKeyTool,
+    BrowserProfileTool, BrowserResizeTool, BrowserScreenshotTool, BrowserScrollTool,
+    BrowserSelectTool, BrowserSessionTool, BrowserSnapshotTool, BrowserTabsTool, BrowserTypeTool,
+    BrowserUploadTool, BrowserWaitForTool,
 };
 use crate::builtin_tools::skill_reader::ListSkillsTool as SkillListTool;
 use crate::builtin_tools::{
@@ -468,6 +469,21 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "browser_emulate",
+        description: "Emulate color scheme, geolocation, network/CPU throttling, HTTP headers, or user-agent on the active tab",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_cookies",
+        description: "List, get, set, delete, or clear cookies in the managed browser session",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "browser_session",
+        description: "Save or restore a browser login session (cookies + localStorage) by name",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
         name: "browser_profile",
         description: "List and manage browser profiles",
         requires_config: false,
@@ -894,7 +910,8 @@ pub fn create_tool_boxed(
         | "browser_evaluate" | "browser_fill_form" | "browser_press_key" | "browser_wait_for"
         | "browser_console" | "browser_hover" | "browser_scroll" | "browser_pdf"
         | "browser_network" | "browser_dialog" | "browser_drag" | "browser_upload"
-        | "browser_resize" | "browser_profile" => {
+        | "browser_resize" | "browser_emulate" | "browser_cookies" | "browser_session"
+        | "browser_profile" => {
             let manager = config
                 .and_then(|cfg| cfg.browser_profile_manager.clone())
                 .unwrap_or_else(|| {
@@ -924,6 +941,9 @@ pub fn create_tool_boxed(
                 "browser_drag" => Some(Box::new(BrowserDragTool::new(manager))),
                 "browser_upload" => Some(Box::new(BrowserUploadTool::new(manager))),
                 "browser_resize" => Some(Box::new(BrowserResizeTool::new(manager))),
+                "browser_emulate" => Some(Box::new(BrowserEmulateTool::new(manager))),
+                "browser_cookies" => Some(Box::new(BrowserCookiesTool::new(manager))),
+                "browser_session" => Some(Box::new(BrowserSessionTool::new(manager))),
                 "browser_profile" => Some(Box::new(BrowserProfileTool::new(manager))),
                 _ => None,
             }
