@@ -6,6 +6,7 @@ use tower::{Layer, Service};
 
 use crate::gateway::handlers::HandlerRegistry;
 use crate::gateway::middleware::{
+    latency::global_latency_or_init,
     request_state::{set_global_registry, RequestStateRegistry},
     AuthLayer, HandlerService, MetricsLayer, RateLimitLayer, TraceLayer, ValidateLayer,
 };
@@ -27,7 +28,8 @@ impl MiddlewareChain {
     pub fn new(handlers: Arc<HandlerRegistry>, rate_limiter: Arc<RateLimiter>) -> Self {
         let state_registry = Arc::new(RequestStateRegistry::new());
         set_global_registry(state_registry.clone());
-        let metrics = MetricsLayer::new_with_registry(state_registry.clone());
+        let metrics = MetricsLayer::new_with_registry(state_registry.clone())
+            .with_latency(global_latency_or_init());
         Self {
             handlers,
             rate_limiter,

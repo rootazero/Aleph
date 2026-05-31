@@ -79,6 +79,7 @@ mod tests {
             guest_session_manager: None,
             auth_mode: AuthMode::default(),
             max_connections: 1000,
+            max_connections_per_ip: 64,
             presence: Arc::new(PresenceTracker::new()),
             state_versions: Arc::new(StateVersionTracker::new()),
             rate_limiter: Arc::new(RateLimiter::new(RateLimitConfig::default())),

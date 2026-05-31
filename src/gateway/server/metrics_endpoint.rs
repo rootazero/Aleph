@@ -33,6 +33,7 @@ use axum::http::header::CONTENT_TYPE;
 use axum::response::IntoResponse;
 
 use super::GatewaySharedState;
+use crate::gateway::middleware::latency::get_global_latency;
 use crate::gateway::middleware::request_state::get_global_registry;
 
 /// Prometheus exposition content type (format version 0.0.4).
@@ -50,6 +51,7 @@ pub struct MetricsSnapshot {
     pub connections_active: u64,
     pub connections_authenticated: u64,
     pub max_connections: u64,
+    pub max_connections_per_ip: u64,
     pub rate_limit_tracked_entries: u64,
     // Request lifecycle (from RequestStateRegistry).
     pub req_pending: u64,
@@ -84,6 +86,7 @@ pub async fn handle_metrics(State(state): State<Arc<GatewaySharedState>>) -> imp
         connections_active,
         connections_authenticated,
         max_connections: state.max_connections as u64,
+        max_connections_per_ip: state.max_connections_per_ip as u64,
         rate_limit_tracked_entries: state.rate_limiter.tracked_entries() as u64,
         req_pending: reg.as_ref().map(|s| s.pending).unwrap_or(0),
         req_validating: reg.as_ref().map(|s| s.validating).unwrap_or(0),
@@ -94,10 +97,14 @@ pub async fn handle_metrics(State(state): State<Arc<GatewaySharedState>>) -> imp
         req_cancelled: reg.as_ref().map(|s| s.cancelled).unwrap_or(0),
     };
 
-    (
-        [(CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)],
-        render_prometheus(&snapshot),
-    )
+    let mut body = render_prometheus(&snapshot);
+    // Latency histogram is a separate, self-rendering metric family (variable
+    // bucket lines) appended after the flat gauges/counters.
+    if let Some(hist) = get_global_latency() {
+        body.push_str(&hist.render_prometheus("aleph_gateway_request_duration_ms"));
+    }
+
+    ([(CONTENT_TYPE, PROMETHEUS_CONTENT_TYPE)], body)
 }
 
 /// Escape a Prometheus label value per the exposition spec: backslash,
@@ -155,6 +162,15 @@ pub fn render_prometheus(s: &MetricsSnapshot) -> String {
     out.push_str(&format!(
         "aleph_gateway_max_connections {}\n",
         s.max_connections
+    ));
+
+    out.push_str(
+        "# HELP aleph_gateway_max_connections_per_ip Configured per-IP concurrent connection cap (0=disabled).\n",
+    );
+    out.push_str("# TYPE aleph_gateway_max_connections_per_ip gauge\n");
+    out.push_str(&format!(
+        "aleph_gateway_max_connections_per_ip {}\n",
+        s.max_connections_per_ip
     ));
 
     out.push_str(
@@ -219,6 +235,7 @@ mod tests {
             connections_active: 3,
             connections_authenticated: 2,
             max_connections: 1000,
+            max_connections_per_ip: 64,
             rate_limit_tracked_entries: 7,
             req_pending: 1,
             req_validating: 0,
@@ -258,9 +275,10 @@ mod tests {
     #[test]
     fn every_metric_has_help_and_type_lines() {
         let out = render_prometheus(&sample());
-        // One HELP + one TYPE per metric family (8 families).
-        assert_eq!(out.matches("# HELP ").count(), 8);
-        assert_eq!(out.matches("# TYPE ").count(), 8);
+        // One HELP + one TYPE per flat metric family (9; histogram is appended
+        // separately by the handler, not by render_prometheus).
+        assert_eq!(out.matches("# HELP ").count(), 9);
+        assert_eq!(out.matches("# TYPE ").count(), 9);
     }
 
     #[test]

@@ -29,6 +29,7 @@ pub mod auth;
 pub mod chain;
 pub mod context;
 pub mod handler_service;
+pub mod latency;
 pub mod metrics;
 pub mod rate_limit;
 pub mod request_state;

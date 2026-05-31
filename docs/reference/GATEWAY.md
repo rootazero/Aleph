@@ -398,9 +398,17 @@ Alongside WebSocket, Gateway serves:
 - Static files (WebChat UI)
 - Liveness probe (`/health`) and readiness probe (`/ready`)
 - Metrics endpoint (`/metrics`) — Prometheus text exposition (v0.0.4) of
-  request-lifecycle counters, connection gauges, and rate-limiter pressure;
-  exports only aggregate counts (no payloads/secrets), unauthenticated like the
-  probes. Implemented in `src/gateway/server/metrics_endpoint.rs`.
+  request-lifecycle counters, connection gauges, rate-limiter pressure, and a
+  request-duration histogram (`aleph_gateway_request_duration_ms`, fed by the
+  per-request `elapsed_ms` the metrics middleware already measures); exports
+  only aggregate counts (no payloads/secrets), unauthenticated like the probes.
+  Implemented in `src/gateway/server/metrics_endpoint.rs` +
+  `src/gateway/middleware/latency.rs`.
+
+Abuse protection at WS upgrade: besides the global `max_connections` cap, a
+per-IP concurrent-connection cap (`gateway.max_connections_per_ip`, default 64,
+`0` disables, loopback exempt) bounds preauth slot-exhaustion — a remote peer
+opening many sockets that never authenticate.
 
 ---
 

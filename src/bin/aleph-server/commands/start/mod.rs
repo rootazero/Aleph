@@ -122,6 +122,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let server_config = ServerConfig {
         max_connections: final_max_connections,
+        max_connections_per_ip: full_config.gateway.max_connections_per_ip,
         auth_mode: full_config.gateway.auth.mode.clone(),
         timeout_secs: 300,
         ping_interval_secs: full_config.gateway.ping_interval_secs,

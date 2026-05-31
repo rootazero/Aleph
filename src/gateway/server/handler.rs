@@ -260,15 +260,45 @@ pub(super) async fn ws_upgrade_handler(
     State(state): State<Arc<GatewaySharedState>>,
     headers: HeaderMap,
 ) -> axum::response::Response {
-    // Check connection limit before upgrading
-    let current = state.connections.read().await.len();
-    if current >= state.max_connections {
-        warn!("Connection limit reached, rejecting {}", peer_addr);
-        return (
-            axum::http::StatusCode::SERVICE_UNAVAILABLE,
-            "Connection limit reached",
-        )
-            .into_response();
+    // Check connection limits before upgrading. One read guard covers both the
+    // global cap and the per-IP cap so we hold the lock once.
+    {
+        let conns = state.connections.read().await;
+        if conns.len() >= state.max_connections {
+            warn!("Connection limit reached, rejecting {}", peer_addr);
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                "Connection limit reached",
+            )
+                .into_response();
+        }
+
+        // Per-IP concurrent-connection cap: bounds a single remote IP from
+        // exhausting global connection slots with sockets that never
+        // authenticate (preauth flood / slot exhaustion). Loopback (Panel,
+        // local CLI, desktop shell) is exempt — it legitimately opens several
+        // connections at once. `0` disables the cap. Connection keys are
+        // `peer_addr` strings, so the IP is recovered by re-parsing them.
+        let per_ip_cap = state.max_connections_per_ip;
+        if per_ip_cap > 0 && !peer_addr.ip().is_loopback() {
+            let same_ip = conns
+                .keys()
+                .filter_map(|k| k.parse::<SocketAddr>().ok())
+                .filter(|a| a.ip() == peer_addr.ip())
+                .count();
+            if same_ip >= per_ip_cap {
+                warn!(
+                    "Per-IP connection cap ({}) reached for {}, rejecting",
+                    per_ip_cap,
+                    peer_addr.ip()
+                );
+                return (
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                    "Per-IP connection limit reached",
+                )
+                    .into_response();
+            }
+        }
     }
 
     // Derive the channel class for Lane priority. Loopback connections

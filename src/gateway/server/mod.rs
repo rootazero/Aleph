@@ -102,6 +102,9 @@ pub struct GatewaySharedState {
     pub guest_session_manager: Option<Arc<crate::gateway::security::GuestSessionManager>>,
     pub auth_mode: AuthMode,
     pub max_connections: usize,
+    /// Per-IP concurrent-connection cap enforced at WS upgrade. `0` disables.
+    /// Loopback is exempt. See [`GatewayConfig::max_connections_per_ip`].
+    pub max_connections_per_ip: usize,
     pub presence: Arc<PresenceTracker>,
     pub state_versions: Arc<StateVersionTracker>,
     pub rate_limiter: Arc<RateLimiter>,
@@ -153,6 +156,11 @@ pub struct GatewaySharedState {
 pub struct GatewayConfig {
     /// Maximum number of concurrent connections
     pub max_connections: usize,
+    /// Maximum concurrent connections from a single (non-loopback) remote IP.
+    /// Bounds preauth slot-exhaustion: a remote peer cannot consume all global
+    /// connection slots with sockets that never authenticate. `0` disables the
+    /// cap; loopback is always exempt.
+    pub max_connections_per_ip: usize,
     /// Authentication mode
     pub auth_mode: AuthMode,
     /// Connection timeout in seconds
@@ -180,6 +188,7 @@ impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
             max_connections: 1000,
+            max_connections_per_ip: 64,
             auth_mode: AuthMode::default(),
             timeout_secs: 300,
             ping_interval_secs: 30,
@@ -481,6 +490,7 @@ impl GatewayServer {
             guest_session_manager: self.guest_session_manager.clone(),
             auth_mode: self.config.auth_mode.clone(),
             max_connections: self.config.max_connections,
+            max_connections_per_ip: self.config.max_connections_per_ip,
             presence: self.presence.clone(),
             state_versions: self.state_versions.clone(),
             rate_limiter: self.rate_limiter.clone(),
