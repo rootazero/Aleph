@@ -5,7 +5,8 @@
 //! or another multimodal provider for those capabilities.
 
 use async_trait::async_trait;
-use std::sync::Arc;
+
+use crate::sync_primitives::Arc;
 
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
@@ -50,9 +51,16 @@ impl PlatformOcrProvider {
         match image {
             ImageInput::Base64 { data, .. } => {
                 use base64::Engine;
-                base64::engine::general_purpose::STANDARD
+                let decoded = base64::engine::general_purpose::STANDARD
                     .decode(data)
-                    .map_err(|e| VisionError::ImageError(format!("Invalid base64 image: {e}")))
+                    .map_err(|e| VisionError::ImageError(format!("Invalid base64 image: {e}")))?;
+                if decoded.len() as u64 > crate::vision::types::MAX_IMAGE_FILE_SIZE {
+                    return Err(VisionError::ImageError(format!(
+                        "decoded base64 image exceeds maximum size of {} MB",
+                        crate::vision::types::MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                    )));
+                }
+                Ok(decoded)
             }
             ImageInput::FilePath { path } => {
                 let metadata = std::fs::metadata(path).map_err(|e| {

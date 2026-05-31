@@ -209,10 +209,14 @@ impl ClaudeVisionProvider {
                 crate::providers::anthropic::AnthropicContentBlock::Text { text } => Some(text),
                 _ => None,
             })
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                VisionError::ProviderError(
+                    "Claude API returned no text content for vision request".to_string(),
+                )
+            })?;
 
         if text.is_empty() {
-            tracing::warn!("Claude API returned no text content for vision request");
+            tracing::warn!("Claude API returned empty text content for vision request");
         }
 
         Ok(text)
