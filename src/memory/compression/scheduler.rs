@@ -124,9 +124,13 @@ impl CompressionScheduler {
         self.pending_turns.fetch_add(1, Ordering::Release);
     }
 
-    /// Increment turns by specified amount
+    /// Increment turns by specified amount (saturates at u32::MAX).
     pub fn increment_turns_by(&self, count: u32) {
-        self.pending_turns.fetch_add(count, Ordering::Release);
+        let _ = self
+            .pending_turns
+            .fetch_update(Ordering::Release, Ordering::Acquire, |current| {
+                Some(current.saturating_add(count))
+            });
     }
 
     /// Get current pending turns count

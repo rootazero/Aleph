@@ -315,21 +315,6 @@ struct SchedulerEventListener {
     app_config: Option<Arc<tokio::sync::RwLock<crate::Config>>>,
 }
 
-impl SchedulerEventListener {
-    /// Called when a run completes or errors — delegates to `drain_queue`.
-    async fn on_run_finished(&self) {
-        drain_queue(
-            &self.session_key,
-            Arc::clone(&self.queues),
-            Arc::clone(&self.execution_adapter),
-            Arc::clone(&self.agent_registry),
-            Arc::clone(&self.channel_registry),
-            self.app_config.clone(),
-        )
-        .await;
-    }
-}
-
 /// Drain the session queue: clear the active run, drop expired tasks, and start
 /// the next queued task.  If the next task's agent is missing, the loop continues
 /// until a runnable task is found or the queue is empty.
@@ -371,7 +356,12 @@ async fn drain_queue(
                     );
                 }
 
-                queue.pending.pop_front()
+                let next = queue.pending.pop_front();
+                // Prevent memory leak: remove empty idle queue from the map.
+                if queue.pending.is_empty() && queue.is_idle() {
+                    queues.remove(session_key_str);
+                }
+                next
             } else {
                 None
             }
@@ -408,10 +398,29 @@ impl EventEmitter for SchedulerEventListener {
         // Always forward to inner first
         let result = self.inner.emit(event.clone()).await;
 
-        // On terminal events, trigger the next queued task
+        // On terminal events, trigger the next queued task.
+        // Spawn drain in a separate task to avoid holding any locks
+        // that inner.emit may have acquired, which could deadlock
+        // if drain_queue acquires locks in the opposite order.
         match &event {
             StreamEvent::RunComplete { .. } | StreamEvent::RunError { .. } => {
-                self.on_run_finished().await;
+                let queues = Arc::clone(&self.queues);
+                let session_key = self.session_key.clone();
+                let execution_adapter = Arc::clone(&self.execution_adapter);
+                let agent_registry = Arc::clone(&self.agent_registry);
+                let channel_registry = Arc::clone(&self.channel_registry);
+                let app_config = self.app_config.clone();
+                tokio::spawn(async move {
+                    drain_queue(
+                        &session_key,
+                        queues,
+                        execution_adapter,
+                        agent_registry,
+                        channel_registry,
+                        app_config,
+                    )
+                    .await;
+                });
             }
             _ => {}
         }
