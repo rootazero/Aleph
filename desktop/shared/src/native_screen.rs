@@ -120,13 +120,13 @@ impl ScreenCapability for NativeScreen {
         &self,
         config: crate::screen_types::ScreenRecordConfig,
     ) -> Result<crate::screen_types::ScreenRecordResult> {
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
             tokio::task::spawn_blocking(move || perception::screen_record(&config))
                 .await
                 .map_err(|e| DesktopError::ScreenCapture(format!("task join error: {e}")))?
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         {
             let _ = config;
             Err(DesktopError::NotImplemented(

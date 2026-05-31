@@ -22,7 +22,7 @@ pub use screenshot::{
     take_screenshot_display, DEFAULT_SCREENSHOT_MAX_BYTES,
 };
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub use screen_record::screen_record;
 
 #[allow(unused_imports)]
