@@ -86,6 +86,10 @@ pub enum SearchProviderType {
     Bing,
     /// Exa.ai semantic search
     Exa,
+    /// Jina AI search
+    Jina,
+    /// DuckDuckGo HTML-scrape search
+    DuckDuckGo,
 }
 
 impl SearchProviderType {
@@ -98,6 +102,8 @@ impl SearchProviderType {
             SearchProviderType::Google => "google",
             SearchProviderType::Bing => "bing",
             SearchProviderType::Exa => "exa",
+            SearchProviderType::Jina => "jina",
+            SearchProviderType::DuckDuckGo => "duckduckgo",
         }
     }
 }
@@ -119,6 +125,8 @@ impl std::str::FromStr for SearchProviderType {
             "google" => Ok(SearchProviderType::Google),
             "bing" => Ok(SearchProviderType::Bing),
             "exa" => Ok(SearchProviderType::Exa),
+            "jina" => Ok(SearchProviderType::Jina),
+            "duckduckgo" => Ok(SearchProviderType::DuckDuckGo),
             _ => Err(format!("Unknown provider type: {}", s)),
         }
     }
@@ -137,6 +145,8 @@ mod tests {
             SearchProviderType::Google,
             SearchProviderType::Bing,
             SearchProviderType::Exa,
+            SearchProviderType::Jina,
+            SearchProviderType::DuckDuckGo,
         ] {
             let s = variant.as_str();
             let parsed: SearchProviderType = s.parse().unwrap();

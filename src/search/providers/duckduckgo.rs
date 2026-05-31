@@ -36,7 +36,9 @@ impl DuckDuckGoProvider {
 
 impl Default for DuckDuckGoProvider {
     fn default() -> Self {
-        Self::new().expect("build_client should not fail in default reqwest setup")
+        Self {
+            client: Client::new(),
+        }
     }
 }
 
