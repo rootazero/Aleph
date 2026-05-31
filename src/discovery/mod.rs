@@ -171,6 +171,16 @@ impl DiscoveryManager {
         self.scanner.discover_plugins()
     }
 
+    /// Discover plugins from `~/.aleph/plugins/` plus each supplied extra
+    /// plugin-parent directory (e.g. registered projects' `.aleph/plugins`),
+    /// so project-local installs are discovered alongside the global ones.
+    pub fn discover_plugins_with_extra(
+        &self,
+        extra_parents: &[PathBuf],
+    ) -> DiscoveryResult<Vec<DiscoveredPath>> {
+        self.scanner.discover_plugins_with_extra(extra_parents)
+    }
+
     /// Get the git root directory if available
     pub fn git_root(&self) -> Option<&Path> {
         self.scanner.git_root()
