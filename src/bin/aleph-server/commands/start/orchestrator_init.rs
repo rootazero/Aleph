@@ -69,6 +69,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     session_epoch_registrar: Option<
         Arc<dyn alephcore::session::epoch_registrar::SessionEpochRegistrar>,
     >,
+    // Live MCP manager handle. When `Some`, `AgentHarnessRunner` aggregates
+    // connected servers' advertised `instructions` into the system prompt
+    // (`McpInstructionsLayer`). `None` keeps that layer silent.
+    mcp_handle: Option<alephcore::mcp::McpManagerHandle>,
 ) -> anyhow::Result<Arc<Orchestrator>> {
     // P2 Stage E: load user/project agent definitions from filesystem.
     // Shadow events (higher-tier overrides) are logged at info level; the
@@ -219,6 +223,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         tool_catalog,
         session_epoch_registrar,
         cheap_provider: None,
+        mcp_handle,
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

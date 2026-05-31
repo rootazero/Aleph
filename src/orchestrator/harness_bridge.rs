@@ -27,6 +27,7 @@ use crate::harness::agent::AgentHarness;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::Harness;
+use crate::mcp::manager::McpManagerHandle;
 use crate::memory::store::MemoryBackend;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent, HarnessRunner};
 use crate::orchestrator::errors::FlowError;
@@ -181,6 +182,15 @@ pub struct AgentHarnessRunner {
     /// `deepseek-v4-flash` for DeepSeek). `None` preserves the legacy
     /// behaviour of reusing the main LLM for summarization.
     pub cheap_provider: Option<Arc<dyn AiProvider>>,
+
+    /// Live MCP manager handle. When `Some`, `build_system_prompt` aggregates
+    /// each connected server's advertised `instructions` and threads them into
+    /// `PromptConfig.mcp_instructions`, activating `McpInstructionsLayer`. This
+    /// is the only consumer of the server-instruction channel on the prompt
+    /// path. `None` (tests / boot without MCP) keeps the layer silent. The
+    /// handle is a cheap clone of channel senders, so holding it here adds no
+    /// per-turn cost beyond one actor round-trip during prompt assembly.
+    pub mcp_handle: Option<McpManagerHandle>,
 }
 
 #[async_trait]
@@ -761,13 +771,29 @@ impl AgentHarnessRunner {
             .as_ref()
             .map(|s| !s.eligible_manifests.is_empty())
             .unwrap_or(false);
+
+        // Aggregate connected MCP servers' advertised `instructions`. One actor
+        // round-trip per prompt build (negligible next to the file/skill IO
+        // above) keeps the data always-fresh without a shared mutable snapshot.
+        // `None` when no manager is wired, the call fails, or no server supplied
+        // instructions — `McpInstructionsLayer` then renders nothing.
+        let mcp_instructions = match &self.mcp_handle {
+            Some(handle) => {
+                let items = handle.aggregate_instructions().await.unwrap_or_default();
+                (!items.is_empty()).then_some(items)
+            }
+            None => None,
+        };
+
         // Skip prompt assembly entirely when there is nothing to inject:
-        // no memory, no AgentDef, no eligible skills, and no identity files.
+        // no memory, no AgentDef, no eligible skills, no identity files, and no
+        // MCP server instructions.
         if curated_text.is_none()
             && memory_text.is_none()
             && agent_def.is_none()
             && !has_skills
             && !has_identity
+            && mcp_instructions.is_none()
         {
             return None;
         }
@@ -785,6 +811,7 @@ impl AgentHarnessRunner {
         let mut builder = PromptBuilder::new(PromptConfig {
             native_tools_enabled: true,
             eligible_skills,
+            mcp_instructions,
             ..PromptConfig::default()
         });
         let role_present = agent_def.is_some();

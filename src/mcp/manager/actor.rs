@@ -348,6 +348,10 @@ impl McpManagerActor {
                 let prompts = self.aggregate_prompts().await;
                 let _ = respond_to.send(prompts);
             }
+            McpCommand::AggregateInstructions { respond_to } => {
+                let instructions = self.aggregate_instructions().await;
+                let _ = respond_to.send(instructions);
+            }
             McpCommand::ReloadConfig { respond_to } => {
                 let result = self.reload_config().await;
                 let _ = respond_to.send(result);
@@ -819,6 +823,17 @@ impl McpManagerActor {
     /// Aggregate prompts from all healthy servers
     async fn aggregate_prompts(&self) -> Vec<McpPrompt> {
         self.aggregate_from_healthy(|c| async move { c.list_prompts().await })
+            .await
+    }
+
+    /// Aggregate server-provided `instructions` from all healthy servers.
+    /// Each per-server `McpClient` owns one connection, so collecting across
+    /// every healthy client yields the full set of connected-server guidance
+    /// that `McpInstructionsLayer` renders into the system prompt.
+    async fn aggregate_instructions(
+        &self,
+    ) -> Vec<crate::thinker::prompt_layer::McpServerInstruction> {
+        self.aggregate_from_healthy(|c| async move { c.collect_instructions().await })
             .await
     }
 

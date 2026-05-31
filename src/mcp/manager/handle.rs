@@ -258,6 +258,24 @@ impl McpManagerHandle {
             .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
     }
 
+    /// Get aggregated server-provided `instructions` from all healthy servers.
+    ///
+    /// Used by the prompt builder to populate `McpInstructionsLayer` so each
+    /// connected server's usage guidance reaches the system prompt.
+    pub async fn aggregate_instructions(
+        &self,
+    ) -> Result<Vec<crate::thinker::prompt_layer::McpServerInstruction>> {
+        let (respond_to, rx) = oneshot::channel();
+
+        self.tx
+            .send(McpCommand::AggregateInstructions { respond_to })
+            .await
+            .map_err(|_| AlephError::channel_closed("McpManager command channel closed"))?;
+
+        rx.await
+            .map_err(|_| AlephError::channel_closed("McpManager response channel closed"))
+    }
+
     // ===== Config Methods =====
 
     /// Reload configuration from disk
