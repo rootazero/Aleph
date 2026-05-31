@@ -74,6 +74,9 @@ pub fn is_denied_on_gateway_surface(tool_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn flags_rce_and_mutation_and_control_plane() {
@@ -106,6 +109,7 @@ mod tests {
 
     #[test]
     fn gateway_surface_denies_dangerous_without_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var(GATEWAY_TOOLS_ALLOW_ENV);
         assert!(is_denied_on_gateway_surface("exec"));
         assert!(!is_denied_on_gateway_surface("fs_read"));
@@ -113,6 +117,7 @@ mod tests {
 
     #[test]
     fn gateway_surface_respects_explicit_allow() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var(GATEWAY_TOOLS_ALLOW_ENV, "fs_write, exec");
         assert!(!is_denied_on_gateway_surface("fs_write"));
         assert!(!is_denied_on_gateway_surface("exec"));

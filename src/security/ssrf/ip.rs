@@ -178,7 +178,11 @@ pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
 ///
 /// When `allow_private_network` is true, only loopback and cloud metadata
 /// (169.254.169.254) are blocked. Otherwise the full blocklist applies.
+/// When the policy is disabled (`enabled == false`), all IPs are allowed.
 pub(crate) fn is_ip_blocked_by_policy(ip: IpAddr, policy: &SsrfPolicy) -> bool {
+    if !policy.enabled {
+        return false;
+    }
     if policy.allow_private_network {
         match ip {
             IpAddr::V4(v4) => v4.is_loopback() || v4 == Ipv4Addr::new(169, 254, 169, 254),

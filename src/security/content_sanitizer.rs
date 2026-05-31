@@ -256,10 +256,20 @@ fn detect_injection_patterns(content: &str) -> Vec<InjectionPattern> {
     let mut patterns = Vec::new();
 
     for phrase in OVERRIDE_PHRASES {
-        if let Some(pos) = lower.find(phrase) {
+        let phrase_lower = phrase.to_lowercase();
+        if let Some(pos) = lower.find(&phrase_lower) {
+            // Map byte position in lowercase string back to original.
+            // to_lowercase() may change byte lengths for some chars (e.g. ß→ss),
+            // so we count chars up to the match and index into the original.
+            let char_idx = lower[..pos].chars().count();
+            let offset = content
+                .char_indices()
+                .nth(char_idx)
+                .map(|(idx, _)| idx)
+                .unwrap_or(content.len());
             patterns.push(InjectionPattern {
                 pattern_type: "instruction_override",
-                offset: pos,
+                offset,
             });
         }
     }

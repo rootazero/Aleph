@@ -27,7 +27,7 @@ const CACHE_CONTROL_NO_STORE_VALUE: &str = "no-store";
 /// Returns true if the path corresponds to a static asset that should be
 /// served with normal caching (i.e., exempt from Cache-Control: no-store).
 fn is_static_asset(path: &str) -> bool {
-    if path.contains("/assets/") {
+    if path.starts_with("/assets/") {
         return true;
     }
     let extensions = [".js", ".css", ".wasm", ".png", ".svg", ".ico", ".woff2"];
