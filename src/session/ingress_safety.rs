@@ -85,7 +85,7 @@ impl SafetyGuard {
     ) -> Self {
         let blocked_patterns: Vec<Regex> = blocked
             .into_iter()
-            .filter_map(|p| match Regex::new(&p) {
+            .filter_map(|p| match crate::security::safe_regex::bounded_builder(&p).build() {
                 Ok(r) => Some(r),
                 Err(e) => {
                     tracing::warn!(pattern = %p, error = %e, "Failed to compile safety regex — pattern skipped");
@@ -110,7 +110,7 @@ impl SafetyGuard {
     ) -> Self {
         let blocked_patterns: Vec<Regex> = blocked
             .into_iter()
-            .filter_map(|p| match Regex::new(&p) {
+            .filter_map(|p| match crate::security::safe_regex::bounded_builder(&p).build() {
                 Ok(r) => Some(r),
                 Err(e) => {
                     tracing::warn!(pattern = %p, error = %e, "Failed to compile safety regex — pattern skipped");

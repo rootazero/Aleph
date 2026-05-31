@@ -126,7 +126,7 @@ impl LeakDetector {
     pub fn with_custom_patterns(custom: &[crate::config::types::CustomLeakPattern]) -> Self {
         let mut detector = Self::new();
         for pattern in custom {
-            match Regex::new(&pattern.pattern) {
+            match crate::security::safe_regex::bounded_builder(&pattern.pattern).build() {
                 Ok(regex) => detector.custom_patterns.push(CompiledCustomPattern {
                     name: pattern.name.clone(),
                     regex,

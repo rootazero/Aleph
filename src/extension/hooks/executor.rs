@@ -134,7 +134,7 @@ impl HookExecutor {
         for hook in hooks {
             if let Some(ref matcher) = hook.matcher {
                 if !cache.contains_key(matcher) {
-                    match regex::Regex::new(matcher) {
+                    match crate::security::safe_regex::bounded_builder(matcher).build() {
                         Ok(re) => {
                             cache.insert(matcher.clone(), Some(re));
                         }
@@ -152,7 +152,7 @@ impl HookExecutor {
     /// Cache a single regex pattern
     fn cache_regex(&mut self, pattern: &str) {
         if !self.regex_cache.contains_key(pattern) {
-            match regex::Regex::new(pattern) {
+            match crate::security::safe_regex::bounded_builder(pattern).build() {
                 Ok(re) => {
                     self.regex_cache.insert(pattern.to_string(), Some(re));
                 }
@@ -275,7 +275,7 @@ impl HookExecutor {
             Some(None) => false, // Invalid regex, logged at cache time
             None => {
                 // Fallback: compile on the fly (should not happen if add_hook was used)
-                match regex::Regex::new(matcher) {
+                match crate::security::safe_regex::bounded_builder(matcher).build() {
                     Ok(re) => re.is_match(tool_name),
                     Err(e) => {
                         warn!("Invalid hook matcher regex '{}': {}", matcher, e);

@@ -49,13 +49,19 @@ impl SecurityKernel {
 
         if config.enable_custom_patterns {
             for pattern in &config.custom_blocked {
-                kernel.custom_blocked.push(Regex::new(&pattern.pattern)?);
+                kernel
+                    .custom_blocked
+                    .push(crate::security::safe_regex::bounded_builder(&pattern.pattern).build()?);
             }
             for pattern in &config.custom_danger {
-                kernel.custom_danger.push(Regex::new(&pattern.pattern)?);
+                kernel
+                    .custom_danger
+                    .push(crate::security::safe_regex::bounded_builder(&pattern.pattern).build()?);
             }
             for pattern in &config.custom_safe {
-                kernel.custom_safe.push(Regex::new(&pattern.pattern)?);
+                kernel
+                    .custom_safe
+                    .push(crate::security::safe_regex::bounded_builder(&pattern.pattern).build()?);
             }
         }
 
@@ -64,19 +70,22 @@ impl SecurityKernel {
 
     /// Add a custom blocked pattern.
     pub fn add_blocked_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
-        self.custom_blocked.push(Regex::new(pattern)?);
+        self.custom_blocked
+            .push(crate::security::safe_regex::bounded_builder(pattern).build()?);
         Ok(())
     }
 
     /// Add a custom danger pattern.
     pub fn add_danger_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
-        self.custom_danger.push(Regex::new(pattern)?);
+        self.custom_danger
+            .push(crate::security::safe_regex::bounded_builder(pattern).build()?);
         Ok(())
     }
 
     /// Add a custom safe pattern.
     pub fn add_safe_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
-        self.custom_safe.push(Regex::new(pattern)?);
+        self.custom_safe
+            .push(crate::security::safe_regex::bounded_builder(pattern).build()?);
         Ok(())
     }
 
