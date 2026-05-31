@@ -4,7 +4,7 @@ mod tests {
 
     #[test]
     fn extract_provenance_markers_handles_all_origins() {
-        let body = "- a \\u003c!-- src: raw/abc, origin: raw_source, inferred: false --\\u003e\n- b \\u003c!-- origin: inferred, inferred: true --\\u003e\n- c \\u003c!-- src: note/x, origin: prior_note, inferred: false --\\u003e\n- legacy fact with no marker\n";
+        let body = "- a <!-- src: raw/abc, origin: raw_source, inferred: false -->\n- b <!-- origin: inferred, inferred: true -->\n- c <!-- src: note/x, origin: prior_note, inferred: false -->\n- legacy fact with no marker\n";
         let provs = parsing::extract_provenance_markers(body, &parsing::extract_facts(body));
         assert_eq!(provs.len(), 4);
         assert_eq!(provs[0].origin, types::ProvenanceOrigin::RawSource);
@@ -18,10 +18,10 @@ mod tests {
     #[test]
     fn fts_body_strips_provenance_comments() {
         let n = KnowledgeNote::from_markdown("t",
-            "---\ncategory: preference\ntags: []\n---\n\n- a \\u003c!-- src: raw/x, origin: raw_source, inferred: false --\\u003e\n- b\n",
+            "---\ncategory: preference\ntags: []\n---\n\n- a <!-- src: raw/x, origin: raw_source, inferred: false -->\n- b\n",
         ).unwrap();
         let fts = n.body_text_for_fts();
-        assert!(!fts.contains("\\u003c!--"));
+        assert!(!fts.contains("<!--"));
         assert!(fts.contains("a"));
         assert!(fts.contains("b"));
     }

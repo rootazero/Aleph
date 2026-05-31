@@ -13,7 +13,7 @@ use super::types::{FactProvenance, ProvenanceOrigin};
 /// segment is optional (e.g. inferred facts have no source).
 pub static PROVENANCE_RE: std::sync::LazyLock<Regex> = std::sync::LazyLock::new(|| {
     Regex::new(
-        r"\<!--\s*(?:src:\s*([^,]+?),\s*)?origin:\s*(raw_source|prior_note|inferred|legacy)\s*,\s*inferred:\s*(true|false)\s*--\>",
+        r"<!--\s*(?:src:\s*([^,]+?),\s*)?origin:\s*(raw_source|prior_note|inferred|legacy)\s*,\s*inferred:\s*(true|false)\s*-->",
     ).unwrap()
 });
 

@@ -63,7 +63,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].path, "general/search_test");
+        assert_eq!(results[0].path, "general/search test");
     }
 
     #[tokio::test]
@@ -93,7 +93,7 @@ mod tests {
             .await
             .unwrap();
         let found = backend
-            .get_note_index("general/update_test", "agent1")
+            .get_note_index("general/update test", "agent1")
             .await
             .unwrap();
         assert!(found.is_some());
@@ -105,7 +105,7 @@ mod tests {
             .await
             .unwrap();
         let found = backend
-            .get_note_index("general/update_test", "agent1")
+            .get_note_index("general/update test", "agent1")
             .await
             .unwrap();
         assert!(found.is_some());
