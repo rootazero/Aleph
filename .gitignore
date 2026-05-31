@@ -85,7 +85,6 @@ bridges/
 clients/
 platforms/
 !src/sandbox/platforms/
-Scripts/
 examples/*
 !examples/plugins/
 !examples/protocols/
