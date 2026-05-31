@@ -219,6 +219,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) browser_upload_tool: crate::builtin_tools::browser_tools::BrowserUploadTool,
     pub(crate) browser_resize_tool: crate::builtin_tools::browser_tools::BrowserResizeTool,
     pub(crate) browser_emulate_tool: crate::builtin_tools::browser_tools::BrowserEmulateTool,
+    pub(crate) browser_cookies_tool: crate::builtin_tools::browser_tools::BrowserCookiesTool,
+    pub(crate) browser_session_tool: crate::builtin_tools::browser_tools::BrowserSessionTool,
     pub(crate) browser_profile_tool: crate::builtin_tools::browser_tools::BrowserProfileTool,
     /// Shared session key handle for memory_search scope=current_session
     pub(super) memory_session_key_handle: Option<Arc<RwLock<String>>>,
@@ -884,6 +886,12 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "browser_emulate" => {
                 Box::pin(async move { self.browser_emulate_tool.call_json(arguments).await })
+            }
+            "browser_cookies" => {
+                Box::pin(async move { self.browser_cookies_tool.call_json(arguments).await })
+            }
+            "browser_session" => {
+                Box::pin(async move { self.browser_session_tool.call_json(arguments).await })
             }
             "browser_profile" => {
                 Box::pin(async move { self.browser_profile_tool.call_json(arguments).await })

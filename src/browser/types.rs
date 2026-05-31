@@ -212,6 +212,59 @@ impl EmulateOptions {
     }
 }
 
+/// SameSite attribute applied when setting a cookie.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SameSite {
+    Strict,
+    Lax,
+    None,
+}
+
+impl SameSite {
+    /// Canonical value accepted by `playwright-cli cookie-set --sameSite`.
+    pub fn as_cli(self) -> &'static str {
+        match self {
+            SameSite::Strict => "Strict",
+            SameSite::Lax => "Lax",
+            SameSite::None => "None",
+        }
+    }
+}
+
+/// A cookie-management operation against the live managed browser session.
+///
+/// Modeled directly on the `playwright-cli cookie-*` verbs. This is a
+/// backend-internal contract constructed by the tool layer from validated
+/// arguments, so it carries no serde derive — only the leaf [`SameSite`] is
+/// part of any tool's JSON schema.
+#[derive(Debug, Clone)]
+pub enum CookieOp {
+    /// List all cookies, optionally filtered by domain and/or path.
+    List {
+        domain: Option<String>,
+        path: Option<String>,
+    },
+    /// Get a single cookie by name.
+    Get { name: String },
+    /// Set a cookie with optional attributes.
+    Set {
+        name: String,
+        value: String,
+        domain: Option<String>,
+        path: Option<String>,
+        /// Expiration as a unix timestamp (seconds).
+        expires: Option<i64>,
+        http_only: Option<bool>,
+        secure: Option<bool>,
+        same_site: Option<SameSite>,
+    },
+    /// Delete a single cookie by name.
+    Delete { name: String },
+    /// Clear all cookies.
+    Clear,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,6 +310,13 @@ mod tests {
         let json = serde_json::json!({"type": "selector", "css": ".foo"});
         let parsed: Result<ActionTarget, _> = serde_json::from_value(json);
         assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn test_same_site_cli_values() {
+        assert_eq!(SameSite::Strict.as_cli(), "Strict");
+        assert_eq!(SameSite::Lax.as_cli(), "Lax");
+        assert_eq!(SameSite::None.as_cli(), "None");
     }
 
     #[test]

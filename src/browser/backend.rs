@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use super::error::BrowserError;
 use super::types::{
-    ActionTarget, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
+    ActionTarget, CookieOp, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
     SnapshotOutput, TabId,
 };
 
@@ -146,6 +146,28 @@ pub trait BrowserBackend: Send + Sync {
         _opts: &EmulateOptions,
     ) -> Result<(), BrowserError> {
         Err(BrowserError::ActionFailed("emulate not supported".into()))
+    }
+
+    /// Persist the browser's storage state (cookies + localStorage — the
+    /// authentication state) to an absolute file path, so a logged-in session
+    /// can be reused later. Default impl returns Unsupported — only the managed
+    /// Playwright backend implements it (the existing-session/MCP backend has no
+    /// storage-state primitive).
+    async fn save_state(&self, _path: &Path) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed("save_state not supported".into()))
+    }
+
+    /// Restore a previously-saved storage state from an absolute file path,
+    /// re-establishing cookies + localStorage. Default impl returns Unsupported.
+    async fn load_state(&self, _path: &Path) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed("load_state not supported".into()))
+    }
+
+    /// Run a cookie-management operation, returning the backend's textual output
+    /// (a cookie listing for `List` / `Get`; empty/confirmation for mutations).
+    /// Default impl returns Unsupported.
+    async fn cookies(&self, _op: &CookieOp) -> Result<String, BrowserError> {
+        Err(BrowserError::ActionFailed("cookies not supported".into()))
     }
 
     async fn fill_form(

@@ -124,6 +124,8 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "browser_upload",
             "browser_resize",
             "browser_emulate",
+            "browser_cookies",
+            "browser_session",
             "browser_profile",
         ],
     },

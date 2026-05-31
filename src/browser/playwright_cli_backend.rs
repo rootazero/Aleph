@@ -11,7 +11,7 @@ use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::playwright_cli::{CliOutput, PlaywrightCliDriver};
 use super::types::{
-    ActionTarget, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
+    ActionTarget, CookieOp, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
     SnapshotOutput, TabId,
 };
 
@@ -56,6 +56,67 @@ fn target_ref(target: &ActionTarget) -> Result<&str, BrowserError> {
         ActionTarget::Coordinates { .. } => Err(BrowserError::ActionFailed(
             "this action requires a snapshot ref; coordinates unsupported for this op".into(),
         )),
+    }
+}
+
+/// Translate a [`CookieOp`] into the `playwright-cli cookie-*` argv.
+///
+/// Pure so the presence-flag (`--httpOnly`/`--secure`) vs value-flag
+/// (`--domain`/`--path`/`--expires`/`--sameSite`) wiring is unit-testable
+/// without spawning a browser.
+fn cookie_argv(op: &CookieOp) -> Vec<String> {
+    match op {
+        CookieOp::List { domain, path } => {
+            let mut a = vec!["cookie-list".to_string()];
+            if let Some(d) = domain {
+                a.push("--domain".into());
+                a.push(d.clone());
+            }
+            if let Some(p) = path {
+                a.push("--path".into());
+                a.push(p.clone());
+            }
+            a
+        }
+        CookieOp::Get { name } => vec!["cookie-get".into(), name.clone()],
+        CookieOp::Set {
+            name,
+            value,
+            domain,
+            path,
+            expires,
+            http_only,
+            secure,
+            same_site,
+        } => {
+            let mut a = vec!["cookie-set".into(), name.clone(), value.clone()];
+            if let Some(d) = domain {
+                a.push("--domain".into());
+                a.push(d.clone());
+            }
+            if let Some(p) = path {
+                a.push("--path".into());
+                a.push(p.clone());
+            }
+            if let Some(e) = expires {
+                a.push("--expires".into());
+                a.push(e.to_string());
+            }
+            // httpOnly / secure are presence flags: pass when true, omit otherwise.
+            if *http_only == Some(true) {
+                a.push("--httpOnly".into());
+            }
+            if *secure == Some(true) {
+                a.push("--secure".into());
+            }
+            if let Some(ss) = same_site {
+                a.push("--sameSite".into());
+                a.push(ss.as_cli().to_string());
+            }
+            a
+        }
+        CookieOp::Delete { name } => vec!["cookie-delete".into(), name.clone()],
+        CookieOp::Clear => vec!["cookie-clear".into()],
     }
 }
 
@@ -376,6 +437,24 @@ impl BrowserBackend for PlaywrightCliBackend {
             )),
         }
     }
+
+    async fn save_state(&self, path: &Path) -> Result<(), BrowserError> {
+        let p = path.to_string_lossy().to_string();
+        self.run(&["state-save", &p], self.action_timeout()).await?;
+        Ok(())
+    }
+
+    async fn load_state(&self, path: &Path) -> Result<(), BrowserError> {
+        let p = path.to_string_lossy().to_string();
+        self.run(&["state-load", &p], self.action_timeout()).await?;
+        Ok(())
+    }
+
+    async fn cookies(&self, op: &CookieOp) -> Result<String, BrowserError> {
+        let argv = cookie_argv(op);
+        let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+        Ok(self.run(&refs, self.action_timeout()).await?.stdout)
+    }
 }
 
 #[cfg(test)]
@@ -442,5 +521,77 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, BrowserError::ActionFailed(_)));
+    }
+
+    #[test]
+    fn test_cookie_argv_list_and_mutations() {
+        assert_eq!(
+            cookie_argv(&CookieOp::List {
+                domain: Some("example.com".into()),
+                path: None,
+            }),
+            vec!["cookie-list", "--domain", "example.com"]
+        );
+        assert_eq!(
+            cookie_argv(&CookieOp::Get {
+                name: "sid".into()
+            }),
+            vec!["cookie-get", "sid"]
+        );
+        assert_eq!(
+            cookie_argv(&CookieOp::Delete {
+                name: "sid".into()
+            }),
+            vec!["cookie-delete", "sid"]
+        );
+        assert_eq!(cookie_argv(&CookieOp::Clear), vec!["cookie-clear"]);
+    }
+
+    #[test]
+    fn test_cookie_argv_set_presence_and_value_flags() {
+        use crate::browser::types::SameSite;
+        // httpOnly true → flag present; secure false → flag omitted; expires &
+        // sameSite are value flags.
+        let argv = cookie_argv(&CookieOp::Set {
+            name: "token".into(),
+            value: "abc".into(),
+            domain: Some("example.com".into()),
+            path: Some("/".into()),
+            expires: Some(1_900_000_000),
+            http_only: Some(true),
+            secure: Some(false),
+            same_site: Some(SameSite::Lax),
+        });
+        assert_eq!(
+            argv,
+            vec![
+                "cookie-set",
+                "token",
+                "abc",
+                "--domain",
+                "example.com",
+                "--path",
+                "/",
+                "--expires",
+                "1900000000",
+                "--httpOnly",
+                "--sameSite",
+                "Lax",
+            ]
+        );
+        // Minimal set: no optional attributes, secure omitted when None.
+        assert_eq!(
+            cookie_argv(&CookieOp::Set {
+                name: "k".into(),
+                value: "v".into(),
+                domain: None,
+                path: None,
+                expires: None,
+                http_only: None,
+                secure: None,
+                same_site: None,
+            }),
+            vec!["cookie-set", "k", "v"]
+        );
     }
 }
