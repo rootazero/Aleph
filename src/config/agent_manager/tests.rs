@@ -6,7 +6,7 @@ use tempfile::TempDir;
 use toml_edit::DocumentMut;
 
 use crate::config::types::agents_def::{
-    AgentDefinition, AgentIdentity, AgentParams, SubagentPolicy,
+    AgentDefinition, AgentIdentity, AgentModelRef, AgentParams, SubagentPolicy,
 };
 
 use super::{AgentManager, AgentPatch};
@@ -480,6 +480,106 @@ fn test_empty_config_create_first_agent() {
     assert!(
         agents.iter().any(|a| a.id == "first"),
         "explicitly created first agent"
+    );
+}
+
+// =========================================================================
+// Model patch — tri-state semantics
+// =========================================================================
+
+#[test]
+fn update_sets_qualified_model() {
+    let (_dir, mgr) = setup(base_config());
+    let patch = AgentPatch {
+        model: Some(Some(AgentModelRef::Qualified {
+            provider: "anthropic".into(),
+            model: "claude-sonnet-4".into(),
+        })),
+        ..Default::default()
+    };
+    mgr.update("main", patch).unwrap();
+    let def = mgr.get("main").unwrap();
+    assert_eq!(
+        def.model,
+        Some(AgentModelRef::Qualified {
+            provider: "anthropic".into(),
+            model: "claude-sonnet-4".into(),
+        })
+    );
+}
+
+#[test]
+fn update_clears_model_to_inherit() {
+    let (_dir, mgr) = setup(base_config());
+    // First set a model
+    mgr.update(
+        "main",
+        AgentPatch {
+            model: Some(Some(AgentModelRef::Legacy("gpt-5".into()))),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(mgr.get("main").unwrap().model.is_some());
+    // Now clear it
+    mgr.update(
+        "main",
+        AgentPatch {
+            model: Some(None),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(mgr.get("main").unwrap().model.is_none());
+}
+
+#[test]
+fn update_absent_model_leaves_it_untouched() {
+    let (_dir, mgr) = setup(base_config());
+    // Set a model
+    mgr.update(
+        "main",
+        AgentPatch {
+            model: Some(Some(AgentModelRef::Legacy("gpt-5".into()))),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Update name only (model key absent)
+    mgr.update(
+        "main",
+        AgentPatch {
+            name: Some("Renamed".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        mgr.get("main").unwrap().model,
+        Some(AgentModelRef::Legacy("gpt-5".into()))
+    );
+}
+
+#[test]
+fn agent_patch_model_double_option_wire() {
+    // absent → None
+    let p: AgentPatch = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert!(p.model.is_none());
+    // explicit null → Some(None) (clear)
+    let p: AgentPatch =
+        serde_json::from_value(serde_json::json!({ "model": null })).unwrap();
+    assert_eq!(p.model, Some(None));
+    // object → Some(Some(Qualified))
+    let p: AgentPatch = serde_json::from_value(
+        serde_json::json!({"model": {"provider": "openai", "model": "gpt-5"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        p.model,
+        Some(Some(AgentModelRef::Qualified {
+            provider: "openai".into(),
+            model: "gpt-5".into(),
+        }))
     );
 }
 

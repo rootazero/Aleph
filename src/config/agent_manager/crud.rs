@@ -348,6 +348,17 @@ impl AgentManager {
             }
         }
 
+        // Model: tri-state — Some(Some)=set, Some(None)=clear, None=untouched
+        match &patch.model {
+            Some(Some(model_ref)) => {
+                agent_table["model"] = super::toml_ops::model_ref_to_item(model_ref);
+            }
+            Some(None) => {
+                agent_table.remove("model");
+            }
+            None => {}
+        }
+
         self.save_document(&doc)?;
         info!("Updated agent '{}'", id);
         Ok(())

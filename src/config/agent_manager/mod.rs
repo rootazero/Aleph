@@ -16,7 +16,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::types::agents_def::{AgentIdentity, AgentParams, SubagentPolicy};
+use crate::config::types::agents_def::{AgentIdentity, AgentModelRef, AgentParams, SubagentPolicy};
 
 // =============================================================================
 // Constants
@@ -42,8 +42,19 @@ pub(super) const MAX_ID_LENGTH: usize = 32;
 // AgentPatch
 // =============================================================================
 
+/// Serde helper for tri-state optional fields: absent JSON key → `None`,
+/// explicit `null` → `Some(None)`, any value → `Some(Some(value))`.
+fn deserialize_double_option<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<AgentModelRef>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Some(Option::<AgentModelRef>::deserialize(deserializer)?))
+}
+
 /// Partial update for an agent definition
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AgentPatch {
     pub name: Option<String>,
     pub identity: Option<AgentIdentity>,
@@ -52,6 +63,9 @@ pub struct AgentPatch {
     pub skills_blacklist: Option<Vec<String>>,
     pub subagents: Option<SubagentPolicy>,
     pub allowed_links: Option<Vec<String>>,
+    /// Model 更新三态:缺省(`None`)=不动;`Some(None)`=清除→继承系统默认;`Some(Some(ref))`=设为该 model。
+    #[serde(default, deserialize_with = "deserialize_double_option")]
+    pub model: Option<Option<AgentModelRef>>,
 }
 
 // =============================================================================
