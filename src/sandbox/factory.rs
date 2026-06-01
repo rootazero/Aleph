@@ -84,7 +84,19 @@ pub fn build_sandbox(
         }
     }
 
-    let hooks = hooks.with_before(Arc::new(RateLimitHook::new(rate_limiter)));
+    let mut hooks = hooks.with_before(Arc::new(RateLimitHook::new(rate_limiter)));
+
+    // Load-aware admission gate for heavy (Dangerous-class) execution.
+    // Sourced from `cfg` (no extra `build_sandbox` parameter → no caller
+    // churn). Dormant unless `[sandbox.resource_governor] enabled = true`, so
+    // boot behaviour is unchanged by default.
+    let governor = crate::sandbox::resource_governor::ResourceGovernor::from_schema(
+        &cfg.resource_governor,
+    );
+    if governor.is_enabled() {
+        hooks = hooks.with_before(Arc::new(governor));
+    }
+
     let ws = WorkspaceSandbox::new(cfg.workspace_root.clone(), driver, approval, hooks)
         .with_timeout(Duration::from_secs(cfg.default_timeout_seconds))
         .with_max_output_bytes(cfg.max_output_bytes);
@@ -190,6 +202,7 @@ mod tests {
             linux: Default::default(),
             windows: Default::default(),
             rate_limit: Default::default(),
+            resource_governor: Default::default(),
             command_policy: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(UnusedDriver);
@@ -241,6 +254,7 @@ mod tests {
             linux: Default::default(),
             windows: Default::default(),
             rate_limit: Default::default(),
+            resource_governor: Default::default(),
             command_policy: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
@@ -294,6 +308,7 @@ mod tests {
             linux: Default::default(),
             windows: Default::default(),
             rate_limit: Default::default(),
+            resource_governor: Default::default(),
             command_policy: Default::default(),
         };
         let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
