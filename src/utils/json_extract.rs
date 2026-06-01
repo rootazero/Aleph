@@ -104,7 +104,10 @@ fn extract_from_json_code_block(response: &str) -> Option<String> {
         let json_start = start + start_marker.len();
         // Skip any whitespace/newlines after ```json
         let content = &response[json_start..];
-        let content_start = content.find(|c: char| !c.is_whitespace()).unwrap_or(0);
+        let content_start = match content.find(|c: char| !c.is_whitespace()) {
+            Some(pos) => pos,
+            None => return None,
+        };
 
         // Find closing ``` that stands on its own line (preceded only by whitespace)
         let mut search_pos = content_start;

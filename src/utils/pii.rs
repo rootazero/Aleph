@@ -45,7 +45,8 @@ fn get_patterns() -> &'static PiiPatterns {
             .expect("china_mobile regex should be valid"),
         china_id: Regex::new(r"\b\d{17}[\dXx]\b")
             .expect("china_id regex should be valid"),
-        bank_card: Regex::new(r"\b\d{16,19}\b")
+        // Major card network prefixes (Visa, MC, AmEx, Diners, Discover, JCB, UnionPay)
+        bank_card: Regex::new(r"\b(?:4\d{15}|5[1-5]\d{14}|3[47]\d{13}|3(?:0[0-5]|[68]\d)\d{11}|6(?:011|5\d{2})\d{12}|(?:2131|1800|35\d{3})\d{11}|62\d{14,17})\b")
             .expect("bank_card regex should be valid"),
     })
 }

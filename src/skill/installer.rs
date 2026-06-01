@@ -30,8 +30,9 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
         InstallKind::Uv => Some(format!("uv pip install {}", spec.package)),
         InstallKind::Go => Some(format!("go install {}", spec.package)),
         InstallKind::Download => spec.url.as_ref().and_then(|url| {
-            // Reject URLs containing single quotes to prevent breaking out of shell quotes.
-            if url.contains('\'') {
+            // Reject URLs containing single quotes (would break shell quoting) or
+            // control characters (could confuse curl or the shell).
+            if url.contains('\'') || url.chars().any(|c| c.is_control()) {
                 return None;
             }
             if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -123,6 +124,7 @@ impl InstallExecutor {
             tokio::process::Command::new("sh")
                 .arg("-c")
                 .arg(&cmd_str)
+                .kill_on_drop(true)
                 .output(),
         )
         .await;

@@ -140,8 +140,16 @@ pub fn parse_skill_content(
     let (yaml_str, body_str) = split_frontmatter(content_str)?;
     let raw: RawFrontmatter = serde_yaml::from_str(&yaml_str)?;
 
-    // Build the id from the name (lowercase, replace spaces with hyphens)
-    let id_str = raw.name.to_lowercase().replace(' ', "-");
+    // Build the id from the name (lowercase, replace spaces with hyphens,
+    // collapse consecutive hyphens to prevent invalid ids like "a--b").
+    let id_str = raw
+        .name
+        .to_lowercase()
+        .replace(' ', "-")
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
     let id = SkillId::new(id_str);
 
     let content = SkillContent::new(body_str.trim());
@@ -262,13 +270,23 @@ pub fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseEr
         None => return Err(SkillParseError::NoFrontmatter),
     };
 
-    // Find the closing `---`
+    // Find the closing `---` that appears on its own line (allowing \r for CRLF).
+    // We iterate lines so that a `---` inside a YAML value does not falsely
+    // terminate the frontmatter.
     let rest = &trimmed[after_opening..];
     let closing_pos = rest
-        .find("\n---")
-        .map(|p| p + 1) // skip the newline itself, point at the first `-`
+        .lines()
+        .enumerate()
+        .skip(1) // first line is part of the YAML, not a delimiter
+        .find(|(_, line)| line.trim() == "---")
+        .map(|(idx, _)| {
+            rest.split_inclusive('\n')
+                .take(idx)
+                .map(|s| s.len())
+                .sum()
+        })
         .or_else(|| {
-            // Handle case where --- is at very start of rest
+            // Handle case where --- is at very start of rest (empty frontmatter)
             if rest.starts_with("---") {
                 Some(0)
             } else {

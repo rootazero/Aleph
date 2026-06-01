@@ -42,16 +42,17 @@ mod tests {
     use super::*;
 
     fn pragma_str(conn: &rusqlite::Connection, pragma: &str) -> String {
+        // Try String first (most common), fall back to i64 for numeric pragmas.
         conn.query_row(&format!("PRAGMA {pragma}"), [], |row| {
             row.get::<_, String>(0)
         })
-        .unwrap_or_else(|_| {
+        .or_else(|_| {
             conn.query_row(&format!("PRAGMA {pragma}"), [], |row| {
                 let v: i64 = row.get(0)?;
                 Ok(v.to_string())
             })
-            .unwrap()
         })
+        .unwrap_or_else(|e| panic!("PRAGMA {pragma} failed: {e}"))
     }
 
     #[test]

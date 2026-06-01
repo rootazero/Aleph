@@ -60,10 +60,20 @@ pub enum SkillConfigUpdate {
 
 impl SkillsConfig {
     pub fn load(path: &Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|content| toml::from_str(&content).ok())
-            .unwrap_or_default()
+        match std::fs::read_to_string(path) {
+            Ok(content) => match toml::from_str(&content) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %path.display(), "skills config parse failed; using defaults");
+                    Self::default()
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Self::default(),
+            Err(e) => {
+                tracing::warn!(error = %e, path = %path.display(), "skills config read failed; using defaults");
+                Self::default()
+            }
+        }
     }
 
     pub fn save(&self, path: &Path) -> std::io::Result<()> {

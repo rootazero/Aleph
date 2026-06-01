@@ -251,7 +251,8 @@ pub fn get_all_skills_dirs(project_dir: Option<&std::path::Path>) -> Result<Vec<
     // Determine start directory
     let start_dir = match project_dir {
         Some(p) => p.to_path_buf(),
-        None => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        None => std::env::current_dir()
+            .map_err(|e| AlephError::config(format!("Failed to get current directory: {e}")))?,
     };
 
     info!(

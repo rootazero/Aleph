@@ -120,7 +120,13 @@ impl UsageStore {
 
     fn load_map(&self) -> HashMap<String, UsageStats> {
         match std::fs::read(&self.path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(map) => map,
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %self.path.display(), "corrupted usage sidecar; resetting");
+                    HashMap::new()
+                }
+            },
             Err(_) => HashMap::new(),
         }
     }

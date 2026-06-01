@@ -124,7 +124,10 @@ impl SkillSystem {
     /// Create a new, empty skill system.
     pub fn new() -> Self {
         let data_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
+            .unwrap_or_else(|| {
+                tracing::warn!("dirs::home_dir() returned None; falling back to current directory for skill data");
+                PathBuf::from(".")
+            })
             .join(".aleph")
             .join("data");
         let config_path = data_dir.join("skills.toml");
@@ -307,8 +310,10 @@ impl SkillSystem {
     /// registered dir owns this skill's `SKILL.md`. Best-effort — silently
     /// no-ops if the skill cannot be located on disk.
     pub async fn record_patch(&self, id: &SkillId) {
-        if id.as_str().contains("..") || id.as_str().contains(|c| c == '/' || c == '\\') {
-            tracing::warn!(skill_id = %id.as_str(), "record_patch: rejecting malformed skill id");
+        let id_str = id.as_str();
+        // Reject any path-separator or parent-dir references to prevent traversal.
+        if id_str.contains("..") || id_str.contains('/') || id_str.contains('\\') {
+            tracing::warn!(skill_id = %id_str, "record_patch: rejecting malformed skill id");
             return;
         }
         let dirs = self.inner.skill_dirs.read().await.clone();

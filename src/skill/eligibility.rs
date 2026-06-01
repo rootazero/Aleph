@@ -60,8 +60,8 @@ impl EligibilityService {
     /// Pass `&serde_json::json!({})` when no config is available (tests, fallback).
     ///
     /// Check order:
-    /// 1. `always` flag — if true, skip all other checks
-    /// 2. `enabled` override — if explicitly `false`, immediately ineligible
+    /// 1. `enabled` override — if explicitly `false`, immediately ineligible
+    /// 2. `always` flag — if true, skip all remaining checks
     /// 3. OS check
     /// 4. required_bins
     /// 5. any_bins

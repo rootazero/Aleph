@@ -46,8 +46,7 @@ mod tests {
     #[test]
     fn test_format_timestamp_invalid() {
         let result = format_timestamp(-999999999999);
-        // Should return "Unknown" for invalid timestamps
-        assert!(result == "Unknown" || result.contains("1938") || result.contains("-"));
+        assert_eq!(result, "Unknown");
     }
 
     #[test]
