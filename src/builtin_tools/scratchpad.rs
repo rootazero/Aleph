@@ -27,6 +27,8 @@ pub enum ScratchpadAction {
     SetObjective,
     /// Set plan items (replaces existing plan)
     SetPlan,
+    /// Mark a plan item as the in-progress current step (by 0-based index)
+    StartItem,
     /// Mark a plan item as complete (by 0-based index)
     CompleteItem,
     /// Append a note to the Notes section
@@ -42,6 +44,7 @@ impl std::fmt::Display for ScratchpadAction {
             Self::Read => write!(f, "read"),
             Self::SetObjective => write!(f, "set_objective"),
             Self::SetPlan => write!(f, "set_plan"),
+            Self::StartItem => write!(f, "start_item"),
             Self::CompleteItem => write!(f, "complete_item"),
             Self::AppendNote => write!(f, "append_note"),
             Self::Clear => write!(f, "clear"),
@@ -60,7 +63,7 @@ pub struct ScratchpadArgs {
     pub value: Option<String>,
     /// Plan items for SetPlan
     pub items: Option<Vec<String>>,
-    /// Item index for CompleteItem (0-based)
+    /// Item index for StartItem / CompleteItem (0-based)
     pub item_index: Option<usize>,
 }
 
@@ -108,17 +111,29 @@ impl ScratchpadTool {
     }
 }
 
+/// Echo the updated execution list back to the model after a mutating
+/// action — Claude Code `TodoWrite` parity (the tool always returns the
+/// current list), giving the loop continuous visibility through the tool-
+/// result channel without touching the harness prompt builder (R10-safe).
+/// Fail-soft: returns `None` on any read error rather than failing the op.
+async fn progress_echo(manager: &ScratchpadManager) -> Option<String> {
+    manager.snapshot().await.ok().map(|s| s.render_progress())
+}
+
 #[async_trait]
 impl AlephTool for ScratchpadTool {
     const NAME: &'static str = "scratchpad";
     const DESCRIPTION: &'static str =
         "Manage your working memory (scratchpad) for a multi-step task: set an \
-         objective, lay out a plan as an execution list, and check items off as \
-         you complete them. The scratchpad persists across sessions. While an \
-         objective is set and plan items remain unchecked, the goal-loop keeps \
-         this session running so you work through the list step by step — mark \
-         each finished step with action='complete_item', and call action='clear' \
-         once the objective is fully achieved.";
+         objective, lay out a plan as an execution list, then work the list one \
+         step at a time. Mark the step you are about to work with \
+         action='start_item' (it becomes the single in-progress step), and \
+         action='complete_item' when it is done; both echo the updated list back \
+         to you so you always see current progress. The scratchpad persists \
+         across sessions. While an objective is set and plan items remain \
+         unfinished, the goal-loop keeps this session running so you work through \
+         them step by step — call action='clear' once the objective is fully \
+         achieved.";
 
     type Args = ScratchpadArgs;
     type Output = ScratchpadOutput;
@@ -128,6 +143,8 @@ impl AlephTool for ScratchpadTool {
             "scratchpad(project_id='blog-redesign', action='initialize', value='Redesign the blog layout with modern CSS')"
                 .to_string(),
             "scratchpad(project_id='blog-redesign', action='set_plan', items=['Design mockup', 'Implement header', 'Add responsive styles'])"
+                .to_string(),
+            "scratchpad(project_id='blog-redesign', action='start_item', item_index=0)"
                 .to_string(),
             "scratchpad(project_id='blog-redesign', action='complete_item', item_index=0)"
                 .to_string(),
@@ -212,7 +229,7 @@ impl AlephTool for ScratchpadTool {
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Objective updated: {}", value),
-                    content: None,
+                    content: progress_echo(&manager).await,
                 })
             }
 
@@ -223,7 +240,17 @@ impl AlephTool for ScratchpadTool {
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Plan set with {} items", items.len()),
-                    content: None,
+                    content: progress_echo(&manager).await,
+                })
+            }
+
+            ScratchpadAction::StartItem => {
+                let index = args.item_index.unwrap_or(0);
+                manager.start_item(index).await?;
+                Ok(ScratchpadOutput {
+                    success: true,
+                    message: format!("Item {} marked in progress (current step)", index),
+                    content: progress_echo(&manager).await,
                 })
             }
 
@@ -233,7 +260,7 @@ impl AlephTool for ScratchpadTool {
                 Ok(ScratchpadOutput {
                     success: true,
                     message: format!("Item {} marked as complete", index),
-                    content: None,
+                    content: progress_echo(&manager).await,
                 })
             }
 
@@ -274,7 +301,7 @@ mod tests {
         let tool = ScratchpadTool::new();
         let examples = tool.examples();
         assert!(examples.is_some());
-        assert_eq!(examples.unwrap().len(), 4);
+        assert_eq!(examples.unwrap().len(), 5);
     }
 
     #[test]
@@ -286,6 +313,7 @@ mod tests {
             "set_objective"
         );
         assert_eq!(format!("{}", ScratchpadAction::SetPlan), "set_plan");
+        assert_eq!(format!("{}", ScratchpadAction::StartItem), "start_item");
         assert_eq!(
             format!("{}", ScratchpadAction::CompleteItem),
             "complete_item"

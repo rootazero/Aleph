@@ -93,7 +93,13 @@ impl TurnVerifier for ScratchpadGoalVerifier {
         let listed = pending
             .iter()
             .take(MAX_LISTED)
-            .map(|i| format!("- {}", i.text))
+            .map(|i| {
+                if i.is_in_progress() {
+                    format!("- {} (in progress)", i.text)
+                } else {
+                    format!("- {}", i.text)
+                }
+            })
             .collect::<Vec<_>>()
             .join("\n");
         let overflow = pending.len().saturating_sub(MAX_LISTED);
@@ -104,10 +110,11 @@ impl TurnVerifier for ScratchpadGoalVerifier {
         };
         let reason = format!(
             "Your execution list for the objective \"{objective}\" still has {n} \
-             incomplete step(s):\n{listed}{more_note}\n\nKeep working through them, \
-             marking each finished step done via `scratchpad(action='complete_item', …)`. \
-             If the objective is already fully achieved, call \
-             `scratchpad(action='clear', …)` to finish.",
+             incomplete step(s):\n{listed}{more_note}\n\nKeep working through them \
+             one at a time — mark the step you are working on with \
+             `scratchpad(action='start_item', …)` and each finished step with \
+             `scratchpad(action='complete_item', …)`. If the objective is already \
+             fully achieved, call `scratchpad(action='clear', …)` to finish.",
             n = pending.len(),
         );
         VerifierVerdict::Veto {
