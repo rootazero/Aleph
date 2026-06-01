@@ -4,16 +4,63 @@ use crate::search::{SearchOptions, SearchProvider, SearchResult};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 
 /// SearXNG search provider
 ///
 /// SearXNG is a privacy-first, self-hosted metasearch engine
 const NAME: &str = "searxng";
 
+/// Default request-spacing applied when the backend doesn't set
+/// `min_request_interval_ms`. Empirically tuned against a self-hosted
+/// instance: at 0ms a burst of agent searches trips upstream CAPTCHA /
+/// rate-limit suspensions on sensitive engines (brave/duckduckgo) by the
+/// 4th request; ~2s spacing keeps the engine set healthy while adding only
+/// ~50s over a 25-search morning-report run (well within the job budget).
+const DEFAULT_MIN_INTERVAL_MS: u64 = 2000;
+
+/// Resolve the configured throttle interval. Unset → tuned default (2s);
+/// explicit `Some(0)` disables throttling entirely.
+fn resolve_min_interval(ms: Option<u64>) -> Duration {
+    Duration::from_millis(ms.unwrap_or(DEFAULT_MIN_INTERVAL_MS))
+}
+
+/// Build the SearXNG `/search` query parameters. Pure (no I/O) so the
+/// `engines` pinning and option mapping are unit-testable.
+fn build_params(
+    query: &str,
+    options: &SearchOptions,
+    engines: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let mut params: Vec<(&'static str, String)> = vec![
+        ("q", query.to_string()),
+        ("format", "json".to_string()),
+        ("count", options.validated_max_results().to_string()),
+        ("safesearch", options.searxng_safesearch().to_string()),
+    ];
+    if let Some(lang) = options.language.as_deref() {
+        params.push(("language", lang.to_string()));
+    }
+    if let Some(range) = options.searxng_time_range() {
+        params.push(("time_range", range.to_string()));
+    }
+    if let Some(eng) = engines.filter(|s| !s.is_empty()) {
+        params.push(("engines", eng.to_string()));
+    }
+    params
+}
+
 #[derive(Debug)]
 pub struct SearxngProvider {
     base_url: String,
     client: Client,
+    /// Comma-separated upstream engines to pin (None = instance default set).
+    engines: Option<String>,
+    /// Minimum spacing between consecutive requests to this backend.
+    min_interval: Duration,
+    /// Timestamp of the last dispatched request, for rate throttling.
+    last_request: Mutex<Option<Instant>>,
 }
 
 #[derive(Deserialize)]
@@ -37,7 +84,11 @@ struct SearxngResult {
 }
 
 impl SearxngProvider {
-    pub fn new(base_url: impl Into<String>) -> Result<Self> {
+    pub fn new(
+        base_url: impl Into<String>,
+        engines: Option<String>,
+        min_request_interval_ms: Option<u64>,
+    ) -> Result<Self> {
         let base_url = base_url.into();
         if base_url.is_empty() {
             return Err(AlephError::invalid_config("SearXNG base URL is required"));
@@ -54,7 +105,29 @@ impl SearxngProvider {
         Ok(Self {
             base_url: trimmed,
             client: build_client()?,
+            engines: engines.filter(|s| !s.is_empty()),
+            min_interval: resolve_min_interval(min_request_interval_ms),
+            last_request: Mutex::new(None),
         })
+    }
+
+    /// Enforce `min_interval` spacing between consecutive requests to this
+    /// backend. Holding the lock across the sleep serializes concurrent
+    /// callers — exactly the rate-limiting we want: it prevents an agent's
+    /// burst of searches from tripping upstream engine CAPTCHA / rate-limit
+    /// suspensions. A no-op when the interval is zero (throttle disabled).
+    async fn throttle(&self) {
+        if self.min_interval.is_zero() {
+            return;
+        }
+        let mut last = self.last_request.lock().await;
+        if let Some(prev) = *last {
+            let elapsed = prev.elapsed();
+            if elapsed < self.min_interval {
+                tokio::time::sleep(self.min_interval - elapsed).await;
+            }
+        }
+        *last = Some(Instant::now());
     }
 }
 
@@ -62,19 +135,11 @@ impl SearxngProvider {
 impl SearchProvider for SearxngProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
         let url = format!("{}/search", self.base_url);
+        let params = build_params(query, options, self.engines.as_deref());
 
-        let mut params: Vec<(&str, String)> = vec![
-            ("q", query.to_string()),
-            ("format", "json".to_string()),
-            ("count", options.validated_max_results().to_string()),
-            ("safesearch", options.searxng_safesearch().to_string()),
-        ];
-        if let Some(lang) = options.language.as_deref() {
-            params.push(("language", lang.to_string()));
-        }
-        if let Some(range) = options.searxng_time_range() {
-            params.push(("time_range", range.to_string()));
-        }
+        // Space requests out before dispatching so a burst doesn't suspend
+        // the upstream engines (see `throttle` / `DEFAULT_MIN_INTERVAL_MS`).
+        self.throttle().await;
 
         let response = self
             .client
@@ -159,7 +224,11 @@ impl crate::search::ProviderFactory for SearxngFactory {
             );
             return Ok(None);
         };
-        match SearxngProvider::new(base.to_string()) {
+        match SearxngProvider::new(
+            base.to_string(),
+            backend.engines.clone(),
+            backend.min_request_interval_ms,
+        ) {
             Ok(p) => Ok(Some(crate::sync_primitives::Arc::new(p))),
             Err(e) => {
                 log::warn!("search backend '{name}' ({}) construct failed: {e}", NAME);
@@ -175,26 +244,27 @@ mod tests {
 
     #[test]
     fn test_searxng_provider_creation() {
-        let provider = SearxngProvider::new("http://localhost:8080".to_string()).unwrap();
+        let provider = SearxngProvider::new("http://localhost:8080".to_string(), None, None).unwrap();
         assert_eq!(provider.name(), "searxng");
         assert!(provider.is_available());
     }
 
     #[test]
     fn test_searxng_provider_rejects_empty_url() {
-        let result = SearxngProvider::new("".to_string());
+        let result = SearxngProvider::new("".to_string(), None, None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_searxng_provider_trims_trailing_slash() {
-        let provider = SearxngProvider::new("http://localhost:8080/".to_string()).unwrap();
+        let provider =
+            SearxngProvider::new("http://localhost:8080/".to_string(), None, None).unwrap();
         assert_eq!(provider.base_url, "http://localhost:8080");
     }
 
     #[test]
     fn test_searxng_provider_rejects_invalid_scheme() {
-        let result = SearxngProvider::new("ftp://localhost:8080".to_string());
+        let result = SearxngProvider::new("ftp://localhost:8080".to_string(), None, None);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("must use http:// or https://"));
@@ -202,8 +272,72 @@ mod tests {
 
     #[test]
     fn test_searxng_provider_accepts_https() {
-        let provider = SearxngProvider::new("https://searx.example.com".to_string()).unwrap();
+        let provider =
+            SearxngProvider::new("https://searx.example.com".to_string(), None, None).unwrap();
         assert_eq!(provider.base_url, "https://searx.example.com");
+    }
+
+    /// Unset interval falls back to the tuned default; `Some(0)` disables the
+    /// throttle (zero duration → `throttle` early-returns); explicit values
+    /// pass through verbatim.
+    #[test]
+    fn resolve_min_interval_defaults_and_overrides() {
+        assert_eq!(
+            resolve_min_interval(None),
+            Duration::from_millis(DEFAULT_MIN_INTERVAL_MS)
+        );
+        assert!(resolve_min_interval(Some(0)).is_zero());
+        assert_eq!(resolve_min_interval(Some(500)), Duration::from_millis(500));
+    }
+
+    /// An empty `min_request_interval_ms` distinct from a present-but-zero one:
+    /// the provider treats `Some(0)` as "throttle off".
+    #[test]
+    fn provider_zero_interval_disables_throttle() {
+        let p = SearxngProvider::new("http://localhost:8080".to_string(), None, Some(0)).unwrap();
+        assert!(p.min_interval.is_zero());
+    }
+
+    /// `engines` is pinned into the query params only when non-empty; an empty
+    /// string is normalized away so we never send `engines=`.
+    #[test]
+    fn build_params_includes_engines_when_set() {
+        let opts = SearchOptions::default();
+        let params = build_params("a股", &opts, Some("bing,baidu,360search"));
+        assert!(params
+            .iter()
+            .any(|(k, v)| *k == "engines" && v == "bing,baidu,360search"));
+        // always present
+        assert!(params.iter().any(|(k, v)| *k == "format" && v == "json"));
+        assert!(params.iter().any(|(k, v)| *k == "q" && v == "a股"));
+    }
+
+    #[test]
+    fn build_params_omits_engines_when_absent_or_empty() {
+        let opts = SearchOptions::default();
+        assert!(!build_params("x", &opts, None)
+            .iter()
+            .any(|(k, _)| *k == "engines"));
+        assert!(!build_params("x", &opts, Some(""))
+            .iter()
+            .any(|(k, _)| *k == "engines"));
+    }
+
+    /// Empty-string `engines` passed to the constructor is normalized to None
+    /// (so the factory can pass through config values without pre-filtering).
+    #[test]
+    fn provider_normalizes_empty_engines_to_none() {
+        let p =
+            SearxngProvider::new("http://localhost:8080".to_string(), Some(String::new()), None)
+                .unwrap();
+        assert!(p.engines.is_none());
+        let p2 = SearxngProvider::new(
+            "http://localhost:8080".to_string(),
+            Some("bing".to_string()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(p2.engines.as_deref(), Some("bing"));
     }
 
     /// Empty `results` with non-empty `unresponsive_engines` must surface as

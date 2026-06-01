@@ -141,6 +141,8 @@ mod tests {
             api_key: None,
             base_url: None,
             engine_id: None,
+            engines: None,
+            min_request_interval_ms: None,
             verified: false,
         }
     }

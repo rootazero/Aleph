@@ -224,6 +224,8 @@ pub async fn handle_update(
                         api_key: None,
                         base_url: None,
                         engine_id: None,
+                        engines: None,
+                        min_request_interval_ms: None,
                         verified: false,
                     });
 
@@ -403,7 +405,9 @@ pub async fn handle_test(
             let base_url = params
                 .base_url
                 .unwrap_or_else(|| "http://localhost:8888".to_string());
-            match SearxngProvider::new(base_url) {
+            // Connectivity test: no engine pin, no throttle (Some(0)) so the
+            // probe returns promptly.
+            match SearxngProvider::new(base_url, None, Some(0)) {
                 Ok(provider) => {
                     let opts = SearchOptions {
                         max_results: 1,

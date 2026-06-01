@@ -159,6 +159,21 @@ pub struct SearchBackendConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
 
+    /// SearXNG only — comma-separated upstream engines to query
+    /// (e.g. "bing,baidu,360search"). Pins requests to rate-tolerant engines
+    /// so a burst of agent searches doesn't trigger CAPTCHA / rate-limit
+    /// suspension on sensitive engines (brave/duckduckgo). When unset, the
+    /// SearXNG instance's default engine set is used. Ignored by other providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engines: Option<String>,
+
+    /// SearXNG only — minimum interval between requests to this backend, in
+    /// milliseconds. Throttles request rate so rate-sensitive upstream engines
+    /// don't get suspended under a burst. Defaults to 2000ms (empirically tuned)
+    /// when unset; set to 0 to disable throttling. Ignored by other providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_request_interval_ms: Option<u64>,
+
     /// Whether this backend has been verified via a successful test connection
     #[serde(default)]
     pub verified: bool,
