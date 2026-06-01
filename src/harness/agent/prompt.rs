@@ -30,94 +30,52 @@ pub(crate) fn build_prompt(
     tail_start: usize,
 ) -> Vec<UnifiedMessage> {
     let mut messages = Vec::new();
+    // Whether an assistant turn has already been emitted. Drives the G2
+    // wrap decision: the conversation-opening user message (before any
+    // assistant turn) is never wrapped; later real user messages are.
+    let mut assistant_emitted = false;
 
-    // Reconstruct the preceding assistant turn (if any) so the model sees
-    // its own tool_use request in context.
-    if tail_start > 0 {
-        if let SessionEvent::AssistantMessage { content, .. } = &events[tail_start - 1].event {
-            // Pre-compute the set of call_ids that have a matching
-            // ToolResult or ToolError in the tail. Tool_use blocks without
-            // one are "orphans" — typically caused by the previous turn
-            // being interrupted (turn timeout, cancel, crash) before
-            // `act()` could persist a result. Drop them so the next turn
-            // can proceed cleanly.
-            let resolved: std::collections::HashSet<&str> = events[tail_start..]
-                .iter()
-                .filter_map(|r| match &r.event {
-                    SessionEvent::ToolResult { call_id, .. }
-                    | SessionEvent::ToolError { call_id, .. } => Some(call_id.as_str()),
-                    _ => None,
-                })
-                .collect();
-
-            // Partition tool_use blocks into kept vs. orphan first, so we
-            // can decide whether the paired thinking block should be
-            // included (signed thinking only makes sense alongside a
-            // surviving tool_use intent).
-            let mut tool_blocks: Vec<ContentBlock> = Vec::new();
-            let mut dropped_orphans: Vec<String> = Vec::new();
-            for raw in &content.blocks {
-                if let Some(tc) = parse_tool_use_block(raw) {
-                    if let ContentBlock::ToolCall { id, .. } = &tc {
-                        if !resolved.contains(id.as_str()) {
-                            dropped_orphans.push(id.clone());
-                            continue;
-                        }
-                    }
-                    tool_blocks.push(tc);
-                }
-            }
-            if !dropped_orphans.is_empty() {
-                tracing::warn!(
-                    orphans = ?dropped_orphans,
-                    "dropping orphan tool_use blocks from replayed assistant message \
-                     (no matching tool_result/tool_error in session log)",
-                );
-            }
-
-            let mut blocks: Vec<ContentBlock> = Vec::new();
-            // Reconstruct signed thinking block first so tool_use blocks
-            // that follow it receive reasoning_content in convert_messages.
-            // Skip when no tool_use survived: a lone signed thinking block
-            // (without any subsequent action) is rejected by Anthropic.
-            if !tool_blocks.is_empty() {
-                if let (Some(ref thinking), Some(ref sig)) =
-                    (&content.thinking, &content.thinking_signature)
-                {
-                    if !thinking.is_empty() {
-                        blocks.push(ContentBlock::Thinking {
-                            thinking: thinking.clone(),
-                            signature: Some(sig.clone()),
-                        });
-                    }
-                }
-            }
-            if !content.text.is_empty() {
-                blocks.push(ContentBlock::Text {
-                    text: content.text.clone(),
-                    cache_control: None,
-                });
-            }
-            blocks.extend(tool_blocks);
-            if !blocks.is_empty() {
-                messages.push(UnifiedMessage::Assistant { content: blocks });
-            }
-        }
-    }
-
-    // Walk the tail and emit UserMessage / ToolResult entries.
-    for (offset, record) in events[tail_start..].iter().enumerate() {
+    // Walk the FULL conversation in order, emitting one message per event.
+    //
+    // History must be complete: in an autonomous tool loop (cron / subagent),
+    // the turn after a tool round has NO new user message — the loop continues
+    // on tool results alone. Emitting only a window from the last assistant
+    // turn would drop the original user task, so the model would see only its
+    // own tool_use + results with no instruction (Claude replies "you didn't
+    // send anything"; weaker models loop and re-invent inputs). Token pressure
+    // on long histories is handled downstream by the context compactor, not by
+    // truncating the prompt here.
+    for (idx, record) in events.iter().enumerate() {
         match &record.event {
+            SessionEvent::AssistantMessage { content, .. } => {
+                // call_ids whose ToolResult/ToolError appears after this turn.
+                // tool_use blocks without one are "orphans" (the turn was
+                // interrupted before `act()` persisted a result) and Anthropic-
+                // compatible backends reject them with HTTP 400 — drop them.
+                let resolved: std::collections::HashSet<&str> = events[idx + 1..]
+                    .iter()
+                    .filter_map(|r| match &r.event {
+                        SessionEvent::ToolResult { call_id, .. }
+                        | SessionEvent::ToolError { call_id, .. } => Some(call_id.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(blocks) = reconstruct_assistant_blocks(content, &resolved) {
+                    messages.push(UnifiedMessage::Assistant { content: blocks });
+                    assistant_emitted = true;
+                }
+            }
             SessionEvent::UserMessage {
                 content, synthetic, ..
             } => {
-                // G2 (opencode parity): wrap real mid-loop user messages
-                // in `<system-reminder>` so the model recognises them as
-                // genuine user interjections rather than synthetic harness
-                // chatter. Only fires when an assistant turn already
-                // exists (`tail_start > 0`).
+                // G2 (opencode parity): wrap real mid-loop user messages in
+                // `<system-reminder>` so the model recognises them as genuine
+                // user interjections rather than synthetic harness chatter.
+                // The opening user message (no assistant turn yet) and
+                // synthetic messages (verifier vetoes, MAX_STEPS hints) pass
+                // through unwrapped.
                 let wrapped;
-                let text: &str = if !*synthetic && tail_start > 0 {
+                let text: &str = if !*synthetic && assistant_emitted {
                     wrapped = format!(
                         "<system-reminder>\n\
                          The user sent the following message:\n\
@@ -135,9 +93,7 @@ pub(crate) fn build_prompt(
             SessionEvent::ToolResult {
                 call_id, output, ..
             } => {
-                let tool_result_idx = tail_start + offset;
-                let tool_name =
-                    resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
+                let tool_name = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
                 messages.push(UnifiedMessage::tool_result_json(
                     call_id.clone(),
                     tool_name.to_string(),
@@ -146,9 +102,7 @@ pub(crate) fn build_prompt(
                 ));
             }
             SessionEvent::ToolError { call_id, error, .. } => {
-                let tool_result_idx = tail_start + offset;
-                let tool_name =
-                    resolve_tool_name(events, tool_result_idx, call_id).unwrap_or("unknown");
+                let tool_name = resolve_tool_name(events, idx, call_id).unwrap_or("unknown");
                 messages.push(UnifiedMessage::ToolResult {
                     tool_call_id: call_id.clone(),
                     tool_name: tool_name.to_string(),
@@ -179,6 +133,69 @@ pub(crate) fn build_prompt(
     }
 
     messages
+}
+
+/// Reconstruct one persisted assistant turn into provider content blocks.
+///
+/// `resolved` is the set of tool-call ids whose `ToolResult`/`ToolError`
+/// appears later in the log; tool_use blocks without one are orphans (an
+/// interrupted turn) and are dropped — Anthropic-compatible backends reject
+/// orphan tool_use with HTTP 400. The signed thinking block is replayed only
+/// alongside a surviving tool_use (a lone thinking block is also rejected).
+/// Returns `None` when nothing survives (no text and only orphan tool_use),
+/// so the caller emits no empty assistant placeholder.
+fn reconstruct_assistant_blocks(
+    content: &crate::session::events::MessageContent,
+    resolved: &std::collections::HashSet<&str>,
+) -> Option<Vec<ContentBlock>> {
+    let mut tool_blocks: Vec<ContentBlock> = Vec::new();
+    let mut dropped_orphans: Vec<String> = Vec::new();
+    for raw in &content.blocks {
+        if let Some(tc) = parse_tool_use_block(raw) {
+            if let ContentBlock::ToolCall { id, .. } = &tc {
+                if !resolved.contains(id.as_str()) {
+                    dropped_orphans.push(id.clone());
+                    continue;
+                }
+            }
+            tool_blocks.push(tc);
+        }
+    }
+    if !dropped_orphans.is_empty() {
+        tracing::warn!(
+            orphans = ?dropped_orphans,
+            "dropping orphan tool_use blocks from replayed assistant message \
+             (no matching tool_result/tool_error in session log)",
+        );
+    }
+
+    let mut blocks: Vec<ContentBlock> = Vec::new();
+    // Signed thinking goes first so following tool_use blocks receive
+    // reasoning_content in convert_messages. Only with a surviving tool_use.
+    if !tool_blocks.is_empty() {
+        if let (Some(ref thinking), Some(ref sig)) =
+            (&content.thinking, &content.thinking_signature)
+        {
+            if !thinking.is_empty() {
+                blocks.push(ContentBlock::Thinking {
+                    thinking: thinking.clone(),
+                    signature: Some(sig.clone()),
+                });
+            }
+        }
+    }
+    if !content.text.is_empty() {
+        blocks.push(ContentBlock::Text {
+            text: content.text.clone(),
+            cache_control: None,
+        });
+    }
+    blocks.extend(tool_blocks);
+    if blocks.is_empty() {
+        None
+    } else {
+        Some(blocks)
+    }
 }
 
 /// Parse a previously persisted `tool_use` JSON block back into a
@@ -260,6 +277,73 @@ mod tests {
         let events: Vec<SessionEventRecord> = Vec::new();
         let out = build_prompt(&events, 0);
         assert!(out.is_empty(), "empty events → empty output");
+    }
+
+    /// REGRESSION: in an autonomous tool loop (cron / subagent), the turn that
+    /// follows a tool round has NO new user message in the tail — the loop
+    /// continues on tool results alone. The provider must still see the
+    /// ORIGINAL user task, or the model loses what it was asked to do (Claude
+    /// replies "you didn't send any content"; weaker models loop, re-inventing
+    /// inputs). With `tail_start` = "just after the last assistant turn", the
+    /// opening task is windowed out. The full conversation must be emitted.
+    #[test]
+    fn autonomous_continuation_preserves_original_task() {
+        let turn = uuid::Uuid::new_v4();
+        let events: Vec<SessionEventRecord> = vec![
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: "TASK: summarize today's Iran war news".into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: false,
+            }),
+            mk_record(SessionEvent::AssistantMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: String::new(),
+                    blocks: vec![
+                        json!({"type": "tool_use", "id": "c1", "name": "web_fetch", "input": {"url": "https://bbc.com"}}),
+                    ],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::ToolCallRequested {
+                turn_id: turn,
+                call_id: "c1".into(),
+                name: "web_fetch".into(),
+                input: json!({"url": "https://bbc.com"}),
+                at: now_ms(),
+            }),
+            mk_record(SessionEvent::ToolResult {
+                turn_id: turn,
+                call_id: "c1".into(),
+                output: ToolOutput {
+                    value: json!("<headlines>"),
+                    metadata: ToolOutputMetadata::default(),
+                },
+                at: now_ms(),
+            }),
+        ];
+
+        let tail_start = crate::harness::agent::tail_start_index(&events);
+        let messages = build_prompt(&events, tail_start);
+
+        let has_task = messages.iter().any(|m| match m {
+            UnifiedMessage::User { content } => content
+                .iter()
+                .any(|b| matches!(b, ContentBlock::Text { text, .. } if text.contains("TASK: summarize today's Iran war news"))),
+            _ => false,
+        });
+        assert!(
+            has_task,
+            "autonomous continuation dropped the original user task; messages={messages:#?}",
+        );
     }
 
     /// Regression: when the previous assistant turn emitted tool_use blocks

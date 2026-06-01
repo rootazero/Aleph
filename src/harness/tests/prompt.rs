@@ -120,11 +120,26 @@ fn assistant_then_tool_result_reconstructs_prior_turn() {
 
     let new_output = build_prompt(&events, tail_start);
 
-    // Shape: 1 reconstructed Assistant + 1 ToolResult
-    assert_eq!(new_output.len(), 2);
+    // Shape: the FULL conversation — opening user task + reconstructed
+    // Assistant tool_use + ToolResult. The opening user message MUST be
+    // preserved (regression: it was previously windowed out, so an
+    // autonomous tool loop lost its task on the continuation turn).
+    assert_eq!(new_output.len(), 3);
 
-    // First message: reconstructed Assistant turn with the tool_use block
+    // First message: the original user task, preserved and unwrapped (it is
+    // the conversation opener, before any assistant turn).
     match &new_output[0] {
+        UnifiedMessage::User { content } => match &content[0] {
+            crate::providers::message::ContentBlock::Text { text, .. } => {
+                assert_eq!(text, "fetch the weather");
+            }
+            other => panic!("expected Text block, got {other:?}"),
+        },
+        other => panic!("expected User message, got {other:?}"),
+    }
+
+    // Second message: reconstructed Assistant turn with the tool_use block
+    match &new_output[1] {
         UnifiedMessage::Assistant { content } => {
             assert_eq!(content.len(), 1);
             match &content[0] {
@@ -138,8 +153,8 @@ fn assistant_then_tool_result_reconstructs_prior_turn() {
         other => panic!("expected Assistant, got {other:?}"),
     }
 
-    // Second message: ToolResult
-    match &new_output[1] {
+    // Third message: ToolResult
+    match &new_output[2] {
         UnifiedMessage::ToolResult {
             tool_call_id,
             tool_name,
