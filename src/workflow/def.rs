@@ -111,8 +111,9 @@ impl WorkflowDef {
     /// Return step indices in dependency order: every step appears after all
     /// the steps it `depends_on`. Kahn's algorithm — `O(V + E)`.
     ///
-    /// Errors with a cycle message if the graph is not acyclic. Assumes ids
-    /// are unique and deps resolve (guaranteed once the id/dep checks in
+    /// Errors with a cycle message if the graph is not acyclic, or with an
+    /// unknown-dependency message if a `depends_on` references a step that does
+    /// not exist. Assumes ids are unique (guaranteed once the id checks in
     /// [`validate`](Self::validate) pass; callable standalone otherwise).
     pub fn topo_order(&self) -> Result<Vec<usize>> {
         let index_of: HashMap<&str, usize> = self
@@ -127,10 +128,14 @@ impl WorkflowDef {
         let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); self.steps.len()];
         for (i, step) in self.steps.iter().enumerate() {
             for dep in &step.depends_on {
-                if let Some(&j) = index_of.get(dep.as_str()) {
-                    dependents[j].push(i);
-                    indegree[i] += 1;
-                }
+                let Some(&j) = index_of.get(dep.as_str()) else {
+                    return Err(AlephError::invalid_input(format!(
+                        "step '{}' depends on unknown step '{dep}'",
+                        step.id
+                    )));
+                };
+                dependents[j].push(i);
+                indegree[i] += 1;
             }
         }
 

@@ -96,7 +96,9 @@ pub fn save(manifest: &WorkflowManifest) -> Result<PathBuf> {
 pub fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<PathBuf> {
     ensure_dir_at(dir)?;
     let final_path = dir.join(format!("{}.{ext}", sanitise_name(name)));
-    let tmp_path = final_path.with_extension(format!("{ext}.tmp"));
+    let mut tmp_os = final_path.as_os_str().to_os_string();
+    tmp_os.push(".tmp");
+    let tmp_path = PathBuf::from(tmp_os);
     fs::write(&tmp_path, body)
         .map_err(|e| AlephError::config(format!("write {} failed: {e}", tmp_path.display())))?;
     fs::rename(&tmp_path, &final_path).map_err(|e| {

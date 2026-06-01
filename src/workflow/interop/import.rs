@@ -49,7 +49,8 @@ pub fn parse_workflow_js(src: &str) -> Result<ImportOutcome> {
     scan_bare(src)
 }
 
-/// Extract the JSON between `EMBED_PREFIX` and `EMBED_SUFFIX`, if present.
+/// Extract the JSON between the first `EMBED_PREFIX` and the matching
+/// `EMBED_SUFFIX` that follows it.  Only the first embed block is considered.
 fn extract_embedded(src: &str) -> Option<String> {
     let start = src.find(EMBED_PREFIX)? + EMBED_PREFIX.len();
     let rest = &src[start..];
