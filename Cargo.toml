@@ -206,7 +206,6 @@ cbc = { version = "0.1", features = ["alloc", "block-padding"] }
 hkdf = "0.12"
 secrecy = { version = "0.10", features = ["serde"] }
 zeroize = { version = "1.8", features = ["derive"] }
-keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 k256 = { version = "0.13", features = ["ecdsa", "schnorr"] }
 sha3 = "0.10"
 bincode = "1.3"

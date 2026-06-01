@@ -132,12 +132,11 @@ impl WizardFlow for PairingFlow {
             .map_err(|e| WizardSessionError::FlowError(format!("issue_token: {e}")))?;
         let token = format!("{}:{}", signed.token, signed.signature);
 
-        // 5. internal: persist to OS keychain — best-effort, non-blocking
-        if let Err(e) = persist_token_to_keyring(&token) {
-            tracing::warn!(error = %e, "keyring persist failed; pairing succeeded anyway");
-        }
-
-        // 6. finish: hand the token back through wizard.next's final response
+        // 5. finish: hand the token back through wizard.next's final response.
+        //    The local desktop shell no longer needs an OS-keychain handoff —
+        //    it reads the auto-provisioned shared token from security.db via
+        //    `aleph-server bootstrap-token`. Remote devices receive the token
+        //    here in the finish response.
         prompter
             .finish(json!({
                 "token": token,
@@ -150,28 +149,6 @@ impl WizardFlow for PairingFlow {
 
     fn name(&self) -> &str {
         "pairing"
-    }
-}
-
-fn persist_token_to_keyring(token: &str) -> Result<(), keyring::Error> {
-    // Skip the real keyring call in unit tests (cargo test --lib) — macOS
-    // Keychain can pop a UI prompt that would hang the test.  Note: this
-    // cfg gate does NOT apply to integration tests in `tests/`, where the
-    // library is compiled without cfg(test).  Integration tests rely on
-    // the best-effort error-swallow in PairingFlow::run so a keyring
-    // failure becomes a warn-log, not a test failure.
-    #[cfg(test)]
-    {
-        let _ = token;
-        return Ok(());
-    }
-
-    #[cfg(not(test))]
-    {
-        const KEYRING_SERVICE: &str = "aleph-gateway";
-        const KEYRING_USER: &str = "desktop-shell";
-        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)?;
-        entry.set_password(token)
     }
 }
 

@@ -385,6 +385,34 @@ pub(crate) fn load_bootstrap_url() -> Option<String> {
     }
 }
 
+/// Read the auto-provisioned shared token via the bundled `aleph-server
+/// bootstrap-token` subcommand. The token lives in `~/.aleph/data/security.db`
+/// (mode 0600) and is read directly from the DB — no running daemon and no OS
+/// keychain are involved, so this never triggers a Keychain UI prompt. Returns
+/// `None` on first run (before the daemon has provisioned a token).
+pub(crate) fn load_shared_token() -> Option<String> {
+    let bin = resolve_daemon_binary()?;
+    let output = std::process::Command::new(&bin)
+        .arg("bootstrap-token")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        tracing::warn!(
+            status = ?output.status.code(),
+            stderr = %String::from_utf8_lossy(&output.stderr).trim(),
+            "bootstrap-token returned non-zero"
+        );
+        return None;
+    }
+    let raw = String::from_utf8(output.stdout).ok()?;
+    let token = raw.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_string())
+    }
+}
+
 /// Cross-platform "open this URL in the default browser" — used by
 /// the menu handler and as the fallback path in `reveal_panel`.
 pub(crate) fn open_url_in_browser(url: &str) {

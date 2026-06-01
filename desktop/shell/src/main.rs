@@ -61,24 +61,16 @@ fn window_state_flags() -> StateFlags {
     StateFlags::SIZE | StateFlags::POSITION
 }
 
-/// Load the device token from the OS keychain. Returns None on any error
-/// (missing entry, locked keychain, platform-specific failures) so the
-/// shell can still boot — it will simply prompt for pairing again.
-fn load_pairing_token() -> Option<String> {
-    let entry = keyring::Entry::new("aleph-gateway", "desktop-shell").ok()?;
-    match entry.get_password() {
-        Ok(t) if !t.is_empty() => Some(t),
-        _ => None,
-    }
-}
-
 fn main() {
-    // Inject the device token from the OS keychain before any subsystems
-    // boot. The notify.rs subsystem reads ALEPH_GATEWAY_TOKEN during
-    // connect_request — this must be set before Tauri/Tokio threads start.
-    // The guard ensures an explicit env override is never clobbered.
+    // Inject the auto-provisioned shared token before any subsystems boot.
+    // The notify.rs subsystem reads ALEPH_GATEWAY_TOKEN during connect_request
+    // — this must be set before Tauri/Tokio threads start. The token is read
+    // daemon-free from ~/.aleph/data/security.db via the bundled `aleph-server
+    // bootstrap-token` subcommand: no OS keychain, so no Keychain UI prompt on
+    // app updates. The guard ensures an explicit env override is never
+    // clobbered.
     if std::env::var_os("ALEPH_GATEWAY_TOKEN").is_none() {
-        if let Some(token) = load_pairing_token() {
+        if let Some(token) = daemon::load_shared_token() {
             std::env::set_var("ALEPH_GATEWAY_TOKEN", token);
         }
     }
