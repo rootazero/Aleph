@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Required so macOS TCC permits WKWebView getUserMedia (the Panel's
+         voice-input button). Without this string the OS denies microphone
+         access outright, regardless of the in-webview grant wry performs. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Aleph uses the microphone to transcribe your speech into chat messages. Audio is sent only to your local Aleph daemon for transcription.</string>
+</dict>
+</plist>

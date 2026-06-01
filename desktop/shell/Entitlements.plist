@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- WKWebView runs media capture in a separate WebKit GPU process; macOS
+         requires the host app to hold this entitlement for that process to
+         reach the microphone. Without it getUserMedia rejects with no TCC
+         prompt. Paired with NSMicrophoneUsageDescription in Info.plist.
+         Reference: openclaw scripts/codesign-mac-app.sh. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

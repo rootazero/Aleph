@@ -289,6 +289,19 @@ pub(super) fn VoiceInputButton(
     };
 
     view! {
+        <div class="relative flex-shrink-0">
+        // Visible failure surface: getUserMedia rejections (permission denied,
+        // unsupported webview) otherwise live only in the button tooltip, which
+        // reads as "nothing happened". Click the bubble to dismiss.
+        <Show when=move || error.get().is_some()>
+            <div
+                class="absolute bottom-full left-0 mb-1 max-w-[220px] px-2 py-1 rounded-md
+                       bg-danger text-white text-xs leading-snug shadow-lg cursor-pointer z-50"
+                on:click=move |_| error.set(None)
+            >
+                {move || error.get().unwrap_or_default()}
+            </div>
+        </Show>
         <button
             class=button_class
             title=title
@@ -316,5 +329,6 @@ pub(super) fn VoiceInputButton(
                 }.into_any(),
             }}
         </button>
+        </div>
     }
 }

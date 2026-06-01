@@ -255,6 +255,8 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "webkit2gtk",
+ "webview2-com",
  "window-vibrancy 0.5.3",
 ]
 

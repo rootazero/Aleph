@@ -18,6 +18,7 @@ mod menu;
 mod notify;
 mod tray;
 mod update;
+mod webview_perms;
 
 use std::time::Duration;
 
@@ -193,6 +194,10 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
             .hidden_title(true);
     }
     let window = builder.build()?;
+
+    // Grant the Panel webview microphone access (voice-input button). No-op on
+    // macOS where wry auto-grants; installs handlers on Windows/Linux.
+    webview_perms::grant_microphone(&window);
 
     // Restore the window's last size and position. On first run there is
     // nothing saved, so it keeps the centered default set above.
