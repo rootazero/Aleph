@@ -102,6 +102,18 @@ pub async fn reembed_all(
         "[reembed] Migration complete"
     );
 
+    // Record the vector-space signature so a later provider/model switch can be
+    // detected (see `memory::embedding_signature`). Skip on cancellation — a
+    // cancelled run leaves the store split between the old and new model, so the
+    // signature would misrepresent it.
+    if !cancel.load(Ordering::Relaxed) {
+        let sig = crate::memory::embedding_signature::provider_signature(embedder.as_ref());
+        match database.set_embedding_signature(&sig) {
+            Ok(()) => info!(signature = %sig, "[reembed] recorded embedding signature"),
+            Err(e) => warn!("[reembed] failed to record embedding signature: {e}"),
+        }
+    }
+
     Ok(result)
 }
 

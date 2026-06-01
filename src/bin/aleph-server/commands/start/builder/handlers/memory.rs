@@ -152,6 +152,31 @@ pub(in crate::commands::start) fn register_memory_handlers(
                     async move { memory_handlers::handle_reembed_cancel(req, rs).await }
                 });
         }
+
+        // Embedding vector-space drift check: if the active provider differs
+        // from the model that produced the stored vectors, recommend a reembed.
+        // A standing mismatch re-surfaces on every boot until reembedded. The
+        // signature is recorded by `reembed_all`; an `Unknown` (never reembedded)
+        // store stays silent.
+        {
+            let db = ::std::sync::Arc::clone(memory_db);
+            let emb = ::std::sync::Arc::clone(emb);
+            tokio::spawn(async move {
+                use alephcore::memory::embedding_signature as sig;
+                let current = sig::provider_signature(emb.as_ref());
+                let stored = db.get_embedding_signature().ok().flatten();
+                if let sig::SignatureStatus::Mismatch { stored, current } =
+                    sig::compare(stored.as_deref(), &current)
+                {
+                    tracing::warn!(
+                        stored = %stored,
+                        current = %current,
+                        "Embedding model changed since notes were last embedded — \
+                         run memory.reembed to keep retrieval accurate."
+                    );
+                }
+            });
+        }
     } else {
         server
             .handlers_mut()

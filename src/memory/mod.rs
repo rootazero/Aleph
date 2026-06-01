@@ -25,6 +25,7 @@ pub mod curated;
 pub mod dreaming;
 pub mod embedding_manager;
 pub mod embedding_provider;
+pub mod embedding_signature;
 pub mod events;
 pub mod extensions;
 pub mod ingestion;

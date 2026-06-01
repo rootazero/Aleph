@@ -100,6 +100,45 @@ async fn full_rebuild_indexes_all_notes() {
 }
 
 #[tokio::test]
+async fn full_rebuild_prunes_orphan_index_rows() {
+    let dir = TempDir::new().unwrap();
+    let memory_dir = dir.path().to_path_buf();
+    let db = create_test_db();
+
+    let pref_dir = setup_category_dir(&memory_dir, AGENT, "preference").await;
+    fs::write(
+        pref_dir.join("Keep.md"),
+        sample_md("preference", &["keep me"], &[]),
+    )
+    .await
+    .unwrap();
+    fs::write(
+        pref_dir.join("Gone.md"),
+        sample_md("preference", &["delete me"], &[]),
+    )
+    .await
+    .unwrap();
+
+    let indexer = NoteIndexer::new(memory_dir, db.clone());
+
+    // First rebuild indexes both; nothing to prune yet.
+    let stats = indexer.full_rebuild(AGENT).await.unwrap();
+    assert_eq!(stats.indexed, 2);
+    assert_eq!(stats.pruned, 0);
+    assert_eq!(db.list_notes(AGENT).await.unwrap().len(), 2);
+
+    // Remove one file from disk → its index row is now an orphan.
+    fs::remove_file(pref_dir.join("Gone.md")).await.unwrap();
+
+    // Second rebuild prunes exactly the orphan; the surviving row is kept.
+    let stats = indexer.full_rebuild(AGENT).await.unwrap();
+    assert_eq!(stats.pruned, 1, "the file-less row must be pruned");
+    let notes = db.list_notes(AGENT).await.unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].path, "preference/Keep");
+}
+
+#[tokio::test]
 async fn full_rebuild_skips_unchanged() {
     let dir = TempDir::new().unwrap();
     let memory_dir = dir.path().to_path_buf();

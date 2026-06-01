@@ -44,6 +44,9 @@ pub struct IndexStats {
     pub indexed: usize,
     pub skipped: usize,
     pub errors: usize,
+    /// Index rows removed because their backing `.md` file no longer exists on
+    /// disk (orphans from a rename / deletion / agent-id relocation).
+    pub pruned: usize,
 }
 
 /// Per-file outcome from `index_one_file`. Mirrors the `bool` returned by
@@ -231,6 +234,33 @@ impl<S: NoteStore> NoteIndexer<S> {
                 Err(e) => return Err(e),
             }
         }
+
+        // Reconcile: the index must reflect disk. The scan above only adds or
+        // updates rows (keyed by content_hash) — it never removed rows whose
+        // backing file is gone, so entries left by a rename, deletion, or
+        // agent-id relocation lingered forever (the source of the orphan rows
+        // that broke reembed and surfaced as duplicates). Drop any index row
+        // for this agent whose `<category>/<file>.md` no longer exists.
+        //
+        // Non-destructive: only rows with NO file on disk are removed — never a
+        // file, never a row that still has content. Scoped to scannable
+        // CATEGORY_DIRS so out-of-scope rows (e.g. `archive/`) are untouched.
+        // Orphan vectors are left as-is: the search join already tolerates them
+        // and no delete path clears `notes_vec_map`.
+        let agent_dir = self.memory_dir.join(agent_id);
+        for entry in self.store.list_notes(agent_id).await? {
+            if !CATEGORY_DIRS.contains(&entry.category.as_str()) {
+                continue;
+            }
+            let file = agent_dir
+                .join(&entry.category)
+                .join(crate::memory::notes::store::note_md_filename(&entry.filename));
+            if fs::metadata(&file).await.is_err() {
+                self.store.remove_note_index(&entry.path, agent_id).await?;
+                total.pruned += 1;
+            }
+        }
+
         Ok(total)
     }
 
