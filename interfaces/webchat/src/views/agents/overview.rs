@@ -1,11 +1,21 @@
 // Overview Tab — identity, model config, and inference parameters editor
 
 use crate::api::agents::AgentsApi;
+use crate::api::providers::{CatalogEntry, CatalogView, ProvidersApi};
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use serde_json::json;
+
+/// 取 catalog entry 的有效 model 列表:有 models 用 models,否则回退到 [default_model]。
+fn effective_models(e: &CatalogEntry) -> Vec<String> {
+    if e.models.is_empty() {
+        vec![e.default_model.clone()]
+    } else {
+        e.models.clone()
+    }
+}
 
 #[component]
 pub fn OverviewTab(agent_id: String) -> impl IntoView {
@@ -17,14 +27,26 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
     let name = RwSignal::new(String::new());
     let description = RwSignal::new(String::new());
     let theme = RwSignal::new(String::new());
-    let primary_model = RwSignal::new(String::new());
-    let fallbacks = RwSignal::new(String::new());
+    // "" = 继承系统默认;否则 "provider\u{1f}model"(catalog 选中项)
+    let selected_model = RwSignal::new(String::new());
+    let model_touched = RwSignal::new(false);
+    let catalog: RwSignal<Vec<CatalogEntry>> = RwSignal::new(Vec::new());
     let temperature = RwSignal::new(String::new());
     let max_tokens = RwSignal::new(String::new());
     let top_p = RwSignal::new(String::new());
     let top_k = RwSignal::new(String::new());
     let is_saving = RwSignal::new(false);
     let save_message = RwSignal::new(Option::<(bool, String)>::None);
+
+    // Fetch catalog once
+    {
+        let dash = state;
+        spawn_local(async move {
+            if let Ok(items) = ProvidersApi::catalog(&dash, CatalogView::Configured).await {
+                catalog.set(items);
+            }
+        });
+    }
 
     // Load agent detail
     let id_for_load = agent_id.clone();
@@ -68,22 +90,16 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                     );
                 }
 
-                if let Some(mc) = def.get("model_config") {
-                    primary_model.set(
-                        mc.get("primary")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                    );
-                    if let Some(fb) = mc.get("fallbacks").and_then(|v| v.as_array()) {
-                        let fbs: Vec<String> = fb
-                            .iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect();
-                        fallbacks.set(fbs.join(", "));
+                // 读取已存 model:Qualified 对象 → "provider\u{1f}model";Legacy 字符串/缺省 → 留空=继承
+                if let Some(mv) = def.get("model") {
+                    if let Some(obj) = mv.as_object() {
+                        let p = obj.get("provider").and_then(|v| v.as_str()).unwrap_or("");
+                        let m = obj.get("model").and_then(|v| v.as_str()).unwrap_or("");
+                        if !p.is_empty() && !m.is_empty() {
+                            selected_model.set(format!("{p}\u{1f}{m}"));
+                        }
                     }
-                } else if let Some(model) = def.get("model").and_then(|v| v.as_str()) {
-                    primary_model.set(model.to_string());
+                    // Legacy bare string: no provider context → leave empty (=inherit); user can re-pick.
                 }
 
                 if let Some(params) = def.get("params") {
@@ -112,12 +128,14 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
         let id = id_for_save.clone();
         let dash = state;
 
-        let fb_list: Vec<String> = fallbacks
-            .get()
-            .split(',')
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty())
-            .collect();
+        let sel = selected_model.get();
+        let model_patch = if sel.is_empty() {
+            serde_json::Value::Null // 继承系统默认
+        } else if let Some((p, m)) = sel.split_once('\u{1f}') {
+            json!({ "provider": p, "model": m })
+        } else {
+            serde_json::Value::Null
+        };
 
         let mut patch = json!({
             "name": name.get(),
@@ -128,12 +146,10 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
             },
         });
 
-        let pm = primary_model.get();
-        if !pm.is_empty() {
-            patch["model_config"] = json!({
-                "primary": pm,
-                "fallbacks": fb_list,
-            });
+        // 仅当用户实际改动下拉框时才写 model 键:
+        // untouched → 键缺省 → 后端 AgentPatch.model = None → 保留原值(legacy/qualified)。
+        if model_touched.get() {
+            patch["model"] = model_patch;
         }
 
         let mut params = serde_json::Map::new();
@@ -223,28 +239,38 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
             // Model Configuration
             <div class="bg-surface-raised border border-border rounded-xl p-6">
                 <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.overview.model_config)}</h2>
-                <div class="space-y-4">
-                    <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.primary_model)}</label>
-                        <input
-                            type="text"
-                            prop:value=move || primary_model.get()
-                            on:input=move |ev| primary_model.set(event_target_value(&ev))
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary font-mono text-sm"
-                            placeholder="claude-opus-4"
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.fallback_models)}</label>
-                        <input
-                            type="text"
-                            prop:value=move || fallbacks.get()
-                            on:input=move |ev| fallbacks.set(event_target_value(&ev))
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary font-mono text-sm"
-                            placeholder=move || t_string!(i18n, agents.overview.fallback_placeholder).to_string()
-                        />
-                        <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, agents.overview.fallback_hint)}</p>
-                    </div>
+                <div class="space-y-2">
+                    <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.primary_model)}</label>
+                    <select
+                        prop:value=move || selected_model.get()
+                        on:change=move |ev| { selected_model.set(event_target_value(&ev)); model_touched.set(true); }
+                        class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary font-mono text-sm"
+                    >
+                        <option value="">"继承系统默认 (inherit system default)"</option>
+                        {move || {
+                            catalog.get().into_iter().flat_map(|entry: CatalogEntry| {
+                                let provider_id = entry.id.clone();
+                                let models = effective_models(&entry);
+                                let dn = entry.display_name.clone();
+                                models.into_iter().map(move |m| {
+                                    let val = format!("{}\u{1f}{}", provider_id, m);
+                                    let label = format!("{} / {}", dn, m);
+                                    view! { <option value=val>{label}</option> }
+                                }).collect::<Vec<_>>()
+                            }).collect::<Vec<_>>()
+                        }}
+                    </select>
+                    {move || {
+                        let sel = selected_model.get();
+                        let in_catalog = sel.is_empty() || catalog.get().iter().any(|e| {
+                            effective_models(e).iter().any(|m| format!("{}\u{1f}{}", e.id, m) == sel)
+                        });
+                        (!in_catalog).then(|| view! {
+                            <p class="mt-1 text-xs text-danger/80">
+                                "\u{26a0} 当前选中的 model 已失效(provider 被删/禁用),保存后将回退系统默认"
+                            </p>
+                        })
+                    }}
                 </div>
             </div>
 
