@@ -1532,7 +1532,11 @@ impl BuiltinToolRegistry {
             permission_tool,
             media_tool,
             desktop_platform,
-            scratchpad_tool,
+            // Share the live session-key handle so the scratchpad tool can
+            // bind its project to the session for the goal-loop hook. When
+            // memory is unconfigured the handle is None → hook stays dormant.
+            scratchpad_tool: scratchpad_tool
+                .with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
             memory_browse_tool,

@@ -33,6 +33,7 @@
 
 pub mod stop_hooks;
 
+pub mod scratchpad_goal_verifier;
 pub mod stop_hook_verifier;
 pub mod tool_loop_verifier;
 pub mod turn_verifier;
@@ -40,6 +41,7 @@ pub mod turn_verifier;
 #[cfg(test)]
 mod tests;
 
+pub use scratchpad_goal_verifier::ScratchpadGoalVerifier;
 pub use stop_hook_verifier::StopHookVerifier;
 pub use tool_loop_verifier::ToolLoopVerifier;
 pub use turn_verifier::{

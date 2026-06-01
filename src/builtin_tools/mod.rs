@@ -76,6 +76,7 @@ pub mod recall_context;
 pub mod recall_events;
 pub mod remember;
 pub mod scratchpad;
+pub mod scratchpad_registry;
 pub mod search;
 pub mod self_config;
 pub mod self_manage;

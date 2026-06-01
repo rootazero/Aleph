@@ -6,10 +6,13 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 use tracing::info;
 
+use crate::builtin_tools::scratchpad_registry;
 use crate::error::Result;
 use crate::memory::scratchpad::ScratchpadManager;
+use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
 /// What action to perform on the scratchpad
@@ -73,18 +76,35 @@ pub struct ScratchpadOutput {
 }
 
 /// Tool that allows the AI to manage project scratchpads
-#[derive(Clone)]
-pub struct ScratchpadTool;
-
-impl Default for ScratchpadTool {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Clone, Default)]
+pub struct ScratchpadTool {
+    /// Live session-key handle (shared with the execution engine, which
+    /// writes the active session's key before every tool call). Used to
+    /// bind the touched `project_id` to the session in
+    /// [`scratchpad_registry`] so the goal-loop hook can find this
+    /// execution list at stop time. `None` → registry binding is skipped
+    /// (scratchpad still works; the hook simply stays dormant).
+    session_key: Option<Arc<RwLock<String>>>,
 }
 
 impl ScratchpadTool {
     pub fn new() -> Self {
-        Self
+        Self { session_key: None }
+    }
+
+    /// Attach the shared live session-key handle. Pass the same handle the
+    /// execution engine writes (see `execution_engine::execute`).
+    pub fn with_session_key_handle(mut self, handle: Option<Arc<RwLock<String>>>) -> Self {
+        self.session_key = handle;
+        self
+    }
+
+    /// Current live session key, or empty string when no handle is wired.
+    async fn current_session_key(&self) -> String {
+        match &self.session_key {
+            Some(h) => h.read().await.clone(),
+            None => String::new(),
+        }
     }
 }
 
@@ -92,9 +112,13 @@ impl ScratchpadTool {
 impl AlephTool for ScratchpadTool {
     const NAME: &'static str = "scratchpad";
     const DESCRIPTION: &'static str =
-        "Manage project working memory (scratchpad). Use to track objectives, \
-         plans, and notes for multi-step tasks. The scratchpad persists across \
-         sessions and is automatically injected into your context.";
+        "Manage your working memory (scratchpad) for a multi-step task: set an \
+         objective, lay out a plan as an execution list, and check items off as \
+         you complete them. The scratchpad persists across sessions. While an \
+         objective is set and plan items remain unchecked, the goal-loop keeps \
+         this session running so you work through the list step by step — mark \
+         each finished step with action='complete_item', and call action='clear' \
+         once the objective is fully achieved.";
 
     type Args = ScratchpadArgs;
     type Output = ScratchpadOutput;
@@ -129,6 +153,19 @@ impl AlephTool for ScratchpadTool {
             return Err(crate::error::AlephError::tool(
                 "Invalid project_id: must not contain path separators, '..', null bytes, or start with '.'".to_string(),
             ));
+        }
+
+        // Bind this session to the project it is actively working, so the
+        // goal-loop hook (ScratchpadGoalVerifier) can find this execution
+        // list at stop time. Read-only access never re-points the binding;
+        // Clear unbinds. No-op when no session handle is wired.
+        let session_key = self.current_session_key().await;
+        if !session_key.is_empty() {
+            match args.action {
+                ScratchpadAction::Read => {}
+                ScratchpadAction::Clear => scratchpad_registry::clear(&session_key),
+                _ => scratchpad_registry::set_active(&session_key, &args.project_id),
+            }
         }
 
         let manager = ScratchpadManager::new(&args.project_id, "tool");

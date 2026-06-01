@@ -24,6 +24,7 @@ async fn below_threshold_allows() {
         final_text: None,
         recent_tool_calls: &history,
         stop_reason: None,
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());
@@ -39,6 +40,7 @@ async fn at_threshold_with_no_text_vetoes() {
         final_text: None,
         recent_tool_calls: &history,
         stop_reason: None,
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     match v.verify(&ctx, &cancel).await {
@@ -60,6 +62,7 @@ async fn at_threshold_with_thinking_text_allows() {
         final_text: Some("hmm, let me reconsider"),
         recent_tool_calls: &history,
         stop_reason: None,
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());
@@ -75,6 +78,7 @@ async fn whitespace_only_text_treated_as_no_text() {
         final_text: Some("   \n\t  "),
         recent_tool_calls: &history,
         stop_reason: None,
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_veto());
@@ -96,6 +100,7 @@ async fn different_args_hash_breaks_repetition() {
         final_text: None,
         recent_tool_calls: &history,
         stop_reason: None,
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_continue());
@@ -121,6 +126,7 @@ async fn threshold_two_vetoes_at_exactly_two() {
         final_text: None,
         recent_tool_calls: &history,
         stop_reason: None,
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_veto());

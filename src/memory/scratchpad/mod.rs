@@ -33,5 +33,5 @@ mod manager;
 pub mod template;
 
 pub use history::{HistoryEntry, SessionHistory};
-pub use manager::{ScratchpadConfig, ScratchpadManager};
+pub use manager::{PlanItem, ScratchpadConfig, ScratchpadManager, ScratchpadSnapshot};
 pub use template::{generate_scratchpad, DEFAULT_TEMPLATE};

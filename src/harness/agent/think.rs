@@ -720,6 +720,7 @@ impl AgentHarness {
             });
         }
         let stop_reason = response.tool_calls.is_empty().then_some("end_turn");
+        let session_key = session_id.to_key_string();
         let verdict = self
             .run_verifiers(
                 iterations,
@@ -727,6 +728,7 @@ impl AgentHarness {
                 &text,
                 tool_history,
                 stop_reason,
+                &session_key,
                 parent_cancel,
             )
             .await;
@@ -1189,6 +1191,7 @@ impl AgentHarness {
         final_text: &str,
         tool_history: &std::collections::VecDeque<ToolCallSummary>,
         stop_reason: Option<&str>,
+        session_key: &str,
         cancel: &CancellationToken,
     ) -> VerifierVerdict {
         let Some(chain) = self.deps.verifier_chain.as_ref() else {
@@ -1205,6 +1208,7 @@ impl AgentHarness {
             },
             recent_tool_calls: &snapshot,
             stop_reason,
+            session_id: Some(session_key),
         };
         chain.verify(&ctx, cancel).await
     }
