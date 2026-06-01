@@ -526,10 +526,16 @@ impl WebFetchTool {
 
     /// Reject HTML that exceeds 1,000,000 characters to prevent DoS.
     pub(crate) fn validate_html_safety(html: &str) -> std::result::Result<(), ToolError> {
-        if html.len() > 1_000_000 {
+        // The 10 MB response-byte gate already bounds anything reaching here;
+        // this is the matching upper bound on the decoded HTML string. The
+        // former 1 MB cap rejected ordinary modern news pages (1–4 MB of HTML)
+        // *before* the readability/markdown extractor could reduce them to
+        // clean, length-capped text — defeating the whole point of fetching.
+        if html.len() > Self::MAX_RESPONSE_BYTES {
             return Err(ToolError::Execution(format!(
-                "HTML too large: {} chars (max 1,000,000)",
-                html.len()
+                "HTML too large: {} chars (max {} chars)",
+                html.len(),
+                Self::MAX_RESPONSE_BYTES,
             )));
         }
         Ok(())
@@ -877,8 +883,20 @@ mod tests {
 
     #[test]
     fn test_safety_gate_rejects_oversized_html() {
-        let huge = "a".repeat(1_100_000);
+        // Only truly pathological input (beyond the 10 MB response budget) is
+        // rejected; the byte gate already bounds anything that reaches here.
+        let huge = "a".repeat(WebFetchTool::MAX_RESPONSE_BYTES + 1);
         assert!(WebFetchTool::validate_html_safety(&huge).is_err());
+    }
+
+    #[test]
+    fn test_safety_gate_accepts_large_news_page() {
+        // Real news section pages routinely ship 1–4 MB of HTML (e.g. BBC
+        // Middle East ≈ 3.6 MB). These must pass the gate so the readability
+        // extractor can reduce them to clean text — the old 1 MB cap rejected
+        // them outright before extraction.
+        let big = "a".repeat(3_600_000);
+        assert!(WebFetchTool::validate_html_safety(&big).is_ok());
     }
 
     #[test]
