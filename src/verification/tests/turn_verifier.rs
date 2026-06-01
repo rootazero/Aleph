@@ -51,6 +51,7 @@ fn ctx() -> TurnVerifyContext<'static> {
         final_text: None,
         recent_tool_calls: &[],
         stop_reason: None,
+        session_id: None,
     }
 }
 
@@ -138,6 +139,7 @@ async fn concurrent_verify_vs_disable_all_is_consistent() {
                 final_text: None,
                 recent_tool_calls: &[],
                 stop_reason: None,
+                session_id: None,
             };
             for _ in 0..ITERS {
                 match chain.verify(&c, &cancel).await {

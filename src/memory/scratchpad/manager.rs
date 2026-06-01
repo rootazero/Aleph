@@ -42,6 +42,39 @@ impl Default for ScratchpadConfig {
     }
 }
 
+/// A single plan item parsed from the scratchpad's `## Plan` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanItem {
+    /// Item text (the part after the `- [ ]` / `- [x]` marker).
+    pub text: String,
+    /// `true` when the checkbox is `[x]`.
+    pub done: bool,
+}
+
+/// Structural snapshot of a scratchpad's objective + plan, used by the
+/// goal-loop hook. Carries no judgment — just the parsed checkbox state.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScratchpadSnapshot {
+    /// The objective text, or `None` when unset / still `[No active task]`.
+    pub objective: Option<String>,
+    /// Plan items in document order (excludes the `- [ ] ...` placeholder).
+    pub items: Vec<PlanItem>,
+}
+
+impl ScratchpadSnapshot {
+    /// Plan items whose checkbox is still `[ ]`.
+    pub fn incomplete(&self) -> Vec<&PlanItem> {
+        self.items.iter().filter(|i| !i.done).collect()
+    }
+
+    /// `true` when an objective is set AND at least one real plan item is
+    /// still unchecked. This is the structural condition the goal-loop
+    /// hook fires on — not a semantic completion judgment.
+    pub fn has_pending_work(&self) -> bool {
+        self.objective.is_some() && self.items.iter().any(|i| !i.done)
+    }
+}
+
 /// Manages agent scratchpad files under `~/.aleph/workspaces/<agent_id>/`.
 pub struct ScratchpadManager {
     /// Base directory for this project's scratchpad files
@@ -138,6 +171,19 @@ impl ScratchpadManager {
         };
 
         Ok(has_objective || has_plan_items || has_working_state)
+    }
+
+    /// Parse the objective + plan checkboxes into a [`ScratchpadSnapshot`].
+    ///
+    /// Pure structural read — uses the same markers as [`Self::has_content`]
+    /// (`## Objective` / `## Plan` sections, `- [ ]` / `- [x]` checkboxes,
+    /// skipping the `- [ ] ...` placeholder). Returns an empty snapshot when
+    /// no scratchpad file exists.
+    pub async fn snapshot(&self) -> Result<ScratchpadSnapshot, AlephError> {
+        if !self.exists() {
+            return Ok(ScratchpadSnapshot::default());
+        }
+        Ok(parse_snapshot(&self.read().await?))
     }
 
     /// Read scratchpad content
@@ -288,10 +334,92 @@ impl ScratchpadManager {
     }
 }
 
+/// Return the trimmed text of the markdown section between `header` and the
+/// next `## ` heading (or end of document).
+fn extract_section<'a>(content: &'a str, header: &str) -> Option<&'a str> {
+    let start = content.find(header)? + header.len();
+    let rest = &content[start..];
+    let end = rest.find("\n## ").unwrap_or(rest.len());
+    Some(rest[..end].trim())
+}
+
+/// Parse objective + plan checkboxes out of raw scratchpad markdown.
+///
+/// Free function (no I/O) so it is trivially unit-testable. Mirrors the
+/// marker conventions of [`ScratchpadManager::has_content`].
+pub(crate) fn parse_snapshot(content: &str) -> ScratchpadSnapshot {
+    let objective = extract_section(content, "## Objective")
+        .map(str::trim)
+        .filter(|o| !o.is_empty() && *o != "[No active task]")
+        .map(str::to_string);
+
+    let items = extract_section(content, "## Plan")
+        .map(|plan| {
+            plan.lines()
+                .filter_map(|line| {
+                    let line = line.trim();
+                    if let Some(text) = line.strip_prefix("- [ ] ") {
+                        Some((text.trim(), false))
+                    } else if let Some(text) = line.strip_prefix("- [x] ") {
+                        Some((text.trim(), true))
+                    } else {
+                        None
+                    }
+                })
+                // Drop the default `- [ ] ...` placeholder.
+                .filter(|(text, done)| !(!*done && *text == "..."))
+                .map(|(text, done)| PlanItem {
+                    text: text.to_string(),
+                    done,
+                })
+                .collect::<Vec<PlanItem>>()
+        })
+        .unwrap_or_default();
+
+    ScratchpadSnapshot { objective, items }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn parse_snapshot_empty_template_has_no_pending_work() {
+        let snap = parse_snapshot(DEFAULT_TEMPLATE);
+        assert_eq!(snap.objective, None);
+        assert!(snap.items.is_empty(), "placeholder must be skipped");
+        assert!(!snap.has_pending_work());
+    }
+
+    #[test]
+    fn parse_snapshot_objective_plus_mixed_checkboxes() {
+        let md = "# Current Task\n\n## Objective\nShip auth\n\n## Plan\n- [x] Design API\n- [ ] Implement\n- [ ] Test\n\n## Working State\n\n## Notes\n";
+        let snap = parse_snapshot(md);
+        assert_eq!(snap.objective.as_deref(), Some("Ship auth"));
+        assert_eq!(snap.items.len(), 3);
+        let pending = snap.incomplete();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].text, "Implement");
+        assert!(snap.has_pending_work());
+    }
+
+    #[test]
+    fn parse_snapshot_all_done_has_no_pending_work() {
+        let md = "## Objective\nDone goal\n\n## Plan\n- [x] A\n- [x] B\n\n## Working State\n";
+        let snap = parse_snapshot(md);
+        assert_eq!(snap.objective.as_deref(), Some("Done goal"));
+        assert!(!snap.has_pending_work(), "all boxes checked → no pending");
+    }
+
+    #[test]
+    fn parse_snapshot_plan_without_objective_does_not_fire() {
+        // Items present but objective never set → hook stays dormant.
+        let md = "## Objective\n[No active task]\n\n## Plan\n- [ ] orphan step\n\n## Working State\n";
+        let snap = parse_snapshot(md);
+        assert_eq!(snap.objective, None);
+        assert!(!snap.has_pending_work());
+    }
 
     #[tokio::test]
     async fn test_manager_creates_directory() {

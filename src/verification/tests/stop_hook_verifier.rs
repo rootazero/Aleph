@@ -51,6 +51,7 @@ async fn skips_when_stop_reason_is_none() {
         final_text: None,
         recent_tool_calls: &[],
         stop_reason: None,
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     assert!(verifier.verify(&ctx, &cancel).await.is_continue());
@@ -65,6 +66,7 @@ async fn fires_when_stop_reason_is_some_and_hook_blocks() {
         final_text: Some("done"),
         recent_tool_calls: &[],
         stop_reason: Some("end_turn"),
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     match verifier.verify(&ctx, &cancel).await {
@@ -84,6 +86,7 @@ async fn allows_when_hook_passes() {
         final_text: Some("done"),
         recent_tool_calls: &[],
         stop_reason: Some("end_turn"),
+        session_id: None,
     };
     let cancel = CancellationToken::new();
     assert!(verifier.verify(&ctx, &cancel).await.is_continue());

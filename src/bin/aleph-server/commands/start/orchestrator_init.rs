@@ -26,8 +26,8 @@ use alephcore::orchestrator::{
     resolver::RoutingOverrides, sandbox_factory::WorkspaceBuilder,
 };
 use alephcore::verification::{
-    stop_hooks::build_from_config as build_stop_hooks, StopHookVerifier, ToolLoopVerifier,
-    VerifierChain,
+    stop_hooks::build_from_config as build_stop_hooks, ScratchpadGoalVerifier, StopHookVerifier,
+    ToolLoopVerifier, VerifierChain,
 };
 use alephcore::StopHookConfig;
 
@@ -144,6 +144,11 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
             builder = builder.with(std::sync::Arc::new(StopHookVerifier::new(hooks)));
         }
         builder = builder.with(std::sync::Arc::new(ToolLoopVerifier::new()));
+        // Goal-loop hook: keeps the loop running while the session's
+        // scratchpad has an objective + unchecked plan items. Listed last so
+        // explicit user stop-hooks and the death-loop watchdog take
+        // precedence. Dormant unless the model has set an objective.
+        builder = builder.with(std::sync::Arc::new(ScratchpadGoalVerifier::new()));
         Some(std::sync::Arc::new(builder.build()))
     };
 

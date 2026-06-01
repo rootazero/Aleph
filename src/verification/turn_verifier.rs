@@ -49,6 +49,11 @@ pub struct TurnVerifyContext<'a> {
     /// tool_calls produced); `None` mid-turn (tool_calls produced and
     /// about to enter Act).
     pub stop_reason: Option<&'a str>,
+    /// Live session key string for the current run, when available.
+    /// Pure plumbing so session-scoped watchdogs (e.g.
+    /// `ScratchpadGoalVerifier`) can locate per-session state. `None`
+    /// in contexts that don't bind a session (some tests / rollback).
+    pub session_id: Option<&'a str>,
 }
 
 /// Outcome of one verifier's evaluation.
