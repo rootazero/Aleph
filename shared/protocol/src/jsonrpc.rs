@@ -293,22 +293,8 @@ impl ToolCallResult {
 // Helper Functions
 // ============================================================================
 
-/// Generate a simple UUID v4 (without external dependency)
 fn uuid_v4() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    let nanos = now.as_nanos();
-    let random = (nanos ^ (nanos >> 64)) as u64;
-    format!(
-        "{:08x}-{:04x}-4{:03x}-{:04x}-{:012x}",
-        (random >> 32) as u32,
-        ((random >> 16) as u16),
-        random as u16 & 0x0FFF,
-        ((random >> 48) as u16 & 0x3FFF) | 0x8000,
-        random & 0xFFFFFFFFFFFF
-    )
+    uuid::Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]

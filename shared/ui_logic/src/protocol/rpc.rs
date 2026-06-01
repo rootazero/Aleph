@@ -74,8 +74,12 @@ impl RpcClient {
         if let Some(id) = response.get("id").and_then(|id| id.as_str()) {
             if let Some(tx) = self.pending.borrow_mut().remove(id) {
                 if let Some(error) = response.get("error") {
-                    let msg = error.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
-                    let _ = tx.send(Err(RpcError::ServerError(msg.to_string())));
+                    let msg = error
+                        .get("message")
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| error.to_string());
+                    let _ = tx.send(Err(RpcError::ServerError(msg)));
                 } else if let Some(result) = response.get("result") {
                     let _ = tx.send(Ok(result.clone()));
                 }

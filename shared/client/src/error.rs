@@ -20,11 +20,11 @@ pub enum CliError {
     #[error("RPC error ({code}): {message}")]
     Rpc { code: i32, message: String },
 
-    #[error("Timeout waiting for response")]
-    Timeout,
+    #[error("Timeout waiting for response: {0}")]
+    Timeout(String),
 
-    #[error("Server disconnected")]
-    Disconnected,
+    #[error("Server disconnected: {0}")]
+    Disconnected(String),
 
     #[error("Configuration error: {0}")]
     Config(String),

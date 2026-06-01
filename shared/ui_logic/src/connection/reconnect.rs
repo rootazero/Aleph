@@ -18,7 +18,9 @@ impl ReconnectStrategy {
             return None;
         }
 
-        let delay = self.base_delay_ms * 2u64.pow(self.current_attempt);
+        let delay = self
+            .base_delay_ms
+            .saturating_mul(2u64.saturating_pow(self.current_attempt));
         self.current_attempt += 1;
         Some(delay)
     }

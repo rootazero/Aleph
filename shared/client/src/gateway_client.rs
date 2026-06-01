@@ -65,7 +65,7 @@ impl GatewayClient {
         // Connect to Gateway
         let (ws_stream, _) = timeout(Duration::from_millis(5000), connect_async(&self.url))
             .await
-            .map_err(|_| CliError::Timeout)?
+            .map_err(|e| CliError::Timeout(format!("Connection timeout: {e}")))?
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
         let (mut write, mut read) = ws_stream.split();
@@ -87,8 +87,8 @@ impl GatewayClient {
         // Wait for response with timeout
         let response = timeout(Duration::from_millis(self.timeout_ms), read.next())
             .await
-            .map_err(|_| CliError::Timeout)?
-            .ok_or(CliError::Disconnected)?
+            .map_err(|e| CliError::Timeout(format!("Read timeout: {e}")))?
+            .ok_or_else(|| CliError::Disconnected("Server closed connection".to_string()))?
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
         // Parse response
@@ -100,7 +100,11 @@ impl GatewayClient {
 
         // Check for RPC error
         if let Some(error) = json.get("error") {
-            let code = error.get("code").and_then(|c| c.as_i64()).unwrap_or(-1) as i32;
+            let code = error
+                .get("code")
+                .and_then(|c| c.as_i64())
+                .and_then(|c| c.try_into().ok())
+                .unwrap_or(-1);
             let message = error
                 .get("message")
                 .and_then(|m| m.as_str())

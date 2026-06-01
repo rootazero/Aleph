@@ -251,7 +251,9 @@ impl AlephClient {
         timeout: Duration,
     ) -> CliResult<R> {
         if !self.connected.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err(CliError::Disconnected);
+            return Err(CliError::Disconnected(
+                "Connection closed by peer".to_string(),
+            ));
         }
 
         let id = self.next_id();
@@ -284,16 +286,16 @@ impl AlephClient {
         // Wait for response with timeout
         let result = tokio::time::timeout(timeout, rx)
             .await
-            .map_err(|_| {
+            .map_err(|e| {
                 // Remove pending request on timeout
                 let pending = self.pending.clone();
                 let id = id.clone();
                 tokio::spawn(async move {
                     pending.write().await.remove(&id);
                 });
-                CliError::Timeout
+                CliError::Timeout(e.to_string())
             })?
-            .map_err(|_| CliError::Disconnected)?;
+            .map_err(|e| CliError::Disconnected(e.to_string()))?;
 
         match result {
             Ok(value) => {
