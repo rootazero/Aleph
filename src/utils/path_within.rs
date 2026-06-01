@@ -20,13 +20,9 @@ pub fn is_path_within(base: &Path, target: &Path) -> bool {
         }
     }
 
-    match normalized.strip_prefix(base) {
-        Ok(remainder) => {
-            remainder.as_os_str().is_empty()
-                || remainder.as_os_str().as_encoded_bytes().first() == Some(&b'/')
-        }
-        Err(_) => false,
-    }
+    // strip_prefix succeeds only when base is a true prefix (component-level),
+    // so any Ok result means target is either base itself or inside it.
+    normalized.strip_prefix(base).is_ok()
 }
 
 #[cfg(test)]

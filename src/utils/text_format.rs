@@ -45,7 +45,7 @@ mod tests {
 
     #[test]
     fn test_format_timestamp_invalid() {
-        let result = format_timestamp(-999999999999);
+        let result = format_timestamp(i64::MIN);
         assert_eq!(result, "Unknown");
     }
 
