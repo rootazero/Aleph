@@ -16,9 +16,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::config::types::agents_def::{
-    AgentDefaults, AgentDefinition, AgentsConfig, SubagentPolicy,
+    AgentDefaults, AgentDefinition, AgentModelRef, AgentsConfig, SubagentPolicy,
 };
 use crate::config::types::profile::ProfileConfig;
+use crate::config::types::provider::ProviderConfig;
 use crate::gateway::identity_loader::IdentityFileLoader;
 use crate::thinker::soul::SoulManifest;
 
@@ -29,6 +30,42 @@ use crate::thinker::soul::SoulManifest;
 /// Fallback model when no model is specified at any level.
 /// Empty string signals the provider registry to use the provider's own default model.
 const DEFAULT_MODEL: &str = "";
+
+// =============================================================================
+// Model Reference Validation
+// =============================================================================
+
+/// Resolve an [`AgentModelRef`] to a final model string, or `None` if unavailable.
+///
+/// - `Legacy(s)` — always returns `Some(s)` (free-form string, no validation).
+/// - `Qualified{provider, model}` — returns `Some(model)` only when the provider
+///   exists, is enabled, and the model is listed in `provider.models`. Otherwise
+///   returns `None` and emits a warning so the caller falls back to the system
+///   default chain.
+pub(crate) fn resolve_model_ref(
+    m: &AgentModelRef,
+    providers: &HashMap<String, ProviderConfig>,
+) -> Option<String> {
+    match m {
+        AgentModelRef::Legacy(s) => Some(s.clone()),
+        AgentModelRef::Qualified { provider, model } => {
+            let available = providers
+                .get(provider)
+                .is_some_and(|p| p.enabled && p.models.iter().any(|x| x == model));
+            if available {
+                Some(model.clone())
+            } else {
+                tracing::warn!(
+                    provider = %provider,
+                    model = %model,
+                    "selected agent model unavailable (provider removed/disabled or model dropped), \
+                     falling back to system default"
+                );
+                None
+            }
+        }
+    }
+}
 
 // =============================================================================
 // ResolvedAgent
@@ -115,6 +152,7 @@ impl AgentDefinitionResolver {
         &mut self,
         config: &AgentsConfig,
         profiles: &HashMap<String, ProfileConfig>,
+        providers: &HashMap<String, ProviderConfig>,
     ) -> Vec<ResolvedAgent> {
         // Only clone if we need to inject a default agent
         let owned;
@@ -147,7 +185,7 @@ impl AgentDefinitionResolver {
                     false
                 }
             })
-            .map(|agent_def| self.resolve_one(agent_def, &effective.defaults, profiles))
+            .map(|agent_def| self.resolve_one(agent_def, &effective.defaults, profiles, providers))
             .collect()
     }
 
@@ -201,6 +239,7 @@ impl AgentDefinitionResolver {
         agent: &AgentDefinition,
         defaults: &AgentDefaults,
         profiles: &HashMap<String, ProfileConfig>,
+        providers: &HashMap<String, ProviderConfig>,
     ) -> ResolvedAgent {
         // 1. Resolve workspace path and agent state directory
         let workspace_path = self.resolve_workspace_path(agent, defaults);
@@ -272,13 +311,11 @@ impl AgentDefinitionResolver {
             .cloned()
             .unwrap_or_default();
 
-        // 4. Resolve model: agent.model > defaults.model > profile.model > DEFAULT_MODEL
-        // NOTE: provider validation/fallback is added in a later task; for now
-        // both Legacy and Qualified just yield their model string.
+        // 4. Resolve model: 选中的 Qualified 失效 → 当作 None 落到系统默认链。
         let model = agent
             .model
             .as_ref()
-            .map(|m| m.model_str().to_string())
+            .and_then(|m| resolve_model_ref(m, providers))
             .or_else(|| defaults.model.clone())
             .or_else(|| profile.model.clone())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
@@ -716,7 +753,7 @@ mod tests {
 
         let profiles: HashMap<String, ProfileConfig> = HashMap::new();
         let mut resolver = AgentDefinitionResolver::new();
-        let resolved = resolver.resolve_all(&config, &profiles);
+        let resolved = resolver.resolve_all(&config, &profiles, &std::collections::HashMap::new());
 
         assert_eq!(resolved.len(), 2);
 
@@ -753,7 +790,7 @@ mod tests {
 
         let profiles: HashMap<String, ProfileConfig> = HashMap::new();
         let mut resolver = AgentDefinitionResolver::new();
-        let resolved = resolver.resolve_all(&config, &profiles);
+        let resolved = resolver.resolve_all(&config, &profiles, &std::collections::HashMap::new());
 
         assert_eq!(resolved.len(), 1);
 
@@ -815,7 +852,7 @@ mod tests {
 
         let profiles = HashMap::new();
         let mut resolver = AgentDefinitionResolver::new();
-        let resolved = resolver.resolve_all(&config, &profiles);
+        let resolved = resolver.resolve_all(&config, &profiles, &std::collections::HashMap::new());
 
         assert_eq!(resolved.len(), 1);
         let agent = &resolved[0];
@@ -863,7 +900,7 @@ mod tests {
 
         let profiles = HashMap::new();
         let mut resolver = AgentDefinitionResolver::new();
-        let resolved = resolver.resolve_all(&config, &profiles);
+        let resolved = resolver.resolve_all(&config, &profiles, &std::collections::HashMap::new());
         let agent = &resolved[0];
 
         // sessions/ should have been copied to agent_dir
@@ -905,10 +942,86 @@ mod tests {
 
         let profiles = HashMap::new();
         let mut resolver = AgentDefinitionResolver::new();
-        resolver.resolve_all(&config, &profiles);
+        resolver.resolve_all(&config, &profiles, &std::collections::HashMap::new());
 
         // No migration should happen for empty sessions dir
         // agent_dir/sessions/ should exist (from initialize_agent_dir)
         assert!(agents_root.join("empty").join("sessions").is_dir());
+    }
+
+    // -------------------------------------------------------------------------
+    // resolve_model_ref tests
+    // -------------------------------------------------------------------------
+
+    fn test_provider() -> crate::config::types::provider::ProviderConfig {
+        crate::config::types::provider::ProviderConfig {
+            protocol: None,
+            api_key: None,
+            models: vec![],
+            base_url: None,
+            color: "#000000".to_string(),
+            timeout_seconds: 60,
+            stream_idle_timeout_secs: None,
+            cache_retention: None,
+            enabled: true,
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            frequency_penalty: None,
+            presence_penalty: None,
+            stop_sequences: None,
+            thinking_level: None,
+            media_resolution: None,
+            repeat_penalty: None,
+            system_prompt_mode: None,
+            model_behavior: None,
+            verified: false,
+            service_tier: None,
+            response_format: None,
+            parallel_tool_calls: None,
+            seed: None,
+            logprobs: None,
+            top_logprobs: None,
+            metadata_user_id: None,
+            effort: None,
+        }
+    }
+
+    #[test]
+    fn resolve_model_ref_legacy_passes_through() {
+        use crate::config::types::agents_def::AgentModelRef;
+        let providers = std::collections::HashMap::new();
+        let m = AgentModelRef::Legacy("anything".to_string());
+        assert_eq!(super::resolve_model_ref(&m, &providers), Some("anything".to_string()));
+    }
+
+    #[test]
+    fn resolve_model_ref_qualified_hits_when_valid() {
+        use crate::config::types::agents_def::AgentModelRef;
+        use crate::config::types::provider::ProviderConfig;
+        let mut providers = std::collections::HashMap::new();
+        providers.insert("anthropic".to_string(), ProviderConfig {
+            enabled: true,
+            models: vec!["claude-sonnet-4".to_string()],
+            ..test_provider()
+        });
+        let m = AgentModelRef::Qualified { provider: "anthropic".to_string(), model: "claude-sonnet-4".to_string() };
+        assert_eq!(super::resolve_model_ref(&m, &providers), Some("claude-sonnet-4".to_string()));
+    }
+
+    #[test]
+    fn resolve_model_ref_falls_back_when_provider_missing_disabled_or_model_dropped() {
+        use crate::config::types::agents_def::AgentModelRef;
+        use crate::config::types::provider::ProviderConfig;
+        let mut providers = std::collections::HashMap::new();
+        providers.insert("anthropic".to_string(), ProviderConfig { enabled: false, models: vec!["claude-sonnet-4".to_string()], ..test_provider() });
+        providers.insert("openai".to_string(), ProviderConfig { enabled: true, models: vec!["gpt-5".to_string()], ..test_provider() });
+        let disabled = AgentModelRef::Qualified { provider: "anthropic".into(), model: "claude-sonnet-4".into() };
+        let missing_provider = AgentModelRef::Qualified { provider: "ghost".into(), model: "x".into() };
+        let model_dropped = AgentModelRef::Qualified { provider: "openai".into(), model: "gpt-4".into() };
+        assert_eq!(super::resolve_model_ref(&disabled, &providers), None);
+        assert_eq!(super::resolve_model_ref(&missing_provider, &providers), None);
+        assert_eq!(super::resolve_model_ref(&model_dropped, &providers), None);
     }
 }

@@ -95,7 +95,7 @@ fn test_full_agent_pipeline() {
     // 3. Resolve agents
     let profiles = HashMap::new();
     let mut resolver = AgentDefinitionResolver::new();
-    let resolved = resolver.resolve_all(&config.agents, &profiles);
+    let resolved = resolver.resolve_all(&config.agents, &profiles, &config.providers);
     assert_eq!(resolved.len(), 2);
     assert_eq!(resolved[0].model, "claude-opus-4-6");
 

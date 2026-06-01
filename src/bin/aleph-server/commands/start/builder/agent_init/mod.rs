@@ -1171,7 +1171,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         if !app_config.agents.list.is_empty() {
             // New path: use ResolvedAgents from AgentDefinitionResolver
             let mut resolver = alephcore::AgentDefinitionResolver::new();
-            let resolved_agents = resolver.resolve_all(&app_config.agents, &app_config.profiles);
+            let resolved_agents = resolver.resolve_all(&app_config.agents, &app_config.profiles, &app_config.providers);
             for agent in &resolved_agents {
                 let config = alephcore::gateway::AgentInstanceConfig::from_resolved(agent);
                 let agent_id = config.agent_id.clone();

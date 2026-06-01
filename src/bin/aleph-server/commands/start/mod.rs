@@ -565,7 +565,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Resolve agent definitions from config (initializes workspace directories)
     let mut agent_resolver = alephcore::AgentDefinitionResolver::new();
     let resolved_agents =
-        agent_resolver.resolve_all(&loaded_app_config.agents, &loaded_app_config.profiles);
+        agent_resolver.resolve_all(&loaded_app_config.agents, &loaded_app_config.profiles, &loaded_app_config.providers);
 
     // Find default agent
     let default_agent_id = resolved_agents
