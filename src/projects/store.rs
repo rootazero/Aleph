@@ -181,6 +181,26 @@ impl ProjectStore {
         Ok(())
     }
 
+    /// Read the catalogue under the advisory lock **without** writing it back.
+    /// Used by pure reads (`list`, `get`). Writing on read would bump the
+    /// file's mtime and retrigger the extension watcher's recursive `~/.aleph`
+    /// watch in a tight feedback loop (a mere `list()` on every hot-reload
+    /// would rewrite the file, firing another reload).
+    fn with_locked_read<T, F>(&self, f: F) -> Result<T, ProjectError>
+    where
+        F: FnOnce(&StoreFile) -> T,
+    {
+        self.ensure_parent()?;
+        let lock_path = self.lock_path();
+        let value: T = with_file_lock(&lock_path, |_| {
+            let file = self
+                .read_unlocked()
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+            Ok(f(&file))
+        })?;
+        Ok(value)
+    }
+
     fn with_locked_file<T, F>(&self, f: F) -> Result<T, ProjectError>
     where
         F: FnOnce(&mut StoreFile) -> Result<T, ProjectError>,
@@ -206,8 +226,7 @@ impl ProjectStore {
 
     /// Return projects ordered by `last_used_at` descending.
     pub fn list(&self) -> Result<Vec<Project>, ProjectError> {
-        let file = self.with_locked_file(|f| Ok(f.clone()))?;
-        let mut projects = file.projects;
+        let mut projects = self.with_locked_read(|f| f.projects.clone())?;
         projects.sort_by(|a, b| b.last_used_at.cmp(&a.last_used_at));
         Ok(projects)
     }
@@ -286,8 +305,7 @@ impl ProjectStore {
 
     /// Look up a project by ID.
     pub fn get(&self, id: &str) -> Result<Option<Project>, ProjectError> {
-        let file = self.with_locked_file(|f| Ok(f.clone()))?;
-        Ok(file.projects.into_iter().find(|p| p.id == id))
+        self.with_locked_read(|f| f.projects.iter().find(|p| p.id == id).cloned())
     }
 
     /// Look up a project by its canonical absolute path.
@@ -457,6 +475,44 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed[0].id, pb.id);
         assert_eq!(listed[1].id, pa.id);
+    }
+
+    /// A pure read must never create the store file. The extension watcher
+    /// recursively watches `~/.aleph`; if `list()` materialised
+    /// `projects.json` on first read it would fire a reload, which calls
+    /// `list()` again — a tight feedback loop.
+    #[test]
+    fn list_does_not_create_file_when_missing() {
+        let dir = tempdir().unwrap();
+        let store = fresh_store(dir.path());
+        let _ = store.list().unwrap();
+        assert!(
+            !dir.path().join("projects.json").exists(),
+            "list() must not write the store file on a pure read"
+        );
+    }
+
+    /// A pure read must not rewrite an existing store file. An atomic rewrite
+    /// bumps the file's mtime, retriggering the recursive extension watcher in
+    /// the same feedback loop. Reproduces the projects.json hot-reload storm.
+    #[test]
+    fn list_does_not_rewrite_existing_file() {
+        let dir = tempdir().unwrap();
+        let store = fresh_store(dir.path());
+        let p = dir.path().join("x");
+        std::fs::create_dir_all(&p).unwrap();
+        store.add(&p, None).unwrap();
+
+        let store_path = dir.path().join("projects.json");
+        let m0 = std::fs::metadata(&store_path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        store.list().unwrap();
+        store.get("nonexistent").unwrap();
+        let m1 = std::fs::metadata(&store_path).unwrap().modified().unwrap();
+        assert_eq!(
+            m0, m1,
+            "list()/get() must not rewrite projects.json (would retrigger watcher loop)"
+        );
     }
 
     #[test]
