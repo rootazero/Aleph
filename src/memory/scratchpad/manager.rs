@@ -42,13 +42,51 @@ impl Default for ScratchpadConfig {
     }
 }
 
+/// Lifecycle state of a plan item — mirrors Claude Code's `TodoWrite`
+/// 3-state model (`pending` → `in_progress` → `completed`). Modeled as an
+/// enum rather than parallel bools so the illegal `done && in_progress`
+/// state is unrepresentable (leverages Rust's type system; see the task
+/// directive on exceeding the reference via stronger type safety).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlanItemStatus {
+    /// `- [ ]` — not started.
+    Pending,
+    /// `- [~]` — the single step currently being worked.
+    InProgress,
+    /// `- [x]` — finished.
+    Done,
+}
+
+impl PlanItemStatus {
+    /// Markdown checkbox glyph (without the leading `- `) for this state.
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Pending => "[ ]",
+            Self::InProgress => "[~]",
+            Self::Done => "[x]",
+        }
+    }
+}
+
 /// A single plan item parsed from the scratchpad's `## Plan` section.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlanItem {
-    /// Item text (the part after the `- [ ]` / `- [x]` marker).
+    /// Item text (the part after the `- [ ]` / `- [~]` / `- [x]` marker).
     pub text: String,
-    /// `true` when the checkbox is `[x]`.
-    pub done: bool,
+    /// Lifecycle state of this item.
+    pub status: PlanItemStatus,
+}
+
+impl PlanItem {
+    /// `true` when the item is finished (`[x]`).
+    pub fn is_done(&self) -> bool {
+        self.status == PlanItemStatus::Done
+    }
+
+    /// `true` when this is the active step (`[~]`).
+    pub fn is_in_progress(&self) -> bool {
+        self.status == PlanItemStatus::InProgress
+    }
 }
 
 /// Structural snapshot of a scratchpad's objective + plan, used by the
@@ -62,16 +100,53 @@ pub struct ScratchpadSnapshot {
 }
 
 impl ScratchpadSnapshot {
-    /// Plan items whose checkbox is still `[ ]`.
+    /// Plan items not yet finished (pending **or** in-progress).
     pub fn incomplete(&self) -> Vec<&PlanItem> {
-        self.items.iter().filter(|i| !i.done).collect()
+        self.items.iter().filter(|i| !i.is_done()).collect()
+    }
+
+    /// The single in-progress item, if any — the "current step".
+    pub fn current(&self) -> Option<&PlanItem> {
+        self.items.iter().find(|i| i.is_in_progress())
     }
 
     /// `true` when an objective is set AND at least one real plan item is
-    /// still unchecked. This is the structural condition the goal-loop
+    /// not yet finished. This is the structural condition the goal-loop
     /// hook fires on — not a semantic completion judgment.
     pub fn has_pending_work(&self) -> bool {
-        self.objective.is_some() && self.items.iter().any(|i| !i.done)
+        self.objective.is_some() && self.items.iter().any(|i| !i.is_done())
+    }
+
+    /// Compact, judgment-free progress block echoed back to the model after
+    /// each mutating scratchpad action (Claude Code `TodoWrite` parity: the
+    /// tool always returns the updated list, giving the loop continuous
+    /// visibility without touching the harness prompt builder). Pure render.
+    pub fn render_progress(&self) -> String {
+        let mut out = String::new();
+        if let Some(obj) = &self.objective {
+            out.push_str("Objective: ");
+            out.push_str(obj);
+            out.push('\n');
+        }
+        if self.items.is_empty() {
+            out.push_str("Plan: (none)");
+            return out;
+        }
+        out.push_str("Plan:\n");
+        for item in &self.items {
+            out.push_str("- ");
+            out.push_str(item.status.glyph());
+            out.push(' ');
+            out.push_str(&item.text);
+            out.push('\n');
+        }
+        let done = self.items.iter().filter(|i| i.is_done()).count();
+        out.push_str(&format!("Progress: {}/{} done", done, self.items.len()));
+        if let Some(cur) = self.current() {
+            out.push_str(" · current: ");
+            out.push_str(&cur.text);
+        }
+        out
     }
 }
 
@@ -287,30 +362,65 @@ impl ScratchpadManager {
         self.write(&content).await
     }
 
-    /// Mark a plan item as complete
+    /// Mark a plan item as complete (`[x]`).
     pub async fn complete_item(&self, item_index: usize) -> Result<(), AlephError> {
-        let mut content = self.read().await?;
+        self.set_item_status(item_index, PlanItemStatus::Done).await
+    }
 
-        // Find and replace the nth "- [ ]" with "- [x]"
-        let mut new_content = String::new();
-        let mut last_end = 0;
+    /// Mark a plan item as the in-progress current step (`[~]`).
+    ///
+    /// Mirrors Claude Code's `TodoWrite` "exactly one in_progress" discipline
+    /// at the action level: the model marks which step it is actively working.
+    pub async fn start_item(&self, item_index: usize) -> Result<(), AlephError> {
+        self.set_item_status(item_index, PlanItemStatus::InProgress)
+            .await
+    }
 
-        for (count, (start, _)) in content.match_indices("- [ ]").enumerate() {
-            if count == item_index {
-                new_content.push_str(&content[last_end..start]);
-                new_content.push_str("- [x]");
-                last_end = start + 5;
-                break;
+    /// Rewrite the nth plan checkbox to `status`, counting **every** item
+    /// marker (`- [ ]` / `- [~]` / `- [x]`) in document order and skipping
+    /// the `- [ ] ...` placeholder.
+    ///
+    /// Indexing over all states — not just `- [ ]` as the original
+    /// `complete_item` did — keeps `item_index` stable once an item moves to
+    /// `[~]`/`[x]`; otherwise completing an already-started step would skip
+    /// to the wrong pending item. Byte-preserving (only the matched marker is
+    /// rewritten).
+    async fn set_item_status(
+        &self,
+        item_index: usize,
+        status: PlanItemStatus,
+    ) -> Result<(), AlephError> {
+        let content = self.read().await?;
+        let mut out = String::with_capacity(content.len());
+        let mut count = 0usize;
+
+        for line in content.split_inclusive('\n') {
+            let trimmed = line.trim_start();
+            let body = trimmed.trim_end_matches(['\n', '\r']);
+            let is_item = body.starts_with("- [ ]")
+                || body.starts_with("- [~]")
+                || body.starts_with("- [x]");
+            // The placeholder never consumes an index (matches parse_snapshot).
+            if is_item && body != "- [ ] ..." {
+                let this = count;
+                count += 1;
+                if this == item_index {
+                    let indent = &line[..line.len() - trimmed.len()];
+                    // All three markers are exactly 5 ASCII bytes; the slice
+                    // keeps the item text and any trailing newline intact.
+                    let after_marker = &trimmed[5..];
+                    out.push_str(indent);
+                    out.push_str("- ");
+                    out.push_str(status.glyph());
+                    out.push_str(after_marker);
+                    continue;
+                }
             }
+            out.push_str(line);
         }
 
-        if last_end > 0 {
-            new_content.push_str(&content[last_end..]);
-            content = new_content;
-        }
-
-        content = self.update_timestamp(content);
-        self.write(&content).await
+        let out = self.update_timestamp(out);
+        self.write(&out).await
     }
 
     /// Clear scratchpad (reset to empty template)
@@ -359,18 +469,22 @@ pub(crate) fn parse_snapshot(content: &str) -> ScratchpadSnapshot {
                 .filter_map(|line| {
                     let line = line.trim();
                     if let Some(text) = line.strip_prefix("- [ ] ") {
-                        Some((text.trim(), false))
+                        Some((text.trim(), PlanItemStatus::Pending))
+                    } else if let Some(text) = line.strip_prefix("- [~] ") {
+                        Some((text.trim(), PlanItemStatus::InProgress))
                     } else if let Some(text) = line.strip_prefix("- [x] ") {
-                        Some((text.trim(), true))
+                        Some((text.trim(), PlanItemStatus::Done))
                     } else {
                         None
                     }
                 })
                 // Drop the default `- [ ] ...` placeholder.
-                .filter(|(text, done)| !(!*done && *text == "..."))
-                .map(|(text, done)| PlanItem {
+                .filter(|(text, status)| {
+                    !(*status == PlanItemStatus::Pending && *text == "...")
+                })
+                .map(|(text, status)| PlanItem {
                     text: text.to_string(),
-                    done,
+                    status,
                 })
                 .collect::<Vec<PlanItem>>()
         })
@@ -419,6 +533,54 @@ mod tests {
         let snap = parse_snapshot(md);
         assert_eq!(snap.objective, None);
         assert!(!snap.has_pending_work());
+    }
+
+    #[test]
+    fn parse_snapshot_in_progress_counts_as_pending_and_is_current() {
+        let md = "## Objective\nShip\n\n## Plan\n- [x] A\n- [~] B\n- [ ] C\n\n## Working State\n";
+        let snap = parse_snapshot(md);
+        assert_eq!(snap.items.len(), 3);
+        // in_progress is not done → still pending work (keeps the loop alive).
+        assert!(snap.has_pending_work());
+        assert_eq!(snap.incomplete().len(), 2, "[~] and [ ] are both incomplete");
+        let cur = snap.current().expect("an in-progress step");
+        assert_eq!(cur.text, "B");
+        assert_eq!(cur.status, PlanItemStatus::InProgress);
+    }
+
+    #[test]
+    fn render_progress_shows_glyphs_count_and_current() {
+        let md = "## Objective\nShip\n\n## Plan\n- [x] A\n- [~] B\n- [ ] C\n\n## Working State\n";
+        let rendered = parse_snapshot(md).render_progress();
+        assert!(rendered.contains("Objective: Ship"));
+        assert!(rendered.contains("- [x] A"));
+        assert!(rendered.contains("- [~] B"));
+        assert!(rendered.contains("- [ ] C"));
+        assert!(rendered.contains("Progress: 1/3 done"));
+        assert!(rendered.contains("current: B"));
+    }
+
+    #[tokio::test]
+    async fn start_then_complete_targets_the_same_item() {
+        // Regression for the original complete_item bug: once an item is
+        // marked [~], completing it by the same index must still hit it (the
+        // old `- [ ]`-only scan would have completed the next pending item).
+        let temp = tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess");
+        manager.set_plan(&["alpha", "beta", "gamma"]).await.unwrap();
+
+        manager.start_item(1).await.unwrap();
+        let snap = manager.snapshot().await.unwrap();
+        assert_eq!(snap.current().unwrap().text, "beta");
+
+        manager.complete_item(1).await.unwrap();
+        let snap = manager.snapshot().await.unwrap();
+        assert!(snap.current().is_none(), "no item should remain in progress");
+        assert_eq!(snap.items[1].text, "beta");
+        assert_eq!(snap.items[1].status, PlanItemStatus::Done);
+        // alpha + gamma still pending — beta did not bleed into a sibling.
+        assert_eq!(snap.items[0].status, PlanItemStatus::Pending);
+        assert_eq!(snap.items[2].status, PlanItemStatus::Pending);
     }
 
     #[tokio::test]
