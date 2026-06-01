@@ -10,6 +10,8 @@ use crate::sync_primitives::{AtomicBool, Ordering as AtomicOrdering};
 use rusqlite::params;
 use rusqlite::OptionalExtension;
 
+// OnceLock is in the documented exception list for sync_primitives
+// (see crate::sync_primitives module docs); AtomicBool is from crate::sync_primitives.
 static FIRST_EVENT_LOGGED: std::sync::OnceLock<AtomicBool> = std::sync::OnceLock::new();
 
 fn first_event_logged() -> &'static AtomicBool {
@@ -57,7 +59,7 @@ impl StateDatabase {
         let last_id = conn.last_insert_rowid();
         drop(conn);
 
-        if !first_event_logged().swap(true, AtomicOrdering::Relaxed) {
+        if !first_event_logged().swap(true, AtomicOrdering::SeqCst) {
             tracing::info!(
                 subsystem = "resilience",
                 event = "first_event_recorded",

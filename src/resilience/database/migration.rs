@@ -340,7 +340,7 @@ pub fn migrate_add_channel_offsets(conn: &Connection) -> Result<(), AlephError> 
                 channel_id TEXT PRIMARY KEY,
                 bot_id TEXT NOT NULL,
                 last_update_id INTEGER NOT NULL DEFAULT 0,
-                updated_at TEXT NOT NULL
+                updated_at INTEGER NOT NULL
             )
             "#,
         )

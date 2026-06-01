@@ -253,7 +253,7 @@ impl StateDatabase {
             )
             .map_err(|e| AlephError::other(format!("Failed to get latest seq: {e}")))?;
 
-        Ok(result.unwrap_or(0) as u64)
+        Ok(u64::try_from(result.unwrap_or(0)).unwrap_or(0))
     }
 
     /// Check if any migration events exist (indicates migration has been run).
@@ -284,7 +284,7 @@ impl StateDatabase {
                 .query_row("SELECT COUNT(*) FROM memory_events", [], |row| row.get(0))
                 .map_err(|e| AlephError::other(format!("Failed to count events: {e}")))?,
         };
-        Ok(count as usize)
+        Ok(usize::try_from(count).unwrap_or(usize::MAX))
     }
 }
 
