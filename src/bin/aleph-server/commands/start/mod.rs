@@ -1080,7 +1080,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             Ok(orch) => {
                 // Inject orchestrator into ExecutionEngine via the shared OnceLock.
                 if let Some(ref cell) = agent_result.orchestrator_cell {
-                    if let Err(_) = cell.set(orch.clone()) {
+                    if cell.set(orch.clone()).is_err() {
                         tracing::warn!("Failed to set orchestrator cell: cell already initialized");
                     }
                 }

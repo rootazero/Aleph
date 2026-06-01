@@ -104,7 +104,13 @@ pub async fn handle_sandbox_debug(
 
     // 2. Build + execute the command.
     let session_id = alephcore::routing::session_key::SessionKey::ephemeral("sandbox-debug");
-    let (program, args) = split_program_args(&command);
+    let (program, args) = match split_program_args(&command) {
+        Some(p) => p,
+        None => {
+            eprintln!("Error: no command given (pass after `--`)");
+            std::process::exit(2);
+        }
+    };
     let cmd = SandboxCommand {
         session_id,
         program: program.to_string(),
@@ -184,8 +190,11 @@ fn parse_network(s: Option<&str>) -> Result<NetworkPolicy, String> {
     }
 }
 
-fn split_program_args(cmd: &[String]) -> (&str, &[String]) {
-    (cmd[0].as_str(), &cmd[1..])
+fn split_program_args(cmd: &[String]) -> Option<(&str, &[String])> {
+    if cmd.is_empty() {
+        return None;
+    }
+    Some((cmd[0].as_str(), &cmd[1..]))
 }
 
 #[cfg(test)]
@@ -232,8 +241,14 @@ mod tests {
     #[test]
     fn split_program_args_splits_first_from_rest() {
         let cmd = vec!["ls".to_string(), "-la".to_string(), "/tmp".to_string()];
-        let (prog, args) = split_program_args(&cmd);
+        let (prog, args) = split_program_args(&cmd).unwrap();
         assert_eq!(prog, "ls");
         assert_eq!(args, &["-la".to_string(), "/tmp".to_string()]);
+    }
+
+    #[test]
+    fn split_program_args_returns_none_for_empty() {
+        let cmd: Vec<String> = vec![];
+        assert!(split_program_args(&cmd).is_none());
     }
 }
