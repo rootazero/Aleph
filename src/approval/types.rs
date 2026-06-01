@@ -6,6 +6,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 /// Classification of actions that require approval.
 ///
@@ -24,6 +25,24 @@ pub enum ActionType {
     DesktopKeyCombo,
     DesktopLaunchApp,
     ShellExec,
+}
+
+impl fmt::Display for ActionType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            ActionType::BrowserNavigate => "browser navigate",
+            ActionType::BrowserClick => "browser click",
+            ActionType::BrowserType => "browser type",
+            ActionType::BrowserFill => "browser fill",
+            ActionType::BrowserEvaluate => "browser evaluate",
+            ActionType::DesktopClick => "desktop click",
+            ActionType::DesktopType => "desktop type",
+            ActionType::DesktopKeyCombo => "desktop key combo",
+            ActionType::DesktopLaunchApp => "desktop launch app",
+            ActionType::ShellExec => "shell exec",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 /// The result of an approval policy check.

@@ -349,4 +349,11 @@ mod tests {
         let result: Result<PolicyConfig, _> = serde_json::from_str(json);
         assert!(result.is_err(), "Serde should reject capitalized 'Deny'");
     }
+
+    #[test]
+    fn test_action_type_display() {
+        assert_eq!(ActionType::BrowserNavigate.to_string(), "browser navigate");
+        assert_eq!(ActionType::ShellExec.to_string(), "shell exec");
+        assert_eq!(ActionType::DesktopLaunchApp.to_string(), "desktop launch app");
+    }
 }
