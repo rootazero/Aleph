@@ -356,7 +356,7 @@ impl AcpAdapterManager {
                 }
             };
 
-            let timeout = std::time::Duration::from_secs(30);
+            let timeout = harness.build_config(Some(&entry.cwd)).timeout;
             if session
                 .load_acp_session(&entry.acp_session_id, &entry.cwd, timeout)
                 .await

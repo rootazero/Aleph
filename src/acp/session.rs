@@ -104,7 +104,10 @@ impl CancelHandle {
         let sid = self
             .acp_session_id
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                warn!(harness_id = %self.harness_id, "ACP cancel: session_id lock poisoned, recovering");
+                e.into_inner()
+            })
             .clone();
         let Some(session_id) = sid else {
             debug!(harness_id = %self.harness_id, "ACP cancel handle: no session yet, skipping");
@@ -232,7 +235,10 @@ impl AcpSession {
         if let Some(sid) = self
             .acp_session_id
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                warn!(harness_id = %self.harness_id, "ACP create: session_id lock poisoned, recovering");
+                e.into_inner()
+            })
             .clone()
         {
             return Ok(sid);
@@ -261,7 +267,10 @@ impl AcpSession {
         *self
             .acp_session_id
             .write()
-            .unwrap_or_else(|e| e.into_inner()) = Some(session_id.clone());
+            .unwrap_or_else(|e| {
+                warn!(harness_id = %self.harness_id, "ACP create: session_id lock poisoned, recovering");
+                e.into_inner()
+            }) = Some(session_id.clone());
         Ok(session_id)
     }
 
@@ -288,7 +297,10 @@ impl AcpSession {
                 *self
                     .acp_session_id
                     .write()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(sid.clone());
+                    .unwrap_or_else(|e| {
+                        warn!(harness_id = %self.harness_id, "ACP load: session_id lock poisoned, recovering");
+                        e.into_inner()
+                    }) = Some(sid.clone());
                 Ok(sid)
             }
             Err(e) => {
@@ -396,7 +408,10 @@ impl AcpSession {
         let session_id = match self
             .acp_session_id
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                warn!(harness_id = %self.harness_id, "ACP cancel: session_id lock poisoned, recovering");
+                e.into_inner()
+            })
             .clone()
         {
             Some(id) => id,
@@ -507,7 +522,10 @@ impl AcpSession {
     pub fn acp_session_id(&self) -> Option<String> {
         self.acp_session_id
             .read()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(|e| {
+                warn!(harness_id = %self.harness_id, "ACP session_id lock poisoned, recovering");
+                e.into_inner()
+            })
             .clone()
     }
 

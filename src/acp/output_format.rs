@@ -22,10 +22,12 @@ impl OutputFormat {
             OutputFormat::PlainText => trimmed.to_string(),
             OutputFormat::JsonField { field } => {
                 if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
-                    if let Some(value) = json.get(field).and_then(|v| v.as_str()) {
-                        return value.to_string();
+                    if let Some(field_value) = json.get(field) {
+                        if let Some(text) = field_value.as_str() {
+                            return text.to_string();
+                        }
+                        return field_value.to_string();
                     }
-                    // Field not found or not a string — return full JSON
                     return json.to_string();
                 }
                 // Not valid JSON — return raw text

@@ -86,7 +86,7 @@ impl AcpAdapter for CustomAcpAdapter {
             &crate::acp::output_format::OutputFormat::from(&self.config.output_format),
             prompt,
             cwd,
-            Duration::from_secs(self.config.timeout_seconds),
+            Duration::from_secs(self.config.timeout_seconds.max(1)),
         )
         .await
     }

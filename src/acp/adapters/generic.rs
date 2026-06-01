@@ -51,7 +51,7 @@ impl GenericAcpAdapter {
             oneshot_args: entry.args.clone(),
             native_acp_args: vec!["--acp".to_string()],
             output_format: OutputFormat::from(&entry.output_format),
-            timeout: Duration::from_secs(entry.timeout_seconds),
+            timeout: Duration::from_secs(entry.timeout_seconds.max(1)),
         }
     }
 

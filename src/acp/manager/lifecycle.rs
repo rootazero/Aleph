@@ -59,27 +59,30 @@ impl AcpAdapterManager {
         let key = SessionKey::with_name(harness_id, cwd, session_name);
 
         // Fast path: existing entry whose process is still alive.
-        let existing = self.sessions.read().await.get(&key).cloned();
-        if let Some(entry) = existing {
-            let is_live = {
-                let mut s = entry.session.lock().await;
-                s.is_alive() && s.state() != crate::acp::protocol::AcpSessionState::Error
-            };
-            if is_live {
-                return Ok(entry);
+        // Re-check under write lock to close the race between read and write.
+        {
+            let mut sessions = self.sessions.write().await;
+            if let Some(entry) = sessions.get(&key).cloned() {
+                let is_live = {
+                    let mut s = entry.session.lock().await;
+                    s.is_alive() && s.state() != crate::acp::protocol::AcpSessionState::Error
+                };
+                if is_live {
+                    return Ok(entry);
+                }
+                // Dead — evict, then fall through to spawn a replacement.
+                warn!(
+                    harness_id,
+                    "ACP session died or entered error state, respawning"
+                );
+                self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
+                    harness_id: harness_id.to_string(),
+                    cwd: cwd.to_string(),
+                    session_name: session_name.map(str::to_string),
+                })
+                .await;
+                sessions.remove(&key);
             }
-            // Dead — evict, then fall through to spawn a replacement.
-            warn!(
-                harness_id,
-                "ACP session died or entered error state, respawning"
-            );
-            self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
-                harness_id: harness_id.to_string(),
-                cwd: cwd.to_string(),
-                session_name: session_name.map(str::to_string),
-            })
-            .await;
-            self.sessions.write().await.remove(&key);
         }
 
         // Slow path: spawn outside any lock, then double-check.
