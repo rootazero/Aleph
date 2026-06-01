@@ -246,10 +246,13 @@ impl ChromeMcpDriver {
 
     /// Destroy a session (for cleanup after transport errors).
     pub async fn destroy_session(&self, profile_name: &str) {
-        let mut sessions = self.sessions.write().await;
-        if let Some(session) = sessions.remove(profile_name) {
+        let session = {
+            let mut sessions = self.sessions.write().await;
+            sessions.remove(profile_name)
+        };
+        if let Some(session) = session {
             let _ = session.client.stop_all().await;
-            tracing::info!("Chrome MCP session destroyed for profile '{profile_name}'");
+            tracing::info!("Chrome MCP session destroyed for profile '{}'", profile_name);
         }
     }
 }

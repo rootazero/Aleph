@@ -192,9 +192,11 @@ impl ProfileManager {
             if let Some(BrowserDriver::ExistingSession) = self.get_driver(&name) {
                 self.chrome_mcp_driver.destroy_session(&name).await;
             }
-            if let Some(state) = self.get_state(&name) {
-                if state.is_running() {
-                    self.set_state(&name, ProfileState::Idle);
+            // Atomically check-and-set state inside a single write lock.
+            let mut profiles = self.profiles.write().unwrap_or_else(|e| e.into_inner());
+            if let Some(profile) = profiles.get_mut(&name) {
+                if profile.state.is_running() {
+                    profile.state = ProfileState::Idle;
                 }
             }
         }

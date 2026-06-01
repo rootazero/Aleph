@@ -137,7 +137,7 @@ impl PlaywrightCliDriver {
             }
         }
 
-        let child = cmd.spawn().map_err(|e| match e.kind() {
+        let mut child = cmd.spawn().map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => BrowserError::PlaywrightCliNotInstalled,
             _ => BrowserError::Io(e),
         })?;
@@ -145,7 +145,10 @@ impl PlaywrightCliDriver {
         let output_fut = child.wait_with_output();
         let output = match tokio::time::timeout(timeout, output_fut).await {
             Ok(res) => res.map_err(BrowserError::Io)?,
-            Err(_) => return Err(BrowserError::Timeout(timeout.as_millis() as u64)),
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err(BrowserError::Timeout(timeout.as_millis() as u64));
+            }
         };
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();

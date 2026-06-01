@@ -95,11 +95,10 @@ impl BrowserBackend for ChromeMcpBackend {
         self.ssrf_guard
             .check_url(url)
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
-        let result = self.call("new_page", json!({ "url": url })).await?;
-        let text = Self::extract_text(&result);
+        let _result = self.call("new_page", json!({ "url": url })).await?;
         // Re-list to find the new page's ID
         let tabs_text = self.list_tabs().await?;
-        // Parse last numeric id from "N: URL" lines
+        // Parse last numeric id from "N: URL" lines (newest tab is last)
         let last_id = tabs_text
             .lines()
             .filter_map(|line| {
@@ -114,24 +113,9 @@ impl BrowserBackend for ChromeMcpBackend {
             })
             .next_back();
 
-        match last_id {
-            Some(id) => Ok(id),
-            None => {
-                let id = text
-                    .lines()
-                    .filter(|l| l.contains(url))
-                    .filter_map(|l| l.split(':').next())
-                    .next()
-                    .map(|s| s.trim().to_string());
-
-                match id {
-                    Some(id) if !id.is_empty() && id.chars().all(|c| c.is_ascii_digit()) => Ok(id),
-                    _ => Err(BrowserError::TabNotFound(format!(
-                        "Could not determine tab ID after opening {url}"
-                    ))),
-                }
-            }
-        }
+        last_id.ok_or_else(|| BrowserError::TabNotFound(format!(
+            "Could not determine tab ID after opening {url}"
+        )))
     }
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {

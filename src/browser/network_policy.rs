@@ -88,7 +88,7 @@ impl From<ssrf::SsrfError> for PolicyViolation {
                 }
             }
             ssrf::SsrfError::DnsResolutionFailed { host, .. } => {
-                PolicyViolation::PrivateNetwork(host.clone())
+                PolicyViolation::InvalidUrl(format!("DNS resolution failed for host: {host}"))
             }
             ssrf::SsrfError::TooManyRedirects(_) | ssrf::SsrfError::FetchFailed(_) => {
                 PolicyViolation::InvalidUrl(err.to_string())
