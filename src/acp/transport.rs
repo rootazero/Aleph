@@ -203,7 +203,7 @@ impl StdioTransport {
             Err(_) => {
                 // Timeout: drain any stale responses so the next request
                 // doesn't receive a mismatched id.
-                while let Ok(Some(_)) = self.event_rx.try_recv() {
+                while self.event_rx.try_recv().is_ok() {
                     debug!("ACP transport: drained stale response after timeout");
                 }
                 Err(Self::timeout_err(timeout))
@@ -252,7 +252,7 @@ impl StdioTransport {
             Err(_) => {
                 // Timeout: drain any stale responses so the next request
                 // doesn't receive a mismatched id.
-                while let Ok(Some(_)) = self.event_rx.try_recv() {
+                while self.event_rx.try_recv().is_ok() {
                     debug!("ACP transport: drained stale response after timeout");
                 }
                 Err(Self::timeout_err(timeout))

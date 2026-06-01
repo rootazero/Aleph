@@ -128,7 +128,11 @@ impl PlaywrightCliDriver {
             .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // Kill the child if its owning future is dropped — e.g. on the
+            // timeout branch below, where `wait_with_output` has consumed
+            // `child` so it can no longer be killed explicitly.
+            .kill_on_drop(true);
         // Strip secret-bearing env vars from the browser child process. The
         // browser never needs the parent's credentials; over-stripping is safe.
         for (name, _) in std::env::vars() {
@@ -137,7 +141,7 @@ impl PlaywrightCliDriver {
             }
         }
 
-        let mut child = cmd.spawn().map_err(|e| match e.kind() {
+        let child = cmd.spawn().map_err(|e| match e.kind() {
             std::io::ErrorKind::NotFound => BrowserError::PlaywrightCliNotInstalled,
             _ => BrowserError::Io(e),
         })?;
@@ -146,7 +150,8 @@ impl PlaywrightCliDriver {
         let output = match tokio::time::timeout(timeout, output_fut).await {
             Ok(res) => res.map_err(BrowserError::Io)?,
             Err(_) => {
-                let _ = child.kill().await;
+                // `output_fut` (owning `child`) is dropped here; `kill_on_drop`
+                // set above terminates the process on timeout.
                 return Err(BrowserError::Timeout(timeout.as_millis() as u64));
             }
         };
