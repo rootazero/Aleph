@@ -14,7 +14,7 @@ use super::substitute::substitute;
 use super::types::{TeamTemplate, TeamTemplateError, TemplateMember};
 use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask};
 use crate::config::agent_manager::AgentManager;
-use crate::config::types::agents_def::AgentDefinition;
+use crate::config::types::agents_def::{AgentDefinition, AgentModelRef};
 use crate::error::AlephError;
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
 use crate::gateway::session_store::SessionStore;
@@ -433,7 +433,7 @@ async fn provision_member(
         let def = AgentDefinition {
             id: member.id.clone(),
             name: member.name.clone(),
-            model: Some(model),
+            model: Some(AgentModelRef::Legacy(model)),
             ..Default::default()
         };
         if let Err(e) = manager.create(def) {

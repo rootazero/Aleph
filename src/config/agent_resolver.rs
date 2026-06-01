@@ -273,9 +273,12 @@ impl AgentDefinitionResolver {
             .unwrap_or_default();
 
         // 4. Resolve model: agent.model > defaults.model > profile.model > DEFAULT_MODEL
+        // NOTE: provider validation/fallback is added in a later task; for now
+        // both Legacy and Qualified just yield their model string.
         let model = agent
             .model
-            .clone()
+            .as_ref()
+            .map(|m| m.model_str().to_string())
             .or_else(|| defaults.model.clone())
             .or_else(|| profile.model.clone())
             .unwrap_or_else(|| DEFAULT_MODEL.to_string());
@@ -700,7 +703,7 @@ mod tests {
                     id: "main".to_string(),
                     default: true,
                     name: Some("Main Agent".to_string()),
-                    model: Some("claude-opus-4".to_string()),
+                    model: Some(crate::config::types::agents_def::AgentModelRef::Legacy("claude-opus-4".to_string())),
                     ..Default::default()
                 },
                 AgentDefinition {

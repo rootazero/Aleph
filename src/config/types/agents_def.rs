@@ -230,9 +230,10 @@ pub struct AgentDefinition {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
 
-    /// AI model override for this agent
+    /// AI model override for this agent.
+    /// `None` = 继承系统默认 model(= defaults.model > profile.model > DEFAULT_MODEL)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
+    pub model: Option<AgentModelRef>,
 
     /// Skills available to this agent (overrides defaults)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -346,7 +347,7 @@ mod tests {
         assert_eq!(main.id, "main");
         assert!(main.default);
         assert_eq!(main.name, Some("Main Agent".to_string()));
-        assert_eq!(main.model, Some("claude-opus-4".to_string()));
+        assert_eq!(main.model, Some(AgentModelRef::Legacy("claude-opus-4".to_string())));
         assert_eq!(
             main.skills,
             Some(vec!["git_*".to_string(), "fs_*".to_string()])
@@ -482,7 +483,7 @@ mod tests {
         "#;
         let config: AgentsConfig = toml::from_str(toml_str).unwrap();
         let agent = &config.list[0];
-        assert_eq!(agent.model, Some("claude-sonnet-4".to_string()));
+        assert_eq!(agent.model, Some(AgentModelRef::Legacy("claude-sonnet-4".to_string())));
     }
 
     #[test]

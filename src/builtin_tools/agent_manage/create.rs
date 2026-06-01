@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use crate::config::agent_manager::AgentManager;
 use crate::config::agent_resolver::initialize_agent_identity;
-use crate::config::types::agents_def::AgentDefinition;
+use crate::config::types::agents_def::{AgentDefinition, AgentModelRef};
 use crate::error::Result;
 use crate::gateway::agent_env::AgentEnvStore;
 use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig, AgentRegistry};
@@ -371,7 +371,7 @@ impl AlephTool for AgentCreateTool {
             let def = AgentDefinition {
                 id: args.id.clone(),
                 name: args.name.clone(),
-                model: Some(model.to_string()),
+                model: Some(AgentModelRef::Legacy(model.to_string())),
                 ..Default::default()
             };
             if let Err(e) = manager.create(def) {

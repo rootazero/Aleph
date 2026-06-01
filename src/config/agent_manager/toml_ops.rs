@@ -6,7 +6,7 @@ use serde::Deserialize;
 use toml_edit::{Array, DocumentMut, Item, Table};
 use tracing::debug;
 
-use crate::config::types::agents_def::{AgentDefinition, AgentsConfig};
+use crate::config::types::agents_def::{AgentDefinition, AgentModelRef, AgentsConfig};
 use crate::error::{AlephError, Result};
 
 use super::AgentManager;
@@ -133,7 +133,7 @@ impl AgentManager {
         }
 
         if let Some(ref model) = def.model {
-            agent["model"] = toml_edit::value(model.as_str());
+            agent["model"] = model_ref_to_item(model);
         }
 
         if let Some(ref skills) = def.skills {
@@ -207,5 +207,19 @@ impl AgentManager {
 
         list.push(agent);
         Ok(())
+    }
+}
+
+/// 把 `AgentModelRef` 写成 toml_edit Item:
+/// Legacy → 裸字符串;Qualified → 内联表 `{ provider, model }`。
+pub(super) fn model_ref_to_item(m: &AgentModelRef) -> toml_edit::Item {
+    match m {
+        AgentModelRef::Legacy(s) => toml_edit::value(s.as_str()),
+        AgentModelRef::Qualified { provider, model } => {
+            let mut t = toml_edit::InlineTable::new();
+            t.insert("provider", provider.as_str().into());
+            t.insert("model", model.as_str().into());
+            toml_edit::value(t)
+        }
     }
 }

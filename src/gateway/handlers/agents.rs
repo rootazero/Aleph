@@ -17,7 +17,9 @@ use serde_json::json;
 use tracing::{debug, info};
 
 use crate::config::agent_manager::{AgentManager, AgentPatch};
-use crate::config::types::agents_def::{AgentDefinition, AgentIdentity, AgentParams};
+use crate::config::types::agents_def::{
+    AgentDefinition, AgentIdentity, AgentModelRef, AgentParams,
+};
 use crate::sync_primitives::Arc;
 
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -46,7 +48,10 @@ impl From<&AgentDefinition> for AgentSummary {
             name: def.name.clone(),
             emoji: def.identity.as_ref().and_then(|i| i.emoji.clone()),
             description: def.identity.as_ref().and_then(|i| i.description.clone()),
-            model: def.model.clone(),
+            model: def.model.as_ref().map(|m| match m {
+                AgentModelRef::Legacy(s) => s.clone(),
+                AgentModelRef::Qualified { provider, model } => format!("{provider}/{model}"),
+            }),
             is_default: def.default,
         }
     }
