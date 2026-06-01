@@ -24,7 +24,9 @@
 //! at the steady-state scale of one harness per session.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+use crate::sync_primitives::Mutex;
 
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;

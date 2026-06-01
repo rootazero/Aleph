@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use crate::tool_metadata::ToolDefinition;
 use crate::tools::traits::AlephToolDyn;
 use crate::tools::types::{ToolRepairInfo, ToolUpdateInfo};
@@ -32,10 +32,10 @@ use repair::{call_with_repair_impl, try_repair_tool_name_impl};
 
 /// The shared, lock-protected tool registry used by both server and handle.
 ///
-/// Uses `std::sync::Mutex` so synchronous builder methods (`tool`, `tool_boxed`)
+/// Uses `crate::sync_primitives::Mutex` so synchronous builder methods (`tool`, `tool_boxed`)
 /// can register tools without blocking the async runtime.  All async ops clone
 /// the `Arc` they need while holding the lock and drop the guard before awaiting.
-type ToolMap = Arc<std::sync::Mutex<HashMap<String, Arc<dyn AlephToolDyn>>>>;
+type ToolMap = Arc<Mutex<HashMap<String, Arc<dyn AlephToolDyn>>>>;
 
 // =============================================================================
 // AlephToolServer
@@ -85,7 +85,7 @@ impl AlephToolServer {
     /// Create a new empty tool server.
     pub fn new() -> Self {
         Self {
-            tools: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            tools: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 

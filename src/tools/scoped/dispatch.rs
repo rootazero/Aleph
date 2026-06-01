@@ -191,7 +191,12 @@ impl ScopedToolService {
                                 RoutingTarget::Inner => {
                                     self.inner.execute(&name_owned, input, cancel).await
                                 }
-                                RoutingTarget::Missing => unreachable!(),
+                                RoutingTarget::Missing => {
+                                    return Err(ToolError::Execution {
+                                        name: name_owned.clone(),
+                                        cause: "Routing target became Missing after being checked".into(),
+                                    });
+                                }
                             };
                             Self::tool_result_to_output(&name_owned, raw)
                         }
