@@ -36,6 +36,20 @@ func registerAudioHandlers(_ router: Router) async {
         ])
     }
 
+    await router.register("media.audio.record_start") { _ in
+        try await session.recordStart()
+        return .object([:])
+    }
+
+    await router.register("media.audio.record_stop") { _ in
+        let (filePath, duration, format) = try await session.recordStop()
+        return .object([
+            "file_path": .string(filePath),
+            "duration_secs": .number(duration),
+            "format": .string(format),
+        ])
+    }
+
     await router.register("media.audio.mic_meter") { _ in
         let result = await meter.poll()
         var out: [String: JSONValue] = ["active": .bool(result.active)]

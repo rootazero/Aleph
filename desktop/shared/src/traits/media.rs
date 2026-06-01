@@ -39,6 +39,25 @@ pub trait MediaCapability: Send + Sync {
         ))
     }
 
+    /// Begin an open-ended push-to-talk recording (stop via [`Self::record_audio_stop`]).
+    ///
+    /// Powers the Panel mic button on platforms whose webview cannot reach the
+    /// microphone via `getUserMedia` (unsigned macOS WKWebView). The default
+    /// `NotImplemented` is the signal callers use to fall back to browser
+    /// capture on platforms without a native helper (Windows/Linux).
+    async fn record_audio_start(&self) -> Result<()> {
+        Err(crate::DesktopError::NotImplemented(
+            "native audio recording not available on this platform".into(),
+        ))
+    }
+
+    /// Stop the active push-to-talk recording and return the captured file.
+    async fn record_audio_stop(&self) -> Result<AudioRecordResult> {
+        Err(crate::DesktopError::NotImplemented(
+            "native audio recording not available on this platform".into(),
+        ))
+    }
+
     /// Transcribe an audio file to text using on-device speech recognition.
     async fn speech_to_text(
         &self,

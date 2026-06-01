@@ -12,6 +12,11 @@ pub const METHOD_CAMERA_CLIP: &str = "media.camera.clip";
 
 pub const METHOD_AUDIO_LIST_DEVICES: &str = "media.audio.list_devices";
 pub const METHOD_AUDIO_RECORD: &str = "media.audio.record";
+/// Open-ended push-to-talk: start recording now, stop on a later call. Used by
+/// the Panel mic button (the WKWebView `getUserMedia` path is blocked on
+/// unsigned macOS builds, so capture happens natively in the helper instead).
+pub const METHOD_AUDIO_RECORD_START: &str = "media.audio.record_start";
+pub const METHOD_AUDIO_RECORD_STOP: &str = "media.audio.record_stop";
 pub const METHOD_AUDIO_MIC_METER: &str = "media.audio.mic_meter";
 
 pub const METHOD_SPEECH_TRANSCRIBE_FILE: &str = "media.speech.transcribe_file";
@@ -111,6 +116,20 @@ pub struct RecordAudioResult {
     /// Audio format (e.g., "m4a").
     pub format: String,
 }
+
+/// Start a push-to-talk recording. No parameters; the helper holds the active
+/// recorder until [`METHOD_AUDIO_RECORD_STOP`]. Sent as an empty object.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct RecordStartParams {}
+
+/// Acknowledgement that recording began. No payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct RecordStartResult {}
+
+/// Stop the active push-to-talk recording. No parameters. The result mirrors
+/// [`RecordAudioResult`] (file path + actual elapsed duration + format).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+pub struct RecordStopParams {}
 
 /// Mic meter poll request. No parameters; first call lazily starts a long-lived
 /// `AVAudioEngine` tap on the default input device. The helper auto-shuts the

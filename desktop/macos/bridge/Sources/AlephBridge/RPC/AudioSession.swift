@@ -14,6 +14,12 @@ struct AudioDeviceInfo {
 /// instances in principle but the hardware input path is single-tenant in
 /// practice; we gate record() calls through an actor to match camera.
 actor AudioSession {
+    /// Active push-to-talk recorder, held between `recordStart` and `recordStop`.
+    /// The delegate is retained too so its continuation/encode callbacks fire.
+    private var activeRecorder: AVAudioRecorder?
+    private var activeURL: URL?
+    private var activeDelegate: AudioRecordingDelegate?
+
     func listDevices() async throws -> [AudioDeviceInfo] {
         do {
             let discovery = AVCaptureDevice.DiscoverySession(
@@ -101,6 +107,116 @@ actor AudioSession {
         }
 
         return (url.path, durationSecs, "m4a")
+    }
+
+    /// Begin an open-ended push-to-talk recording. Triggers the native
+    /// microphone TCC prompt on first use (direct AVFoundation access works on
+    /// unsigned/ad-hoc builds, unlike WKWebView `getUserMedia`). Replaces any
+    /// recording already in progress.
+    func recordStart() async throws {
+        // Proactively request mic access so the system prompt appears up front
+        // and a denial surfaces as a clean error rather than an empty file.
+        let granted = await AVCaptureDevice.requestAccess(for: .audio)
+        guard granted else {
+            throw RpcError(
+                code: -32004,
+                message: "audio.record_start: microphone permission denied",
+                data: nil
+            )
+        }
+
+        if let existing = activeRecorder {
+            existing.stop()
+            activeRecorder = nil
+            activeURL = nil
+            activeDelegate = nil
+        }
+
+        let dir = mediaDir()
+        do {
+            try FileManager.default.createDirectory(
+                at: dir, withIntermediateDirectories: true
+            )
+        } catch {
+            throw RpcError(
+                code: -32003,
+                message: "audio.record_start: cannot create media directory \(dir.path): \(error)",
+                data: nil
+            )
+        }
+        let url = dir.appendingPathComponent("audio_record_\(timestampSuffix()).m4a")
+
+        let settings: [String: Any] = [
+            AVFormatIDKey: kAudioFormatMPEG4AAC,
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+        ]
+
+        let recorder: AVAudioRecorder
+        do {
+            recorder = try AVAudioRecorder(url: url, settings: settings)
+        } catch {
+            throw RpcError(
+                code: -32003,
+                message: "audio.record_start: failed to initialise recorder: \(error)",
+                data: nil
+            )
+        }
+
+        let delegate = AudioRecordingDelegate()
+        recorder.delegate = delegate
+
+        guard recorder.prepareToRecord() else {
+            throw RpcError(
+                code: -32004,
+                message: "audio.record_start: prepareToRecord failed (permission denied or microphone in use)",
+                data: nil
+            )
+        }
+        guard recorder.record() else {
+            throw RpcError(
+                code: -32004,
+                message: "audio.record_start: record() failed (permission denied or microphone in use)",
+                data: nil
+            )
+        }
+
+        activeRecorder = recorder
+        activeURL = url
+        activeDelegate = delegate
+    }
+
+    /// Stop the active push-to-talk recording and return the captured file.
+    func recordStop() async throws -> (filePath: String, duration: Double, format: String) {
+        guard let recorder = activeRecorder, let url = activeURL else {
+            throw RpcError(
+                code: -32004,
+                message: "audio.record_stop: no active recording",
+                data: nil
+            )
+        }
+        // `currentTime` resets to 0 on stop(), so capture elapsed time first.
+        let elapsed = recorder.currentTime
+        let delegate = activeDelegate
+        recorder.stop()
+        activeRecorder = nil
+        activeURL = nil
+        activeDelegate = nil
+
+        // Let the encoder finalise the file (delegate fires didFinishRecording).
+        if let delegate {
+            try? await delegate.waitForFinish(timeout: 5.0)
+        }
+
+        if !FileManager.default.fileExists(atPath: url.path) {
+            throw RpcError(
+                code: -32003,
+                message: "audio.record_stop: recorder produced no output file",
+                data: nil
+            )
+        }
+        return (url.path, elapsed, "m4a")
     }
 }
 

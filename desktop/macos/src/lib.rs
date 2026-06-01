@@ -293,6 +293,42 @@ impl MediaCapability for MacOSPlatform {
         })
     }
 
+    async fn record_audio_start(&self) -> Result<()> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            RecordStartParams, RecordStartResult, METHOD_AUDIO_RECORD_START,
+        };
+        debug!("Proxying audio record_start to Swift helper");
+        let _: RecordStartResult = self
+            .bridge
+            .call(METHOD_AUDIO_RECORD_START, RecordStartParams {})
+            .await
+            .map_err(|e| bridge_err(&format!("media.audio.record_start RPC: {e}")))?;
+        Ok(())
+    }
+
+    async fn record_audio_stop(&self) -> Result<AudioRecordResult> {
+        use aleph_protocol::desktop_bridge::methods::media::{
+            RecordAudioResult, RecordStopParams, METHOD_AUDIO_RECORD_STOP,
+        };
+        debug!("Proxying audio record_stop to Swift helper");
+        // The helper finalises the encoder before replying; the recording is
+        // user-bounded so cap generously rather than by a known duration.
+        let rpc: RecordAudioResult = self
+            .bridge
+            .call_with_timeout(
+                METHOD_AUDIO_RECORD_STOP,
+                RecordStopParams {},
+                Duration::from_secs(15),
+            )
+            .await
+            .map_err(|e| bridge_err(&format!("media.audio.record_stop RPC: {e}")))?;
+        Ok(AudioRecordResult {
+            file_path: rpc.file_path,
+            duration_secs: rpc.duration_secs,
+            format: rpc.format,
+        })
+    }
+
     async fn list_audio_devices(&self) -> Result<Vec<AudioDeviceInfo>> {
         use aleph_protocol::desktop_bridge::methods::media::{
             ListAudioDevicesParams, ListAudioDevicesResult, METHOD_AUDIO_LIST_DEVICES,
