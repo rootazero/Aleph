@@ -394,7 +394,13 @@ impl AcpAdapterManager {
         for (key, entry) in entries {
             let (alive, state, sid) = match entry.session.try_lock() {
                 Ok(mut s) => (s.is_alive(), s.state(), s.acp_session_id()),
-                Err(_) => (true, crate::acp::protocol::AcpSessionState::Busy, None),
+                Err(_) => {
+                    // Lock held by another task (likely an in-flight prompt).
+                    // The session is actively in use, so report alive=true.
+                    // State is Busy because we can't read the actual state
+                    // without blocking the caller.
+                    (true, crate::acp::protocol::AcpSessionState::Busy, None)
+                }
             };
             out.push(SessionSnapshot {
                 harness_id: key.harness_id.clone(),

@@ -6,14 +6,12 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::process::Command;
-use tracing::{debug, error};
 
 use crate::acp::adapter::{AcpAdapter, AdapterMode};
 use crate::acp::output_format::OutputFormat;
 use crate::acp::session::{AcpSession, AdapterConfig};
 use crate::config::types::acp::AcpAdapterEntry;
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 
 /// Generic ACP harness built from configuration.
 ///
@@ -120,54 +118,17 @@ impl AcpAdapter for GenericAcpAdapter {
     }
 
     async fn execute_oneshot(&self, prompt: &str, cwd: &str) -> Result<String> {
-        let mut cmd = Command::new(&self.executable);
-
-        // Append oneshot args, then the prompt
-        cmd.args(&self.oneshot_args)
-            .arg(prompt)
-            .current_dir(cwd)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-
-        debug!(
-            harness = %self.id,
-            executable = %self.executable,
-            "Spawning oneshot generic harness process"
-        );
-
-        let output = tokio::time::timeout(self.timeout, cmd.output())
-            .await
-            .map_err(|_| {
-                AlephError::tool(format!(
-                    "Harness '{}' timed out after {:?}",
-                    self.id, self.timeout
-                ))
-            })?
-            .map_err(|e| {
-                AlephError::tool(format!(
-                    "Failed to execute harness '{}' (executable: '{}'): {}. \
-                     Is the executable installed and in PATH?",
-                    self.id, self.executable, e
-                ))
-            })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            error!(
-                harness = %self.id,
-                stderr = %stderr,
-                "Generic harness process failed"
-            );
-            return Err(AlephError::tool(format!(
-                "Harness '{}' exited with {}: {}",
-                self.id,
-                output.status,
-                stderr.chars().take(500).collect::<String>()
-            )));
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(self.output_format.parse(&stdout))
+        super::run_oneshot_command(
+            &self.id,
+            &self.executable,
+            &self.oneshot_args,
+            &[],
+            &self.output_format,
+            prompt,
+            cwd,
+            self.timeout,
+        )
+        .await
     }
 
     async fn spawn_session(&self, cwd: Option<&str>) -> Result<AcpSession> {
