@@ -289,8 +289,10 @@ const BINARY_THINKING_PROVIDERS: &[&str] = &["z.ai", "zai", "z-ai"];
 /// Some providers like Z.AI only support enabling or disabling thinking,
 /// without granular level control.
 pub fn is_binary_thinking_provider(provider: &str) -> bool {
-    let normalized = provider.trim().to_lowercase();
-    BINARY_THINKING_PROVIDERS.contains(&normalized.as_str())
+    let trimmed = provider.trim();
+    BINARY_THINKING_PROVIDERS
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(trimmed))
 }
 
 /// Check if model supports xhigh (extended) thinking
@@ -303,17 +305,13 @@ pub fn supports_xhigh_thinking(provider: &str, model: &str) -> bool {
 
     // Check full reference (provider/model)
     let full_ref = format!("{}/{}", provider_key, model_key);
-    if XHIGH_MODEL_REFS
-        .iter()
-        .any(|r| r.to_lowercase() == full_ref)
-    {
+    if XHIGH_MODEL_REFS.iter().any(|r| r.eq_ignore_ascii_case(&full_ref)) {
         return true;
     }
 
-    // Check model ID only
     XHIGH_MODEL_IDS
         .iter()
-        .any(|id| id.to_lowercase() == model_key)
+        .any(|id| id.eq_ignore_ascii_case(&model_key))
 }
 
 /// Get supported thinking levels for a provider/model combination

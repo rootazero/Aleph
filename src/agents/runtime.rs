@@ -444,7 +444,8 @@ impl AgentRuntime {
 
 /// Truncate a string for log output, appending "..." if truncated.
 pub fn truncate_for_log(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    let char_count = s.chars().count();
+    if char_count <= max_len {
         s.to_string()
     } else {
         match s.char_indices().nth(max_len) {

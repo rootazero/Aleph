@@ -192,6 +192,8 @@ pub(crate) fn parse_file(path: &Path, source: AgentSource) -> Result<AgentDef, L
     }
     def.source = source;
 
+    // Body is intentionally unused — frontmatter carries the agent definition;
+    // the markdown body is reserved for future documentation / prompt embedding.
     let _ = body;
 
     Ok(def)

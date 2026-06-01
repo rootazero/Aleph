@@ -198,7 +198,7 @@ impl AgentDef {
     /// Callers wanting both should chain `with_allowed_tools` after this method.
     pub fn with_allowed_tool_sets(mut self, sets: Vec<String>) -> Self {
         self.allowed_tool_sets = sets;
-        if self.allowed_tools == vec!["*".to_string()] {
+        if self.allowed_tools.len() == 1 && self.allowed_tools[0] == "*" {
             self.allowed_tools = vec![];
         }
         self

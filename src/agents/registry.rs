@@ -176,7 +176,6 @@ impl AgentRegistry {
     }
 }
 
-/// Returns the built-in agent definitions
 /// Canonicalize a built-in `agent_type` selector, tolerating casing and the
 /// common synonyms a model trained on Claude Code conventions emits
 /// (`general-purpose`, `Explore`, `planner`, …). Returns the canonical
@@ -188,10 +187,16 @@ impl AgentRegistry {
 /// exactly in the first resolution pass and never routed through this table.
 fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
     let trimmed = raw.trim();
+    // Built-in ids pass through unchanged — return the `'static` spelling, not
+    // the borrowed `trimmed` slice (which is tied to the caller's `raw`).
     match trimmed {
-        "default" | "explore" | "plan" | "verify" | "researcher" | "coder" | "main" => {
-            return Some(trimmed);
-        }
+        "default" => return Some("default"),
+        "explore" => return Some("explore"),
+        "plan" => return Some("plan"),
+        "verify" => return Some("verify"),
+        "researcher" => return Some("researcher"),
+        "coder" => return Some("coder"),
+        "main" => return Some("main"),
         _ => {}
     }
     match trimmed.to_ascii_lowercase().as_str() {
