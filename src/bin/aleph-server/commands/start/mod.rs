@@ -1150,6 +1150,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &agent_result.compression_service,
         &agent_result.embedder,
         &event_bus,
+        &app_config,
+        &auth_bundle.auth_ctx.shared_token_mgr,
         args.daemon,
     );
     register_daemon_handlers(&mut server, start_time, args.daemon);

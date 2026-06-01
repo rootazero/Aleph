@@ -1,5 +1,30 @@
 use super::*;
 
+/// Rebuild the embedder from the *current* config so a provider switched via
+/// `embedding_providers.setActive` takes effect for reembed without restarting
+/// the daemon. Returns `None` when no active provider can be built (caller falls
+/// back to the boot embedder).
+///
+/// Embedding API keys are `#[serde(skip)]` and never persisted, so they are
+/// re-hydrated from the vault (`embed:<id>`) — mirroring the boot path — before
+/// constructing the provider.
+async fn resolve_active_embedder(
+    app_config: &std::sync::Arc<tokio::sync::RwLock<alephcore::Config>>,
+    shared_token_mgr: &std::sync::Arc<alephcore::gateway::security::SharedTokenManager>,
+) -> Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> {
+    let mut settings = app_config.read().await.memory.embedding.clone();
+    for p in settings.providers.iter_mut() {
+        if p.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+            if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("embed:{}", p.id)) {
+                p.api_key = Some(secret.expose().to_string());
+            }
+        }
+    }
+    let manager = alephcore::memory::EmbeddingManager::new(settings);
+    manager.init().await.ok()?;
+    manager.get_active_provider().await
+}
+
 pub(in crate::commands::start) fn register_memory_handlers(
     server: &mut GatewayServer,
     memory_db: &MemoryBackend,
@@ -8,6 +33,11 @@ pub(in crate::commands::start) fn register_memory_handlers(
     >,
     embedder: &Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>>,
     event_bus: &std::sync::Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    // Live config + vault so reembed can rebuild the embedder from the
+    // *currently active* provider (switched via embedding_providers.setActive)
+    // instead of the one frozen at boot.
+    app_config: &std::sync::Arc<tokio::sync::RwLock<alephcore::Config>>,
+    shared_token_mgr: &std::sync::Arc<alephcore::gateway::security::SharedTokenManager>,
     daemon: bool,
 ) {
     register_handler!(
@@ -88,6 +118,8 @@ pub(in crate::commands::start) fn register_memory_handlers(
             let emb = ::std::sync::Arc::clone(emb);
             let eb = ::std::sync::Arc::clone(event_bus);
             let rs = ::std::sync::Arc::clone(&reembed_state);
+            let cfg = ::std::sync::Arc::clone(app_config);
+            let vault = ::std::sync::Arc::clone(shared_token_mgr);
             let mem_dir = alephcore::utils::paths::get_note_memory_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from(""));
             server
@@ -97,8 +129,17 @@ pub(in crate::commands::start) fn register_memory_handlers(
                     let emb = ::std::sync::Arc::clone(&emb);
                     let eb = ::std::sync::Arc::clone(&eb);
                     let rs = ::std::sync::Arc::clone(&rs);
+                    let cfg = ::std::sync::Arc::clone(&cfg);
+                    let vault = ::std::sync::Arc::clone(&vault);
                     let md = mem_dir.clone();
-                    async move { memory_handlers::handle_reembed(req, db, md, emb, eb, rs).await }
+                    async move {
+                        // Resolve the active provider at call time so a provider
+                        // switched in the panel takes effect without a restart;
+                        // fall back to the boot embedder if it can't be rebuilt.
+                        let embedder =
+                            resolve_active_embedder(&cfg, &vault).await.unwrap_or(emb);
+                        memory_handlers::handle_reembed(req, db, md, embedder, eb, rs).await
+                    }
                 });
         }
 

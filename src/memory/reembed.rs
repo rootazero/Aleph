@@ -168,7 +168,7 @@ async fn reembed_agent_notes(
             let file_path = memory_dir
                 .join(agent_id)
                 .join(&note.category)
-                .join(format!("{}.md", note.filename));
+                .join(crate::memory::notes::store::note_md_filename(&note.filename));
 
             match tokio::fs::read_to_string(&file_path).await {
                 Ok(content) => {

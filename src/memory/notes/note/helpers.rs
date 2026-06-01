@@ -114,6 +114,10 @@ pub fn sanitize_title(title: &str) -> Result<String, crate::error::AlephError> {
         .replace("..", "")
         .trim()
         .to_string();
+    // Titles are stored extensionless; a trailing ".md" leaking in (e.g. a
+    // filename passed as a title) would otherwise produce a doubled "*.md.md"
+    // file on disk. Strip it at this single filename chokepoint.
+    let cleaned = crate::memory::notes::store::strip_md_ext(&cleaned).to_string();
     if cleaned.is_empty() || cleaned.chars().all(|c| c == '.' || c.is_whitespace()) {
         return Err(crate::error::AlephError::Validation(format!(
             "note title sanitizes to empty: {title:?}"

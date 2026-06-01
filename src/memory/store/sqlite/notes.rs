@@ -97,8 +97,11 @@ impl NoteStore for SqliteMemoryBackend {
     ) -> Result<(), AlephError> {
         let conn = lock_conn!(self)?;
 
-        let path = format!("{category}/{}", note.title);
-        let filename = note.title.clone();
+        // Store titles/filenames extensionless: a title carrying ".md" would
+        // otherwise produce a doubled "*.md.md" path on disk reads.
+        let title = crate::memory::notes::store::strip_md_ext(&note.title);
+        let path = format!("{category}/{title}");
+        let filename = title.to_string();
 
         let tags_json = serde_json::to_string(&note.tags).unwrap_or_else(|_| "[]".to_string());
 
@@ -1148,7 +1151,7 @@ async fn load_note_content_from_disk(entry: &NoteIndexEntry, agent_id: &str) -> 
     let file_path = memory_dir
         .join(agent_id)
         .join(&entry.category)
-        .join(format!("{}.md", entry.filename));
+        .join(crate::memory::notes::store::note_md_filename(&entry.filename));
     tokio::fs::read_to_string(&file_path).await.ok()
 }
 

@@ -19,6 +19,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
     let (progress_completed, set_progress_completed) = signal(0usize);
     let (progress_failed, set_progress_failed) = signal(0usize);
     let (result_message, set_result_message) = signal(Option::<String>::None);
+    let (result_errors, set_result_errors) = signal(Vec::<String>::new());
     let (error_message, set_error_message) = signal(Option::<String>::None);
 
     // Subscribe to reembed events via Gateway event bus
@@ -69,11 +70,19 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                                 .get("memories_total")
                                 .and_then(|v| v.as_u64())
                                 .unwrap_or(0);
-                            let errors = data
+                            let error_list: Vec<String> = data
                                 .get("errors")
                                 .and_then(|v| v.as_array())
-                                .map(|a| a.len())
-                                .unwrap_or(0);
+                                .map(|a| {
+                                    a.iter()
+                                        .filter_map(|e| e.as_str().map(str::to_string))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let errors = error_list.len();
+                            // Surface the first few concrete reasons so failures
+                            // are diagnosable from the panel, not just a count.
+                            set_result_errors.set(error_list.into_iter().take(5).collect());
 
                             let msg = format!(
                                 "Facts: {}/{} migrated, Memories: {}/{} migrated{}",
@@ -100,6 +109,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
     let handle_start = move |_| {
         set_migrating.set(true);
         set_result_message.set(None);
+        set_result_errors.set(Vec::new());
         set_error_message.set(None);
         set_progress_completed.set(0);
         set_progress_total.set(0);
@@ -171,6 +181,19 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                     {msg}
                 </div>
             })}
+
+            // Per-note error detail (first few concrete reasons)
+            {move || {
+                let errs = result_errors.get();
+                (!errs.is_empty()).then(|| view! {
+                    <div class="p-3 bg-warning-subtle border border-warning/20 rounded-lg text-warning text-xs space-y-1">
+                        <div class="font-semibold">"Error details:"</div>
+                        <ul class="list-disc list-inside space-y-0.5 font-mono">
+                            {errs.into_iter().map(|e| view! { <li>{e}</li> }).collect_view()}
+                        </ul>
+                    </div>
+                })
+            }}
 
             // Error message
             {move || error_message.get().map(|msg| view! {

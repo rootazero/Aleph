@@ -36,6 +36,24 @@ pub struct NoteIndexEntry {
     pub content_hash: String,
 }
 
+/// Strip a single trailing `.md` extension from a note title or filename.
+///
+/// Note titles/filenames are stored extensionless by convention (see
+/// [`NoteIndexEntry::filename`]). Some writers historically passed a title that
+/// already carried `.md`, which corrupted the index and made disk reads compute
+/// a doubled `*.md.md` path. Normalizing at the write chokepoint and tolerating
+/// it on read keeps both paths single-extension.
+pub fn strip_md_ext(s: &str) -> &str {
+    s.strip_suffix(".md").unwrap_or(s)
+}
+
+/// Build the on-disk note filename (`<stem>.md`) tolerating a stem that already
+/// carries a trailing `.md`, so legacy `.md`-suffixed index rows resolve to the
+/// correct single-extension file rather than `*.md.md`.
+pub fn note_md_filename(filename: &str) -> String {
+    format!("{}.md", strip_md_ext(filename))
+}
+
 /// Persistence contract for the notes index, link graph, and full-text search.
 ///
 /// All methods are scoped by `agent_id` to support the `memory/{agent_id}/{category}/`
@@ -312,6 +330,40 @@ mod tests {
         assert_eq!(entry.created_at, 1_700_000_000);
         assert_eq!(entry.updated_at, 1_700_001_000);
         assert_eq!(entry.content_hash, "hash_Editor Preferences");
+    }
+
+    #[test]
+    fn strip_md_ext_removes_single_trailing_extension() {
+        assert_eq!(strip_md_ext("rust-ownership"), "rust-ownership");
+        assert_eq!(strip_md_ext("toolchain.md"), "toolchain");
+        // Only one extension is stripped; an embedded ".md" mid-name is left.
+        assert_eq!(strip_md_ext("a.md.md"), "a.md");
+        assert_eq!(strip_md_ext("notes.markdown"), "notes.markdown");
+    }
+
+    #[test]
+    fn note_md_filename_never_doubles_extension() {
+        assert_eq!(note_md_filename("rust-ownership"), "rust-ownership.md");
+        assert_eq!(note_md_filename("toolchain.md"), "toolchain.md");
+    }
+
+    #[tokio::test]
+    async fn index_note_normalizes_md_suffixed_title() {
+        let db = create_test_db();
+        // A writer that mistakenly passes a title carrying ".md" must still
+        // produce an extensionless index row (path + filename), so disk reads
+        // compute "<stem>.md" rather than "<stem>.md.md".
+        let note = sample_note("toolchain.md", "preferences", vec![]);
+
+        db.index_note(&note, AGENT, "preferences").await.unwrap();
+
+        let entry = db
+            .get_note_index("preferences/toolchain", AGENT)
+            .await
+            .unwrap()
+            .expect("normalized path should exist");
+        assert_eq!(entry.path, "preferences/toolchain");
+        assert_eq!(entry.filename, "toolchain");
     }
 
     #[tokio::test]
