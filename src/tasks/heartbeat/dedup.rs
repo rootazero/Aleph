@@ -59,7 +59,7 @@ pub enum DedupVerdict {
 /// to no-ops (is_duplicate returns false, record is a no-op).
 pub struct DedupEngine {
     config: DedupConfig,
-    conn: Arc<Mutex<Connection>>,
+    conn: Option<Arc<Mutex<Connection>>>,
     embedding_provider: Option<Arc<dyn EmbeddingProvider>>,
 }
 
@@ -75,34 +75,19 @@ impl DedupEngine {
     ) -> Self {
         Self {
             config,
-            conn,
+            conn: Some(conn),
             embedding_provider,
         }
     }
 
-    /// Create a no-op DedupEngine backed by an in-memory connection.
+    /// Create a no-op DedupEngine with no DB connection.
     ///
-    /// Used in tests and as a fallback when no DB is available.
+    /// Used as a fallback when no DB is available. All operations degrade
+    /// gracefully to no-ops.
     pub fn noop(config: DedupConfig) -> Self {
-        let conn = match Connection::open_in_memory() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to open in-memory connection for noop DedupEngine, using no-op fallback");
-                return Self {
-                    config,
-                    conn: Arc::new(Mutex::new(Connection::open_in_memory().unwrap_or_else(|e2| {
-                        tracing::error!(error = %e2, "critical: failed to open in-memory connection for noop DedupEngine fallback");
-                        panic!("failed to open in-memory SQLite connection: {e2}")
-                    }))),
-                    embedding_provider: None,
-                };
-            }
-        };
-        // Initialize schema so the connection is valid, errors are ignored.
-        let _ = init_dedup_schema(&conn);
         Self {
             config,
-            conn: Arc::new(Mutex::new(conn)),
+            conn: None,
             embedding_provider: None,
         }
     }
@@ -127,12 +112,15 @@ impl DedupEngine {
         };
 
         // Load history from DB (lock only for the read, release before compare).
-        let history = {
-            let conn = self.conn.lock().await;
-            let cutoff = chrono::Utc::now().timestamp_millis() - self.config.window_ms as i64;
-            let model_name = provider.model_name().to_string();
-            load_dedup_history(&conn, task_id, cutoff, &model_name, self.config.max_history)
-                .unwrap_or_default()
+        let history = match &self.conn {
+            None => return DedupVerdict::Unavailable,
+            Some(c) => {
+                let conn = c.lock().await;
+                let cutoff = chrono::Utc::now().timestamp_millis() - self.config.window_ms as i64;
+                let model_name = provider.model_name().to_string();
+                load_dedup_history(&conn, task_id, cutoff, &model_name, self.config.max_history)
+                    .unwrap_or_default()
+            }
         };
 
         for (_, hist_embedding) in &history {
@@ -156,14 +144,16 @@ impl DedupEngine {
             Some(p) => p.model_name().to_string(),
             None => return,
         };
-        let conn = self.conn.lock().await;
+        let Some(c) = &self.conn else { return };
+        let conn = c.lock().await;
         let _ = insert_dedup_record(&conn, task_id, output, embedding, &model_name);
         let _ = prune_dedup_records(&conn, task_id, self.config.max_history);
     }
 
     /// Remove dedup records older than `retention_ms` milliseconds.
     pub async fn cleanup(&self, retention_ms: u64) {
-        let conn = self.conn.lock().await;
+        let Some(c) = &self.conn else { return };
+        let conn = c.lock().await;
         let cutoff = chrono::Utc::now().timestamp_millis() - retention_ms as i64;
         let _ = cleanup_dedup_records(&conn, cutoff);
     }

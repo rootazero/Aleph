@@ -131,7 +131,7 @@ pub async fn run_heartbeat_loop(
 /// would be skipped by `collect_due_tasks` forever. Mirrors cron's startup
 /// catchup. Threshold: `max(job_timeout * 2, 2h)`.
 async fn clear_stale_running_markers(state: &HeartbeatServiceState) {
-    let stale_threshold_ms = ((state.config.job_timeout_secs as i64) * 2 * 1000).max(7_200_000);
+    let stale_threshold_ms = (state.config.job_timeout_secs.saturating_mul(2).saturating_mul(1000).min(i64::MAX as u64) as i64).max(7_200_000);
     let now_ms = state.clock.now_ms();
 
     let mut store = state.store.lock().await;
