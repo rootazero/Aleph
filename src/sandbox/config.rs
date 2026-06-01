@@ -159,6 +159,63 @@ impl Default for SandboxRateLimitConfigSchema {
     }
 }
 
+/// `[sandbox.resource_governor]` — load-aware admission gate for heavy
+/// (Dangerous-class) execution. See [`crate::sandbox::resource_governor`].
+///
+/// **Disabled by default** so boot behaviour is byte-identical to today;
+/// opt in by setting `enabled = true`. When enabled, the default thresholds
+/// gate purely on a free-memory floor (CPU gate off) — the robust signal on
+/// a headless box.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ResourceGovernorConfigSchema {
+    #[serde(default = "default_governor_enabled")]
+    pub enabled: bool,
+    /// Refuse a heavy task while free system memory is below this many MiB.
+    /// `None` disables the memory gate.
+    #[serde(default = "default_governor_min_memory_mb")]
+    pub min_available_memory_mb: Option<u64>,
+    /// Refuse a heavy task while global CPU usage exceeds this percentage.
+    /// `None` (default) disables the CPU gate — the first `sysinfo` CPU
+    /// sample is unreliable, so memory is the safer default signal.
+    #[serde(default = "default_governor_max_cpu_percent")]
+    pub max_cpu_percent: Option<f32>,
+    /// Maximum seconds to wait for load to subside before rejecting the task
+    /// (the bounded-wait improvement over the unbounded shell `sleep` loop).
+    #[serde(default = "default_governor_max_wait_secs")]
+    pub max_wait_secs: u64,
+    /// Delay in milliseconds between load re-samples while waiting.
+    #[serde(default = "default_governor_backoff_ms")]
+    pub backoff_ms: u64,
+}
+
+fn default_governor_enabled() -> bool {
+    false
+}
+fn default_governor_min_memory_mb() -> Option<u64> {
+    Some(512)
+}
+fn default_governor_max_cpu_percent() -> Option<f32> {
+    None
+}
+fn default_governor_max_wait_secs() -> u64 {
+    30
+}
+fn default_governor_backoff_ms() -> u64 {
+    500
+}
+
+impl Default for ResourceGovernorConfigSchema {
+    fn default() -> Self {
+        Self {
+            enabled: default_governor_enabled(),
+            min_available_memory_mb: default_governor_min_memory_mb(),
+            max_cpu_percent: default_governor_max_cpu_percent(),
+            max_wait_secs: default_governor_max_wait_secs(),
+            backoff_ms: default_governor_backoff_ms(),
+        }
+    }
+}
+
 impl From<SandboxRateLimitConfigSchema> for SandboxRateLimitConfig {
     fn from(schema: SandboxRateLimitConfigSchema) -> Self {
         let mut per_category = HashMap::new();
@@ -303,6 +360,12 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub rate_limit: SandboxRateLimitConfigSchema,
 
+    /// Load-aware admission gate for heavy execution
+    /// (`[sandbox.resource_governor]`). Disabled by default; see
+    /// [`crate::sandbox::resource_governor`].
+    #[serde(default)]
+    pub resource_governor: ResourceGovernorConfigSchema,
+
     /// Content-level command hard-filter (`[sandbox.command_policy]`).
     /// Defence-in-depth in front of the OS sandbox; see
     /// [`crate::sandbox::command_policy`].
@@ -349,6 +412,7 @@ impl Default for SandboxConfig {
                 dangerous: default_rate_limit_dangerous(),
                 admin: default_rate_limit_admin(),
             },
+            resource_governor: ResourceGovernorConfigSchema::default(),
             command_policy: CommandPolicyConfigSchema::default(),
         }
     }

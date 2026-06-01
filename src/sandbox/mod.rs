@@ -26,6 +26,7 @@ pub mod policy;
 pub mod protected_paths;
 pub mod proxy;
 pub mod rate_limit;
+pub mod resource_governor;
 pub mod sandbox_init;
 pub mod scrub;
 pub mod security_kernel_hook;
@@ -45,6 +46,9 @@ pub use hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
 pub use platforms::{create_platform_driver, create_platform_driver_from_config};
 pub use policy::{
     EnvPolicy, FsPolicy, NetworkPolicy as PolicyNetworkPolicy, ProcessPolicy, SandboxPolicy,
+};
+pub use resource_governor::{
+    AdmissionDecision, GovernorThresholds, LoadProbe, LoadSample, ResourceGovernor,
 };
 pub use scrub::{scrub_secrets_bytes, ScrubResult};
 pub use summary::{NetworkState, SandboxSummary};
