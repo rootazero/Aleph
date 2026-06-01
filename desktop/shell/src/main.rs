@@ -125,7 +125,7 @@ fn main() {
         .menu(menu::build)
         .on_menu_event(|app, event| menu::on_event(app, event.id().as_ref()));
 
-    builder
+    let app = match builder
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -161,16 +161,23 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("failed to build the Aleph desktop shell")
-        .run(|_app, event| {
-            // A window-close-driven exit is vetoed (stay in the tray); an
-            // explicit "Quit" calls `app.exit(code)` and is allowed.
-            if let RunEvent::ExitRequested { code, api, .. } = event {
-                if code.is_none() {
-                    api.prevent_exit();
-                }
+    {
+        Ok(app) => app,
+        Err(e) => {
+            tracing::error!("failed to build the Aleph desktop shell: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    app.run(|_app, event| {
+        // A window-close-driven exit is vetoed (stay in the tray); an
+        // explicit "Quit" calls `app.exit(code)` and is allowed.
+        if let RunEvent::ExitRequested { code, api, .. } = event {
+            if code.is_none() {
+                api.prevent_exit();
             }
-        });
+        }
+    });
 }
 
 /// Create the single main window, hosting the splash until the daemon is up.

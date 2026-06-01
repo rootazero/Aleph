@@ -73,7 +73,7 @@ impl EscapeAbort for WindowsEscapeListener {
                 ))
             })?;
 
-            *self.hook.lock().unwrap() = Some(hook.0 as isize);
+            *self.hook.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook.0 as isize);
             Ok(())
         }
         #[cfg(not(windows))]
@@ -89,7 +89,7 @@ impl EscapeAbort for WindowsEscapeListener {
         {
             use windows::Win32::UI::WindowsAndMessaging::{UnhookWindowsHookEx, HHOOK};
 
-            if let Some(addr) = self.hook.lock().unwrap().take() {
+            if let Some(addr) = self.hook.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 // SAFETY: `addr` is an `HHOOK` previously returned by
                 // `SetWindowsHookExW` and not yet unhooked.
                 let _ = unsafe { UnhookWindowsHookEx(HHOOK(addr as *mut core::ffi::c_void)) };

@@ -38,9 +38,10 @@ pub fn parse_modifier(name: &str) -> Result<Key> {
 /// - [`DesktopError::InputFailed`] if the name is not a recognized key.
 pub fn parse_key(name: &str) -> Result<Key> {
     // Single character keys (use char count, not byte length, for Unicode safety)
-    if name.chars().count() == 1 {
-        let ch = name.chars().next().unwrap();
-        return Ok(Key::Unicode(ch));
+    if let Some(ch) = name.chars().next() {
+        if name.chars().count() == 1 {
+            return Ok(Key::Unicode(ch));
+        }
     }
 
     // Named keys (case-insensitive)

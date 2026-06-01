@@ -87,8 +87,11 @@ async fn session(app: &AppHandle) -> Result<(), String> {
     while let Some(frame) = ws.next().await {
         match frame.map_err(|e| format!("stream error: {e}"))? {
             Message::Text(text) => {
-                if let Ok(value) = serde_json::from_str::<Value>(&text) {
-                    handle_message(app, &value);
+                match serde_json::from_str::<Value>(&text) {
+                    Ok(value) => handle_message(app, &value),
+                    Err(e) => {
+                        tracing::warn!("notification bridge: failed to parse JSON frame: {e}; raw={text:?}");
+                    }
                 }
             }
             Message::Close(_) => return Ok(()),
