@@ -77,7 +77,7 @@ impl StopHookHandler for ShellStopHook {
 /// scenario S1.4 has a passive wiring proof regardless of whether any hooks
 /// are configured.
 pub fn build_from_config(cfgs: &[StopHookConfig]) -> Option<Arc<Vec<Arc<dyn StopHookHandler>>>> {
-    tracing::info!(count = cfgs.len(), "Stop hooks registered");
+    tracing::info!(count = cfgs.len(), "Stop hooks configuration checked");
     if cfgs.is_empty() {
         return None;
     }
@@ -224,7 +224,9 @@ async fn execute_shell_hook(
     let result = tokio::select! {
         r = async {
             if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(context_json.as_bytes()).await;
+                if let Err(e) = stdin.write_all(context_json.as_bytes()).await {
+                    tracing::debug!(error = %e, "stop hook stdin write failed");
+                }
                 drop(stdin);
             }
 
@@ -299,14 +301,18 @@ async fn execute_shell_hook(
             }
         } => r,
         _ = tokio::time::sleep(hook.timeout) => {
-            let _ = child.kill().await;
+            if let Err(e) = child.kill().await {
+                tracing::debug!(error = %e, "stop hook kill after timeout failed");
+            }
             StopHookVerdict::Error {
                 hook_name: hook.hook_name.clone(),
                 message: "timed out".to_string(),
             }
         }
         _ = cancel.cancelled() => {
-            let _ = child.kill().await;
+            if let Err(e) = child.kill().await {
+                tracing::debug!(error = %e, "stop hook kill after cancel failed");
+            }
             StopHookVerdict::Error {
                 hook_name: hook.hook_name.clone(),
                 message: "cancelled".to_string(),

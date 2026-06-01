@@ -185,7 +185,11 @@ impl VerifierChainBuilder {
 pub fn hash_tool_args(args: &serde_json::Value) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    let bytes = serde_json::to_vec(args).unwrap_or_default();
+    // serde_json::Value 的序列化理论不可能失败，但如果失败说明内部状态
+    // 已损坏（不变量被破坏）。panic 比静默返回空 vec 的哈希更安全，
+    // 否则两个不同的参数会被误判为相同（false positive 的 tool loop detection）。
+    let bytes = serde_json::to_vec(args)
+        .expect("serde_json::Value serialization should never fail");
     let mut h = DefaultHasher::new();
     bytes.hash(&mut h);
     h.finish()
