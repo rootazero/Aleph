@@ -196,8 +196,18 @@ impl WizardSessionManager {
     /// Removes the session from the manager. When the Arc is dropped,
     /// the session's channels will close, triggering cancellation.
     pub fn cancel(&self, session_id: &str) -> bool {
-        let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
-        sessions.remove(session_id).is_some()
+        let session = {
+            let sessions = self.sessions.read().unwrap_or_else(|e| e.into_inner());
+            sessions.get(session_id).cloned()
+        };
+
+        if let Some(session) = session {
+            session.cancel();
+            let mut sessions = self.sessions.write().unwrap_or_else(|e| e.into_inner());
+            sessions.remove(session_id).is_some()
+        } else {
+            false
+        }
     }
 
     /// Get session status

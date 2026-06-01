@@ -206,15 +206,39 @@ impl WizardFlow for OnboardingFlow {
                 .await?;
             data.secondary_provider = Some(secondary_provider.clone());
 
-            if secondary_provider != "ollama" && secondary_provider != primary_provider {
-                let api_key = prompter
-                    .text(
-                        &format!("Enter your {} API key:", secondary_provider),
-                        Some("sk-..."),
-                        true,
+            if secondary_provider != "ollama" {
+                let api_key = if secondary_provider == primary_provider {
+                    let use_same = prompter
+                        .confirm(
+                            "Use the same API key as the primary provider?",
+                            true,
+                        )
+                        .await?;
+                    if use_same {
+                        data.primary_api_key.clone()
+                    } else {
+                        Some(
+                            prompter
+                                .text(
+                                    &format!("Enter your {} API key:", secondary_provider),
+                                    Some("sk-..."),
+                                    true,
+                                )
+                                .await?,
+                        )
+                    }
+                } else {
+                    Some(
+                        prompter
+                            .text(
+                                &format!("Enter your {} API key:", secondary_provider),
+                                Some("sk-..."),
+                                true,
+                            )
+                            .await?,
                     )
-                    .await?;
-                data.secondary_api_key = Some(api_key);
+                };
+                data.secondary_api_key = api_key;
             }
 
             let secondary_model: String = prompter

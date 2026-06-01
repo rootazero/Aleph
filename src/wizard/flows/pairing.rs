@@ -153,12 +153,7 @@ impl WizardFlow for PairingFlow {
     }
 }
 
-#[cfg(not(test))]
-const KEYRING_SERVICE: &str = "aleph-gateway";
-#[cfg(not(test))]
-const KEYRING_USER: &str = "desktop-shell";
-
-fn persist_token_to_keyring(token: &str) -> Result<(), String> {
+fn persist_token_to_keyring(token: &str) -> Result<(), keyring::Error> {
     // Skip the real keyring call in unit tests (cargo test --lib) — macOS
     // Keychain can pop a UI prompt that would hang the test.  Note: this
     // cfg gate does NOT apply to integration tests in `tests/`, where the
@@ -173,11 +168,10 @@ fn persist_token_to_keyring(token: &str) -> Result<(), String> {
 
     #[cfg(not(test))]
     {
-        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)
-            .map_err(|e| format!("entry: {e}"))?;
-        entry
-            .set_password(token)
-            .map_err(|e| format!("set_password: {e}"))
+        const KEYRING_SERVICE: &str = "aleph-gateway";
+        const KEYRING_USER: &str = "desktop-shell";
+        let entry = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER)?;
+        entry.set_password(token)
     }
 }
 

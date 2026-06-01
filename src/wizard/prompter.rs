@@ -2,9 +2,8 @@
 //!
 //! Provides abstractions for collecting user input during wizard flows.
 
-use crate::sync_primitives::{Arc, RwLock};
+use crate::sync_primitives::{Arc, AtomicU64, Ordering, RwLock};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use serde::de::DeserializeOwned;
@@ -118,8 +117,14 @@ impl RpcPrompter {
 
         debug!(step_id = %step.id, "Waiting for answer");
 
-        // Wait for answer
-        rx.await.map_err(|_| WizardSessionError::Cancelled)
+        // Wait for answer.  If the sender is dropped without sending,
+        // treat it as an internal error (the flow task may have panicked
+        // or the channel was closed unexpectedly).
+        rx.await.map_err(|_| {
+            WizardSessionError::Internal(
+                "Answer channel closed unexpectedly (flow may have panicked)".to_string(),
+            )
+        })
     }
 
     /// Mark the flow as complete with a payload that propagates back through

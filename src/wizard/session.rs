@@ -71,7 +71,7 @@ pub struct WizardSession {
     /// Final payload set by `RpcPrompter::finish(...)` before the flow returns.
     /// `next()` reads from this when surfacing the Done result.
     finish_data: Arc<RwLock<Option<serde_json::Value>>>,
-    cancel_tx: Option<oneshot::Sender<()>>,
+    cancel_tx: Arc<RwLock<Option<oneshot::Sender<()>>>>,
 }
 
 impl WizardSession {
@@ -100,7 +100,7 @@ impl WizardSession {
             answers,
             error: Arc::new(RwLock::new(None)),
             finish_data: finish_data.clone(),
-            cancel_tx: Some(cancel_tx),
+            cancel_tx: Arc::new(RwLock::new(Some(cancel_tx))),
         };
 
         // Spawn the flow runner
@@ -174,7 +174,8 @@ impl WizardSession {
                     let error = self.error.read().unwrap_or_else(|e| e.into_inner()).clone();
                     WizardNextResult::error(error.unwrap_or_else(|| "Unknown error".to_string()))
                 }
-                _ => self.done_result(),
+                // Running cannot appear here because of the guard above.
+                WizardStatus::Running => self.done_result(),
             };
         }
 
@@ -198,7 +199,11 @@ impl WizardSession {
                             error.unwrap_or_else(|| "Unknown error".to_string()),
                         )
                     }
-                    _ => self.done_result(),
+                    // Channel closed while still Running — flow task
+                    // terminated unexpectedly (likely panicked).
+                    WizardStatus::Running => WizardNextResult::error(
+                        "Wizard flow terminated unexpectedly".to_string(),
+                    ),
                 }
             }
         }
@@ -238,8 +243,8 @@ impl WizardSession {
     }
 
     /// Cancel the wizard
-    pub fn cancel(&mut self) {
-        if let Some(tx) = self.cancel_tx.take() {
+    pub fn cancel(&self) {
+        if let Some(tx) = self.cancel_tx.write().unwrap_or_else(|e| e.into_inner()).take() {
             let _ = tx.send(());
         }
         *self.status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Cancelled;
