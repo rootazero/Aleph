@@ -309,6 +309,25 @@ impl ArenaManifest {
                     }
                 }
 
+                if stages.is_empty() {
+                    return Err("Pipeline stages cannot be empty".to_string());
+                }
+
+                let stage_agent_ids: std::collections::HashSet<_> =
+                    stages.iter().map(|s| &s.agent_id).collect();
+                for id in agent_ids {
+                    if !stage_agent_ids.contains(id) {
+                        return Err(format!(
+                            "Participant '{}' is not assigned to any pipeline stage",
+                            id
+                        ));
+                    }
+                }
+
+                if Self::has_pipeline_cycle(&stages) {
+                    return Err("Pipeline stages contain a cyclic dependency".to_string());
+                }
+
                 CoordinationStrategy::Pipeline { stages }
             }
             other => {
@@ -343,6 +362,47 @@ impl ArenaManifest {
             created_at: Utc::now(),
         })
     }
+
+    fn has_pipeline_cycle(stages: &[StageSpec]) -> bool {
+        let mut in_degree: HashMap<&str, usize> = HashMap::new();
+        let mut adjacency: HashMap<&str, Vec<&str>> = HashMap::new();
+
+        for stage in stages {
+            in_degree.entry(stage.agent_id.as_str()).or_insert(0);
+        }
+
+        for stage in stages {
+            for dep in &stage.depends_on {
+                adjacency
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(stage.agent_id.as_str());
+                *in_degree.entry(stage.agent_id.as_str()).or_insert(0) += 1;
+            }
+        }
+
+        let mut queue: std::collections::VecDeque<&str> = in_degree
+            .iter()
+            .filter(|(_, &deg)| deg == 0)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut processed = 0usize;
+
+        while let Some(node) = queue.pop_front() {
+            processed += 1;
+            if let Some(neighbors) = adjacency.get(node) {
+                for neighbor in neighbors {
+                    let deg = in_degree.get_mut(neighbor).unwrap();
+                    *deg -= 1;
+                    if *deg == 0 {
+                        queue.push_back(neighbor);
+                    }
+                }
+            }
+        }
+
+        processed != stages.len()
+    }
 }
 
 // =============================================================================
@@ -376,7 +436,7 @@ pub enum ArtifactContent {
 impl ValueObject for ArtifactContent {}
 
 /// A concrete output produced by an agent within a slot.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Artifact {
     /// Unique artifact identifier.
     pub id: ArtifactId,
@@ -727,7 +787,6 @@ mod tests {
         let inline = ArtifactContent::Inline("hello world".to_string());
         let reference = ArtifactContent::Reference(PathBuf::from("/tmp/output.txt"));
 
-        // Pattern matching works on both variants
         match &inline {
             ArtifactContent::Inline(s) => assert_eq!(s, "hello world"),
             ArtifactContent::Reference(_) => panic!("expected Inline"),
@@ -737,5 +796,65 @@ mod tests {
             ArtifactContent::Reference(p) => assert_eq!(p, &PathBuf::from("/tmp/output.txt")),
             ArtifactContent::Inline(_) => panic!("expected Reference"),
         }
+    }
+
+    #[test]
+    fn arena_manifest_build_rejects_empty_pipeline_stages() {
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "pipeline",
+            &["agent-a".to_string()],
+            None,
+            Some(vec![]),
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot be empty"));
+    }
+
+    #[test]
+    fn arena_manifest_build_rejects_uncovered_pipeline_participant() {
+        let stages = vec![StageSpec {
+            agent_id: "agent-a".to_string(),
+            description: "Stage 1".to_string(),
+            depends_on: vec![],
+        }];
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "pipeline",
+            &["agent-a".to_string(), "agent-b".to_string()],
+            None,
+            Some(stages),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Participant 'agent-b' is not assigned to any pipeline stage"));
+    }
+
+    #[test]
+    fn arena_manifest_build_rejects_cyclic_pipeline_dependencies() {
+        let stages = vec![
+            StageSpec {
+                agent_id: "agent-a".to_string(),
+                description: "Stage 1".to_string(),
+                depends_on: vec!["agent-b".to_string()],
+            },
+            StageSpec {
+                agent_id: "agent-b".to_string(),
+                description: "Stage 2".to_string(),
+                depends_on: vec!["agent-a".to_string()],
+            },
+        ];
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "pipeline",
+            &["agent-a".to_string(), "agent-b".to_string()],
+            None,
+            Some(stages),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("cyclic dependency"));
     }
 }
