@@ -150,6 +150,39 @@ pub struct AgentParams {
 }
 
 // =============================================================================
+// AgentModelRef
+// =============================================================================
+
+/// agent 选中的 model 引用。
+///
+/// 作为 `AgentDefinition.model` 的值;字段为 `None` 时表示**继承系统默认 model**
+/// (= `defaults.model > profile.model > DEFAULT_MODEL`,即"当前默认 model")。
+///
+/// 用 `#[serde(untagged)]` 兼容两种 TOML 写法:
+/// - 裸字符串 `model = "claude-x"` → [`AgentModelRef::Legacy`](旧格式,不做删除检测)
+/// - 内联表 `model = { provider = "anthropic", model = "claude-x" }` → [`AgentModelRef::Qualified`]
+///   (Panel 从已配置 model 里选出,带 provider 以便检测"被删/禁用/移除"而自动回退)
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum AgentModelRef {
+    /// Panel 选中的已配置 model,pin 住 provider + model。
+    Qualified { provider: String, model: String },
+    /// 旧 config 的自由字符串。永不参与删除回退校验。
+    Legacy(String),
+}
+
+impl AgentModelRef {
+    /// 返回 model id(两种变体都带)。仅用于显示与"不校验"路径;
+    /// 删除回退的真正解析在 `agent_resolver::resolve_model_ref`。
+    pub fn model_str(&self) -> &str {
+        match self {
+            Self::Qualified { model, .. } => model,
+            Self::Legacy(s) => s,
+        }
+    }
+}
+
+// =============================================================================
 // AgentDefinition
 // =============================================================================
 
@@ -504,5 +537,51 @@ mod tests {
 
         let policy: SubagentPolicy = toml::from_str(toml_str).unwrap();
         assert_eq!(policy.allow, vec!["*"]);
+    }
+}
+
+#[cfg(test)]
+mod model_ref_tests {
+    use super::AgentModelRef;
+
+    #[test]
+    fn legacy_bare_string_roundtrips() {
+        let m: AgentModelRef = serde_json::from_value(serde_json::json!("claude-opus-4")).unwrap();
+        assert_eq!(m, AgentModelRef::Legacy("claude-opus-4".to_string()));
+        assert_eq!(m.model_str(), "claude-opus-4");
+    }
+
+    #[test]
+    fn qualified_table_parses() {
+        let m: AgentModelRef = serde_json::from_value(
+            serde_json::json!({ "provider": "anthropic", "model": "claude-sonnet-4" }),
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            AgentModelRef::Qualified {
+                provider: "anthropic".to_string(),
+                model: "claude-sonnet-4".to_string(),
+            }
+        );
+        assert_eq!(m.model_str(), "claude-sonnet-4");
+    }
+
+    #[test]
+    fn legacy_serializes_back_to_bare_string() {
+        let m = AgentModelRef::Legacy("gpt-5".to_string());
+        assert_eq!(serde_json::to_value(&m).unwrap(), serde_json::json!("gpt-5"));
+    }
+
+    #[test]
+    fn qualified_serializes_to_table() {
+        let m = AgentModelRef::Qualified {
+            provider: "openai".to_string(),
+            model: "gpt-5".to_string(),
+        };
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::json!({ "provider": "openai", "model": "gpt-5" })
+        );
     }
 }
