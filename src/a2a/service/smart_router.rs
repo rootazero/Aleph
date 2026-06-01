@@ -153,21 +153,7 @@ impl SmartRouter {
         if needle.is_empty() {
             return false;
         }
-        let needle_bytes = needle.as_bytes();
-        haystack
-            .as_bytes()
-            .windows(needle_bytes.len())
-            .any(|window| {
-                if window != needle_bytes {
-                    return false;
-                }
-                let start = window.as_ptr() as usize - haystack.as_bytes().as_ptr() as usize;
-                let end = start + needle_bytes.len();
-                let left_ok = start == 0 || !haystack.as_bytes()[start - 1].is_ascii_alphanumeric();
-                let right_ok =
-                    end >= haystack.len() || !haystack.as_bytes()[end].is_ascii_alphanumeric();
-                left_ok && right_ok
-            })
+        haystack.split(|c: char| !c.is_alphanumeric()).any(|word| word == needle)
     }
 }
 

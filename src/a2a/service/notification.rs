@@ -31,7 +31,10 @@ impl NotificationService {
             http_client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
-                .expect("reqwest client with timeout should always build"),
+                .unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "Failed to build reqwest client with timeout, using default client");
+                    reqwest::Client::new()
+                }),
         }
     }
 

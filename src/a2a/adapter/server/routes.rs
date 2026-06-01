@@ -220,8 +220,7 @@ fn sse_error(resp: JsonRpcResponse) -> axum::response::Response {
 fn extract_credentials(headers: &HeaderMap) -> Credentials {
     if let Some(auth) = headers.get("authorization").and_then(|v| v.to_str().ok()) {
         // RFC 7235: auth-scheme is case-insensitive
-        if auth.len() >= 7 {
-            let prefix = &auth[..7];
+        if let Some(prefix) = auth.get(..7) {
             if prefix.eq_ignore_ascii_case("bearer ") {
                 return Credentials::BearerToken(auth[7..].to_string());
             }
