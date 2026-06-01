@@ -236,7 +236,12 @@ pub(in crate::commands::start) fn initialize_auth(
 pub(in crate::commands::start) fn load_app_config(
 ) -> Result<alephcore::Config, Box<dyn std::error::Error>> {
     match alephcore::Config::load() {
-        Ok(cfg) => Ok(cfg),
+        Ok(cfg) => {
+            // Startup-only advisory hints (kept out of validate() so they
+            // don't spam on every programmatic reload / skill snapshot rebuild).
+            cfg.log_advisories();
+            Ok(cfg)
+        }
         Err(e) => Err(format!("Error loading application config: {}", e).into()),
     }
 }

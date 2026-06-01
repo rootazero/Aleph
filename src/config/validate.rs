@@ -22,24 +22,6 @@ impl Config {
             "Starting config validation"
         );
 
-        // Warn if no default provider is configured
-        if self.general.default_provider.is_none() {
-            warn!(
-                "No default_provider configured. \
-                 Requests will fail if no routing rule matches. \
-                 Recommendation: Set general.default_provider in config"
-            );
-        }
-
-        // Warn if no routing rules are configured
-        if self.rules.is_empty() {
-            warn!(
-                "No routing rules configured. \
-                 All requests will use default_provider (if set). \
-                 Recommendation: Add routing rules to enable context-aware routing"
-            );
-        }
-
         // Validate default provider exists (if configured)
         if let Some(ref default_provider) = self.general.default_provider {
             if !self.providers.contains_key(default_provider) {
@@ -586,5 +568,29 @@ impl Config {
         );
 
         Ok(())
+    }
+
+    /// Emit one-time advisory recommendations about the loaded config.
+    ///
+    /// These are *not* validation errors — they are startup hints. They live
+    /// outside [`Config::validate`] because `validate` runs on every config
+    /// reload/patch (and on every programmatic `Config::load`), which would
+    /// otherwise spam the log. Call this exactly once from the startup path.
+    pub fn log_advisories(&self) {
+        if self.general.default_provider.is_none() {
+            warn!(
+                "No default_provider configured. \
+                 Requests will fail if no routing rule matches. \
+                 Recommendation: Set general.default_provider in config"
+            );
+        }
+
+        if self.rules.is_empty() {
+            debug!(
+                "No routing rules configured. \
+                 All requests use default_provider — this is the expected \
+                 default for LLM-sovereign routing"
+            );
+        }
     }
 }
