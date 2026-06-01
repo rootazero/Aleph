@@ -148,7 +148,7 @@ mod tests {
     }
     impl TraceSink for CapturingSink {
         fn on_trace(&self, event: &LoopTraceEvent) {
-            self.events.lock().unwrap().push(event.clone());
+            self.events.lock().expect("test sink lock").push(event.clone());
         }
         fn flush(&self) {}
     }
@@ -224,7 +224,7 @@ mod tests {
             text: "hello".into(),
         });
         // Inner sink received the event…
-        assert_eq!(inner.events.lock().unwrap().len(), 1);
+        assert_eq!(inner.events.lock().expect("test sink lock").len(), 1);
         // …but tracker.progress unchanged (TextEmitted is not translated).
         assert!(tracker.progress_snapshot("rid", 10).is_empty());
     }

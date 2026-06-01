@@ -2,6 +2,7 @@
 
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
+use tracing::warn;
 
 use crate::agents::types::{AgentDef, AgentMode, ContextMode};
 
@@ -36,20 +37,29 @@ impl AgentRegistry {
     /// Register an agent definition
     pub fn register(&self, agent: AgentDef) {
         // Recover from poisoned lock — the data is still valid after a panic
-        let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());
+        let mut agents = self.agents.write().unwrap_or_else(|e| {
+            warn!("AgentRegistry lock poisoned during register, recovering");
+            e.into_inner()
+        });
         agents.insert(agent.id.clone(), agent);
     }
 
     /// Get an agent by ID
     pub fn get(&self, id: &str) -> Option<AgentDef> {
         // Recover from poisoned lock — the data is still valid after a panic
-        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
+        let agents = self.agents.read().unwrap_or_else(|e| {
+            warn!("AgentRegistry lock poisoned during get, recovering");
+            e.into_inner()
+        });
         agents.get(id).cloned()
     }
 
     /// List all registered agent IDs (sorted for deterministic output)
     pub fn list_ids(&self) -> Vec<String> {
-        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
+        let agents = self.agents.read().unwrap_or_else(|e| {
+            warn!("AgentRegistry lock poisoned during list_ids, recovering");
+            e.into_inner()
+        });
         let mut ids: Vec<String> = agents.keys().cloned().collect();
         ids.sort();
         ids
@@ -57,7 +67,10 @@ impl AgentRegistry {
 
     /// List all sub-agents (excluding primary, sorted by id)
     pub fn list_subagents(&self) -> Vec<AgentDef> {
-        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
+        let agents = self.agents.read().unwrap_or_else(|e| {
+            warn!("AgentRegistry lock poisoned during list_subagents, recovering");
+            e.into_inner()
+        });
         let mut result: Vec<AgentDef> = agents
             .values()
             .filter(|a| a.mode == AgentMode::SubAgent)
@@ -155,7 +168,10 @@ impl AgentRegistry {
 
     /// Remove an agent by ID
     pub fn unregister(&self, id: &str) -> Option<AgentDef> {
-        let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());
+        let mut agents = self.agents.write().unwrap_or_else(|e| {
+            warn!("AgentRegistry lock poisoned during unregister, recovering");
+            e.into_inner()
+        });
         agents.remove(id)
     }
 }
@@ -171,14 +187,20 @@ impl AgentRegistry {
 /// Only built-in ids are aliased; project/user-defined agents are matched
 /// exactly in the first resolution pass and never routed through this table.
 fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "default" | "general" | "general-purpose" | "general_purpose" | "gp" => Some("default"),
-        "explore" | "explorer" | "exploration" => Some("explore"),
-        "plan" | "planner" | "planning" => Some("plan"),
-        "verify" | "verifier" | "verification" => Some("verify"),
-        "research" | "researcher" => Some("researcher"),
-        "code" | "coder" | "coding" => Some("coder"),
-        "main" => Some("main"),
+    let trimmed = raw.trim();
+    match trimmed {
+        "default" | "explore" | "plan" | "verify" | "researcher" | "coder" | "main" => {
+            return Some(trimmed);
+        }
+        _ => {}
+    }
+    match trimmed.to_ascii_lowercase().as_str() {
+        "general" | "general-purpose" | "general_purpose" | "gp" => Some("default"),
+        "explorer" | "exploration" => Some("explore"),
+        "planner" | "planning" => Some("plan"),
+        "verifier" | "verification" => Some("verify"),
+        "research" => Some("researcher"),
+        "code" | "coding" => Some("coder"),
         _ => None,
     }
 }
@@ -230,7 +252,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
                 "web_fetch".into(),
                 "read_file".into(),
             ])
-            .with_denied_tools(vec!["write_file".into(), "edit_file".into(), "bash".into()])
+            .with_denied_tools(vec!["write_file".into(), "file_edit".into(), "bash".into()])
             .with_max_iterations(15),
         // Default agent - general-purpose sub-agent
         AgentDef::new("default", AgentMode::SubAgent)
@@ -250,7 +272,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
                 "read_file".into(),
                 "bash".into(),
             ])
-            .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
+            .with_denied_tools(vec!["write_file".into(), "file_edit".into()])
             .with_max_iterations(20)
             .with_context_mode(ContextMode::Summary),
         // Verify agent - adversarial verifier (read-only)
@@ -259,7 +281,7 @@ pub fn builtin_agents() -> Vec<AgentDef> {
             .with_when_to_use("When you need to independently verify that work was done correctly")
             .with_prompt_sections(vec!["verify_protocol".into()])
             .with_allowed_tools(vec!["*".into()])
-            .with_denied_tools(vec!["write_file".into(), "edit_file".into()])
+            .with_denied_tools(vec!["write_file".into(), "file_edit".into()])
             .with_max_iterations(25)
             .with_context_mode(ContextMode::Summary),
     ]
@@ -389,7 +411,7 @@ mod tests {
         assert!(verify.is_tool_allowed("glob"));
         assert!(verify.is_tool_allowed("bash"));
         assert!(!verify.is_tool_allowed("write_file")); // read-only: write denied
-        assert!(!verify.is_tool_allowed("edit_file")); // read-only: edit denied
+        assert!(!verify.is_tool_allowed("file_edit")); // read-only: edit denied
         assert_eq!(verify.max_iterations, Some(25));
         assert_eq!(verify.prompt_sections, vec!["verify_protocol"]);
     }

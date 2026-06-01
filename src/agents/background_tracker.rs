@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 use crate::agents::progress::SubagentProgress;
 use crate::sync_primitives::RwLock;
 use tokio_util::sync::CancellationToken;
+use tracing::warn;
 
 /// C1 — completed background results older than this are pruned opportunistically
 /// on each new `register()`.
@@ -94,7 +95,10 @@ impl BackgroundAgentTracker {
         cancel_token: CancellationToken,
         task_description: String,
     ) {
-        let mut running = self.running.write().unwrap_or_else(|e| e.into_inner());
+        let mut running = self.running.write().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         running.insert(
             request_id,
             RunningAgent {
@@ -116,7 +120,10 @@ impl BackgroundAgentTracker {
     pub fn mark_completed(&self, request_id: &str, outcome: CompletedOutcome) {
         let now = Instant::now();
         let prior = {
-            let mut running = self.running.write().unwrap_or_else(|e| e.into_inner());
+            let mut running = self.running.write().unwrap_or_else(|e| {
+                warn!("BackgroundAgentTracker lock poisoned, recovering");
+                e.into_inner()
+            });
             running.remove(request_id)
         };
         let (duration_secs, task_description) = match prior {
@@ -126,7 +133,10 @@ impl BackgroundAgentTracker {
             ),
             None => (0, String::new()),
         };
-        let mut completed = self.completed.write().unwrap_or_else(|e| e.into_inner());
+        let mut completed = self.completed.write().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         completed.insert(
             request_id.to_string(),
             CompletedAgent {
@@ -144,7 +154,10 @@ impl BackgroundAgentTracker {
     /// registered). The cooperative cancellation still relies on the
     /// running task observing the token at the next await point.
     pub fn cancel(&self, request_id: &str) -> bool {
-        let running = self.running.read().unwrap_or_else(|e| e.into_inner());
+        let running = self.running.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         if let Some(agent) = running.get(request_id) {
             agent.cancel_token.cancel();
             true
@@ -158,7 +171,10 @@ impl BackgroundAgentTracker {
     /// Unlike a consume, repeated polls return the same snapshot — this is
     /// what lets a parent re-check a completed subagent.
     pub fn result_snapshot(&self, request_id: &str) -> Option<CompletedSnapshot> {
-        let completed = self.completed.read().unwrap_or_else(|e| e.into_inner());
+        let completed = self.completed.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         completed.get(request_id).map(|c| CompletedSnapshot {
             task: c.task_description.clone(),
             duration_secs: c.duration_secs,
@@ -168,7 +184,10 @@ impl BackgroundAgentTracker {
 
     /// List running agents as (request_id, task_description, elapsed_secs).
     pub fn list_running(&self) -> Vec<(String, String, u64)> {
-        let running = self.running.read().unwrap_or_else(|e| e.into_inner());
+        let running = self.running.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         running
             .iter()
             .map(|(id, agent)| {
@@ -184,7 +203,10 @@ impl BackgroundAgentTracker {
     /// Lightweight metadata for one still-running agent. `None` when the
     /// request_id is unknown (never registered, or already completed).
     pub fn running_meta(&self, request_id: &str) -> Option<RunningMeta> {
-        let running = self.running.read().unwrap_or_else(|e| e.into_inner());
+        let running = self.running.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         running.get(request_id).map(|agent| RunningMeta {
             elapsed_secs: agent.started_at.elapsed().as_secs(),
             task: agent.task_description.clone(),
@@ -195,7 +217,10 @@ impl BackgroundAgentTracker {
     /// Backs the `list` action's view of results still retrievable by the
     /// parent. Bounded by the TTL prune in `cleanup`.
     pub fn all_completed(&self) -> Vec<(String, CompletedSnapshot)> {
-        let completed = self.completed.read().unwrap_or_else(|e| e.into_inner());
+        let completed = self.completed.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         completed
             .iter()
             .map(|(id, c)| {
@@ -215,7 +240,10 @@ impl BackgroundAgentTracker {
     /// Capped at 50 events FIFO. Silently no-ops if request_id is unknown
     /// (race condition: tracker may have moved entry to completed).
     pub fn push_progress(&self, request_id: &str, event: SubagentProgress) {
-        let mut running = self.running.write().unwrap_or_else(|e| e.into_inner());
+        let mut running = self.running.write().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         if let Some(agent) = running.get_mut(request_id) {
             if agent.progress.len() >= 50 {
                 agent.progress.pop_front();
@@ -227,7 +255,10 @@ impl BackgroundAgentTracker {
     /// Return up to `limit` most-recent progress events (chronological order).
     /// Returns empty Vec if request_id is unknown or already completed.
     pub fn progress_snapshot(&self, request_id: &str, limit: usize) -> Vec<SubagentProgress> {
-        let running = self.running.read().unwrap_or_else(|e| e.into_inner());
+        let running = self.running.read().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         match running.get(request_id) {
             Some(agent) => {
                 let total = agent.progress.len();
@@ -240,7 +271,10 @@ impl BackgroundAgentTracker {
 
     /// Remove completed entries older than `ttl`.
     pub fn cleanup(&self, ttl: Duration) {
-        let mut completed = self.completed.write().unwrap_or_else(|e| e.into_inner());
+        let mut completed = self.completed.write().unwrap_or_else(|e| {
+            warn!("BackgroundAgentTracker lock poisoned, recovering");
+            e.into_inner()
+        });
         completed.retain(|_, agent| agent.completed_at.elapsed() < ttl);
     }
 }
