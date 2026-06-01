@@ -94,6 +94,17 @@ const PRESETS: &[SearchPreset] = &[
         is_self_hosted: false,
         needs_engine_id: false,
     },
+    SearchPreset {
+        name: "duckduckgo",
+        display_name: "DuckDuckGo",
+        description: "No-account HTML search",
+        base_url: "",
+        api_key_placeholder: "",
+        icon_color: "#DE5833",
+        needs_api_key: false,
+        is_self_hosted: false,
+        needs_engine_id: false,
+    },
 ];
 
 fn find_preset(name: &str) -> Option<&'static SearchPreset> {
