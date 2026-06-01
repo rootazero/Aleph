@@ -53,7 +53,7 @@ use crate::gateway::channel::{
     ChannelInfo, ChannelResult, ChannelState, ChannelStatus, ConversationId, InboundMessage,
     MessageId, MessageMeta, OutboundMessage, PairingData, SendResult, UserId,
 };
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Ordering};
 use access::AccessDecision;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -740,7 +740,7 @@ impl Channel for TelegramChannel {
                             .await
                         {
                             Ok(Ok(_)) => {
-                                is_healthy.store(true, std::sync::atomic::Ordering::Relaxed);
+                                is_healthy.store(true, Ordering::Relaxed);
                             }
                             Ok(Err(e)) => {
                                 tracing::warn!(
@@ -748,14 +748,14 @@ impl Channel for TelegramChannel {
                                     error = %e,
                                     "Telegram bot health check failed"
                                 );
-                                is_healthy.store(false, std::sync::atomic::Ordering::Relaxed);
+                                is_healthy.store(false, Ordering::Relaxed);
                             }
                             Err(_) => {
                                 tracing::warn!(
                                     account_id = %account_id,
                                     "Telegram bot health check timed out"
                                 );
-                                is_healthy.store(false, std::sync::atomic::Ordering::Relaxed);
+                                is_healthy.store(false, Ordering::Relaxed);
                             }
                         }
                     }
@@ -981,8 +981,8 @@ impl ChannelFactory for TelegramChannelFactory {
 
 fn telegram_factory_creator(
     _config: crate::gateway::channel::ChannelConfig,
-) -> crate::gateway::channel::ChannelResult<std::sync::Arc<dyn ChannelFactory>> {
-    Ok(std::sync::Arc::new(TelegramChannelFactory))
+) -> crate::gateway::channel::ChannelResult<crate::sync_primitives::Arc<dyn ChannelFactory>> {
+    Ok(crate::sync_primitives::Arc::new(TelegramChannelFactory))
 }
 
 pub fn register_with_plugin() {

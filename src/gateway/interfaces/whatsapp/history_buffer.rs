@@ -53,7 +53,7 @@ impl Default for HistoryBufferConfig {
 pub struct GroupHistoryBuffer {
     config: HistoryBufferConfig,
     buffers:
-        std::sync::Arc<tokio::sync::RwLock<HashMap<ConversationId, VecDeque<BufferedMessage>>>>,
+        crate::sync_primitives::Arc<tokio::sync::RwLock<HashMap<ConversationId, VecDeque<BufferedMessage>>>>,
 }
 
 impl GroupHistoryBuffer {

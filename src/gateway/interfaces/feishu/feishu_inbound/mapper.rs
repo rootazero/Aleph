@@ -138,7 +138,7 @@ mod tests {
 
     fn make_api() -> Arc<FeishuApi> {
         Arc::new(FeishuApi::new(
-            std::sync::Arc::new(crate::gateway::interfaces::feishu::auth::TokenManager::new(
+            crate::sync_primitives::Arc::new(crate::gateway::interfaces::feishu::auth::TokenManager::new(
                 "",
                 "",
                 "https://open.feishu.cn",

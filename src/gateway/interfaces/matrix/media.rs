@@ -50,10 +50,14 @@ pub async fn hydrate_inbound_attachments(
             continue;
         }
 
-        let mxc = att
-            .url
-            .take()
-            .expect("mxc url present per needs_hydration guard");
+        let mxc = match att.url.take() {
+            Some(url) => url,
+            None => {
+                tracing::warn!("Attachment marked for hydration but URL is absent; passing through metadata-only");
+                out.push(att);
+                continue;
+            }
+        };
         if !within_cap(att.size, max_bytes) {
             tracing::debug!(
                 "Matrix inbound media {} exceeds cap ({:?} > {} bytes), metadata only",

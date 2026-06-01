@@ -408,8 +408,8 @@ impl ChannelFactory for LineChannelFactory {
 
 fn line_factory_creator(
     _config: crate::gateway::channel::ChannelConfig,
-) -> crate::gateway::channel::ChannelResult<std::sync::Arc<dyn ChannelFactory>> {
-    Ok(std::sync::Arc::new(LineChannelFactory))
+) -> crate::gateway::channel::ChannelResult<crate::sync_primitives::Arc<dyn ChannelFactory>> {
+    Ok(crate::sync_primitives::Arc::new(LineChannelFactory))
 }
 
 pub fn register_with_plugin() {
