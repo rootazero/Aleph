@@ -191,6 +191,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::routing_rules;
     use alephcore::gateway::handlers::search_config;
     use alephcore::gateway::handlers::security_config;
+    use alephcore::gateway::handlers::voice;
 
     // Config CRUD
     register_handler!(
@@ -519,6 +520,16 @@ pub(in crate::commands::start) fn register_config_handlers(
         server,
         "generation_providers.list_presets",
         generation_providers::handle_list_presets
+    );
+
+    // Panel mic button → browser-recorded audio → STT transcription.
+    // Reuses the transcription provider resolved above for inbound voice.
+    register_handler!(
+        server,
+        "voice.transcribe",
+        voice::handle_transcribe,
+        config,
+        shared_token_mgr
     );
 
     // Embedding providers (vault-backed API key storage)

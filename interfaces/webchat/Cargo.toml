@@ -37,6 +37,9 @@ web-sys = { version = "0.3", features = [
     "IntersectionObserver", "IntersectionObserverEntry",
     # theme_toggle View Transition reveal — set --theme-x/--theme-y origin
     "CssStyleDeclaration",
+    # composer voice button — mic capture via MediaRecorder → base64 → STT RPC
+    "MediaDevices", "MediaStream", "MediaStreamTrack", "MediaStreamConstraints",
+    "MediaRecorder", "MediaRecorderOptions", "BlobEvent", "BlobPropertyBag",
 ] }
 console_error_panic_hook = "0.1"
 

@@ -607,76 +607,18 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
-    // Wire STT config from dedicated transcription provider
-    // api_key is #[serde(skip)] and injected from vault at runtime,
-    // so we must resolve it from the vault (gen:<provider_name>) before checking.
+    // Wire STT config from dedicated transcription provider.
+    // api_key is #[serde(skip)] and injected from vault at runtime, so
+    // resolution (config-inline or vault `gen:<name>`) is shared with the
+    // `voice.transcribe` panel RPC via `resolve_stt_config`.
     if let Some(ref cfg_arc) = app_config {
         let cfg = cfg_arc.read().await;
-        let gen_cfg = &cfg.generation;
+        if let Some(stt) =
+            alephcore::gateway::voice::inbound::resolve_stt_config(&cfg.generation, &vault)
         {
-            // Helper: resolve api_key from config or vault
-            let resolve_key =
-                |name: &str, pcfg: &alephcore::GenerationProviderConfig| -> Option<String> {
-                    if let Some(ref key) = pcfg.api_key {
-                        if !key.is_empty() {
-                            return Some(key.clone());
-                        }
-                    }
-                    if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
-                        let val = secret.expose().to_string();
-                        if !val.is_empty() {
-                            return Some(val);
-                        }
-                    }
-                    None
-                };
-
-            let transcription_provider = gen_cfg
-                .default_transcription_provider
-                .as_ref()
-                .and_then(|default_name| {
-                    gen_cfg
-                        .transcription_providers
-                        .get_key_value(default_name)
-                        .filter(|(_, pcfg)| pcfg.enabled)
-                        .and_then(|(name, pcfg)| resolve_key(name, pcfg).map(|key| (key, pcfg)))
-                })
-                .or_else(|| {
-                    gen_cfg
-                        .transcription_providers
-                        .iter()
-                        .find_map(|(name, pcfg)| {
-                            if pcfg.enabled {
-                                resolve_key(name, pcfg).map(|key| (key, pcfg))
-                            } else {
-                                None
-                            }
-                        })
-                });
-
-            if let Some((key, pcfg)) = transcription_provider {
-                let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
-                let resolved =
-                    alephcore::generation::providers::url_normalize::resolve_base_url(base);
-                let stt_endpoint =
-                    resolved.primary_endpoint(alephcore::generation::GenerationType::Transcription);
-                let stt_base = stt_endpoint
-                    .trim_end_matches("/audio/transcriptions")
-                    .to_string();
-                let stt_model = pcfg
-                    .models
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "whisper-1".to_string());
-                let stt = alephcore::gateway::voice::inbound::SttConfig {
-                    api_key: key,
-                    base_url: stt_base,
-                    model: stt_model,
-                };
-                inbound_router = inbound_router.with_stt_config(stt);
-                if !daemon {
-                    println!("  Inbound router: voice STT transcription enabled (from transcription provider)");
-                }
+            inbound_router = inbound_router.with_stt_config(stt);
+            if !daemon {
+                println!("  Inbound router: voice STT transcription enabled (from transcription provider)");
             }
         }
     }
