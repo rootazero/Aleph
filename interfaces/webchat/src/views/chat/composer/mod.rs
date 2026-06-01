@@ -9,6 +9,7 @@
 
 mod attachments;
 mod palette;
+mod voice;
 
 use attachments::{read_file_list_into, AttachmentPreviewBar};
 use palette::{
@@ -458,6 +459,12 @@ pub(super) fn InputArea() -> impl IntoView {
                                   clip-rule="evenodd" />
                         </svg>
                     </button>
+
+                    // Voice input — mic capture → STT → draft text (G6).
+                    <voice::VoiceInputButton
+                        input_text=input_text
+                        disabled=Signal::derive(move || is_sending.get())
+                    />
 
                     <textarea
                         class="flex-1 min-w-0 resize-none bg-transparent px-1 py-[6px] text-sm leading-snug

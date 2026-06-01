@@ -119,6 +119,7 @@ pub mod tools_invoke;
 pub mod tools_visibility;
 pub mod trace_replay;
 pub mod version;
+pub mod voice;
 pub mod wizard;
 pub mod workspace;
 

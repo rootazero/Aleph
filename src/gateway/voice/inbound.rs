@@ -29,6 +29,76 @@ pub struct SttConfig {
     pub model: String,
 }
 
+/// Resolve the active STT config from the generation config + vault.
+///
+/// Picks the `default_transcription_provider` when set and enabled, otherwise
+/// the first enabled transcription provider with a resolvable API key (config
+/// inline or vault `gen:<name>`). Returns `None` when no usable provider exists.
+///
+/// Shared by the boot path (inbound router wiring) and the `voice.transcribe`
+/// panel RPC so both resolve the provider identically.
+pub fn resolve_stt_config(
+    gen_cfg: &crate::config::types::generation::GenerationConfig,
+    vault: &crate::gateway::security::SharedTokenManager,
+) -> Option<SttConfig> {
+    let resolve_key = |name: &str, pcfg: &crate::GenerationProviderConfig| -> Option<String> {
+        if let Some(ref key) = pcfg.api_key {
+            if !key.is_empty() {
+                return Some(key.clone());
+            }
+        }
+        if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+            let val = secret.expose().to_string();
+            if !val.is_empty() {
+                return Some(val);
+            }
+        }
+        None
+    };
+
+    let (key, pcfg) = gen_cfg
+        .default_transcription_provider
+        .as_ref()
+        .and_then(|default_name| {
+            gen_cfg
+                .transcription_providers
+                .get_key_value(default_name)
+                .filter(|(_, pcfg)| pcfg.enabled)
+                .and_then(|(name, pcfg)| resolve_key(name, pcfg).map(|key| (key, pcfg)))
+        })
+        .or_else(|| {
+            gen_cfg
+                .transcription_providers
+                .iter()
+                .find_map(|(name, pcfg)| {
+                    if pcfg.enabled {
+                        resolve_key(name, pcfg).map(|key| (key, pcfg))
+                    } else {
+                        None
+                    }
+                })
+        })?;
+
+    let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
+    let resolved = crate::generation::providers::url_normalize::resolve_base_url(base);
+    let stt_endpoint =
+        resolved.primary_endpoint(crate::generation::GenerationType::Transcription);
+    let stt_base = stt_endpoint
+        .trim_end_matches("/audio/transcriptions")
+        .to_string();
+    let stt_model = pcfg
+        .models
+        .first()
+        .cloned()
+        .unwrap_or_else(|| "whisper-1".to_string());
+
+    Some(SttConfig {
+        api_key: key,
+        base_url: stt_base,
+        model: stt_model,
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -102,25 +172,39 @@ pub async fn process_inbound_voice(
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// Download audio bytes and send to Whisper-compatible API for transcription.
+/// Download audio bytes from an attachment and transcribe them.
 async fn transcribe_attachment(
     attachment: &Attachment,
     config: &SttConfig,
 ) -> Result<String, String> {
-    // Get audio bytes: from inline data, local file, or download from URL
     let (bytes, filename) = get_audio_bytes(attachment).await?;
+    transcribe_bytes(bytes, &filename, &attachment.mime_type, None, config).await
+}
 
-    // Send to Whisper API
-    let mime = &attachment.mime_type;
+/// Send raw audio bytes to a Whisper-compatible API and return the transcript.
+///
+/// Backend-agnostic core shared by the channel inbound middleware
+/// ([`transcribe_attachment`]) and the `voice.transcribe` panel RPC. `language`
+/// is an optional ISO 639-1 hint passed natively to the API.
+pub async fn transcribe_bytes(
+    bytes: Vec<u8>,
+    filename: &str,
+    mime: &str,
+    language: Option<&str>,
+    config: &SttConfig,
+) -> Result<String, String> {
     let file_part = reqwest::multipart::Part::bytes(bytes)
-        .file_name(filename)
+        .file_name(filename.to_string())
         .mime_str(mime)
         .map_err(|e| format!("Invalid MIME type: {}", e))?;
 
-    let form = reqwest::multipart::Form::new()
+    let mut form = reqwest::multipart::Form::new()
         .part("file", file_part)
         .text("model", config.model.clone())
         .text("response_format", "json");
+    if let Some(lang) = language.filter(|l| !l.is_empty()) {
+        form = form.text("language", lang.to_string());
+    }
 
     let url = format!(
         "{}/audio/transcriptions",
