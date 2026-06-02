@@ -27,10 +27,10 @@ fn needs_hydration(att: &Attachment) -> bool {
 
 /// Hydrate inbound `mxc://` attachments into inline [`Attachment::data`].
 ///
-/// The generic media pipeline ([`crate::gateway::pipeline::media_download`])
-/// fetches over HTTP via `safe_fetch`, which cannot resolve `mxc://` URIs —
-/// those require the Matrix client and its access token. So the Matrix limb
-/// downloads its own media here and hands bytes downstream as inline data.
+/// The generic SSRF-guarded fetch path ([`crate::security::ssrf::safe_fetch`])
+/// fetches over HTTP, which cannot resolve `mxc://` URIs — those require the
+/// Matrix client and its access token. So the Matrix limb downloads its own
+/// media here and hands bytes downstream as inline data.
 ///
 /// Each attachment carrying an `mxc://` URL has its `url` cleared (the pipeline
 /// cannot use it) and, when the download succeeds within `max_bytes`, its

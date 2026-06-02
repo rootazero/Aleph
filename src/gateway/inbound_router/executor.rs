@@ -41,12 +41,6 @@ impl InboundMessageRouter {
         ctx: &InboundContext,
         slash_command_mode: Option<String>,
     ) -> Result<(), RoutingError> {
-        // Pipeline path: if debounce buffer is configured, use it
-        if let Some(buffer) = &self.debounce_buffer {
-            buffer.submit(ctx.clone()).await;
-            return Ok(());
-        }
-
         // Check if execution support is configured
         let (agent_registry, execution_adapter) = match (
             self.agent_registry.as_ref(),

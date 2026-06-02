@@ -34,6 +34,20 @@ pub struct CoalescingConfig {
     pub max_fragments: usize,
     /// Maximum cumulative text bytes before forced flush.
     pub max_bytes: usize,
+    /// Hard ceiling on total coalescing latency, measured from the first
+    /// buffered fragment (ms). The rolling `debounce_ms` window resets on every
+    /// new message; without this ceiling a slow drip of fragments (one every
+    /// `debounce_ms - ε`) would delay dispatch until a `max_fragments` /
+    /// `max_bytes` safety limit is hit. `0` disables the ceiling (rolling
+    /// window only — legacy behavior).
+    #[serde(default = "default_max_window_ms")]
+    pub max_window_ms: u64,
+}
+
+/// Default hard-deadline ceiling for coalescing (ms). Kept as a free function so
+/// `#[serde(default)]` can backfill it when deserializing older configs.
+fn default_max_window_ms() -> u64 {
+    5_000
 }
 
 impl Default for CoalescingConfig {
@@ -44,6 +58,7 @@ impl Default for CoalescingConfig {
             media_group_timeout_ms: 500,
             max_fragments: 12,
             max_bytes: 50_000,
+            max_window_ms: default_max_window_ms(),
         }
     }
 }
@@ -55,6 +70,9 @@ impl Default for CoalescingConfig {
 struct CoalesceBuffer {
     messages: Vec<InboundMessage>,
     deadline: Instant,
+    /// Timestamp of the first fragment in the current batch. Anchors the hard
+    /// `max_window_ms` ceiling so the rolling deadline can never escape it.
+    first_seen: Instant,
     total_text_bytes: usize,
     /// Non-None when this buffer aggregates a Telegram media group.
     /// Retained for future diagnostics / logging.
@@ -116,6 +134,7 @@ impl MessageCoalescer {
         let mut entry = self.buffers.entry(key).or_insert_with(|| CoalesceBuffer {
             messages: Vec::new(),
             deadline: base_deadline,
+            first_seen: now,
             total_text_bytes: 0,
             media_group_id: media_group_id.clone(),
         });
@@ -123,7 +142,15 @@ impl MessageCoalescer {
         let buf = entry.value_mut();
         buf.messages.push(msg);
         buf.total_text_bytes += text_len;
-        buf.deadline = base_deadline;
+        // Roll the debounce window forward, but never past the hard ceiling
+        // anchored at the first fragment. `max_window_ms == 0` disables the
+        // ceiling (legacy rolling-window-only behavior).
+        buf.deadline = if self.config.max_window_ms > 0 {
+            let hard = buf.first_seen + Duration::from_millis(self.config.max_window_ms);
+            base_deadline.min(hard)
+        } else {
+            base_deadline
+        };
 
         tracing::debug!(
             conversation_id = %conversation_id,
@@ -138,6 +165,10 @@ impl MessageCoalescer {
         {
             let drained = std::mem::take(&mut buf.messages);
             buf.total_text_bytes = 0;
+            // A forced flush closes the batch; re-anchor the hard window so any
+            // subsequent fragments start a fresh ceiling rather than inheriting
+            // the (now-elapsed) original anchor.
+            buf.first_seen = now;
             flushed.push(Self::merge(drained));
         }
 
@@ -537,6 +568,64 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].id.as_str(), "42");
         assert_eq!(results[0].text, "solo");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: hard max_window ceiling forces flush despite a long rolling window
+    // -----------------------------------------------------------------------
+    #[test]
+    fn hard_window_caps_rolling_debounce() {
+        // Rolling window is effectively infinite (debounce + early_flush huge),
+        // so without the ceiling these fragments would never expire via tick.
+        // The 10ms hard ceiling, anchored at the first fragment, forces a flush.
+        let cfg = CoalescingConfig {
+            debounce_ms: 100_000,
+            early_flush_ms: 100_000,
+            max_window_ms: 10,
+            ..Default::default()
+        };
+        let coalescer = MessageCoalescer::new(cfg);
+
+        // Two non-sentence fragments; the second resets the rolling window but
+        // must NOT escape the hard ceiling anchored at the first.
+        coalescer.push(make_msg("1", "chat-w", "drip one"));
+        coalescer.push(make_msg("2", "chat-w", "drip two"));
+
+        // Before the ceiling elapses, nothing should flush.
+        assert!(
+            coalescer.tick().is_empty(),
+            "should not flush before the hard window elapses"
+        );
+
+        // Sleep well past the 10ms ceiling (5x margin keeps this non-flaky).
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let results = coalescer.tick();
+        assert_eq!(results.len(), 1, "hard window must force a flush");
+        assert_eq!(results[0].text, "drip one\ndrip two");
+    }
+
+    // -----------------------------------------------------------------------
+    // Test: max_window_ms == 0 disables the ceiling (legacy behavior)
+    // -----------------------------------------------------------------------
+    #[test]
+    fn hard_window_disabled_keeps_rolling() {
+        let cfg = CoalescingConfig {
+            debounce_ms: 100_000,
+            early_flush_ms: 100_000,
+            max_window_ms: 0, // disabled
+            ..Default::default()
+        };
+        let coalescer = MessageCoalescer::new(cfg);
+
+        coalescer.push(make_msg("1", "chat-z", "stay"));
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        // With the ceiling disabled and a huge rolling window, tick must NOT flush.
+        assert!(
+            coalescer.tick().is_empty(),
+            "disabled ceiling should leave the long rolling window intact"
+        );
     }
 
     // -----------------------------------------------------------------------
