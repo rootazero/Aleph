@@ -399,6 +399,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
+        // Always surface the effective working directory to the model — for
+        // both default `~/.aleph/workspaces/{agent_id}` runs and project-scoped
+        // runs. The path-selection logic above already picks the right
+        // directory; this is the missing half (R7/R9): without it the model
+        // has no way to know where it is and, when asked to save a file,
+        // invents an arbitrary absolute path under the user's home instead of
+        // writing into its workspace. Prepended last so it sits outermost.
+        effective_user_input = format!(
+            "<system-reminder>\n{}\n</system-reminder>\n\n{}",
+            workspace_directive(&effective_workspace),
+            effective_user_input
+        );
+
         // Pre-process multimodal attachments (constant across retries)
         let multimodal_messages: Option<Vec<crate::providers::message::UnifiedMessage>> =
             if let (false, Some(media_processor)) = (
@@ -948,6 +961,26 @@ const PROJECT_SKILLS_MAX: usize = 50;
 /// verbose frontmatter line cannot dominate the listing.
 const PROJECT_SKILL_DESC_MAX_CHARS: usize = 200;
 
+/// Build the working-directory directive surfaced to the model on every turn.
+///
+/// The effective workspace (project override or the agent's stable
+/// `~/.aleph/workspaces/{agent_id}` directory) is already resolved before the
+/// loop runs, but nothing told the model what it was — so when asked to "save a
+/// file" the model would invent a plausible absolute path under the user's home
+/// (e.g. `/Users/<u>/paris-riot-timeline/index.html`) and write outside the
+/// workspace. This directive closes that gap by naming the directory and asking
+/// the model to default to it. It steers (R7: no hard jail) — an explicit
+/// user-named location still wins.
+fn workspace_directive(workspace: &std::path::Path) -> String {
+    format!(
+        "Working directory: `{}`\n\
+         Save any files you create or generate here — use a relative path, or \
+         this directory as the base for an absolute path. Only write to a \
+         different location when the user explicitly asks for one.",
+        workspace.display()
+    )
+}
+
 /// Read project context files from the active workspace root, walking
 /// upward like Claude Code's `claudemd.ts`: each ancestor's `AGENTS.md`,
 /// `CLAUDE.md`, `.claude/CLAUDE.md` and `.aleph/CLAUDE.md` are loaded,
@@ -1209,6 +1242,22 @@ mod project_context_tests {
     /// confined to the tempdir.
     fn anchor(dir: &std::path::Path) {
         std::fs::create_dir_all(dir.join(".git")).unwrap();
+    }
+
+    #[test]
+    fn workspace_directive_names_the_effective_directory() {
+        // The directive must always carry the resolved path verbatim so the
+        // model writes there instead of inventing one. Holds for the default
+        // `~/.aleph/workspaces/{id}` path and for a project override alike —
+        // it is the same helper fed by `effective_workspace` in both modes.
+        let default_ws = std::path::Path::new("/home/u/.aleph/workspaces/main");
+        let d = workspace_directive(default_ws);
+        assert!(d.contains("/home/u/.aleph/workspaces/main"));
+        assert!(d.to_lowercase().contains("working directory"));
+
+        let project_ws = std::path::Path::new("/home/u/projects/paris-riot-timeline");
+        let p = workspace_directive(project_ws);
+        assert!(p.contains("/home/u/projects/paris-riot-timeline"));
     }
 
     #[test]
