@@ -830,6 +830,24 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                             crate::providers::health::TransientError::ConnectionFailed,
                         )),
                     );
+                    // Reactive OAuth self-heal: a `token_expired` 401 means the
+                    // Codex/ChatGPT access token lapsed mid-run. Refresh it and
+                    // hot-swap the live provider so the retry below uses a fresh
+                    // token instead of hammering the same stale one. Infra-level
+                    // (limb refreshing its credential), not a loop strategy
+                    // decision — the retry happens regardless.
+                    if crate::gateway::codex_token_refresher::is_oauth_token_expired_error(&message)
+                    {
+                        if let Some(refresher) = crate::gateway::codex_token_refresher::global() {
+                            let healed = refresher.refresh_and_swap().await;
+                            info!(
+                                run_id = run_id,
+                                attempt = attempt,
+                                healed = healed,
+                                "OAuth token expired mid-run — attempted refresh before retry"
+                            );
+                        }
+                    }
                     warn!(
                         run_id = run_id,
                         attempt = attempt,

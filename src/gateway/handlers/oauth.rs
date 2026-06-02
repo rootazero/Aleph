@@ -149,6 +149,35 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
     }
 }
 
+/// Vault key for the full OAuth token blob (access + refresh + expiry).
+///
+/// The legacy `ai:<provider>` key keeps holding *only* the access token so
+/// providers (which read `api_key`) work unchanged. This blob key stores the
+/// complete [`OAuthTokenCache`] so a daemon restart can recover the
+/// `refresh_token` and real expiry — without it, `restore_from_vault` loses the
+/// refresh token and every later refresh fails with "No refresh token
+/// available. Please re-login."
+fn oauth_blob_key(provider_name: &str) -> String {
+    format!("ai:{}:oauth", provider_name)
+}
+
+/// Persist the full OAuth cache (refresh token + real expiry) as a vault blob.
+/// Best-effort: a failure only degrades restart recovery, not the live session.
+fn persist_oauth_blob(
+    vault: &Arc<SharedTokenManager>,
+    provider_name: &str,
+    cache: &OAuthTokenCache,
+) {
+    match serde_json::to_string(cache) {
+        Ok(json) => {
+            if let Err(e) = vault.store_secret(&oauth_blob_key(provider_name), &json) {
+                warn!(error = %e, "Failed to store OAuth token blob in vault");
+            }
+        }
+        Err(e) => warn!(error = %e, "Failed to serialize OAuth token blob"),
+    }
+}
+
 /// Update config and store OAuth token in vault.
 /// Token is stored in vault under "ai:<provider_name>" (same key format as other providers).
 async fn update_config_api_key(
@@ -163,8 +192,14 @@ async fn update_config_api_key(
         if let Err(e) = vault.store_secret(&vault_key, token) {
             warn!(error = %e, "Failed to store OAuth token in vault");
         }
-    } else if let Err(e) = vault.delete_secret(&vault_key) {
-        warn!(error = %e, "Failed to delete OAuth token from vault");
+    } else {
+        if let Err(e) = vault.delete_secret(&vault_key) {
+            warn!(error = %e, "Failed to delete OAuth token from vault");
+        }
+        // Clear the full blob too so logout fully forgets the refresh token.
+        if let Err(e) = vault.delete_secret(&oauth_blob_key(provider_name)) {
+            warn!(error = %e, "Failed to delete OAuth token blob from vault");
+        }
     }
 
     let mut cfg = config.write().await;
@@ -187,7 +222,11 @@ async fn update_config_api_key(
 }
 
 /// Attempt to refresh an expired token. Returns true on success.
-async fn try_refresh(
+///
+/// `pub(crate)` so the runtime self-heal path (`codex_token_refresher`) can
+/// reuse the exact persistence logic the Panel status-poll uses, instead of
+/// duplicating refresh + vault writes.
+pub(crate) async fn try_refresh(
     oauth_state: &SharedOAuthState,
     config: &Arc<RwLock<Config>>,
     vault: &Arc<SharedTokenManager>,
@@ -208,6 +247,8 @@ async fn try_refresh(
             *oauth_state.write().await = Some(new_cache.clone());
             update_config_api_key(config, vault, provider_name, Some(&new_cache.access_token))
                 .await;
+            // Persist refresh_token + real expiry so a restart can recover.
+            persist_oauth_blob(vault, provider_name, &new_cache);
             info!("OAuth token refreshed successfully");
             true
         }
@@ -228,7 +269,20 @@ pub fn restore_from_vault(config: &Config, vault: &SharedTokenManager) -> Option
     // Check that chatgpt provider exists and is verified
     let _provider = config.providers.get("chatgpt")?;
 
-    // Read token from vault
+    // Prefer the full blob: it carries the real refresh_token + expiry, so the
+    // runtime/background refresh can actually renew the token after a restart.
+    if let Ok(Some(secret)) = vault.get_secret(&oauth_blob_key("chatgpt")) {
+        if let Ok(cache) = serde_json::from_str::<OAuthTokenCache>(secret.expose()) {
+            if !cache.access_token.is_empty() {
+                debug!("Restored OAuth blob from vault (chatgpt provider)");
+                return Some(cache);
+            }
+        }
+    }
+
+    // Legacy fallback: only the access token survived (logged in before the
+    // blob existed). Refresh token is unrecoverable; assume a 1h window so
+    // `oauthStatus` surfaces a re-login prompt once it lapses.
     let api_key = match vault.get_secret("ai:chatgpt") {
         Ok(Some(secret)) => secret.expose().to_string(),
         _ => return None,
@@ -238,8 +292,6 @@ pub fn restore_from_vault(config: &Config, vault: &SharedTokenManager) -> Option
         return None;
     }
 
-    // We don't know the real expiry from vault alone, so assume
-    // it might be expired — oauthStatus will auto-refresh.
     let cache = OAuthTokenCache {
         access_token: api_key,
         refresh_token: None,
@@ -251,7 +303,7 @@ pub fn restore_from_vault(config: &Config, vault: &SharedTokenManager) -> Option
         session_id: String::new(),
     };
 
-    debug!("Restored OAuth state from vault (chatgpt provider)");
+    debug!("Restored OAuth state from vault (chatgpt provider, legacy access-only)");
     Some(cache)
 }
 
@@ -302,8 +354,10 @@ pub async fn handle_oauth_login(
     // Store in memory (with expiry + refresh token metadata)
     *oauth_state.write().await = Some(cache.clone());
 
-    // Persist access_token to vault
+    // Persist access_token to vault (legacy key read by providers) + the full
+    // blob (refresh token + expiry) so a restart can recover and auto-refresh.
     update_config_api_key(&config, &vault, provider_name, Some(&cache.access_token)).await;
+    persist_oauth_blob(&vault, provider_name, &cache);
 
     info!(provider = provider_name, "OAuth login successful");
 

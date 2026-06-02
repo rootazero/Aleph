@@ -1182,6 +1182,34 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
     );
 
+    // Codex/ChatGPT OAuth token self-heal. The access token expires after ~1h;
+    // without this a long task that crosses that boundary dies on a stale-token
+    // 401. Proactive: a background loop refreshes before expiry and hot-swaps
+    // the live provider. Reactive: the global is read by the dispatch retry path
+    // to refresh-and-retry on a `token_expired` error. Only when the chatgpt
+    // provider is configured and the live registry exists.
+    if let Some(registry) = agent_result.multi_registry.clone() {
+        let has_chatgpt = app_config_for_oauth
+            .read()
+            .await
+            .providers
+            .contains_key("chatgpt");
+        if has_chatgpt {
+            use alephcore::gateway::codex_token_refresher::{set_global, CodexTokenRefresher};
+            let refresher = Arc::new(CodexTokenRefresher::new(
+                oauth_state.clone(),
+                app_config_for_oauth.clone(),
+                oauth_vault.clone(),
+                registry,
+            ));
+            set_global(refresher.clone());
+            refresher.spawn_background();
+            if !args.daemon {
+                println!("OAuth: Codex token auto-refresh enabled");
+            }
+        }
+    }
+
     if let Some(ref wm) = workspace_manager {
         register_workspace_handlers(&mut server, wm, &memory_db, args.daemon);
     }
