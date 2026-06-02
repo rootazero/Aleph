@@ -20,6 +20,21 @@ actor AudioSession {
     private var activeURL: URL?
     private var activeDelegate: AudioRecordingDelegate?
 
+    /// Whether the host has any audio input device (built-in or attached).
+    /// A Mac mini with no microphone returns false — used to fail
+    /// `recordStart` early with a clear "no microphone" signal.
+    private func hasAudioInputDevice() -> Bool {
+        if AVCaptureDevice.default(for: .audio) != nil {
+            return true
+        }
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.builtInMicrophone, .externalUnknown],
+            mediaType: .audio,
+            position: .unspecified
+        )
+        return !discovery.devices.isEmpty
+    }
+
     func listDevices() async throws -> [AudioDeviceInfo] {
         do {
             let discovery = AVCaptureDevice.DiscoverySession(
@@ -114,6 +129,19 @@ actor AudioSession {
     /// unsigned/ad-hoc builds, unlike WKWebView `getUserMedia`). Replaces any
     /// recording already in progress.
     func recordStart() async throws {
+        // No input device at all (e.g. a Mac mini with no built-in mic and none
+        // attached). Detect this BEFORE prompting for permission so we surface a
+        // distinct "no microphone" signal the core can turn into a clear message,
+        // rather than a cryptic `record() failed`. The token is matched on the
+        // Rust side (`handle_record_start`).
+        guard hasAudioInputDevice() else {
+            throw RpcError(
+                code: -32004,
+                message: "audio.record_start: NO_AUDIO_INPUT_DEVICE",
+                data: nil
+            )
+        }
+
         // Proactively request mic access so the system prompt appears up front
         // and a denial surfaces as a clean error rather than an empty file.
         let granted = await AVCaptureDevice.requestAccess(for: .audio)

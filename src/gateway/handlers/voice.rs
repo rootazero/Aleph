@@ -128,6 +128,15 @@ fn filename_for_mime(mime: &str) -> String {
 /// The Panel matches this exact token to fall back to browser `getUserMedia`.
 const NATIVE_AUDIO_UNAVAILABLE: &str = "NATIVE_AUDIO_UNAVAILABLE";
 
+/// Token the macOS bridge puts in its error when the host has no audio input
+/// device at all (matched here, not shown to the user verbatim).
+const NO_AUDIO_INPUT_DEVICE: &str = "NO_AUDIO_INPUT_DEVICE";
+
+/// User-facing message when there is no microphone on the host. Distinct from
+/// the browser-fallback sentinel: there is nothing to fall back to.
+const NO_MICROPHONE_MESSAGE: &str =
+    "No microphone found. Connect a microphone to this computer and try again.";
+
 /// Begin an open-ended native recording via the desktop bridge.
 ///
 /// Returns `{}` on success. When native capture is unavailable, the error
@@ -149,11 +158,20 @@ pub async fn handle_record_start(
             aleph_desktop::DesktopError::NotImplemented(_)
             | aleph_desktop::DesktopError::BridgeDisabled(_),
         ) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, NATIVE_AUDIO_UNAVAILABLE),
-        Err(e) => JsonRpcResponse::error(
-            request.id,
-            INTERNAL_ERROR,
-            format!("Failed to start recording: {e}"),
-        ),
+        Err(e) => {
+            // The bridge has no input device (e.g. a Mac mini with no built-in
+            // mic). Surface a clear, actionable message instead of a cryptic
+            // `record() failed` — and do NOT fall back to browser capture
+            // (getUserMedia on the same host has no device either).
+            if e.to_string().contains(NO_AUDIO_INPUT_DEVICE) {
+                return JsonRpcResponse::error(request.id, INTERNAL_ERROR, NO_MICROPHONE_MESSAGE);
+            }
+            JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to start recording: {e}"),
+            )
+        }
     }
 }
 
@@ -333,6 +351,18 @@ mod tests {
         assert_eq!(mime_for_format("mp3"), "audio/mpeg");
         // Unknown → safe default the native recorder actually emits.
         assert_eq!(mime_for_format("caf"), "audio/mp4");
+    }
+
+    #[test]
+    fn no_input_device_token_survives_bridge_wrapping() {
+        // The macOS client wraps the bridge error; the no-device token must
+        // still be matchable so the user sees the clear message, not a fallback.
+        let wrapped = "media.audio.record_start RPC: bridge error -32004: \
+                       audio.record_start: NO_AUDIO_INPUT_DEVICE";
+        assert!(wrapped.contains(NO_AUDIO_INPUT_DEVICE));
+        // The no-device case must NOT be confused with the browser-fallback path.
+        assert!(!wrapped.contains(NATIVE_AUDIO_UNAVAILABLE));
+        assert!(!NO_MICROPHONE_MESSAGE.is_empty());
     }
 
     #[tokio::test]
