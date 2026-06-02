@@ -65,6 +65,24 @@ pub struct LinuxInitPolicy {
 /// dynamic linker / libc / shells in `/usr/bin` cannot load.
 pub const SYSTEM_READ_PATHS: &[&str] = &["/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc"];
 
+/// Pseudo-device files granted read+write unconditionally. `apply_landlock`
+/// handles `AccessFs::from_all`, which makes the ruleset default-deny for
+/// every path not covered by an explicit rule — including the `/dev`
+/// devtmpfs that bwrap mounts via `--dev /dev`. Without these grants, shell
+/// redirection to `/dev/null`, `/dev/tty` writes, and similar pseudo-device
+/// I/O fail with `EACCES`. bwrap exposes only a minimal devtmpfs (no block
+/// devices), so granting the standard writable pseudo-devices is safe.
+/// Mirrors codex's explicit `/dev/null` RW grant, widened to the customary
+/// set. Absent entries are skipped (`PathFd::new` failure is non-fatal).
+pub const SYSTEM_DEVICE_RW_PATHS: &[&str] = &["/dev/null", "/dev/zero", "/dev/full", "/dev/tty"];
+
+/// Pseudo-device files granted read-only unconditionally. `/dev/urandom`
+/// in particular is read by libc, language runtimes (Python `os.urandom`,
+/// OpenSSL seeding) and most crypto — denying it breaks a large class of
+/// otherwise-benign tools. Read-only because nothing legitimate writes the
+/// kernel RNG from inside the sandbox.
+pub const SYSTEM_DEVICE_RO_PATHS: &[&str] = &["/dev/random", "/dev/urandom"];
+
 /// Frozen seccomp denylist. Each name corresponds to a syscall that gets
 /// `SECCOMP_RET_ERRNO(EPERM)`; everything else falls through to allow.
 /// `EPERM` (vs `SIGKILL`) keeps the program survivable so it can log /
@@ -265,20 +283,33 @@ fn set_no_new_privs() -> Result<(), std::io::Error> {
 #[cfg(target_os = "linux")]
 fn apply_landlock(policy: &LinuxInitPolicy) -> Result<(), String> {
     use landlock::{
-        Access, AccessFs, PathBeneath, PathFd, RestrictionStatus, Ruleset, RulesetAttr,
-        RulesetCreatedAttr, RulesetStatus, ABI,
+        Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, RestrictionStatus, Ruleset,
+        RulesetAttr, RulesetCreatedAttr, RulesetStatus, ABI,
     };
 
-    let abi = ABI::V1;
-    let ruleset = Ruleset::default()
+    // Negotiate against the highest Landlock ABI this build knows about
+    // (V5: ioctl-on-device control, on top of V2 cross-directory
+    // refer/rename, V3 truncate, V4 TCP port rules) and let the kernel
+    // degrade gracefully via `CompatLevel::BestEffort`. The previous code
+    // pinned `ABI::V1`, which permanently capped enforcement at the V1
+    // access set even on modern kernels — leaving `LANDLOCK_ACCESS_FS_REFER`
+    // (a cross-mount rename/link escape vector), `TRUNCATE` and `IOCTL_DEV`
+    // unrestricted. BestEffort preserves the old behaviour on V1-only
+    // kernels (unsupported access bits are silently dropped, no error)
+    // while tightening enforcement wherever the running kernel supports it.
+    // Mirrors codex `linux-sandbox/src/landlock.rs`.
+    let abi = ABI::V5;
+    let mut ruleset = Ruleset::default()
+        .set_compatibility(CompatLevel::BestEffort)
         .handle_access(AccessFs::from_all(abi))
         .map_err(|e| format!("Ruleset::handle_access: {e}"))?
         .create()
         .map_err(|e| format!("Ruleset::create (kernel may lack landlock): {e}"))?;
 
-    let mut ruleset = ruleset;
-
     let read_mask = AccessFs::from_read(abi) | AccessFs::Execute;
+    let write_mask = AccessFs::from_all(abi);
+
+    // System-minimum + caller-supplied readable hierarchies.
     for path in &policy.read_paths {
         if let Ok(fd) = PathFd::new(path) {
             ruleset = ruleset
@@ -287,7 +318,17 @@ fn apply_landlock(policy: &LinuxInitPolicy) -> Result<(), String> {
         }
     }
 
-    let write_mask = AccessFs::from_all(abi);
+    // Read-only pseudo-devices (`/dev/urandom`, `/dev/random`). Absent on
+    // some minimal devtmpfs layouts → skip silently.
+    for path in SYSTEM_DEVICE_RO_PATHS {
+        if let Ok(fd) = PathFd::new(path) {
+            ruleset = ruleset
+                .add_rule(PathBeneath::new(fd, read_mask))
+                .map_err(|e| format!("add device read rule {path}: {e}"))?;
+        }
+    }
+
+    // Workspace cwd + caller-supplied writable hierarchies.
     for path in &policy.write_paths {
         if let Ok(fd) = PathFd::new(path) {
             ruleset = ruleset
@@ -296,11 +337,37 @@ fn apply_landlock(policy: &LinuxInitPolicy) -> Result<(), String> {
         }
     }
 
+    // Read+write pseudo-devices (`/dev/null`, `/dev/zero`, `/dev/full`,
+    // `/dev/tty`). Without these the default-deny ruleset blocks shell
+    // redirection and tty writes inside the sandbox.
+    for path in SYSTEM_DEVICE_RW_PATHS {
+        if let Ok(fd) = PathFd::new(path) {
+            ruleset = ruleset
+                .add_rule(PathBeneath::new(fd, write_mask))
+                .map_err(|e| format!("add device write rule {path}: {e}"))?;
+        }
+    }
+
     let status: RestrictionStatus = ruleset
         .restrict_self()
         .map_err(|e| format!("restrict_self: {e}"))?;
-    if status.ruleset == RulesetStatus::NotEnforced {
-        return Err("landlock kernel-side enforcement returned NotEnforced".into());
+    match status.ruleset {
+        RulesetStatus::NotEnforced => {
+            return Err("landlock kernel-side enforcement returned NotEnforced".into());
+        }
+        RulesetStatus::PartiallyEnforced => {
+            // BestEffort downgraded some access bits because the running
+            // kernel exposes a lower ABI than V5. The filesystem is still
+            // confined at the kernel's supported level — surface it for
+            // audit, not as a failure.
+            tracing::debug!(
+                "landlock partially enforced (kernel ABI < V5); \
+                 confinement active at the highest supported level"
+            );
+        }
+        RulesetStatus::FullyEnforced => {
+            tracing::debug!("landlock fully enforced at ABI V5");
+        }
     }
     Ok(())
 }
@@ -585,6 +652,32 @@ mod tests {
             joined, expected,
             "seccomp denylist changed — update SP-2 spec"
         );
+    }
+
+    /// Pins the pseudo-device grant sets. These compensate for the
+    /// `from_all`-handled (default-deny) landlock ruleset over bwrap's
+    /// `--dev /dev` devtmpfs; shrinking them silently re-breaks
+    /// `/dev/null` redirection or `/dev/urandom` reads inside the sandbox.
+    #[test]
+    fn device_path_grants_are_frozen() {
+        assert_eq!(
+            SYSTEM_DEVICE_RW_PATHS,
+            &["/dev/null", "/dev/zero", "/dev/full", "/dev/tty"],
+        );
+        assert_eq!(SYSTEM_DEVICE_RO_PATHS, &["/dev/random", "/dev/urandom"]);
+        // No path may appear in both sets (a RW grant would shadow a RO one
+        // and muddy the intent).
+        for rw in SYSTEM_DEVICE_RW_PATHS {
+            assert!(
+                !SYSTEM_DEVICE_RO_PATHS.contains(rw),
+                "{rw} is in both RW and RO device sets"
+            );
+        }
+        // Every device grant lives under /dev — guards against a typo
+        // accidentally granting a broad hierarchy.
+        for p in SYSTEM_DEVICE_RW_PATHS.iter().chain(SYSTEM_DEVICE_RO_PATHS) {
+            assert!(p.starts_with("/dev/"), "{p} is not under /dev/");
+        }
     }
 
     #[test]
