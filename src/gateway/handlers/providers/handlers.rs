@@ -747,6 +747,14 @@ pub async fn handle_catalog(
                 .map(String::from)
                 .unwrap_or_else(|| entry.name.to_string());
 
+            // Per-model metadata for the default model. Best-effort: both
+            // resolve to `None` for unknown/unpriced families, leaving the
+            // JSON fields absent (skip_serializing_if). This is the R7
+            // "enable the LLM" surface — capability + cost data the picker
+            // and the model can reason over, not an auto-router.
+            let capabilities = crate::providers::capabilities_for(preset.default_model);
+            let cost = crate::pricing::rate_card(entry.name, preset.default_model);
+
             Some(CatalogEntryView {
                 id: entry.name.to_string(),
                 display_name,
@@ -774,6 +782,8 @@ pub async fn handle_catalog(
                 verified,
                 enabled,
                 is_default: default_provider.as_deref() == Some(entry.name),
+                capabilities,
+                cost,
             })
         })
         .filter(|item| match view {

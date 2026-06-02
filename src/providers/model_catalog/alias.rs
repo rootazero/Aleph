@@ -1,0 +1,211 @@
+//! Centralised model-id canonicalisation + vendor inference.
+//!
+//! Single source of truth for three operations that were previously
+//! duplicated across the codebase:
+//!   1. [`canonicalize_model_id`] — strip a leading vendor tag (`anthropic/`)
+//!      and a trailing `YYYYMMDD` date stamp, lower-casing for stable lookup.
+//!      (was `pricing::canonicalize_model`)
+//!   2. [`infer_vendor`] — map a *bare model name* to its canonical vendor
+//!      slug (`claude-sonnet-4` → `anthropic`). (was
+//!      `presets::resolve_provider_from_model`, here enriched from 4 vendors
+//!      to a hermes-parity prefix table)
+//!   3. [`canonical_provider_id`] — normalise a *provider alias* to its
+//!      canonical vendor slug (`claude` → `anthropic`). (was
+//!      `pricing::canonical_provider`)
+//!
+//! Mirrors hermes-agent `model_normalize._VENDOR_PREFIXES` (20+ vendors) and
+//! openclaw `provider-model-id-normalization`, mapped to Rust as static
+//! prefix tables — zero allocation on the lookup path beyond the lowercase
+//! copy, no network, no config.
+
+/// Provider/vendor tags stripped from the front of a model id during
+/// canonicalisation. Lowercased. Scanned in order; nested tags
+/// (`x-ai/openai/…`) peel one layer per matching entry.
+const VENDOR_TAGS: &[&str] = &[
+    "anthropic/",
+    "openai/",
+    "google/",
+    "models/",
+    "deepseek/",
+    "x-ai/",
+    "xai/",
+    "mistralai/",
+    "mistral/",
+    "moonshotai/",
+    "moonshot/",
+    "qwen/",
+    "meta-llama/",
+    "meta/",
+    "z-ai/",
+    "zai/",
+];
+
+/// `(model-name prefix, canonical vendor slug)`. Scanned in declaration
+/// order; the first prefix that matches the canonicalised id wins, so
+/// more-specific prefixes must precede broader ones.
+///
+/// Vendor slugs are the conventional config provider names Aleph already
+/// uses. The four historical [`infer_vendor`] outputs
+/// (`anthropic`/`openai`/`google`/`deepseek`) are preserved exactly; the
+/// rest extend coverage toward hermes' `_VENDOR_PREFIXES`.
+const MODEL_VENDOR_PREFIXES: &[(&str, &str)] = &[
+    ("claude", "anthropic"),
+    ("gpt", "openai"),
+    ("chatgpt", "openai"),
+    ("o1", "openai"),
+    ("o3", "openai"),
+    ("o4", "openai"),
+    ("gemini", "google"),
+    ("gemma", "google"),
+    ("deepseek", "deepseek"),
+    ("grok", "xai"),
+    ("mixtral", "mistral"),
+    ("mistral", "mistral"),
+    ("magistral", "mistral"),
+    ("codestral", "mistral"),
+    ("ministral", "mistral"),
+    ("kimi", "moonshot"),
+    ("moonshot", "moonshot"),
+    ("qwen", "qwen"),
+    ("qwq", "qwen"),
+    ("glm", "zai"),
+    ("llama", "meta"),
+];
+
+/// Strip a leading vendor tag and a trailing `YYYYMMDD` date stamp from a
+/// model id, lower-casing for case-insensitive prefix matching.
+///
+/// ```text
+/// "anthropic/Claude-Sonnet-4-6-20250520" -> "claude-sonnet-4-6"
+/// "gpt-4o-2024-11-20"                     -> "gpt-4o-2024-11-20" (non-8-digit tail kept)
+/// ```
+pub fn canonicalize_model_id(model: &str) -> String {
+    let mut m = model.trim().to_ascii_lowercase();
+    // Peel one layer per matching tag (handles nested aggregator tags).
+    for tag in VENDOR_TAGS {
+        if let Some(rest) = m.strip_prefix(tag) {
+            m = rest.to_string();
+        }
+    }
+    // Drop a trailing 8-digit date stamp (e.g. "-20250520"). Arbitrary
+    // dash-separated dates with non-8-digit tails are left intact.
+    if let Some(idx) = m.rfind('-') {
+        let tail = &m[idx + 1..];
+        if tail.len() == 8 && tail.bytes().all(|b| b.is_ascii_digit()) {
+            m.truncate(idx);
+        }
+    }
+    m
+}
+
+/// Infer the canonical vendor slug for a *bare model name*.
+///
+/// Returns `None` when no prefix matches — callers should treat that as
+/// "unknown vendor" and fall back to their default. Superset of the legacy
+/// 4-vendor `resolve_provider_from_model`; the original outputs are
+/// byte-for-byte preserved.
+pub fn infer_vendor(model: &str) -> Option<&'static str> {
+    let canon = canonicalize_model_id(model);
+    MODEL_VENDOR_PREFIXES
+        .iter()
+        .find(|(prefix, _)| canon.starts_with(prefix))
+        .map(|(_, vendor)| *vendor)
+}
+
+/// Normalise a *provider alias* to its canonical vendor slug.
+///
+/// Substring-based (a provider name may embed the vendor, e.g.
+/// `vertex-anthropic`). Returns `None` for unrecognised providers.
+pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
+    let p = provider.trim().to_ascii_lowercase();
+    if p.contains("anthropic") || p.contains("claude") {
+        Some("anthropic")
+    } else if p.contains("openai")
+        || p.contains("gpt")
+        || p.contains("chatgpt")
+        || p.starts_with("o1")
+        || p.starts_with("o3")
+    {
+        Some("openai")
+    } else if p.contains("google") || p.contains("gemini") || p.contains("vertex") {
+        Some("google")
+    } else if p.contains("deepseek") {
+        Some("deepseek")
+    } else if p.contains("grok") || p == "xai" || p == "x-ai" {
+        Some("xai")
+    } else if p.contains("mistral") {
+        Some("mistral")
+    } else if p.contains("moonshot") || p.contains("kimi") {
+        Some("moonshot")
+    } else if p.contains("qwen") {
+        Some("qwen")
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonicalize_strips_vendor_tag_and_date() {
+        assert_eq!(
+            canonicalize_model_id("anthropic/Claude-Sonnet-4-6-20250520"),
+            "claude-sonnet-4-6"
+        );
+        assert_eq!(canonicalize_model_id("gpt-4o-20241120"), "gpt-4o");
+        // Non-8-digit dash tail is left intact.
+        assert_eq!(
+            canonicalize_model_id("openai/gpt-4o-2024-11-20"),
+            "gpt-4o-2024-11-20"
+        );
+    }
+
+    #[test]
+    fn canonicalize_peels_nested_aggregator_tags() {
+        assert_eq!(canonicalize_model_id("x-ai/grok-4"), "grok-4");
+    }
+
+    #[test]
+    fn infer_vendor_preserves_legacy_four() {
+        // Exact parity with the old resolve_provider_from_model outputs.
+        assert_eq!(infer_vendor("gpt-4o"), Some("openai"));
+        assert_eq!(infer_vendor("o1-mini"), Some("openai"));
+        assert_eq!(infer_vendor("o3-mini"), Some("openai"));
+        assert_eq!(infer_vendor("claude-sonnet-4-6"), Some("anthropic"));
+        assert_eq!(infer_vendor("gemini-2.5-pro"), Some("google"));
+        assert_eq!(infer_vendor("deepseek-chat"), Some("deepseek"));
+    }
+
+    #[test]
+    fn infer_vendor_extends_to_new_vendors() {
+        assert_eq!(infer_vendor("grok-4"), Some("xai"));
+        assert_eq!(infer_vendor("mistral-large-latest"), Some("mistral"));
+        assert_eq!(infer_vendor("kimi-k2"), Some("moonshot"));
+        assert_eq!(infer_vendor("qwen-2.5-72b"), Some("qwen"));
+        assert_eq!(infer_vendor("glm-4.6"), Some("zai"));
+        assert_eq!(infer_vendor("llama-3.3-70b"), Some("meta"));
+    }
+
+    #[test]
+    fn infer_vendor_handles_vendor_tagged_input() {
+        assert_eq!(infer_vendor("anthropic/claude-opus-4"), Some("anthropic"));
+        assert_eq!(infer_vendor("x-ai/grok-4-fast"), Some("xai"));
+    }
+
+    #[test]
+    fn infer_vendor_unknown_is_none() {
+        assert_eq!(infer_vendor("some-unknown-model"), None);
+    }
+
+    #[test]
+    fn canonical_provider_resolves_aliases() {
+        assert_eq!(canonical_provider_id("claude"), Some("anthropic"));
+        assert_eq!(canonical_provider_id("vertex-anthropic"), Some("anthropic"));
+        assert_eq!(canonical_provider_id("OpenAI"), Some("openai"));
+        assert_eq!(canonical_provider_id("gemini"), Some("google"));
+        assert_eq!(canonical_provider_id("xai"), Some("xai"));
+        assert_eq!(canonical_provider_id("nonexistent"), None);
+    }
+}

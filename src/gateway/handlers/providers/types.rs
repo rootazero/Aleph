@@ -170,4 +170,14 @@ pub struct CatalogEntryView {
     pub verified: bool,
     pub enabled: bool,
     pub is_default: bool,
+    /// Capability metadata for `default_model` (context window, vision,
+    /// tools, reasoning). `None` when the model family is not in the catalog.
+    /// Lets the picker — and the LLM reasoning over `providers.catalog` —
+    /// see what the default model can do without a side lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<crate::providers::ModelCapabilities>,
+    /// Per-million-token cost summary for `default_model`. `None` when the
+    /// model is not priced. Cost-at-a-glance for the model picker.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost: Option<crate::pricing::RateCard>,
 }

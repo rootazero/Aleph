@@ -74,6 +74,7 @@ pub mod metadata;
 pub mod metering;
 pub mod mock;
 pub mod model_behaviors;
+pub mod model_catalog;
 pub mod model_discovery;
 pub mod oauth_refresh;
 pub mod ollama;
@@ -108,6 +109,7 @@ pub use failover::{FailoverConfig, FailoverHealth, FailoverNode, FailoverProvide
 pub use health::{ModelInfo, ProviderError, ProviderHealth, ResolvedModel};
 pub use http_provider::HttpProvider;
 pub use metering::MeteringProvider;
+pub use model_catalog::{capabilities_for, infer_vendor, ModelCapabilities};
 pub use mock::{MockError, MockProvider};
 pub use ollama::OllamaProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};

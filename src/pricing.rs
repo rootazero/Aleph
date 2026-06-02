@@ -211,44 +211,143 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
             },
         ],
     ),
+    (
+        "deepseek",
+        &[
+            Rates {
+                model_prefix: "deepseek-reasoner",
+                input_per_mtok: Some(0.55),
+                output_per_mtok: Some(2.19),
+                cache_read_per_mtok: Some(0.14),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // deepseek-chat (V3) and the family fallback.
+                model_prefix: "deepseek",
+                input_per_mtok: Some(0.27),
+                output_per_mtok: Some(1.10),
+                cache_read_per_mtok: Some(0.07),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
+    (
+        "xai",
+        &[Rates {
+            model_prefix: "grok",
+            input_per_mtok: Some(3.0),
+            output_per_mtok: Some(15.0),
+            cache_read_per_mtok: Some(0.75),
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: None,
+        }],
+    ),
+    (
+        "mistral",
+        &[
+            Rates {
+                model_prefix: "mistral-large",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(6.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "mistral",
+                input_per_mtok: Some(0.20),
+                output_per_mtok: Some(0.60),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
+    (
+        "moonshot",
+        &[
+            Rates {
+                model_prefix: "kimi",
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(2.50),
+                cache_read_per_mtok: Some(0.15),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "moonshot",
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(2.50),
+                cache_read_per_mtok: Some(0.15),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
 ];
 
 /// Lower-case the provider id and accept a few common synonyms so callers
 /// can pass the raw provider name from `ProviderConfig` without tagging.
+///
+/// Delegates to the shared
+/// [`crate::providers::model_catalog::canonical_provider_id`]; the empty
+/// string preserves this module's "unknown provider" sentinel contract.
 fn canonical_provider(provider: &str) -> &'static str {
-    let p = provider.trim().to_ascii_lowercase();
-    if p.contains("anthropic") || p.contains("claude") {
-        "anthropic"
-    } else if p.contains("openai")
-        || p.contains("gpt")
-        || p.starts_with("o1")
-        || p.starts_with("o3")
-    {
-        "openai"
-    } else if p.contains("google") || p.contains("gemini") {
-        "google"
-    } else {
-        "" // unknown
-    }
+    crate::providers::model_catalog::canonical_provider_id(provider).unwrap_or("")
 }
 
 /// Strip provider tags / date stamps / aliases from a model id so the
 /// prefix match is stable. Lower-cases for case-insensitive lookup.
+///
+/// Thin alias for the shared
+/// [`crate::providers::model_catalog::canonicalize_model_id`].
 fn canonicalize_model(model: &str) -> String {
-    let mut m = model.trim().to_ascii_lowercase();
-    for tag in ["anthropic/", "openai/", "google/", "models/"] {
-        if let Some(rest) = m.strip_prefix(tag) {
-            m = rest.to_string();
-        }
+    crate::providers::model_catalog::canonicalize_model_id(model)
+}
+
+/// Per-million-token rate summary for the picker / catalog UI. A serialisable
+/// projection of the matched [`Rates`] entry — the input/output/cache-read
+/// rates a user cares about when choosing a model. `None`-valued components
+/// in the table serialise as `null`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct RateCard {
+    /// USD per million input tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_per_mtok: Option<f64>,
+    /// USD per million output tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_per_mtok: Option<f64>,
+    /// USD per million cached-prompt-read tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_per_mtok: Option<f64>,
+}
+
+/// Resolve the [`Rates`] entry for a `(provider, model)` pair, or `None` when
+/// the provider/model is not in the table. Shared by [`estimate`] and
+/// [`rate_card`] so both stay on one canonicalisation + lookup path.
+fn lookup_rates(provider: &str, model: &str) -> Option<&'static Rates> {
+    let provider_key = canonical_provider(provider);
+    if provider_key.is_empty() {
+        return None;
     }
-    // Drop trailing version date if present (e.g. "-20250520").
-    if let Some(idx) = m.rfind('-') {
-        let tail = &m[idx + 1..];
-        if tail.len() == 8 && tail.chars().all(|c| c.is_ascii_digit()) {
-            m = m[..idx].to_string();
-        }
-    }
-    m
+    let canonical = canonicalize_model(model);
+    let entries = PRICE_TABLE.iter().find(|(p, _)| *p == provider_key)?.1;
+    entries
+        .iter()
+        .find(|r| canonical.starts_with(r.model_prefix))
+}
+
+/// Return the per-million-token [`RateCard`] for a `(provider, model)` pair,
+/// or `None` when the model is not priced. Powers the model picker's
+/// cost-at-a-glance column (`providers.catalog`).
+pub fn rate_card(provider: &str, model: &str) -> Option<RateCard> {
+    lookup_rates(provider, model).map(|r| RateCard {
+        input_per_mtok: r.input_per_mtok,
+        output_per_mtok: r.output_per_mtok,
+        cache_read_per_mtok: r.cache_read_per_mtok,
+    })
 }
 
 /// Apply rates to one [`TokenBreakdown`] and return the per-component cost
@@ -281,19 +380,7 @@ fn apply_rates(b: &TokenBreakdown, r: &Rates) -> (f64, CostStatus) {
 /// Returns `CostStatus::Unknown` when either provider or model is not in
 /// the table — callers should treat that as "no estimate available".
 pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> CostEstimate {
-    let provider_key = canonical_provider(provider);
-    if provider_key.is_empty() {
-        return CostEstimate::unknown(provider, model);
-    }
-    let canonical = canonicalize_model(model);
-    let entries = match PRICE_TABLE.iter().find(|(p, _)| *p == provider_key) {
-        Some((_, e)) => *e,
-        None => return CostEstimate::unknown(provider, model),
-    };
-    let rate = match entries
-        .iter()
-        .find(|r| canonical.starts_with(r.model_prefix))
-    {
+    let rate = match lookup_rates(provider, model) {
         Some(r) => r,
         None => return CostEstimate::unknown(provider, model),
     };
@@ -454,5 +541,55 @@ mod tests {
         let anth = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
         assert_eq!(claude.status, anth.status);
         assert!((claude.usd - anth.usd).abs() < 1e-9);
+    }
+
+    #[test]
+    fn deepseek_chat_is_priced() {
+        // 1M input @ $0.27 + 1M output @ $1.10 = $1.37.
+        let breakdown = TokenBreakdown {
+            input: 1_000_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        let est = estimate("deepseek", "deepseek-chat", &breakdown);
+        assert_eq!(est.status, CostStatus::Complete);
+        assert!((est.usd - 1.37).abs() < 1e-6, "expected $1.37, got ${}", est.usd);
+    }
+
+    #[test]
+    fn deepseek_reasoner_more_specific_prefix_wins() {
+        // 1M output @ $2.19 (reasoner) not $1.10 (chat fallback).
+        let breakdown = TokenBreakdown {
+            output: 1_000_000,
+            ..Default::default()
+        };
+        let est = estimate("deepseek", "deepseek-reasoner", &breakdown);
+        assert!((est.usd - 2.19).abs() < 1e-6, "expected $2.19, got ${}", est.usd);
+    }
+
+    #[test]
+    fn xai_grok_priced_via_inferred_provider_synonym() {
+        // Provider passed as "grok" resolves to the xai table entry.
+        let breakdown = TokenBreakdown {
+            input: 1_000_000,
+            ..Default::default()
+        };
+        let est = estimate("grok", "grok-4", &breakdown);
+        assert_eq!(est.status, CostStatus::Complete);
+        assert!((est.usd - 3.0).abs() < 1e-6, "expected $3.00, got ${}", est.usd);
+    }
+
+    #[test]
+    fn rate_card_returns_per_mtok_summary() {
+        let card = rate_card("anthropic", "claude-sonnet-4-6").expect("priced");
+        assert_eq!(card.input_per_mtok, Some(3.0));
+        assert_eq!(card.output_per_mtok, Some(15.0));
+        assert_eq!(card.cache_read_per_mtok, Some(0.30));
+    }
+
+    #[test]
+    fn rate_card_unknown_model_is_none() {
+        assert!(rate_card("anthropic", "claude-imaginary-99").is_none());
+        assert!(rate_card("nonexistent", "whatever").is_none());
     }
 }
