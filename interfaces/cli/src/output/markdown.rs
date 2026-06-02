@@ -23,11 +23,20 @@ const RESET: &str = "\x1b[0m";
 
 /// Render Markdown to a terminal-friendly string (ANSI when colour is enabled).
 pub fn render(markdown: &str) -> String {
+    render_with_color(markdown, use_color())
+}
+
+/// Render Markdown with an explicit colour decision.
+///
+/// `render` delegates here after consulting the ambient colour gate; tests use
+/// this seam to exercise both the coloured (OSC-8 hyperlinks, SGR) and plain
+/// (`text (url)`) paths deterministically without depending on a TTY.
+pub(crate) fn render_with_color(markdown: &str, color: bool) -> String {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TABLES);
 
-    let mut renderer = Renderer::new(use_color());
+    let mut renderer = Renderer::new(color);
     for event in Parser::new_ext(markdown, opts) {
         renderer.handle(event);
     }
@@ -43,6 +52,15 @@ struct TableAcc {
     header_rows: usize,
 }
 
+/// One open `[text](url)` link being accumulated until its closing tag, so the
+/// destination can be rendered as an OSC-8 hyperlink (coloured) or a `text
+/// (url)` suffix (plain). CommonMark links do not nest, so a single slot
+/// suffices.
+struct LinkAcc {
+    url: String,
+    text: String,
+}
+
 struct Renderer {
     out: String,
     color: bool,
@@ -53,6 +71,7 @@ struct Renderer {
     quote_depth: usize,
     in_code_block: bool,
     table: Option<TableAcc>,
+    link: Option<LinkAcc>,
 }
 
 impl Renderer {
@@ -65,6 +84,18 @@ impl Renderer {
             quote_depth: 0,
             in_code_block: false,
             table: None,
+            link: None,
+        }
+    }
+
+    /// Append `s` to the active table cell when inside a table, else to the
+    /// main output buffer. Used for already-composed fragments (e.g. a fully
+    /// rendered hyperlink) that must not be re-styled.
+    fn emit(&mut self, s: &str) {
+        if let Some(table) = self.table.as_mut() {
+            table.cell.push_str(s);
+        } else {
+            self.out.push_str(s);
         }
     }
 
@@ -140,14 +171,18 @@ impl Renderer {
                 } else {
                     format!("`{code}`")
                 };
-                if let Some(table) = self.table.as_mut() {
+                if let Some(link) = self.link.as_mut() {
+                    link.text.push_str(&rendered);
+                } else if let Some(table) = self.table.as_mut() {
                     table.cell.push_str(&rendered);
                 } else {
                     self.out.push_str(&rendered);
                 }
             }
             Event::SoftBreak | Event::HardBreak => {
-                if let Some(table) = self.table.as_mut() {
+                if let Some(link) = self.link.as_mut() {
+                    link.text.push(' ');
+                } else if let Some(table) = self.table.as_mut() {
                     table.cell.push(' ');
                 } else {
                     self.out.push('\n');
@@ -219,7 +254,13 @@ impl Renderer {
             Tag::Emphasis => self.inline.push("3"),
             Tag::Strong => self.inline.push("1"),
             Tag::Strikethrough => self.inline.push("9"),
-            Tag::Link { .. } => {}
+            Tag::Link { dest_url, .. } => {
+                // Start buffering link text; the URL is folded in at `end`.
+                self.link = Some(LinkAcc {
+                    url: dest_url.to_string(),
+                    text: String::new(),
+                });
+            }
             Tag::Table(_) => {
                 self.ensure_blank_line();
                 self.table = Some(TableAcc::default());
@@ -261,7 +302,12 @@ impl Renderer {
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
                 self.inline.pop();
             }
-            TagEnd::Link => {}
+            TagEnd::Link => {
+                if let Some(link) = self.link.take() {
+                    let rendered = render_link(self.color, &link.url, &link.text);
+                    self.emit(&rendered);
+                }
+            }
             TagEnd::Table => {
                 if let Some(table) = self.table.take() {
                     self.render_table(table);
@@ -291,6 +337,12 @@ impl Renderer {
     }
 
     fn text(&mut self, s: &str) {
+        // Link text is buffered so the destination URL can be folded in at the
+        // closing tag (OSC-8 hyperlink when coloured, `text (url)` when plain).
+        if let Some(link) = self.link.as_mut() {
+            link.text.push_str(s);
+            return;
+        }
         if let Some(table) = self.table.as_mut() {
             table.cell.push_str(s);
             return;
@@ -359,23 +411,31 @@ fn ansi(color: bool, code: &str, s: &str) -> String {
     }
 }
 
-/// Visible width approximated as scalar count (matches `output::mod` policy).
-fn display_width(s: &str) -> usize {
-    s.chars().count()
+/// Render a `[text](url)` link for the terminal.
+///
+/// - **colour on**: an OSC-8 hyperlink (`ESC]8;;URL ST  text  ESC]8;; ST`) so
+///   supporting terminals make the label clickable, with the label coloured
+///   like a link (underlined blue) for terminals that ignore OSC-8.
+/// - **colour off**: `text (url)` so the destination is never lost when piped
+///   or in `NO_COLOR` mode; collapses to just `url` for bare/auto links where
+///   the label already equals the destination.
+fn render_link(color: bool, url: &str, text: &str) -> String {
+    if url.is_empty() {
+        return text.to_string();
+    }
+    if color {
+        let label = if text.is_empty() { url } else { text };
+        let styled = ansi(true, "4;34", label);
+        format!("\x1b]8;;{url}\x1b\\{styled}\x1b]8;;\x1b\\")
+    } else if text.is_empty() || text == url {
+        url.to_string()
+    } else {
+        format!("{text} ({url})")
+    }
 }
 
-fn pad_to(s: &str, width: usize) -> String {
-    let w = display_width(s);
-    if w >= width {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len() + (width - w));
-    out.push_str(s);
-    for _ in 0..(width - w) {
-        out.push(' ');
-    }
-    out
-}
+// Display-width helpers live in `super::width` (CJK-aware via unicode-width).
+use super::width::{display_width, pad_to};
 
 #[cfg(test)]
 mod tests {
@@ -461,5 +521,62 @@ mod tests {
     #[test]
     fn empty_input_is_empty() {
         assert_eq!(render(""), "");
+    }
+
+    #[test]
+    fn plain_link_keeps_url_as_suffix() {
+        // Colour off: the destination must survive as `text (url)`.
+        let out = render_with_color("see [Anthropic](https://anthropic.com)", false);
+        assert!(
+            out.contains("Anthropic (https://anthropic.com)"),
+            "got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn plain_autolink_collapses_to_single_url() {
+        // When the label already equals the destination, don't print it twice.
+        let out = render_with_color("[https://x.dev](https://x.dev)", false);
+        assert!(out.contains("https://x.dev"), "got: {out:?}");
+        assert_eq!(out.matches("https://x.dev").count(), 1, "got: {out:?}");
+    }
+
+    #[test]
+    fn coloured_link_emits_osc8_hyperlink() {
+        // Colour on: an OSC-8 hyperlink wraps the (styled) label.
+        let out = render_with_color("[docs](https://a.io)", true);
+        assert!(out.contains("\x1b]8;;https://a.io\x1b\\"), "open: {out:?}");
+        assert!(out.contains("\x1b]8;;\x1b\\"), "close: {out:?}");
+        assert!(out.contains("docs"), "label: {out:?}");
+    }
+
+    #[test]
+    fn link_inside_table_cell_renders() {
+        let md = "| name | site |\n| - | - |\n| a | [x](https://x.io) |";
+        let plain = render_with_color(md, false);
+        assert!(plain.contains("https://x.io"), "got: {plain:?}");
+    }
+
+    #[test]
+    fn cjk_table_columns_stay_aligned() {
+        // First data column has a 1-char and a 2-char (CJK) cell; both rows must
+        // pad the second column to the same starting offset.
+        let md = "| 名 | v |\n| - | - |\n| 中文 | 1 |\n| a | 2 |";
+        let out = strip_ansi(&render_with_color(md, false));
+        let data_lines: Vec<&str> = out
+            .lines()
+            .filter(|l| l.contains('1') || l.contains('2'))
+            .collect();
+        assert_eq!(data_lines.len(), 2, "got: {out:?}");
+        // The value column should begin at the same display offset on both rows.
+        let offset = |line: &str, needle: char| {
+            let idx = line.find(needle).unwrap();
+            display_width(&line[..idx])
+        };
+        assert_eq!(
+            offset(data_lines[0], '1'),
+            offset(data_lines[1], '2'),
+            "CJK row misaligned: {data_lines:?}"
+        );
     }
 }
