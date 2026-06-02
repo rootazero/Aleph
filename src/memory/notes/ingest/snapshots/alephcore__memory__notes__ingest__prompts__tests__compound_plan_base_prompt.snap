@@ -29,11 +29,19 @@ to them, emit an IngestPlan that updates the wiki.
 10. Use `update` only to CORRECT a page whose content is now wrong.
     When using `update`, set `expected_content_hash` to the hash of the
     related page AS YOU READ IT in the input below. Do not fabricate hashes.
+11. To reference an EXISTING page, use its `[P<n>]` reference token exactly
+    as shown in "Related existing pages" — do NOT retype the path. This
+    applies to every path field that targets an existing page: `append`,
+    `update`, `contradict` (`note_path`), `link` (`from`/`to`),
+    `supersede` (`old_path`/`new_path`), and a `create`'s `links[]`. Only a
+    `create`'s own `note_path` is a fresh `category/filename` (a new page,
+    so it has no token). An op whose token does not exist is discarded.
 
 ## Page op kinds
 
 - `create` — new page. Fields: `note_path` (category/filename),
-  `title`, `summary` (≤120 chars), `facts[]`, `links[]`, `tags[]`.
+  `title`, `summary` (≤120 chars), `facts[]`, `links[]` (use `[P<n>]`
+  tokens), `tags[]`.
 - `append` — add facts to an existing page. Fields: `note_path`,
   `new_facts[]`, `new_links[]`.
 - `update` — replace facts on an existing page. Fields: `note_path`,
@@ -60,13 +68,16 @@ Every entry inside `ops` MUST start with the discriminator field
 Operations missing `kind` are silently discarded — do not omit it.
 Concrete shapes:
 
+Existing-page references use `[P<n>]` tokens; a `create`'s own `note_path`
+is a fresh path:
+
 ```json
-{"kind": "create", "note_path": "personal/li-wei.md", "title": "Li Wei", "summary": "User's partner of six years", "facts": ["Li Wei works in tech."], "links": ["personal/zou-guojun.md"], "tags": ["personal"]}
-{"kind": "append", "note_path": "preferences/coding-style.md", "new_facts": ["Comments must be in English."], "new_links": []}
-{"kind": "update", "note_path": "projects/aleph.md", "expected_content_hash": "<copy hash from input>", "new_facts": ["Current focus is the memory subsystem."], "reason": "User clarified the focus area."}
-{"kind": "link", "from": "personal/zou-guojun.md", "to": "projects/aleph.md"}
-{"kind": "supersede", "old_path": "projects/old-aleph.md", "new_path": "projects/aleph.md"}
-{"kind": "contradict", "note_path": "preferences/coding-style.md", "new_claim": "User now prefers Python.", "evidence_source_ids": ["raw-123"]}
+{"kind": "create", "note_path": "personal/li-wei.md", "title": "Li Wei", "summary": "User's partner of six years", "facts": ["Li Wei works in tech."], "links": ["[P3]"], "tags": ["personal"]}
+{"kind": "append", "note_path": "[P1]", "new_facts": ["Comments must be in English."], "new_links": []}
+{"kind": "update", "note_path": "[P0]", "expected_content_hash": "<copy hash from input>", "new_facts": ["Current focus is the memory subsystem."], "reason": "User clarified the focus area."}
+{"kind": "link", "from": "[P3]", "to": "[P0]"}
+{"kind": "supersede", "old_path": "[P2]", "new_path": "[P0]"}
+{"kind": "contradict", "note_path": "[P1]", "new_claim": "User now prefers Python.", "evidence_source_ids": ["raw-123"]}
 ```
 
 If nothing is worth ingesting, emit:
