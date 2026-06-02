@@ -33,22 +33,28 @@ pub fn create_platform_driver() -> Arc<dyn crate::sandbox::driver::OsSandboxDriv
 pub fn create_platform_driver_from_config(
     config: &crate::sandbox::config::SandboxConfig,
 ) -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
-    create_platform_driver_with_config(&config.linux, &config.windows)
+    create_platform_driver_with_config(&config.linux, &config.windows, &config.deny_read_globs)
 }
 
 pub fn create_platform_driver_with_config(
     linux_config: &crate::sandbox::config::LinuxSandboxConfig,
     windows_config: &crate::sandbox::config::WindowsSandboxConfig,
+    deny_read_globs: &[String],
 ) -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
     #[cfg(target_os = "macos")]
     {
+        use macos::seatbelt::{SeatbeltDriver, SeatbeltOptions};
         let _ = (linux_config, windows_config);
-        Arc::new(macos::seatbelt::SeatbeltDriver::new())
+        Arc::new(SeatbeltDriver::with_options(SeatbeltOptions {
+            deny_read_globs: deny_read_globs.to_vec(),
+        }))
     }
     #[cfg(target_os = "linux")]
     {
         use linux::bwrap::{BubblewrapDriver, LinuxSandboxOptions};
-        let _ = windows_config;
+        // `deny_read_globs` is a macOS-seatbelt floor today; bwrap has no
+        // native glob-deny primitive (landlock enforcement deferred).
+        let _ = (windows_config, deny_read_globs);
         let options = LinuxSandboxOptions {
             mount_proc: linux_config.mount_proc,
             no_new_privs: linux_config.no_new_privs,
@@ -64,7 +70,7 @@ pub fn create_platform_driver_with_config(
     #[cfg(target_os = "windows")]
     {
         use windows::driver::{WindowsSandboxDriver, WindowsSandboxOptions};
-        let _ = linux_config;
+        let _ = (linux_config, deny_read_globs);
         let options = WindowsSandboxOptions {
             use_restricted_token: windows_config.use_restricted_token,
             require_restricted_token: windows_config.require_restricted_token,
@@ -77,7 +83,7 @@ pub fn create_platform_driver_with_config(
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        let _ = (linux_config, windows_config);
+        let _ = (linux_config, windows_config, deny_read_globs);
         Arc::new(UnsupportedDriver)
     }
 }

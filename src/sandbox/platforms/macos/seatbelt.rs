@@ -404,9 +404,22 @@ const RESTRICTED_NETWORK_POLICY: &str = r#"
 (allow network-outbound (remote ip "localhost:53"))
 "#;
 
+/// Boot-time tuning for the seatbelt driver. Mirrors Linux's
+/// `LinuxSandboxOptions`: sourced from `SandboxConfig` in
+/// [`crate::sandbox::platforms::create_platform_driver_with_config`].
+#[derive(Debug, Clone, Default)]
+pub struct SeatbeltOptions {
+    /// Git-style glob patterns denied read (and unlink) inside every
+    /// sandboxed command — a security floor over the per-command FS policy.
+    /// See [`crate::sandbox::deny_globs`].
+    pub deny_read_globs: Vec<String>,
+}
+
 /// Driver for macOS seatbelt sandboxing.
-#[derive(Debug, Clone)]
-pub struct SeatbeltDriver;
+#[derive(Debug, Clone, Default)]
+pub struct SeatbeltDriver {
+    options: SeatbeltOptions,
+}
 
 /// Escape a string for safe inclusion in SBPL (Sandbox Profile Language).
 /// SBPL uses double quotes for string literals; backslash and quote must be escaped.
@@ -467,7 +480,13 @@ fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
 
 impl SeatbeltDriver {
     pub fn new() -> Self {
-        Self
+        Self::default()
+    }
+
+    /// Construct with boot-time options (e.g. the config-driven
+    /// `deny_read_globs` security floor).
+    pub fn with_options(options: SeatbeltOptions) -> Self {
+        Self { options }
     }
 
     /// Check if `sandbox-exec` is available and executable.
@@ -492,6 +511,11 @@ impl SeatbeltDriver {
 
         // Filesystem policy
         self.add_fs_policy(&mut profile, &policy.filesystem, cwd)?;
+
+        // Unreadable-glob security floor (codex-inspired). Emitted *after*
+        // the FS allow rules so last-match-wins makes the denies authoritative
+        // over any readable/writable root the policy granted above.
+        self.add_deny_read_globs(&mut profile);
 
         // Network policy
         self.add_network_policy(&mut profile, &policy.network)?;
@@ -623,6 +647,34 @@ impl SeatbeltDriver {
             }
         }
         Ok(())
+    }
+
+    /// Emit `(deny file-read* …)` + `(deny file-write-unlink …)` rules for
+    /// each configured glob. Translating to an anchored regex lets Seatbelt
+    /// deny secrets anywhere inside an otherwise-readable root; denying
+    /// `file-write-unlink` too means a blocked path cannot be probed via a
+    /// destructive `rm`. Mirrors codex's `build_seatbelt_unreadable_glob_policy`.
+    fn add_deny_read_globs(&self, profile: &mut String) {
+        if self.options.deny_read_globs.is_empty() {
+            return;
+        }
+
+        let mut emitted = false;
+        for pattern in &self.options.deny_read_globs {
+            let Some(regex) = crate::sandbox::deny_globs::glob_to_anchored_regex(pattern) else {
+                continue;
+            };
+            // SBPL `(regex #"…")` is a raw double-quoted literal — only the
+            // quote needs escaping (the regex never contains a bare `"`, but
+            // be defensive in case a pattern injects one).
+            let regex = regex.replace('"', "\\\"");
+            if !emitted {
+                profile.push_str("; unreadable-glob security floor (read + unlink denied)\n");
+                emitted = true;
+            }
+            profile.push_str(&format!("(deny file-read* (regex #\"{regex}\"))\n"));
+            profile.push_str(&format!("(deny file-write-unlink (regex #\"{regex}\"))\n"));
+        }
     }
 
     fn add_network_policy(
@@ -805,12 +857,6 @@ impl OsSandboxDriverTrait for SeatbeltDriver {
     }
 }
 
-impl Default for SeatbeltDriver {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -936,6 +982,49 @@ mod tests {
         // FullWrite is explicit danger-full-access. We do not auto-protect
         // here; the caller's explicit `exclude` list is the contract.
         assert!(!profile.contains("(deny file-write* (subpath \"/tmp/ws/.git\"))"));
+    }
+
+    #[test]
+    fn deny_read_globs_emit_read_and_unlink_denies_after_allow() {
+        let driver = SeatbeltDriver::with_options(SeatbeltOptions {
+            deny_read_globs: vec!["**/.env".into(), "**/*.pem".into()],
+        });
+        // FullWrite grants broad access; the glob floor must still deny.
+        let policy = SandboxPolicy {
+            filesystem: FsPolicy::FullWrite { exclude: vec![] },
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        let read_deny = r#"(deny file-read* (regex #"^(.*/)?\.env$"))"#;
+        let unlink_deny = r#"(deny file-write-unlink (regex #"^(.*/)?\.env$"))"#;
+        assert!(profile.contains(read_deny), "missing read deny for .env");
+        assert!(
+            profile.contains(unlink_deny),
+            "missing unlink deny for .env"
+        );
+        assert!(
+            profile.contains(r#"(deny file-read* (regex #"^(.*/)?[^/]*\.pem$"))"#),
+            "missing read deny for .pem"
+        );
+
+        // Last-match-wins: the deny must come AFTER the broad allow.
+        let allow_idx = profile
+            .find("(allow file-read* file-write*)")
+            .expect("FullWrite allow present");
+        let deny_idx = profile.find(read_deny).unwrap();
+        assert!(allow_idx < deny_idx, "glob deny must follow the allow rule");
+    }
+
+    #[test]
+    fn no_deny_globs_emits_no_floor() {
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+        assert!(!profile.contains("unreadable-glob security floor"));
+        assert!(!profile.contains("(deny file-write-unlink"));
     }
 
     #[test]
