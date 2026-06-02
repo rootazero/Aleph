@@ -8,7 +8,7 @@ use super::{AgentHarness, InputGuardrailOutcome};
 use crate::context::budget::LoopDirective;
 use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};
-use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::UnifiedMessage;
 use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
@@ -220,6 +220,66 @@ fn build_request_payload<'a>(
 /// fundamentally too large rather than a recoverable burst. Mirrors
 /// claude-code's "already attempted" single-shot guard (query.ts:1092).
 const MAX_REACTIVE_COMPACT_ATTEMPTS: u32 = 1;
+
+/// Plain-text tool-call promotion (openclaw `tool-call-repair` parity).
+///
+/// Weaker / proxied models sometimes emit a tool call as assistant **text**
+/// (`<tool_call>{…}</tool_call>` or `<function=…>…</function>`) instead of a
+/// provider-native function-call block. Left alone the harness reads
+/// `tool_calls == []`, treats the turn as a clean finish, and the agent loop
+/// stalls one step short of acting. This rewrites such text into structured
+/// `NativeToolCall`s so the existing Act path dispatches them normally.
+///
+/// Runs only when the provider returned **no** native calls — a model that used
+/// the native channel is never second-guessed. Promotion is all-or-nothing and
+/// gated on tool-name resolution (see [`crate::tools::text_tool_call`]), so it
+/// cannot misfire on prose. Mutates `response` in place and returns the number
+/// of calls promoted (0 = untouched).
+///
+/// R10-safe: pure mechanical text→struct rewrite, no intent classification and
+/// no policy — the model already decided to call the tool; this only repairs
+/// the wire encoding the provider failed to structure.
+fn promote_text_tool_calls(
+    response: &mut ProviderResponse,
+    tools: &[crate::tool_metadata::ToolDefinition],
+) -> usize {
+    if !response.tool_calls.is_empty() || tools.is_empty() {
+        return 0;
+    }
+    let text = response.text_content();
+    if text.is_empty() {
+        return 0;
+    }
+    let allowed: std::collections::HashSet<&str> =
+        tools.iter().map(|t| t.name.as_str()).collect();
+    let Some(promotion) = crate::tools::text_tool_call::promote_plain_text_tool_calls(&text, &allowed)
+    else {
+        return 0;
+    };
+
+    let promoted: Vec<NativeToolCall> = promotion
+        .calls
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| NativeToolCall {
+            id: format!("promoted_{i}"),
+            name: c.name,
+            arguments: c.arguments,
+            thought_signature: None,
+        })
+        .collect();
+    let count = promoted.len();
+    response.tool_calls = promoted;
+    // The promoted markup must not also surface as assistant prose; keep only
+    // the residual text the model wrote around the call.
+    response.text = if promotion.residual_text.is_empty() {
+        None
+    } else {
+        Some(promotion.residual_text)
+    };
+    response.stop_reason = StopReason::ToolUse;
+    count
+}
 
 impl AgentHarness {
     /// Internal turn execution with pre-computed counters to avoid O(n²)
@@ -654,6 +714,22 @@ impl AgentHarness {
         ) {
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::MaxOutputTokensExhausted,
+            );
+        }
+
+        // 3c. Plain-text tool-call promotion (openclaw tool-call-repair
+        // parity). When the provider returned text that *encodes* a tool call
+        // but no native tool_calls, rewrite it into structured calls so the
+        // Act path below dispatches them instead of mistaking the turn for a
+        // clean finish. No-op on the common native path. Runs after the
+        // empty-response and max_output_tokens recovery so it sees the final
+        // text the model actually produced.
+        let promoted = promote_text_tool_calls(&mut response, &metadata_tools);
+        if promoted > 0 {
+            tracing::info!(
+                ?session_id,
+                promoted,
+                "promoted plain-text tool call(s) to native tool_calls",
             );
         }
 
