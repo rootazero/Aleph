@@ -809,4 +809,66 @@ pub(in crate::commands::start) fn register_config_handlers(
     }
 }
 
+// ─── register_voice_capability_handlers ──────────────────────────────────────
+
+/// Wire the Panel's native voice-capture + TTS-playback RPCs.
+///
+/// - `voice.record_start` / `voice.record_stop` proxy the desktop bridge's
+///   native AVFoundation recorder — the macOS path used when the unsigned
+///   WKWebView cannot reach `getUserMedia`. Capture only; the bytes go back to
+///   the Panel which posts them to `voice.transcribe`.
+/// - `voice.synthesize` reuses the channel TTS path so the Panel can play the
+///   agent's reply back as speech.
+///
+/// Capture and playback are endpoint I/O (R1/R6); STT/LLM/TTS stay in the core.
+pub(in crate::commands::start) fn register_voice_capability_handlers(
+    server: &mut GatewayServer,
+    config: Arc<tokio::sync::RwLock<alephcore::Config>>,
+    generation_registry: Option<
+        Arc<tokio::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>,
+    >,
+) {
+    use alephcore::gateway::handlers::voice;
+
+    // A fresh platform handle — cheap, and mirrors how the presence / mic-level
+    // reporters and the builtin tool registry each construct their own.
+    let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
+        #[cfg(target_os = "macos")]
+        {
+            Arc::new(aleph_desktop_macos::MacOSPlatform::new())
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Arc::new(aleph_desktop_linux::LinuxPlatform::new())
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Arc::new(aleph_desktop_windows::WindowsPlatform::new())
+        }
+    };
+
+    register_handler!(
+        server,
+        "voice.record_start",
+        voice::handle_record_start,
+        platform
+    );
+    register_handler!(
+        server,
+        "voice.record_stop",
+        voice::handle_record_stop,
+        platform
+    );
+
+    if let Some(gen_reg) = generation_registry {
+        register_handler!(
+            server,
+            "voice.synthesize",
+            voice::handle_synthesize,
+            config,
+            gen_reg
+        );
+    }
+}
+
 // ─── register_daemon_handlers ────────────────────────────────────────────────

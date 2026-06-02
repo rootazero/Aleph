@@ -108,6 +108,195 @@ fn filename_for_mime(mime: &str) -> String {
     format!("voice.{ext}")
 }
 
+// ---------------------------------------------------------------------------
+// Native push-to-talk capture (macOS bridge) + TTS playback
+//
+// The Panel mic button is a full voice channel: capture (endpoint) → STT (core)
+// → LLM (core) → TTS (core) → playback (endpoint). These three handlers are the
+// core's I/O surface for the endpoint:
+//   - `voice.record_start` / `voice.record_stop` proxy the native AVFoundation
+//     recorder over the desktop bridge, the macOS path that works when the
+//     unsigned WKWebView cannot reach `getUserMedia`. Capture only — the bytes
+//     come back to the Panel which then posts them to `voice.transcribe`, so
+//     capture and transcription stay two separate steps (mirrors file upload).
+//   - `voice.synthesize` reuses the channel TTS path ([`generate_tts`]) so the
+//     Panel can play back the agent's reply as speech.
+// ---------------------------------------------------------------------------
+
+/// Sentinel surfaced in the JSON-RPC error message when the platform has no
+/// native audio helper (non-macOS, or the bridge returned `NotImplemented`).
+/// The Panel matches this exact token to fall back to browser `getUserMedia`.
+const NATIVE_AUDIO_UNAVAILABLE: &str = "NATIVE_AUDIO_UNAVAILABLE";
+
+/// Begin an open-ended native recording via the desktop bridge.
+///
+/// Returns `{}` on success. When native capture is unavailable, the error
+/// message is the [`NATIVE_AUDIO_UNAVAILABLE`] sentinel so the Panel falls back
+/// to browser capture.
+pub async fn handle_record_start(
+    request: JsonRpcRequest,
+    platform: Arc<dyn aleph_desktop::DesktopPlatform>,
+) -> JsonRpcResponse {
+    let Some(media) = platform.media() else {
+        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, NATIVE_AUDIO_UNAVAILABLE);
+    };
+    match media.record_audio_start().await {
+        Ok(()) => JsonRpcResponse::success(request.id, serde_json::json!({})),
+        // No native helper (default trait impl) or the desktop bridge isn't
+        // running (headless / remote daemon) → tell the Panel to fall back to
+        // browser capture.
+        Err(
+            aleph_desktop::DesktopError::NotImplemented(_)
+            | aleph_desktop::DesktopError::BridgeDisabled(_),
+        ) => JsonRpcResponse::error(request.id, INTERNAL_ERROR, NATIVE_AUDIO_UNAVAILABLE),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Failed to start recording: {e}"),
+        ),
+    }
+}
+
+/// Stop the active native recording and return the captured audio as base64.
+///
+/// The core reads the file the bridge wrote and hands the bytes back to the
+/// Panel — it does NOT transcribe here (capture and transcription are separate
+/// steps, the same split as a file upload). Success:
+/// `{ audio_base64, mime_type, duration_secs }`.
+pub async fn handle_record_stop(
+    request: JsonRpcRequest,
+    platform: Arc<dyn aleph_desktop::DesktopPlatform>,
+) -> JsonRpcResponse {
+    let Some(media) = platform.media() else {
+        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, NATIVE_AUDIO_UNAVAILABLE);
+    };
+    let result = match media.record_audio_stop().await {
+        Ok(r) => r,
+        Err(
+            aleph_desktop::DesktopError::NotImplemented(_)
+            | aleph_desktop::DesktopError::BridgeDisabled(_),
+        ) => {
+            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, NATIVE_AUDIO_UNAVAILABLE)
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to stop recording: {e}"),
+            )
+        }
+    };
+    let bytes = match tokio::fs::read(&result.file_path).await {
+        Ok(b) => b,
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to read recording: {e}"),
+            )
+        }
+    };
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::json!({
+            "audio_base64": BASE64.encode(&bytes),
+            "mime_type": mime_for_format(&result.format),
+            "duration_secs": result.duration_secs,
+        }),
+    )
+}
+
+/// Synthesize speech for the agent's reply so the Panel can play it back.
+///
+/// Reuses the channel TTS path ([`crate::gateway::voice::outbound::generate_tts`]).
+/// Params: `{ text, voice?, provider? }`. Success carries either inline bytes
+/// (`{ audio_base64, mime_type }`) or a remote URL (`{ audio_url, mime_type }`).
+pub async fn handle_synthesize(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    generation_registry: Arc<RwLock<crate::generation::GenerationProviderRegistry>>,
+) -> JsonRpcResponse {
+    #[derive(serde::Deserialize)]
+    struct Params {
+        text: String,
+        #[serde(default)]
+        voice: Option<String>,
+        #[serde(default)]
+        provider: Option<String>,
+    }
+
+    let params: Params = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let text = params.text.trim();
+    if text.is_empty() {
+        return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Empty text");
+    }
+
+    let gen_cfg = { config.read().await.generation.clone() };
+    // A throwaway VoiceState carries the optional per-call provider/voice
+    // overrides; `enabled` is irrelevant here (we're synthesizing on demand).
+    let voice_state = crate::gateway::voice::state::VoiceState {
+        enabled: true,
+        provider: params.provider,
+        voice: params.voice,
+        consecutive_failures: 0,
+    };
+
+    let attachment = {
+        let registry = generation_registry.read().await;
+        crate::gateway::voice::outbound::generate_tts(text, &voice_state, &registry, &gen_cfg).await
+    };
+    let Some(attachment) = attachment else {
+        return JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            "TTS failed or no speech provider configured. Add one in Settings → Generation Providers.",
+        );
+    };
+
+    let mime = attachment.mime_type.clone();
+    if let Some(data) = attachment.data {
+        JsonRpcResponse::success(
+            request.id,
+            serde_json::json!({ "audio_base64": BASE64.encode(&data), "mime_type": mime }),
+        )
+    } else if let Some(url) = attachment.url {
+        JsonRpcResponse::success(
+            request.id,
+            serde_json::json!({ "audio_url": url, "mime_type": mime }),
+        )
+    } else if let Some(path) = attachment.path {
+        match tokio::fs::read(&path).await {
+            Ok(b) => JsonRpcResponse::success(
+                request.id,
+                serde_json::json!({ "audio_base64": BASE64.encode(&b), "mime_type": mime }),
+            ),
+            Err(e) => JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("Failed to read TTS output: {e}"),
+            ),
+        }
+    } else {
+        JsonRpcResponse::error(request.id, INTERNAL_ERROR, "TTS produced no audio")
+    }
+}
+
+/// Map a bridge-reported audio `format` (e.g. "m4a") to a MIME type the Whisper
+/// multipart endpoint accepts. AVFoundation records AAC/m4a by default.
+fn mime_for_format(format: &str) -> &'static str {
+    match format.trim().to_lowercase().as_str() {
+        "m4a" | "mp4" | "aac" => "audio/mp4",
+        "wav" | "wave" => "audio/wav",
+        "mp3" | "mpeg" => "audio/mpeg",
+        "ogg" | "opus" => "audio/ogg",
+        "flac" => "audio/flac",
+        _ => "audio/mp4",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,6 +310,16 @@ mod tests {
         assert_eq!(filename_for_mime("audio/wav"), "voice.wav");
         // Unknown → safe default matching the browser recorder.
         assert_eq!(filename_for_mime("application/octet-stream"), "voice.webm");
+    }
+
+    #[test]
+    fn native_format_maps_to_whisper_mime() {
+        // AVFoundation default is AAC/m4a → audio/mp4 (Whisper-accepted).
+        assert_eq!(mime_for_format("m4a"), "audio/mp4");
+        assert_eq!(mime_for_format("WAV"), "audio/wav");
+        assert_eq!(mime_for_format("mp3"), "audio/mpeg");
+        // Unknown → safe default the native recorder actually emits.
+        assert_eq!(mime_for_format("caf"), "audio/mp4");
     }
 
     #[tokio::test]

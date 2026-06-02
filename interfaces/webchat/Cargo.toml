@@ -40,6 +40,8 @@ web-sys = { version = "0.3", features = [
     # composer voice button — mic capture via MediaRecorder → base64 → STT RPC
     "MediaDevices", "MediaStream", "MediaStreamTrack", "MediaStreamConstraints",
     "MediaRecorder", "MediaRecorderOptions", "BlobEvent", "BlobPropertyBag",
+    # voice-loop playback — speak the agent's TTS reply via a detached <audio>
+    "HtmlMediaElement", "HtmlAudioElement",
 ] }
 console_error_panic_hook = "0.1"
 
