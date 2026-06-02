@@ -1,57 +1,98 @@
 //! Smart message splitting that respects paragraph and code block boundaries.
+//!
+//! This is the single canonical splitter for the whole gateway: outbound
+//! channel adapters reach it via [`crate::gateway::formatter::MessageFormatter::split`]
+//! and the streaming reply path delegates to it through
+//! `ReplyEmitter::split_message`. Fence detection is delegated to the
+//! [`crate::markdown::fences`] parser (handles ``` and ~~~, indented fences and
+//! language tags) — there is deliberately no second backtick-counting heuristic.
 
-use crate::markdown::fences::{find_fence_at, is_safe_fence_break, parse_fence_spans, FenceSpan};
+use crate::markdown::fences::{
+    find_fence_at, get_fence_split, is_safe_fence_break, parse_fence_spans, FenceSpan,
+};
 
 /// Split a message into chunks of at most `max_len` bytes.
+///
+/// Guarantees:
+/// - Every chunk is at most `max_len` bytes (UTF-8 boundary safe).
+/// - A fenced code block that fits in `max_len` is never split.
+/// - A fenced code block larger than `max_len` is split with the fence closed
+///   on the trailing chunk and re-opened (preserving the language tag) on the
+///   following chunk, so no chunk ever carries an unbalanced fence.
 pub(super) fn split_message(text: &str, max_len: usize) -> Vec<String> {
-    let mut chunks: Vec<String> = Vec::new();
-    let mut remaining = text;
+    if text.len() <= max_len {
+        return vec![text.to_string()];
+    }
 
-    while !remaining.is_empty() {
-        if remaining.len() <= max_len {
-            chunks.push(remaining.to_string());
+    let mut chunks: Vec<String> = Vec::new();
+    // Owned buffer: when we split inside an open fence we must *prepend* the
+    // re-opening fence line to the remainder, which a borrowed `&str` can't do.
+    let mut buf = text.to_string();
+
+    while !buf.is_empty() {
+        if buf.len() <= max_len {
+            chunks.push(buf);
             break;
         }
 
-        // Fence spans for the current remainder; offsets line up with `candidate`
-        // below since it is always a prefix of `remaining`.
-        let spans = parse_fence_spans(remaining);
+        let spans = parse_fence_spans(&buf);
 
-        // Find the nearest char boundary at or before max_len to avoid
-        // splitting in the middle of a multi-byte UTF-8 character.
-        let mut safe_max = max_len;
-        while safe_max > 0 && !remaining.is_char_boundary(safe_max) {
+        // When the buffer begins *inside* an unclosed fence that overflows the
+        // window, we will have to hard-split within it and append a closing
+        // line. Reserve room for that closing line so the emitted chunk still
+        // respects `max_len`.
+        let reserve = spans
+            .first()
+            .filter(|f| f.start() == 0 && f.end() > max_len)
+            .map(|f| f.close_line().len() + 1)
+            .unwrap_or(0);
+        let budget = max_len.saturating_sub(reserve).max(1);
+
+        // Nearest char boundary at or before `budget`.
+        let mut safe_max = budget.min(buf.len());
+        while safe_max > 0 && !buf.is_char_boundary(safe_max) {
             safe_max -= 1;
         }
         if safe_max == 0 {
-            // Degenerate case: entire prefix is a single huge codepoint.
-            // Advance to the next boundary to make progress.
-            safe_max = remaining.len().min(max_len + 3);
-            while safe_max < remaining.len() && !remaining.is_char_boundary(safe_max) {
+            // Degenerate case: a single codepoint wider than the budget. Advance
+            // to the next boundary to guarantee forward progress.
+            safe_max = buf.len().min(max_len + 3);
+            while safe_max < buf.len() && !buf.is_char_boundary(safe_max) {
                 safe_max += 1;
             }
         }
 
-        // Try to find the best split point within safe_max.
-        let candidate = &remaining[..safe_max];
-
+        let candidate = &buf[..safe_max];
         let mut split_pos = find_split_point(candidate, &spans);
-
-        // Character-level fallback: if find_split_point returned 0 (no viable
-        // boundary found), force a hard split at safe_max to guarantee forward
-        // progress and the max_len contract.
+        // Character-level fallback: guarantee forward progress and the contract.
         if split_pos == 0 {
             split_pos = safe_max;
         }
 
-        let (chunk, rest) = remaining.split_at(split_pos);
-        let chunk = chunk.trim_end();
-        if !chunk.is_empty() {
-            chunks.push(chunk.to_string());
-        }
-        remaining = rest.trim_start_matches('\n');
-        if remaining.is_empty() {
-            break;
+        // If the chosen break lands strictly inside a fence, close it on this
+        // chunk and re-open it on the remainder.
+        let fence_split = get_fence_split(&spans, split_pos);
+
+        let chunk = buf[..split_pos].trim_end().to_string();
+        let rest = buf[split_pos..].trim_start_matches('\n').to_string();
+
+        match fence_split {
+            Some(fs) => {
+                if !chunk.is_empty() {
+                    chunks.push(format!("{}\n{}", chunk, fs.close_line));
+                }
+                buf = if rest.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}\n{}", fs.reopen_line, rest)
+                };
+            }
+            None => {
+                if !chunk.is_empty() {
+                    chunks.push(chunk);
+                }
+                buf = rest;
+            }
         }
     }
 
@@ -66,11 +107,12 @@ pub(super) fn split_message(text: &str, max_len: usize) -> Vec<String> {
 ///
 /// Prefers paragraph boundaries, then line boundaries. Never splits inside a
 /// fenced code block: fence detection is delegated to the canonical
-/// [`crate::markdown::fences`] parser (handles ``` and ~~~, indented fences,
-/// and language tags) rather than a local backtick count.
+/// [`crate::markdown::fences`] parser rather than a local backtick count.
 fn find_split_point(candidate: &str, spans: &[FenceSpan]) -> usize {
     // If the window end lands inside a fenced block, back off to the start of
-    // that block so the fence is never split mid-way.
+    // that block so the fence is never split mid-way — unless the block itself
+    // starts at the buffer head (it overflows the window and the caller closes
+    // and re-opens it instead).
     if let Some(fence) = find_fence_at(spans, candidate.len()) {
         if fence.start() > 0 {
             return fence.start();
@@ -87,7 +129,7 @@ fn find_split_point(candidate: &str, spans: &[FenceSpan]) -> usize {
         return pos;
     }
 
-    // Last resort: split at max_len.
+    // Last resort: split at the window edge.
     candidate.len()
 }
 

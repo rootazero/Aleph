@@ -128,9 +128,10 @@ pub async fn run(
     }
 
     // Suppress human output when --json is active so the JSONL stream stays
-    // machine-parseable on stdout.
+    // machine-parseable on stdout. Render Markdown to ANSI for the human path;
+    // the raw text is still what gets written to --output-last-message below.
     if !json {
-        println!("{}", response_text);
+        println!("{}", crate::output::markdown::render(&response_text));
         if tool_count > 0 {
             eprintln!();
             eprintln!("({} tools used)", tool_count);

@@ -9,6 +9,7 @@
 
 pub mod box_draw;
 pub mod icon;
+pub mod markdown;
 pub mod spinner;
 pub mod theme;
 
