@@ -493,7 +493,7 @@ impl Harness for AgentHarness {
                                                 .unwrap_or(u32::MAX),
                                         },
                                     );
-                                    // 3a: surface the recurring blocker to the user
+                                    // Surface the recurring blocker to the user
                                     // instead of a silent HitLimit break.
                                     self.fire_boundary_grace_turn(
                                         &current_session,
@@ -527,7 +527,7 @@ impl Harness for AgentHarness {
                             self.set_terminate_reason(TerminateReason::VerifierVeto {
                                 vetos: verifier_veto_count.try_into().unwrap_or(u32::MAX),
                             });
-                            // 3a: surface a context-rich terminal message instead
+                            // Surface a context-rich terminal message instead
                             // of a silent HitLimit break. The remaining steps are
                             // already in the prompt (the `[verifier veto]` events).
                             self.fire_boundary_grace_turn(

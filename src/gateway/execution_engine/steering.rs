@@ -138,7 +138,7 @@ pub(super) async fn try_inject_steering(
     // `SessionId` is a type alias for `SessionKey`, so the gateway key is the
     // harness session id verbatim — no translation needed.
     let session_id: SessionId = request.session_key.clone();
-    // 3b: if this session is driving a scratchpad execution list, tell the
+    // If this session is driving a scratchpad execution list, tell the
     // model to reconcile it before continuing. Mechanical lookup, no I/O.
     let has_active_scratchpad =
         crate::builtin_tools::scratchpad_registry::active(&request.session_key.to_key_string())
