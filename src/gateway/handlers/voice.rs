@@ -214,7 +214,7 @@ pub async fn handle_record_stop(
 pub async fn handle_synthesize(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
-    generation_registry: Arc<RwLock<crate::generation::GenerationProviderRegistry>>,
+    generation_registry: Arc<std::sync::RwLock<crate::generation::GenerationProviderRegistry>>,
 ) -> JsonRpcResponse {
     #[derive(serde::Deserialize)]
     struct Params {
@@ -244,10 +244,23 @@ pub async fn handle_synthesize(
         consecutive_failures: 0,
     };
 
-    let attachment = {
-        let registry = generation_registry.read().await;
-        crate::gateway::voice::outbound::generate_tts(text, &voice_state, &registry, &gen_cfg).await
+    // Snapshot the registry under its sync lock (no guard held across `.await`),
+    // mirroring how the inbound router wires voice TTS output. Picks up
+    // providers added since boot; provider handles are cheap Arc clones.
+    let registry = {
+        let guard = generation_registry
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut snapshot = crate::generation::GenerationProviderRegistry::new();
+        for name in guard.names() {
+            if let Some(provider) = guard.get(&name) {
+                let _ = snapshot.register(name, provider);
+            }
+        }
+        snapshot
     };
+    let attachment =
+        crate::gateway::voice::outbound::generate_tts(text, &voice_state, &registry, &gen_cfg).await;
     let Some(attachment) = attachment else {
         return JsonRpcResponse::error(
             request.id,
