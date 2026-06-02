@@ -283,11 +283,11 @@ impl Sandbox for WorkspaceSandbox {
         // Standard `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` env vars
         // are injected so HTTP clients route through us.
         //
-        // Linux bwrap continues to hard-fail at `profile_for` because
-        // `--unshare-net` strips the loopback that the host proxy lives
-        // on. Phase B (netns→UDS→loopback bridge, ported from codex
-        // `proxy_routing.rs`) will close the Linux gap.
-        let proxy_handle: Option<ProxyHandle> = self.maybe_spawn_proxy(&mut cmd).await?;
+        // Linux bwrap reaches the proxy via the Phase B netns→UDS→loopback
+        // bridge: `maybe_spawn_proxy` additionally spawns a host bridge and
+        // injects a route spec env var that the driver + `sandbox-init`
+        // consume. The returned guard keeps the proxy (and bridge) alive.
+        let active_proxy: Option<ActiveProxy> = self.maybe_spawn_proxy(&mut cmd).await?;
 
         // SP-4: pre-resolve any hostnames in AllowHosts to IPs before the
         // driver builds its profile. After the proxy rewrite above this
@@ -342,11 +342,12 @@ impl Sandbox for WorkspaceSandbox {
             )
             .await;
 
-        // Keep the managed proxy alive across the OS driver `run` and only
-        // shut it down here (drop = shutdown). Explicit binding is required
-        // because `proxy_handle` is declared early in the function for
-        // scope but not consumed by any sub-call.
-        drop(proxy_handle);
+        // Keep the managed proxy (and Linux host bridge) alive across the OS
+        // driver `run` and only shut it down here (drop = shutdown + UDS dir
+        // cleanup). Explicit binding is required because `active_proxy` is
+        // declared early in the function for scope but not consumed by any
+        // sub-call.
+        drop(active_proxy);
 
         // Byte-level secret scrub before any downstream consumer touches stdout/stderr.
         // Whitelist is fed via SecurityContext.injected_secrets when threaded; for
@@ -402,49 +403,61 @@ impl Sandbox for WorkspaceSandbox {
     }
 }
 
+/// Standard proxy env vars injected for `AllowHosts`. Shared between the env
+/// injection and the Linux route spec so the two never drift (the netns-side
+/// `sandbox-init` rewrites exactly these keys to the local bridge port).
+const PROXY_ENV_KEYS: [&str; 6] = [
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+];
+
+/// Holds the managed proxy — and, on Linux, the netns host bridge — alive for
+/// the duration of one sandboxed run. Drop shuts the proxy accept loop down
+/// and removes the host bridge's UDS directory.
+pub(crate) struct ActiveProxy {
+    _proxy: ProxyHandle,
+    _bridge: Option<crate::sandbox::proxy::HostBridgeHandle>,
+}
+
 impl WorkspaceSandbox {
-    /// Cycle 6 Phase A — spawn a managed proxy if the current capabilities
-    /// request `AllowHosts` *and* the platform driver supports loopback
-    /// access. Returns:
+    /// Spawn a managed proxy if the current capabilities request `AllowHosts`
+    /// *and* the platform can reach it. Returns:
     ///
-    /// - `Ok(Some(handle))` — proxy is live, `cmd.capabilities.network`
-    ///   has been rewritten to `AllowHosts(["127.0.0.1"])`, and
-    ///   `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` / `NO_PROXY` env vars
-    ///   have been injected into `cmd.env`.
-    /// - `Ok(None)` — policy is not `AllowHosts`, allowlist is empty, or
-    ///   the platform is Linux/bwrap (which strips loopback via
-    ///   `--unshare-net`; see Phase B).
+    /// - `Ok(Some(active))` — proxy is live, `cmd.capabilities.network` has
+    ///   been collapsed to `AllowHosts(["127.0.0.1"])`, and the standard proxy
+    ///   env vars have been injected into `cmd.env`. On Linux a host bridge is
+    ///   also live and `ALEPH_SANDBOX_PROXY_ROUTE_SPEC` is injected so the
+    ///   driver bind-mounts the UDS and `sandbox-init` runs the local bridge.
+    /// - `Ok(None)` — policy is not `AllowHosts`, allowlist is empty, or the
+    ///   platform cannot reach the proxy (Windows AppContainer; see Phase D).
     /// - `Err(_)` — bind/spawn failure surfaces as `SandboxError::Other`.
     ///
-    /// The caller is responsible for holding the returned handle alive
-    /// across the OS driver `run`. Drop = shutdown.
+    /// The caller holds the returned guard alive across the OS driver `run`.
+    /// Drop = shutdown.
     async fn maybe_spawn_proxy(
         &self,
         cmd: &mut SandboxCommand,
-    ) -> Result<Option<ProxyHandle>, SandboxError> {
+    ) -> Result<Option<ActiveProxy>, SandboxError> {
         use crate::sandbox::capabilities::NetworkPolicy;
         let hosts = match &cmd.capabilities.network {
             NetworkPolicy::AllowHosts { hosts } if !hosts.is_empty() => hosts.clone(),
             _ => return Ok(None),
         };
 
-        // Cycle 6 Phase A is macOS-only. Two reasons:
-        //
-        // - `linux/bwrap` unshares the network namespace; loopback inside
-        //   the namespace is empty so the host proxy is unreachable.
-        //   Phase B will add a netns→UDS→loopback bridge.
-        // - `windows/token` runs the target inside an AppContainer whose
-        //   default isolation blocks loopback access (the
-        //   `CheckNetIsolationEnableLoopback` API requires admin to add
-        //   an exemption). Phase D will use WFP filters, which also
-        //   require admin / `LocalSystem`.
-        //
-        // On those platforms we leave the capabilities untouched and let
-        // the existing platform-level hard-fail surface the documented
-        // gap to the caller. Spawning a proxy that the sandboxed process
-        // cannot reach would convert a clean policy refusal into an
+        // Only macOS Seatbelt and Linux bwrap can reach the host managed
+        // proxy. `windows/token` runs the target inside an AppContainer whose
+        // default isolation blocks loopback (the `CheckNetIsolationEnable-
+        // Loopback` API requires admin); Phase D will use WFP. On unsupported
+        // platforms we leave capabilities untouched so the existing
+        // platform-level hard-fail surfaces the documented gap — spawning a
+        // proxy the sandbox cannot reach would turn a clean refusal into an
         // opaque "connection refused" at runtime.
-        if self.os_driver.platform() != "macos/seatbelt" {
+        let platform = self.os_driver.platform();
+        if platform != "macos/seatbelt" && platform != "linux/bwrap" {
             return Ok(None);
         }
 
@@ -453,6 +466,34 @@ impl WorkspaceSandbox {
             .await
             .map_err(|e| SandboxError::Other(format!("managed proxy spawn: {e}")))?;
         let proxy_url = handle.http_url();
+
+        // Linux: `--unshare-net` isolates the sandbox in its own netns, so the
+        // host loopback proxy is unreachable directly. Spawn a host bridge
+        // (UDS ↔ host proxy) and hand `sandbox-init` a route spec so it can run
+        // the netns-side local bridge and rewrite the proxy port to the bridge.
+        // The host proxy address is what the bridge forwards to.
+        let bridge = if platform == "linux/bwrap" {
+            let socket_dir = proxy::create_proxy_socket_dir()
+                .map_err(|e| SandboxError::Other(format!("proxy socket dir: {e}")))?;
+            let uds_path = socket_dir.join("proxy-route-0.sock");
+            let bridge = proxy::spawn_host_bridge(&uds_path, socket_dir, handle.local_addr())
+                .await
+                .map_err(|e| SandboxError::Other(format!("host bridge spawn: {e}")))?;
+            let spec = proxy::ProxyRouteSpec {
+                uds_path,
+                env_keys: PROXY_ENV_KEYS.iter().map(|s| s.to_string()).collect(),
+            };
+            let spec_json = spec
+                .to_env_json()
+                .map_err(|e| SandboxError::Other(format!("serialize proxy route spec: {e}")))?;
+            // Insert (not or_insert): this is internal routing state the driver
+            // and sandbox-init must see, never caller-overridable.
+            cmd.env
+                .insert(proxy::PROXY_ROUTE_SPEC_ENV.to_string(), spec_json);
+            Some(bridge)
+        } else {
+            None
+        };
 
         // Collapse the OS-level allowlist to the proxy's loopback address.
         // The proxy itself enforces the hostname allowlist; the OS just
@@ -463,19 +504,12 @@ impl WorkspaceSandbox {
 
         // Inject standard proxy env vars. `or_insert` lets caller-supplied
         // env override our defaults — handy for tests that pin the URL
-        // shape, and matches the existing `ALEPH_SANDBOX` env contract.
-        let inject_pairs = [
-            ("HTTP_PROXY", proxy_url.as_str()),
-            ("HTTPS_PROXY", proxy_url.as_str()),
-            ("ALL_PROXY", proxy_url.as_str()),
-            ("http_proxy", proxy_url.as_str()),
-            ("https_proxy", proxy_url.as_str()),
-            ("all_proxy", proxy_url.as_str()),
-        ];
-        for (k, v) in inject_pairs {
+        // shape, and matches the existing `ALEPH_SANDBOX` env contract. On
+        // Linux `sandbox-init` rewrites the port of these to the local bridge.
+        for k in PROXY_ENV_KEYS {
             cmd.env
                 .entry(k.to_string())
-                .or_insert_with(|| v.to_string());
+                .or_insert_with(|| proxy_url.clone());
         }
         // NO_PROXY exempts the loopback itself so curl/python clients
         // don't loop back through the proxy when talking to it.
@@ -490,10 +524,15 @@ impl WorkspaceSandbox {
             target: "sandbox.proxy",
             allowlist = ?hosts,
             proxy = %proxy_url,
+            platform = %platform,
+            bridged = bridge.is_some(),
             "spawned managed proxy for AllowHosts"
         );
 
-        Ok(Some(handle))
+        Ok(Some(ActiveProxy {
+            _proxy: handle,
+            _bridge: bridge,
+        }))
     }
 }
 
@@ -647,6 +686,71 @@ mod tests {
             })
         }
 
+        async fn run(
+            &self,
+            _program: &str,
+            _args: &[String],
+            env: &HashMap<String, String>,
+            _stdin: Option<&[u8]>,
+            _cwd: &Path,
+            _profile: &OsSandboxProfile,
+            _timeout: Duration,
+            _max_output_bytes: usize,
+        ) -> Result<SandboxOutput, SandboxError> {
+            *self.captured_env.lock().unwrap() = env.clone();
+            Ok(SandboxOutput {
+                exit_code: Some(0),
+                duration_ms: 1,
+                ..Default::default()
+            })
+        }
+    }
+
+    /// Like [`CapturingMacosDriver`] but reports `linux/bwrap`, so the
+    /// workspace engages the Phase B Linux branch of `maybe_spawn_proxy`
+    /// (managed proxy + host bridge + route spec). The bridge itself is
+    /// cross-platform (UDS ↔ TCP), so this path runs on a macOS dev box.
+    struct CapturingLinuxDriver {
+        captured_env: std::sync::Mutex<HashMap<String, String>>,
+        captured_caps: std::sync::Mutex<Option<SandboxCapabilities>>,
+    }
+
+    impl CapturingLinuxDriver {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                captured_env: std::sync::Mutex::new(HashMap::new()),
+                captured_caps: std::sync::Mutex::new(None),
+            })
+        }
+        fn env(&self) -> HashMap<String, String> {
+            self.captured_env.lock().unwrap().clone()
+        }
+        fn caps(&self) -> Option<SandboxCapabilities> {
+            self.captured_caps.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl OsSandboxDriverTrait for CapturingLinuxDriver {
+        fn platform(&self) -> &'static str {
+            "linux/bwrap"
+        }
+        fn is_supported(&self) -> bool {
+            true
+        }
+        fn profile_for(
+            &self,
+            capabilities: &SandboxCapabilities,
+            _cwd: &Path,
+        ) -> Result<OsSandboxProfile, SandboxError> {
+            *self.captured_caps.lock().unwrap() = Some(capabilities.clone());
+            Ok(OsSandboxProfile {
+                contents: String::new(),
+                max_memory_mb: None,
+                linux_init_policy: None,
+                windows_init_policy: None,
+            })
+        }
         async fn run(
             &self,
             _program: &str,
@@ -1173,6 +1277,70 @@ mod tests {
         let env = driver.env();
         assert!(!env.contains_key("HTTP_PROXY"));
         assert!(!env.contains_key("HTTPS_PROXY"));
+    }
+
+    // ── Phase B — Linux netns bridge orchestration (cross-platform path) ──
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn proxy_injects_route_spec_and_host_bridge_on_linux() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver = CapturingLinuxDriver::new();
+        let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();
+        let sandbox = WorkspaceSandbox::new(
+            tmp.path().to_path_buf(),
+            driver_trait,
+            build_gate_with(ApprovalOutcome::Approved),
+            SandboxHooks::new(),
+        );
+        let cmd = SandboxCommand {
+            session_id: sid(),
+            program: "curl".into(),
+            args: vec!["https://api.example.com/".into()],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: allow_hosts_caps(&["api.example.com"]),
+            timeout: None,
+        };
+        sandbox.execute(cmd).await.expect("execute");
+
+        let env = driver.env();
+        // Standard proxy env vars still injected (sandbox-init rewrites the
+        // port in-netns; here we just confirm they reached the driver).
+        assert!(env
+            .get("HTTP_PROXY")
+            .is_some_and(|v| v.starts_with("http://127.0.0.1:")));
+
+        // The route spec env var is present and parses into a well-formed spec
+        // listing the proxy env keys and a UDS path under the socket dir.
+        let spec_json = env
+            .get(crate::sandbox::proxy::PROXY_ROUTE_SPEC_ENV)
+            .expect("route spec env var must be injected on linux");
+        let spec = crate::sandbox::proxy::ProxyRouteSpec::from_env_json(spec_json)
+            .expect("route spec must be valid JSON");
+        assert!(spec.env_keys.contains(&"HTTP_PROXY".to_string()));
+        assert!(spec.env_keys.contains(&"all_proxy".to_string()));
+        assert!(
+            spec.uds_path.to_string_lossy().ends_with(".sock"),
+            "uds_path should be a socket file, got {:?}",
+            spec.uds_path
+        );
+
+        // Capabilities reaching the driver are collapsed to loopback.
+        let driver_caps = driver.caps().expect("profile_for not called");
+        match driver_caps.network {
+            NetworkPolicy::AllowHosts { hosts } => {
+                assert_eq!(hosts, vec!["127.0.0.1".to_string()])
+            }
+            other => panic!("expected AllowHosts(['127.0.0.1']), got {other:?}"),
+        }
+
+        // The host bridge's socket dir is cleaned up once `execute` drops the
+        // ActiveProxy guard (drop = abort + remove_dir_all).
+        assert!(
+            !spec.uds_path.exists(),
+            "UDS must be removed after the run completes"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

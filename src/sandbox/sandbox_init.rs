@@ -153,6 +153,54 @@ pub fn policy_from_capabilities(
 }
 
 // ---------------------------------------------------------------------------
+// Phase B proxy-bridge env rewrite (cross-platform: pure string logic, unit-
+// tested on dev boxes; the actual fork/bind lives in the Linux section).
+// ---------------------------------------------------------------------------
+
+/// Rewrite a proxy URL so its host becomes `127.0.0.1` and its port becomes
+/// `local_port`, preserving scheme, path, and the bare-authority (no-scheme)
+/// shape. The pre-rewrite value points at the host managed proxy; after the
+/// netns-side local bridge binds a fresh loopback port, `sandbox-init` swaps
+/// the port in. Modeled on codex `proxy_routing::rewrite_proxy_env_value`.
+///
+/// Returns `None` if the value cannot be parsed as a URL/authority.
+///
+/// `dead_code` allow: the only non-test caller is the Linux-gated
+/// `activate_proxy_routes_from_env`, so on macOS/Windows `cargo check` (no
+/// tests) sees it as unused.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn rewrite_proxy_env_value(proxy_url: &str, local_port: u16) -> Option<String> {
+    let had_scheme = proxy_url.contains("://");
+    let candidate = if had_scheme {
+        proxy_url.to_string()
+    } else {
+        format!("http://{proxy_url}")
+    };
+
+    let mut parsed = url::Url::parse(&candidate).ok()?;
+    parsed.set_host(Some("127.0.0.1")).ok()?;
+    parsed.set_port(Some(local_port)).ok()?;
+    let mut rewritten = parsed.to_string();
+    if !had_scheme {
+        rewritten = rewritten
+            .strip_prefix("http://")
+            .unwrap_or(rewritten.as_str())
+            .to_string();
+    }
+    // `Url::to_string` re-adds a trailing slash for a bare authority; drop it
+    // when the original had no path/query/fragment so we don't perturb the
+    // value's shape (some clients are picky about a stray `/`).
+    if !proxy_url.ends_with('/')
+        && !proxy_url.contains('?')
+        && !proxy_url.contains('#')
+        && rewritten.ends_with('/')
+    {
+        rewritten.pop();
+    }
+    Some(rewritten)
+}
+
+// ---------------------------------------------------------------------------
 // Linux-only entry point + LSM application.
 // ---------------------------------------------------------------------------
 
@@ -165,6 +213,8 @@ pub fn policy_from_capabilities(
 /// - 65 → seccomp filter rejected by the kernel (unrecoverable)
 /// - 66 → cannot parse argv (bad policy JSON, missing `--`, etc.)
 /// - 67 → `execvp` failed (target binary not found or not executable)
+/// - 68 → proxy-route bridge activation failed (Phase B netns bridge); fail
+///        closed rather than run the target with broken egress control.
 #[cfg(target_os = "linux")]
 pub fn run_init(args: Vec<String>) -> ! {
     use std::os::unix::process::CommandExt as _;
@@ -183,6 +233,19 @@ pub fn run_init(args: Vec<String>) -> ! {
     if let Err(e) = set_no_new_privs() {
         eprintln!("aleph sandbox-init: prctl(PR_SET_NO_NEW_PRIVS) failed: {e}");
         std::process::exit(65);
+    }
+
+    // Phase B — activate the netns→UDS→loopback proxy bridge BEFORE landlock
+    // and seccomp. The local bridge is `fork()`ed here (safe: `sandbox-init`
+    // is single-threaded — dispatched in `main()` before any tokio runtime)
+    // and must (a) outlive our `execvp` of the target and (b) keep filesystem
+    // access to the UDS that landlock would otherwise strip. Forking it first
+    // leaves the trusted bridge unrestricted while the target still inherits
+    // the full landlock+seccomp lockdown. No-op when the env var is absent
+    // (NetworkPolicy other than proxied AllowHosts).
+    if let Err(e) = activate_proxy_routes_from_env() {
+        eprintln!("aleph sandbox-init: proxy route bridge activation failed: {e}");
+        std::process::exit(68);
     }
 
     if let Err(e) = apply_landlock(&parsed.policy) {
@@ -278,6 +341,192 @@ fn set_no_new_privs() -> Result<(), std::io::Error> {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Phase B activation, run inside the netns before landlock/seccomp.
+///
+/// Reads the [`crate::sandbox::proxy::PROXY_ROUTE_SPEC_ENV`] spec (a no-op if
+/// absent), forks a local bridge that exposes the bind-mounted UDS as a fresh
+/// loopback port, rewrites each listed proxy env var to that port, then strips
+/// the spec var so the untrusted target never sees the routing internals.
+#[cfg(target_os = "linux")]
+fn activate_proxy_routes_from_env() -> std::io::Result<()> {
+    use crate::sandbox::proxy::{ProxyRouteSpec, PROXY_ROUTE_SPEC_ENV};
+
+    let Ok(raw) = std::env::var(PROXY_ROUTE_SPEC_ENV) else {
+        return Ok(()); // not a proxied AllowHosts run
+    };
+    let spec = ProxyRouteSpec::from_env_json(&raw).map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("parse proxy route spec: {e}"),
+        )
+    })?;
+
+    let local_port = spawn_local_bridge(&spec.uds_path)?;
+
+    for key in &spec.env_keys {
+        // The pre-rewrite value points at the (unreachable-from-netns) host
+        // proxy; swap its port to the local bridge. If a key is unset we
+        // synthesize a plain http authority — the bridge speaks both HTTP
+        // CONNECT and SOCKS5 by first-byte detection, so http:// is a safe
+        // default for clients that only honor the env var.
+        let current = std::env::var(key).unwrap_or_default();
+        let rewritten = if current.is_empty() {
+            format!("http://127.0.0.1:{local_port}")
+        } else {
+            rewrite_proxy_env_value(&current, local_port).ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("could not rewrite proxy env var {key}"),
+                )
+            })?
+        };
+        std::env::set_var(key, rewritten);
+    }
+
+    std::env::remove_var(PROXY_ROUTE_SPEC_ENV);
+    Ok(())
+}
+
+/// Fork a child process that bridges a fresh loopback TCP port to `uds_path`
+/// inside the netns, returning the bound port. The child survives our later
+/// `execvp` (it is a separate process) and dies with us via `PR_SET_PDEATHSIG`.
+/// Safe because `sandbox-init` is single-threaded at this point.
+#[cfg(target_os = "linux")]
+fn spawn_local_bridge(uds_path: &std::path::Path) -> std::io::Result<u16> {
+    use std::fs::File;
+    use std::io::Read as _;
+    use std::os::fd::FromRawFd as _;
+
+    let (read_fd, write_fd) = create_ready_pipe()?;
+    // SAFETY: `fork()` in a single-threaded process (sandbox-init is
+    // dispatched in main() before any tokio runtime). The child touches only
+    // async-signal-safe-after-fork state because no other thread holds the
+    // allocator/locks; it then runs ordinary Rust without exec'ing.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        let err = std::io::Error::last_os_error();
+        let _ = close_fd(read_fd);
+        let _ = close_fd(write_fd);
+        return Err(err);
+    }
+
+    if pid == 0 {
+        // Child: close the read end, run the bridge forever. Any failure →
+        // _exit(1) so the parent's read_exact sees EOF and surfaces an error.
+        if close_fd(read_fd).is_err() {
+            unsafe { libc::_exit(1) };
+        }
+        if run_local_bridge(uds_path, write_fd).is_err() {
+            unsafe { libc::_exit(1) };
+        }
+        unsafe { libc::_exit(0) };
+    }
+
+    // Parent: read the bound port the child reports once it is listening.
+    close_fd(write_fd)?;
+    let mut port_bytes = [0u8; 2];
+    // SAFETY: `read_fd` is a freshly-created, owned pipe read end.
+    let mut read_file = unsafe { File::from_raw_fd(read_fd) };
+    read_file.read_exact(&mut port_bytes)?;
+    Ok(u16::from_be_bytes(port_bytes))
+}
+
+#[cfg(target_os = "linux")]
+fn run_local_bridge(uds_path: &std::path::Path, ready_fd: libc::c_int) -> std::io::Result<()> {
+    use std::fs::File;
+    use std::io::Write as _;
+    use std::net::{Ipv4Addr, TcpListener};
+    use std::os::fd::FromRawFd as _;
+    use std::os::unix::net::UnixStream;
+
+    set_parent_death_signal()?;
+
+    // bwrap brings `lo` up as part of `--unshare-net` setup, so a plain
+    // loopback bind succeeds without needing CAP_NET_ADMIN (which `--cap-drop
+    // ALL` may have removed). This is why we omit codex's ioctl-based
+    // `ensure_loopback_interface_up` fallback — bwrap owns that step.
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))?;
+    let port = listener.local_addr()?.port();
+
+    // SAFETY: `ready_fd` is the owned write end of the readiness pipe.
+    let mut ready_file = unsafe { File::from_raw_fd(ready_fd) };
+    ready_file.write_all(&port.to_be_bytes())?;
+    drop(ready_file);
+
+    let uds_path = uds_path.to_path_buf();
+    loop {
+        let (tcp_stream, _) = listener.accept()?;
+        let socket_path = uds_path.clone();
+        std::thread::spawn(move || {
+            let unix_stream = match UnixStream::connect(socket_path) {
+                Ok(stream) => stream,
+                Err(_) => return,
+            };
+            let _ = proxy_bidirectional(tcp_stream, unix_stream);
+        });
+    }
+}
+
+/// Shovel bytes both ways between a loopback TCP stream and the UDS that
+/// reaches the host bridge. One thread per direction; returns when either
+/// side half-closes. Mirrors codex `proxy_routing::proxy_bidirectional`.
+#[cfg(target_os = "linux")]
+fn proxy_bidirectional(
+    mut tcp_stream: std::net::TcpStream,
+    mut unix_stream: std::os::unix::net::UnixStream,
+) -> std::io::Result<()> {
+    let mut tcp_reader = tcp_stream.try_clone()?;
+    let mut unix_writer = unix_stream.try_clone()?;
+    let tcp_to_unix = std::thread::spawn(move || std::io::copy(&mut tcp_reader, &mut unix_writer));
+    let unix_to_tcp = std::io::copy(&mut unix_stream, &mut tcp_stream);
+    let tcp_to_unix = tcp_to_unix
+        .join()
+        .map_err(|_| std::io::Error::other("bridge copy thread panicked"))?;
+    tcp_to_unix?;
+    unix_to_tcp?;
+    Ok(())
+}
+
+/// Create a close-on-exec pipe used to hand the bound port (or a failure EOF)
+/// from the forked bridge child back to the parent.
+#[cfg(target_os = "linux")]
+fn create_ready_pipe() -> std::io::Result<(libc::c_int, libc::c_int)> {
+    let mut fds = [0; 2];
+    // SAFETY: `pipe2` writes exactly two fds into the provided array.
+    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    if rc != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok((fds[0], fds[1]))
+}
+
+#[cfg(target_os = "linux")]
+fn close_fd(fd: libc::c_int) -> std::io::Result<()> {
+    // SAFETY: closing an owned fd exactly once.
+    let rc = unsafe { libc::close(fd) };
+    if rc < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// Ask the kernel to `SIGTERM` the bridge child when its parent dies, so a
+/// crashed `sandbox-init` never leaks a bridge process. Mirrors codex.
+#[cfg(target_os = "linux")]
+fn set_parent_death_signal() -> std::io::Result<()> {
+    // SAFETY: prctl(PR_SET_PDEATHSIG) only sets a per-task attribute.
+    let rc = unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) };
+    if rc != 0 {
+        Err(std::io::Error::last_os_error())
+    } else if unsafe { libc::getppid() } == 1 {
+        // Parent already reaped between fork and prctl → bail so we don't
+        // linger as an orphan serving a bridge nobody will tear down.
+        Err(std::io::Error::other("parent process already exited"))
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -731,5 +980,34 @@ mod tests {
         ];
         let err = parse_init_args(&argv).unwrap_err();
         assert!(err.contains("JSON parse error"), "got: {err}");
+    }
+
+    #[test]
+    fn rewrite_proxy_env_value_swaps_host_and_port_keeping_scheme() {
+        // socks5h scheme + explicit loopback host → port swapped, scheme kept.
+        assert_eq!(
+            rewrite_proxy_env_value("socks5h://127.0.0.1:8081", 43210).as_deref(),
+            Some("socks5h://127.0.0.1:43210")
+        );
+        // http scheme.
+        assert_eq!(
+            rewrite_proxy_env_value("http://127.0.0.1:3128", 50000).as_deref(),
+            Some("http://127.0.0.1:50000")
+        );
+    }
+
+    #[test]
+    fn rewrite_proxy_env_value_preserves_bare_authority_shape() {
+        // No scheme, no path → stays bare (no scheme re-added, no trailing /).
+        assert_eq!(
+            rewrite_proxy_env_value("127.0.0.1:3128", 40000).as_deref(),
+            Some("127.0.0.1:40000")
+        );
+    }
+
+    #[test]
+    fn rewrite_proxy_env_value_rejects_garbage() {
+        assert_eq!(rewrite_proxy_env_value("", 40000), None);
+        assert_eq!(rewrite_proxy_env_value("http://", 40000), None);
     }
 }

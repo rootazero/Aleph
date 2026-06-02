@@ -23,9 +23,13 @@
 //! - **Windows**: replaces the `UnsupportedPolicy` hard-fail. AppContainer
 //!   already grants `INetwork` for non-`None` policies; loopback is enabled
 //!   in the same profile path.
-//! - **Linux**: still hard-fails — `--unshare-net` strips loopback access
-//!   inside the netns. Phase B (netns bridge, ported from codex
-//!   `proxy_routing.rs`) will close this in a follow-up cycle.
+//! - **Linux**: Phase B ([`netns_bridge`]) closes the gap. `--unshare-net`
+//!   still strips loopback inside the netns, but a Unix-domain socket is a
+//!   filesystem object that crosses the boundary when bind-mounted in. A host
+//!   bridge forwards that UDS to the managed proxy, and `sandbox-init` runs a
+//!   netns-side local bridge that exposes it as loopback. Modeled on codex
+//!   `proxy_routing.rs`, with the host half async (no `fork()` in the
+//!   multi-threaded daemon) instead of forked.
 //!
 //! # Threat model
 //!
@@ -38,7 +42,12 @@
 mod allowlist;
 mod connect;
 mod lifecycle;
+mod netns_bridge;
 mod socks5;
 
 pub use allowlist::AllowList;
 pub use lifecycle::{spawn, ProxyHandle, ProxyStartError};
+pub use netns_bridge::{
+    create_proxy_socket_dir, spawn_host_bridge, HostBridgeHandle, ProxyRouteSpec,
+    PROXY_ROUTE_SPEC_ENV,
+};
