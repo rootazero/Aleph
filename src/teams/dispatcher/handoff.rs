@@ -13,6 +13,12 @@ use crate::teams::store::TeamStore;
 /// Max bytes kept per free-form section (task body, each dependency result).
 const MAX_SECTION_BYTES: usize = 4096;
 
+/// Max bytes kept for the injected team protocol. Larger than a normal section
+/// because the operating agreement may enumerate roles, hand-off rules, and
+/// quality gates, yet still bounded so a runaway protocol cannot dominate the
+/// member's context window.
+const MAX_PROTOCOL_BYTES: usize = 8192;
+
 /// Truncate `s` to at most `max` bytes on a UTF-8 char boundary.
 fn truncate_utf8(s: &str, max: usize) -> String {
     if s.len() <= max {
@@ -27,10 +33,11 @@ fn truncate_utf8(s: &str, max: usize) -> String {
 
 /// Build the handoff context block for `task`.
 ///
-/// Sections (each individually byte-capped): the task instruction, results of
-/// any completed dependencies (the DAG fan-in channel), the team roster, and
-/// an unread-inbox summary. The returned string is the complete `input` handed
-/// to the member agent.
+/// Sections (each individually byte-capped): the task instruction, the team's
+/// operating protocol (if the leader authored one), results of any completed
+/// dependencies (the DAG fan-in channel), the team roster, and an unread-inbox
+/// summary. The returned string is the complete `input` handed to the member
+/// agent.
 pub async fn build_handoff_context(
     coord_store: &Arc<dyn CoordTaskStore>,
     team_store: &Arc<dyn TeamStore>,
@@ -47,6 +54,23 @@ pub async fn build_handoff_context(
         out.push_str(&truncate_utf8(&task.description, MAX_SECTION_BYTES));
     }
     out.push('\n');
+
+    // --- Team protocol (operating agreement injected verbatim) ---
+    // Placed right after the task so the member reads the team's rules before
+    // diving into dependency outputs. Fetched only when the task belongs to a
+    // team; a missing/blank protocol contributes nothing (no empty heading).
+    if let Some(team_id) = &task.team_id {
+        if let Ok(Some(team)) = team_store.get_team(team_id).await {
+            if let Some(proto) = team.protocol.as_deref() {
+                let proto = proto.trim();
+                if !proto.is_empty() {
+                    out.push_str("\n## Team Protocol\n");
+                    out.push_str(&truncate_utf8(proto, MAX_PROTOCOL_BYTES));
+                    out.push('\n');
+                }
+            }
+        }
+    }
 
     // --- Dependency results (fan-in from completed upstream tasks) ---
     let mut dep_section = String::new();
@@ -229,6 +253,46 @@ mod tests {
         assert!(ctx.contains("## Team"));
         assert!(ctx.contains("You are agent `analyst`"));
         assert!(ctx.contains("data analyst"));
+    }
+
+    #[tokio::test]
+    async fn handoff_injects_team_protocol_when_set() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+
+        let team = ts
+            .create_team(NewTeam {
+                name: "Squad".into(),
+                description: String::new(),
+                leader_id: "lead".into(),
+            })
+            .await
+            .unwrap();
+
+        let task = cs
+            .create_task(NewCoordTask {
+                team_id: Some(team.id.clone()),
+                subject: "Ship it".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        // No protocol set -> no protocol heading.
+        let before = build_handoff_context(&cs, &ts, None, &task).await;
+        assert!(!before.contains("## Team Protocol"));
+
+        // After setting a protocol, it appears verbatim.
+        ts.set_protocol(&team.id, Some("Always write tests first.".into()))
+            .await
+            .unwrap();
+        let after = build_handoff_context(&cs, &ts, None, &task).await;
+        assert!(after.contains("## Team Protocol"));
+        assert!(after.contains("Always write tests first."));
     }
 
     #[test]

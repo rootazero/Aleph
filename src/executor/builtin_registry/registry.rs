@@ -263,6 +263,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) team_delegate_tool: Option<crate::builtin_tools::team::TeamDelegateTool>,
     pub(crate) team_status_tool: Option<crate::builtin_tools::team::TeamStatusTool>,
     pub(crate) team_disband_tool: Option<crate::builtin_tools::team::TeamDisbandTool>,
+    pub(crate) team_set_protocol_tool: Option<crate::builtin_tools::team::TeamSetProtocolTool>,
     pub(crate) team_member_add_tool: Option<crate::builtin_tools::team::TeamMemberAddTool>,
     pub(crate) team_member_remove_tool: Option<crate::builtin_tools::team::TeamMemberRemoveTool>,
     pub(crate) team_digest_tool: Option<crate::builtin_tools::team::TeamDigestTool>,
@@ -1210,6 +1211,12 @@ impl ToolRegistry for BuiltinToolRegistry {
             "team_disband" => Box::pin(async move {
                 let tool = self.team_disband_tool.as_ref().ok_or_else(|| {
                     AlephError::tool("team_disband not available: no TeamStore configured")
+                })?;
+                tool.call_json(arguments).await
+            }),
+            "team_set_protocol" => Box::pin(async move {
+                let tool = self.team_set_protocol_tool.as_ref().ok_or_else(|| {
+                    AlephError::tool("team_set_protocol not available: no TeamStore configured")
                 })?;
                 tool.call_json(arguments).await
             }),

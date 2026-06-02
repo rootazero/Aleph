@@ -103,6 +103,15 @@ pub trait TeamStore: Send + Sync {
 
     /// Return summary records for all teams that an agent belongs to (as leader or member).
     async fn get_agent_teams(&self, agent_id: &str) -> crate::error::Result<Vec<TeamSummary>>;
+
+    /// Set (or clear, with `None`) the team's operating protocol. Errors with
+    /// `NotFound` when the team does not exist. The protocol is injected into
+    /// every member's launch context by the handoff-context builder.
+    async fn set_protocol(
+        &self,
+        team_id: &str,
+        protocol: Option<String>,
+    ) -> crate::error::Result<()>;
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +177,10 @@ impl SqliteTeamStore {
         add_column_if_missing(&conn, "team_members", "acp_cwd", "TEXT")?;
         add_column_if_missing(&conn, "team_members", "acp_session_name", "TEXT")?;
 
+        // Additive migration: per-team operating protocol (nullable). Older
+        // databases backfill NULL = no protocol in effect.
+        add_column_if_missing(&conn, "teams", "protocol", "TEXT")?;
+
         Ok(())
     }
 }
@@ -214,6 +227,9 @@ fn read_team_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Team> {
         status: row.get(4)?,
         created_at: row.get(5)?,
         disbanded_at: row.get(6)?,
+        // Column 7 (`protocol`) is an additive nullable column; `.ok()`
+        // tolerates legacy rows / SELECTs that predate it.
+        protocol: row.get::<_, Option<String>>(7).ok().flatten(),
     })
 }
 
@@ -271,6 +287,9 @@ impl TeamStore for SqliteTeamStore {
             status: TeamStatus::Active,
             created_at: now,
             disbanded_at: None,
+            // Protocol is set post-creation via `set_protocol` (keeps `NewTeam`
+            // — and its 20+ call-site literals — unchanged).
+            protocol: None,
         })
     }
 
@@ -278,7 +297,7 @@ impl TeamStore for SqliteTeamStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at FROM teams WHERE id = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol FROM teams WHERE id = ?1",
             )
             .map_err(db_err)?;
         stmt.query_row(params![id], read_team_row)
@@ -290,7 +309,7 @@ impl TeamStore for SqliteTeamStore {
         let conn = self.conn.lock().await;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at FROM teams WHERE name = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol FROM teams WHERE name = ?1",
             )
             .map_err(db_err)?;
         stmt.query_row(params![name], read_team_row)
@@ -488,7 +507,7 @@ impl TeamStore for SqliteTeamStore {
         // Check team exists and is active
         let team = conn
             .prepare_cached(
-                "SELECT id, name, description, leader_id, status, created_at, disbanded_at FROM teams WHERE id = ?1",
+                "SELECT id, name, description, leader_id, status, created_at, disbanded_at, protocol FROM teams WHERE id = ?1",
             )
             .map_err(db_err)?
             .query_row(params![team_id], read_team_row)
@@ -557,6 +576,34 @@ impl TeamStore for SqliteTeamStore {
 
         Ok(summaries)
     }
+
+    async fn set_protocol(
+        &self,
+        team_id: &str,
+        protocol: Option<String>,
+    ) -> crate::error::Result<()> {
+        let conn = self.conn.lock().await;
+        // Normalize empty/whitespace-only input to NULL so "clear" and "blank"
+        // are the same state — the handoff builder treats both as no protocol.
+        let normalized = protocol.and_then(|p| {
+            let t = p.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        });
+        let affected = conn
+            .execute(
+                "UPDATE teams SET protocol = ?1 WHERE id = ?2",
+                params![normalized, team_id],
+            )
+            .map_err(db_err)?;
+        if affected == 0 {
+            return Err(not_found(format!("team not found: {team_id}")));
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -595,6 +642,51 @@ mod tests {
         let fetched = store.get_team(&team.id).await.unwrap().unwrap();
         assert_eq!(fetched.id, team.id);
         assert_eq!(fetched.name, "Alpha");
+    }
+
+    #[tokio::test]
+    async fn test_set_protocol_round_trip() {
+        let store = setup_store().await;
+        let team = store
+            .create_team(NewTeam {
+                name: "Proto".into(),
+                description: "".into(),
+                leader_id: "lead".into(),
+            })
+            .await
+            .unwrap();
+
+        // Fresh teams have no protocol.
+        assert_eq!(store.get_team(&team.id).await.unwrap().unwrap().protocol, None);
+
+        // Set it.
+        store
+            .set_protocol(&team.id, Some("Reviewer owns QA; merge only on green.".into()))
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .get_team(&team.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .protocol
+                .as_deref(),
+            Some("Reviewer owns QA; merge only on green.")
+        );
+
+        // Whitespace-only normalizes back to None (clear).
+        store
+            .set_protocol(&team.id, Some("   ".into()))
+            .await
+            .unwrap();
+        assert_eq!(store.get_team(&team.id).await.unwrap().unwrap().protocol, None);
+
+        // Unknown team is a NotFound error.
+        assert!(store
+            .set_protocol("no-such-team", Some("x".into()))
+            .await
+            .is_err());
     }
 
     #[tokio::test]

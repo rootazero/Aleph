@@ -17,6 +17,7 @@ pub mod plan_submit;
 pub mod session_collaborate;
 pub mod session_read;
 pub mod session_turn;
+mod set_protocol;
 pub mod snapshot;
 mod status;
 pub mod task_comment;
@@ -55,6 +56,7 @@ pub use session_collaborate::{
 };
 pub use session_read::{SessionReadArgs, SessionReadOutput, SessionReadTool};
 pub use session_turn::{SessionTurnArgs, SessionTurnOutput, SessionTurnTool};
+pub use set_protocol::{TeamSetProtocolArgs, TeamSetProtocolOutput, TeamSetProtocolTool};
 pub use snapshot::{SnapshotAction, TeamSnapshotArgs, TeamSnapshotOutput, TeamSnapshotTool};
 pub use status::{MemberInfo, TaskInfo, TeamStatusArgs, TeamStatusOutput, TeamStatusTool};
 pub use task_comment::{TaskCommentArgs, TaskCommentOutput, TaskCommentTool};

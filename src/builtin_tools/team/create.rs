@@ -81,6 +81,13 @@ pub struct TeamCreateArgs {
     /// Each member either references an existing agent_id or provides a `create` spec.
     #[serde(default)]
     pub members: Vec<MemberSpec>,
+
+    /// Optional team operating protocol: role definitions, hand-off rules, and
+    /// quality standards. When set, it is injected verbatim into every member's
+    /// launch context, so the whole team works under one shared agreement.
+    /// Amend it later with `team_set_protocol`.
+    #[serde(default)]
+    pub protocol: Option<String>,
 }
 
 /// Summary of an enrolled member returned in the output.
@@ -412,6 +419,18 @@ impl AlephTool for TeamCreateTool {
             .await?;
 
         info!(team_id = %team.id, leader = %leader_id, "team_create: team created");
+
+        // Apply the operating protocol if one was supplied. Non-fatal: a failed
+        // protocol write must not orphan an already-created team — log and go on.
+        if let Some(proto) = args.protocol.clone() {
+            if !proto.trim().is_empty() {
+                if let Err(e) = self.store.set_protocol(&team.id, Some(proto)).await {
+                    tracing::warn!(team_id = %team.id, error = %e, "team_create: failed to set protocol");
+                } else {
+                    info!(team_id = %team.id, "team_create: protocol applied");
+                }
+            }
+        }
 
         // Auto-enroll the leader as a member (role = "leader")
         self.store

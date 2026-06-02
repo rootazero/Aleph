@@ -62,6 +62,14 @@ pub struct Team {
     pub status: TeamStatus,
     pub created_at: i64,
     pub disbanded_at: Option<i64>,
+    /// Free-form team operating protocol: role definitions, hand-off rules,
+    /// and quality standards authored by the leader. When set, it is injected
+    /// verbatim into every member's launch context by the dispatcher's
+    /// handoff-context builder (see `teams::dispatcher::handoff`). `None` /
+    /// empty means no protocol is in effect. Stored as an additive nullable
+    /// column so older databases and serialized payloads stay compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

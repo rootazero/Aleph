@@ -535,6 +535,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true,
     },
     BuiltinToolDefinition {
+        name: "team_set_protocol",
+        description: "Set or clear a team's operating protocol (role definitions, hand-off rules, quality standards) injected into every member's launch context. Pass an empty protocol to clear.",
+        requires_config: true,
+    },
+    BuiltinToolDefinition {
         name: "team_member_add",
         description: "Add a member to an existing team (leader only). Accepts native agent IDs OR ACP harness refs like 'acp:claude-code' or 'acp:codex/backend' to bring external CLI agents (Claude Code / Codex / Gemini CLI / …) into the shared team session.",
         requires_config: true,
@@ -885,6 +890,7 @@ pub fn create_tool_boxed(
         | "team_delegate"
         | "team_status"
         | "team_disband"
+        | "team_set_protocol"
         | "team_member_add"
         | "team_member_remove"
         | "team_digest"
