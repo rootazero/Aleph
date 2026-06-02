@@ -21,6 +21,7 @@ pub mod markdown_skill_refresh;
 mod orchestrator;
 mod persistence;
 mod run_loop;
+mod scratchpad_progress_sink;
 mod simple;
 mod slash_command;
 mod steering;
@@ -38,6 +39,8 @@ pub(crate) use tool_service_builder::build_request_tool_service;
 pub use tool_service_builder::set_confirmation_requester;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use trace_sink_adapter::GatewayTraceSink;
+#[allow(unused_imports)] // wired into run_loop.rs in this commit
+pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
 
 use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};
@@ -62,6 +65,12 @@ pub struct ExecutionEngineConfig {
     /// consumes it at the next turn boundary) instead of rejecting with
     /// `AgentBusy`. Disable to restore the legacy busy/retry behaviour.
     pub mid_turn_steering: bool,
+    /// R5 progress push: when a run is bound to a user channel, mirror
+    /// scratchpad progress + watchdog-boundary events to that channel so
+    /// headless / background runs aren't a black box. Pure I/O side-channel
+    /// (see `scratchpad_progress_sink`). Default off — opt in via
+    /// `[execution] progress_push`.
+    pub scratchpad_progress_push: bool,
 }
 
 impl Default for ExecutionEngineConfig {
@@ -71,6 +80,7 @@ impl Default for ExecutionEngineConfig {
             default_timeout_secs: 172_800,
             enable_tracing: true,
             mid_turn_steering: true,
+            scratchpad_progress_push: false,
         }
     }
 }

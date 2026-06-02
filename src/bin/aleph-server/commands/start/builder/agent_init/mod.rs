@@ -777,6 +777,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
 
         let engine_config = ExecutionEngineConfig {
             default_timeout_secs: app_config.execution.default_timeout_secs,
+            scratchpad_progress_push: app_config.execution.progress_push,
             ..Default::default()
         };
         let resilience_db: Option<Arc<alephcore::resilience::StateDatabase>> = {
@@ -820,6 +821,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         .with_global_tool_permissions(app_config.policies.tool_permissions.clone());
         if let Some(ref state_db) = resilience_db {
             engine = engine.with_state_database(state_db.clone());
+        }
+        // R5 progress push: share the deferred channel-registry cell so the
+        // progress sink can reach user channels once boot populates it.
+        if let Some(ref cell) = channel_reg_cell {
+            engine = engine.with_channel_registry_cell(cell.clone());
         }
         state_db_out = resilience_db.clone();
         if let Some(router) = task_router {
