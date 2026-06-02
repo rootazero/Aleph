@@ -12,6 +12,7 @@
 
 use std::io::{self, Write};
 
+use alephcore::diagnostics::checks::HooksConsentCheck;
 use alephcore::extension::hooks::{ConsentStatus, ShellHookConsent};
 
 use crate::cli::HooksAction;
@@ -153,31 +154,20 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
         entries.len()
     );
 
+    // Issue detection is owned by the unified diagnostics check so that
+    // `aleph hooks doctor` and `aleph doctor` never drift apart (熵减 — the
+    // pending/empty/fingerprint-drift logic now lives in exactly one place).
+    let check = HooksConsentCheck::new(ShellHookConsent::with_path(path.to_path_buf()));
     let mut issues = 0usize;
-    if pending > 0 {
+    for finding in check.diagnose() {
+        if !finding.is_problem() {
+            continue;
+        }
         issues += 1;
-        println!("  [!] {pending} hook(s) await approval — run `aleph hooks test <fingerprint>`.");
-    }
-
-    let empty = entries
-        .iter()
-        .filter(|e| e.command.trim().is_empty())
-        .count();
-    if empty > 0 {
-        issues += 1;
-        println!("  [!] {empty} entr(ies) have an empty command.");
-    }
-
-    // A stored fingerprint that no longer matches `hash(plugin, command)`
-    // means the registry was hand-edited or corrupted — consent decisions
-    // can no longer be trusted for those rows.
-    let drifted = entries
-        .iter()
-        .filter(|e| ShellHookConsent::fingerprint(&e.plugin_name, &e.command) != e.fingerprint)
-        .count();
-    if drifted > 0 {
-        issues += 1;
-        println!("  [!] {drifted} entr(ies) have a stale fingerprint (registry hand-edited?).");
+        println!("  [!] {}", finding.detail);
+        if let Some(hint) = &finding.fix_hint {
+            println!("      → {hint}");
+        }
     }
 
     if issues == 0 {

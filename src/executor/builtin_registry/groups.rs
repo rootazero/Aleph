@@ -89,6 +89,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "self_config",
             "read_config_guide",
             "config_audit",
+            "doctor",
             "vault_store",
             "channel_pairing",
             "google_meet",

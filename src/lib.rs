@@ -49,6 +49,7 @@ pub mod components;
 mod config;
 pub mod context;
 mod core;
+pub mod diagnostics;
 pub mod discovery;
 pub mod domain;
 pub mod engine;

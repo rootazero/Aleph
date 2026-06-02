@@ -46,6 +46,7 @@ pub mod config_guide;
 pub mod cron_manage;
 pub mod ctx_search;
 pub mod desktop;
+pub mod doctor;
 pub mod error;
 pub mod file_ops;
 pub mod flag_user_correction;
@@ -139,6 +140,7 @@ pub use desktop::{
     DesktopCheckPermissions, DesktopCheckPermissionsArgs, DesktopGuiLocate, DesktopGuiLocateArgs,
     DesktopOutput, DesktopSom, DesktopSomArgs, DesktopTool,
 };
+pub use doctor::{DoctorArgs, DoctorOutput, DoctorTool};
 pub use error::ToolError;
 pub use file_ops::{
     ApplyPatchArgs, ApplyPatchOutput, ApplyPatchTool, FileEditTool, FileOpsArgs, FileOpsTool,
