@@ -38,6 +38,31 @@ const GRACE_NUDGE_MAX_ITERATIONS: &str =
      cannot call any more tools. Respond now with a final summary for the \
      user based on what you have accomplished so far.";
 
+/// Ephemeral nudge for the grace turn fired when the verifier-veto safety
+/// cap trips — the model kept trying to finish with required steps still
+/// incomplete. The remaining steps are already in context (the
+/// `[verifier veto] …` messages list them), so this only tells the model to
+/// stop and hand control back to the user. The model writes the actual
+/// message (R7 — no hardcoded user-facing template).
+const GRACE_NUDGE_VERIFIER_VETO: &str =
+    "You have repeatedly tried to finish while required steps from your \
+     execution list remain incomplete, and the safety cap has now stopped \
+     the loop. Do NOT call any more tools. Respond now with a clear message \
+     for the user: which steps remain unfinished, what is blocking you from \
+     completing them, and what decision or input you need from the user to \
+     proceed.";
+
+/// Ephemeral nudge for the grace turn fired when the consecutive-failure
+/// safety cap trips. The recurring error is already in context (the
+/// `ToolError` events), so this only tells the model to stop and surface the
+/// blocker to the user.
+const GRACE_NUDGE_FAILURE_CAP: &str =
+    "Your recent turns have failed repeatedly and the safety cap has now \
+     stopped the loop. Do NOT call any more tools. Respond now with a clear \
+     message for the user: what you were attempting, the specific error or \
+     obstacle that keeps recurring, and what decision or input you need from \
+     the user to proceed.";
+
 /// Maximum re-issues of the LLM call when the provider returns a response
 /// with no text, no tool_calls and no thinking. A small bound — an empty
 /// response is usually transient; persistent emptiness is a broken
@@ -85,13 +110,17 @@ const MAX_OUTPUT_TOKENS_RESUME_NUDGE: &str =
 /// Why a grace turn is being fired. Selects the nudge text; otherwise
 /// the call path is identical.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GraceReason {
+pub(crate) enum GraceReason {
     /// `LoopDirective::FinalReply` — context-budget critical.
     Budget,
     /// `LoopDirective::StopDiminishing` — diminishing-returns detector trip.
     Diminishing,
     /// `max_iterations` cap reached in the outer loop.
     MaxIterations,
+    /// `MAX_VERIFIER_VETOS` cap reached — model kept finishing with steps left.
+    VerifierVeto,
+    /// `consecutive_failure_cap` reached — repeated total-failure turns.
+    ConsecutiveFailureCap,
 }
 
 impl GraceReason {
@@ -100,6 +129,8 @@ impl GraceReason {
             Self::Budget => GRACE_NUDGE_BUDGET,
             Self::Diminishing => GRACE_NUDGE_DIMINISHING,
             Self::MaxIterations => GRACE_NUDGE_MAX_ITERATIONS,
+            Self::VerifierVeto => GRACE_NUDGE_VERIFIER_VETO,
+            Self::ConsecutiveFailureCap => GRACE_NUDGE_FAILURE_CAP,
         }
     }
 }
@@ -1146,23 +1177,25 @@ impl AgentHarness {
         });
     }
 
-    /// Fire a grace turn from the outer loop's `max_iterations` cap site,
-    /// where the per-turn `events` / `messages` are no longer in scope.
-    /// Re-fetches the session log and re-assembles the prompt, then
-    /// delegates to [`AgentHarness::fire_grace_turn`]. Fail-soft: any error
-    /// logs at WARN and returns. Skips entirely when the last assistant
-    /// turn already produced text — well-behaved capped runs pay nothing.
-    pub(crate) async fn fire_max_iterations_grace_turn(
+    /// Fire a grace turn from the outer loop's cap sites (max_iterations,
+    /// verifier-veto, consecutive-failure), where the per-turn `events` /
+    /// `messages` are no longer in scope. Re-fetches the session log and
+    /// re-assembles the prompt, then delegates to
+    /// [`AgentHarness::fire_grace_turn`]. Fail-soft: any error logs at WARN
+    /// and returns. Skips entirely when the last assistant turn already
+    /// produced text — well-behaved capped runs pay nothing.
+    pub(crate) async fn fire_boundary_grace_turn(
         &self,
         session_id: &SessionId,
         callback: &mut dyn HarnessCallback,
         iterations: usize,
+        reason: GraceReason,
         parent_cancel: &CancellationToken,
     ) {
         let events = match self.deps.session.get_events(session_id, None, None).await {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!(?session_id, ?e, "max-iter grace turn: get_events failed");
+                tracing::warn!(?session_id, ?e, "boundary grace turn: get_events failed");
                 return;
             }
         };
@@ -1177,7 +1210,7 @@ impl AgentHarness {
             &messages,
             callback,
             iterations,
-            GraceReason::MaxIterations,
+            reason,
             parent_cancel,
         )
         .await;
@@ -1321,5 +1354,22 @@ mod tests {
     #[test]
     fn grace_nudge_budget_and_diminishing_are_distinct_strings() {
         assert_ne!(GRACE_NUDGE_BUDGET, GRACE_NUDGE_DIMINISHING);
+    }
+
+    #[test]
+    fn verifier_veto_nudge_is_distinct_and_set() {
+        assert_eq!(GraceReason::VerifierVeto.nudge(), GRACE_NUDGE_VERIFIER_VETO);
+        assert_ne!(GRACE_NUDGE_VERIFIER_VETO, GRACE_NUDGE_MAX_ITERATIONS);
+        assert!(GRACE_NUDGE_VERIFIER_VETO.contains("user"));
+    }
+
+    #[test]
+    fn consecutive_failure_nudge_is_distinct_and_set() {
+        assert_eq!(
+            GraceReason::ConsecutiveFailureCap.nudge(),
+            GRACE_NUDGE_FAILURE_CAP
+        );
+        assert_ne!(GRACE_NUDGE_FAILURE_CAP, GRACE_NUDGE_VERIFIER_VETO);
+        assert!(GRACE_NUDGE_FAILURE_CAP.contains("user"));
     }
 }
