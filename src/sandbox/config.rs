@@ -351,6 +351,16 @@ pub struct SandboxConfig {
     #[serde(default = "default_max_output_bytes")]
     pub max_output_bytes: usize,
 
+    /// Git-style glob patterns whose matches are denied **read** (and
+    /// `unlink`) access inside every sandboxed command, even when the path
+    /// lies within an otherwise-readable workspace root. A defence-in-depth
+    /// security floor for secrets such as `**/.env`, `**/*.pem`,
+    /// `**/.ssh/**`. Empty by default → no extra denies (boot unchanged).
+    /// Currently enforced by the macOS seatbelt driver; other platforms
+    /// ignore it until landlock/WFP glob enforcement lands.
+    #[serde(default)]
+    pub deny_read_globs: Vec<String>,
+
     #[serde(default)]
     pub linux: LinuxSandboxConfig,
 
@@ -402,6 +412,7 @@ impl Default for SandboxConfig {
             enabled: default_enabled(),
             default_timeout_seconds: default_timeout_seconds(),
             max_output_bytes: default_max_output_bytes(),
+            deny_read_globs: Vec::new(),
             linux: LinuxSandboxConfig::default(),
             windows: WindowsSandboxConfig::default(),
             rate_limit: SandboxRateLimitConfigSchema {
@@ -470,6 +481,19 @@ mod tests {
         let cfg: SandboxConfig = toml::from_str(toml).expect("parses");
         assert!(!cfg.windows.use_job_object);
         assert_eq!(cfg.windows.max_active_processes, 4);
+    }
+
+    #[test]
+    fn deny_read_globs_default_empty_and_parses() {
+        // Back-compat: absent key → empty list (boot unchanged).
+        let cfg = SandboxConfig::default();
+        assert!(cfg.deny_read_globs.is_empty());
+
+        let toml = r#"
+            deny_read_globs = ["**/.env", "**/*.pem"]
+        "#;
+        let cfg: SandboxConfig = toml::from_str(toml).expect("parses");
+        assert_eq!(cfg.deny_read_globs, vec!["**/.env", "**/*.pem"]);
     }
 
     #[test]

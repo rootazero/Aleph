@@ -16,6 +16,7 @@ pub mod command_policy;
 pub mod config;
 pub mod context;
 pub mod denial_logger;
+pub mod deny_globs;
 pub(crate) mod dns;
 pub mod driver;
 pub mod exec_approval;
