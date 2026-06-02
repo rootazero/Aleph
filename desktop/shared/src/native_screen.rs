@@ -180,6 +180,13 @@ impl ScreenCapability for NativeScreen {
             .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
     }
 
+    async fn key_button(&self, keys: &[String], action: PressAction) -> Result<()> {
+        let keys = keys.to_vec();
+        tokio::task::spawn_blocking(move || action::key_button(&keys, action))
+            .await
+            .map_err(|e| DesktopError::InputFailed(format!("task join error: {e}")))?
+    }
+
     async fn quit_app(&self, app_name: &str) -> Result<()> {
         let app_name = app_name.to_string();
         tokio::task::spawn_blocking(move || action::quit_app(&app_name))

@@ -194,6 +194,10 @@ impl ScreenCapability for MacOSScreen {
         self.inner.mouse_button(x, y, button, action).await
     }
 
+    async fn key_button(&self, keys: &[String], action: PressAction) -> Result<()> {
+        self.inner.key_button(keys, action).await
+    }
+
     async fn quit_app(&self, app_name: &str) -> Result<()> {
         self.inner.quit_app(app_name).await
     }
