@@ -77,6 +77,19 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Self-diagnose runtime health and optionally apply mechanical repairs.
+    ///
+    /// Inspects the data directory, instance lock, config file, and
+    /// shell-hook consent registry. Read-only by default; `--fix` applies
+    /// deterministic repairs (recreate data dir, clear a stale lock).
+    Doctor {
+        /// Apply mechanical repairs for repairable findings.
+        #[arg(long)]
+        fix: bool,
+        /// Emit a machine-readable JSON envelope instead of human output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage device pairing
     Pairing {
         #[command(subcommand)]

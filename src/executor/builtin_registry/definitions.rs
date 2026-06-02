@@ -31,9 +31,9 @@ use crate::builtin_tools::{
     ApplyPatchTool, BashExecTool, CodeCheckTool, CodeExecTool, ConfigAuditTool, CtxSearchTool,
     DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree, DesktopAxSnapshot,
     DesktopBrowserOperator, DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool,
-    FileEditTool, FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool, PdfGenerateTool,
-    ReadConfigGuideTool, RecallEventsTool, SearchTool, SelfManageTool, VaultStoreTool,
-    WebFetchTool,
+    DoctorTool, FileEditTool, FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool,
+    PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, SearchTool, SelfManageTool,
+    VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -205,6 +205,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         name: "config_audit",
         description: "Audit the live security posture (SSRF, sandbox, shell safety, PII filtering) and return structured findings — read-only",
         requires_config: true, // Requires the live Config handle
+    },
+    BuiltinToolDefinition {
+        name: "doctor",
+        description: "Self-diagnose runtime health (data dir, instance lock, config parse, hook consent) with structured findings; fix=true applies safe deterministic repairs — read-only by default",
+        requires_config: false,
     },
     BuiltinToolDefinition {
         name: "self_manage",
@@ -811,6 +816,7 @@ pub fn create_tool_boxed(
         "config_audit" => config
             .and_then(|c| c.config.as_ref())
             .map(|cfg| Box::new(ConfigAuditTool::new(Arc::clone(cfg))) as Box<dyn AlephToolDyn>),
+        "doctor" => Some(Box::new(DoctorTool)),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
         "desktop_ax_query_focused" => Some(Box::new(DesktopAxQueryFocused::new())),

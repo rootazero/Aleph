@@ -189,6 +189,9 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::Gateway { action }) => {
             return commands::handle_gateway_command(action).await;
         }
+        Some(Command::Doctor { fix, json }) => {
+            return commands::handle_doctor_command(fix, json).await;
+        }
         Some(Command::Audit { action }) => {
             return match action {
                 AuditAction::Tools => commands::handle_audit_tools().await,
