@@ -264,6 +264,7 @@ mod tests {
             streaming: StreamingOptions::default(),
             error_policy: ErrorPolicy::default(),
             html_fallback: true,
+            link_preview: crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
         }
     }
 
@@ -365,6 +366,7 @@ mod tests {
             streaming: StreamingOptions::default(),
             error_policy: ErrorPolicy::default(),
             html_fallback: true,
+            link_preview: crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
         };
         let ctrl = AccessController::new(config);
         assert_eq!(
@@ -413,6 +415,7 @@ mod tests {
             streaming: StreamingOptions::default(),
             error_policy: ErrorPolicy::default(),
             html_fallback: true,
+            link_preview: crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
         };
         let ctrl = AccessController::new(config);
         assert_eq!(

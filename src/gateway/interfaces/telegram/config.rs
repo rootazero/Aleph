@@ -91,6 +91,10 @@ pub struct TelegramConfig {
     /// Streaming delivery options (edit-based progressive output).
     #[serde(default)]
     pub streaming: StreamingOptions,
+
+    /// Link preview policy for outbound messages (default: `Enabled`).
+    #[serde(default)]
+    pub link_preview: super::config_v2::LinkPreviewMode,
 }
 
 /// Webhook configuration for receiving updates
@@ -156,6 +160,7 @@ impl Default for TelegramConfig {
             max_retries: 3,
             coalescing: default_coalescing(),
             streaming: StreamingOptions::default(),
+            link_preview: super::config_v2::LinkPreviewMode::default(),
         }
     }
 }
@@ -259,6 +264,7 @@ impl TelegramConfig {
                 error_policy: None,
                 proxy_url: None,
                 html_fallback: None,
+                link_preview: Some(self.link_preview),
                 groups: Vec::new(),
             }],
             coalescing: self.coalescing.clone(),

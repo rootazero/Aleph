@@ -122,6 +122,7 @@ impl TelegramChannel {
                     error_policy: first.error_policy.clone().unwrap_or_default(),
                     max_retries: 3,
                     html_fallback: first.html_fallback.unwrap_or(true),
+                    link_preview: first.link_preview.unwrap_or_default(),
                 })
         } else {
             ResolvedConfig {
@@ -138,6 +139,7 @@ impl TelegramChannel {
                 error_policy: Default::default(),
                 max_retries: 3,
                 html_fallback: true,
+                link_preview: crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
             }
         };
         let access = Arc::new(AccessController::new(access_config));
@@ -266,6 +268,7 @@ impl Channel for TelegramChannel {
                     error_policy: account.error_policy.clone().unwrap_or_default(),
                     max_retries: 3,
                     html_fallback: account.html_fallback.unwrap_or(true),
+                    link_preview: account.link_preview.unwrap_or_default(),
                 });
 
             let mut instance = BotInstance::new(account, self.callback_tx.clone(), resolved_config);

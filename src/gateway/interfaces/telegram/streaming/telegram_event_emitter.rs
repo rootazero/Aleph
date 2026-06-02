@@ -38,6 +38,7 @@ impl TelegramEventEmitter {
                 error_policy: Default::default(),
                 max_retries: 3,
                 html_fallback: true,
+                link_preview: crate::gateway::interfaces::telegram::config_v2::LinkPreviewMode::Enabled,
             },
             Arc::new(ErrorCooldown::new()),
             conversation_id.clone(),

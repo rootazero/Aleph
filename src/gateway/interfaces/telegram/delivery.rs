@@ -16,7 +16,33 @@ use teloxide::{
 
 use super::chunking::split_html_safe;
 use super::config_resolver::ResolvedConfig;
+use super::config_v2::LinkPreviewMode;
 use super::error_cooldown::{ErrorCooldown, ErrorKind};
+
+/// Map the configured link-preview policy to teloxide's `LinkPreviewOptions`.
+///
+/// Returns `None` for [`LinkPreviewMode::Enabled`] — Telegram's default
+/// behaviour, so the request is left untouched (no API field emitted).
+fn link_preview_options(mode: LinkPreviewMode) -> Option<teloxide::types::LinkPreviewOptions> {
+    use teloxide::types::LinkPreviewOptions;
+    match mode {
+        LinkPreviewMode::Enabled => None,
+        LinkPreviewMode::Disabled => Some(LinkPreviewOptions {
+            is_disabled: true,
+            url: None,
+            prefer_small_media: false,
+            prefer_large_media: false,
+            show_above_text: false,
+        }),
+        LinkPreviewMode::Above => Some(LinkPreviewOptions {
+            is_disabled: false,
+            url: None,
+            prefer_small_media: false,
+            prefer_large_media: false,
+            show_above_text: true,
+        }),
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Error classification
@@ -235,6 +261,9 @@ pub(crate) async fn send_message(
         let mut req = bot.send_message(chat_id, text);
         if let Some(mode) = parse_mode {
             req = req.parse_mode(mode);
+        }
+        if let Some(opts) = link_preview_options(config.link_preview) {
+            req = req.link_preview_options(opts);
         }
         if let Some(reply_to) = reply_to {
             if let Ok(msg_id) = reply_to.parse::<i32>() {
@@ -751,12 +780,15 @@ impl TelegramDelivery {
     pub async fn send_text_message(&self, text: &str) -> ChannelResult<i64> {
         let (chat_id, thread_id) = parse_conversation_id(&self.conversation_id)?;
         let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
-        let req = with_thread!(
+        let mut req = with_thread!(
             self.bot
                 .send_message(chat_id, &html_text)
                 .parse_mode(ParseMode::Html),
             thread_id
         );
+        if let Some(opts) = link_preview_options(self.config.link_preview) {
+            req = req.link_preview_options(opts);
+        }
         match req.await {
             Ok(msg) => Ok(msg.id.0 as i64),
             Err(e) => {
@@ -773,10 +805,13 @@ impl TelegramDelivery {
         let (chat_id, _thread_id) = parse_conversation_id(&self.conversation_id)?;
         let msg_id = teloxide::types::MessageId(message_id as i32);
         let html_text = MessageFormatter::format(text, MarkupFormat::TelegramHtml);
-        let request = self
+        let mut request = self
             .bot
             .edit_message_text(chat_id, msg_id, &html_text)
             .parse_mode(ParseMode::Html);
+        if let Some(opts) = link_preview_options(self.config.link_preview) {
+            request = request.link_preview_options(opts);
+        }
         match request.await {
             Ok(_) => Ok(()),
             Err(ref e) if is_benign_edit_error(e) => {
@@ -831,6 +866,26 @@ impl TelegramDelivery {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_link_preview_enabled_leaves_request_untouched() {
+        // `Enabled` is Telegram's default — no options emitted.
+        assert!(link_preview_options(LinkPreviewMode::Enabled).is_none());
+    }
+
+    #[test]
+    fn test_link_preview_disabled_suppresses_card() {
+        let opts = link_preview_options(LinkPreviewMode::Disabled).expect("options");
+        assert!(opts.is_disabled);
+        assert!(!opts.show_above_text);
+    }
+
+    #[test]
+    fn test_link_preview_above_keeps_card_above_text() {
+        let opts = link_preview_options(LinkPreviewMode::Above).expect("options");
+        assert!(!opts.is_disabled);
+        assert!(opts.show_above_text);
+    }
 
     #[test]
     fn test_parse_conversation_id_plain() {
