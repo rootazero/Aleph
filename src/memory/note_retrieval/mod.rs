@@ -5,9 +5,11 @@
 //! consumers don't require changes.
 
 pub mod hybrid;
+pub mod scoring;
 
 use std::collections::HashMap;
 
+use crate::config::types::memory::RetrievalScoringConfig;
 use crate::error::AlephError;
 use crate::memory::context::{MemoryFact, NoteType};
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
@@ -35,6 +37,9 @@ pub struct NoteFactRetrieval<S: NoteStore + Send + Sync + 'static> {
     /// Blend weight for the reranker score in `[0.0, 1.0]` (only used when
     /// `reranker` is `Some`).
     rerank_weight: f32,
+    /// Retrieval-time recency decay + MMR diversity. Default-inactive, so the
+    /// base `new()` reproduces legacy ranking byte-for-byte.
+    scoring: RetrievalScoringConfig,
 }
 
 impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
@@ -44,7 +49,16 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             embedder,
             reranker: None,
             rerank_weight: 0.6,
+            scoring: RetrievalScoringConfig::default(),
         }
+    }
+
+    /// Attach retrieval-time scoring (recency decay + MMR diversity). An
+    /// inactive config (the default) is a no-op, so callers may wire it
+    /// unconditionally without changing legacy behaviour.
+    pub fn with_scoring_config(mut self, cfg: &RetrievalScoringConfig) -> Self {
+        self.scoring = cfg.clone();
+        self
     }
 
     /// Attach a cross-encoder reranker as a final retrieval stage (non-breaking
@@ -67,17 +81,59 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         self.with_reranker(provider, cfg.rerank_weight)
     }
 
-    /// Candidate pool size to fetch before reranking. Without a reranker this is
-    /// exactly `limit` (preserving legacy fetch counts); with one it over-fetches
-    /// up to a bounded ceiling so the reranker can reorder a real pool.
+    /// Candidate pool size to fetch before reranking/scoring. Without a reranker
+    /// or active scoring this is exactly `limit` (preserving legacy fetch counts);
+    /// otherwise it over-fetches up to a bounded ceiling so the reranker / MMR
+    /// pass has a real pool to reorder before truncation.
     fn fetch_limit(&self, limit: usize) -> usize {
-        if self.reranker.is_none() {
+        if self.reranker.is_none() && !self.scoring.is_active() {
             return limit;
         }
         limit
             .saturating_mul(RERANK_CANDIDATE_MULTIPLIER)
             .min(RERANK_MAX_CANDIDATES)
             .max(limit)
+    }
+
+    /// Apply retrieval-time recency decay and MMR diversity (after rerank,
+    /// before truncation). A no-op when scoring is inactive, so the default path
+    /// is unchanged. `now` is the current Unix time in seconds.
+    fn apply_scoring(&self, facts: Vec<ScoredFact>, now: i64) -> Vec<ScoredFact> {
+        if !self.scoring.is_active() || facts.len() < 2 {
+            return facts;
+        }
+        let mut facts = facts;
+
+        // 1) Recency reweight + re-sort by adjusted score.
+        if self.scoring.recency_enabled {
+            for f in facts.iter_mut() {
+                let mult = scoring::recency_multiplier(
+                    f.fact.updated_at,
+                    now,
+                    self.scoring.recency_half_life_days,
+                );
+                f.score = scoring::apply_recency(f.score, mult, self.scoring.recency_weight);
+            }
+            facts.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+        }
+
+        // 2) MMR diversity reorder over the (relevance-sorted) pool.
+        if self.scoring.mmr_enabled {
+            let contents: Vec<String> = facts.iter().map(|f| f.fact.content.clone()).collect();
+            let relevance: Vec<f32> = facts.iter().map(|f| f.score).collect();
+            let order = scoring::mmr_reorder(&contents, &relevance, self.scoring.mmr_lambda);
+            let mut slots: Vec<Option<ScoredFact>> = facts.into_iter().map(Some).collect();
+            facts = order
+                .into_iter()
+                .filter_map(|i| slots.get_mut(i).and_then(Option::take))
+                .collect();
+        }
+
+        facts
     }
 
     /// Apply the cross-encoder reranker to a candidate set, blending its scores
@@ -141,7 +197,8 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             .await?;
 
         let facts: Vec<ScoredFact> = results.iter().map(|r| r.to_scored_fact(agent_id)).collect();
-        let mut ranked = self.apply_rerank(query, facts).await;
+        let ranked = self.apply_rerank(query, facts).await;
+        let mut ranked = self.apply_scoring(ranked, now_unix());
         ranked.truncate(limit);
         Ok(ranked)
     }
@@ -230,7 +287,8 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         });
         all_results.truncate(self.fetch_limit(limit));
 
-        let mut ranked = self.apply_rerank(query, all_results).await;
+        let ranked = self.apply_rerank(query, all_results).await;
+        let mut ranked = self.apply_scoring(ranked, now_unix());
         ranked.truncate(limit);
         Ok(ranked)
     }
@@ -251,6 +309,14 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         }
         self.retrieve_multi_agent(query, &agent_ids, limit).await
     }
+}
+
+/// Current Unix time in seconds (for retrieval-time recency scoring).
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
 }
 
 /// Discover agent IDs by reading directory names under memory_dir.
@@ -497,5 +563,89 @@ mod tests {
         );
         assert_eq!(retrieval.fetch_limit(5), 15); // 5 * 3
         assert_eq!(retrieval.fetch_limit(20), RERANK_MAX_CANDIDATES); // capped at 50
+    }
+
+    // --- Retrieval-time scoring wiring -------------------------------------
+
+    /// Like `scored` but stamps an `updated_at` for recency tests.
+    fn scored_at(path: &str, content: &str, score: f32, updated_at: i64) -> ScoredFact {
+        let mut f = scored(path, content, score);
+        f.fact.updated_at = updated_at;
+        f
+    }
+
+    #[tokio::test]
+    async fn apply_scoring_inactive_is_noop() {
+        let (retrieval, _dir) = create_retrieval().await;
+        // Default scoring config is inactive → order preserved, scores untouched.
+        let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
+        let out = retrieval.apply_scoring(facts, 1_000_000);
+        let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
+        assert_eq!(order, vec!["p/a", "p/b"]);
+        assert!((out[0].score - 0.9).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn apply_scoring_recency_promotes_fresh_note() {
+        let (retrieval, _dir) = create_retrieval().await;
+        let cfg = RetrievalScoringConfig {
+            recency_enabled: true,
+            recency_half_life_days: 90.0,
+            recency_weight: 1.0,
+            ..RetrievalScoringConfig::default()
+        };
+        let retrieval = retrieval.with_scoring_config(&cfg);
+
+        let day = 86_400_i64;
+        let now = 300 * day;
+        // Stale but higher raw relevance vs fresh but lower relevance.
+        let facts = vec![
+            scored_at("p/stale", "old knowledge", 0.9, now - 200 * day),
+            scored_at("p/fresh", "new knowledge", 0.8, now),
+        ];
+        let out = retrieval.apply_scoring(facts, now);
+        let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["p/fresh", "p/stale"],
+            "recency decay should promote the fresh note above the stale one"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_scoring_mmr_demotes_duplicate() {
+        let (retrieval, _dir) = create_retrieval().await;
+        let cfg = RetrievalScoringConfig {
+            mmr_enabled: true,
+            mmr_lambda: 0.5,
+            ..RetrievalScoringConfig::default()
+        };
+        let retrieval = retrieval.with_scoring_config(&cfg);
+
+        let facts = vec![
+            scored("p/a", "rust async tokio runtime scheduler", 0.95),
+            scored("p/b", "rust async tokio runtime scheduler details", 0.90),
+            scored("p/c", "python pandas dataframe analysis", 0.60),
+        ];
+        let out = retrieval.apply_scoring(facts, 1_000_000);
+        let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
+        assert_eq!(order, vec!["p/a", "p/c", "p/b"]);
+    }
+
+    #[test]
+    fn fetch_limit_overfetches_when_mmr_active() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend: Arc<SqliteMemoryBackend> =
+            Arc::new(SqliteMemoryBackend::new(dir.path()).unwrap());
+        let indexer = Arc::new(NoteIndexer::new(dir.path().to_path_buf(), backend));
+        let embedder: Arc<dyn EmbeddingProvider> =
+            Arc::new(MockEmbeddingProvider::new(1024, "mock"));
+        let cfg = RetrievalScoringConfig {
+            mmr_enabled: true,
+            ..RetrievalScoringConfig::default()
+        };
+        let retrieval = NoteFactRetrieval::new(indexer, embedder).with_scoring_config(&cfg);
+        // No reranker, but MMR active → over-fetch a real pool.
+        assert_eq!(retrieval.fetch_limit(5), 15);
     }
 }
