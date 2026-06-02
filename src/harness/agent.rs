@@ -335,6 +335,13 @@ impl AgentHarness {
     /// forces Done. Prevents infinite loops when a hook permanently blocks.
     const MAX_VERIFIER_VETOS: usize = 10;
 
+    /// Max times a `Done` turn may be overridden because a steering message
+    /// landed during the run's final turn (Pi `getFollowUpMessages` parity).
+    /// Bounds a pathological appender that keeps writing user messages so the
+    /// loop can never spin forever on follow-up continuations alone; the
+    /// normal stop/iteration caps still apply on top of this.
+    const MAX_FOLLOWUP_CONTINUATIONS: usize = 8;
+
     /// Lazy-construct a `LoopTraceEvent` and forward to `trace_sink`.
     /// Returns immediately when no sink is wired — the closure is not invoked.
     pub(crate) fn emit<F>(&self, build: F)
@@ -344,6 +351,44 @@ impl AgentHarness {
         if let Some(ref sink) = self.deps.trace_sink {
             sink.on_trace(&build());
         }
+    }
+
+    /// Pi `getFollowUpMessages` parity — detect a steering message that landed
+    /// during the run's *final* turn and is therefore still unanswered.
+    ///
+    /// Returns `true` iff a non-synthetic [`SessionEvent::UserMessage`] appears
+    /// *after* the last [`SessionEvent::AssistantMessage`] in the session log.
+    /// That ordering is the entire signal: the model produced its final turn,
+    /// then the user spoke — so the model has not yet seen, let alone answered,
+    /// that input. The mid-loop steering path
+    /// ([`crate::gateway::execution_engine`]) documents exactly this race: an
+    /// injection that lands during the closing LLM call would otherwise sit at
+    /// the tail of the log until the user sent a *second* message. Continuing
+    /// the loop here answers it in the same run.
+    ///
+    /// When the newest user message *precedes* the last assistant turn, the
+    /// model already saw it and chose to stop; that decision is the model's
+    /// (R7), so we return `false` and let the loop terminate. A read error also
+    /// returns `false` — failing closed keeps a transient session-store glitch
+    /// from spinning the loop. Purely positional: no intent, completion, or
+    /// relevance judgement is made (R10-safe scaffolding).
+    async fn has_unanswered_user_message(&self, session: &SessionId) -> bool {
+        let events = match self.deps.session.get_events(session, None, None).await {
+            Ok(e) => e,
+            Err(_) => return false,
+        };
+        let Some(last_assistant) = events
+            .iter()
+            .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
+        else {
+            return false;
+        };
+        events[last_assistant + 1..].iter().any(|r| {
+            matches!(
+                &r.event,
+                SessionEvent::UserMessage { synthetic, .. } if !*synthetic
+            )
+        })
     }
 }
 
@@ -397,6 +442,10 @@ impl Harness for AgentHarness {
         let mut tool_calls_made: usize = 0;
         let mut verifier_veto_count: usize = 0;
         let mut consecutive_failure_turns: usize = 0;
+        // Pi `getFollowUpMessages` parity: how many times a `Done` turn has been
+        // overridden because a steering message arrived after the model's final
+        // turn. Bounded by `MAX_FOLLOWUP_CONTINUATIONS`.
+        let mut followup_continuations: usize = 0;
         let mut tool_history: std::collections::VecDeque<ToolCallSummary> =
             std::collections::VecDeque::with_capacity(8);
         let result: Result<crate::harness::trace::LoopTraceSessionOutcome, HarnessError> = loop {
@@ -569,6 +618,26 @@ impl Harness for AgentHarness {
                     }
                 }
                 Ok((TurnState::Done, _, _, _)) => {
+                    // Pi `getFollowUpMessages` parity. A steering message that
+                    // landed during this run's final turn sits unanswered at the
+                    // tail of the event log (the documented boundary race in
+                    // `gateway::execution_engine::steering`). Before handing
+                    // control back, re-read the log: if a genuine user message
+                    // arrived *after* the model's last assistant turn, the model
+                    // has not seen it — continue the loop so it is answered in
+                    // this same run instead of waiting for the user to send a
+                    // second message. Purely positional (R10-safe) and bounded so
+                    // a pathological appender cannot spin forever.
+                    if followup_continuations < Self::MAX_FOLLOWUP_CONTINUATIONS
+                        && self.has_unanswered_user_message(&current_session).await
+                    {
+                        followup_continuations = followup_continuations.saturating_add(1);
+                        if let Some(ref tracker) = self.stall_tracker {
+                            tracker.record_activity().await;
+                        }
+                        iterations = iterations.saturating_add(1);
+                        continue;
+                    }
                     callback.on_complete();
                     break Ok(crate::harness::trace::LoopTraceSessionOutcome::Completed);
                 }
@@ -964,6 +1033,150 @@ mod tests {
             .await
             .unwrap();
         (session, sid)
+    }
+
+    // ---- Pi `getFollowUpMessages` parity: has_unanswered_user_message ----
+
+    /// Build a fresh, empty in-memory session (no seeded events, unlike
+    /// [`fresh_session`]) so each follow-up test controls the exact ordering.
+    fn empty_session(agent_id: &str) -> (Arc<InProcessActorSessionService>, SessionId) {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        migrate_add_session_events(&conn).expect("migrate");
+        let store: Arc<dyn SessionEventStore> = Arc::new(SqliteEventStore::new(conn));
+        let session = Arc::new(InProcessActorSessionService::new(store));
+        let sid = SessionKey::Main {
+            agent_id: agent_id.to_string(),
+            main_key: "main".to_string(),
+            epoch: 0,
+        };
+        (session, sid)
+    }
+
+    /// Minimal harness for unit-testing `has_unanswered_user_message`. The LLM
+    /// provider is never invoked — only the session dep is exercised.
+    fn followup_harness(session: Arc<InProcessActorSessionService>) -> super::AgentHarness {
+        let deps = HarnessDeps {
+            session,
+            tools: Arc::new(AlwaysOkTools),
+            sandbox: Arc::new(crate::sandbox::NoopSandbox),
+            llm: Arc::new(SleepingProvider {
+                sleep: std::time::Duration::from_secs(0),
+            }),
+            verifier_chain: None,
+            context_budget: None,
+            context_compactor: None,
+            preflight_pipeline: None,
+            trace_sink: None,
+            system_prompt: None,
+            system_prompt_parts: None,
+            chain_context: crate::harness::chain_context::ChainContext::default(),
+            guardrails: None,
+            max_iterations: None,
+            power: None,
+            stall_config: None,
+            consecutive_failure_cap: None,
+            turn_timeout: None,
+            turn_budget: None,
+            result_store: None,
+            session_epoch_registrar: None,
+            tool_signal_sink: std::sync::Arc::new(
+                crate::memory::tool_signal_sink::NoopToolSignalSink,
+            ),
+            in_flight_tool_calls: None,
+            parallel_tool_concurrency: None,
+        };
+        super::AgentHarness::new(deps)
+    }
+
+    async fn emit_user(
+        session: &InProcessActorSessionService,
+        sid: &SessionId,
+        text: &str,
+        synthetic: bool,
+    ) {
+        session
+            .emit_event(
+                sid,
+                SessionEvent::UserMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: MessageContent {
+                        text: text.into(),
+                        blocks: vec![],
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                    at: now_ms(),
+                    synthetic,
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    async fn emit_assistant(session: &InProcessActorSessionService, sid: &SessionId, text: &str) {
+        session
+            .emit_event(
+                sid,
+                SessionEvent::AssistantMessage {
+                    turn_id: uuid::Uuid::new_v4(),
+                    content: MessageContent {
+                        text: text.into(),
+                        blocks: vec![],
+                        thinking: None,
+                        thinking_signature: None,
+                    },
+                    at: now_ms(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Normal completion: the model's last act is its assistant turn, so there
+    /// is nothing to follow up on — the loop must be allowed to terminate.
+    #[tokio::test]
+    async fn no_followup_when_assistant_is_last() {
+        let (session, sid) = empty_session("fu-normal");
+        emit_user(&session, &sid, "do the thing", false).await;
+        emit_assistant(&session, &sid, "done").await;
+        let harness = followup_harness(session);
+        assert!(!harness.has_unanswered_user_message(&sid).await);
+    }
+
+    /// The boundary race: a real user message lands *after* the final assistant
+    /// turn. The model has not seen it, so the loop must continue.
+    #[tokio::test]
+    async fn followup_when_user_message_arrives_after_final_turn() {
+        let (session, sid) = empty_session("fu-race");
+        emit_user(&session, &sid, "do the thing", false).await;
+        emit_assistant(&session, &sid, "done").await;
+        // Steering message injected during the closing turn.
+        emit_user(&session, &sid, "actually, also do this", false).await;
+        let harness = followup_harness(session);
+        assert!(harness.has_unanswered_user_message(&sid).await);
+    }
+
+    /// A *synthetic* trailing user message (verifier-veto / grace-turn nudge) is
+    /// harness-internal, not genuine user input — it must not trigger a
+    /// follow-up continuation.
+    #[tokio::test]
+    async fn no_followup_for_synthetic_trailing_message() {
+        let (session, sid) = empty_session("fu-synthetic");
+        emit_user(&session, &sid, "do the thing", false).await;
+        emit_assistant(&session, &sid, "done").await;
+        emit_user(&session, &sid, "[verifier veto] keep going", true).await;
+        let harness = followup_harness(session);
+        assert!(!harness.has_unanswered_user_message(&sid).await);
+    }
+
+    /// Before the first assistant turn there is no completed turn to "follow up"
+    /// on; the leading user prompt must not be mistaken for a late arrival.
+    #[tokio::test]
+    async fn no_followup_before_first_assistant_turn() {
+        let (session, sid) = empty_session("fu-pre");
+        emit_user(&session, &sid, "do the thing", false).await;
+        let harness = followup_harness(session);
+        assert!(!harness.has_unanswered_user_message(&sid).await);
     }
 
     #[test]
