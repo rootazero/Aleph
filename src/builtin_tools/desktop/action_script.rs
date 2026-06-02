@@ -309,8 +309,20 @@ fn build_action(name: &str, kw: &Kwargs<'_>) -> Result<DesktopBatchAction, Scrip
             action.action = "wait_visual".into();
             // No timeout_ms — caller-default 5000.
         }
-        "finished" => action.action = "finished".into(),
-        "call_user" => action.action = "call_user".into(),
+        "finished" => {
+            action.action = "finished".into();
+            // UI-TARS `finished(content='...')` carries the model's answer —
+            // keep it so the host can surface it instead of dropping it.
+            if let Some(c) = kw.get("content") {
+                action.text = Some(unescape(c));
+            }
+        }
+        "call_user" => {
+            action.action = "call_user".into();
+            if let Some(c) = kw.get("content") {
+                action.text = Some(unescape(c));
+            }
+        }
 
         unknown => return Err(ScriptParseError::UnknownAction(unknown.into())),
     }
@@ -367,7 +379,16 @@ fn require_box_center(
 
 /// Accept all four UI-TARS box formats and return the centre point.
 pub fn parse_box_center(raw: &str) -> Option<(f64, f64)> {
-    let raw = raw.trim();
+    // UI-TARS 1.5 / Doubao-1.5-UI-TARS wrap coordinates in
+    // `<|box_start|>(x,y)<|box_end|>` special tokens. Strip them before
+    // format detection — the upstream parser does the same as its first step.
+    let cleaned;
+    let raw = if raw.contains("<|box_start|>") || raw.contains("<|box_end|>") {
+        cleaned = raw.replace("<|box_start|>", "").replace("<|box_end|>", "");
+        cleaned.trim()
+    } else {
+        raw.trim()
+    };
 
     // <point>x y</point>
     if let Some(inner) = raw
@@ -472,6 +493,39 @@ mod tests {
             parse_action_script("click(start_box='<bbox>100 200 300 400</bbox>')").unwrap();
         assert_eq!(parsed[0].x, Some(200.0));
         assert_eq!(parsed[0].y, Some(300.0));
+    }
+
+    #[test]
+    fn click_with_box_token_markers() {
+        // UI-TARS 1.5 / Doubao emit <|box_start|>…<|box_end|> around the tuple.
+        let parsed =
+            parse_action_script("click(start_box='<|box_start|>(500,500)<|box_end|>')").unwrap();
+        assert_eq!(parsed[0].action, "click");
+        assert_eq!(parsed[0].x, Some(500.0));
+        assert_eq!(parsed[0].y, Some(500.0));
+
+        // Markers around a bbox form resolve to the centre too.
+        let bbox =
+            parse_action_script("click(start_box='<|box_start|>[100,200,300,400]<|box_end|>')")
+                .unwrap();
+        assert_eq!(bbox[0].x, Some(200.0));
+        assert_eq!(bbox[0].y, Some(300.0));
+    }
+
+    #[test]
+    fn finished_and_call_user_capture_content() {
+        let fin = parse_action_script(r"finished(content='all done\nok')").unwrap();
+        assert_eq!(fin[0].action, "finished");
+        assert_eq!(fin[0].text.as_deref(), Some("all done\nok"));
+
+        let call = parse_action_script("call_user(content='need a password')").unwrap();
+        assert_eq!(call[0].action, "call_user");
+        assert_eq!(call[0].text.as_deref(), Some("need a password"));
+
+        // Bare forms still parse with no content.
+        let bare = parse_action_script("finished()").unwrap();
+        assert_eq!(bare[0].action, "finished");
+        assert_eq!(bare[0].text, None);
     }
 
     #[test]

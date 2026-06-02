@@ -885,3 +885,57 @@ mod clipboard_image {
         assert_eq!(data["image_base64"], "ZmFrZS1wbmc=");
     }
 }
+
+/// UI-TARS `finished` must succeed even under a deny-all policy and with no
+/// platform configured — it is a loop-control signal, not a desktop mutation,
+/// and must short-circuit before approval / lock / platform dispatch.
+#[tokio::test]
+async fn test_finished_verb_bypasses_approval_and_platform() {
+    let policy = Arc::new(MockPolicy {
+        decision: ApprovalDecision::Deny {
+            reason: "everything blocked".to_string(),
+        },
+    });
+    let tool = DesktopTool::new().with_approval_policy(policy);
+
+    let mut args = make_args("finished");
+    args.text = Some("the answer is 42".to_string());
+    let output = AlephTool::call(&tool, args).await.unwrap();
+
+    assert!(output.success, "finished must not be denied or fail");
+    assert_eq!(
+        output.message.as_deref(),
+        Some("the answer is 42"),
+        "finished should surface the model's content"
+    );
+    assert_eq!(output.data.unwrap()["finished"], true);
+}
+
+#[tokio::test]
+async fn test_call_user_verb_bypasses_approval_and_platform() {
+    let policy = Arc::new(MockPolicy {
+        decision: ApprovalDecision::Deny {
+            reason: "everything blocked".to_string(),
+        },
+    });
+    let tool = DesktopTool::new().with_approval_policy(policy);
+
+    let output = AlephTool::call(&tool, make_args("call_user")).await.unwrap();
+    assert!(output.success);
+    assert_eq!(output.data.unwrap()["call_user"], true);
+}
+
+/// A UI-TARS action script ending in `finished()` must report overall success,
+/// not be tripped up by the loop-control verb at the tail of the batch.
+#[tokio::test]
+async fn test_script_finished_tail_does_not_fail_batch() {
+    let tool = DesktopTool::new();
+    let mut args = make_args("script");
+    args.script = Some("finished(content='done')".to_string());
+    let output = AlephTool::call(&tool, args).await.unwrap();
+    assert!(
+        output.success,
+        "batch whose only/last action is finished should succeed: {:?}",
+        output.message
+    );
+}
