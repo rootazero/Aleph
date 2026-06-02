@@ -59,6 +59,9 @@ uuid = { version = "1.7", features = ["v4"] }
 chrono = "0.4"
 dirs = "5.0"
 
+# Markdown → ANSI rendering for human-facing assistant output
+pulldown-cmark = { version = "0.12", default-features = false }
+
 # Unix process management (signals)
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -337,96 +337,16 @@ impl ReplyEmitter {
         self.send_media_standalone(media_attachments).await;
     }
 
+    /// Split outbound content into channel-sized chunks.
+    ///
+    /// Thin delegate to the single canonical splitter
+    /// ([`crate::gateway::formatter::MessageFormatter::split`]) so the streaming
+    /// reply path and the outbound channel adapters share one fence-aware
+    /// implementation. The canonical splitter handles UTF-8 boundaries,
+    /// paragraph/line preference, and closing + re-opening fences that overflow
+    /// `max_len`.
     pub(crate) fn split_message(content: &str, max_len: usize) -> Vec<String> {
-        if content.len() <= max_len {
-            return vec![content.to_string()];
-        }
-
-        let mut chunks = Vec::new();
-        let mut buf = content.to_string();
-        let mut open_fence: Option<String> = None; // e.g. "```rust"
-
-        while !buf.is_empty() {
-            if buf.len() <= max_len {
-                chunks.push(buf);
-                break;
-            }
-
-            let split_at = Self::find_split_point(&buf, max_len);
-            let chunk_raw = buf[..split_at].trim_end().to_string();
-            let rest = buf[split_at..].trim_start_matches('\n').to_string();
-
-            // Track code fence state through this chunk
-            for line in chunk_raw.lines() {
-                let trimmed = line.trim();
-                if trimmed.starts_with("```") {
-                    if open_fence.is_some() {
-                        open_fence = None;
-                    } else {
-                        open_fence = Some(trimmed.to_string());
-                    }
-                }
-            }
-
-            // If we're splitting inside an open code block, close + reopen
-            if let Some(ref fence) = open_fence {
-                let mut chunk_closed = chunk_raw;
-                chunk_closed.push_str("\n```");
-                chunks.push(chunk_closed);
-                buf = format!("{}\n{}", fence, rest);
-            } else {
-                chunks.push(chunk_raw);
-                buf = rest;
-            }
-        }
-
-        chunks
-    }
-
-    pub(crate) fn find_split_point(text: &str, max_len: usize) -> usize {
-        let mut safe_max = max_len;
-        while safe_max > 0 && !text.is_char_boundary(safe_max) {
-            safe_max -= 1;
-        }
-
-        let search_range = &text[..safe_max];
-
-        // Check if we're inside a code block (odd number of ``` before split point)
-        let fence_count = search_range.matches("```").count();
-        if fence_count % 2 == 1 {
-            // Inside a code block — try to split before the opening fence
-            if let Some(last_fence) = search_range.rfind("```") {
-                if last_fence > 0 {
-                    if let Some(nl) = text[..last_fence].rfind('\n') {
-                        return nl + 1;
-                    }
-                    return last_fence;
-                }
-            }
-        }
-
-        // Check for partial HTML entities at the split point
-        let entity_start = search_range[..safe_max].rfind('&');
-        if let Some(amp_pos) = entity_start {
-            let after_amp = &search_range[amp_pos..safe_max];
-            if !after_amp.contains(';') && after_amp.len() <= 8 {
-                safe_max = amp_pos;
-            }
-        }
-
-        // Existing logic: prefer paragraph boundary, then newline
-        let search_range = &text[..safe_max];
-        if let Some(pos) = search_range.rfind("\n\n") {
-            if pos > safe_max / 4 {
-                return pos + 1;
-            }
-        }
-        if let Some(pos) = search_range.rfind('\n') {
-            if pos > safe_max / 4 {
-                return pos + 1;
-            }
-        }
-        safe_max
+        crate::gateway::formatter::MessageFormatter::split(content, max_len)
     }
 
     pub(crate) async fn send_error(&self, error: &str) {

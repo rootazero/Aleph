@@ -130,6 +130,7 @@ dependencies = [
  "dirs 5.0.1",
  "futures-util",
  "libc",
+ "pulldown-cmark",
  "rpassword 7.4.0",
  "serde",
  "serde_json",

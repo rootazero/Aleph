@@ -474,6 +474,41 @@ fn test_split_long_line_hard_split() {
     assert_eq!(reassembled, long_line);
 }
 
+#[test]
+fn test_split_oversized_code_block_closes_and_reopens_fence() {
+    // A single fenced block larger than max_len must be split with the fence
+    // closed on the trailing chunk and re-opened (preserving the language tag)
+    // on the next, so no chunk carries an unbalanced fence.
+    let code = "let n = 1;\n".repeat(40); // ~440 bytes, well over the limit
+    let text = format!("```rust\n{}```", code);
+    let max_len = 120;
+    let chunks = MessageFormatter::split(&text, max_len);
+
+    assert!(chunks.len() >= 2, "oversized block should span chunks");
+    for chunk in &chunks {
+        // Every chunk respects the byte budget...
+        assert!(
+            chunk.len() <= max_len,
+            "chunk exceeds max_len: {} > {}",
+            chunk.len(),
+            max_len
+        );
+        // ...and carries a balanced number of fence markers.
+        assert_eq!(
+            chunk.matches("```").count() % 2,
+            0,
+            "chunk has an unbalanced fence: {:?}",
+            chunk
+        );
+    }
+    // Continuation chunks re-open with the original language tag.
+    assert!(
+        chunks[1].starts_with("```rust"),
+        "continuation should re-open the rust fence: {:?}",
+        chunks[1]
+    );
+}
+
 // -----------------------------------------------------------------------
 // Normalize (reverse direction)
 // -----------------------------------------------------------------------
