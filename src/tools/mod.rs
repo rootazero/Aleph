@@ -56,6 +56,11 @@ pub mod markdown_skill;
 // Schema strictification for strict-mode tool calling
 pub mod schema_strictify;
 
+// Plain-text tool-call promotion (openclaw tool-call-repair parity): recover
+// tool calls that weaker models emit as assistant text instead of native
+// function-call blocks.
+pub mod text_tool_call;
+
 // Consumer-side `ToolService` trait + production `ScopedToolService` adapter.
 // The pre-`ScopedToolService` decorator chain (Phase 2 facade — `facade.rs`,
 // `dispatch.rs`, `middleware/`) has been deleted: gateway always supplies a
