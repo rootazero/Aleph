@@ -285,6 +285,16 @@ pub(super) enum BlockElement<'a> {
     Blockquote(Vec<&'a str>),
     /// Unordered list item (`- text` or `* text`).
     UnorderedListItem(&'a str),
+    /// Ordered list item (`1. text` or `1) text`); `marker` keeps the original
+    /// number and delimiter (e.g. `"1."`) so platforms render it verbatim.
+    OrderedListItem { marker: &'a str, text: &'a str },
+    /// GFM pipe table: header cells plus zero or more body rows. Cells are
+    /// borrowed, trimmed slices of the source. Channels without native table
+    /// support render this as a column-aligned monospace block.
+    Table {
+        headers: Vec<&'a str>,
+        rows: Vec<Vec<&'a str>>,
+    },
     /// Regular text line (may contain inline formatting).
     Text(&'a str),
 }
@@ -389,6 +399,34 @@ fn parse_line_blocks<'a>(text: &'a str, out: &mut Vec<BlockElement<'a>>) {
             continue;
         }
 
+        // GFM table: a header row followed by a delimiter row (`| --- | --- |`).
+        // The delimiter on the next line is the required, unambiguous signal.
+        if trimmed.contains('|') && i + 1 < lines.len() && is_table_separator(lines[i + 1].trim()) {
+            let headers = split_table_row(trimmed);
+            i += 2; // consume header + delimiter
+            let mut rows = Vec::new();
+            while i < lines.len() {
+                let row_trimmed = lines[i].trim();
+                if row_trimmed.is_empty() || !row_trimmed.contains('|') {
+                    break;
+                }
+                rows.push(split_table_row(row_trimmed));
+                i += 1;
+            }
+            out.push(BlockElement::Table { headers, rows });
+            continue;
+        }
+
+        // Ordered list item: 1. text or 1) text
+        if let Some((marker, item_text)) = parse_ordered_list_item(trimmed) {
+            out.push(BlockElement::OrderedListItem {
+                marker,
+                text: item_text,
+            });
+            i += 1;
+            continue;
+        }
+
         // Unordered list item: - text or * text
         if let Some(item_text) = parse_list_item(trimmed) {
             out.push(BlockElement::UnorderedListItem(item_text));
@@ -448,6 +486,135 @@ pub(super) fn parse_list_item(trimmed: &str) -> Option<&str> {
     } else {
         None
     }
+}
+
+/// Parse an ordered list item (`1. text` or `2) text`).
+///
+/// Returns `(marker, text)` where `marker` is the leading number plus its
+/// delimiter (e.g. `"1."`), preserved verbatim so renderers keep the original
+/// numbering instead of re-sequencing.
+pub(super) fn parse_ordered_list_item(trimmed: &str) -> Option<(&str, &str)> {
+    let digits = trimmed.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 {
+        return None;
+    }
+    let delim = trimmed.as_bytes().get(digits)?;
+    if *delim != b'.' && *delim != b')' {
+        return None;
+    }
+    // Require a space after the delimiter and non-empty body.
+    let after = &trimmed[digits + 1..];
+    let text = after.strip_prefix(' ')?;
+    if text.is_empty() {
+        return None;
+    }
+    Some((&trimmed[..digits + 1], text))
+}
+
+/// Check whether a trimmed line is a GFM table delimiter row.
+///
+/// A delimiter row consists of pipe-separated cells, each made only of `-`
+/// with optional leading/trailing `:` alignment markers (e.g. `| :--- | ---: |`).
+/// At least one `-` must be present.
+pub(super) fn is_table_separator(trimmed: &str) -> bool {
+    if !trimmed.contains('-') {
+        return false;
+    }
+    let cells = split_table_row(trimmed);
+    if cells.is_empty() {
+        return false;
+    }
+    cells.iter().all(|cell| {
+        let bytes = cell.as_bytes();
+        if bytes.is_empty() {
+            return false;
+        }
+        let mut dashes = 0usize;
+        for (idx, &b) in bytes.iter().enumerate() {
+            match b {
+                b'-' => dashes += 1,
+                b':' if idx == 0 || idx == bytes.len() - 1 => {}
+                _ => return false,
+            }
+        }
+        dashes > 0
+    })
+}
+
+/// Split a GFM table row into trimmed cell slices.
+///
+/// One optional leading and trailing `|` is stripped before splitting so both
+/// `| a | b |` and `a | b` parse to the same cells. Escaped pipes (`\|`) are not
+/// supported and will split the cell — acceptable for the formatter's purpose.
+pub(super) fn split_table_row(trimmed: &str) -> Vec<&str> {
+    let mut inner = trimmed;
+    inner = inner.strip_prefix('|').unwrap_or(inner);
+    inner = inner.strip_suffix('|').unwrap_or(inner);
+    inner.split('|').map(|c| c.trim()).collect()
+}
+
+/// Render a parsed table as a column-aligned monospace block.
+///
+/// Produces a header row, a `---+---` separator, and one line per body row,
+/// each column padded to the widest cell. Channels with monospace support
+/// (Telegram `<pre>`, Slack/Discord code fences) wrap this; plain/IRC emit it
+/// directly. Column width uses `char` count (not display width), so wide CJK
+/// glyphs may align imperfectly — acceptable without pulling a unicode-width dep.
+pub(super) fn render_table_aligned(headers: &[&str], rows: &[Vec<&str>]) -> String {
+    let cols = headers
+        .len()
+        .max(rows.iter().map(Vec::len).max().unwrap_or(0));
+    if cols == 0 {
+        return String::new();
+    }
+
+    // Nested fn (not a closure) so the returned slice's lifetime ties to the
+    // cell contents rather than the outer `row` reference.
+    fn cell<'a>(row: &[&'a str], c: usize) -> &'a str {
+        row.get(c).copied().unwrap_or("")
+    }
+
+    // Compute per-column width from header + all rows.
+    let mut widths = vec![0usize; cols];
+    for c in 0..cols {
+        widths[c] = cell(headers, c).chars().count();
+        for row in rows {
+            widths[c] = widths[c].max(cell(row, c).chars().count());
+        }
+    }
+
+    let pad = |text: &str, width: usize| -> String {
+        let len = text.chars().count();
+        let mut s = String::with_capacity(width);
+        s.push_str(text);
+        for _ in len..width {
+            s.push(' ');
+        }
+        s
+    };
+
+    let render_row = |row: &[&str]| -> String {
+        (0..cols)
+            .map(|c| pad(cell(row, c), widths[c]))
+            .collect::<Vec<_>>()
+            .join(" | ")
+    };
+
+    let mut out = String::new();
+    out.push_str(render_row(headers).trim_end());
+    out.push('\n');
+    out.push_str(
+        &widths
+            .iter()
+            .map(|w| "-".repeat(*w))
+            .collect::<Vec<_>>()
+            .join("-+-"),
+    );
+    for row in rows {
+        out.push('\n');
+        out.push_str(render_row(row).trim_end());
+    }
+    out
 }
 
 /// Repair mismatched HTML tag nesting for Telegram's strict parser.

@@ -295,6 +295,105 @@ fn test_plain_strips_code_block() {
 }
 
 // -----------------------------------------------------------------------
+// Ordered lists
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_ordered_list_to_telegram_html() {
+    let input = "1. first\n2. second";
+    assert_eq!(
+        MessageFormatter::format(input, MarkupFormat::TelegramHtml),
+        "1. first\n2. second"
+    );
+}
+
+#[test]
+fn test_ordered_list_preserves_numbering() {
+    // Non-1 starting numbers and `)` delimiter are preserved verbatim.
+    let input = "3) third\n4) fourth";
+    assert_eq!(
+        MessageFormatter::format(input, MarkupFormat::PlainText),
+        "3) third\n4) fourth"
+    );
+}
+
+#[test]
+fn test_ordered_list_with_inline_bold_slack() {
+    assert_eq!(
+        MessageFormatter::format("1. **bold** item", MarkupFormat::SlackMrkdwn),
+        "1. *bold* item"
+    );
+}
+
+#[test]
+fn test_numeric_text_is_not_ordered_list() {
+    // A bare number without a list delimiter stays plain text.
+    assert_eq!(
+        MessageFormatter::format("42 apples", MarkupFormat::PlainText),
+        "42 apples"
+    );
+}
+
+// -----------------------------------------------------------------------
+// GFM tables
+// -----------------------------------------------------------------------
+
+#[test]
+fn test_table_to_plain_aligned() {
+    let input = "| a | bb |\n| --- | --- |\n| c | d |";
+    let result = MessageFormatter::format(input, MarkupFormat::PlainText);
+    assert!(result.contains("a | bb"), "header: {result:?}");
+    assert!(result.contains("-+-"), "separator: {result:?}");
+    assert!(result.contains("c | d"), "row: {result:?}");
+}
+
+#[test]
+fn test_table_columns_aligned_to_widest_cell() {
+    let input = "| Name | Age |\n|---|---|\n| Alice | 30 |\n| Bob | 5 |";
+    let result = MessageFormatter::format(input, MarkupFormat::PlainText);
+    // "Name" padded to width of "Alice" (5 chars) → two spaces before the pipe.
+    assert!(result.contains("Name  | Age"), "aligned header: {result:?}");
+    assert!(result.contains("Alice | 30"), "row: {result:?}");
+    assert!(result.contains("Bob   | 5"), "padded row: {result:?}");
+}
+
+#[test]
+fn test_table_to_telegram_html_pre_block() {
+    let input = "| a | b |\n|---|---|\n| 1 | 2 |";
+    let result = MessageFormatter::format(input, MarkupFormat::TelegramHtml);
+    assert!(result.starts_with("<pre>"), "wrapped in pre: {result:?}");
+    assert!(result.contains("</pre>"), "closed pre: {result:?}");
+    assert!(result.contains("a | b"), "header: {result:?}");
+}
+
+#[test]
+fn test_table_to_slack_code_fence() {
+    let input = "| a | b |\n|---|---|\n| 1 | 2 |";
+    let result = MessageFormatter::format(input, MarkupFormat::SlackMrkdwn);
+    assert!(result.contains("```"), "code fence: {result:?}");
+    assert!(result.contains("a | b"), "header: {result:?}");
+}
+
+#[test]
+fn test_table_without_outer_pipes() {
+    // GFM allows tables with no leading/trailing pipes.
+    let input = "a | b\n--- | ---\nc | d";
+    let result = MessageFormatter::format(input, MarkupFormat::PlainText);
+    assert!(result.contains("a | b"), "header: {result:?}");
+    assert!(result.contains("c | d"), "row: {result:?}");
+}
+
+#[test]
+fn test_pipe_line_without_separator_stays_text() {
+    // A line with a pipe but no delimiter row must NOT be parsed as a table.
+    let input = "use a | b for alternation";
+    assert_eq!(
+        MessageFormatter::format(input, MarkupFormat::PlainText),
+        "use a | b for alternation"
+    );
+}
+
+// -----------------------------------------------------------------------
 // Split
 // -----------------------------------------------------------------------
 
