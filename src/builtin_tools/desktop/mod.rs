@@ -414,6 +414,38 @@ fn check_hard_block(args: &DesktopArgs) -> Option<DesktopOutput> {
     })
 }
 
+/// Honor UI-TARS loop-control verbs (`finished`, `call_user`).
+///
+/// These are not desktop mutations — a UI-TARS-finetuned model emits them to
+/// signal task completion or to request user help. The harness's Think→Act
+/// loop owns flow control (R10), so the tool simply acknowledges the signal
+/// with a benign success result, surfacing any `content` the model attached
+/// (parsed into `text` by [`action_script`]). Returns `None` for every other
+/// action so normal dispatch proceeds unchanged.
+fn loop_control_output(args: &DesktopArgs) -> Option<DesktopOutput> {
+    match args.action.as_str() {
+        "finished" => Some(DesktopOutput {
+            success: true,
+            data: Some(serde_json::json!({ "finished": true })),
+            message: Some(
+                args.text
+                    .clone()
+                    .unwrap_or_else(|| "Task marked finished.".into()),
+            ),
+        }),
+        "call_user" => Some(DesktopOutput {
+            success: true,
+            data: Some(serde_json::json!({ "call_user": true })),
+            message: Some(
+                args.text
+                    .clone()
+                    .unwrap_or_else(|| "Handing control back to the user.".into()),
+            ),
+        }),
+        _ => None,
+    }
+}
+
 impl Default for DesktopTool {
     fn default() -> Self {
         Self::new()
@@ -512,6 +544,18 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
 
         // 1. Unconditional safety hard-block (sits below the approval policy).
         if let Some(out) = check_hard_block(&args) {
+            return Ok(out);
+        }
+
+        // 1.5 Loop-control verbs (UI-TARS `finished` / `call_user`). The model
+        //     emits these to signal task completion or to hand control back to
+        //     the user; they touch no desktop state. Honor them with a benign
+        //     terminal result *before* approval, session lock, and platform
+        //     dispatch — otherwise they would be misclassified as mutating and
+        //     ultimately reported as "unsupported action", which in a batch
+        //     chain would wrongly fail an otherwise-successful task. R10: the
+        //     host honors the signal, it does not drive a loop.
+        if let Some(out) = loop_control_output(&args) {
             return Ok(out);
         }
 
