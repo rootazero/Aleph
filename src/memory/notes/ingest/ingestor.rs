@@ -17,6 +17,7 @@ use crate::memory::notes::governance::gate::{
 use crate::memory::notes::indexer::NoteIndexer;
 use crate::memory::notes::ingest::plan::{IngestPlan, PageOp};
 use crate::memory::notes::ingest::prompts::build_compound_system_prompt;
+use crate::memory::notes::ingest::ref_table::RefTable;
 use crate::memory::notes::ingest::retrieve::{RelatedBudget, RelatedPage};
 use crate::memory::notes::orientation::NoteOrientation;
 use crate::memory::notes::store::NoteStore;
@@ -102,6 +103,23 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
             warn!("compound plan: parse failed: {e}");
             AlephError::other(format!("compound plan parse: {e}"))
         })?;
+
+        // Anti-hallucination: rewrite `[P<n>]` reference tokens back to the
+        // exact canonical paths of the related pages, and drop ops whose token
+        // is out of range. Raw-path fields pass through unchanged, so planners
+        // that still emit full paths keep working. See `ref_table`.
+        let refs = RefTable::from_related(related);
+        if !refs.is_empty() {
+            let stats = refs.resolve_plan(&mut plan);
+            if stats.dropped_ops > 0 || stats.dropped_links > 0 {
+                warn!(
+                    resolved = stats.resolved,
+                    dropped_ops = stats.dropped_ops,
+                    dropped_links = stats.dropped_links,
+                    "compound plan: dropped hallucinated page references"
+                );
+            }
+        }
 
         plan.ops.retain(valid_op);
         Ok(plan)
@@ -449,10 +467,17 @@ fn build_user_prompt(
         }
     }
     if !related.is_empty() {
-        out.push_str("## Related existing pages\n\n");
-        for p in related {
+        out.push_str(
+            "## Related existing pages\n\n\
+             Each page below carries a `[P<n>]` reference token. To act on an \
+             EXISTING page (append / update / contradict / link / supersede, or \
+             a create's `links`), put its token in the path field instead of \
+             retyping the path — the system resolves tokens to exact paths.\n\n",
+        );
+        for (i, p) in related.iter().enumerate() {
             out.push_str(&format!(
-                "### {path} (hash={hash})\n",
+                "### {token} path={path} (hash={hash})\n",
+                token = RefTable::token(i),
                 path = p.path,
                 hash = p.content_hash
             ));
@@ -629,6 +654,117 @@ mod plan_tests {
             .await
             .unwrap();
         assert_eq!(plan.ops.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn plan_resolves_reference_token_to_canonical_path() {
+        let (dir, backend, indexer) = mk().await;
+        // LLM emits an append targeting the related page by its [P0] token
+        // rather than retyping the path. Resolution rewrites it exactly.
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"ops":[
+                {"kind":"append","note_path":"[P0]","new_facts":["new fact"],"new_links":[]}
+            ]}"#
+            .into(),
+        ));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget::default(),
+            embedding_manager: None,
+            gate: None,
+        };
+        let related = vec![RelatedPage {
+            path: "preference/coding-style".into(),
+            title: "coding-style".into(),
+            summary: String::new(),
+            content_preview: String::new(),
+            tags: vec![],
+            content_hash: "h0".into(),
+            score: 1.0,
+        }];
+        let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
+        let plan = ing
+            .plan("default", &[raw], &related, &RawMemorySource::Transcript)
+            .await
+            .unwrap();
+        assert_eq!(plan.ops.len(), 1);
+        match &plan.ops[0] {
+            PageOp::Append { note_path, .. } => assert_eq!(note_path, "preference/coding-style"),
+            _ => panic!("expected append"),
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_drops_op_with_hallucinated_token() {
+        let (dir, backend, indexer) = mk().await;
+        // [P9] is out of range (only P0 exists) → the op is dropped, not
+        // applied against a forged orphan page.
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"ops":[
+                {"kind":"append","note_path":"[P9]","new_facts":["x"],"new_links":[]}
+            ]}"#
+            .into(),
+        ));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget::default(),
+            embedding_manager: None,
+            gate: None,
+        };
+        let related = vec![RelatedPage {
+            path: "preference/coding-style".into(),
+            title: "coding-style".into(),
+            summary: String::new(),
+            content_preview: String::new(),
+            tags: vec![],
+            content_hash: "h0".into(),
+            score: 1.0,
+        }];
+        let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
+        let plan = ing
+            .plan("default", &[raw], &related, &RawMemorySource::Transcript)
+            .await
+            .unwrap();
+        assert!(plan.ops.is_empty(), "hallucinated-token op must be dropped");
+    }
+
+    #[test]
+    fn build_user_prompt_renders_reference_tokens() {
+        let raws = vec![RawMemory::new("hello".into(), RawMemorySource::Transcript)];
+        let related = vec![
+            RelatedPage {
+                path: "preference/coding-style".into(),
+                title: "coding-style".into(),
+                summary: String::new(),
+                content_preview: "prefers vim".into(),
+                tags: vec!["tool".into()],
+                content_hash: "h0".into(),
+                score: 1.0,
+            },
+            RelatedPage {
+                path: "personal/li-wei".into(),
+                title: "li-wei".into(),
+                summary: String::new(),
+                content_preview: String::new(),
+                tags: vec![],
+                content_hash: "h1".into(),
+                score: 0.5,
+            },
+        ];
+        let prompt = build_user_prompt(&raws, &related);
+        assert!(prompt.contains("[P0] path=preference/coding-style"));
+        assert!(prompt.contains("[P1] path=personal/li-wei"));
+        assert!(prompt.contains("reference token"));
     }
 
     #[test]
