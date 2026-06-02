@@ -55,6 +55,16 @@ fn build_event_payload(event: HookEvent, context: &HookContext) -> String {
     serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string())
 }
 
+/// Compare two directory paths for identity, canonicalising best-effort so
+/// symlinks (`/var` → `/private/var`), `.`/`..` segments and trailing slashes
+/// don't cause a spurious mismatch. Falls back to the raw path when a side
+/// doesn't resolve so the comparison degrades gracefully rather than failing.
+fn paths_equal(a: &Path, b: &Path) -> bool {
+    let ca = a.canonicalize().unwrap_or_else(|_| a.to_path_buf());
+    let cb = b.canonicalize().unwrap_or_else(|_| b.to_path_buf());
+    ca == cb
+}
+
 /// Hook executor - runs hook actions based on events
 #[derive(Clone)]
 pub struct HookExecutor {
@@ -187,6 +197,11 @@ impl HookExecutor {
                 continue;
             }
 
+            // Project-scoped hooks fire only in their own workspace.
+            if !self.project_scope_allows(hook) {
+                continue;
+            }
+
             debug!(
                 "Executing hook from plugin '{}' for event {:?}",
                 hook.plugin_name, event
@@ -283,6 +298,40 @@ impl HookExecutor {
                     }
                 }
             }
+        }
+    }
+
+    /// Gate a project-scoped user hook to the active workspace.
+    ///
+    /// Hooks loaded from a project's `.aleph/hooks*.json` are tagged
+    /// `user:project*` and carry that project's `.aleph` directory as their
+    /// `plugin_root`. The daemon serves every registered project from one
+    /// process, so all such hooks live in one shared executor — without this
+    /// gate a hook checked into project A would fire while the agent works
+    /// inside project B (an isolation / arbitrary-command-execution leak).
+    ///
+    /// Returns `true` (always fires) for non-project hooks: global user hooks
+    /// (`user:global`) and plugin-shipped hooks are not bound to any one
+    /// directory. For project hooks, the hook's project root is compared
+    /// against the effective workspace — the Panel-picked project
+    /// ([`current_project_root`](crate::projects::current_project_root)) if a
+    /// run is active, else the daemon CWD (plain server mode). When neither
+    /// resolves, it fails open to preserve pre-project-mode behaviour.
+    fn project_scope_allows(&self, hook: &HookConfig) -> bool {
+        if !hook.plugin_name.starts_with("user:project") {
+            return true;
+        }
+        // `<project>/.aleph/hooks*.json` → plugin_root is `<project>/.aleph`,
+        // so the project root is its parent.
+        let hook_project = match hook.plugin_root.parent() {
+            Some(p) => p,
+            None => return true,
+        };
+        let effective =
+            crate::projects::current_project_root().or_else(|| std::env::current_dir().ok());
+        match effective {
+            Some(root) => paths_equal(&root, hook_project),
+            None => true,
         }
     }
 
@@ -595,6 +644,11 @@ impl HookExecutor {
                 continue;
             }
 
+            // Project-scoped hooks fire only in their own workspace.
+            if !self.project_scope_allows(hook) {
+                continue;
+            }
+
             debug!(
                 "Executing interceptor hook from plugin '{}' for event {:?}",
                 hook.plugin_name, event
@@ -662,6 +716,7 @@ impl HookExecutor {
             .iter()
             .filter(|h| h.event == event && h.kind == HookKind::Observer)
             .filter(|h| self.matches_pattern(h, context))
+            .filter(|h| self.project_scope_allows(h))
             .collect();
 
         if observers.is_empty() {
@@ -733,6 +788,11 @@ impl HookExecutor {
         for hook in resolvers {
             // Check matcher pattern
             if !self.matches_pattern(hook, context) {
+                continue;
+            }
+
+            // Project-scoped hooks fire only in their own workspace.
+            if !self.project_scope_allows(hook) {
                 continue;
             }
 
@@ -817,5 +877,44 @@ mod tests {
         exec.add_hook(dummy_hook("plugin:foo"));
         assert_eq!(exec.remove_by_plugin_prefix("user:"), 0);
         assert_eq!(exec.hook_count(), 1);
+    }
+
+    /// A project hook carries its project's `.aleph` dir as `plugin_root`.
+    fn project_hook(plugin_name: &str, project_root: &Path) -> HookConfig {
+        let mut h = dummy_hook(plugin_name);
+        h.plugin_root = project_root.join(".aleph");
+        h
+    }
+
+    #[test]
+    fn global_and_plugin_hooks_are_never_project_gated() {
+        let exec = HookExecutor::empty();
+        // No `with_project_root` scope active here, yet these must still fire.
+        assert!(exec.project_scope_allows(&dummy_hook("user:global")));
+        assert!(exec.project_scope_allows(&dummy_hook("plugin:foo")));
+    }
+
+    #[tokio::test]
+    async fn project_hook_fires_only_in_its_own_workspace() {
+        let proj_a = tempfile::tempdir().unwrap();
+        let proj_b = tempfile::tempdir().unwrap();
+        let exec = HookExecutor::empty();
+        let hook_a = project_hook("user:project", proj_a.path());
+
+        // Active project == the hook's project → fires.
+        let in_a =
+            crate::projects::with_project_root(Some(proj_a.path().to_path_buf()), async {
+                exec.project_scope_allows(&hook_a)
+            })
+            .await;
+        assert!(in_a, "project hook must fire inside its own project");
+
+        // A different project is active → suppressed (no cross-project leak).
+        let in_b =
+            crate::projects::with_project_root(Some(proj_b.path().to_path_buf()), async {
+                exec.project_scope_allows(&hook_a)
+            })
+            .await;
+        assert!(!in_b, "project hook must NOT fire inside another project");
     }
 }

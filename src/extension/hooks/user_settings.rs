@@ -1,11 +1,19 @@
 //! User-level hook configuration loader.
 //!
-//! Reads Claude Code-compatible hook definitions from three layers (in
-//! ascending precedence):
+//! Reads Claude Code-compatible hook definitions from these layers:
 //!
 //! 1. `~/.aleph/hooks.json` — applies to every Aleph session on this host
 //! 2. `<cwd>/.aleph/hooks.json` — project-scoped, intended to be checked in
 //! 3. `<cwd>/.aleph/hooks.local.json` — project-scoped, gitignored
+//! 4. `<project>/.aleph/hooks.{json,local.json}` for every folder the user has
+//!    registered as an Aleph project (the desktop-App "进入项目工作" picker
+//!    targets). In App mode the daemon CWD is meaningless, so project hooks
+//!    are loaded from the registry rather than (only) the launch directory.
+//!
+//! Layers 2–4 are tagged `user:project` / `user:project-local`; the
+//! [`HookExecutor`](super::executor::HookExecutor) gates them at fire time so a
+//! hook checked into project A never runs while the agent works inside project
+//! B. Layer 1 (`user:global`) always fires.
 //!
 //! The format mirrors Claude Code's `settings.json` `hooks` block so users
 //! can copy a working config across both tools without translation:
@@ -33,7 +41,7 @@
 //! malformed file produces a warning and an empty result. The user-config
 //! layer must never wedge plugin hooks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -104,7 +112,7 @@ struct UserHooksFile {
 /// above. Layer order is irrelevant for semantics — every hook is added to
 /// the executor independently — but it determines the `plugin_name` label
 /// surfaced in logs / consent flows.
-pub fn load_user_hooks(cwd: Option<&Path>) -> Vec<HookConfig> {
+pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<HookConfig> {
     let mut out = Vec::new();
 
     if let Some(home) = dirs::home_dir() {
@@ -112,16 +120,42 @@ pub fn load_user_hooks(cwd: Option<&Path>) -> Vec<HookConfig> {
         load_into(&p, "user:global", &mut out);
     }
 
+    // Track project roots already loaded (by canonical path) so a folder that
+    // is both the daemon CWD and a registered project is not loaded twice —
+    // duplicate registration would fire its commands twice per matching event.
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+
     if let Some(cwd) = cwd {
-        load_into(&cwd.join(".aleph/hooks.json"), "user:project", &mut out);
-        load_into(
-            &cwd.join(".aleph/hooks.local.json"),
-            "user:project-local",
-            &mut out,
-        );
+        seen.insert(canonical(cwd));
+        load_project_layer(cwd, &mut out);
+    }
+
+    for root in project_roots {
+        if seen.insert(canonical(root)) {
+            load_project_layer(root, &mut out);
+        }
     }
 
     out
+}
+
+/// Best-effort canonicalisation for path-equality bookkeeping. Falls back to
+/// the path as-given when the directory does not resolve (e.g. not yet
+/// created) so dedup stays stable instead of panicking.
+fn canonical(p: &Path) -> PathBuf {
+    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
+/// Load a project directory's checked-in + gitignored hook files. Both are
+/// tagged `user:project*` so the executor's fire-time gate binds them to this
+/// project root (`<root>/.aleph` → `plugin_root`, parent recovers `<root>`).
+fn load_project_layer(root: &Path, out: &mut Vec<HookConfig>) {
+    load_into(&root.join(".aleph/hooks.json"), "user:project", out);
+    load_into(
+        &root.join(".aleph/hooks.local.json"),
+        "user:project-local",
+        out,
+    );
 }
 
 fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
@@ -349,5 +383,58 @@ mod tests {
         let mut out = Vec::new();
         load_into(&cfg, "user:project", &mut out);
         assert!(out.is_empty());
+    }
+
+    const ONE_HOOK: &str = r#"{ "hooks": { "PreToolUse": [
+        { "hooks": [{ "type": "command", "command": "echo p" }] }
+    ] } }"#;
+
+    fn count_project_hooks(hooks: &[HookConfig]) -> usize {
+        hooks
+            .iter()
+            .filter(|h| h.plugin_name == "user:project")
+            .count()
+    }
+
+    #[test]
+    fn loads_hooks_from_registered_projects() {
+        // App mode: no project hooks in the daemon CWD, but a registered
+        // project carries one — it must still be discovered.
+        let cwd = tempdir().unwrap();
+        let proj = tempdir().unwrap();
+        write(&proj.path().join(".aleph/hooks.json"), ONE_HOOK);
+
+        let roots = vec![proj.path().to_path_buf()];
+        let hooks = load_user_hooks(Some(cwd.path()), &roots);
+        assert_eq!(count_project_hooks(&hooks), 1);
+        assert_eq!(
+            hooks[0].plugin_root,
+            proj.path().join(".aleph"),
+            "project hook must carry its own .aleph as plugin_root for the fire-time gate"
+        );
+    }
+
+    #[test]
+    fn cwd_that_is_also_a_registered_project_loads_once() {
+        // The daemon CWD and a registered project resolve to the same folder;
+        // a double-load would fire its commands twice per event.
+        let proj = tempdir().unwrap();
+        write(&proj.path().join(".aleph/hooks.json"), ONE_HOOK);
+
+        let roots = vec![proj.path().to_path_buf()];
+        let hooks = load_user_hooks(Some(proj.path()), &roots);
+        assert_eq!(count_project_hooks(&hooks), 1, "must dedup CWD vs registry");
+    }
+
+    #[test]
+    fn distinct_cwd_and_project_both_contribute() {
+        let cwd = tempdir().unwrap();
+        let proj = tempdir().unwrap();
+        write(&cwd.path().join(".aleph/hooks.json"), ONE_HOOK);
+        write(&proj.path().join(".aleph/hooks.json"), ONE_HOOK);
+
+        let roots = vec![proj.path().to_path_buf()];
+        let hooks = load_user_hooks(Some(cwd.path()), &roots);
+        assert_eq!(count_project_hooks(&hooks), 2);
     }
 }

@@ -714,7 +714,16 @@ impl ExtensionManager {
     /// without leaking duplicate registrations.
     pub(crate) async fn sync_user_hooks(&self) {
         let cwd = std::env::current_dir().ok();
-        let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref());
+        // App mode: the daemon CWD is meaningless, so also load hooks from
+        // every registered project folder. The executor gates each project
+        // hook so it only fires while that project is the active workspace —
+        // discovery is union-of-all (daemon = one process), firing is scoped.
+        // A failure to read the registry degrades to global + CWD only.
+        let project_roots: Vec<PathBuf> = crate::projects::ProjectStore::new()
+            .list()
+            .map(|projects| projects.into_iter().map(|p| p.path).collect())
+            .unwrap_or_default();
+        let user_hooks = crate::extension::hooks::load_user_hooks(cwd.as_deref(), &project_roots);
         let mut executor = self.hook_executor.write().await;
         let removed = executor.remove_by_plugin_prefix("user:");
         if user_hooks.is_empty() {
