@@ -318,18 +318,13 @@ pub fn temperature_for_base_url(base_url: Option<&str>, raw: Option<f32>) -> Opt
 }
 
 /// Resolve provider name from model name using known prefix patterns.
+///
+/// Delegates to [`crate::providers::model_catalog::infer_vendor`], the single
+/// source of truth for model-name → vendor inference (hermes-parity prefix
+/// table). The historical four outputs (openai/anthropic/google/deepseek)
+/// are preserved; the catalog additionally recognises xai/mistral/moonshot/
+/// qwen/etc. Callers guard the result with a registry membership check, so
+/// the wider coverage is strictly additive.
 pub fn resolve_provider_from_model(model: &str) -> Option<String> {
-    let m = model.to_lowercase();
-    if m.starts_with("gpt-") || m.starts_with("o1-") || m.starts_with("o3-") || m.starts_with("o4-")
-    {
-        Some("openai".into())
-    } else if m.starts_with("claude-") {
-        Some("anthropic".into())
-    } else if m.starts_with("gemini-") {
-        Some("google".into())
-    } else if m.starts_with("deepseek-") {
-        Some("deepseek".into())
-    } else {
-        None
-    }
+    crate::providers::model_catalog::infer_vendor(model).map(String::from)
 }
