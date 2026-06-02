@@ -332,6 +332,30 @@ fn is_transient_overload(msg_lower: &str) -> bool {
         || msg_lower.contains("receiving too many requests at the moment")
 }
 
+/// Whether a raw error string is a *permanent* provider failure — one that
+/// will not fix itself within a session (a bad/expired API key, a revoked
+/// token, or a forbidden credential).
+///
+/// This is the circuit-breaker's lens, distinct from [`classify`]'s retry
+/// lens: a permanent failure means a sibling provider should be preferred for
+/// the rest of the session rather than re-probed aggressively. Transient
+/// failures (rate limit, server overload, network blips) are deliberately
+/// excluded — a momentary "forbidden"-looking overload must not be mistaken
+/// for a dead key — and account/quota 429s are already classified `Fatal`
+/// upstream so they never reach the breaker.
+pub fn is_permanent_failure(raw: &str) -> bool {
+    let msg = raw.to_lowercase();
+    // Transient signals win: a 503/529 overload or a network reset is not a
+    // permanent credential failure even if the body happens to say "forbidden".
+    if is_transient_overload(&msg) {
+        return false;
+    }
+    msg.contains("401")
+        || msg.contains("403")
+        || msg.contains("unauthorized")
+        || msg.contains("forbidden")
+}
+
 /// Inspect an `anyhow::Error` display string and decide whether to retry.
 pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
     classify(&err.to_string())
@@ -607,6 +631,34 @@ mod tests {
     fn test_classify_fatal() {
         let err = anyhow::anyhow!("HTTP 401 Unauthorized");
         assert_eq!(classify_error(&err), RetryVerdict::Fatal);
+    }
+
+    #[test]
+    fn test_is_permanent_failure_auth() {
+        // `decide()` feeds this the RAW provider error (which always carries
+        // the HTTP status token), not the synthesized "authentication failed"
+        // reason string — so the classifier keys off the status codes.
+        assert!(is_permanent_failure("HTTP 401 Unauthorized"));
+        assert!(is_permanent_failure("HTTP 403 Forbidden"));
+        assert!(is_permanent_failure(
+            "OpenAI Chat API error (403): Forbidden — invalid api key"
+        ));
+        assert!(is_permanent_failure(
+            "request failed: 401 unauthorized"
+        ));
+    }
+
+    #[test]
+    fn test_is_permanent_failure_excludes_transient() {
+        // Rate limit / overload / network are transient — not permanent.
+        assert!(!is_permanent_failure("HTTP 429 too many requests"));
+        assert!(!is_permanent_failure("HTTP 529 overloaded"));
+        assert!(!is_permanent_failure("connection reset by peer"));
+        // A 403-looking body that is really a transient overload must not be
+        // treated as a dead credential.
+        assert!(!is_permanent_failure(
+            "403 forbidden: engine is currently overloaded, please try again later"
+        ));
     }
 
     #[test]
