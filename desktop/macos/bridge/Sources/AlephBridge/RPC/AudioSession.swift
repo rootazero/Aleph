@@ -125,8 +125,23 @@ actor AudioSession {
             )
         }
 
+        // Reentrancy guard. `await requestAccess` above is a suspension point:
+        // while the TCC dialog is up the actor is free, so a duplicate
+        // `record_start` (e.g. a second click before the UI left Idle) can race
+        // in. If a recording is already live, return success WITHOUT touching
+        // its AudioQueue — calling `stop()` here while the queue's input
+        // callback is in flight is a use-after-free that crashes the helper
+        // (AudioRecorderAQInputCallback → objc_loadWeak EXC_BAD_ACCESS).
         if let existing = activeRecorder {
+            if existing.isRecording {
+                return
+            }
+            // Stale, no longer recording — finalise it safely (let the queue
+            // drain via the delegate) before starting a fresh recording.
             existing.stop()
+            if let delegate = activeDelegate {
+                try? await delegate.waitForFinish(timeout: 2.0)
+            }
             activeRecorder = nil
             activeURL = nil
             activeDelegate = nil

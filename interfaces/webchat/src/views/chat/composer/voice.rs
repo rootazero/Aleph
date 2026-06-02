@@ -34,6 +34,11 @@ use crate::i18n::*;
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum RecState {
     Idle,
+    /// Mic requested, backend not yet confirmed (on macOS the native TCC
+    /// permission dialog is up). Clicks are ignored so a duplicate
+    /// `record_start` can't race the first one — see `recordStart` in the
+    /// Swift bridge.
+    Starting,
     Recording,
     Transcribing,
 }
@@ -172,6 +177,10 @@ fn begin(
     error: RwSignal<Option<String>>,
 ) {
     error.set(None);
+    // Leave Idle synchronously so a second click while the permission dialog is
+    // up is ignored (see `RecState::Starting`) rather than firing a duplicate
+    // `record_start` that would race the first.
+    state.set(RecState::Starting);
     spawn_local(async move {
         match dash.rpc_call("voice.record_start", serde_json::json!({})).await {
             Ok(_) => {
@@ -185,6 +194,7 @@ fn begin(
                 } else {
                     // A real failure (e.g. mic permission denied on macOS).
                     error.set(Some(e));
+                    state.set(RecState::Idle);
                 }
             }
         }
@@ -202,10 +212,12 @@ fn browser_start(
     spawn_local(async move {
         let Some(nav) = web_sys::window().map(|w| w.navigator()) else {
             error.set(Some("Microphone unavailable".into()));
+            state.set(RecState::Idle);
             return;
         };
         let Ok(media_devices) = nav.media_devices() else {
             error.set(Some("Microphone not supported in this browser".into()));
+            state.set(RecState::Idle);
             return;
         };
 
@@ -217,12 +229,14 @@ fn browser_start(
         );
         let Ok(promise) = media_devices.get_user_media_with_constraints(&constraints) else {
             error.set(Some("Microphone access failed".into()));
+            state.set(RecState::Idle);
             return;
         };
         let stream: web_sys::MediaStream = match JsFuture::from(promise).await {
             Ok(s) => s.unchecked_into(),
             Err(_) => {
                 error.set(Some("Microphone permission denied".into()));
+                state.set(RecState::Idle);
                 return;
             }
         };
@@ -230,6 +244,7 @@ fn browser_start(
         let Ok(recorder) = web_sys::MediaRecorder::new_with_media_stream(&stream) else {
             stop_tracks(&stream);
             error.set(Some("Recorder init failed".into()));
+            state.set(RecState::Idle);
             return;
         };
 
@@ -272,6 +287,7 @@ fn browser_start(
         if recorder.start().is_err() {
             stop_tracks(&stream);
             error.set(Some("Recording failed to start".into()));
+            state.set(RecState::Idle);
             return;
         }
 
@@ -360,14 +376,16 @@ pub(super) fn VoiceInputButton(
         match state.get_untracked() {
             RecState::Idle => begin(handle.clone(), dashboard, chat, state, error),
             RecState::Recording => finish(handle.clone(), dashboard, chat, state, error),
-            // Busy round-tripping — ignore extra clicks.
-            RecState::Transcribing => {}
+            // Starting (mic dialog up) / Transcribing (round-tripping) — ignore
+            // extra clicks so we don't fire a duplicate record_start/stop.
+            RecState::Starting | RecState::Transcribing => {}
         }
     };
 
     let title = move || {
         let key = match state.get() {
             RecState::Idle => t_string!(i18n, chat.voice_start),
+            RecState::Starting => t_string!(i18n, chat.voice_start),
             RecState::Recording => t_string!(i18n, chat.voice_stop),
             RecState::Transcribing => t_string!(i18n, chat.voice_transcribing),
         };
@@ -383,7 +401,7 @@ pub(super) fn VoiceInputButton(
             RecState::Recording => {
                 format!("{base}text-danger bg-danger/15 hover:bg-danger/25 animate-pulse")
             }
-            RecState::Transcribing => format!("{base}text-primary"),
+            RecState::Starting | RecState::Transcribing => format!("{base}text-primary"),
             RecState::Idle if error.get().is_some() => {
                 format!("{base}text-danger hover:text-text-primary hover:bg-surface-sunken")
             }
@@ -410,12 +428,15 @@ pub(super) fn VoiceInputButton(
         <button
             class=button_class
             title=title
-            disabled=move || disabled.get() || state.get() == RecState::Transcribing
+            disabled=move || disabled.get()
+                || state.get() == RecState::Starting
+                || state.get() == RecState::Transcribing
             on:click=on_click
         >
             {move || match state.get() {
-                // Spinner while transcribing.
-                RecState::Transcribing => view! {
+                // Spinner while preparing the mic (permission dialog) or
+                // transcribing.
+                RecState::Starting | RecState::Transcribing => view! {
                     <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5 animate-spin"
                          viewBox="0 0 24 24" fill="none">
                         <circle class="opacity-25" cx="12" cy="12" r="10"
