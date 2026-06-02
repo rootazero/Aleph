@@ -75,6 +75,26 @@ pub(super) fn render_user_session_text(request: &RunRequest) -> String {
     text
 }
 
+/// Prepended to a steering message when the target session has an active
+/// scratchpad execution list, so the model reconciles its task list before
+/// continuing. The model decides append / insert / reprioritize (R7 — the
+/// harness never splices `scratchpad.md` for the user).
+const RECONCILE_PREAMBLE: &str =
+    "[user added mid-task] The user sent new input while you are executing a \
+     task list. Reconcile your scratchpad first — call the scratchpad tool to \
+     append, insert, or reprioritize steps as you judge appropriate — then \
+     continue.\n\nNew input: ";
+
+/// Prepend [`RECONCILE_PREAMBLE`] to `text` iff the session has an active
+/// scratchpad. Pure so the policy is unit-tested without a registry global,
+/// mirroring [`find_steering_target`].
+pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool) -> String {
+    if !has_active_scratchpad {
+        return text;
+    }
+    format!("{RECONCILE_PREAMBLE}{text}")
+}
+
 /// Try to deliver `request` as a mid-loop steering message into the session's
 /// already-running loop. Returns `true` when the message was injected (the
 /// caller should treat the run as accepted and skip the `AgentBusy` path).
@@ -118,10 +138,16 @@ pub(super) async fn try_inject_steering(
     // `SessionId` is a type alias for `SessionKey`, so the gateway key is the
     // harness session id verbatim — no translation needed.
     let session_id: SessionId = request.session_key.clone();
+    // If this session is driving a scratchpad execution list, tell the
+    // model to reconcile it before continuing. Mechanical lookup, no I/O.
+    let has_active_scratchpad =
+        crate::builtin_tools::scratchpad_registry::active(&request.session_key.to_key_string())
+            .is_some();
+    let text = apply_reconcile_preamble(render_user_session_text(request), has_active_scratchpad);
     let event = SessionEvent::UserMessage {
         turn_id: uuid::Uuid::new_v4(),
         content: MessageContent {
-            text: render_user_session_text(request),
+            text,
             blocks: Vec::new(),
             thinking: None,
             thinking_signature: None,
@@ -246,6 +272,16 @@ mod tests {
             "r-new",
             &run_request("s1", "steer").session_key
         ));
+    }
+
+    #[test]
+    fn preamble_added_only_when_scratchpad_active() {
+        let with = apply_reconcile_preamble("do X".to_string(), true);
+        assert!(with.contains("do X"));
+        assert!(with.starts_with(RECONCILE_PREAMBLE));
+
+        let without = apply_reconcile_preamble("do X".to_string(), false);
+        assert_eq!(without, "do X");
     }
 
     #[test]
