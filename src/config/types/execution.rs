@@ -31,6 +31,17 @@ pub struct ExecutionConfig {
     /// is byte-identical to prior behaviour.
     #[serde(default)]
     pub prompt_mode: PromptMode,
+
+    /// R5 "AI comes to you" progress push (default: false).
+    ///
+    /// When enabled, a run bound to a user channel mirrors scratchpad
+    /// progress (objective set, plan laid out, steps ticked) and
+    /// watchdog-boundary events (verifier-veto / failure-cap) to that
+    /// channel, so headless / background long runs aren't a black box.
+    /// Pure I/O side-channel — never touches the agent loop. Off by default
+    /// to preserve prior behaviour; opt in per-deployment.
+    #[serde(default)]
+    pub progress_push: bool,
 }
 
 fn default_timeout_secs() -> u64 {
@@ -47,6 +58,7 @@ impl Default for ExecutionConfig {
             default_timeout_secs: default_timeout_secs(),
             max_iterations: default_max_iterations(),
             prompt_mode: PromptMode::default(),
+            progress_push: false,
         }
     }
 }

@@ -61,6 +61,12 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// Orchestrator handle injected after boot assembly. Populated via
     /// `with_orchestrator` once `initialize_orchestrator` completes.
     pub(super) orchestrator: Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>>,
+    /// Deferred channel-registry handle for the R5 progress side-channel.
+    /// Shares the same `OnceCell` the boot path populates once channels are
+    /// up (see `agent_init` / boot wiring); empty until then, so the progress
+    /// sink degrades to a no-op decorator. Only read when
+    /// `config.scratchpad_progress_push` is enabled.
+    pub(super) channel_registry: crate::tasks::shared::targets::ChannelRegistryCell,
 }
 
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
@@ -93,7 +99,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             message_router: None,
             inbox: None,
             orchestrator: Arc::new(std::sync::OnceLock::new()),
+            channel_registry: Arc::new(tokio::sync::OnceCell::new()),
         }
+    }
+
+    /// Inject the deferred channel-registry cell so the R5 progress sink can
+    /// reach user channels. Pass the same cell the boot path populates
+    /// (`tool_registry.channel_registry_cell()`); injecting a clone shares the
+    /// underlying `OnceCell`, so the sink sees the registry once boot sets it.
+    pub fn with_channel_registry_cell(
+        mut self,
+        cell: crate::tasks::shared::targets::ChannelRegistryCell,
+    ) -> Self {
+        self.channel_registry = cell;
+        self
     }
 
     /// Return the orchestrator OnceLock handle so boot code can inject the
