@@ -30,6 +30,9 @@ pub fn subscribe_run_events(
     workspace: WorkspaceState,
 ) -> usize {
     let trace_runs = Arc::new(Mutex::new(HashSet::<String>::new()));
+    // Owned Copy captured into the 'static event closure — used to drive
+    // voice-loop TTS playback when a registered run completes.
+    let dash = *dashboard;
     dashboard.subscribe_events(move |event: GatewayEvent| {
         if !event.topic.starts_with("run.") {
             return;
@@ -199,6 +202,14 @@ pub fn subscribe_run_events(
             }
             "run_complete" => {
                 chat.complete_run(run_id);
+                // Voice loop: if the mic button registered this run, speak the
+                // final reply via the core TTS path → endpoint playback.
+                if chat.take_speak_run(run_id) {
+                    let text = chat.assistant_text_for_run(run_id);
+                    if !text.trim().is_empty() {
+                        super::voice_playback::speak(&dash, text);
+                    }
+                }
             }
             "run_error" => {
                 let error = data

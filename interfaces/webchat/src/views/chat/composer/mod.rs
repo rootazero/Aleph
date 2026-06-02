@@ -460,9 +460,8 @@ pub(super) fn InputArea() -> impl IntoView {
                         </svg>
                     </button>
 
-                    // Voice input — mic capture → STT → draft text (G6).
+                    // Voice loop — record → STT → send → spoken reply.
                     <voice::VoiceInputButton
-                        input_text=input_text
                         disabled=Signal::derive(move || is_sending.get())
                     />
 

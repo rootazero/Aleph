@@ -1143,6 +1143,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         acp_manager.clone(),
     );
 
+    // Panel voice channel — native capture (record_start/stop) + TTS playback
+    // (synthesize). Endpoint I/O for the mic button's full voice loop.
+    register_voice_capability_handlers(
+        &mut server,
+        app_config.clone(),
+        agent_result.generation_registry.clone(),
+    );
+
     register_session_handlers(&mut server, &session_store, &memory_db, args.daemon);
     register_memory_handlers(
         &mut server,

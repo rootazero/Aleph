@@ -203,6 +203,11 @@ pub struct ChatState {
     /// server-side `preferred_model` persistence is a follow-up). Picker
     /// component owns reads/writes through this signal.
     pub selected_model: RwSignal<Option<crate::api::providers::ModelOverride>>,
+    /// Run IDs whose final assistant reply should be spoken aloud — the
+    /// voice-loop turns started from the composer mic button. `events.rs` pops
+    /// each on `run_complete` and plays its TTS audio. Ephemeral, like
+    /// `is_dragging_files` / `retry_pulse` (excluded from session snapshots).
+    pub voice_run_ids: RwSignal<Vec<String>>,
     /// Monotonic counter for generating unique user message IDs.
     next_msg_id: RwSignal<u64>,
 }
@@ -230,8 +235,44 @@ impl ChatState {
             active_project_root: RwSignal::new(None),
             active_project_name: RwSignal::new(None),
             selected_model: RwSignal::new(None),
+            voice_run_ids: RwSignal::new(Vec::new()),
             next_msg_id: RwSignal::new(0),
         }
+    }
+
+    /// Register a run whose final assistant reply should be spoken aloud.
+    /// Called by the composer mic button after it sends a voice-loop turn.
+    pub fn mark_speak_run(&self, run_id: &str) {
+        let id = run_id.to_string();
+        self.voice_run_ids.update(|ids| {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        });
+    }
+
+    /// Pop a run from the speak set; returns `true` if it was registered.
+    pub fn take_speak_run(&self, run_id: &str) -> bool {
+        let mut found = false;
+        self.voice_run_ids.update(|ids| {
+            if let Some(pos) = ids.iter().position(|r| r == run_id) {
+                ids.remove(pos);
+                found = true;
+            }
+        });
+        found
+    }
+
+    /// Final accumulated text of the assistant message for `run_id`, if present.
+    pub fn assistant_text_for_run(&self, run_id: &str) -> String {
+        let target_id = format!("assistant-{}", run_id);
+        self.messages.with(|msgs| {
+            msgs.iter()
+                .rev()
+                .find(|m| m.id == target_id)
+                .map(|m| m.content.clone())
+                .unwrap_or_default()
+        })
     }
 
     /// Set the active project and reset the session (1:1 project↔session
