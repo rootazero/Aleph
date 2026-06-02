@@ -182,6 +182,17 @@ pub fn get_sessions_db_path() -> Result<PathBuf> {
     Ok(get_data_dir()?.join("sessions.db"))
 }
 
+/// Get the path for the scratchpad session→plan binding store.
+///
+/// Returns: `<data_dir>/scratchpad_bindings.json`
+///
+/// Mirrors the goal-loop hook's session→active-plan pointers so that an
+/// in-flight multi-step task keeps its continuation across a daemon restart
+/// (see [`crate::builtin_tools::scratchpad_registry`]).
+pub fn get_scratchpad_bindings_path() -> Result<PathBuf> {
+    Ok(get_data_dir()?.join("scratchpad_bindings.json"))
+}
+
 // ============================================================================
 // Multi-location Skills Discovery (OpenCode Compatible)
 // ============================================================================
