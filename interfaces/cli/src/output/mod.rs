@@ -8,6 +8,7 @@
 //! is opt-out via `NO_COLOR` / `ALEPH_COLOR=never` / non-TTY stdout.
 
 pub mod box_draw;
+pub mod exec_echo;
 pub mod icon;
 pub mod markdown;
 pub mod spinner;
