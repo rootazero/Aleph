@@ -42,6 +42,23 @@ use async_trait::async_trait;
 use axum::body::Bytes;
 use axum::http::HeaderMap;
 
+/// HTTP headers carrying a provider-supplied delivery/idempotency identifier,
+/// in priority order. Mirrors the idempotency-key handling in openclaw
+/// (`hooks.ts`) and hermes-agent (`_IdempotencyCache`).
+const DELIVERY_ID_HEADERS: [&str; 3] = ["idempotency-key", "x-request-id", "x-github-delivery"];
+
+/// Extract a delivery/idempotency hint from request headers, if any.
+fn delivery_hint(headers: &HeaderMap) -> Option<String> {
+    DELIVERY_ID_HEADERS.iter().find_map(|name| {
+        headers
+            .get(*name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    })
+}
+
 /// Generic webhook channel implementation.
 ///
 /// Uses HTTP POST for both inbound (via `WebhookHandler` trait) and outbound
@@ -214,12 +231,13 @@ impl WebhookHandler for GenericWebhookHandler {
         WebhookReceiver::verify_signature(&self.secret, body, signature)
     }
 
-    async fn handle(
-        &self,
-        _headers: &HeaderMap,
-        body: Bytes,
-    ) -> ChannelResult<Vec<InboundMessage>> {
-        let mut messages = WebhookMessageOps::parse_inbound_payload(&body, &self.channel_id)?;
+    async fn handle(&self, headers: &HeaderMap, body: Bytes) -> ChannelResult<Vec<InboundMessage>> {
+        let hint = delivery_hint(headers);
+        let mut messages = WebhookMessageOps::parse_inbound_payload_with_hint(
+            &body,
+            &self.channel_id,
+            hint.as_deref(),
+        )?;
 
         // Filter by allowed senders if configured
         if !self.allowed_senders.is_empty() {
@@ -485,6 +503,54 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].sender_id.as_str(), "allowed-user");
+    }
+
+    #[test]
+    fn test_delivery_hint_priority_and_blank_skip() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(delivery_hint(&headers), None);
+
+        headers.insert("x-request-id", "req-1".parse().unwrap());
+        assert_eq!(delivery_hint(&headers), Some("req-1".to_string()));
+
+        // Idempotency-Key takes priority over X-Request-Id.
+        headers.insert("idempotency-key", "idem-1".parse().unwrap());
+        assert_eq!(delivery_hint(&headers), Some("idem-1".to_string()));
+
+        // Blank header values are ignored.
+        let mut blank = HeaderMap::new();
+        blank.insert("idempotency-key", "   ".parse().unwrap());
+        assert_eq!(delivery_hint(&blank), None);
+    }
+
+    #[tokio::test]
+    async fn test_webhook_handler_dedups_retry_via_idempotency_header() {
+        let handler = GenericWebhookHandler {
+            secret: "s".to_string(),
+            channel_id: ChannelId::new("webhook"),
+            path: "/webhook/generic".to_string(),
+            allowed_senders: Vec::new(),
+        };
+
+        let body = serde_json::to_vec(&serde_json::json!({
+            "sender_id": "user-1",
+            "message": "Hello!"
+        }))
+        .unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert("Idempotency-Key", "evt-7".parse().unwrap());
+
+        // Simulate a provider retry: same header + body delivered twice.
+        let first = handler
+            .handle(&headers, Bytes::from(body.clone()))
+            .await
+            .unwrap();
+        let second = handler.handle(&headers, Bytes::from(body)).await.unwrap();
+
+        // Stable id → the downstream InboundDedupTracker can drop the retry.
+        assert_eq!(first[0].id.as_str(), "evt-7#0");
+        assert_eq!(first[0].id.as_str(), second[0].id.as_str());
     }
 
     #[tokio::test]
