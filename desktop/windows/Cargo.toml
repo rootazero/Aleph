@@ -29,6 +29,11 @@ windows = { version = "0.58", features = [
     "Win32_System_LibraryLoader",
     "Win32_Globalization",
     "Win32_UI_Input_KeyboardAndMouse",
+    # UI Automation (IUIAutomation) — the accessibility-tree backend that
+    # lights up `desktop_som` / `desktop_ax_*` on Windows (parity with the
+    # macOS Swift-bridge AX layer). COM is needed to instantiate CUIAutomation.
+    "Win32_UI_Accessibility",
+    "Win32_System_Com",
     "Foundation",
     "UI_Notifications",
 ] }
