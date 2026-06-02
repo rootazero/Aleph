@@ -79,6 +79,12 @@ pub(crate) fn scratchpad_progress_line(event: &LoopTraceEvent) -> Option<String>
             if content.is_empty() {
                 return None;
             }
+            // 收尾: a finished goal-loop echoes a completion summary (the
+            // model checked its last box). Surface it directly as the closing
+            // push instead of the in-progress "任务进度" header.
+            if content.starts_with(crate::memory::scratchpad::COMPLETION_BANNER) {
+                return Some(content.to_string());
+            }
             Some(format!("📋 任务进度\n{content}"))
         }
 
@@ -183,6 +189,21 @@ mod tests {
         let line = scratchpad_progress_line(&ev).expect("should surface");
         assert!(line.contains("任务进度"));
         assert!(line.contains("[~] B"));
+    }
+
+    #[test]
+    fn completion_banner_surfaces_as_closing_push_not_progress() {
+        // The final complete_item echoes a 收尾 summary (banner-prefixed).
+        let content = format!(
+            "{}：Ship auth\n全部 2 个步骤已完成：\n- [x] Design API\n- [x] Implement",
+            crate::memory::scratchpad::COMPLETION_BANNER
+        );
+        let ev = scratchpad_completed("complete_item", Some(&content));
+        let line = scratchpad_progress_line(&ev).expect("completion should surface");
+        // Surfaced verbatim — NOT wrapped with the in-progress "任务进度" header.
+        assert!(line.starts_with(crate::memory::scratchpad::COMPLETION_BANNER));
+        assert!(!line.contains("任务进度"));
+        assert!(line.contains("Ship auth"));
     }
 
     #[test]

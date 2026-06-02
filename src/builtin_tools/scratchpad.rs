@@ -116,8 +116,20 @@ impl ScratchpadTool {
 /// current list), giving the loop continuous visibility through the tool-
 /// result channel without touching the harness prompt builder (R10-safe).
 /// Fail-soft: returns `None` on any read error rather than failing the op.
+///
+/// When the action just finished the objective (every box `[x]`), the echo
+/// becomes a 收尾 completion summary instead of the in-progress checklist —
+/// closing the goal-loop with hermes-agent `mark_done` parity. The summary is
+/// structural (the model's own checkboxes), so the model stays sovereign over
+/// completion (R7); the progress sink mirrors it to the user channel (R5).
 async fn progress_echo(manager: &ScratchpadManager) -> Option<String> {
-    manager.snapshot().await.ok().map(|s| s.render_progress())
+    manager.snapshot().await.ok().map(|s| {
+        if s.is_objective_complete() {
+            s.render_completion()
+        } else {
+            s.render_progress()
+        }
+    })
 }
 
 #[async_trait]

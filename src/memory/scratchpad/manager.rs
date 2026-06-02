@@ -99,10 +99,47 @@ pub struct ScratchpadSnapshot {
     pub items: Vec<PlanItem>,
 }
 
+/// Stable sentinel prefix marking a goal-loop **completion summary** (收尾).
+/// Both the scratchpad tool echo (model-facing) and the progress sink
+/// (user-facing) key off this so a finished objective surfaces as a "✅ 目标
+/// 达成" 收尾 rather than a plain in-progress checklist. Keep in sync with the
+/// `scratchpad_progress_sink` detection.
+pub const COMPLETION_BANNER: &str = "✅ 目标达成";
+
 impl ScratchpadSnapshot {
     /// Plan items not yet finished (pending **or** in-progress).
     pub fn incomplete(&self) -> Vec<&PlanItem> {
         self.items.iter().filter(|i| !i.is_done()).collect()
+    }
+
+    /// `true` when an objective is set and **every** real plan item is
+    /// finished (`[x]`) — the structural success/收尾 condition, the exact
+    /// complement of [`Self::has_pending_work`] once a plan exists. Empty
+    /// plans never count as complete (nothing was decomposed to finish).
+    pub fn is_objective_complete(&self) -> bool {
+        self.objective.is_some()
+            && !self.items.is_empty()
+            && self.items.iter().all(|i| i.is_done())
+    }
+
+    /// Render a judgment-free **completion summary** for a finished goal-loop:
+    /// the objective plus the full list of completed steps. Structural only —
+    /// the model's own checked boxes, never a semantic verdict (R7). The
+    /// "what was achieved" prose is the model's final reply; this is just the
+    /// scaffold both it and the user see at the 收尾 moment. Mirrors hermes-
+    /// agent's `mark_done` → "✓ Goal achieved" without an LLM judge call.
+    pub fn render_completion(&self) -> String {
+        let mut out = String::from(COMPLETION_BANNER);
+        if let Some(obj) = &self.objective {
+            out.push_str("：");
+            out.push_str(obj);
+        }
+        out.push_str(&format!("\n全部 {} 个步骤已完成：", self.items.len()));
+        for item in &self.items {
+            out.push_str("\n- [x] ");
+            out.push_str(&item.text);
+        }
+        out
     }
 
     /// The single in-progress item, if any — the "current step".
@@ -556,6 +593,45 @@ mod tests {
         assert!(rendered.contains("- [ ] C"));
         assert!(rendered.contains("Progress: 1/3 done"));
         assert!(rendered.contains("current: B"));
+    }
+
+    #[test]
+    fn is_objective_complete_only_when_objective_set_and_all_done() {
+        // All done + objective → complete.
+        let done = parse_snapshot(
+            "## Objective\nShip\n\n## Plan\n- [x] A\n- [x] B\n\n## Working State\n",
+        );
+        assert!(done.is_objective_complete());
+        // A box still open → not complete.
+        let mixed = parse_snapshot(
+            "## Objective\nShip\n\n## Plan\n- [x] A\n- [ ] B\n\n## Working State\n",
+        );
+        assert!(!mixed.is_objective_complete());
+        // In-progress is not done → not complete.
+        let wip =
+            parse_snapshot("## Objective\nShip\n\n## Plan\n- [~] A\n\n## Working State\n");
+        assert!(!wip.is_objective_complete());
+        // No objective → never complete (dormant gate, matches the verifier).
+        let no_obj = parse_snapshot(
+            "## Objective\n[No active task]\n\n## Plan\n- [x] A\n\n## Working State\n",
+        );
+        assert!(!no_obj.is_objective_complete());
+        // Empty plan → nothing was decomposed to finish.
+        let empty = parse_snapshot("## Objective\nShip\n\n## Plan\n\n## Working State\n");
+        assert!(!empty.is_objective_complete());
+    }
+
+    #[test]
+    fn render_completion_banner_objective_and_done_steps() {
+        let snap = parse_snapshot(
+            "## Objective\nShip auth\n\n## Plan\n- [x] Design API\n- [x] Implement\n\n## Working State\n",
+        );
+        let out = snap.render_completion();
+        assert!(out.starts_with(COMPLETION_BANNER), "must lead with the 收尾 sentinel");
+        assert!(out.contains("Ship auth"));
+        assert!(out.contains("全部 2 个步骤已完成"));
+        assert!(out.contains("- [x] Design API"));
+        assert!(out.contains("- [x] Implement"));
     }
 
     #[tokio::test]
