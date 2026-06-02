@@ -12,6 +12,7 @@ pub mod icon;
 pub mod markdown;
 pub mod spinner;
 pub mod theme;
+pub mod width;
 
 pub use spinner::Spinner;
 
@@ -19,6 +20,7 @@ use serde_json::Value;
 
 use box_draw::horizontal;
 use theme::{paint, status_style, Style};
+use width::{display_width, pad_to};
 
 /// Pretty-print a JSON value to stdout.
 pub fn print_json(value: &Value) {
@@ -161,26 +163,6 @@ pub fn print_detail(pairs: &[(&str, String)], json_mode: bool, raw: &Value) {
     }
 }
 
-/// Best-effort visible width (codepoint count). Treats every Unicode scalar
-/// as width 1 — close enough for the ASCII-heavy text the CLI emits, and
-/// removes the unicode-width dependency from this thin client.
-fn display_width(s: &str) -> usize {
-    s.chars().count()
-}
-
-fn pad_to(s: &str, width: usize) -> String {
-    let w = display_width(s);
-    if w >= width {
-        return s.to_string();
-    }
-    let mut out = String::with_capacity(s.len() + (width - w));
-    out.push_str(s);
-    for _ in 0..(width - w) {
-        out.push(' ');
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -254,26 +236,8 @@ mod tests {
         print_json(&value);
     }
 
-    #[test]
-    fn pad_to_pads_with_spaces_at_target_width() {
-        let padded = pad_to("hi", 5);
-        assert_eq!(padded, "hi   ");
-    }
-
-    #[test]
-    fn pad_to_returns_input_when_already_wide_enough() {
-        let padded = pad_to("hello", 3);
-        assert_eq!(padded, "hello");
-    }
-
-    #[test]
-    fn display_width_counts_scalars_not_bytes() {
-        // 2 ASCII bytes = 2 columns
-        assert_eq!(display_width("hi"), 2);
-        // multi-byte CJK is 1 scalar each; we approximate width as 1 per
-        // scalar (good enough for ASCII-heavy CLI output).
-        assert_eq!(display_width("中"), 1);
-    }
+    // Width/padding helpers now live in `super::width` with their own tests
+    // (including CJK alignment); see `output::width`.
 
     #[test]
     fn print_table_status_column_does_not_panic_with_unknown_status() {

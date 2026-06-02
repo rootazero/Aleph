@@ -62,6 +62,9 @@ dirs = "5.0"
 # Markdown → ANSI rendering for human-facing assistant output
 pulldown-cmark = { version = "0.12", default-features = false }
 
+# CJK / wide-character aware display widths for aligned table/detail output
+unicode-width = "0.2"
+
 # Unix process management (signals)
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
