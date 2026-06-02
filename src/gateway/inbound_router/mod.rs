@@ -104,8 +104,6 @@ pub struct InboundMessageRouter {
     pub(super) llm_provider: Option<Arc<dyn crate::providers::AiProvider>>,
     /// Command parser for unified slash command resolution
     pub(super) command_parser: Option<Arc<CommandParser>>,
-    /// Debounce buffer for message merging
-    pub(super) debounce_buffer: Option<Arc<crate::gateway::pipeline::DebounceBuffer>>,
     /// Session manager for session lifecycle
     pub(super) session_store: Option<Arc<dyn super::session_store::SessionStore>>,
     /// App config for reading output_mode at runtime
@@ -157,7 +155,6 @@ impl InboundMessageRouter {
             active_group_sessions: Mutex::new(HashMap::new()),
             llm_provider: None,
             command_parser: None,
-            debounce_buffer: None,
             session_store: None,
             app_config: None,
             stt_config: None,
@@ -241,15 +238,6 @@ impl InboundMessageRouter {
     /// Set the session store for session lifecycle operations
     pub fn with_session_store(mut self, sm: Arc<dyn super::session_store::SessionStore>) -> Self {
         self.session_store = Some(sm);
-        self
-    }
-
-    /// Set the debounce buffer for message merging
-    pub fn with_debounce_buffer(
-        mut self,
-        buffer: Arc<crate::gateway::pipeline::DebounceBuffer>,
-    ) -> Self {
-        self.debounce_buffer = Some(buffer);
         self
     }
 

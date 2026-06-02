@@ -2,10 +2,10 @@
 //!
 //! Slack delivers file metadata in a message event's `files[]` array, but the
 //! actual bytes live behind `url_private`, which requires the bot token in an
-//! `Authorization: Bearer xoxb-…` header. The generic media pipeline
-//! ([`crate::gateway::pipeline::media_download`]) fetches via `safe_fetch`,
-//! which has no auth-header support — pointing it at a `url_private` would
-//! return an HTML login page, not the file.
+//! `Authorization: Bearer xoxb-…` header. The generic SSRF-guarded fetch path
+//! ([`crate::security::ssrf::safe_fetch`]) has no auth-header support —
+//! pointing it at a `url_private` would return an HTML login page, not the
+//! file.
 //!
 //! Therefore the Slack limb (which holds the bot token) downloads its own
 //! files here and hands the bytes downstream as inline [`Attachment::data`].
