@@ -141,38 +141,39 @@ impl BubblewrapDriver {
                 args.push("--unshare-net".into());
             }
             NetworkPolicy::AllowAll => {}
+            NetworkPolicy::AllowHosts(hosts) if hosts.iter().all(|h| is_loopback_literal(h)) => {
+                // Phase B (netns→UDS→loopback bridge) is live. By the time we
+                // get here `WorkspaceSandbox::maybe_spawn_proxy` has spawned
+                // the managed proxy + host bridge and collapsed the allowlist
+                // to loopback. Unshare the network so the ONLY reachable
+                // egress is the netns-side local bridge `sandbox-init` binds
+                // on `lo`; it forwards over the bind-mounted UDS to the host
+                // proxy, which enforces the real hostname allowlist. The UDS
+                // bind-mount itself is added in `run()` (it needs the runtime
+                // socket path, which `generate_args` does not see).
+                args.push("--unshare-net".into());
+            }
             NetworkPolicy::AllowHosts(hosts) => {
-                // Workspace pre-resolution (see `src/sandbox/dns.rs`) has
-                // already turned every hostname into an IP literal by the
-                // time we get here, so the rejection message can be
-                // precise about which IPs *would* be allowed if a
-                // future cycle wires per-host enforcement.
-                //
-                // Cycle 6 Phase A delivered a managed in-process HTTP
-                // CONNECT + SOCKS5 proxy that enforces hostname
-                // allowlists on macOS. It does not yet help on Linux:
-                // `--unshare-net` strips the loopback interface inside
-                // the netns, so the host proxy bound on `127.0.0.1:N` is
-                // unreachable from within. Phase B closes this by adding
-                // a netns→UDS→loopback bridge (codex
-                // `linux-sandbox/proxy_routing.rs` does the same), at
-                // which point the workspace pipeline will route Linux
-                // AllowHosts traffic through the same proxy.
-                //
-                // Phase C (nftables in a `CAP_NET_ADMIN` user namespace,
-                // for true kernel-level per-IP egress) remains deferred.
+                // Raw, non-loopback AllowHosts with no proxy bridge in front.
+                // Workspace pre-resolution (`src/sandbox/dns.rs`) has turned
+                // hostnames into IP literals, so the message names the IPs
+                // that *would* be allowed. True kernel-level per-IP egress
+                // still needs nftables under `CAP_NET_ADMIN` (Phase C,
+                // deferred). The proxied loopback form above is the supported
+                // path; this arm only triggers for a direct driver caller
+                // that bypassed `maybe_spawn_proxy`.
                 let allowlist = hosts.join(", ");
                 return Err(SandboxError::UnsupportedPolicy {
                     platform: "linux/bwrap",
                     feature: "NetworkPolicy::AllowHosts".into(),
                     reason: format!(
-                        "per-host egress filtering on Linux is not yet enforced. \
-                         Workspace pre-resolved the allowlist to [{allowlist}]. \
-                         Cycle 6 Phase A (managed proxy) is live on macOS; Linux waits \
-                         on Phase B (netns→UDS→loopback bridge) because `--unshare-net` \
-                         strips the loopback the host proxy listens on. Phase C \
-                         (nftables under CAP_NET_ADMIN) remains deferred. For now, use \
-                         AllowAll (unfiltered) or None (no network). Tracked in \
+                        "per-host egress filtering on Linux is enforced via the managed \
+                         proxy + netns→UDS→loopback bridge (Phase B), which \
+                         `WorkspaceSandbox` wires by collapsing the allowlist to loopback. \
+                         This raw non-loopback allowlist [{allowlist}] reached the driver \
+                         without that bridge; true kernel-level per-IP egress (Phase C, \
+                         nftables under CAP_NET_ADMIN) remains deferred. Route through \
+                         WorkspaceSandbox, or use AllowAll / None. Tracked in \
                          docs/reference/SANDBOX.md § Network Filtering."
                     ),
                 });
@@ -181,8 +182,9 @@ impl BubblewrapDriver {
                 return Err(SandboxError::UnsupportedPolicy {
                     platform: "linux/bwrap",
                     feature: "NetworkPolicy::ProxyOnly".into(),
-                    reason: "proxy-only mode requires Phase B (netns→loopback bridge) \
-                             before Linux can reach the managed proxy. Use AllowAll or None."
+                    reason: "proxy-only (port-list) mode is not wired on Linux; the \
+                             supported proxied path is AllowHosts via WorkspaceSandbox. \
+                             Use AllowAll or None."
                         .into(),
                 });
             }
@@ -384,6 +386,20 @@ impl BubblewrapDriver {
     }
 }
 
+/// Is `host` an IPv4/IPv6 loopback literal or `localhost`? Used to detect the
+/// proxy-collapsed AllowHosts form (`["127.0.0.1"]`) that `WorkspaceSandbox`
+/// produces once the managed proxy + host bridge are live, vs a raw
+/// non-loopback allowlist that still has no kernel-level enforcement.
+fn is_loopback_literal(host: &str) -> bool {
+    host == "127.0.0.1"
+        || host == "::1"
+        || host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
+}
+
 /// Append codex-inspired metadata-protection mounts to a bubblewrap
 /// argument vector. For every writable root, each protected subpath
 /// (`.git`, `.aleph`, `.codex`, `.agents`) is shielded so the sandboxed
@@ -487,6 +503,34 @@ impl OsSandboxDriverTrait for BubblewrapDriver {
             .ok_or_else(|| SandboxError::ExecutionFailed("bubblewrap (bwrap) not found".into()))?;
 
         let mut bwrap_args: Vec<String> = profile.contents.lines().map(|s| s.to_string()).collect();
+
+        // Phase B: when a proxy route spec is present (AllowHosts via the
+        // managed proxy), bind-mount the host bridge's UDS directory into the
+        // namespace at the same path so the netns-side local bridge can
+        // `connect()` to it. A read-write `--bind` (not `--ro-bind`) is
+        // required because connecting to a Unix socket needs write permission
+        // on its inode. The bind must follow the `--tmpfs /` emitted by
+        // `generate_args` (it does — those lines are already in `bwrap_args`).
+        if let Some(spec_json) = env.get(crate::sandbox::proxy::PROXY_ROUTE_SPEC_ENV) {
+            match crate::sandbox::proxy::ProxyRouteSpec::from_env_json(spec_json) {
+                Ok(spec) => {
+                    if let Some(dir) = spec.uds_path.parent().and_then(|p| p.to_str()) {
+                        bwrap_args.push("--bind".into());
+                        bwrap_args.push(dir.to_string());
+                        bwrap_args.push(dir.to_string());
+                    } else {
+                        return Err(SandboxError::ProfileGeneration(
+                            "proxy route UDS path has no valid parent directory".into(),
+                        ));
+                    }
+                }
+                Err(e) => {
+                    return Err(SandboxError::ProfileGeneration(format!(
+                        "parse proxy route spec for bind-mount: {e}"
+                    )));
+                }
+            }
+        }
 
         // SP-2: bind-mount the currently-running aleph-server binary
         // read-only inside the bwrap namespace at a fixed path, then
@@ -842,6 +886,37 @@ mod tests {
             .generate_args(&policy, cwd)
             .expect_err("ProxyOnly must hard-fail on linux/bwrap");
         assert!(matches!(err, SandboxError::UnsupportedPolicy { .. }));
+    }
+
+    #[test]
+    fn generate_args_allow_hosts_loopback_unshares_net_for_proxy_bridge() {
+        // Phase B: once `WorkspaceSandbox::maybe_spawn_proxy` collapses the
+        // allowlist to loopback (proxy + host bridge are live), the driver
+        // must NOT hard-fail — it unshares the network so the only egress is
+        // the netns-side local bridge on `lo`.
+        let driver = BubblewrapDriver::new();
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowHosts(vec!["127.0.0.1".into()]),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let args = driver
+            .generate_args(&policy, cwd)
+            .expect("loopback AllowHosts is the supported proxied path");
+        assert!(
+            args.contains(&"--unshare-net".into()),
+            "proxied AllowHosts must isolate the network, got: {args:?}"
+        );
+    }
+
+    #[test]
+    fn is_loopback_literal_matches_loopback_forms_only() {
+        assert!(is_loopback_literal("127.0.0.1"));
+        assert!(is_loopback_literal("::1"));
+        assert!(is_loopback_literal("localhost"));
+        assert!(is_loopback_literal("127.5.6.7")); // whole 127/8 is loopback
+        assert!(!is_loopback_literal("10.0.0.1"));
+        assert!(!is_loopback_literal("example.com"));
     }
 
     #[test]

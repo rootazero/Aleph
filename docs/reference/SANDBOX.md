@@ -547,23 +547,31 @@ status` continue to work. Cycle 5 closes the absent-path gap (below).
 |---|---|---|---|
 | `None` | `(deny network*)` | `--unshare-net` + Cycle 3 seccomp deny `socket(AF_INET/INET6/NETLINK)` + `connect` | Token restricts; no inbound caps granted |
 | `AllowAll` | `(allow network*)` | shared netns | network capability granted |
-| `AllowHosts(hosts)` | **Cycle 6**: managed proxy enforces hostname allowlist + Seatbelt restricts to loopback only | **Rejected** — pre-resolved IPs surfaced in error; Phase B (netns→loopback bridge) next | **Rejected** — pre-resolved IPs surfaced in error; Phase D (WFP, admin) deferred |
-| `ProxyOnly` | `(allow ...)` for `localhost:<port>` | Rejected | Rejected |
+| `AllowHosts(hosts)` | **Cycle 6**: managed proxy enforces hostname allowlist + Seatbelt restricts to loopback only | **Phase B (live)**: managed proxy + netns→UDS→loopback bridge; `--unshare-net` isolates the netns and the only egress is the bridge to the host proxy | **Rejected** — pre-resolved IPs surfaced in error; Phase D (WFP, admin) deferred |
+| `ProxyOnly` | `(allow ...)` for `localhost:<port>` | Rejected (use `AllowHosts`) | Rejected |
 
 Cycle 3 lifted Linux closer to codex parity by adding seccomp-level
 socket-family deny for `None` mode (defense in depth on top of
 `--unshare-net`). Cycle 6 lit macOS up for hostname allowlists via a
-managed in-process proxy (see "Cycle 6 — managed proxy" below). Linux
-and Windows enforcement remains deferred: every plausible mechanism
-requires either elevated privileges we don't hold (CAP_NET_ADMIN on
-Linux, SeChangeNotify / LocalSystem on Windows) or a path for the
-sandbox to reach the host loopback (Linux requires the netns bridge in
-Phase B; Windows requires admin loopback-exemption for AppContainer).
+managed in-process proxy (see "Cycle 6 — managed proxy" below). **Phase B
+extends that proxy to Linux** via a netns→UDS→loopback bridge (a
+Unix-domain socket is a filesystem object, so it crosses the
+`--unshare-net` boundary when bind-mounted in): a host-side async bridge
+forwards the UDS to the managed proxy, and `sandbox-init` runs a
+netns-side local bridge that re-exposes it as loopback and rewrites the
+proxy env vars. No elevated privileges are required. Windows enforcement
+remains deferred (Phase D / WFP needs admin loopback-exemption for
+AppContainer).
 
-Until Phases B / D ship, `AllowHosts` on Linux and Windows hard-fails
-with a rejection message that includes the exact pre-resolved IPs that
-would be allowed — callers can use this to plan around the gap or fall
-back to `AllowAll` + application-level filtering inside the workload.
+`AllowHosts` is now enforced on **macOS (Cycle 6)** and **Linux (Phase
+B)**. On **Windows** it still hard-fails with a rejection message that
+includes the exact pre-resolved IPs that would be allowed — callers can
+use this to plan around the gap or fall back to `AllowAll` +
+application-level filtering inside the workload. A raw, non-loopback
+`AllowHosts` that reaches the Linux driver without going through
+`WorkspaceSandbox` (which collapses it to a loopback proxy) also still
+hard-fails: true kernel-level per-IP egress (Phase C / nftables under
+CAP_NET_ADMIN) remains deferred.
 
 ## Cycle 4 hardening (2026-05-21)
 
@@ -681,12 +689,11 @@ The Cycle 5 spec decomposes enforcement into four phases:
 | Phase | Mechanism | Privilege | Platforms | Status |
 |------:|-----------|-----------|-----------|--------|
 | A | In-process HTTP CONNECT + SOCKS5 allowlist proxy (`src/sandbox/proxy/`) | None | macOS | **DONE (Cycle 6)** |
-| B | Linux netns TCP→UDS→TCP bridge + seccomp ProxyRouted | None | Linux | Next |
+| B | Linux netns→UDS→loopback bridge (host async + netns-side forked local bridge) | None | Linux | **DONE (Phase B, 2026-06-02)** |
 | C | nftables in `CAP_NET_ADMIN` user namespace | Admin-equiv | Linux | Deferred |
 | D | Windows WFP filters | Admin / LocalSystem | Windows | Deferred |
 
-Recommended sequencing is `A → B`, then reassess; C and D stay deferred
-until a concrete need.
+`A → B` are both shipped; C and D stay deferred until a concrete need.
 
 ## Cycle 6 — managed proxy (2026-05-24)
 
@@ -730,14 +737,11 @@ exact hostnames (`api.example.com`), wildcard children
 (`*.example.com` matches one extra label, browser-cookie semantics),
 and IP literals (`140.82.114.4`, `::1`).
 
-**Why macOS only this cycle:**
+**Why macOS only this cycle (Linux landed later in Phase B):**
 
 - **Linux**: `--unshare-net` strips the loopback the host proxy
   listens on, so a sandboxed process cannot reach `127.0.0.1:<port>`.
-  Phase B (netns→UDS→loopback bridge, ported from codex
-  `linux-sandbox/proxy_routing.rs`) closes this without elevated
-  privileges. The Linux driver continues to hard-fail at
-  `profile_for` with an updated message that points at Phase B.
+  Phase B (below) closes this without elevated privileges.
 - **Windows**: AppContainer isolates loopback by default; enabling it
   requires `CheckNetIsolationEnableLoopback`, which needs admin /
   `SeChangeNotifyPrivilege`. Phase D will use WFP filters, also admin
@@ -758,6 +762,82 @@ matcher, CONNECT parse, SOCKS5 layout, lifecycle bind/handshake/shutdown,
 end-to-end happy path through a loopback upstream). 3 new workspace
 tests for the proxy injection (env vars set, capabilities rewritten,
 caller env wins). All existing sandbox tests (199) remain green.
+
+## Phase B — Linux netns bridge (2026-06-02)
+
+Phase B extends the Cycle 6 managed proxy to Linux. A Unix-domain socket
+is a *filesystem* object, so it crosses the `--unshare-net` boundary when
+bind-mounted into the sandbox — that is the hinge the bridge turns on.
+
+```
+target (in netns)  HTTP_PROXY=http://127.0.0.1:LOCAL
+        │  connect 127.0.0.1:LOCAL
+        ▼  local bridge  (forked by sandbox-init, in netns; binds lo)
+        │  connect(UDS)                     [UDS bind-mounted: --bind <dir>]
+        ▼  ───────────── netns boundary ─────────────
+        │
+        ▼  host bridge   (async task in aleph-server; UnixListener(UDS))
+        │  connect 127.0.0.1:PROXY
+        ▼  managed proxy (host)  → allowlist enforce → upstream
+```
+
+**How it wires together** (`WorkspaceSandbox::maybe_spawn_proxy`, the
+`linux/bwrap` branch):
+
+1. Spawn the managed `ProxyHandle` on the host loopback (as on macOS).
+2. `proxy::create_proxy_socket_dir()` → a per-run 0700 dir under
+   `~/.aleph/tmp`; `proxy::spawn_host_bridge(uds, dir, proxy_addr)` runs an
+   async `UnixListener(uds) ↔ TcpStream(proxy_addr)` shovel. Unlike codex's
+   forked host bridge, this is a Tokio task — `fork()` is unsafe in the
+   multi-threaded daemon, and `copy_bidirectional` is the natural fit.
+3. Collapse `capabilities.network → AllowHosts(["127.0.0.1"])` and inject
+   the standard proxy env vars (host proxy URL) + a `ProxyRouteSpec` JSON in
+   `ALEPH_SANDBOX_PROXY_ROUTE_SPEC` (`{uds_path, env_keys}`).
+4. `BubblewrapDriver::generate_args` sees the loopback allowlist and emits
+   `--unshare-net` (the netns's only egress is the local bridge on `lo`);
+   `run()` reads the spec and adds `--bind <uds_dir> <uds_dir>` (read-write —
+   `connect()` needs write perms on the socket inode).
+5. `sandbox-init` (`activate_proxy_routes_from_env`, before landlock/seccomp)
+   `fork()`s the netns-side local bridge — safe because `sandbox-init` is
+   dispatched in `main()` before any Tokio runtime, so the process is
+   single-threaded — which binds `127.0.0.1:0` and forwards to the UDS. It
+   then rewrites each `env_keys` port to the local bridge's, strips the spec
+   var, and execs the target. The forked bridge is unrestricted trusted infra
+   (forked before `restrict_self`); the target inherits the full lockdown.
+
+`ensure_loopback_interface_up` (codex's ioctl-based `lo`-up fallback) is
+**not** ported: codex builds its own netns and must raise `lo` itself,
+whereas bwrap's `--unshare-net` already brings `lo` up in its privileged
+setup phase — so a plain `TcpListener::bind((127.0.0.1, 0))` succeeds
+without `CAP_NET_ADMIN` (which `--cap-drop ALL` may have removed). Omitting
+it drops ~60 lines of untestable `unsafe` ioctl.
+
+Activation failure is **fail-closed**: `sandbox-init` exits 68 rather than
+run the target with broken egress control.
+
+**Files:**
+
+- New: `src/sandbox/proxy/netns_bridge.rs` (host bridge + `ProxyRouteSpec` +
+  socket-dir lifecycle; cross-platform `unix`, unit-tested on macOS).
+- Wired: `src/sandbox/sandbox_init.rs` (netns-side fork bridge + env rewrite),
+  `src/sandbox/platforms/linux/bwrap.rs` (`--unshare-net` + UDS bind-mount;
+  the `AllowHosts` hard-fail now only guards raw non-loopback allowlists),
+  `src/sandbox/workspace.rs` (`maybe_spawn_proxy` Linux branch + `ActiveProxy`
+  guard).
+
+**Entropy reduction:** the `AllowHosts`/`ProxyOnly` `UnsupportedPolicy`
+messages and several stale "Phase B is next" comments were updated to
+reflect the shipped state; the shared `PROXY_ENV_KEYS` const removed the
+duplicated env-key list in `maybe_spawn_proxy`.
+
+**Verification:** host bridge, route-spec round-trip, socket-dir lifecycle,
+proxy-env rewrite, and the full Linux orchestration path
+(`maybe_spawn_proxy` collapse + spec injection + real UDS↔TCP forwarding via
+a `linux/bwrap`-reporting mock driver) are unit-tested and run on macOS
+(UDS is cross-platform). The Linux-gated fork bridge + bwrap arg changes
+compile only under `--target *-linux-*`; they are verified by GitHub
+workflow CI build + tests (runtime netns behavior needs bwrap + a Linux
+kernel ≥ 5.13, unavailable on the macOS dev host).
 
 ### Verification
 
