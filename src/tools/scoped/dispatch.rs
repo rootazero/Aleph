@@ -69,8 +69,12 @@ impl ScopedToolService {
 
         // Confirmation gate: tools flagged `requires_confirmation` must be
         // approved by the user before they run. Fails closed when no approval
-        // transport is wired.
-        if self.confirm_tools.contains(name) {
+        // transport is wired. A tool is gated when it appears in the static
+        // `confirm_tools` set (the gateway's `CONFIRMATION_REQUIRED_TOOLS`)
+        // OR when the tool itself declares `LoopTool::requires_confirmation()`
+        // — the per-tool, declaration-driven seam that lets MCP / extension /
+        // skill tools opt into approval without being hard-coded gateway-side.
+        if self.confirm_tools.contains(name) || self.inner.requires_confirmation(name) {
             match &self.approval_requester {
                 Some(requester) => {
                     let reason = format!("Tool `{name}` requires your confirmation to run.");

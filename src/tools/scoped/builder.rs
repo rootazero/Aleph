@@ -201,11 +201,16 @@ impl ScopedToolService {
     /// harness can advertise / inspect parallel-safety per tool. The
     /// authoritative per-call dispatch decision still goes through
     /// [`crate::tools::service::ToolService::is_call_concurrent_safe`].
-    pub(super) fn builtin_metadata(name: &str, concurrent_safe: bool) -> ToolDefinitionMetadata {
+    pub(super) fn builtin_metadata(
+        name: &str,
+        concurrent_safe: bool,
+        requires_approval: bool,
+    ) -> ToolDefinitionMetadata {
         ToolDefinitionMetadata {
             idempotent: crate::tools::retry::is_idempotent_builtin_name(name),
             max_duration_ms: crate::tools::budget::builtin_tool_budget_ms(name),
             concurrent_safe,
+            requires_approval,
             ..ToolDefinitionMetadata::default()
         }
     }
@@ -218,7 +223,7 @@ impl ScopedToolService {
             description: tool.description().to_string(),
             input_schema: tool.schema(),
             source: ToolSource::Builtin,
-            metadata: Self::builtin_metadata(name, concurrent_safe),
+            metadata: Self::builtin_metadata(name, concurrent_safe, tool.requires_confirmation()),
         }
     }
 

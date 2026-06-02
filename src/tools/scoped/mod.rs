@@ -122,7 +122,8 @@ impl ToolService for ScopedToolService {
             .tool_definitions()
             .into_iter()
             .map(|d| {
-                let metadata = Self::builtin_metadata(&d.name, d.concurrent_safe);
+                let metadata =
+                    Self::builtin_metadata(&d.name, d.concurrent_safe, d.requires_confirmation);
                 ToolDefinition {
                     name: d.name,
                     description: d.description,
@@ -249,8 +250,11 @@ impl ToolService for ScopedToolService {
         }
         // Confirmation-gated tools require user approval — they must be
         // routed through the serial path so the prompt is visible in input
-        // order; never run them in parallel.
-        if self.confirm_tools.contains(name) {
+        // order; never run them in parallel. Honors both the static
+        // `confirm_tools` set and per-tool `requires_confirmation()`
+        // declarations so a self-declared dangerous tool is never silently
+        // parallelized past its approval prompt.
+        if self.confirm_tools.contains(name) || self.inner.requires_confirmation(name) {
             return false;
         }
         self.inner
@@ -299,7 +303,8 @@ impl ToolService for ScopedToolService {
             .tool_definitions()
             .into_iter()
             .map(|d| {
-                let metadata = Self::builtin_metadata(&d.name, d.concurrent_safe);
+                let metadata =
+                    Self::builtin_metadata(&d.name, d.concurrent_safe, d.requires_confirmation);
                 ToolDefinition {
                     name: d.name,
                     description: d.description,
