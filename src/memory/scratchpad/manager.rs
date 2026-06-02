@@ -280,9 +280,7 @@ impl ScratchpadManager {
             }
         }
 
-        fs::write(self.scratchpad_path(), content)
-            .await
-            .map_err(|e| AlephError::other(format!("Failed to write scratchpad: {}", e)))
+        crate::utils::atomic_write::atomic_write_file(&self.scratchpad_path(), content).await
     }
 
     /// Initialize scratchpad with default template
@@ -668,6 +666,21 @@ mod tests {
         let content = manager.read().await.unwrap();
         assert!(content.contains("- [x] Step 1"));
         assert!(content.contains("- [ ] Step 2"));
+    }
+
+    #[tokio::test]
+    async fn write_roundtrips_and_leaves_no_temp_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = ScratchpadManager::with_dir(temp.path().to_path_buf(), "sess-atomic");
+        manager.write("# Objective\nhello\n").await.unwrap();
+        assert_eq!(manager.read().await.unwrap(), "# Objective\nhello\n");
+        // No `.aleph_atomic_*` staging files survive a successful write.
+        let leftovers: Vec<_> = std::fs::read_dir(manager.scratchpad_path().parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".aleph_atomic_"))
+            .collect();
+        assert!(leftovers.is_empty(), "no atomic temp files should remain");
     }
 
     #[tokio::test]
