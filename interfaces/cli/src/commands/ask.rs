@@ -61,7 +61,9 @@ pub async fn run(
     let mut response_text = String::new();
     let mut tool_count = 0usize;
     let mut agent_trace_seen = false;
+    let mut footer_rendered = false;
     let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
+    use crate::output::exec_echo;
 
     while let Some(event) = events.recv().await {
         // JSON mode: serialize every event before doing any presentation
@@ -73,17 +75,34 @@ pub async fn run(
         }
 
         match event {
+            // Rich path: the agent-loop trace carries tool args, per-call
+            // duration, the scratchpad checklist, and the terminate cause.
+            // Render it as a hierarchical, readable stream so the user can
+            // follow a background run step-by-step.
             StreamEvent::AgentTrace { event, .. } => {
                 agent_trace_seen = true;
+                if json {
+                    continue;
+                }
                 match event {
                     AgentTraceEvent::ToolCallStarted { call, .. } => {
                         tool_count += 1;
-                        if !json {
-                            eprintln!("  [Tool: {}]", call.tool_name);
+                        eprintln!("{}", exec_echo::render_tool_start(&call.tool_name, &call.input));
+                    }
+                    AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
+                        if let Some(line) = exec_echo::render_tool_end(
+                            &call.tool_name,
+                            &result,
+                            call.duration_ms,
+                            verbose,
+                        ) {
+                            eprintln!("{line}");
                         }
                     }
-                    AgentTraceEvent::ToolSummary { summary, .. } if verbose && !json => {
-                        eprintln!("  [Summary: {}]", summary);
+                    AgentTraceEvent::ToolSummary { summary, .. } if verbose => {
+                        if let Some(line) = exec_echo::render_tool_summary(&summary) {
+                            eprintln!("{line}");
+                        }
                     }
                     _ => {}
                 }
@@ -96,15 +115,22 @@ pub async fn run(
                     break;
                 }
             }
-            StreamEvent::ToolStart { tool_name, .. } => {
-                if !agent_trace_seen {
+            // Fallback path: coarse tool events when no AgentTrace stream is
+            // present (older servers / minimal emitters).
+            StreamEvent::ToolStart {
+                tool_name, params, ..
+            } => {
+                if !agent_trace_seen && !json {
                     tool_count += 1;
-                    if !json {
-                        eprintln!("  [Tool: {}]", tool_name);
-                    }
+                    eprintln!("{}", exec_echo::render_tool_start(&tool_name, &params));
                 }
             }
-            StreamEvent::RunComplete { .. } => {
+            StreamEvent::RunComplete { summary, .. } => {
+                if !json {
+                    eprintln!();
+                    eprintln!("{}", exec_echo::render_summary_footer(&summary));
+                    footer_rendered = true;
+                }
                 break;
             }
             StreamEvent::RunError { error, .. } => {
@@ -115,12 +141,16 @@ pub async fn run(
             }
             StreamEvent::Reasoning { content, .. } => {
                 if verbose && !json {
-                    eprintln!("  [Thinking: {}]", content);
+                    if let Some(line) = exec_echo::render_reasoning(&content) {
+                        eprintln!("{line}");
+                    }
                 }
             }
             StreamEvent::ReasoningBlock { content, .. } => {
                 if verbose && !agent_trace_seen && !json {
-                    eprintln!("  [Summary: {}]", content);
+                    if let Some(line) = exec_echo::render_reasoning(&content) {
+                        eprintln!("{line}");
+                    }
                 }
             }
             _ => {}
@@ -132,7 +162,10 @@ pub async fn run(
     // the raw text is still what gets written to --output-last-message below.
     if !json {
         println!("{}", crate::output::markdown::render(&response_text));
-        if tool_count > 0 {
+        // The summary footer (rendered on RunComplete) supersedes the legacy
+        // "(N tools used)" line; only fall back to the count when no footer
+        // arrived (e.g. the stream ended on ResponseChunk is_final).
+        if !footer_rendered && tool_count > 0 {
             eprintln!();
             eprintln!("({} tools used)", tool_count);
         }
