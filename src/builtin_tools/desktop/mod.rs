@@ -512,7 +512,7 @@ Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are 
 {"action":"click","coord_space":"normalized","x":500,"y":500}
 {"action":"batch","coord_space":"normalized","actions":[{"action":"click","x":300,"y":400},{"action":"type_text","text":"hi"}]}
 
-Pythonic action script — UI-TARS-finetuned models can emit `script` containing one or more `Action: ...` lines instead of JSON. Supported verbs: click, left_double, right_single, drag, hover, type, hotkey, scroll, wait, finished, call_user. Box formats `(x,y)`, `[x1,y1,x2,y2]`, `<point>x y</point>`, `<bbox>x1 y1 x2 y2</bbox>` all parse. Inherits `coord_space` / `coord_factors` from the same call.
+Pythonic action script — UI-TARS-finetuned models can emit `script` containing one or more `Action: ...` lines instead of JSON. Supported verbs: click, left_double, right_single, drag, hover, type, hotkey, scroll, wait, finished, call_user. A trailing `\n` in `type(content='…\n')` types the text then presses Enter (submit). Box formats `(x,y)`, `[x1,y1,x2,y2]`, `<point>x y</point>`, `<bbox>x1 y1 x2 y2</bbox>` all parse. Inherits `coord_space` / `coord_factors` from the same call.
 
 {"action":"script","coord_space":"normalized","script":"Thought: open menu\nAction: click(start_box='(500,30)')"}
 {"action":"script","coord_space":"normalized","script":"type(content='hello\\n'); wait(); click(start_box='[100,200,300,400]')"}"#;

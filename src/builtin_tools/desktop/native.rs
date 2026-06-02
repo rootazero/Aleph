@@ -75,6 +75,19 @@ async fn fit_clipboard_image(png_base64: String) -> Result<String> {
     Ok(processed.image_base64)
 }
 
+/// Split a single trailing newline off `text` for UI-TARS
+/// `type(content='…\n')` submit semantics.
+///
+/// Returns the text to type and whether a trailing newline was present (in
+/// which case the caller emits an explicit Return keypress). Only one trailing
+/// `\n` is stripped — interior newlines are left untouched.
+fn split_trailing_newline(text: &str) -> (&str, bool) {
+    match text.strip_suffix('\n') {
+        Some(stripped) => (stripped, true),
+        None => (text, false),
+    }
+}
+
 /// Platform execution methods for [`super::DesktopTool`].
 impl super::DesktopTool {
     /// Execute a desktop action via `DesktopPlatform.screen()`.
@@ -298,15 +311,34 @@ impl super::DesktopTool {
                 }
             }
             "type_text" => {
-                let text = args.text.as_deref().unwrap_or("");
+                // UI-TARS `type(content='…\n')` parity: a single trailing
+                // newline means "type the text, then submit". We strip it and
+                // emit an explicit Return keypress, which is reliable across
+                // platforms — passing a literal `\n` to the text injector
+                // behaves inconsistently in single-line fields.
+                let raw = args.text.as_deref().unwrap_or("");
+                let (text, submit) = split_trailing_newline(raw);
                 match screen.type_text(text).await {
-                    Ok(()) => Ok(Some(DesktopOutput {
-                        success: true,
-                        data: Some(
-                            serde_json::json!({"typed": true, "chars": text.chars().count()}),
-                        ),
-                        message: None,
-                    })),
+                    Ok(()) => {
+                        if submit {
+                            if let Err(e) = screen.key_combo(&[], "return").await {
+                                return Ok(Some(DesktopOutput {
+                                    success: false,
+                                    data: None,
+                                    message: Some(format!("Screen capability error: {e}")),
+                                }));
+                            }
+                        }
+                        Ok(Some(DesktopOutput {
+                            success: true,
+                            data: Some(serde_json::json!({
+                                "typed": true,
+                                "chars": text.chars().count(),
+                                "submitted": submit,
+                            })),
+                            message: None,
+                        }))
+                    }
                     Err(e) => Ok(Some(DesktopOutput {
                         success: false,
                         data: None,
@@ -842,5 +874,22 @@ mod tests {
     fn require_xy_accepts_full_coordinates() {
         let full = args(serde_json::json!({"action": "click", "x": 12.0, "y": 34.0}));
         assert_eq!(require_xy(&full, "click").unwrap(), (12.0, 34.0));
+    }
+
+    #[test]
+    fn trailing_newline_signals_submit() {
+        assert_eq!(split_trailing_newline("search\n"), ("search", true));
+    }
+
+    #[test]
+    fn no_trailing_newline_does_not_submit() {
+        assert_eq!(split_trailing_newline("search"), ("search", false));
+    }
+
+    #[test]
+    fn only_one_trailing_newline_is_stripped() {
+        // Interior newlines stay; a bare newline means "just submit".
+        assert_eq!(split_trailing_newline("a\nb\n"), ("a\nb", true));
+        assert_eq!(split_trailing_newline("\n"), ("", true));
     }
 }
