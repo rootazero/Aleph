@@ -36,6 +36,27 @@ pub struct StatusReactionConfig {
     pub complete: Option<String>,
 }
 
+/// Link preview generation policy for outbound messages.
+///
+/// AI assistants frequently cite URLs; Telegram's default behaviour expands the
+/// first link into a large preview card that clutters the conversation. This
+/// enum lets a deployment control that behaviour per account/group/topic.
+///
+/// Maps to Telegram's `LinkPreviewOptions`. `SmallMedia`/`LargeMedia` are
+/// intentionally omitted because they are ignored unless an explicit preview
+/// URL is supplied, which Aleph never does.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkPreviewMode {
+    /// Telegram's automatic preview of the first link (default, current behaviour).
+    #[default]
+    Enabled,
+    /// Suppress link preview cards entirely.
+    Disabled,
+    /// Keep the automatic preview but render it above the message text.
+    Above,
+}
+
 /// Streaming mode for Telegram delivery.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(rename_all = "snake_case")]
@@ -208,6 +229,8 @@ pub struct TelegramAccountConfig {
     pub proxy_url: Option<String>,
     /// When true (default), fallback to plain text if HTML parsing fails.
     pub html_fallback: Option<bool>,
+    /// Link preview policy for outbound messages (defaults to `Enabled`).
+    pub link_preview: Option<LinkPreviewMode>,
     #[serde(default)]
     pub groups: Vec<TelegramGroupConfig>,
 }

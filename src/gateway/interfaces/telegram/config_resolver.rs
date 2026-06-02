@@ -1,8 +1,8 @@
 #[cfg(test)]
 use super::config_v2::ErrorPolicyMode;
 use super::config_v2::{
-    DmPolicy, ErrorPolicy, GroupPolicy, StreamingOptions, TelegramAccountConfig, TelegramConfigV2,
-    TelegramGroupConfig, TelegramTopicConfig,
+    DmPolicy, ErrorPolicy, GroupPolicy, LinkPreviewMode, StreamingOptions, TelegramAccountConfig,
+    TelegramConfigV2, TelegramGroupConfig, TelegramTopicConfig,
 };
 use std::collections::HashMap;
 
@@ -21,6 +21,7 @@ pub struct ResolvedConfig {
     pub error_policy: ErrorPolicy,
     pub max_retries: u32,
     pub html_fallback: bool,
+    pub link_preview: LinkPreviewMode,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +80,7 @@ impl ConfigResolver {
             error_policy: account.error_policy.clone().unwrap_or_default(),
             max_retries: 3,
             html_fallback: account.html_fallback.unwrap_or(true),
+            link_preview: account.link_preview.unwrap_or_default(),
         }
     }
 
@@ -106,6 +108,7 @@ impl ConfigResolver {
                 .unwrap_or_else(|| base.error_policy.clone()),
             max_retries: base.max_retries,
             html_fallback: base.html_fallback,
+            link_preview: base.link_preview,
         }
     }
 
@@ -136,6 +139,7 @@ impl ConfigResolver {
                 .unwrap_or_else(|| base.error_policy.clone()),
             max_retries: base.max_retries,
             html_fallback: base.html_fallback,
+            link_preview: base.link_preview,
         }
     }
 }
@@ -166,6 +170,7 @@ mod tests {
                     max_retries: 3,
                 }),
                 html_fallback: None,
+                link_preview: None,
                 proxy_url: None,
                 groups: vec![],
             }],
@@ -199,6 +204,7 @@ mod tests {
                     max_retries: 3,
                 }),
                 html_fallback: None,
+                link_preview: None,
                 proxy_url: None,
                 groups: vec![TelegramGroupConfig {
                     id: "g1".to_string(),
