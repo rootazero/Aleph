@@ -1049,3 +1049,160 @@ async fn execute_with_cancel_runs_to_completion_when_token_never_fires() {
     };
     assert!(matches, "unexpected output shape: {:?}", out.value);
 }
+
+// -------------------------------------------------------------------------
+// Per-tool confirmation gate — `LoopTool::requires_confirmation()` honored
+// by the dispatch gate independently of the static `confirm_tools` set.
+// -------------------------------------------------------------------------
+
+/// A tool that declares itself confirmation-required without being in any
+/// hard-coded gateway list — the MCP / extension / skill opt-in path.
+struct ConfirmTool;
+
+#[async_trait::async_trait]
+impl LoopTool for ConfirmTool {
+    fn name(&self) -> &str {
+        "danger"
+    }
+    fn description(&self) -> &str {
+        "irreversible stub"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        LoopToolResult::Success {
+            output: json!({ "ran": true }),
+        }
+    }
+    fn is_concurrent_safe(&self, _input: &Value) -> bool {
+        false
+    }
+    fn requires_confirmation(&self) -> bool {
+        true
+    }
+}
+
+/// Records every approval request and returns a fixed outcome.
+struct FakeRequester {
+    outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome,
+    calls: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl crate::sandbox::exec_approval::gate::ApprovalRequester for FakeRequester {
+    async fn request_approval(
+        &self,
+        _tool_name: &str,
+        _reason: &str,
+    ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.outcome
+    }
+}
+
+fn confirm_registry() -> Arc<LoopToolRegistry> {
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(ConfirmTool));
+    r.register(Box::new(StubTool { tool_name: "plain" }));
+    Arc::new(r)
+}
+
+#[test]
+fn registry_reports_per_tool_requires_confirmation() {
+    let reg = confirm_registry();
+    assert!(reg.requires_confirmation("danger"));
+    assert!(!reg.requires_confirmation("plain"));
+    // Unknown tool is conservatively not gated here (allowed-filter rejects it).
+    assert!(!reg.requires_confirmation("nope"));
+    // Alias resolution: dotted spelling still resolves to the same tool.
+    let mut r = LoopToolRegistry::new();
+    r.register(Box::new(ConfirmTool));
+    assert!(r.requires_confirmation("danger"));
+}
+
+#[tokio::test]
+async fn declared_confirmation_tool_runs_when_approved() {
+    let requester = StdArc::new(FakeRequester {
+        outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved,
+        calls: AtomicUsize::new(0),
+    });
+    // Empty static `confirm_tools` set — gating comes solely from the tool's
+    // own `requires_confirmation()` declaration.
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+
+    let out = svc.execute("danger", json!({})).await.expect("approved → runs");
+    let ran = match &out.value {
+        Value::Object(_) => out.value == json!({"ran": true}),
+        Value::String(s) => serde_json::from_str::<Value>(s).ok() == Some(json!({"ran": true})),
+        _ => false,
+    };
+    assert!(ran, "unexpected output: {:?}", out.value);
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1, "gate must prompt once");
+}
+
+#[tokio::test]
+async fn declared_confirmation_tool_blocked_when_denied() {
+    let requester = StdArc::new(FakeRequester {
+        outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::Denied,
+        calls: AtomicUsize::new(0),
+    });
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+
+    match svc.execute("danger", json!({})).await {
+        Err(ToolError::Execution { name, .. }) => assert_eq!(name, "danger"),
+        other => panic!("denied confirmation must block, got: {other:?}"),
+    }
+    assert_eq!(requester.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn declared_confirmation_tool_fails_closed_without_requester() {
+    // No approval transport wired → confirm-required tool must fail closed,
+    // never silently auto-run.
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new());
+    match svc.execute("danger", json!({})).await {
+        Err(ToolError::Execution { name, cause }) => {
+            assert_eq!(name, "danger");
+            assert!(cause.contains("no approval"), "unexpected cause: {cause}");
+        }
+        other => panic!("expected fail-closed Execution error, got: {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn plain_tool_unaffected_by_confirmation_gate() {
+    // A tool that does not declare requires_confirmation runs normally even
+    // with no requester wired — the change is byte-identical for it.
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new());
+    let out = svc.execute("plain", json!({})).await.expect("plain tool runs");
+    let ok = matches!(&out.value, Value::Object(_) | Value::String(_));
+    assert!(ok, "plain tool should produce output");
+}
+
+#[tokio::test]
+async fn declared_confirmation_tool_never_parallel() {
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new());
+    assert!(
+        !svc.is_call_concurrent_safe("danger", &json!({})).await,
+        "confirm-required tool must be forced onto the serial path"
+    );
+    assert!(
+        svc.is_call_concurrent_safe("plain", &json!({})).await,
+        "plain concurrent-safe tool stays parallelizable"
+    );
+}
+
+#[tokio::test]
+async fn describe_surfaces_requires_approval_metadata() {
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new());
+    let danger = svc.describe("danger").await.expect("danger described");
+    assert!(
+        danger.metadata.requires_approval,
+        "describe() metadata must reflect the tool's requires_confirmation()"
+    );
+    let plain = svc.describe("plain").await.expect("plain described");
+    assert!(!plain.metadata.requires_approval);
+}

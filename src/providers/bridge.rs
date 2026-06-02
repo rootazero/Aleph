@@ -70,7 +70,10 @@ impl AiProviderBridge {
             name: def.name.clone(),
             description: def.description.clone(),
             parameters: def.parameters.clone(),
-            requires_confirmation: false,
+            // Forward the tool's own declaration instead of hard-coding false
+            // so the metadata catalog honestly reflects confirmation-required
+            // tools (see `LoopTool::requires_confirmation`).
+            requires_confirmation: def.requires_confirmation,
             category: ToolCategory::Builtin,
             llm_context: None,
             strict: false,
@@ -148,6 +151,7 @@ mod tests {
             }),
             max_result_tokens: None,
             concurrent_safe: false,
+            requires_confirmation: false,
         };
 
         let converted = AiProviderBridge::convert_tool_def(&def);

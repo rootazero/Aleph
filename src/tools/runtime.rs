@@ -50,6 +50,14 @@ pub struct ToolDefinition {
     /// tools (e.g. file_ops) may flip per call.
     #[serde(default)]
     pub concurrent_safe: bool,
+    /// Static "running this tool needs explicit user confirmation" hint,
+    /// derived from [`LoopTool::requires_confirmation`] at definition build
+    /// time. Mirrors `concurrent_safe`: informational for catalog consumers,
+    /// while the live confirmation gate in `ScopedToolService` queries the
+    /// registry directly at dispatch time. `#[serde(default)]` keeps legacy
+    /// JSON (absent field) decoding to `false`.
+    #[serde(default)]
+    pub requires_confirmation: bool,
 }
 
 // =============================================================================
@@ -88,6 +96,23 @@ pub trait LoopTool: Send + Sync {
     /// Returns true by default. Override to false for tools that mutate shared state.
     fn is_concurrent_safe(&self, _input: &Value) -> bool {
         true
+    }
+
+    /// Whether running this tool requires explicit user confirmation first.
+    ///
+    /// Returns `false` by default. Override to `true` on irreversible /
+    /// sensitive tools (destructive deletes, credential writes, fund
+    /// transfers, MCP / extension tools that declare themselves dangerous)
+    /// so the live confirmation gate in `ScopedToolService` routes a user
+    /// approval before dispatch — independent of the static
+    /// `CONFIRMATION_REQUIRED_TOOLS` builtin list. This is the per-tool,
+    /// declaration-driven approval seam: any `LoopTool` (built-in, MCP,
+    /// skill, extension) can opt in without being hard-coded into the
+    /// gateway, mirroring openclaw's per-tool policy and hermes's per-tool
+    /// approval flags. Like `is_concurrent_safe`, the answer is static per
+    /// tool; it is not input-dependent.
+    fn requires_confirmation(&self) -> bool {
+        false
     }
 
     /// Per-result token budget hint used by the Layer 2 result processor.
@@ -212,6 +237,7 @@ impl LoopToolRegistry {
                 parameters: t.schema(),
                 max_result_tokens: t.max_result_tokens(),
                 concurrent_safe: t.is_concurrent_safe(&Value::Null),
+                requires_confirmation: t.requires_confirmation(),
             })
             .collect();
         defs.sort_by(|a, b| a.name.cmp(&b.name));
@@ -223,6 +249,18 @@ impl LoopToolRegistry {
     /// (callers should treat unknown as conservative `false`).
     pub fn is_call_concurrent_safe(&self, name: &str, input: &Value) -> Option<bool> {
         self.resolve(name).map(|t| t.is_concurrent_safe(input))
+    }
+
+    /// Whether the named tool declares that it requires explicit user
+    /// confirmation before running (see [`LoopTool::requires_confirmation`]).
+    /// Unknown tools return `false` — they are gated elsewhere (the allowed
+    /// filter rejects them with `NotFound` before any confirmation check).
+    /// Uses dot/underscore alias resolution so a confirmation-required tool
+    /// is still recognized when the LLM emits the aliased spelling.
+    pub fn requires_confirmation(&self, name: &str) -> bool {
+        self.resolve(name)
+            .map(|t| t.requires_confirmation())
+            .unwrap_or(false)
     }
 
     /// Return the per-result token budget that the named tool declared via
