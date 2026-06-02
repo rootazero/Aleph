@@ -22,6 +22,13 @@ pub struct SsrfConfig {
     /// If non-empty, only these domains (glob patterns) are allowed (whitelist mode).
     #[serde(default)]
     pub allowed_domains: Vec<String>,
+
+    /// Block navigation to URLs that embed a credential (API key, bearer token,
+    /// private key) to prevent secret exfiltration via the URL (default: true).
+    /// Orthogonal to SSRF: SSRF guards the destination host, this guards the
+    /// URL's content. Enforced only on agent-initiated navigation targets.
+    #[serde(default = "default_true")]
+    pub block_secrets_in_url: bool,
 }
 
 fn default_true() -> bool {
@@ -34,6 +41,7 @@ impl Default for SsrfConfig {
             block_private: true,
             blocked_domains: Vec::new(),
             allowed_domains: Vec::new(),
+            block_secrets_in_url: true,
         }
     }
 }
@@ -49,6 +57,9 @@ pub enum PolicyViolation {
     NotInAllowlist(String),
     /// The URL could not be parsed.
     InvalidUrl(String),
+    /// The URL embeds a credential (potential secret exfiltration). Carries the
+    /// matched secret-rule name (e.g. "api_key").
+    SecretInUrl(String),
 }
 
 impl fmt::Display for PolicyViolation {
@@ -65,6 +76,12 @@ impl fmt::Display for PolicyViolation {
             }
             PolicyViolation::InvalidUrl(reason) => {
                 write!(f, "invalid URL: {reason}")
+            }
+            PolicyViolation::SecretInUrl(rule) => {
+                write!(
+                    f,
+                    "blocked: URL embeds a secret ({rule}) — refusing to exfiltrate a credential via navigation"
+                )
             }
         }
     }
@@ -158,6 +175,21 @@ impl BrowserSsrfGuard {
 
         Ok(())
     }
+
+    /// Validate a URL for an **agent-initiated navigation target**: the full
+    /// SSRF policy ([`Self::check_url`]) plus, when `block_secrets_in_url` is
+    /// set, a scan for embedded credentials. Use this for `goto`/`open`; the
+    /// post-navigation active-URL re-check stays on [`Self::check_url`] so a
+    /// landed page whose URL legitimately carries a token is still readable.
+    pub fn check_navigation(&self, url_str: &str) -> Result<(), PolicyViolation> {
+        self.check_url(url_str)?;
+        if self.config.block_secrets_in_url {
+            if let Some(rule) = super::secret_guard::scan_url_for_secrets(url_str) {
+                return Err(PolicyViolation::SecretInUrl(rule));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -223,6 +255,7 @@ mod tests {
             block_private: false,
             blocked_domains: vec!["*.malware.com".to_string(), "evil.org".to_string()],
             allowed_domains: vec![],
+            block_secrets_in_url: false,
         });
 
         // Subdomain match
@@ -250,6 +283,7 @@ mod tests {
             block_private: false,
             blocked_domains: vec![],
             allowed_domains: vec!["*.trusted.com".to_string(), "api.example.org".to_string()],
+            block_secrets_in_url: false,
         });
 
         // Allowed
@@ -269,6 +303,7 @@ mod tests {
             block_private: false,
             blocked_domains: vec![],
             allowed_domains: vec![],
+            block_secrets_in_url: false,
         });
 
         assert!(policy.check_url("http://localhost/").is_ok());
@@ -300,5 +335,36 @@ mod tests {
 
         let v = PolicyViolation::InvalidUrl("missing scheme".to_string());
         assert!(v.to_string().contains("invalid URL"));
+
+        let v = PolicyViolation::SecretInUrl("api_key".to_string());
+        assert!(v.to_string().contains("secret"));
+    }
+
+    #[test]
+    fn check_navigation_blocks_secret_in_url() {
+        // Default guard has block_secrets_in_url = true.
+        let policy = BrowserSsrfGuard::default();
+        let url = "https://public.example/?leak=sk-ant-api03-0123456789abcdefghijklmnop";
+        // SSRF alone allows the public host…
+        assert!(policy.check_url(url).is_ok());
+        // …but navigation rejects the embedded credential.
+        assert!(matches!(
+            policy.check_navigation(url),
+            Err(PolicyViolation::SecretInUrl(_))
+        ));
+        // Clean public URL still navigates.
+        assert!(policy.check_navigation("https://public.example/docs").is_ok());
+    }
+
+    #[test]
+    fn check_navigation_respects_disabled_secret_scan() {
+        let policy = BrowserSsrfGuard::new(SsrfConfig {
+            block_private: false,
+            blocked_domains: vec![],
+            allowed_domains: vec![],
+            block_secrets_in_url: false,
+        });
+        let url = "https://public.example/?leak=sk-ant-api03-0123456789abcdefghijklmnop";
+        assert!(policy.check_navigation(url).is_ok());
     }
 }

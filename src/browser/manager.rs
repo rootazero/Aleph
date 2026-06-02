@@ -242,6 +242,12 @@ impl ProfileManager {
         self.ssrf_guard.check_url(url)
     }
 
+    /// Validate an agent-initiated navigation target: SSRF policy plus
+    /// secret-exfiltration scanning. Use this for `goto`/`open`.
+    pub fn check_navigation(&self, url: &str) -> Result<(), PolicyViolation> {
+        self.ssrf_guard.check_navigation(url)
+    }
+
     /// Record activity on a profile to reset its idle timer.
     pub fn record_activity(&self, profile_name: &str) {
         let mut profiles = self.profiles.write().unwrap_or_else(|e| e.into_inner());

@@ -5,6 +5,7 @@ mod discovery;
 pub mod error;
 pub mod manager;
 pub mod network_policy;
+mod secret_guard;
 pub mod playwright_cli;
 pub use playwright_cli::{CliOutput, PageMeta, PlaywrightCliDriver};
 pub mod playwright_cli_backend;
