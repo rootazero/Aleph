@@ -35,5 +35,6 @@ pub mod template;
 pub use history::{HistoryEntry, SessionHistory};
 pub use manager::{
     PlanItem, PlanItemStatus, ScratchpadConfig, ScratchpadManager, ScratchpadSnapshot,
+    COMPLETION_BANNER,
 };
 pub use template::{generate_scratchpad, DEFAULT_TEMPLATE};
