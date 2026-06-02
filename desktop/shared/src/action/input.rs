@@ -116,6 +116,69 @@ pub fn key_combo(modifiers: &[String], key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Press or release one or more keys *without* the paired counterpart, so a
+/// key (or chord) can be held down across subsequent actions and released
+/// later. This backs the UI-TARS `press` / `release` verbs, which differ from
+/// [`key_combo`] (an atomic press-and-release).
+///
+/// `keys` may mix modifiers and regular keys; each token is parsed leniently
+/// via [`super::key_parse::parse_key_or_modifier`]. On `Press` the keys go down
+/// in order; on `Release` they come up in reverse order so nested holds unwind
+/// correctly. `Click` performs a full press-and-release.
+///
+/// # Errors
+///
+/// - [`DesktopError::InputFailed`] if `keys` is empty, a key name is invalid,
+///   enigo cannot be created, or the key operation fails.
+pub fn key_button(keys: &[String], action: crate::PressAction) -> Result<()> {
+    if keys.is_empty() {
+        return Err(DesktopError::InputFailed(
+            "key_button requires at least one key".into(),
+        ));
+    }
+
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        return super::wayland_input::key_button(keys, action);
+    }
+
+    let parsed = keys
+        .iter()
+        .map(|k| super::key_parse::parse_key_or_modifier(k))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut enigo = new_enigo()?;
+
+    let mut press = |dir: Direction, reverse: bool| -> Result<()> {
+        if reverse {
+            for key in parsed.iter().rev() {
+                enigo.key(*key, dir).map_err(|e| {
+                    DesktopError::InputFailed(format!("Failed key {dir:?}: {e}"))
+                })?;
+            }
+        } else {
+            for key in &parsed {
+                enigo.key(*key, dir).map_err(|e| {
+                    DesktopError::InputFailed(format!("Failed key {dir:?}: {e}"))
+                })?;
+            }
+        }
+        Ok(())
+    };
+
+    match action {
+        crate::PressAction::Press => press(Direction::Press, false)?,
+        crate::PressAction::Release => press(Direction::Release, true)?,
+        crate::PressAction::Click => {
+            press(Direction::Press, false)?;
+            press(Direction::Release, true)?;
+        }
+    }
+
+    info!(keys = ?keys, action = ?action, "Key button action performed");
+    Ok(())
+}
+
 /// Scroll the mouse wheel.
 ///
 /// `direction` is "up", "down", "left", or "right".

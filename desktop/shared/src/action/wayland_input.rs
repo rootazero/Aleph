@@ -102,6 +102,40 @@ pub(crate) fn key_args(modifiers: &[String], key: &str) -> Result<Vec<String>> {
     Ok(args)
 }
 
+/// Build the `ydotool key` argv for holding (`Press`) or releasing
+/// (`Release`) a set of keys without the paired counterpart — the Wayland
+/// equivalent of the enigo `key_button` path. ydotool encodes key state as
+/// `<code>:1` (down) / `<code>:0` (up).
+///
+/// On `Press` keys go down in order; on `Release` they come up in reverse so
+/// nested holds unwind correctly; `Click` emits a full down-then-up.
+pub(crate) fn key_button_args(keys: &[String], action: PressAction) -> Result<Vec<String>> {
+    let codes = keys
+        .iter()
+        .map(|k| {
+            evdev_keycode(k).or_else(|| evdev_modifier(k)).ok_or_else(|| {
+                DesktopError::InputFailed(format!(
+                    "ydotool: no evdev keycode for key '{k}' (Wayland press/release)"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut args = Vec::with_capacity(codes.len() * 2 + 1);
+    args.push("key".into());
+    if matches!(action, PressAction::Press | PressAction::Click) {
+        for c in &codes {
+            args.push(format!("{c}:1"));
+        }
+    }
+    if matches!(action, PressAction::Release | PressAction::Click) {
+        for c in codes.iter().rev() {
+            args.push(format!("{c}:0"));
+        }
+    }
+    Ok(args)
+}
+
 /// Map a modifier name (same vocabulary as [`super::key_parse::parse_modifier`])
 /// to its left-side evdev keycode.
 pub(crate) fn evdev_modifier(name: &str) -> Option<u16> {
@@ -312,6 +346,14 @@ pub(crate) fn key_combo(modifiers: &[String], key: &str) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) fn key_button(keys: &[String], action: PressAction) -> Result<()> {
+    let args = key_button_args(keys, action)?;
+    run_ydotool(&args)?;
+    tracing::info!(keys = ?keys, action = ?action, "Key button action performed (ydotool/Wayland)");
+    Ok(())
+}
+
 // ── Tests (pure logic — run on every host) ───────────────────────────────────
 
 #[cfg(test)]
@@ -381,6 +423,34 @@ mod tests {
     fn key_args_rejects_unknown_key() {
         let err = key_args(&[], "§").unwrap_err();
         assert!(matches!(err, DesktopError::InputFailed(_)));
+    }
+
+    #[test]
+    fn key_button_args_press_only_holds_down() {
+        // press 'a'(30): down only, no release.
+        let args = key_button_args(&["a".into()], PressAction::Press).unwrap();
+        assert_eq!(args, vec!["key", "30:1"]);
+    }
+
+    #[test]
+    fn key_button_args_release_reverses_order() {
+        // release ctrl(29)+shift(42): up in reverse order, no down.
+        let args =
+            key_button_args(&["ctrl".into(), "shift".into()], PressAction::Release).unwrap();
+        assert_eq!(args, vec!["key", "42:0", "29:0"]);
+    }
+
+    #[test]
+    fn key_button_args_click_is_full_cycle() {
+        let args = key_button_args(&["shift".into()], PressAction::Click).unwrap();
+        assert_eq!(args, vec!["key", "42:1", "42:0"]);
+    }
+
+    #[test]
+    fn key_button_args_modifier_as_held_key() {
+        // bare modifier resolves via evdev_modifier fallback (shift = 42).
+        let args = key_button_args(&["shift".into()], PressAction::Press).unwrap();
+        assert_eq!(args, vec!["key", "42:1"]);
     }
 
     #[test]

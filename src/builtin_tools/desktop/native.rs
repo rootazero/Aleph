@@ -371,6 +371,42 @@ impl super::DesktopTool {
                     })),
                 }
             }
+            "key_button" => {
+                let keys = args.keys.as_deref().unwrap_or(&[]);
+                if keys.is_empty() {
+                    return Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some("key_button requires 'keys' array".to_string()),
+                    }));
+                }
+                let action = match args.press_action.as_deref() {
+                    Some("press") | Some("down") => aleph_desktop::PressAction::Press,
+                    Some("release") | Some("up") => aleph_desktop::PressAction::Release,
+                    Some("click") | None => aleph_desktop::PressAction::Click,
+                    Some(other) => {
+                        return Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some(format!(
+                                "Invalid press_action '{other}'. Use 'press'/'down', 'release'/'up', or 'click'."
+                            )),
+                        }))
+                    }
+                };
+                match screen.key_button(keys, action).await {
+                    Ok(()) => Ok(Some(DesktopOutput {
+                        success: true,
+                        data: Some(serde_json::json!({"keys": keys, "action": args.press_action})),
+                        message: None,
+                    })),
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Screen capability error: {e}")),
+                    })),
+                }
+            }
             "scroll" => {
                 let delta_y = args.delta_y.unwrap_or(0.0);
                 let delta_x = args.delta_x.unwrap_or(0.0);

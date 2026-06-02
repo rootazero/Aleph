@@ -240,6 +240,13 @@ fn build_action(name: &str, kw: &Kwargs<'_>) -> Result<DesktopBatchAction, Scrip
             action.y = Some(y);
             action.button = Some(super::types::MouseButton::Right);
         }
+        "middle_click" | "middle_single" => {
+            let (x, y) = require_box_center(kw, "start_box", "click")?;
+            action.action = "click".into();
+            action.x = Some(x);
+            action.y = Some(y);
+            action.button = Some(super::types::MouseButton::Middle);
+        }
 
         // ── Drag ────────────────────────────────────────────────
         "drag" | "left_click_drag" | "select" => {
@@ -275,12 +282,27 @@ fn build_action(name: &str, kw: &Kwargs<'_>) -> Result<DesktopBatchAction, Scrip
                 arg: "key".into(),
             })?;
             action.action = "key_combo".into();
-            action.keys = Some(
-                key.split_whitespace()
-                    .map(|s| s.trim_matches('+').to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect(),
-            );
+            action.keys = Some(split_hotkey(key));
+        }
+        // UI-TARS `press`/`release`: hold a key (or chord) down, release it
+        // later — distinct from `hotkey` which presses and releases atomically.
+        "press" | "key_down" => {
+            let key = kw.get("key").ok_or_else(|| ScriptParseError::MissingArg {
+                action: "press".into(),
+                arg: "key".into(),
+            })?;
+            action.action = "key_button".into();
+            action.keys = Some(split_hotkey(key));
+            action.press_action = Some("press".into());
+        }
+        "release" | "key_up" => {
+            let key = kw.get("key").ok_or_else(|| ScriptParseError::MissingArg {
+                action: "release".into(),
+                arg: "key".into(),
+            })?;
+            action.action = "key_button".into();
+            action.keys = Some(split_hotkey(key));
+            action.press_action = Some("release".into());
         }
 
         // ── Scroll ──────────────────────────────────────────────
@@ -363,6 +385,16 @@ fn blank_batch_action() -> DesktopBatchAction {
         coord_space: None,
         coord_factors: None,
     }
+}
+
+/// Split a hotkey string like `"ctrl shift a"` or `"ctrl+c"` into individual
+/// key tokens. Shared by the `hotkey`, `press`, and `release` verbs.
+fn split_hotkey(key: &str) -> Vec<String> {
+    key.split_whitespace()
+        .flat_map(|s| s.split('+'))
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn require_box_center(
@@ -554,6 +586,43 @@ mod tests {
 
         let err = parse_action_script("drag(start_box='(10,20)')").unwrap_err();
         assert!(matches!(err, ScriptParseError::MissingArg { .. }));
+    }
+
+    #[test]
+    fn middle_click_maps_to_click_with_middle_button() {
+        let parsed = parse_action_script("middle_click(start_box='(5,6)')").unwrap();
+        assert_eq!(parsed[0].action, "click");
+        assert_eq!(parsed[0].x, Some(5.0));
+        assert!(matches!(
+            parsed[0].button,
+            Some(super::super::types::MouseButton::Middle)
+        ));
+    }
+
+    #[test]
+    fn press_and_release_map_to_key_button() {
+        let press = parse_action_script("press(key='ctrl')").unwrap();
+        assert_eq!(press[0].action, "key_button");
+        assert_eq!(press[0].keys.as_deref(), Some(["ctrl".to_string()].as_slice()));
+        assert_eq!(press[0].press_action.as_deref(), Some("press"));
+
+        let release = parse_action_script("release(key='shift a')").unwrap();
+        assert_eq!(release[0].action, "key_button");
+        assert_eq!(
+            release[0].keys.as_deref(),
+            Some(["shift".to_string(), "a".to_string()].as_slice())
+        );
+        assert_eq!(release[0].press_action.as_deref(), Some("release"));
+    }
+
+    #[test]
+    fn hotkey_plus_separator_splits_into_keys() {
+        // `ctrl+c` was previously a single broken token; now splits cleanly.
+        let parsed = parse_action_script("hotkey(key='ctrl+c')").unwrap();
+        assert_eq!(
+            parsed[0].keys.as_deref(),
+            Some(["ctrl".to_string(), "c".to_string()].as_slice())
+        );
     }
 
     #[test]

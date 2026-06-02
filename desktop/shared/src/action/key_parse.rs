@@ -78,6 +78,20 @@ pub fn parse_key(name: &str) -> Result<Key> {
     }
 }
 
+/// Parse a name as either a modifier or a regular key.
+///
+/// Modifier names take precedence, so a bare `"shift"` / `"ctrl"` resolves to
+/// the modifier key (`Key::Shift` / `Key::Control`) — required for `press` /
+/// `release` actions that hold a single modifier down.
+///
+/// # Errors
+///
+/// - [`DesktopError::InputFailed`] if the name is neither a known modifier nor
+///   a known key.
+pub fn parse_key_or_modifier(name: &str) -> Result<Key> {
+    parse_modifier(name).or_else(|_| parse_key(name))
+}
+
 // ── Tests ────────────────────────────────────────────────────────
 
 #[cfg(test)]

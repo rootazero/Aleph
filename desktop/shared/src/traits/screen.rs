@@ -95,6 +95,14 @@ pub trait ScreenCapability: Send + Sync {
         Err(crate::DesktopError::NotImplemented("mouse_button".into()))
     }
 
+    /// Press or release one or more keys without the paired counterpart, so a
+    /// key (or chord) can be held down across actions and released later
+    /// (UI-TARS `press` / `release`). `Click` performs a full press-and-release.
+    async fn key_button(&self, keys: &[String], action: PressAction) -> Result<()> {
+        let _ = (keys, action);
+        Err(crate::DesktopError::NotImplemented("key_button".into()))
+    }
+
     /// Quit/close an application by name or bundle ID.
     async fn quit_app(&self, app_name: &str) -> Result<()> {
         let _ = app_name;
