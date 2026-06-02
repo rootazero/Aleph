@@ -179,6 +179,7 @@ mod tests {
             thinking: None,
             thinking_signature: None,
             stop_reason: Default::default(),
+            truncated_tool_call: None,
             usage: None,
         }
     }

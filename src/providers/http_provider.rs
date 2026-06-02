@@ -172,6 +172,30 @@ impl HttpProvider {
             }
         }
 
+        // A tool call whose streamed arguments were truncated mid-stream (the
+        // upstream closed the body before the JSON finished) is unusable:
+        // executing it with empty `{}` args surfaces as a misleading
+        // "missing field" validation error, and the model — unable to fix an
+        // infrastructure truncation — loops on it. Surface a transient error
+        // (typed `Timeout` is classified retryable, so the failover/retry path
+        // can switch providers) with an honest diagnostic.
+        if let Some(diag) = provider_response.truncated_tool_call {
+            tracing::warn!(
+                provider = %self.name,
+                diagnostic = %diag,
+                "Tool-call arguments truncated mid-stream — surfacing as transient error"
+            );
+            return Err(crate::error::AlephError::Timeout {
+                suggestion: Some(format!(
+                    "Tool-call arguments were truncated mid-stream ({diag}). The upstream \
+                     likely closed the streaming response before the arguments finished — \
+                     common when a large tool output (e.g. a big file write) crosses a \
+                     proxy or idle timeout. Retry, switch providers, or write large files \
+                     in smaller chunks."
+                )),
+            });
+        }
+
         // Validate response
         provider_response.validate(self.adapter.name());
 

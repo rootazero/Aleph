@@ -905,8 +905,16 @@ fn test_parse_sse_event_args_done() {
     let mut map = HashMap::new();
     map.insert("fc_1".to_string(), "call_abc".to_string());
     let data = r#"{"type":"response.function_call_arguments.done","item_id":"fc_1","arguments":"{\"q\":\"rust\"}"}"#;
-    let delta = drain_one(data, &mut map);
-    assert!(matches!(delta, Some(ProviderDelta::ToolCallEnd { ref id }) if id == "call_abc"));
+    // The done event carries the authoritative complete arguments, so it emits
+    // ToolCallArgsComplete (adopting that copy) followed by ToolCallEnd. The
+    // collector uses the authoritative copy to repair a truncated delta stream.
+    let deltas = drain_all(data, &mut map);
+    assert_eq!(deltas.len(), 2, "done emits ArgsComplete + End");
+    assert!(
+        matches!(&deltas[0], ProviderDelta::ToolCallArgsComplete { id, arguments }
+            if id == "call_abc" && arguments == r#"{"q":"rust"}"#)
+    );
+    assert!(matches!(&deltas[1], ProviderDelta::ToolCallEnd { id } if id == "call_abc"));
 }
 
 #[test]

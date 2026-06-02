@@ -202,6 +202,17 @@ pub fn provider_deltas_to_sse(
                                     // No-op — continue to next delta
                                     continue;
                                 }
+                                ProviderDelta::ToolCallArgsComplete { .. } => {
+                                    // The Chat Completions stream forwards tool
+                                    // arguments purely as incremental
+                                    // `function.arguments` chunks; its wire format
+                                    // has no authoritative final-arguments frame.
+                                    // The fragments were already relayed, so the
+                                    // terminal copy is dropped here. (The internal
+                                    // tool-execution path and the Responses relay
+                                    // consume it to repair a truncated stream.)
+                                    continue;
+                                }
                                 ProviderDelta::ThinkingDelta(_)
                                 | ProviderDelta::ThinkingSignatureDelta(_) => {
                                     // No-op — skip thinking deltas in OpenAI format.

@@ -186,6 +186,21 @@ pub fn provider_deltas_to_responses_sse(
                             );
                             return Some((frame, state));
                         }
+                        ProviderDelta::ToolCallArgsComplete { id, arguments } => {
+                            // Authoritative complete arguments: replace the
+                            // accumulated fragments so the `done` frame emitted
+                            // on ToolCallEnd carries the full value even when the
+                            // streamed fragments arrived truncated. Empty is a
+                            // no-op (fragment-only backends send a blank copy).
+                            if !arguments.is_empty() {
+                                if let Some(entry) =
+                                    state.tool_calls.iter_mut().find(|(tid, _, _)| tid == &id)
+                                {
+                                    entry.2 = arguments;
+                                }
+                            }
+                            continue;
+                        }
                         ProviderDelta::ToolCallEnd { id } => {
                             // Find accumulated args
                             let args = state

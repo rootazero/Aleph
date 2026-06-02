@@ -59,6 +59,18 @@ pub enum ProviderDelta {
     },
     /// Additional argument JSON fragment for a tool call
     ToolCallArgDelta { id: String, delta: String },
+    /// Authoritative, complete argument JSON for a tool call.
+    ///
+    /// Some providers (OpenAI Responses API) re-send the fully assembled
+    /// arguments in a terminal event (`response.function_call_arguments.done`
+    /// and `response.output_item.done`) in addition to the incremental
+    /// `...arguments.delta` fragments. The streamed fragments can be dropped or
+    /// arrive partial (large argument values truncated mid-stream), leaving the
+    /// accumulated JSON unparseable. When a non-empty authoritative copy
+    /// arrives, the collector replaces the accumulated fragments with it. A
+    /// provider that only streams fragments never emits this, so the behaviour
+    /// is unchanged for them.
+    ToolCallArgsComplete { id: String, arguments: String },
     /// A tool call's argument stream is complete
     ToolCallEnd { id: String },
     /// Token usage statistics (usually the last event before Done)
@@ -163,6 +175,17 @@ impl DeltaCollector {
                     entry.args.push_str(&delta);
                 }
             }
+            ProviderDelta::ToolCallArgsComplete { id, arguments } => {
+                // Authoritative terminal copy of the arguments: replace the
+                // accumulated fragments (which may be truncated). Ignore an
+                // empty payload so backends that send a blank `done` and rely
+                // on the streamed fragments keep the accumulated value.
+                if !arguments.is_empty() {
+                    if let Some(entry) = self.tool_calls.iter_mut().find(|tc| tc.id == id) {
+                        entry.args = arguments;
+                    }
+                }
+            }
             ProviderDelta::ToolCallEnd { .. } => {
                 // No state change needed; presence in tool_calls list is sufficient
             }
@@ -191,6 +214,11 @@ impl DeltaCollector {
     /// validation then reports the missing fields, producing a structured
     /// ToolError that the model can react to on the next turn.
     pub fn finish(mut self) -> ProviderResponse {
+        // First non-empty-but-unparseable tool call: the signature of a stream
+        // truncated mid-arguments (a complete tool call is always well-formed
+        // JSON). Surfaced on the response so the consumer can promote it to a
+        // retryable error rather than executing the tool with empty `{}` args.
+        let mut truncated_tool_call: Option<String> = None;
         let mut tool_calls: Vec<NativeToolCall> = self
             .tool_calls
             .into_iter()
@@ -216,6 +244,8 @@ impl DeltaCollector {
                                 raw_args = %raw_args,
                                 "Malformed tool arguments — defaulting to empty object ((the tool layer will report missing fields))"
                             );
+                            truncated_tool_call
+                                .get_or_insert_with(|| format!("{name}: {e}"));
                             Value::Object(serde_json::Map::new())
                         }
                     }
@@ -255,6 +285,7 @@ impl DeltaCollector {
             tool_calls,
             usage: self.usage,
             stop_reason: self.stop_reason,
+            truncated_tool_call,
         }
     }
 
@@ -518,6 +549,72 @@ mod tests {
     }
 
     #[test]
+    fn complete_args_repair_truncated_delta_stream() {
+        // The OpenAI Responses backend dropped the `content` field's argument
+        // fragments mid-stream, leaving the accumulated JSON truncated. The
+        // terminal `...arguments.done` event carries the authoritative full
+        // copy, which must replace the partial fragments so the call parses.
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::ToolCallStart {
+            signature: None,
+            id: "tc1".to_string(),
+            name: "file_write".to_string(),
+        });
+        // Only the first field survived the truncated delta stream.
+        c.push(ProviderDelta::ToolCallArgDelta {
+            id: "tc1".to_string(),
+            delta: r#"{"file_path": "/tmp/index.html""#.to_string(),
+        });
+        // Authoritative complete arguments from the terminal done event.
+        c.push(ProviderDelta::ToolCallArgsComplete {
+            id: "tc1".to_string(),
+            arguments: r#"{"file_path": "/tmp/index.html", "content": "<html></html>"}"#
+                .to_string(),
+        });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "tc1".to_string(),
+        });
+        c.push(ProviderDelta::Done(StopReason::ToolUse));
+
+        let resp = c.finish();
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(
+            resp.tool_calls[0].arguments,
+            serde_json::json!({"file_path": "/tmp/index.html", "content": "<html></html>"})
+        );
+    }
+
+    #[test]
+    fn empty_complete_args_keeps_streamed_fragments() {
+        // A blank terminal copy must NOT clobber a fully-streamed delta value:
+        // backends that only stream fragments send an empty `done` payload.
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::ToolCallStart {
+            signature: None,
+            id: "tc1".to_string(),
+            name: "search".to_string(),
+        });
+        c.push(ProviderDelta::ToolCallArgDelta {
+            id: "tc1".to_string(),
+            delta: r#"{"q": "rust"}"#.to_string(),
+        });
+        c.push(ProviderDelta::ToolCallArgsComplete {
+            id: "tc1".to_string(),
+            arguments: String::new(),
+        });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "tc1".to_string(),
+        });
+        c.push(ProviderDelta::Done(StopReason::ToolUse));
+
+        let resp = c.finish();
+        assert_eq!(
+            resp.tool_calls[0].arguments,
+            serde_json::json!({"q": "rust"})
+        );
+    }
+
+    #[test]
     fn test_collector_malformed_tool_args_returns_empty_object() {
         let mut c = DeltaCollector::new();
         c.push(ProviderDelta::ToolCallStart {
@@ -542,6 +639,52 @@ mod tests {
             resp.tool_calls[0].arguments,
             Value::Object(serde_json::Map::new())
         );
+        // ...and the truncation is flagged so the consumer can surface a
+        // retryable error instead of a misleading "missing field".
+        assert!(
+            resp.truncated_tool_call
+                .as_deref()
+                .is_some_and(|d| d.starts_with("bad_tool:")),
+            "non-empty unparseable args must set truncated_tool_call, got {:?}",
+            resp.truncated_tool_call
+        );
+    }
+
+    #[test]
+    fn complete_and_empty_args_do_not_flag_truncation() {
+        // A well-formed tool call and a genuinely-empty (no-arg) tool call must
+        // both leave truncated_tool_call unset — only a non-empty-but-broken
+        // arg stream signals truncation.
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::ToolCallStart {
+            signature: None,
+            id: "good".to_string(),
+            name: "search".to_string(),
+        });
+        c.push(ProviderDelta::ToolCallArgDelta {
+            id: "good".to_string(),
+            delta: r#"{"q": "rust"}"#.to_string(),
+        });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "good".to_string(),
+        });
+        c.push(ProviderDelta::ToolCallStart {
+            signature: None,
+            id: "noarg".to_string(),
+            name: "ping".to_string(),
+        });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "noarg".to_string(),
+        });
+        c.push(ProviderDelta::Done(StopReason::ToolUse));
+
+        let resp = c.finish();
+        assert!(
+            resp.truncated_tool_call.is_none(),
+            "valid + empty args must not flag truncation, got {:?}",
+            resp.truncated_tool_call
+        );
+        assert_eq!(resp.tool_calls.len(), 2);
     }
 
     #[test]
@@ -738,6 +881,7 @@ mod tests {
                 cost: None,
             }),
             thinking: None,
+            truncated_tool_call: None,
         };
 
         let deltas: Vec<_> = response_to_delta_stream(resp).collect::<Vec<_>>().await;

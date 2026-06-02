@@ -502,18 +502,36 @@ fn parse_sse_event_multi(
             }
         }
 
-        StreamEvent::FunctionCallArgumentsDone { item_id, .. } => {
-            // Arguments stream complete — emit ToolCallEnd using the call_id
+        StreamEvent::FunctionCallArgumentsDone {
+            item_id, arguments, ..
+        } => {
+            // Arguments stream complete. `arguments` is the fully-assembled,
+            // authoritative copy — the streamed `...arguments.delta` fragments
+            // can arrive truncated (large values dropped mid-stream), so adopt
+            // this copy before ending the call.
             if let Some(call_id) = item_to_call.get(&item_id).cloned() {
+                out.push_back(Ok(ProviderDelta::ToolCallArgsComplete {
+                    id: call_id.clone(),
+                    arguments,
+                }));
                 out.push_back(Ok(ProviderDelta::ToolCallEnd { id: call_id }));
             }
         }
 
         StreamEvent::OutputItemDone {
-            item: OutputItem::FunctionCall { call_id, .. },
+            item:
+                OutputItem::FunctionCall {
+                    call_id, arguments, ..
+                },
             ..
         } => {
-            // Fallback ToolCallEnd (some providers skip FunctionCallArgumentsDone)
+            // Fallback for backends that skip FunctionCallArgumentsDone: the
+            // final output item also carries the complete arguments. Adopt them
+            // (no-op when empty) so a truncated delta stream is repaired.
+            out.push_back(Ok(ProviderDelta::ToolCallArgsComplete {
+                id: call_id.clone(),
+                arguments,
+            }));
             out.push_back(Ok(ProviderDelta::ToolCallEnd { id: call_id }));
         }
 

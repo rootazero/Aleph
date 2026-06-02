@@ -243,6 +243,15 @@ pub struct ProviderResponse {
     pub stop_reason: StopReason,
     /// Token usage statistics
     pub usage: Option<TokenUsage>,
+    /// Set when a tool call's streamed arguments were non-empty but could not be
+    /// parsed as JSON — the signature of a stream truncated mid-tool-call (the
+    /// upstream closed the response body before the arguments JSON finished). A
+    /// *complete* tool call always carries well-formed JSON, so this only fires
+    /// on truncation. Carries a short diagnostic (`"<tool>: <parse error>"`).
+    /// The consumer promotes it to a retryable transient error instead of
+    /// executing the tool with empty `{}` args, which would surface as a
+    /// misleading "missing field" validation error the model cannot fix.
+    pub truncated_tool_call: Option<String>,
 }
 
 impl ProviderResponse {
