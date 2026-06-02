@@ -189,10 +189,24 @@ actor AudioSession {
                 data: nil
             )
         }
-        guard recorder.record() else {
+
+        // `record()` starts the CoreAudio input queue, which can transiently
+        // fail to acquire the device — e.g. a just-released reservation that
+        // coreaudiod hasn't fully reaped, or another client mid-handoff. TCC
+        // permission is already confirmed above, so a failure here is device
+        // contention, not denial: retry a few times with short backoff before
+        // surfacing it.
+        var started = recorder.record()
+        var attempt = 0
+        while !started, attempt < 4 {
+            attempt += 1
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            started = recorder.record()
+        }
+        guard started else {
             throw RpcError(
                 code: -32004,
-                message: "audio.record_start: record() failed (permission denied or microphone in use)",
+                message: "audio.record_start: record() failed after \(attempt) retries (microphone in use or unavailable)",
                 data: nil
             )
         }
