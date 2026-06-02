@@ -10,7 +10,7 @@
 //! - **system**:   binary location, version, sibling `aleph-server` presence
 //! - **config**:   `~/.aleph/config.toml` exists + parses
 //! - **runtime**:  Gateway daemon reachable, providers/MCP servers OK,
-//!                 vault present
+//!   vault present
 //! - **sandbox**:  active sandbox profile can be summarised
 //!
 //! The plugin-specific `aleph plugin doctor` checks remain separate; this
@@ -83,16 +83,15 @@ impl DoctorCheck {
 
 /// Top-level entry. `server_url` is forwarded from the global `--server` flag.
 pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
-    let mut checks: Vec<DoctorCheck> = Vec::new();
-
-    // 1. System
-    checks.push(check_cli_binary());
-    checks.push(check_server_binary());
-    checks.push(check_aleph_home());
-
-    // 2. Config
-    checks.push(check_config_file());
-    checks.push(check_logs_dir());
+    let mut checks: Vec<DoctorCheck> = vec![
+        // 1. System
+        check_cli_binary(),
+        check_server_binary(),
+        check_aleph_home(),
+        // 2. Config
+        check_config_file(),
+        check_logs_dir(),
+    ];
 
     // 3. Runtime (only meaningful if the daemon is reachable)
     let gateway_check = check_gateway_reachable(server_url).await;

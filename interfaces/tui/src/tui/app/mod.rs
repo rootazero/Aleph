@@ -13,7 +13,7 @@ use std::time::Duration;
 use aleph_protocol::{
     present_agent_trace_event_with_preset, summarize_tool_input, AgentTraceEvent,
     AgentTracePresentation, AgentTracePresentationPreset, AgentTraceReplay, AgentTraceTextKind,
-    AgentTraceToolResult, RunSummary, StreamEvent,
+    AgentTraceToolResult, RunSummary,
 };
 use chrono::{DateTime, Utc};
 

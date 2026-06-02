@@ -7,7 +7,7 @@
 use std::fmt;
 
 /// Tool execution progress display mode (client-side filter).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolProgressMode {
     /// Suppress all ToolStart/ToolUpdate/ToolEnd display.
     Off,
@@ -15,15 +15,10 @@ pub enum ToolProgressMode {
     New,
     /// Show ToolStart + ToolEnd + ToolUpdate (default — preserves the
     /// pre-`/tools` TUI behaviour and matches hermes-agent's default).
+    #[default]
     All,
     /// Show everything plus raw tool params + result outputs.
     Verbose,
-}
-
-impl Default for ToolProgressMode {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 impl fmt::Display for ToolProgressMode {
