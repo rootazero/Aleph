@@ -9,6 +9,7 @@ pub mod ingest;
 pub mod orientation;
 pub mod profile;
 pub mod reflection;
+pub mod retrieval;
 #[cfg(test)]
 mod tests;
 
@@ -20,6 +21,7 @@ pub use ingest::{CompoundIngestConfig, CuratedSection, QueryFilerConfig};
 pub use orientation::OrientationConfig;
 pub use profile::UserProfileConfig;
 pub use reflection::ReflectionConfig;
+pub use retrieval::RetrievalScoringConfig;
 
 /// Controls how memory is surfaced to the LLM.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -75,6 +77,11 @@ pub struct MemoryConfig {
     pub bm25_bonus_weight: f32,
     #[serde(default)]
     pub rerank: crate::memory::rerank::RerankConfig,
+
+    /// Retrieval-time recency decay + MMR diversity (default: both off →
+    /// byte-for-byte legacy ranking).
+    #[serde(default)]
+    pub retrieval_scoring: RetrievalScoringConfig,
 
     #[serde(default = "defaults::default_dedup_similarity_threshold")]
     pub dedup_similarity_threshold: f32,
@@ -155,6 +162,7 @@ impl Default for MemoryConfig {
             rrf_k: defaults::default_rrf_k(),
             bm25_bonus_weight: defaults::default_bm25_bonus(),
             rerank: crate::memory::rerank::RerankConfig::default(),
+            retrieval_scoring: RetrievalScoringConfig::default(),
             dedup_similarity_threshold: defaults::default_dedup_similarity_threshold(),
             backup_enabled: defaults::default_backup_enabled(),
             backup_max_files: defaults::default_backup_max_files(),
