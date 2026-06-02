@@ -1,6 +1,7 @@
 //! Windows platform implementation for Aleph desktop capabilities.
 
 mod automation;
+mod ax;
 mod escape_listener;
 mod media;
 mod permission;
@@ -9,6 +10,7 @@ mod sleep_inhibitor;
 mod system;
 
 pub use automation::WindowsAutomation;
+pub use ax::WindowsAccessibility;
 pub use escape_listener::WindowsEscapeListener;
 pub use media::WindowsMedia;
 pub use permission::WindowsPermission;
@@ -17,8 +19,8 @@ pub use sleep_inhibitor::WindowsPower;
 pub use system::WindowsSystem;
 
 use aleph_desktop::traits::{
-    AutomationCapability, MediaCapability, PermissionCapability, PimCapability, PowerCapability,
-    ScreenCapability, SystemCapability,
+    AccessibilityCapability, AutomationCapability, MediaCapability, PermissionCapability,
+    PimCapability, PowerCapability, ScreenCapability, SystemCapability,
 };
 use aleph_desktop::DesktopPlatform;
 use aleph_desktop::NativeScreen;
@@ -33,6 +35,7 @@ pub struct WindowsPlatform {
     pim: WindowsPim,
     permission: WindowsPermission,
     media: WindowsMedia,
+    ax: WindowsAccessibility,
 }
 
 impl WindowsPlatform {
@@ -47,6 +50,7 @@ impl WindowsPlatform {
             pim: WindowsPim::new(),
             permission: WindowsPermission::new(),
             media: WindowsMedia::new(),
+            ax: WindowsAccessibility::new(),
         }
     }
 }
@@ -93,6 +97,10 @@ impl DesktopPlatform for WindowsPlatform {
     fn escape_listener(&self) -> Option<&dyn aleph_desktop::platform::EscapeAbort> {
         Some(&self.escape)
     }
+
+    fn ax(&self) -> Option<&dyn AccessibilityCapability> {
+        Some(&self.ax)
+    }
 }
 
 #[cfg(test)]
@@ -116,5 +124,8 @@ mod tests {
         assert!(platform.pim().is_some());
         assert!(platform.permission().is_some());
         assert!(platform.media().is_some());
+        // AX is now wired (UI Automation) — previously `None` on Windows, which
+        // silently disabled `desktop_som` and the `desktop_ax_*` tools.
+        assert!(platform.ax().is_some());
     }
 }
