@@ -102,6 +102,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Migrate legacy database files from ~/.aleph/*.db to ~/.aleph/data/*.db
     alephcore::utils::paths::migrate_legacy_db_files();
 
+    // Restore the scratchpad session→plan bindings from disk (mirrors
+    // openclaw's reloadTaskRegistryFromStore): a multi-step task whose plan
+    // is unfinished keeps its goal-loop continuation across this restart.
+    // Best-effort — a missing/corrupt store just leaves the table empty.
+    if let Ok(bindings_path) = alephcore::utils::paths::get_scratchpad_bindings_path() {
+        alephcore::builtin_tools::scratchpad_registry::init_persistence(bindings_path);
+    }
+
     // Daemonization is handled in main() before tokio starts (fork safety).
 
     initialize_tracing(args);
