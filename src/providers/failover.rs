@@ -145,6 +145,23 @@ impl Default for FailoverHealth {
 // Decision
 // =============================================================================
 
+/// How a provider-level failure should shape the circuit breaker.
+///
+/// The breaker treats the two kinds differently: a `Transient` outage needs a
+/// few strikes before it sidelines a provider (so a momentary blip does not
+/// evict a healthy one), whereas a `Permanent` failure — a revoked or
+/// misconfigured credential — is shed on the first strike with a long cooldown,
+/// so the hot path stops paying a full round-trip to a known-dead provider on
+/// every subsequent request. Mirrors openclaw's transient-vs-preserved probe
+/// slots and hermes' permanent/transient split.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum FailureKind {
+    /// Recoverable soon (rate limit, overload, network): strike-then-probe.
+    Transient,
+    /// Won't recover this session (bad/expired key, forbidden): shed at once.
+    Permanent,
+}
+
 /// What to do after one failed `process()` attempt.
 #[derive(Debug, PartialEq, Eq)]
 enum Decision {
@@ -153,7 +170,7 @@ enum Decision {
     /// Advance to the next model of the same provider.
     NextModel,
     /// Trip this provider's circuit and advance to the next provider.
-    NextProvider,
+    NextProvider(FailureKind),
     /// Abort the walk and return the error to the caller.
     Stop,
 }
@@ -178,6 +195,14 @@ fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
     };
     let can_retry = attempt < max_retries;
 
+    // When the walk advances providers, tag *why*: a permanent credential
+    // failure sheds the provider immediately; everything else is transient.
+    let next_provider = if crate::providers::llm_retry::is_permanent_failure(&msg) {
+        Decision::NextProvider(FailureKind::Permanent)
+    } else {
+        Decision::NextProvider(FailureKind::Transient)
+    };
+
     match classify_exhausted(&msg) {
         // 413 — the harness owns this recovery path via
         // `AgentHarness::try_reactive_compact_and_retry` (see
@@ -191,12 +216,12 @@ fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
             } else if let (Some(delay), true) = (transient_delay, can_retry) {
                 Decision::RetrySame(delay)
             } else {
-                Decision::NextProvider
+                next_provider
             }
         }
         // `classify_exhausted` never yields `Retry`; handled defensively.
         RetryVerdict::Retry { delay } if can_retry => Decision::RetrySame(delay),
-        RetryVerdict::Retry { .. } => Decision::NextProvider,
+        RetryVerdict::Retry { .. } => next_provider,
         RetryVerdict::Fatal => {
             let explicit_bad_request = lower.contains("400")
                 && (lower.contains("bad request") || lower.contains("invalid"));
@@ -204,7 +229,8 @@ fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
                 if can_retry {
                     Decision::RetrySame(DEFAULT_TRANSIENT_DELAY)
                 } else {
-                    Decision::NextProvider
+                    // A typed-transient error with no HTTP code: transient.
+                    Decision::NextProvider(FailureKind::Transient)
                 }
             } else {
                 Decision::Stop
@@ -309,7 +335,13 @@ impl FailoverProvider {
     }
 
     /// Record a provider-level failure and advance the circuit breaker.
-    async fn mark_unhealthy(&self, name: &str, error: String) {
+    ///
+    /// `kind` shapes how fast the circuit trips: a [`FailureKind::Permanent`]
+    /// failure (revoked/misconfigured credential) opens the circuit on the
+    /// first strike with a long cooldown so the hot path stops re-dialing a
+    /// known-dead provider; a [`FailureKind::Transient`] failure keeps the
+    /// 3-strike threshold so a brief blip does not evict a healthy provider.
+    async fn mark_unhealthy(&self, name: &str, error: String, kind: FailureKind) {
         let mut map = self.health.0.write().await;
         let st = map.entry(name.to_string()).or_default();
         st.last_failure = Some(Instant::now());
@@ -322,8 +354,18 @@ impl FailoverProvider {
                 st.circuit = CircuitState::Open;
             }
             CircuitState::Closed => {
-                if st.failure_count >= CIRCUIT_OPEN_THRESHOLD {
+                let should_open = match kind {
+                    FailureKind::Permanent => true,
+                    FailureKind::Transient => st.failure_count >= CIRCUIT_OPEN_THRESHOLD,
+                };
+                if should_open {
                     st.circuit = CircuitState::Open;
+                    // A dead credential recovers on the scale of minutes-to-hours
+                    // (operator rotates the key), not seconds — probe sparingly
+                    // by starting at the cooldown ceiling instead of the base.
+                    if matches!(kind, FailureKind::Permanent) {
+                        st.cooldown = MAX_COOLDOWN;
+                    }
                 }
             }
             CircuitState::Open => {}
@@ -384,7 +426,7 @@ impl AiProvider for FailoverProvider {
                     cand.models.iter().cloned().map(Some).collect()
                 };
 
-                let mut tripped = false;
+                let mut tripped: Option<FailureKind> = None;
                 'model: for model in models {
                     let mut attempt: u32 = 0;
                     loop {
@@ -430,13 +472,13 @@ impl AiProvider for FailoverProvider {
                                     last_error = Some(e);
                                     continue 'model;
                                 }
-                                Decision::NextProvider => {
+                                Decision::NextProvider(kind) => {
                                     tracing::warn!(
-                                        provider = %cand.name, error = %e,
+                                        provider = %cand.name, ?kind, error = %e,
                                         "failover: provider unavailable, advancing chain",
                                     );
                                     last_error = Some(e);
-                                    tripped = true;
+                                    tripped = Some(kind);
                                     break 'model;
                                 }
                                 Decision::Stop => {
@@ -451,12 +493,12 @@ impl AiProvider for FailoverProvider {
                     }
                 }
 
-                if tripped {
+                if let Some(kind) = tripped {
                     let reason = last_error
                         .as_ref()
                         .map(ToString::to_string)
                         .unwrap_or_default();
-                    self.mark_unhealthy(&cand.name, reason).await;
+                    self.mark_unhealthy(&cand.name, reason, kind).await;
                 }
             }
 
@@ -603,7 +645,24 @@ mod tests {
     #[test]
     fn decide_rate_limit_advances_provider() {
         let e = AlephError::provider("HTTP 429 too many requests");
-        assert_eq!(decide(&e, 0, 2), Decision::NextProvider);
+        assert_eq!(
+            decide(&e, 0, 2),
+            Decision::NextProvider(FailureKind::Transient)
+        );
+    }
+
+    #[test]
+    fn decide_auth_advances_provider_as_permanent() {
+        let e = AlephError::provider("HTTP 401 Unauthorized");
+        assert_eq!(
+            decide(&e, 0, 2),
+            Decision::NextProvider(FailureKind::Permanent)
+        );
+        let e = AlephError::provider("HTTP 403 Forbidden: invalid api key");
+        assert_eq!(
+            decide(&e, 0, 2),
+            Decision::NextProvider(FailureKind::Permanent)
+        );
     }
 
     #[test]
@@ -623,7 +682,10 @@ mod tests {
         let e = AlephError::provider("connection reset by peer");
         assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
         assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
-        assert_eq!(decide(&e, 2, 2), Decision::NextProvider);
+        assert_eq!(
+            decide(&e, 2, 2),
+            Decision::NextProvider(FailureKind::Transient)
+        );
     }
 
     #[test]
@@ -632,7 +694,10 @@ mod tests {
         // typed class is Transient, so the walk must still advance.
         let e = AlephError::Timeout { suggestion: None };
         assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
-        assert_eq!(decide(&e, 2, 2), Decision::NextProvider);
+        assert_eq!(
+            decide(&e, 2, 2),
+            Decision::NextProvider(FailureKind::Transient)
+        );
     }
 
     // --- process() integration tests --------------------------------------
@@ -745,6 +810,47 @@ mod tests {
             let _ = fp.process(RequestPayload::new(&msgs)).await;
         }
         assert!(fp.circuit_open("primary").await);
+    }
+
+    #[tokio::test]
+    async fn permanent_auth_failure_opens_circuit_on_first_strike() {
+        // A fallback with a dead credential must be shed immediately so the hot
+        // path stops re-dialing it — unlike a transient outage, which needs
+        // CIRCUIT_OPEN_THRESHOLD strikes (see `circuit_opens_after_threshold`).
+        let primary = ScriptProvider::err("primary", "HTTP 401 Unauthorized");
+        let fallback = ScriptProvider::ok("fallback");
+        let fp = build(primary, vec![], vec![node("fallback", fallback)]);
+
+        let msgs = [UnifiedMessage::user("hi")];
+        assert!(!fp.circuit_open("primary").await);
+        // One request is enough: the primary serves the error, fails over to
+        // the healthy fallback, and the primary's circuit is already open.
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "fallback");
+        assert!(fp.circuit_open("primary").await);
+    }
+
+    #[tokio::test]
+    async fn permanently_dead_fallback_skipped_on_next_request() {
+        // Once a permanent-failure provider's circuit is open, later requests
+        // skip it entirely (a later candidate exists), saving the round-trip.
+        let dead = ScriptProvider::err("dead", "HTTP 403 Forbidden: bad key");
+        let healthy = ScriptProvider::ok("healthy");
+        let fp = build(
+            dead.clone(),
+            vec![],
+            vec![node("healthy", healthy.clone())],
+        );
+
+        let msgs = [UnifiedMessage::user("hi")];
+        // First request: dead is dialed once, trips its circuit, healthy serves.
+        let _ = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(dead.call_count(), 1);
+        // Second request: dead's circuit is open and a later candidate exists,
+        // so it is skipped — call_count stays at 1.
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "healthy");
+        assert_eq!(dead.call_count(), 1);
     }
 
     #[tokio::test]
