@@ -188,14 +188,15 @@ impl SelfConfigTool {
     fn write_file(&self, file_name: &str, content: &str) -> Result<SelfConfigOutput> {
         validate_file_name(file_name)?;
 
-        // MEMORY.md writes are deprecated — entry-level edits go through the
-        // `remember` tool. Read access via self_config(action='read', ...)
-        // remains available.
+        // MEMORY.md is owned entirely by the curated-memory module, not by the
+        // identity-file path. It is not one of IDENTITY_FILE_NAMES, so neither
+        // read_file nor write_file can touch it — all edits go through the
+        // `remember` tool.
         if file_name.eq_ignore_ascii_case("MEMORY.md") {
             return Err(ToolError::Execution(
-                "self_config no longer writes MEMORY.md. \
+                "self_config does not manage MEMORY.md. \
                  Use the `remember` tool with action=add/replace/remove for entry-level edits. \
-                 Read access remains available via self_config(action='read', file='MEMORY.md')."
+                 MEMORY.md content is injected into your context automatically each turn."
                     .to_string(),
             )
             .into());

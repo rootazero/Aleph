@@ -12,9 +12,11 @@
 
 ```toml
 [cron]
-enabled = true             # Master switch for cron system
-max_concurrent = 3         # Max jobs running simultaneously
-default_timeout_seconds = 300  # Per-job timeout
+enabled = true               # Master switch for cron system
+db_path = "..."              # SQLite store for jobs (defaults under ~/.aleph/data)
+check_interval_secs = 60     # Scheduler tick interval
+max_concurrent_jobs = 5      # Max jobs running simultaneously
+job_timeout_secs = 300       # Per-job timeout
 ```
 
 ## Job Management

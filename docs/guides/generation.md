@@ -13,50 +13,67 @@
 
 ```toml
 [generation]
-# Default providers per generation type
-default_image = "stability"
-default_speech = "openai-tts"
-default_video = "runway"
-default_audio = "suno"
+# Default provider per generation type (NOTE: full `_provider` suffix)
+default_image_provider = "stability"
+default_speech_provider = "openai-tts"
+default_video_provider = "veo"
+default_audio_provider = "my-audio"
 
 [generation.providers.stability]
-type = "image"
-provider = "stability"     # Provider implementation
+provider_type = "stability"          # REQUIRED, exact id (NOT `type` / `provider`)
 base_url = "https://api.stability.ai/v2beta"
-model = "sd3-large"
+models = ["sd3-large"]               # array (NOT singular `model`)
+capabilities = ["image"]             # array: "image"|"video"|"speech"|"audio"
+enabled = true                       # default true (unlike LLM providers)
+timeout_seconds = 120                # default 120 (unlike LLM 300)
 # api_key — DO NOT SET HERE, use vault_store with key "gen:stability"
 
 [generation.providers.openai-tts]
-type = "speech"
-provider = "openai"
-model = "tts-1-hd"
+provider_type = "openai_tts"         # aliases: tts
+models = ["tts-1-hd"]
+capabilities = ["speech"]
+
+[generation.providers.openai-tts.defaults]
 voice = "alloy"            # alloy | echo | fable | onyx | nova | shimmer
 
 [generation.providers.openai-dall-e]
-type = "image"
-provider = "openai"
-model = "dall-e-3"
-size = "1024x1024"         # 256x256 | 512x512 | 1024x1024 | 1792x1024 | 1024x1792
-quality = "hd"             # standard | hd
+provider_type = "openai"             # aliases: openai_image, dalle
+models = ["dall-e-3"]
+capabilities = ["image"]
+
+[generation.providers.openai-dall-e.defaults]
+width = 1024
+height = 1024
+quality = "hd"            # standard | hd
+style = "vivid"           # vivid | natural
 ```
+
+> Typed maps (`[generation.image_providers.<name>]`, `video_providers`,
+> `speech_providers`, `audio_providers`) are an alternative to the generic
+> `[generation.providers.<name>]` map and auto-set `capabilities` from the
+> section name. See [references/generation-providers.md](../../skills/self/references/generation-providers.md)
+> for the exact `provider_type` values and per-type `defaults` fields.
 
 ## Common Operations
 
 ### Add image generation provider
-1. Add `[generation.providers.<name>]` with `type = "image"`
+1. Add `[generation.providers.<name>]` with `provider_type = "<type>"` and `capabilities = ["image"]`
 2. Store API key: `vault_store(action="store", key="gen:<name>", secret="...")`
-3. Set as default: `generation.default_image = "<name>"`
+3. Set as default: `generation.default_image_provider = "<name>"`
 
 ### Add speech provider
-1. Add `[generation.providers.<name>]` with `type = "speech"`
+1. Add `[generation.providers.<name>]` with `provider_type = "<type>"` and `capabilities = ["speech"]`
 2. Store API key via vault_store
-3. Set as default: `generation.default_speech = "<name>"`
+3. Set as default: `generation.default_speech_provider = "<name>"`
 
 ### Remove a generation provider
 1. Remove section from config.toml
 2. Delete API key: `vault_store(action="delete", key="gen:<name>")`
 
 ## Caveats
-- Generation types: "image", "speech", "audio", "video"
-- Each type can have multiple providers; `default_*` sets which is used
-- API keys use `gen:{name}` vault convention (not `provider:{name}`)
+- `provider_type` is REQUIRED and must be an exact id; `type` / `provider` are silently ignored. Unknown values cause a startup error.
+- `models` is an array; singular `model` works as an alias but the array is canonical.
+- `capabilities` is an array — only "image", "video", "speech", "audio".
+- Default-selection fields carry the full `_provider` suffix: `default_image_provider`, `default_speech_provider`, `default_video_provider`, `default_audio_provider` (NOT `default_image` etc.).
+- API keys use `gen:{name}` vault convention (not `provider:{name}`).
+- Generation providers need a restart after adding/modifying.

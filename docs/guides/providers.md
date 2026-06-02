@@ -14,7 +14,7 @@
 
 ```toml
 [providers.openai]
-protocol = "openai"        # "openai" | "anthropic" | "gemini" | "ollama"
+protocol = "openai"        # "openai" | "anthropic" | "gemini" | "ollama" | "codex" | "openai-responses"
 models = ["gpt-4o", "gpt-4o-mini"]  # First model is default
 base_url = "https://api.openai.com/v1"  # Optional, defaults to official
 color = "#10a37f"          # Hex color for UI
@@ -49,7 +49,7 @@ Set `enabled = false` in the provider section.
 2. Remove API key: `vault_store(action="delete", key="provider:<name>")`
 
 ## Protocol-Specific Fields
-- **anthropic**: `max_tokens` (required by API), `stop_sequences`
+- **anthropic**: `max_tokens` (optional in config — Aleph supplies a default), `stop_sequences`
 - **gemini**: `thinking_level = "LOW"|"HIGH"`, `media_resolution = "LOW"|"MEDIUM"|"HIGH"`
 - **ollama**: `base_url = "http://localhost:11434"`, `repeat_penalty = 1.1`
 

@@ -7,8 +7,9 @@
 | `"openai"` (default) | `https://api.openai.com/v1` | `{base}/v1/chat/completions` (or `v3` if URL contains `/v3`) |
 | `"anthropic"` | `https://api.anthropic.com` | `{base}/v1/messages` |
 | `"gemini"` | `https://generativelanguage.googleapis.com` | `{base}/v1beta/models/{model}:generateContent` |
-| `"ollama"` | `http://localhost:11434` | `{base}/api/generate` |
-| `"codex"` | `https://chatgpt.com` | `{base}/backend-api/codex/responses` |
+| `"ollama"` | `http://localhost:11434` | `{base}/api/generate` (native provider) |
+| `"codex"` (alias `"chatgpt"`) | `https://chatgpt.com` | `{base}/backend-api/codex/responses` |
+| `"openai-responses"` | (per-provider) | OpenAI Responses API — used by OpenRouter etc. |
 
 ## base_url Normalization
 
@@ -32,13 +33,14 @@ When a provider name matches a preset, `base_url`, `protocol`, `color`, and defa
 | `deepseek` | `https://api.deepseek.com` | openai | deepseek-chat |
 | `claude` | `https://api.anthropic.com` | anthropic | claude-sonnet-4-5-20250514 |
 | `gemini` | `https://generativelanguage.googleapis.com` | gemini | gemini-2.5-flash |
-| `moonshot` / `kimi` | `https://api.moonshot.cn/v1` | openai | moonshot-v1-8k |
+| `moonshot` / `kimi` | `https://api.moonshot.ai/v1` | openai | kimi-k2-0905-preview |
+| `moonshot-cn` | `https://api.moonshot.cn/v1` | openai | kimi-k2-0905-preview |
 | `doubao` / `volcengine` / `ark` | `https://ark.cn-beijing.volces.com/api/v3` | openai | doubao-1.5-pro-256k |
 | `siliconflow` | `https://api.siliconflow.cn/v1` | openai | deepseek-ai/DeepSeek-V3 |
 | `zhipu` / `glm` | `https://open.bigmodel.cn/api/paas/v4` | openai | GLM-5 |
 | `minimax` | `https://api.minimax.io/v1` | openai | MiniMax-M2.5 |
 | `groq` | `https://api.groq.com/openai/v1` | openai | llama-3.3-70b-versatile |
-| `openrouter` | `https://openrouter.ai/api/v1` | openai | anthropic/claude-sonnet-4-5 |
+| `openrouter` | `https://openrouter.ai/api` | openai-responses | openai/gpt-4o |
 | `t8star` | `https://api.t8star.cn/v1` | openai | (none) |
 | `together` | `https://api.together.xyz/v1` | openai | (none) |
 | `perplexity` | `https://api.perplexity.ai` | openai | (none) |
@@ -57,7 +59,7 @@ enabled = true
 
 ```toml
 [providers.MyProvider]
-protocol = "openai"                     # REQUIRED: "openai" | "anthropic" | "gemini" | "ollama" | "codex"
+protocol = "openai"                     # REQUIRED: "openai" | "anthropic" | "gemini" | "ollama" | "codex" | "openai-responses"
 base_url = "https://api.example.com/v1" # Optional: override default for protocol
 models = ["model-name"]                 # REQUIRED: array of model names (first = default)
 enabled = true                          # REQUIRED: default is false, must explicitly enable

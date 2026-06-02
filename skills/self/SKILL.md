@@ -55,39 +55,43 @@ Structured access to identity files and config.toml with built-in validation and
 
 ### Actions
 
-#### ListFiles
+> **Action values are snake_case** — the `action` field accepts `list_files`,
+> `read_file`, `write_file`, `read_config`, `update_config`. PascalCase
+> spellings (e.g. `ListFiles`) fail deserialization.
+
+#### list_files
 List all identity files and their status (exists, size).
 ```
-self_config(action="ListFiles")
+self_config(action="list_files")
 ```
 
-#### ReadFile
+#### read_file
 Read an identity file by name.
 ```
-self_config(action="ReadFile", file_name="SOUL.md")
+self_config(action="read_file", file_name="SOUL.md")
 ```
 Allowed files: `SOUL.md`, `IDENTITY.md`, `AGENTS.md`, `TOOLS.md`, `HEARTBEAT.md`
 
-#### WriteFile
+#### write_file
 Write content to an identity file (creates if not exists). Changes take effect on the next turn.
 ```
-self_config(action="WriteFile", file_name="SOUL.md", content="# My Soul\n\nI am...")
+self_config(action="write_file", file_name="SOUL.md", content="# My Soul\n\nI am...")
 ```
 
-#### ReadConfig
+#### read_config
 Read a config section as JSON using dot-path syntax.
 ```
-self_config(action="ReadConfig", config_path="providers.openai")
-self_config(action="ReadConfig", config_path="general")
+self_config(action="read_config", config_path="providers.openai")
+self_config(action="read_config", config_path="general")
 ```
 
-#### UpdateConfig
+#### update_config
 Update a config section via deep-merge patch with optional preview.
 
 **Preview mode (dry_run=true)** — show changes without writing:
 ```
 self_config(
-  action="UpdateConfig",
+  action="update_config",
   config_path="providers.openai",
   config_value={
     "enabled": true,
@@ -101,7 +105,7 @@ self_config(
 **Apply mode (dry_run=false)** — apply after user confirms:
 ```
 self_config(
-  action="UpdateConfig",
+  action="update_config",
   config_path="providers.openai",
   config_value={
     "enabled": true,
@@ -135,13 +139,13 @@ When `dry_run=true`, the response includes a `preview_message` in Chinese:
 ### Recommended Workflow
 
 ```
-1. Read current:    self_config(action="ReadConfig", config_path="providers.openai")
+1. Read current:    self_config(action="read_config", config_path="providers.openai")
    ↓
-2. Preview changes: self_config(action="UpdateConfig", ..., dry_run=true)
+2. Preview changes: self_config(action="update_config", ..., dry_run=true)
    ↓
 3. Show preview_message to user and ask for confirmation
    ↓
-4. Apply changes:   self_config(action="UpdateConfig", ..., dry_run=false)
+4. Apply changes:   self_config(action="update_config", ..., dry_run=false)
 ```
 
 ### Config Path Examples
@@ -229,7 +233,7 @@ All top-level sections available in `config.toml`:
 | `subagent` | Sub-agent sync | `enabled`, `max_depth`, `inherit_context` |
 | `task_routing` | Task routing | `enabled`, `default_queue`, `strategies` |
 | `group_chat` | Multi-agent chat | `enabled`, `personas`, `rotation_strategy` |
-| `cron` | Scheduled tasks | `jobs` array with `name`, `schedule`, `command` |
+| `cron` | Scheduler runtime (jobs themselves are DB-backed, managed via the `cron_manage` tool) | `enabled`, `db_path`, `check_interval_secs`, `max_concurrent_jobs`, `job_timeout_secs` |
 | `heartbeat` | Health monitoring | `enabled`, `interval_seconds`, `endpoints` |
 | `personas` | Preset persona definitions | `name`, `system_prompt`, `model` |
 | `evolution` | Skill evolution | `enabled`, `auto_generate`, `threshold` |
@@ -245,7 +249,7 @@ All top-level sections available in `config.toml`:
 | `channels.*` | Channel instances | Platform-specific fields (Telegram, Discord, etc.) |
 | `a2a` | A2A protocol | `enabled`, `endpoint`, `auth` |
 | `acp` | ACP harness | `enabled`, `mode`, `timeout_seconds` |
-| `execution` | Execution engine | `default_timeout_secs` (default 48h), `max_iterations` (default 200) |
+| `execution` | Execution engine | `default_timeout_secs` (default 48h), `max_iterations` (default 1000), `prompt_mode`, `progress_push` |
 | `agents` | Agent definitions | `defaults`, `list` (array of agent definitions) |
 | `bindings` | Route bindings | `channel`, `pattern`, `agent_id` |
 | `plugin_marketplaces.*` | Plugin sources | `source`, `type` (`github` or `local`) |
@@ -255,7 +259,11 @@ All top-level sections available in `config.toml`:
 | `fallback_provider` | Provider failover chain | `chain`, `provider` |
 | `context_budget` | Mid-run context-window compaction | `enabled`, `token_budget`, `warning_threshold`, `critical_threshold` |
 | `resume` | Boot-scan auto-resume of interrupted runs | `enabled`, `max_age_secs`, `max_attempts`, `max_concurrent` |
+| `projects` | Project workspace registry (per-directory skills/memory/plugins/hooks scoping) | `enabled`, project roots |
+| `tasks_reaper` (alias `task_reaper`) | Background reaper for stale/orphaned tasks | `enabled`, sweep interval |
 
+> **Top-level scalar**: `default_hotkey` (string) sits at the config root, not inside any section.
+>
 > **Important**: `[agent]` (task orchestration) and `[agents]` (agent definitions) are **different sections**. Do not confuse them.
 
 ---
@@ -265,9 +273,9 @@ All top-level sections available in `config.toml`:
 ### For Secret/API Key Changes
 
 1. Store secret: `vault_store(action="store", key="provider:openai", secret="sk-...")`
-2. Read config: `self_config(action="ReadConfig", config_path="providers.openai")`
-3. Preview: `self_config(action="UpdateConfig", config_path="providers.openai", config_value={...}, dry_run=true)`
-4. Apply: `self_config(action="UpdateConfig", ..., dry_run=false)`
+2. Read config: `self_config(action="read_config", config_path="providers.openai")`
+3. Preview: `self_config(action="update_config", config_path="providers.openai", config_value={...}, dry_run=true)`
+4. Apply: `self_config(action="update_config", ..., dry_run=false)`
 
 ### For Complex Config Edits (via bash)
 
@@ -296,7 +304,7 @@ vault_store(action="list")
 |------|---------------|---------|
 | LLM providers | `provider:{name}` | `provider:openai` |
 | Generation providers | `gen:{name}` | `gen:stability` |
-| Channels | `channel:{type}:{id}` | `channel:telegram:bot1` |
+| Channels | `channel:{instance_id}:{secret_field}` | `channel:telegram:bot_token` |
 | Embedding | `embedding:{name}` | `embedding:openai` |
 
 ---
