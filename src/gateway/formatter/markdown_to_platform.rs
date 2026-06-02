@@ -49,6 +49,18 @@ pub(super) fn markdown_to_telegram_html(text: &str) -> String {
                 let formatted = telegram_inline(&escape_html(item));
                 out.push_str(&format!("• {formatted}\n"));
             }
+            BlockElement::OrderedListItem { marker, text: item } => {
+                ensure_newline(&mut out);
+                let formatted = telegram_inline(&escape_html(item));
+                out.push_str(&format!("{marker} {formatted}\n"));
+            }
+            BlockElement::Table { headers, rows } => {
+                ensure_newline(&mut out);
+                // Telegram has no table markup; render aligned text in a <pre>
+                // monospace block. Escape the rendered table as a literal.
+                let aligned = render_table_aligned(headers, rows);
+                out.push_str(&format!("<pre>{}</pre>\n", escape_html(&aligned)));
+            }
             BlockElement::Text(line) => {
                 if !out.is_empty() && !out.ends_with('\n') {
                     out.push('\n');
@@ -116,6 +128,17 @@ pub(super) fn markdown_to_slack_mrkdwn(text: &str) -> String {
             BlockElement::UnorderedListItem(item) => {
                 ensure_newline(&mut out);
                 out.push_str(&format!("• {}\n", slack_inline(item)));
+            }
+            BlockElement::OrderedListItem { marker, text: item } => {
+                ensure_newline(&mut out);
+                out.push_str(&format!("{marker} {}\n", slack_inline(item)));
+            }
+            BlockElement::Table { headers, rows } => {
+                ensure_newline(&mut out);
+                // Slack has no table markup; render aligned text inside a code
+                // fence so columns stay monospace-aligned.
+                let aligned = render_table_aligned(headers, rows);
+                out.push_str(&format!("```\n{aligned}\n```\n"));
             }
             BlockElement::Text(line) => {
                 if !out.is_empty() && !out.ends_with('\n') {
@@ -185,6 +208,16 @@ pub(super) fn markdown_to_irc(text: &str) -> String {
                 ensure_newline(&mut out);
                 out.push_str(&format!("• {}\n", irc_inline(item)));
             }
+            BlockElement::OrderedListItem { marker, text: item } => {
+                ensure_newline(&mut out);
+                out.push_str(&format!("{marker} {}\n", irc_inline(item)));
+            }
+            BlockElement::Table { headers, rows } => {
+                ensure_newline(&mut out);
+                // IRC has no block markup; emit the aligned table verbatim.
+                out.push_str(&render_table_aligned(headers, rows));
+                out.push('\n');
+            }
             BlockElement::Text(line) => {
                 if !out.is_empty() && !out.ends_with('\n') {
                     out.push('\n');
@@ -244,6 +277,15 @@ pub(super) fn markdown_to_plain(text: &str) -> String {
             BlockElement::UnorderedListItem(item) => {
                 ensure_newline(&mut out);
                 out.push_str(&format!("• {}\n", plain_inline(item)));
+            }
+            BlockElement::OrderedListItem { marker, text: item } => {
+                ensure_newline(&mut out);
+                out.push_str(&format!("{marker} {}\n", plain_inline(item)));
+            }
+            BlockElement::Table { headers, rows } => {
+                ensure_newline(&mut out);
+                out.push_str(&render_table_aligned(headers, rows));
+                out.push('\n');
             }
             BlockElement::Text(line) => {
                 if !out.is_empty() && !out.ends_with('\n') {

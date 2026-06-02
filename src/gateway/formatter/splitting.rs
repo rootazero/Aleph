@@ -1,5 +1,7 @@
 //! Smart message splitting that respects paragraph and code block boundaries.
 
+use crate::markdown::fences::{find_fence_at, is_safe_fence_break, parse_fence_spans, FenceSpan};
+
 /// Split a message into chunks of at most `max_len` bytes.
 pub(super) fn split_message(text: &str, max_len: usize) -> Vec<String> {
     let mut chunks: Vec<String> = Vec::new();
@@ -10,6 +12,10 @@ pub(super) fn split_message(text: &str, max_len: usize) -> Vec<String> {
             chunks.push(remaining.to_string());
             break;
         }
+
+        // Fence spans for the current remainder; offsets line up with `candidate`
+        // below since it is always a prefix of `remaining`.
+        let spans = parse_fence_spans(remaining);
 
         // Find the nearest char boundary at or before max_len to avoid
         // splitting in the middle of a multi-byte UTF-8 character.
@@ -29,7 +35,7 @@ pub(super) fn split_message(text: &str, max_len: usize) -> Vec<String> {
         // Try to find the best split point within safe_max.
         let candidate = &remaining[..safe_max];
 
-        let mut split_pos = find_split_point(candidate);
+        let mut split_pos = find_split_point(candidate, &spans);
 
         // Character-level fallback: if find_split_point returned 0 (no viable
         // boundary found), force a hard split at safe_max to guarantee forward
@@ -58,37 +64,46 @@ pub(super) fn split_message(text: &str, max_len: usize) -> Vec<String> {
 
 /// Find the best byte offset to split `candidate`.
 ///
-/// Prefers paragraph boundaries, then line boundaries. Avoids splitting inside
-/// fenced code blocks.
-fn find_split_point(candidate: &str) -> usize {
-    // Count fence openings/closings in the candidate to detect if we're mid-block.
-    let fence_count = candidate.matches("```").count();
-    let in_code_block = !fence_count.is_multiple_of(2);
-
-    if in_code_block {
-        // We're in the middle of a code block. Try to split BEFORE the opening
-        // fence of the last unclosed block.
-        if let Some(pos) = candidate.rfind("```") {
-            if pos > 0 {
-                return pos;
-            }
+/// Prefers paragraph boundaries, then line boundaries. Never splits inside a
+/// fenced code block: fence detection is delegated to the canonical
+/// [`crate::markdown::fences`] parser (handles ``` and ~~~, indented fences,
+/// and language tags) rather than a local backtick count.
+fn find_split_point(candidate: &str, spans: &[FenceSpan]) -> usize {
+    // If the window end lands inside a fenced block, back off to the start of
+    // that block so the fence is never split mid-way.
+    if let Some(fence) = find_fence_at(spans, candidate.len()) {
+        if fence.start() > 0 {
+            return fence.start();
         }
     }
 
-    // Prefer double newline (paragraph boundary).
-    if let Some(pos) = candidate.rfind("\n\n") {
-        if pos > 0 {
-            return pos;
-        }
+    // Prefer the latest paragraph boundary that is a safe (non-fenced) break.
+    if let Some(pos) = rfind_safe_break(candidate, "\n\n", spans) {
+        return pos;
     }
 
-    // Prefer single newline (line boundary).
-    if let Some(pos) = candidate.rfind('\n') {
-        if pos > 0 {
-            return pos;
-        }
+    // Then the latest safe single-newline boundary.
+    if let Some(pos) = rfind_safe_break(candidate, "\n", spans) {
+        return pos;
     }
 
     // Last resort: split at max_len.
     candidate.len()
+}
+
+/// Find the last occurrence of `sep` in `candidate` whose byte offset is a safe
+/// fence break (not strictly inside a code fence). Searches progressively
+/// earlier matches until a safe one is found.
+fn rfind_safe_break(candidate: &str, sep: &str, spans: &[FenceSpan]) -> Option<usize> {
+    let mut search_end = candidate.len();
+    while let Some(pos) = candidate[..search_end].rfind(sep) {
+        if pos > 0 && is_safe_fence_break(spans, pos) {
+            return Some(pos);
+        }
+        if pos == 0 {
+            break;
+        }
+        search_end = pos;
+    }
+    None
 }
