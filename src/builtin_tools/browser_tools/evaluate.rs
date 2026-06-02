@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
+use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -50,9 +51,21 @@ impl AlephTool for BrowserEvaluateTool {
         match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.evaluate(&tab_id, &args.script).await {
                 Ok(value) => {
-                    // evaluate() returns String; try to parse as JSON, else wrap as JSON string.
-                    let json_value: serde_json::Value =
-                        serde_json::from_str(&value).unwrap_or(serde_json::Value::String(value));
+                    // evaluate() returns String; try to parse as JSON, else treat as raw text.
+                    let json_value: serde_json::Value = match serde_json::from_str(&value) {
+                        // Free page text (not JSON) is untrusted external content — wrap it
+                        // with injection-boundary markers, consistent with snapshot/console/
+                        // network. Structured JSON results stay typed (low injection surface;
+                        // wrapping would corrupt the value).
+                        Err(_) => serde_json::Value::String(wrap_external_content(
+                            &value,
+                            ContentSource::BrowserContent,
+                        )),
+                        Ok(serde_json::Value::String(s)) => serde_json::Value::String(
+                            wrap_external_content(&s, ContentSource::BrowserContent),
+                        ),
+                        Ok(other) => other,
+                    };
                     Ok(BrowserEvaluateOutput {
                         success: true,
                         result: Some(json_value),

@@ -47,8 +47,8 @@ impl AlephTool for BrowserOpenTool {
     type Output = BrowserOpenOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        // SSRF check before creating backend
-        if let Err(violation) = self.manager.check_url(&args.url) {
+        // SSRF + secret-exfiltration check before creating backend
+        if let Err(violation) = self.manager.check_navigation(&args.url) {
             return Ok(BrowserOpenOutput {
                 success: false,
                 tab_id: None,
@@ -135,6 +135,7 @@ mod tests {
             block_private: false,
             blocked_domains: vec!["*.evil.com".to_string(), "malware.org".to_string()],
             allowed_domains: vec![],
+            block_secrets_in_url: false,
         };
 
         let manager = Arc::new(ProfileManager::new(config));
@@ -184,6 +185,7 @@ mod tests {
             block_private: false,
             blocked_domains: vec![],
             allowed_domains: vec!["*.allowed.com".to_string()],
+            block_secrets_in_url: false,
         };
 
         let manager = Arc::new(ProfileManager::new(config));
