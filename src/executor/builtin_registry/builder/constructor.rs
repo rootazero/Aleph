@@ -679,6 +679,7 @@ impl BuiltinToolRegistry {
             team_delegate_tool,
             team_status_tool,
             team_disband_tool,
+            team_set_protocol_tool,
             team_member_add_tool,
             team_member_remove_tool,
             team_from_template_tool,
@@ -687,7 +688,7 @@ impl BuiltinToolRegistry {
         {
             use crate::builtin_tools::team::{
                 TeamCreateTool, TeamDelegateTool, TeamDisbandTool, TeamFromTemplateTool,
-                TeamMemberAddTool, TeamMemberRemoveTool, TeamStatusTool,
+                TeamMemberAddTool, TeamMemberRemoveTool, TeamSetProtocolTool, TeamStatusTool,
             };
 
             let agent_registry = config
@@ -735,6 +736,7 @@ impl BuiltinToolRegistry {
                 config.session_store.clone(),
                 config.event_store.clone(),
             );
+            let set_protocol = TeamSetProtocolTool::new(Arc::clone(store));
             let member_add = TeamMemberAddTool::new(
                 Arc::clone(store),
                 Arc::clone(&agent_registry),
@@ -764,6 +766,7 @@ impl BuiltinToolRegistry {
                     delegate.definition(),
                     status.definition(),
                     disband.definition(),
+                    set_protocol.definition(),
                     member_add.definition(),
                     member_remove.definition(),
                 ];
@@ -791,12 +794,13 @@ impl BuiltinToolRegistry {
                 Some(delegate),
                 Some(status),
                 Some(disband),
+                Some(set_protocol),
                 Some(member_add),
                 Some(member_remove),
                 from_template,
             )
         } else {
-            (None, None, None, None, None, None, None)
+            (None, None, None, None, None, None, None, None)
         };
 
         // Build team_snapshot when TeamStore + CoordTaskStore + SqliteSnapshotStore
@@ -1677,6 +1681,7 @@ impl BuiltinToolRegistry {
             team_delegate_tool,
             team_status_tool,
             team_disband_tool,
+            team_set_protocol_tool,
             team_member_add_tool,
             team_member_remove_tool,
             team_digest_tool,

@@ -41,6 +41,7 @@ pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
     "agent_delete",
     "team_create",
     "team_delegate",
+    "team_set_protocol",
     "heartbeat_create",
     "heartbeat_delete",
     "task_create",

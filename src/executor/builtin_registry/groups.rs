@@ -158,6 +158,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "team_delegate",
             "team_status",
             "team_disband",
+            "team_set_protocol",
             "team_member_add",
             "team_member_remove",
             "team_digest",

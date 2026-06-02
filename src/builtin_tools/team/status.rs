@@ -46,6 +46,11 @@ pub struct TeamStatusOutput {
     pub name: String,
     pub status: TeamStatusEnum,
     pub leader_id: String,
+    /// The team's operating protocol, if one is in effect. Surfaced here so the
+    /// leader can read the current agreement before amending it via
+    /// `team_set_protocol`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub protocol: Option<String>,
     pub members: Vec<MemberInfo>,
     pub tasks: Vec<TaskInfo>,
 }
@@ -129,6 +134,7 @@ impl AlephTool for TeamStatusTool {
             name: team.name,
             status: team.status,
             leader_id: team.leader_id,
+            protocol: team.protocol,
             members,
             tasks,
         })
