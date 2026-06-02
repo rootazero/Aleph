@@ -1,0 +1,410 @@
+//! Wayland input fallback via `ydotool` (kernel `uinput`).
+//!
+//! `enigo`/XTEST cannot inject input under Wayland: the compositor blocks
+//! synthetic pointer and key events for unprivileged clients, so the existing
+//! `enigo` path silently no-ops (or fails to construct) on a pure Wayland
+//! session. `ydotool` writes directly to the kernel `uinput` device, which
+//! sits below the display server, so it is unaffected by the Wayland gate.
+//!
+//! This module is a *fallback*, not a replacement: it is preferred only on
+//! Wayland sessions where the `ydotool` client is installed. X11, macOS, and
+//! Windows keep the unchanged `enigo` path. nut.js — the engine the reference
+//! `UI-TARS-desktop` project relies on — has no Wayland path at all, so this
+//! is a genuine capability gain over the reference implementation.
+//!
+//! The argv-building and key-mapping logic is pure and host-testable on any
+//! platform; only the process-spawning executor and session probe are gated to
+//! `target_os = "linux"`.
+
+use crate::error::{DesktopError, Result};
+use crate::{MouseButton, PressAction};
+
+// ── Pure argv / keycode logic (host-testable on every platform) ──────────────
+
+/// ydotool button code layout: the low nibble selects the button
+/// (0 = left, 1 = right, 2 = middle), `0x40` adds a press, `0x80` adds a
+/// release; a full click sets both (`0xC0`).
+pub(crate) fn click_code(button: MouseButton, action: PressAction) -> u8 {
+    let idx: u8 = match button {
+        MouseButton::Left => 0x00,
+        MouseButton::Right => 0x01,
+        MouseButton::Middle => 0x02,
+    };
+    match action {
+        PressAction::Press => 0x40 | idx,
+        PressAction::Release => 0x80 | idx,
+        PressAction::Click => 0xC0 | idx,
+    }
+}
+
+/// `ydotool mousemove --absolute -x X -y Y` — move the pointer to an absolute
+/// screen position.
+pub(crate) fn mousemove_args(x: i32, y: i32) -> Vec<String> {
+    vec![
+        "mousemove".into(),
+        "--absolute".into(),
+        "-x".into(),
+        x.to_string(),
+        "-y".into(),
+        y.to_string(),
+    ]
+}
+
+/// `ydotool click 0xNN` — press/release/click the given button.
+pub(crate) fn click_args(button: MouseButton, action: PressAction) -> Vec<String> {
+    vec![
+        "click".into(),
+        format!("0x{:02X}", click_code(button, action)),
+    ]
+}
+
+/// `ydotool type -- <text>` — type a literal string. The `--` stops option
+/// parsing so text beginning with `-` is typed verbatim.
+pub(crate) fn type_args(text: &str) -> Vec<String> {
+    vec!["type".into(), "--".into(), text.to_string()]
+}
+
+/// `ydotool key M:1 … K:1 K:0 … M:0` — press modifiers, tap the main key, then
+/// release modifiers in reverse order, using Linux evdev keycodes.
+///
+/// # Errors
+///
+/// [`DesktopError::InputFailed`] if a modifier or the main key has no evdev
+/// keycode mapping (e.g. an exotic punctuation key that would need a shifted
+/// chord).
+pub(crate) fn key_args(modifiers: &[String], key: &str) -> Result<Vec<String>> {
+    let main = evdev_keycode(key).ok_or_else(|| {
+        DesktopError::InputFailed(format!(
+            "ydotool: no evdev keycode for key '{key}' (Wayland key combo)"
+        ))
+    })?;
+    let mods = modifiers
+        .iter()
+        .map(|m| {
+            evdev_modifier(m).ok_or_else(|| {
+                DesktopError::InputFailed(format!(
+                    "ydotool: no evdev keycode for modifier '{m}' (Wayland key combo)"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut args = Vec::with_capacity(mods.len() * 2 + 3);
+    args.push("key".into());
+    for m in &mods {
+        args.push(format!("{m}:1"));
+    }
+    args.push(format!("{main}:1"));
+    args.push(format!("{main}:0"));
+    for m in mods.iter().rev() {
+        args.push(format!("{m}:0"));
+    }
+    Ok(args)
+}
+
+/// Map a modifier name (same vocabulary as [`super::key_parse::parse_modifier`])
+/// to its left-side evdev keycode.
+pub(crate) fn evdev_modifier(name: &str) -> Option<u16> {
+    match name.to_lowercase().as_str() {
+        "meta" | "command" | "cmd" | "super" | "win" => Some(125), // KEY_LEFTMETA
+        "shift" => Some(42),                                       // KEY_LEFTSHIFT
+        "control" | "ctrl" => Some(29),                            // KEY_LEFTCTRL
+        "alt" | "option" => Some(56),                              // KEY_LEFTALT
+        _ => None,
+    }
+}
+
+/// Map a key name (same vocabulary as [`super::key_parse::parse_key`]) to its
+/// evdev keycode. Single ASCII letters/digits and the common named keys are
+/// supported; shifted-punctuation chords are not.
+pub(crate) fn evdev_keycode(name: &str) -> Option<u16> {
+    if name.chars().count() == 1 {
+        if let Some(code) = ascii_char_keycode(name.chars().next().unwrap()) {
+            return Some(code);
+        }
+    }
+    let code = match name.to_lowercase().as_str() {
+        "space" => 57,
+        "return" | "enter" => 28,
+        "tab" => 15,
+        "escape" | "esc" => 1,
+        "backspace" | "delete" => 14, // KEY_BACKSPACE (mirrors parse_key)
+        "up" | "uparrow" => 103,
+        "down" | "downarrow" => 108,
+        "left" | "leftarrow" => 105,
+        "right" | "rightarrow" => 106,
+        "home" => 102,
+        "end" => 107,
+        "pageup" => 104,
+        "pagedown" => 109,
+        "f1" => 59,
+        "f2" => 60,
+        "f3" => 61,
+        "f4" => 62,
+        "f5" => 63,
+        "f6" => 64,
+        "f7" => 65,
+        "f8" => 66,
+        "f9" => 67,
+        "f10" => 68,
+        "f11" => 87,
+        "f12" => 88,
+        _ => return None,
+    };
+    Some(code)
+}
+
+/// evdev keycodes for single ASCII letters, digits, and space.
+fn ascii_char_keycode(ch: char) -> Option<u16> {
+    let code = match ch.to_ascii_lowercase() {
+        'a' => 30,
+        'b' => 48,
+        'c' => 46,
+        'd' => 32,
+        'e' => 18,
+        'f' => 33,
+        'g' => 34,
+        'h' => 35,
+        'i' => 23,
+        'j' => 36,
+        'k' => 37,
+        'l' => 38,
+        'm' => 50,
+        'n' => 49,
+        'o' => 24,
+        'p' => 25,
+        'q' => 16,
+        'r' => 19,
+        's' => 31,
+        't' => 20,
+        'u' => 22,
+        'v' => 47,
+        'w' => 17,
+        'x' => 45,
+        'y' => 21,
+        'z' => 44,
+        '1' => 2,
+        '2' => 3,
+        '3' => 4,
+        '4' => 5,
+        '5' => 6,
+        '6' => 7,
+        '7' => 8,
+        '8' => 9,
+        '9' => 10,
+        '0' => 11,
+        ' ' => 57,
+        _ => return None,
+    };
+    Some(code)
+}
+
+// ── Linux runtime: session probe + ydotool executor ──────────────────────────
+
+/// Whether input should be routed through `ydotool` instead of `enigo`.
+///
+/// True only on a Wayland session with the `ydotool` client on `PATH`. On X11
+/// (or when `ydotool` is absent) this is false and the caller keeps `enigo`.
+#[cfg(target_os = "linux")]
+pub(crate) fn should_use_ydotool() -> bool {
+    is_wayland_session() && ydotool_available()
+}
+
+#[cfg(target_os = "linux")]
+fn is_wayland_session() -> bool {
+    if let Ok(t) = std::env::var("XDG_SESSION_TYPE") {
+        if t.eq_ignore_ascii_case("wayland") {
+            return true;
+        }
+        if t.eq_ignore_ascii_case("x11") {
+            return false;
+        }
+    }
+    std::env::var_os("WAYLAND_DISPLAY").is_some()
+}
+
+#[cfg(target_os = "linux")]
+fn ydotool_available() -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join("ydotool").is_file())
+}
+
+#[cfg(target_os = "linux")]
+fn run_ydotool(args: &[String]) -> Result<()> {
+    let status = std::process::Command::new("ydotool")
+        .args(args)
+        .status()
+        .map_err(|e| DesktopError::InputFailed(format!("Failed to spawn ydotool: {e}")))?;
+    if !status.success() {
+        return Err(DesktopError::InputFailed(format!(
+            "ydotool exited with {status} (is the ydotoold daemon running and ~/.ydotool_socket accessible?)"
+        )));
+    }
+    Ok(())
+}
+
+// ── Linux input primitives mirroring `input.rs` signatures ───────────────────
+
+#[cfg(target_os = "linux")]
+pub(crate) fn click(x: i32, y: i32, button: MouseButton) -> Result<()> {
+    run_ydotool(&mousemove_args(x, y))?;
+    run_ydotool(&click_args(button, PressAction::Click))?;
+    tracing::info!(x, y, button = ?button, "Click performed (ydotool/Wayland)");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn double_click(x: i32, y: i32, button: MouseButton) -> Result<()> {
+    run_ydotool(&mousemove_args(x, y))?;
+    run_ydotool(&click_args(button, PressAction::Click))?;
+    run_ydotool(&click_args(button, PressAction::Click))?;
+    tracing::info!(x, y, button = ?button, "Double-click performed (ydotool/Wayland)");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn hover(x: i32, y: i32) -> Result<()> {
+    run_ydotool(&mousemove_args(x, y))?;
+    tracing::info!(x, y, "Hover performed (ydotool/Wayland)");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn mouse_button(
+    x: i32,
+    y: i32,
+    button: MouseButton,
+    action: PressAction,
+) -> Result<()> {
+    run_ydotool(&mousemove_args(x, y))?;
+    run_ydotool(&click_args(button, action))?;
+    tracing::info!(x, y, button = ?button, action = ?action, "Mouse button action performed (ydotool/Wayland)");
+    Ok(())
+}
+
+/// Drag via press-at-start, move-to-end, release. The pointer jumps directly to
+/// the end (ydotool `mousemove` is instantaneous); animated stepping would spawn
+/// one subprocess per frame, so the fallback keeps it atomic.
+#[cfg(target_os = "linux")]
+pub(crate) fn drag(start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> Result<()> {
+    run_ydotool(&mousemove_args(start_x, start_y))?;
+    run_ydotool(&click_args(MouseButton::Left, PressAction::Press))?;
+    run_ydotool(&mousemove_args(end_x, end_y))?;
+    run_ydotool(&click_args(MouseButton::Left, PressAction::Release))?;
+    tracing::info!(start_x, start_y, end_x, end_y, "Drag performed (ydotool/Wayland)");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn type_text(text: &str) -> Result<()> {
+    run_ydotool(&type_args(text))?;
+    tracing::info!(chars = text.chars().count(), "Text typed (ydotool/Wayland)");
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn key_combo(modifiers: &[String], key: &str) -> Result<()> {
+    let args = key_args(modifiers, key)?;
+    run_ydotool(&args)?;
+    tracing::info!(modifiers = ?modifiers, key = %key, "Key combo performed (ydotool/Wayland)");
+    Ok(())
+}
+
+// ── Tests (pure logic — run on every host) ───────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn click_codes_match_ydotool_layout() {
+        assert_eq!(click_code(MouseButton::Left, PressAction::Click), 0xC0);
+        assert_eq!(click_code(MouseButton::Right, PressAction::Click), 0xC1);
+        assert_eq!(click_code(MouseButton::Middle, PressAction::Click), 0xC2);
+        assert_eq!(click_code(MouseButton::Left, PressAction::Press), 0x40);
+        assert_eq!(click_code(MouseButton::Left, PressAction::Release), 0x80);
+        assert_eq!(click_code(MouseButton::Right, PressAction::Press), 0x41);
+        assert_eq!(click_code(MouseButton::Middle, PressAction::Release), 0x82);
+    }
+
+    #[test]
+    fn mousemove_args_are_absolute() {
+        assert_eq!(
+            mousemove_args(640, 480),
+            vec!["mousemove", "--absolute", "-x", "640", "-y", "480"]
+        );
+    }
+
+    #[test]
+    fn click_args_format_button_hex() {
+        assert_eq!(
+            click_args(MouseButton::Left, PressAction::Click),
+            vec!["click", "0xC0"]
+        );
+        assert_eq!(
+            click_args(MouseButton::Right, PressAction::Press),
+            vec!["click", "0x41"]
+        );
+    }
+
+    #[test]
+    fn type_args_stop_option_parsing() {
+        assert_eq!(type_args("-rf hello"), vec!["type", "--", "-rf hello"]);
+    }
+
+    #[test]
+    fn key_args_ctrl_c_press_release_order() {
+        // ctrl(29) down, c(46) down, c up, ctrl up
+        let args = key_args(&["control".into()], "c").unwrap();
+        assert_eq!(args, vec!["key", "29:1", "46:1", "46:0", "29:0"]);
+    }
+
+    #[test]
+    fn key_args_multi_modifier_reverse_release() {
+        // ctrl(29)+shift(42)+t(20): press in order, release in reverse.
+        let args = key_args(&["ctrl".into(), "shift".into()], "t").unwrap();
+        assert_eq!(
+            args,
+            vec!["key", "29:1", "42:1", "20:1", "20:0", "42:0", "29:0"]
+        );
+    }
+
+    #[test]
+    fn key_args_named_key() {
+        let args = key_args(&["alt".into()], "f4").unwrap();
+        assert_eq!(args, vec!["key", "56:1", "62:1", "62:0", "56:0"]);
+    }
+
+    #[test]
+    fn key_args_rejects_unknown_key() {
+        let err = key_args(&[], "§").unwrap_err();
+        assert!(matches!(err, DesktopError::InputFailed(_)));
+    }
+
+    #[test]
+    fn key_args_rejects_unknown_modifier() {
+        let err = key_args(&["hyper".into()], "c").unwrap_err();
+        assert!(matches!(err, DesktopError::InputFailed(_)));
+    }
+
+    #[test]
+    fn evdev_modifier_aliases() {
+        for m in ["meta", "command", "cmd", "super", "win"] {
+            assert_eq!(evdev_modifier(m), Some(125), "modifier {m}");
+        }
+        assert_eq!(evdev_modifier("Ctrl"), Some(29));
+        assert_eq!(evdev_modifier("ALT"), Some(56));
+        assert_eq!(evdev_modifier("option"), Some(56));
+        assert_eq!(evdev_modifier("capslock"), None);
+    }
+
+    #[test]
+    fn evdev_keycode_letters_case_insensitive() {
+        assert_eq!(evdev_keycode("a"), Some(30));
+        assert_eq!(evdev_keycode("A"), Some(30));
+        assert_eq!(evdev_keycode("z"), Some(44));
+        assert_eq!(evdev_keycode("0"), Some(11));
+    }
+}

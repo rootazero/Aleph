@@ -19,6 +19,11 @@ pub fn click(x: f64, y: f64, button: MouseButton) -> Result<()> {
     let ix = validate_coordinate(x, "x")?;
     let iy = validate_coordinate(y, "y")?;
 
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        return super::wayland_input::click(ix, iy, button);
+    }
+
     let enigo_button = to_enigo_button(button);
 
     let mut enigo = new_enigo()?;
@@ -42,6 +47,11 @@ pub fn click(x: f64, y: f64, button: MouseButton) -> Result<()> {
 /// - [`DesktopError::InputFailed`] if enigo cannot be created or the
 ///   text typing operation fails.
 pub fn type_text(text: &str) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        return super::wayland_input::type_text(text);
+    }
+
     let mut enigo = new_enigo()?;
 
     enigo
@@ -68,6 +78,11 @@ pub fn type_text(text: &str) -> Result<()> {
 pub fn key_combo(modifiers: &[String], key: &str) -> Result<()> {
     if key.is_empty() {
         return Err(DesktopError::InputFailed("Key cannot be empty".into()));
+    }
+
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        return super::wayland_input::key_combo(modifiers, key);
     }
 
     let main_key = super::key_parse::parse_key(key)?;
@@ -140,6 +155,12 @@ pub fn scroll(direction: &str, amount: i32) -> Result<()> {
 pub fn double_click(x: f64, y: f64, button: MouseButton) -> Result<()> {
     let ix = validate_coordinate(x, "x")?;
     let iy = validate_coordinate(y, "y")?;
+
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        return super::wayland_input::double_click(ix, iy, button);
+    }
+
     let btn = to_enigo_button(button);
     let mut enigo = new_enigo()?;
     enigo
@@ -169,6 +190,12 @@ pub fn drag(
     let sy = validate_coordinate(start_y, "start_y")?;
     let ex = validate_coordinate(end_x, "end_x")?;
     let ey = validate_coordinate(end_y, "end_y")?;
+
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        let _ = duration_ms; // ydotool mousemove is instantaneous; drag is atomic.
+        return super::wayland_input::drag(sx, sy, ex, ey);
+    }
 
     let mut enigo = new_enigo()?;
 
@@ -224,6 +251,12 @@ pub fn drag(
 pub fn hover(x: f64, y: f64) -> Result<()> {
     let ix = validate_coordinate(x, "x")?;
     let iy = validate_coordinate(y, "y")?;
+
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        return super::wayland_input::hover(ix, iy);
+    }
+
     let mut enigo = new_enigo()?;
     enigo
         .move_mouse(ix, iy, Coordinate::Abs)
@@ -245,6 +278,12 @@ pub fn cursor_position() -> Result<(f64, f64)> {
 pub fn mouse_button(x: f64, y: f64, button: MouseButton, action: crate::PressAction) -> Result<()> {
     let ix = validate_coordinate(x, "x")?;
     let iy = validate_coordinate(y, "y")?;
+
+    #[cfg(target_os = "linux")]
+    if super::wayland_input::should_use_ydotool() {
+        return super::wayland_input::mouse_button(ix, iy, button, action);
+    }
+
     let btn = to_enigo_button(button);
     let dir = match action {
         crate::PressAction::Press => Direction::Press,
