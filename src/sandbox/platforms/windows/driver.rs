@@ -52,17 +52,39 @@ impl Default for WindowsSandboxOptions {
 #[derive(Debug, Clone)]
 pub struct WindowsSandboxDriver {
     options: WindowsSandboxOptions,
+    /// Cycle 7: secret-path globs denied to the sandboxed target's read.
+    /// Sourced from `SandboxConfig.deny_read_globs` and threaded into
+    /// `WindowsInitPolicy` so the AppContainer init stamps deny-read ACEs.
+    /// Kept off `WindowsSandboxOptions` so that struct stays `Copy`.
+    deny_read_globs: Vec<String>,
 }
 
 impl WindowsSandboxDriver {
     pub fn new() -> Self {
         Self {
             options: WindowsSandboxOptions::default(),
+            deny_read_globs: Vec::new(),
         }
     }
 
     pub fn with_options(options: WindowsSandboxOptions) -> Self {
-        Self { options }
+        Self {
+            options,
+            deny_read_globs: Vec::new(),
+        }
+    }
+
+    /// Construct with both the driver knobs and the deny-read glob floor.
+    /// Used by `create_platform_driver_with_config` to wire
+    /// `SandboxConfig.deny_read_globs` through to the AppContainer init.
+    pub fn with_options_and_deny_globs(
+        options: WindowsSandboxOptions,
+        deny_read_globs: Vec<String>,
+    ) -> Self {
+        Self {
+            options,
+            deny_read_globs,
+        }
     }
 
     /// Generate a profile description from the sandbox policy.
@@ -199,6 +221,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                             &capabilities.network,
                         ),
                     workspace_path: Some(cwd.to_string_lossy().into_owned()),
+                    deny_read_globs: self.deny_read_globs.clone(),
                 };
                 Some(serde_json::to_string(&p).map_err(|e| {
                     SandboxError::ProfileGeneration(format!("WindowsInitPolicy serialize: {e}"))
