@@ -218,6 +218,7 @@ pub async fn handle_list_tasks(
         "completed" => Some(CoordTaskStatus::Completed),
         "failed" => Some(CoordTaskStatus::Failed),
         "cancelled" => Some(CoordTaskStatus::Cancelled),
+        "unsatisfiable" => Some(CoordTaskStatus::Unsatisfiable),
         _ => None,
     });
 
@@ -1310,6 +1311,7 @@ pub async fn handle_task_pause(
     match current.status {
         CoordTaskStatus::Pending
         | CoordTaskStatus::Blocked
+        | CoordTaskStatus::Unsatisfiable
         | CoordTaskStatus::WaitingReview => {}
         CoordTaskStatus::Paused => {
             return JsonRpcResponse::success(request.id, json!({ "status": "paused" }));
@@ -2188,6 +2190,7 @@ pub async fn handle_workflow_export_canvas(
         "completed" => Some(CoordTaskStatus::Completed),
         "failed" => Some(CoordTaskStatus::Failed),
         "cancelled" => Some(CoordTaskStatus::Cancelled),
+        "unsatisfiable" => Some(CoordTaskStatus::Unsatisfiable),
         _ => None,
     });
     let filter = CoordTaskFilter {

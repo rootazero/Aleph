@@ -644,6 +644,26 @@ mod tests {
         assert_eq!(fetched.name, "Alpha");
     }
 
+    /// `team_create` rejects duplicate names by consulting `get_team_by_name`
+    /// before inserting. This locks in the lookup contract that guard relies on:
+    /// an existing name resolves to its team, an absent one resolves to None.
+    #[tokio::test]
+    async fn get_team_by_name_finds_existing_and_none_for_absent() {
+        let store = setup_store().await;
+        let team = store
+            .create_team(NewTeam {
+                name: "Dup".into(),
+                description: String::new(),
+                leader_id: "lead".into(),
+            })
+            .await
+            .unwrap();
+
+        let found = store.get_team_by_name("Dup").await.unwrap();
+        assert_eq!(found.map(|t| t.id), Some(team.id));
+        assert!(store.get_team_by_name("Absent").await.unwrap().is_none());
+    }
+
     #[tokio::test]
     async fn test_set_protocol_round_trip() {
         let store = setup_store().await;

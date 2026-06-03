@@ -96,14 +96,39 @@ pub(super) fn has_unresolved_deps(conn: &Connection, task_id: &str) -> rusqlite:
     Ok(blocked)
 }
 
-/// Derive the effective status for a task (Blocked is computed, not stored).
+/// Determine if a pending task has at least one dependency in a terminal
+/// non-satisfying state (`failed` or `cancelled`). Such a dep will never
+/// flip to completed/skipped, so the dependent is permanently stuck — this
+/// distinguishes `Unsatisfiable` from a still-waiting `Blocked`.
+pub(super) fn has_dead_deps(conn: &Connection, task_id: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        r#"
+        SELECT EXISTS(
+            SELECT 1 FROM coord_task_dependencies d
+            JOIN coord_tasks dep ON dep.id = d.depends_on
+            WHERE d.task_id = ?1 AND dep.status IN ('failed', 'cancelled')
+        )
+        "#,
+        params![task_id],
+        |row| row.get(0),
+    )
+}
+
+/// Derive the effective status for a task (`Blocked`/`Unsatisfiable` are
+/// computed, not stored). A pending task with unresolved deps is
+/// `Unsatisfiable` when one of those deps terminally failed, otherwise
+/// `Blocked`.
 pub(super) fn derive_status(
     conn: &Connection,
     task_id: &str,
     stored: CoordTaskStatus,
 ) -> rusqlite::Result<CoordTaskStatus> {
     if stored == CoordTaskStatus::Pending && has_unresolved_deps(conn, task_id)? {
-        Ok(CoordTaskStatus::Blocked)
+        if has_dead_deps(conn, task_id)? {
+            Ok(CoordTaskStatus::Unsatisfiable)
+        } else {
+            Ok(CoordTaskStatus::Blocked)
+        }
     } else {
         Ok(stored)
     }

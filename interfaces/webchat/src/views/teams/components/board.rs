@@ -13,7 +13,16 @@ pub fn KanbanBoard(
     let i18n = use_i18n();
 
     let pending = Signal::derive(move || tasks_with_status(&tasks.get(), "pending"));
-    let blocked = Signal::derive(move || tasks_with_status(&tasks.get(), "blocked"));
+    // "unsatisfiable" is a refinement of blocked (a dependency terminally
+    // failed); group it under the Blocked column so these tasks stay visible.
+    let blocked = Signal::derive(move || {
+        tasks
+            .get()
+            .iter()
+            .filter(|t| t.status == "blocked" || t.status == "unsatisfiable")
+            .cloned()
+            .collect::<Vec<_>>()
+    });
     let in_progress = Signal::derive(move || tasks_with_status(&tasks.get(), "in_progress"));
     let completed = Signal::derive(move || tasks_with_status(&tasks.get(), "completed"));
     let failed = Signal::derive(move || tasks_with_status(&tasks.get(), "failed"));

@@ -93,6 +93,7 @@ fn format_task_board(tasks: &[CoordTask]) -> String {
             CoordTaskStatus::Cancelled => "⊘",
             CoordTaskStatus::Skipped => "⤳",
             CoordTaskStatus::Paused => "⏸",
+            CoordTaskStatus::Unsatisfiable => "⊠",
         };
         lines.push(format!(
             "{} {} [{}]{}{} — {}",

@@ -343,15 +343,17 @@ impl SessionStore for SqliteSessionStore {
 
         // Compute turn_number atomically within the locked connection to avoid TOCTOU races.
         // The caller-supplied turn.turn_number is ignored; the authoritative value is derived
-        // from the current row count.
-        let current_count: u32 = conn
+        // from the current maximum turn number. MAX (not COUNT) is used so that if a turn were
+        // ever deleted, the next number never reuses an existing one and collides with the
+        // (session_id, turn_number) primary key.
+        let max_turn: u32 = conn
             .query_row(
-                "SELECT COUNT(*) FROM session_turns WHERE session_id = ?1",
+                "SELECT COALESCE(MAX(turn_number), 0) FROM session_turns WHERE session_id = ?1",
                 params![session_id],
                 |row| row.get(0),
             )
             .map_err(db_err)?;
-        let turn_number = current_count + 1;
+        let turn_number = max_turn + 1;
 
         if turn_number > max_rounds {
             return Err(AlephError::ConfigError {

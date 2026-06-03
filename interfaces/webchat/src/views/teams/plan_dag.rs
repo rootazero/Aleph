@@ -146,6 +146,7 @@ fn status_fill(status: &str) -> &'static str {
         "in_progress" => "#3b82f6", // blue-500
         "completed" => "#10b981",   // emerald-500
         "failed" => "#ef4444",      // red-500
+        "unsatisfiable" => "#ef4444", // red-500 — a dependency terminally failed
         "cancelled" => "#6b7280",   // gray-500
         _ => "#9ca3af",
     }

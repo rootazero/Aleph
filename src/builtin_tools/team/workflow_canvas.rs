@@ -91,6 +91,7 @@ impl TeamWorkflowCanvasTool {
             "completed" => Some(CoordTaskStatus::Completed),
             "failed" => Some(CoordTaskStatus::Failed),
             "cancelled" => Some(CoordTaskStatus::Cancelled),
+            "unsatisfiable" => Some(CoordTaskStatus::Unsatisfiable),
             _ => None,
         })
     }

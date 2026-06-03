@@ -368,9 +368,12 @@ impl CoordTaskStore for SqliteCoordTaskStore {
 
         let filter_blocked = filter.status == Some(CoordTaskStatus::Blocked);
         let filter_pending = filter.status == Some(CoordTaskStatus::Pending);
+        let filter_unsatisfiable = filter.status == Some(CoordTaskStatus::Unsatisfiable);
 
         if let Some(ref status) = filter.status {
-            if *status == CoordTaskStatus::Blocked || *status == CoordTaskStatus::Pending {
+            // Blocked, Unsatisfiable and Pending are all stored as 'pending';
+            // they are separated in the post-query pass below.
+            if status.is_blocked_like() || *status == CoordTaskStatus::Pending {
                 where_clauses.push(format!("t.status = ?{idx}"));
                 values.push(Box::new("pending".to_string()));
                 idx += 1;
@@ -412,6 +415,7 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                 t.priority, t.result, t.metadata, t.created_at, t.started_at,
                 t.completed_at, t.locked_by, t.locked_at,
                 COALESCE(SUM(CASE WHEN dep.status IS NOT NULL AND dep.status NOT IN ('completed', 'skipped') THEN 1 ELSE 0 END), 0) AS unresolved_parents,
+                COALESCE(SUM(CASE WHEN dep.status IN ('failed', 'cancelled') THEN 1 ELSE 0 END), 0) AS dead_parents,
                 GROUP_CONCAT(d.depends_on) AS dep_ids
             FROM coord_tasks t
             LEFT JOIN coord_task_dependencies d ON d.task_id = t.id
@@ -438,12 +442,19 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             .query_map(params_ref.as_slice(), |row| {
                 let mut task = read_task_row(row)?;
                 let unresolved: i64 = row.get(14)?;
-                let dep_csv: Option<String> = row.get(15)?;
+                let dead: i64 = row.get(15)?;
+                let dep_csv: Option<String> = row.get(16)?;
                 task.dependencies = dep_csv
                     .map(|s| s.split(',').map(|x| x.to_string()).collect())
                     .unwrap_or_default();
                 task.status = if task.status == CoordTaskStatus::Pending && unresolved > 0 {
-                    CoordTaskStatus::Blocked
+                    // A terminally-failed dependency makes the task permanently
+                    // stuck (Unsatisfiable); otherwise it is merely Blocked.
+                    if dead > 0 {
+                        CoordTaskStatus::Unsatisfiable
+                    } else {
+                        CoordTaskStatus::Blocked
+                    }
                 } else {
                     task.status
                 };
@@ -455,6 +466,9 @@ impl CoordTaskStore for SqliteCoordTaskStore {
         for row in rows {
             let task = row.map_err(db_err)?;
             if filter_blocked && task.status != CoordTaskStatus::Blocked {
+                continue;
+            }
+            if filter_unsatisfiable && task.status != CoordTaskStatus::Unsatisfiable {
                 continue;
             }
             if filter_pending && task.status != CoordTaskStatus::Pending {
@@ -939,8 +953,8 @@ impl CoordTaskStore for SqliteCoordTaskStore {
 mod review_tests {
     use super::SqliteCoordTaskStore;
     use crate::agents::swarm::tasks::{
-        CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority, ReviewVerdict,
-        ReviewerKind, TaskRunStatus,
+        CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
+        ReviewVerdict, ReviewerKind, TaskRunStatus,
     };
 
     async fn make_store() -> SqliteCoordTaskStore {
@@ -1035,5 +1049,90 @@ mod review_tests {
 
         let unblocked_child = store.get_task(&child.id).await.unwrap().unwrap();
         assert_eq!(unblocked_child.status, CoordTaskStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn failed_dependency_makes_child_unsatisfiable() {
+        let store = make_store().await;
+        let parent = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "parent".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: Vec::new(),
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let child = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "child".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![parent.id.clone()],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Parent still Pending → child is merely Blocked (deps may yet complete).
+        assert_eq!(
+            store.get_task(&child.id).await.unwrap().unwrap().status,
+            CoordTaskStatus::Blocked
+        );
+
+        // Fail the parent → child can never run → Unsatisfiable. Verified via
+        // both the get_task (derive_status) path and the list_tasks inline path.
+        store
+            .update_task(
+                &parent.id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Failed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.get_task(&child.id).await.unwrap().unwrap().status,
+            CoordTaskStatus::Unsatisfiable
+        );
+
+        let listed = store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some("t1".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let listed_child = listed.iter().find(|t| t.id == child.id).unwrap();
+        assert_eq!(listed_child.status, CoordTaskStatus::Unsatisfiable);
+
+        // The dedicated filter returns the child; the Blocked filter does not.
+        let unsat = store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some("t1".into()),
+                status: Some(CoordTaskStatus::Unsatisfiable),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(unsat.len(), 1);
+        assert_eq!(unsat[0].id, child.id);
+
+        let blocked = store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some("t1".into()),
+                status: Some(CoordTaskStatus::Blocked),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert!(blocked.iter().all(|t| t.id != child.id));
     }
 }

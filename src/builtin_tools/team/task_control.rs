@@ -95,6 +95,7 @@ impl AlephTool for TeamTaskControlTool {
                 match current {
                     CoordTaskStatus::Pending
                     | CoordTaskStatus::Blocked
+                    | CoordTaskStatus::Unsatisfiable
                     | CoordTaskStatus::WaitingReview => {}
                     CoordTaskStatus::Paused => {
                         return Ok(TeamTaskControlOutput {

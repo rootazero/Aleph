@@ -408,6 +408,17 @@ impl AlephTool for TeamCreateTool {
             resolved.push((agent_id, spec.role.clone(), created));
         }
 
+        // Reject duplicate team names up front. `get_team_by_name` resolves by
+        // name via query_row (first match wins), so a second team sharing a name
+        // would be permanently shadowed from every name-based lookup. Fail fast
+        // instead of silently creating an unreachable duplicate.
+        if let Some(existing) = self.store.get_team_by_name(&args.name).await? {
+            return Err(AlephError::invalid_input(format!(
+                "a team named '{}' already exists (id {})",
+                args.name, existing.id
+            )));
+        }
+
         // Create the team record
         let team = self
             .store

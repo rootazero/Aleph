@@ -94,6 +94,13 @@ pub enum CoordTaskStatus {
     /// Manually paused. Dispatcher does not claim until resumed.
     /// Does NOT satisfy downstream dependency — dependents stay blocked.
     Paused,
+    /// **Derived** (like `Blocked`, never stored): a pending task that has at
+    /// least one dependency in a terminal non-satisfying state (`Failed` or
+    /// `Cancelled`). Such a task can never become runnable on its own — it is
+    /// distinct from `Blocked` (still waiting on deps that may yet complete).
+    /// This is pure visibility for the leader/panel; the dispatcher takes NO
+    /// automatic recovery action (that decision is the leader's, per R7/R10).
+    Unsatisfiable,
 }
 
 impl CoordTaskStatus {
@@ -108,13 +115,14 @@ impl CoordTaskStatus {
             Self::Cancelled => "cancelled",
             Self::Skipped => "skipped",
             Self::Paused => "paused",
+            Self::Unsatisfiable => "unsatisfiable",
         }
     }
 
     /// Deserialize from a stored string value.
     ///
-    /// `"blocked"` is intentionally excluded — `Blocked` is derived dynamically
-    /// at query time and should never appear in persistent storage.
+    /// `"blocked"` and `"unsatisfiable"` are intentionally excluded — both are
+    /// derived dynamically at query time and never appear in persistent storage.
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(Self::Pending),
@@ -136,6 +144,15 @@ impl CoordTaskStatus {
     /// other statuses (including Failed) leave the dependent blocked.
     pub fn satisfies_dependency(&self) -> bool {
         matches!(self, Self::Completed | Self::Skipped)
+    }
+
+    /// Whether this status is a derived "not yet runnable because of
+    /// dependencies" state — either `Blocked` (deps may still complete) or
+    /// `Unsatisfiable` (a dep terminally failed). Consumers that group these
+    /// two together (e.g. a kanban "Blocked" column) use this so the
+    /// `Unsatisfiable` refinement never makes a task disappear from view.
+    pub fn is_blocked_like(&self) -> bool {
+        matches!(self, Self::Blocked | Self::Unsatisfiable)
     }
 }
 

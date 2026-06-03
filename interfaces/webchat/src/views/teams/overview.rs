@@ -593,6 +593,7 @@ fn TeamDetailPanel(detail: TeamDetail) -> impl IntoView {
                                     "completed" => ("bg-success", t_string!(i18n, teams.task_completed).to_string()),
                                     "running" | "in_progress" => ("bg-warning animate-pulse", t_string!(i18n, teams.task_running).to_string()),
                                     "failed" => ("bg-danger", t_string!(i18n, teams.task_failed).to_string()),
+                                    "unsatisfiable" => ("bg-danger", task.status.clone()),
                                     _ => ("bg-text-tertiary", task.status.clone()),
                                 };
                                 let owner = task.owner.clone().unwrap_or_else(|| "—".into());

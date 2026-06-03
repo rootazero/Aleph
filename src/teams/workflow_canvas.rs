@@ -135,6 +135,7 @@ fn status_color(s: CoordTaskStatus) -> Option<&'static str> {
         CoordTaskStatus::Skipped => Some("6"),
         CoordTaskStatus::Paused => Some("6"),
         CoordTaskStatus::Failed => Some("1"),
+        CoordTaskStatus::Unsatisfiable => Some("1"),
         CoordTaskStatus::Cancelled => None,
     }
 }
