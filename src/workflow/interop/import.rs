@@ -140,14 +140,25 @@ fn scan_meta_field(src: &str, field: &str) -> Option<String> {
     read_first_string_literal(&src[pos..])
 }
 
-/// Read the first single- or double-quoted string literal in `s` (UTF-8 safe,
-/// honours backslash escapes by keeping the escaped char verbatim).
+/// Read a single- or double-quoted string literal that is the *first
+/// non-whitespace token* of `s` (UTF-8 safe, honours backslash escapes by
+/// keeping the escaped char verbatim).
+///
+/// Requiring the literal to lead — rather than scanning arbitrarily far ahead —
+/// keeps a non-literal argument (`agent(promptVar)`, `meta: { name: foo }`)
+/// from silently capturing an *unrelated* later string elsewhere in the source.
+/// Both real callers (a `meta.<field>:` value and an `agent(` first argument)
+/// place the literal immediately after optional whitespace, so this is the
+/// correct shape, not just a safer one.
 fn read_first_string_literal(s: &str) -> Option<String> {
     let mut chars = s.chars();
     let quote = loop {
         match chars.next()? {
             c @ ('\'' | '"') => break c,
-            _ => continue,
+            c if c.is_whitespace() => continue,
+            // First non-whitespace token is not a string literal — give up
+            // rather than over-reaching to a later, unrelated literal.
+            _ => return None,
         }
     };
     let mut out = String::new();
@@ -397,6 +408,30 @@ const r = await pipeline(items, s1, s2)
         let outcome = parse_workflow_js(src).expect("scan");
         assert!(outcome.dropped.iter().any(|d| d.contains("for loop")));
         assert!(outcome.dropped.iter().any(|d| d.contains("pipeline")));
+    }
+
+    #[test]
+    fn agent_with_non_literal_arg_does_not_capture_unrelated_string() {
+        // `agent(promptVar)` has no leading string literal. The scanner must NOT
+        // reach forward and adopt the next unrelated literal (`'unrelated'`) as
+        // this step's prompt; that call yields no importable prompt.
+        let src = "export const meta = { name: 'wf' }\n\
+                   await agent(promptVar)\n\
+                   const note = 'unrelated string'\n\
+                   await agent('real prompt')";
+        let outcome = parse_workflow_js(src).expect("scan bare js");
+        assert_eq!(
+            outcome.manifest.steps.len(),
+            1,
+            "only the string-literal agent() counts, got: {:?}",
+            outcome
+                .manifest
+                .steps
+                .iter()
+                .map(|s| s.prompt.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(outcome.manifest.steps[0].prompt, "real prompt");
     }
 
     #[test]

@@ -16,7 +16,9 @@
 
 use serde_json::json;
 
-use crate::agents::swarm::tasks::{CoordTaskId, CoordTaskStore, NewCoordTask, Priority};
+use crate::agents::swarm::tasks::{
+    CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
+};
 use crate::error::Result;
 use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
 use crate::workflow::def::{render_prompt, WorkflowDef};
@@ -54,18 +56,23 @@ pub async fn materialize(
 
         // depends_on resolves to already-created task ids because we iterate
         // in topological order — a dependency is always materialised first.
-        let blocked_by: Vec<CoordTaskId> = step
-            .depends_on
-            .iter()
-            .map(|dep| {
-                id_map.get(dep.as_str()).cloned().ok_or_else(|| {
-                    crate::error::AlephError::invalid_input(format!(
-                        "internal: dependency '{dep}' of step '{}' not yet materialised",
-                        step.id
-                    ))
-                })
-            })
-            .collect::<Result<_>>()?;
+        // De-duplicate: a step listing the same dependency twice would emit a
+        // duplicate `(task_id, depends_on)` edge, which violates the dependency
+        // table's PRIMARY KEY and aborts `create_task`. `validate()` permits
+        // duplicate `depends_on` (semantically a no-op), so collapse them here.
+        let mut blocked_by: Vec<CoordTaskId> = Vec::with_capacity(step.depends_on.len());
+        for dep in &step.depends_on {
+            let Some(dep_id) = id_map.get(dep.as_str()).cloned() else {
+                cancel_partial(store, &task_ids).await;
+                return Err(crate::error::AlephError::invalid_input(format!(
+                    "internal: dependency '{dep}' of step '{}' not yet materialised",
+                    step.id
+                )));
+            };
+            if !blocked_by.contains(&dep_id) {
+                blocked_by.push(dep_id);
+            }
+        }
 
         let metadata = json!({
             MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
@@ -73,7 +80,7 @@ pub async fn materialize(
             "workflow_step": step.id,
         });
 
-        let created = store
+        let created = match store
             .create_task(NewCoordTask {
                 team_id: Some(team_id.to_string()),
                 subject: format!("{}:{}", def.name, step.id),
@@ -83,13 +90,41 @@ pub async fn materialize(
                 blocked_by,
                 metadata,
             })
-            .await?;
+            .await
+        {
+            Ok(created) => created,
+            Err(e) => {
+                // A mid-loop failure leaves the steps created so far as live,
+                // dispatcher-managed tasks. Cancel them best-effort so a failed
+                // run does not execute a half-materialised workflow.
+                cancel_partial(store, &task_ids).await;
+                return Err(e);
+            }
+        };
 
         id_map.insert(step.id.as_str(), created.id.clone());
         task_ids.push(created.id);
     }
 
     Ok(MaterializedWorkflow { task_ids })
+}
+
+/// Best-effort rollback: mark already-created tasks `Cancelled` so a failed
+/// partial materialisation leaves no live dispatcher-managed orphans. Errors
+/// are swallowed — we are already on an error path and a terminal status is the
+/// most we can guarantee without a batch/transaction API on the store.
+async fn cancel_partial(store: &dyn CoordTaskStore, ids: &[CoordTaskId]) {
+    for id in ids {
+        let _ = store
+            .update_task(
+                id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Cancelled),
+                    ..Default::default()
+                },
+            )
+            .await;
+    }
 }
 
 #[cfg(test)]
@@ -186,6 +221,30 @@ mod tests {
             .unwrap();
         let after = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
         assert_eq!(after.status, CoordTaskStatus::Pending);
+    }
+
+    #[tokio::test]
+    async fn materialize_collapses_duplicate_dependency() {
+        // A step listing the same dependency twice must NOT emit a duplicate
+        // (task_id, depends_on) edge — that would hit the dependency table's
+        // PRIMARY KEY and abort materialisation. `validate()` allows the
+        // duplicate (it is semantically a no-op), so the compiler collapses it.
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "dup".into(),
+            description: String::new(),
+            steps: vec![
+                step("a", "w", &[]),
+                step("b", "w", &["a", "a"]),
+            ],
+        };
+        let mat = materialize(&def, "x", "t", &store)
+            .await
+            .expect("duplicate dep collapses instead of aborting");
+        assert_eq!(mat.task_ids.len(), 2);
+        let dependent = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert_eq!(dependent.subject, "dup:b");
+        assert_eq!(dependent.status, CoordTaskStatus::Blocked);
     }
 
     #[tokio::test]

@@ -19,6 +19,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::canvas_io::sanitise_name;
 use crate::error::{AlephError, Result};
@@ -26,6 +27,23 @@ use crate::workflow::interop::manifest::WorkflowManifest;
 
 /// File extension for stored workflow templates.
 pub const WORKFLOW_EXT: &str = "json";
+
+/// Monotonic suffix source: two concurrent writers of the SAME final path must
+/// not share a temp file, or one writer's `rename` would publish the other
+/// writer's half-written bytes (and the loser's `rename` would spuriously
+/// fail). Combined with the pid this is unique within and across processes.
+/// Static `AtomicU64` deliberately uses `std::sync::atomic` (loom's `new` is
+/// not `const`) — the documented sync-primitives exception.
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// A temp sibling of `final_path`, unique per writer: `{final}.{pid}.{seq}.tmp`.
+/// The `.tmp` suffix keeps it out of [`list_at`] (which matches only `.json`).
+fn unique_tmp_path(final_path: &Path) -> PathBuf {
+    let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let mut tmp = final_path.as_os_str().to_os_string();
+    tmp.push(format!(".{}.{seq}.tmp", std::process::id()));
+    PathBuf::from(tmp)
+}
 
 /// `$ALEPH_HOME/workflows/`. Falls back to `~/.aleph/workflows/`, then
 /// `./workflows/`.
@@ -72,7 +90,7 @@ pub fn save_at(dir: &Path, manifest: &WorkflowManifest) -> Result<PathBuf> {
     let body = serde_json::to_string_pretty(manifest)
         .map_err(|e| AlephError::config(format!("workflow serialise failed: {e}")))?;
 
-    let tmp_path = final_path.with_extension(format!("{WORKFLOW_EXT}.tmp"));
+    let tmp_path = unique_tmp_path(&final_path);
     fs::write(&tmp_path, body).map_err(|e| {
         AlephError::config(format!("workflow write {} failed: {e}", tmp_path.display()))
     })?;
@@ -97,9 +115,7 @@ pub fn save(manifest: &WorkflowManifest) -> Result<PathBuf> {
 pub fn write_text_at(dir: &Path, name: &str, ext: &str, body: &str) -> Result<PathBuf> {
     ensure_dir_at(dir)?;
     let final_path = dir.join(format!("{}.{ext}", sanitise_name(name)));
-    let mut tmp_os = final_path.as_os_str().to_os_string();
-    tmp_os.push(".tmp");
-    let tmp_path = PathBuf::from(tmp_os);
+    let tmp_path = unique_tmp_path(&final_path);
     fs::write(&tmp_path, body)
         .map_err(|e| AlephError::config(format!("write {} failed: {e}", tmp_path.display())))?;
     fs::rename(&tmp_path, &final_path).map_err(|e| {
