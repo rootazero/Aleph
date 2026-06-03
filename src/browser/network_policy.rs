@@ -128,6 +128,22 @@ impl BrowserSsrfGuard {
 
     /// Validate a URL against the SSRF policy.
     pub fn check_url(&self, url_str: &str) -> Result<(), PolicyViolation> {
+        // Browser navigation is web-only: reject any non-HTTP(S) scheme up-front.
+        // The sync SSRF engine validates the *host* but not the scheme, so a
+        // host-bearing alternate scheme (e.g. `gopher://internal:6379/…`,
+        // `ftp://host/…`) would otherwise pass the host checks — a classic
+        // SSRF-via-alternate-scheme vector. Schemeless / hostless URLs
+        // (`about:blank`, `data:`, `file:///…`) still fall through to the
+        // engine's no-host rejection below.
+        if let Ok(parsed) = url::Url::parse(url_str) {
+            let scheme = parsed.scheme();
+            if scheme != "http" && scheme != "https" {
+                return Err(PolicyViolation::InvalidUrl(format!(
+                    "unsupported scheme '{scheme}': browser navigation allows only http/https"
+                )));
+            }
+        }
+
         // Build core policy from browser config.
         // When block_private is false, disable SSRF protection entirely so that
         // loopback, localhost, and private ranges are all reachable (useful for
@@ -320,6 +336,33 @@ mod tests {
             policy.check_url("not-a-url"),
             Err(PolicyViolation::InvalidUrl(_))
         ));
+    }
+
+    #[test]
+    fn test_rejects_non_http_schemes() {
+        // Host-bearing alternate schemes must not slip past the host-only SSRF
+        // checks (SSRF-via-alternate-scheme). Disable host blocking so the only
+        // thing that can reject these is the scheme guard itself.
+        let policy = BrowserSsrfGuard::new(SsrfConfig {
+            block_private: false,
+            blocked_domains: vec![],
+            allowed_domains: vec![],
+            block_secrets_in_url: false,
+        });
+        for url in [
+            "gopher://internal-host:6379/_data",
+            "ftp://files.example.com/etc/passwd",
+            "file:///etc/passwd",
+            "data:text/html,<script>alert(1)</script>",
+        ] {
+            assert!(
+                matches!(policy.check_url(url), Err(PolicyViolation::InvalidUrl(_))),
+                "scheme of {url} should be rejected"
+            );
+        }
+        // http/https still pass when host policy is disabled.
+        assert!(policy.check_url("http://example.com/").is_ok());
+        assert!(policy.check_url("https://example.com/").is_ok());
     }
 
     #[test]
