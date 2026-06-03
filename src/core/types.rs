@@ -77,53 +77,6 @@ pub struct MediaAttachment {
     pub size_bytes: u64,
 }
 
-impl MediaAttachment {
-    /// Create a new media attachment with validated size.
-    ///
-    /// # Arguments
-    /// * `media_type` - Content type classification
-    /// * `mime_type` - MIME type (e.g. "image/png")
-    /// * `data` - Content string (base64-encoded or utf8 text)
-    /// * `encoding` - Encoding format
-    /// * `filename` - Optional original filename
-    pub fn new(
-        media_type: MediaType,
-        mime_type: impl Into<String>,
-        data: impl Into<String>,
-        encoding: ContentEncoding,
-        filename: Option<String>,
-    ) -> Self {
-        let data = data.into();
-        let size_bytes = match encoding {
-            // Base64 encoding inflates size by ~33%; store original decoded size
-            // Account for padding characters (=) at the end of base64 strings
-            // Strip whitespace (newlines, spaces) before calculating to handle
-            // PEM-style or RFC 2045 wrapped base64 strings correctly.
-            ContentEncoding::Base64 => {
-                let bytes = data.as_bytes();
-                let clean_len = bytes.iter().filter(|&&b| !b.is_ascii_whitespace()).count();
-                let padding = bytes
-                    .iter()
-                    .rev()
-                    .filter(|&&b| !b.is_ascii_whitespace())
-                    .take(2)
-                    .filter(|&&b| b == b'=')
-                    .count();
-                ((clean_len.saturating_sub(padding)).saturating_mul(3) / 4) as u64
-            }
-            ContentEncoding::Utf8 => data.len() as u64,
-        };
-        Self {
-            media_type,
-            mime_type: mime_type.into(),
-            data,
-            encoding,
-            filename,
-            size_bytes,
-        }
-    }
-}
-
 impl fmt::Debug for MediaAttachment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("MediaAttachment")
@@ -184,81 +137,6 @@ pub struct MemoryEntry {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn media_attachment_base64_empty() {
-        let attachment = MediaAttachment::new(
-            MediaType::Image,
-            "image/png",
-            "",
-            ContentEncoding::Base64,
-            None,
-        );
-        assert_eq!(attachment.size_bytes, 0);
-    }
-
-    #[test]
-    fn media_attachment_base64_whitespace_only() {
-        let attachment = MediaAttachment::new(
-            MediaType::Image,
-            "image/png",
-            "   \n\t  ",
-            ContentEncoding::Base64,
-            None,
-        );
-        assert_eq!(attachment.size_bytes, 0);
-    }
-
-    #[test]
-    fn media_attachment_base64_with_padding() {
-        // "SGVsbG8=" is "Hello" in base64 (5 bytes)
-        let attachment = MediaAttachment::new(
-            MediaType::Image,
-            "image/png",
-            "SGVsbG8=",
-            ContentEncoding::Base64,
-            None,
-        );
-        assert_eq!(attachment.size_bytes, 5);
-    }
-
-    #[test]
-    fn media_attachment_base64_without_padding() {
-        // "SGVsbG8" is base64 without padding
-        let attachment = MediaAttachment::new(
-            MediaType::Image,
-            "image/png",
-            "SGVsbG8",
-            ContentEncoding::Base64,
-            None,
-        );
-        // (7 * 3) / 4 = 5 (integer division truncates)
-        assert_eq!(attachment.size_bytes, 5);
-    }
-
-    #[test]
-    fn media_attachment_utf8_multibyte() {
-        let attachment = MediaAttachment::new(
-            MediaType::Document,
-            "text/plain",
-            "\u{4f60}\u{597d}\u{4e16}\u{754c}",
-            ContentEncoding::Utf8,
-            None,
-        );
-        assert_eq!(attachment.size_bytes, 12); // 4 chars * 3 bytes each in UTF-8
-    }
-
-    #[test]
-    fn media_attachment_utf8_ascii() {
-        let attachment = MediaAttachment::new(
-            MediaType::Document,
-            "text/plain",
-            "Hello",
-            ContentEncoding::Utf8,
-            None,
-        );
-        assert_eq!(attachment.size_bytes, 5);
-    }
 
     #[test]
     fn memory_entry_default() {
