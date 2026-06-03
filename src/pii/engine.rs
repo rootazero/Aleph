@@ -219,6 +219,17 @@ impl PiiEngine {
             return FilterResult::unchanged(text);
         }
 
+        // Rank matches before overlap dedup: a match that will actually be
+        // redacted (Block) must always win an overlap over one that won't
+        // (Warn), regardless of severity. Otherwise a higher-severity Warn
+        // rule (e.g. api_key=warn) silently suppresses a lower-severity Block
+        // rule (e.g. phone=block) that overlaps it, leaking the lower-severity
+        // PII in plaintext. Within equal block-ness, higher severity wins.
+        all_matches.sort_by_key(|m| {
+            let blocks = *Self::action_for_rule(config, &m.rule_name) == PiiAction::Block;
+            (std::cmp::Reverse(blocks), std::cmp::Reverse(m.severity))
+        });
+
         let deduped = dedup_overlapping(all_matches);
 
         // Sort by start descending so we can replace from back to front
@@ -288,18 +299,15 @@ impl PiiEngine {
     }
 }
 
-/// Remove overlapping matches, keeping the one with the higher severity.
+/// Remove overlapping matches, keeping the highest-priority one.
 ///
-/// Matches are sorted by severity descending so that Critical > High > Medium > Low.
-/// When two matches overlap, the higher-severity match is retained. If severities
-/// are equal, the first one encountered wins.
-fn dedup_overlapping(mut matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
+/// The caller must pre-sort `matches` by priority descending — redacting
+/// (Block) matches first, then severity descending. When two matches overlap,
+/// the earlier (higher-priority) one in the pre-sorted input is retained.
+fn dedup_overlapping(matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
     if matches.len() <= 1 {
         return matches;
     }
-
-    // Sort by severity descending so higher-severity matches are retained.
-    matches.sort_by_key(|x| std::cmp::Reverse(x.severity));
 
     let mut result: Vec<PiiMatch> = Vec::new();
     for m in matches {
@@ -475,6 +483,27 @@ mod tests {
         // The digits "1990030700" also match the phone pattern.
         let result = engine().filter("ID: 11010119900307002X");
         assert!(result.text.contains("[ID_CARD]"));
+    }
+
+    #[test]
+    fn test_overlap_block_wins_over_higher_severity_warn() {
+        // Regression: a higher-severity Warn match must NOT suppress an
+        // overlapping lower-severity Block match (would leak PII in plaintext).
+        // api_key (Critical) = Warn, phone (High) = Block. The Bearer token
+        // span contains a phone that passes its own boundary check.
+        let config = PrivacyConfig {
+            api_key: PiiAction::Warn,
+            phone: PiiAction::Block,
+            ..Default::default()
+        };
+        let engine = PiiEngine::new(config);
+        let result = engine.filter("Bearer 13912345678.abcdefghijklmnop");
+        assert!(
+            result.text.contains("[PHONE]"),
+            "phone (block) must win the overlap vs api_key (warn), got: {}",
+            result.text
+        );
+        assert_eq!(result.blocked_count, 1);
     }
 
     #[test]

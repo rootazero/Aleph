@@ -14,6 +14,10 @@ fn api_key_regex() -> &'static Regex {
     API_KEY_RE.get_or_init(|| {
         Regex::new(
             r"(?x)
+            \b                                    # anchor at a word boundary so
+                                                  # prefixes (sk-, gho_, ...) are
+                                                  # not matched inside larger
+                                                  # tokens (e.g. ta`sk-`...)
             (?:
                 sk-[a-zA-Z0-9\-_]{20,}           # OpenAI / Anthropic style
                 | ghp_[a-zA-Z0-9]{36,}            # GitHub Personal Access Token
@@ -112,6 +116,25 @@ mod tests {
     #[test]
     fn test_detect_bearer_token() {
         let matches = rule().detect("Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9");
+        assert_eq!(matches.len(), 1);
+    }
+
+    #[test]
+    fn test_no_match_sk_inside_larger_token() {
+        // "task-..." contains the substring "sk-" but must NOT be redacted:
+        // the leading word boundary prevents matching prefixes mid-token.
+        let matches = rule().detect("task-1234567890abcdefghij12");
+        assert_eq!(
+            matches.len(),
+            0,
+            "prefix inside a larger word token must not match"
+        );
+    }
+
+    #[test]
+    fn test_detect_sk_at_word_boundary() {
+        // Preceded by '=' (non-word) the boundary still allows a real key.
+        let matches = rule().detect("OPENAI_API_KEY=sk-1234567890abcdefghijklmnop");
         assert_eq!(matches.len(), 1);
     }
 }
