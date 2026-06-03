@@ -1,5 +1,7 @@
 //! Content-aware token-ratio detection for context-pressure estimation.
 
+use crate::providers::message::{ContentBlock, UnifiedMessage};
+
 // =============================================================================
 // Content-aware ratio detection
 // =============================================================================
@@ -166,6 +168,39 @@ pub fn estimate_tokens_aware(content: &str, prose_ratio: f64) -> usize {
     ((chars as f64) / ratio).ceil() as usize
 }
 
+/// Estimated provider-side token cost of a single inline image block.
+///
+/// Matches Anthropic's tile-based image pricing and the Hermes constant. This
+/// is the single source of truth shared by the budget sensor (which must count
+/// images toward pressure) and the historical-image-stripping preflight stage
+/// (which frees exactly this many tokens per image it drops) — so the sensor
+/// and the stripper agree on what an image costs.
+pub const IMAGE_TOKENS_ESTIMATE: usize = 1500;
+
+/// Content-aware token estimate for a whole message.
+///
+/// Text/JSON/thinking/tool-call blocks are estimated via [`estimate_tokens_aware`]
+/// (which already adapts to CJK/code density), plus a flat per-image charge for
+/// every [`ContentBlock::Image`] block. The image term matters because
+/// [`UnifiedMessage::text_content`] omits image blocks entirely: without it the
+/// pressure sensor counts a multi-megabyte screenshot as **zero tokens** and
+/// under-estimates vision-heavy contexts by ~[`IMAGE_TOKENS_ESTIMATE`] tokens
+/// per image — so compaction (and the image-stripping that would shed those
+/// very images) fires too late, risking provider-side overflow before the EWMA
+/// usage calibration can correct.
+///
+/// Image-free messages contain no image blocks, so this is byte-identical to
+/// `estimate_tokens_aware(&msg.text_content(), prose_ratio)` for the common case.
+pub fn estimate_message_tokens_aware(msg: &UnifiedMessage, prose_ratio: f64) -> usize {
+    let text_tokens = estimate_tokens_aware(&msg.text_content(), prose_ratio);
+    let image_count = msg
+        .content_blocks()
+        .iter()
+        .filter(|b| matches!(b, ContentBlock::Image { .. }))
+        .count();
+    text_tokens + image_count * IMAGE_TOKENS_ESTIMATE
+}
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -283,5 +318,70 @@ mod tests {
     #[test]
     fn aware_estimate_zero_ratio_guard() {
         assert_eq!(estimate_tokens_aware("hello", 0.0), 0);
+    }
+
+    // --- estimate_message_tokens_aware (image-aware per-message estimate) ---
+
+    fn user_with_image(text: &str) -> UnifiedMessage {
+        UnifiedMessage::user_with_content(vec![
+            ContentBlock::Image {
+                data: "ignored_base64_blob".to_string(),
+                mime_type: "image/png".to_string(),
+            },
+            ContentBlock::Text {
+                text: text.to_string(),
+                cache_control: None,
+            },
+        ])
+    }
+
+    #[test]
+    fn message_estimate_matches_text_when_no_images() {
+        // A text-only message must estimate exactly as the text path — the image
+        // term is purely additive, so the common case stays byte-identical.
+        let msg = UnifiedMessage::user("just plain english prose here");
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            estimate_tokens_aware(&msg.text_content(), DEFAULT_PROSE_RATIO)
+        );
+    }
+
+    #[test]
+    fn message_estimate_charges_for_image() {
+        // The core fix: an image-bearing message must cost its text estimate PLUS
+        // one image charge — not zero for the image (which is what the sensor saw
+        // when it summed estimate_tokens_aware(text_content) and text_content
+        // dropped the image block).
+        let msg = user_with_image("look at this screenshot");
+        let text_only = estimate_tokens_aware(&msg.text_content(), DEFAULT_PROSE_RATIO);
+        let with_image = estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO);
+        assert_eq!(with_image, text_only + IMAGE_TOKENS_ESTIMATE);
+        assert!(
+            with_image >= IMAGE_TOKENS_ESTIMATE,
+            "image-bearing message must never estimate as ~0 tokens, got {with_image}"
+        );
+    }
+
+    #[test]
+    fn message_estimate_charges_per_image() {
+        // Three images in one turn → three image charges.
+        let msg = UnifiedMessage::user_with_content(vec![
+            ContentBlock::Image {
+                data: "a".to_string(),
+                mime_type: "image/png".to_string(),
+            },
+            ContentBlock::Image {
+                data: "b".to_string(),
+                mime_type: "image/png".to_string(),
+            },
+            ContentBlock::Image {
+                data: "c".to_string(),
+                mime_type: "image/png".to_string(),
+            },
+        ]);
+        assert_eq!(
+            estimate_message_tokens_aware(&msg, DEFAULT_PROSE_RATIO),
+            3 * IMAGE_TOKENS_ESTIMATE
+        );
     }
 }

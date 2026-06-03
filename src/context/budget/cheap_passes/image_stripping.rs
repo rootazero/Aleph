@@ -7,12 +7,10 @@
 //! placeholder. The 1500-token estimate matches Anthropic's image pricing
 //! and Hermes' constant.
 
+use crate::context::budget::pressure::IMAGE_TOKENS_ESTIMATE;
 use crate::context::budget::ContextPressure;
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 use async_trait::async_trait;
-
-/// Estimated tokens per image (matches Anthropic's pricing model + Hermes).
-const IMAGE_TOKENS_ESTIMATE: usize = 1500;
 
 #[derive(Default)]
 pub struct HistoricalImageStrippingStage;
