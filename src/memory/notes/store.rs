@@ -277,6 +277,20 @@ pub trait NoteStore: Send + Sync {
         let _ = (agent_id, note_path);
         Ok(None)
     }
+
+    /// Total recall-signal count per note path, for retrieval-time reinforcement
+    /// salience. Returns a map `note_path -> hit_count` for the requested paths
+    /// that have at least one recorded recall signal (absent paths score neutral).
+    ///
+    /// Default impl returns an empty map so existing test mocks and non-SQLite
+    /// stores compile unchanged and simply contribute no reinforcement boost.
+    async fn recall_hit_counts(
+        &self,
+        note_paths: &[String],
+    ) -> Result<std::collections::HashMap<String, i64>, AlephError> {
+        let _ = note_paths;
+        Ok(std::collections::HashMap::new())
+    }
 }
 
 #[cfg(test)]

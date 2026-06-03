@@ -71,7 +71,8 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         }
 
         let system = build_compound_system_prompt(source);
-        let user = build_user_prompt(raws, related);
+        let observation_date = chrono::Utc::now().format("%Y-%m-%d (%A)").to_string();
+        let user = build_user_prompt(raws, related, &observation_date);
         let msgs = [UnifiedMessage::user(&user)];
         let resp = self
             .provider
@@ -471,8 +472,21 @@ fn candidate_from_pageop(agent_id: &str, op: &PageOp) -> Option<CandidateNote> {
 fn build_user_prompt(
     raws: &[crate::memory::store::raw_memory::RawMemory],
     related: &[RelatedPage],
+    observation_date: &str,
 ) -> String {
-    let mut out = String::from("## New raw memories\n\n");
+    // Temporal grounding: give the model an absolute anchor so it can resolve
+    // relative time references ("today", "next week") into permanent dates
+    // before they are written into a fact. Without this, an Ephemeral/Contextual
+    // fact like "user wants to focus on docs today" becomes uninterpretable on
+    // later recall. The model does the resolution (R9: intelligence in prompt).
+    let mut out = format!(
+        "## Observation date\n\n\
+         The current date is {observation_date}. Resolve every relative time \
+         reference (\"today\", \"yesterday\", \"next week\", \"in 3 days\", \"last \
+         month\") to an absolute date before writing it into a fact, so the memory \
+         stays interpretable when recalled later.\n\n"
+    );
+    out.push_str("## New raw memories\n\n");
     for (i, r) in raws.iter().enumerate() {
         out.push_str(&format!(
             "### raw-{} (id={}, source={:?})\n",
@@ -783,10 +797,22 @@ mod plan_tests {
                 score: 0.5,
             },
         ];
-        let prompt = build_user_prompt(&raws, &related);
+        let prompt = build_user_prompt(&raws, &related, "2026-01-15 (Thursday)");
         assert!(prompt.contains("[P0] path=preference/coding-style"));
         assert!(prompt.contains("[P1] path=personal/li-wei"));
         assert!(prompt.contains("reference token"));
+    }
+
+    #[test]
+    fn build_user_prompt_injects_observation_date() {
+        let raws = vec![RawMemory::new("hello".into(), RawMemorySource::Transcript)];
+        let prompt = build_user_prompt(&raws, &[], "2026-01-15 (Thursday)");
+        assert!(prompt.contains("## Observation date"));
+        assert!(prompt.contains("2026-01-15 (Thursday)"));
+        assert!(
+            prompt.contains("absolute date"),
+            "must instruct the model to resolve relative time"
+        );
     }
 
     #[test]
