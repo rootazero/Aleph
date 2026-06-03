@@ -60,6 +60,7 @@ pub mod anthropic;
 pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod bridge;
+pub mod capability_gate;
 pub mod catalog;
 pub mod codex;
 pub mod default_handle;

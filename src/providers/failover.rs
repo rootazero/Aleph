@@ -42,6 +42,7 @@ use tokio::sync::RwLock;
 use crate::config::types::RouteMode;
 use crate::error::{AlephError, ErrorClass, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
 use crate::providers::llm_retry::{classify, classify_exhausted, RetryVerdict};
 use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::{order_candidates, CandidateAction, EndpointTier};
@@ -514,6 +515,13 @@ impl AiProvider for FailoverProvider {
         let tool_choice = payload.tool_choice.clone();
         let req_model = payload.model.clone();
         let metadata = payload.metadata.clone();
+        // C floor: derive the request's structural capability requirements once
+        // (image blocks → vision, tools array → tool-calling, text size →
+        // context window). Prompt-blind; shapes the candidate model set below.
+        let reqs = RequestRequirements::from_request(
+            &messages,
+            tools.as_ref().is_some_and(|t| !t.is_empty()),
+        );
 
         Box::pin(async move {
             let candidates = self.candidates();
@@ -558,10 +566,16 @@ impl AiProvider for FailoverProvider {
 
                 // Empty model list → a single attempt with the caller's model
                 // (or the provider's own default when that is `None` too).
+                // Otherwise the C floor drops models that structurally cannot
+                // serve this request (no vision / no tools / over context
+                // window), failing open so the chain is never emptied.
                 let models: Vec<Option<String>> = if cand.models.is_empty() {
                     vec![req_model.clone()]
                 } else {
-                    cand.models.iter().cloned().map(Some).collect()
+                    retain_capable_models(cand.models.clone(), &reqs)
+                        .into_iter()
+                        .map(Some)
+                        .collect()
                 };
 
                 let mut tripped: Option<FailureKind> = None;
@@ -888,6 +902,29 @@ mod tests {
             primary.models(),
             vec![Some("opus".to_string()), Some("sonnet".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn vision_request_skips_blind_model_in_candidate_list() {
+        // The primary "openai" offers a blind model (o1-mini) before a seeing
+        // one (gpt-4o). A request carrying an image must skip o1-mini entirely
+        // (C floor) and dial only gpt-4o.
+        let primary = ScriptProvider::ok("openai");
+        let fp = build(
+            primary.clone(),
+            vec![("openai", vec!["o1-mini", "gpt-4o"])],
+            vec![],
+        );
+
+        let msgs = [UnifiedMessage::user_with_content(vec![
+            crate::providers::message::ContentBlock::Image {
+                data: "base64".into(),
+                mime_type: "image/png".into(),
+            },
+        ])];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "openai");
+        assert_eq!(primary.models(), vec![Some("gpt-4o".to_string())]);
     }
 
     #[tokio::test]
