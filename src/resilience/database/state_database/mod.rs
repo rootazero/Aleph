@@ -107,13 +107,21 @@ impl StateDatabase {
         let needs_migration = Self::check_needs_migration(&conn)?;
 
         if needs_migration {
-            // Drop old memories table for dimension migration
-            conn.execute_batch("DROP TABLE IF EXISTS memories;")
+            // Drop the old memories table AND its derived vec0 index for the
+            // dimension migration. `memories_vec` is a vector index over
+            // `memories.embedding`; if only `memories` is dropped, the
+            // subsequent `CREATE VIRTUAL TABLE IF NOT EXISTS memories_vec`
+            // keeps the stale-dimension table (IF NOT EXISTS is a no-op),
+            // leaving schema_info and the vec0 table disagreeing on the
+            // dimension and breaking every later embedding insert. Dropping
+            // both lets create_schema rebuild memories_vec at the new
+            // dimension, mirroring new_with_dim().
+            conn.execute_batch("DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec;")
                 .map_err(|e| AlephError::config(format!("Failed to drop old table: {}", e)))?;
 
             tracing::info!(
                 new_dim = DEFAULT_EMBEDDING_DIM,
-                "Cleared memories table for embedding dimension migration"
+                "Cleared memories + memories_vec tables for embedding dimension migration"
             );
         }
 
