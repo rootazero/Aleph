@@ -106,6 +106,31 @@ MIIEpAIBAAKCAQEA0Z3VS5JJcds3xfn/ygWyF8DHGP...
     }
 
     #[test]
+    fn test_mask_pkcs8_private_key_without_algorithm_word() {
+        // Regression: the standard PKCS#8 header has no algorithm word
+        // (`-----BEGIN PRIVATE KEY-----`); it must still be fully redacted.
+        let masker = SecretMasker::new();
+        let input = r#"-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQ...
+-----END PRIVATE KEY-----"#;
+        let output = masker.mask(input);
+        assert!(output.contains("***REDACTED***"));
+        assert!(
+            !output.contains("MIIEvQIBADANBgkqhkiG"),
+            "PKCS#8 key body must be redacted"
+        );
+    }
+
+    #[test]
+    fn test_mask_github_fine_grained_pat() {
+        let masker = SecretMasker::new();
+        let input = "GH_PAT=github_pat_11ABCDE0Y0abcdefghijklmnopqrstuvwxyz0123456789ABCDEF";
+        let output = masker.mask(input);
+        assert!(output.contains("github_pat_***REDACTED***"));
+        assert!(!output.contains("11ABCDE0Y0abcdefghij"));
+    }
+
+    #[test]
     fn test_mask_password_in_url() {
         let masker = SecretMasker::new();
         let input = "postgres://user:secretpassword123@localhost:5432/db";

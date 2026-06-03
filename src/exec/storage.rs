@@ -137,21 +137,36 @@ impl ExecApprovalsStorage {
         // Serialize with pretty print
         let json = serde_json::to_string_pretty(config)?;
 
-        // Write atomically using temp file
-        let temp_path = self.path.with_extension("json.tmp");
-        {
+        // Write atomically using a temp file. The temp name is suffixed with
+        // the PID so concurrent writers (e.g. the daemon and a CLI write path)
+        // do not clobber a shared temp file mid-write.
+        let temp_path = self
+            .path
+            .with_extension(format!("json.tmp.{}", std::process::id()));
+
+        // Write + fsync, and (on Unix) set 0600 on the temp file BEFORE the
+        // rename so the secrets file is never briefly world-readable under the
+        // process umask. Any failure cleans up the temp file so partial writes
+        // don't leak onto disk.
+        let write_result = (|| -> Result<(), StorageError> {
             let mut file = fs::File::create(&temp_path)?;
             file.write_all(json.as_bytes())?;
             file.sync_all()?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(fs::Permissions::from_mode(0o600))?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = write_result {
+            let _ = fs::remove_file(&temp_path);
+            return Err(e);
         }
-        fs::rename(&temp_path, &self.path)?;
 
-        // Set permissions to 0600 on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let perms = fs::Permissions::from_mode(0o600);
-            fs::set_permissions(&self.path, perms)?;
+        if let Err(e) = fs::rename(&temp_path, &self.path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(StorageError::from(e));
         }
 
         Ok(compute_hash(&json))

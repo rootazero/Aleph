@@ -422,6 +422,15 @@ impl IpcClient {
         if n == 0 {
             return Err(IpcError::ConnectionClosed);
         }
+        // Bound the message size symmetrically with the server (see
+        // IpcServer::MAX_MESSAGE_SIZE) so a hostile or compromised peer cannot
+        // exhaust client memory with an unbounded line.
+        if line.len() > IpcServer::MAX_MESSAGE_SIZE {
+            return Err(IpcError::InvalidMessage(format!(
+                "message exceeds maximum size of {} bytes",
+                IpcServer::MAX_MESSAGE_SIZE
+            )));
+        }
         let msg: IpcMessage = serde_json::from_str(&line)?;
         Ok(msg)
     }

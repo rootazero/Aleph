@@ -48,11 +48,19 @@ pub fn secret_masker_patterns() -> Vec<SecretPattern> {
             replacement: "gh*_***REDACTED***",
         },
         SecretPattern {
+            regex: Regex::new(r"github_pat_[A-Za-z0-9_]{50,}").unwrap(),
+            replacement: "github_pat_***REDACTED***",
+        },
+        SecretPattern {
             regex: Regex::new(r#"(?i)(bearer|token|authorization)\s*[=:]\s*['"]?([a-zA-Z0-9\-_.]{20,})['"]?"#).unwrap(),
             replacement: "$1=***REDACTED***",
         },
         SecretPattern {
-            regex: Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----").unwrap(),
+            // `[A-Z ]*` (zero-or-more, no mandatory surrounding spaces) so the
+            // common PKCS#8 header `-----BEGIN PRIVATE KEY-----` (no algorithm
+            // word) is redacted as well as `-----BEGIN RSA PRIVATE KEY-----`.
+            // Mirrors the leak-detector `private_key` regex below to avoid drift.
+            regex: Regex::new(r"-----BEGIN[A-Z ]*PRIVATE KEY-----[\s\S]*?-----END[A-Z ]*PRIVATE KEY-----").unwrap(),
             replacement: "-----BEGIN PRIVATE KEY-----\n***REDACTED***\n-----END PRIVATE KEY-----",
         },
         SecretPattern {
@@ -84,6 +92,7 @@ pub fn leak_detector_assets() -> LeakDetectorAssets {
         "ghu_",
         "ghs_",
         "ghr_",
+        "github_pat_",
         "xoxb-",
         "xoxa-",
         "xoxp-",
@@ -118,6 +127,11 @@ pub fn leak_detector_assets() -> LeakDetectorAssets {
         LeakPatternDef {
             name: "github_token",
             regex: Regex::new(r"gh[pousr]_[a-zA-Z0-9]{36,}").unwrap(),
+            action: super::leak_detector::LeakAction::Block,
+        },
+        LeakPatternDef {
+            name: "github_fine_grained_pat",
+            regex: Regex::new(r"github_pat_[A-Za-z0-9_]{50,}").unwrap(),
             action: super::leak_detector::LeakAction::Block,
         },
         LeakPatternDef {

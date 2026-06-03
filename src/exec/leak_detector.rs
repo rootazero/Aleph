@@ -6,7 +6,7 @@
 //! - Private keys (PEM format)
 //! - Bearer tokens
 
-use aho_corasick::AhoCorasick;
+use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use regex::Regex;
 
 /// Action to take when a leak is detected.
@@ -79,7 +79,14 @@ pub struct LeakDetector {
 impl LeakDetector {
     /// Create a new LeakDetector with the given prefixes and patterns.
     pub fn new(prefixes: Vec<&'static str>, patterns: Vec<LeakPattern>) -> Self {
-        let ac = AhoCorasick::new(&prefixes).expect("failed to build Aho-Corasick automaton");
+        // ASCII case-insensitive so the fast-path prefix gate matches the
+        // case-insensitive `(?i)` regexes below. Without this, content like
+        // `BEARER <token>` would fail the prefix gate and skip the regex scan
+        // entirely, leaking a secret that the slow path would have caught.
+        let ac = AhoCorasickBuilder::new()
+            .ascii_case_insensitive(true)
+            .build(&prefixes)
+            .expect("failed to build Aho-Corasick automaton");
         Self { ac, patterns }
     }
 
@@ -300,5 +307,38 @@ mod tests {
         let detector = LeakDetector::default_patterns();
         let result = detector.scan_outbound("key=AIzaSyA1234567890abcdefghijklmnopqrstuv");
         assert!(result.has_blocks(), "should detect Google API key as block");
+    }
+
+    #[test]
+    fn test_uppercase_bearer_not_skipped_by_fast_path() {
+        // Regression: the Aho-Corasick prefix gate must be case-insensitive so
+        // an uppercase `BEARER` still reaches the `(?i)bearer` regex.
+        let detector = LeakDetector::default_patterns();
+        let result = detector.scan_outbound("BEARER eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9");
+        let bearer_finding = result
+            .findings
+            .iter()
+            .find(|f| f.pattern_name == "bearer_token");
+        assert!(
+            bearer_finding.is_some(),
+            "uppercase BEARER must not bypass the fast-path prefix gate"
+        );
+    }
+
+    #[test]
+    fn test_github_fine_grained_pat_detection() {
+        let detector = LeakDetector::default_patterns();
+        let result = detector.scan_outbound(
+            "token=github_pat_11ABCDE0Y0abcdefghijklmnopqrstuvwxyz0123456789ABCDEF",
+        );
+        assert!(
+            result.has_blocks(),
+            "should detect github fine-grained PAT as block"
+        );
+        let finding = result
+            .findings
+            .iter()
+            .find(|f| f.pattern_name == "github_fine_grained_pat");
+        assert!(finding.is_some(), "should have a github_fine_grained_pat finding");
     }
 }
