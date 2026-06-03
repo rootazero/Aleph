@@ -86,8 +86,11 @@ pub fn parse_classify_response(response: &str) -> Result<TaskRoute, ClassifyErro
 
     let parsed: ClassifyResponse = serde_json::from_str(json_str)?;
 
+    // LLM output is untrusted: clamp to the documented [0.0, 1.0] range so an
+    // out-of-band value (e.g. 5.0 or -3.0) can't produce an unsatisfiable or
+    // always-met quality gate downstream. Non-finite falls back to the default.
     let quality_threshold = if parsed.quality_threshold.is_finite() {
-        parsed.quality_threshold
+        parsed.quality_threshold.clamp(0.0, 1.0)
     } else {
         default_quality_threshold()
     };
@@ -172,6 +175,26 @@ mod tests {
         if let TaskRoute::Critical { manifest_hints, .. } = &route {
             assert_eq!(manifest_hints.hard_constraints.len(), 1);
             assert!((manifest_hints.quality_threshold - 0.9).abs() < f64::EPSILON);
+        } else {
+            panic!("expected Critical");
+        }
+    }
+
+    #[test]
+    fn parse_critical_clamps_out_of_range_threshold() {
+        // Untrusted LLM output: values outside [0,1] must be clamped, not passed through.
+        let high = r#"{"category": "critical", "reason": "x", "quality_threshold": 5.0}"#;
+        if let TaskRoute::Critical { manifest_hints, .. } =
+            parse_classify_response(high).unwrap()
+        {
+            assert!((manifest_hints.quality_threshold - 1.0).abs() < f64::EPSILON);
+        } else {
+            panic!("expected Critical");
+        }
+
+        let low = r#"{"category": "critical", "reason": "x", "quality_threshold": -3.0}"#;
+        if let TaskRoute::Critical { manifest_hints, .. } = parse_classify_response(low).unwrap() {
+            assert!((manifest_hints.quality_threshold - 0.0).abs() < f64::EPSILON);
         } else {
             panic!("expected Critical");
         }

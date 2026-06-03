@@ -427,7 +427,20 @@ impl SessionKey {
 
         if let Some((rest_no_epoch, epoch)) = Self::strip_epoch(rest) {
             if let Some(key) = Self::parse_rest(&agent_id, rest_no_epoch, epoch) {
-                return Some(key);
+                // Epochs are only ever serialized onto Main (2-segment rest) and
+                // DirectMessage keys. For 3+ segment keys, a trailing `:sN` must
+                // NOT be stripped as an epoch when the non-epoch parse already
+                // yields a concrete non-Main variant — otherwise a Group/DM whose
+                // peer_id happens to look like `s7` (e.g. `agent:a:discord:group:s7`)
+                // is mis-parsed as a shorter key, breaking the round-trip. The
+                // 2-segment case keeps epoch priority so `agent:a:main:s7` stays Main.
+                let prefer_direct = rest.len() >= 3
+                    && Self::parse_rest(&agent_id, rest, 0)
+                        .as_ref()
+                        .is_some_and(|d| !matches!(d, Self::Main { .. }));
+                if !prefer_direct {
+                    return Some(key);
+                }
             }
         }
 
@@ -1054,6 +1067,44 @@ mod tests {
         let s = key.to_key_string();
         let parsed = SessionKey::parse(&s).expect("must parse arbitrary task type");
         assert_eq!(parsed.to_key_string(), s);
+    }
+
+    #[test]
+    fn test_nested_subagent_roundtrip() {
+        // A sub-subagent must round-trip without collapsing into its
+        // grandparent's session (parse must use the OUTERMOST subagent marker).
+        let grandparent = SessionKey::dm("main", "telegram", "user", DmScope::PerChannelPeer);
+        let parent = SessionKey::subagent(grandparent, "level1");
+        let key = SessionKey::subagent(parent, "level2");
+        let s = key.to_key_string();
+        let parsed = SessionKey::parse(&s).expect("must parse nested subagent");
+        assert_eq!(parsed.to_key_string(), s, "nested subagent roundtrip failed");
+        // The outer layer (level2) must survive parsing.
+        match parsed {
+            SessionKey::Subagent {
+                parent_key,
+                subagent_id,
+            } => {
+                assert_eq!(subagent_id, "level2");
+                assert!(matches!(*parent_key, SessionKey::Subagent { .. }));
+            }
+            other => panic!("expected nested Subagent, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_group_peer_id_resembling_epoch_roundtrip() {
+        // A group peer_id that looks like an epoch suffix (`s7`) must not be
+        // mis-stripped into a shorter key.
+        let key = SessionKey::group("main", "discord", PeerKind::Group, "s7");
+        let s = key.to_key_string();
+        assert_eq!(s, "agent:main:discord:group:s7");
+        let parsed = SessionKey::parse(&s).expect("must parse group with s7 peer");
+        assert_eq!(parsed.to_key_string(), s);
+        assert!(matches!(
+            parsed,
+            SessionKey::Group { peer_id, .. } if peer_id == "s7"
+        ));
     }
 
     #[test]
