@@ -45,7 +45,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use super::edit_match::{apply_ranges, locate, LocateResult};
+use super::edit_match::{apply_ranges, locate, locate_lines, LocateResult};
 use super::path_utils::{check_and_resolve_path, get_denied_paths};
 use super::text::is_binary;
 use crate::builtin_tools::error::ToolError;
@@ -329,14 +329,32 @@ make several coordinated edits at once."#;
                 // gracefully rather than producing a confusing "not found".
                 continue;
             }
-            match locate(&content, &old_text) {
-                LocateResult::Exact(ranges) | LocateResult::Folded(ranges) => {
-                    // V4A hunks identify exactly one location per hunk.
-                    let first = ranges.first().copied().into_iter().collect::<Vec<_>>();
-                    content = apply_ranges(&content, &first, &new_text);
+            // Substring `locate` is the fast path and carries the rich "why"
+            // diagnostic on a miss. `locate_lines` is the codex `seek_sequence`
+            // line-anchored matcher — used as a fallback when the substring
+            // search misses (whitespace / indentation / CRLF drift in a context
+            // line), and as the *primary* matcher for EOF-anchored hunks, which
+            // must bind to the file tail rather than a head-first substring hit
+            // on an identical earlier block.
+            let substring = locate(&content, &old_text);
+            let range = if hunk.eof_anchor {
+                locate_lines(&content, &old_text, true).or_else(|| first_range(&substring))
+            } else {
+                match first_range(&substring) {
+                    Some(r) => Some(r),
+                    None => locate_lines(&content, &old_text, false),
+                }
+            };
+            match range {
+                Some(r) => {
+                    content = apply_ranges(&content, &[r], &new_text);
                     hunks_applied += 1;
                 }
-                LocateResult::NotFound(why) => {
+                None => {
+                    let why = match &substring {
+                        LocateResult::NotFound(w) => w.as_str(),
+                        _ => "no matching location in file",
+                    };
                     return fail(
                         "update",
                         path,
@@ -510,7 +528,7 @@ fn hunk_to_old_new(hunk: &Hunk) -> (String, String) {
             }
         }
     }
-    let _ = hunk.eof_anchor; // reserved for a future end-of-file anchor pass
+    // `eof_anchor` is consumed by `do_update`'s line-anchored fallback locator.
     (old, new)
 }
 
@@ -688,6 +706,16 @@ fn current_mut(slot: &mut Option<Hunk>) -> &mut Hunk {
 // Helpers
 // =============================================================================
 
+/// First matched byte range of a substring [`LocateResult`], or `None` for a
+/// miss. V4A hunks identify exactly one location per hunk, so only the first
+/// occurrence is ever applied.
+fn first_range(result: &LocateResult) -> Option<(usize, usize)> {
+    match result {
+        LocateResult::Exact(ranges) | LocateResult::Folded(ranges) => ranges.first().copied(),
+        LocateResult::NotFound(_) => None,
+    }
+}
+
 fn fail(op: &'static str, path: &str, message: impl Into<String>) -> FileOutcome {
     FileOutcome {
         path: path.to_string(),
@@ -839,5 +867,64 @@ mod tests {
         let outcome = tool.do_update("app.py", None, &[hunk], Some(dir.path()));
         assert!(!outcome.success);
         assert!(outcome.message.contains("did not match"), "{:?}", outcome);
+    }
+
+    #[test]
+    fn update_applies_hunk_despite_trailing_whitespace_drift() {
+        // The file's context lines carry trailing whitespace that the model's
+        // patch omits. The contiguous-substring locator misses (the block is
+        // broken by the `\n`-adjacent spaces); the codex-style line-anchored
+        // fallback recovers the location and the edit lands.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let app_py = dir.path().join("app.py");
+        std::fs::write(&app_py, "x = 1   \ny = 2\nz = 3  \n").unwrap();
+
+        let tool = ApplyPatchTool::new();
+        let outcome = tool.do_update(
+            "app.py",
+            None,
+            &[Hunk {
+                header: None,
+                lines: vec![
+                    HunkLine::Context("x = 1".into()),
+                    HunkLine::Remove("y = 2".into()),
+                    HunkLine::Add("y = 20".into()),
+                    HunkLine::Context("z = 3".into()),
+                ],
+                eof_anchor: false,
+            }],
+            Some(dir.path()),
+        );
+        assert!(outcome.success, "{:?}", outcome);
+        let updated = std::fs::read_to_string(&app_py).unwrap();
+        assert_eq!(updated, "x = 1\ny = 20\nz = 3\n");
+    }
+
+    #[test]
+    fn update_eof_anchor_targets_file_tail() {
+        // Identical sentinel blocks at head and tail; the EOF anchor must make
+        // the fallback locator edit the trailing one. (Whitespace drift on the
+        // context line forces the line-anchored path.)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let f = dir.path().join("log.txt");
+        std::fs::write(&f, "end \nmiddle\nend \n").unwrap();
+
+        let tool = ApplyPatchTool::new();
+        let outcome = tool.do_update(
+            "log.txt",
+            None,
+            &[Hunk {
+                header: None,
+                lines: vec![
+                    HunkLine::Remove("end".into()),
+                    HunkLine::Add("FIN".into()),
+                ],
+                eof_anchor: true,
+            }],
+            Some(dir.path()),
+        );
+        assert!(outcome.success, "{:?}", outcome);
+        let updated = std::fs::read_to_string(&f).unwrap();
+        assert_eq!(updated, "end \nmiddle\nFIN\n");
     }
 }

@@ -169,6 +169,114 @@ fn normalize_line(line: &str) -> String {
     line.trim().chars().map(fold_char).collect()
 }
 
+// =============================================================================
+// Line-anchored fuzzy locator (apply_patch only)
+// =============================================================================
+
+/// Line-anchored fuzzy locator for `apply_patch` hunks.
+///
+/// Ported from codex's `apply-patch` `seek_sequence`. When the contiguous
+/// substring search in [`locate`] fails to anchor a hunk, this performs a
+/// *line-oriented* search with progressively looser per-line equality —
+/// exact → trailing-whitespace-insensitive (`rstrip`) → both-ends trimmed →
+/// typographically folded. This bridges the single most common `apply_patch`
+/// failure mode: a context line whose trailing whitespace drifted between the
+/// model's patch and the file on disk, which defeats the substring matcher
+/// entirely (one stray `\n`-adjacent space breaks the whole multi-line block).
+///
+/// `eof` mirrors codex: when the hunk carried a `*** End of File` anchor, the
+/// search starts at the last possible window so a pattern meant to match the
+/// file's tail is applied there.
+///
+/// Returns a byte range over the *original* `content` spanning the matched
+/// block — first line start .. last line end (excluding the trailing newline) —
+/// matching the splice convention of [`apply_ranges`] so surrounding newlines
+/// are preserved. Returns `None` when no pass matches.
+///
+/// Deliberately scoped to `apply_patch`: `file_edit` keeps its strict
+/// exact/diagnostic model (a clean failure beats a wrong-whitespace edit), so
+/// it does not call this.
+pub(super) fn locate_lines(content: &str, needle: &str, eof: bool) -> Option<(usize, usize)> {
+    let spans = line_spans(content);
+    let pattern: Vec<&str> = needle.split('\n').collect();
+    // A pattern longer than the file can never match; an empty `needle` is
+    // never passed here (pure-add hunks are skipped upstream).
+    if pattern.is_empty() || pattern.len() > spans.len() {
+        return None;
+    }
+
+    // A file ending in '\n' yields a trailing empty span (a `split('\n')`
+    // artifact, not a real line). Exclude it when computing the EOF anchor so
+    // the search starts at the last *content* line rather than the phantom
+    // empty one; the scan's upper bound keeps the empty span so a pattern that
+    // legitimately ends in a blank line can still match. `saturating_sub`
+    // guards the case where the pattern spans the whole effective file.
+    let effective_len = if content.ends_with('\n') {
+        spans.len() - 1
+    } else {
+        spans.len()
+    };
+    let search_start = if eof {
+        effective_len.saturating_sub(pattern.len())
+    } else {
+        0
+    };
+
+    // Each pass is a full scan at one strictness level — codex semantics: try
+    // the strictest first so an exact location always wins over a fuzzy one.
+    let exact = |a: &str, b: &str| a == b;
+    let rstrip = |a: &str, b: &str| a.trim_end() == b.trim_end();
+    let trim = |a: &str, b: &str| a.trim() == b.trim();
+    let fold = |a: &str, b: &str| normalize_line(a) == normalize_line(b);
+
+    [
+        scan(&spans, content, &pattern, search_start, exact),
+        scan(&spans, content, &pattern, search_start, rstrip),
+        scan(&spans, content, &pattern, search_start, trim),
+        scan(&spans, content, &pattern, search_start, fold),
+    ]
+    .into_iter()
+    .flatten()
+    .next()
+    .map(|i| (spans[i].0, spans[i + pattern.len() - 1].1))
+}
+
+/// Byte spans `(start, end)` for each line of `content` split on `'\n'`, where
+/// `end` excludes the newline. Mirrors `str::split('\n')` exactly (a trailing
+/// `'\n'` yields a final empty span), so spans align 1:1 with a needle that was
+/// likewise produced by `split('\n')`. A trailing `'\r'` stays inside the slice
+/// and folds away in the `rstrip` pass, so CRLF/LF drift is tolerated for free.
+fn line_spans(content: &str) -> Vec<(usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for (idx, b) in content.bytes().enumerate() {
+        if b == b'\n' {
+            spans.push((start, idx));
+            start = idx + 1;
+        }
+    }
+    spans.push((start, content.len()));
+    spans
+}
+
+/// Scan `spans` from `search_start` for the first window where every line
+/// satisfies `eq` against the corresponding `pattern` line.
+fn scan(
+    spans: &[(usize, usize)],
+    content: &str,
+    pattern: &[&str],
+    search_start: usize,
+    eq: impl Fn(&str, &str) -> bool,
+) -> Option<usize> {
+    let last = spans.len() - pattern.len();
+    (search_start..=last).find(|&i| {
+        (0..pattern.len()).all(|j| {
+            let (s, e) = spans[i + j];
+            eq(&content[s..e], pattern[j])
+        })
+    })
+}
+
 /// Fold a single typographic-punctuation code point to its ASCII equivalent.
 ///
 /// Ported from codex's `apply-patch` `seek_sequence::normalise`. The mapping is
@@ -284,6 +392,55 @@ mod tests {
             }
             _ => panic!("expected generic not-found"),
         }
+    }
+
+    #[test]
+    fn locate_lines_bridges_trailing_whitespace_drift() {
+        // File line carries trailing spaces the model's patch context omitted.
+        // The contiguous substring matcher fails (the `\n`-adjacent spaces break
+        // the block); the line-anchored rstrip pass recovers the location.
+        let content = "fn a() {\n    let x = 1;   \n    y\n}\n";
+        let needle = "    let x = 1;\n    y";
+        assert!(
+            matches!(locate(content, needle), LocateResult::NotFound(_)),
+            "substring matcher must miss so the line fallback is exercised"
+        );
+        let (s, e) = locate_lines(content, needle, false).expect("rstrip pass matches");
+        assert_eq!(&content[s..e], "    let x = 1;   \n    y");
+    }
+
+    #[test]
+    fn locate_lines_bridges_indentation_drift() {
+        // Leading-whitespace drift: patch under-indents the context block.
+        let content = "        deeply\n        nested\n";
+        let needle = "deeply\nnested";
+        let (s, e) = locate_lines(content, needle, false).expect("trim pass matches");
+        assert_eq!(&content[s..e], "        deeply\n        nested");
+    }
+
+    #[test]
+    fn locate_lines_eof_anchor_prefers_tail() {
+        // Two identical blocks; the EOF anchor must select the last one.
+        let content = "marker\nx\nmarker\n";
+        let needle = "marker";
+        assert_eq!(locate_lines(content, needle, true), Some((9, 15)));
+        assert_eq!(&content["marker\nx\n".len()..15], "marker");
+        // Without the anchor the first occurrence wins.
+        assert_eq!(locate_lines(content, needle, false), Some((0, 6)));
+    }
+
+    #[test]
+    fn locate_lines_pattern_longer_than_file_is_none() {
+        assert_eq!(locate_lines("one line", "a\nb\nc", false), None);
+    }
+
+    #[test]
+    fn locate_lines_exact_wins_over_fuzzy() {
+        // An exact-matching window further down must not be pre-empted by a
+        // fuzzy (whitespace-different) window earlier in the file.
+        let content = "foo \nfoo\n";
+        // Exact "foo" is line 2 (byte 5); line 1 "foo " only matches under rstrip.
+        assert_eq!(locate_lines(content, "foo", false), Some((5, 8)));
     }
 
     #[test]
