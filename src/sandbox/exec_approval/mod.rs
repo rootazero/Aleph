@@ -1,6 +1,7 @@
 pub mod gate;
 pub mod parser;
 pub mod retry;
+pub mod session_memory;
 pub mod types;
 
 pub use gate::{check_always_confirm, ApprovalGate, ApprovalOutcome, ApprovalRequester};

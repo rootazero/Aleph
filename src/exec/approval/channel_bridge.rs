@@ -467,9 +467,13 @@ impl ChannelApprovalBridge {
         }
 
         match approval_manager.wait_for_decision(record).await {
-            Some(ApprovalDecisionType::AllowOnce) | Some(ApprovalDecisionType::AllowAlways) => {
-                ApprovalOutcome::Approved
-            }
+            // "Allow once" approves this invocation; "allow always" additionally
+            // carries the session-scoped grant so the dispatch gate can remember
+            // it and stop re-prompting the same tool this session. Previously
+            // both collapsed to `Approved`, silently discarding the user's
+            // "always" intent (the `AllowAlways` variant was dead end-to-end).
+            Some(ApprovalDecisionType::AllowOnce) => ApprovalOutcome::Approved,
+            Some(ApprovalDecisionType::AllowAlways) => ApprovalOutcome::ApprovedForSession,
             Some(ApprovalDecisionType::Deny) => ApprovalOutcome::Denied,
             None => {
                 self.send_timeout_notice(channel_id, conversation_id).await;

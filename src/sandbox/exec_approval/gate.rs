@@ -14,14 +14,28 @@ pub trait ApprovalRequester: Send + Sync {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalOutcome {
+    /// Approved for this single invocation only.
     Approved,
+    /// Approved for the remainder of the session (user chose "allow always").
+    /// Treated as approved everywhere; additionally recorded in the session
+    /// approval memory so the same tool is not re-prompted this session.
+    ApprovedForSession,
     Denied,
     Timeout,
 }
 
 impl ApprovalOutcome {
     pub fn is_approved(&self) -> bool {
-        matches!(self, ApprovalOutcome::Approved)
+        matches!(
+            self,
+            ApprovalOutcome::Approved | ApprovalOutcome::ApprovedForSession
+        )
+    }
+
+    /// True only for a session-scoped grant — the caller should remember it so
+    /// subsequent calls to the same tool skip the prompt.
+    pub fn is_session_grant(&self) -> bool {
+        matches!(self, ApprovalOutcome::ApprovedForSession)
     }
 }
 

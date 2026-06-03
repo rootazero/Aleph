@@ -1149,6 +1149,59 @@ async fn declared_confirmation_tool_runs_when_approved() {
     );
 }
 
+/// Build a `TurnContext` with a unique `SessionKey` so each test isolates its
+/// entry in the process-wide session approval memory.
+fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
+    crate::tools::turn_context::TurnContext {
+        session_key: crate::routing::session_key::SessionKey::main(agent),
+        channel_id: "test".to_string(),
+        conversation_id: "conv".to_string(),
+    }
+}
+
+#[tokio::test]
+async fn session_grant_skips_reprompt_within_session() {
+    // `ApprovedForSession` (the `AllowAlways` choice) must be remembered: the
+    // first call prompts, the second is satisfied by the session memory.
+    let requester = StdArc::new(FakeRequester {
+        outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::ApprovedForSession,
+        calls: AtomicUsize::new(0),
+    });
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-session-grant"))
+        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+
+    svc.execute("danger", json!({})).await.expect("first runs");
+    svc.execute("danger", json!({})).await.expect("second runs");
+
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "session grant must suppress the second prompt"
+    );
+}
+
+#[tokio::test]
+async fn one_shot_approval_reprompts_each_call() {
+    // A plain one-shot `Approved` is NOT remembered — every call re-prompts.
+    let requester = StdArc::new(FakeRequester {
+        outcome: crate::sandbox::exec_approval::gate::ApprovalOutcome::Approved,
+        calls: AtomicUsize::new(0),
+    });
+    let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-one-shot"))
+        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+
+    svc.execute("danger", json!({})).await.expect("first runs");
+    svc.execute("danger", json!({})).await.expect("second runs");
+
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        2,
+        "one-shot approval must re-prompt each call"
+    );
+}
+
 #[tokio::test]
 async fn declared_confirmation_tool_blocked_when_denied() {
     let requester = StdArc::new(FakeRequester {
