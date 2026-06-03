@@ -8,7 +8,7 @@ pub mod cheap_passes;
 pub mod preflight;
 pub mod pressure;
 
-use crate::context::budget::pressure::estimate_tokens_aware;
+use crate::context::budget::pressure::{estimate_message_tokens_aware, estimate_tokens_aware};
 use crate::context::compact::PressureLevel;
 use crate::providers::message::UnifiedMessage;
 
@@ -74,9 +74,14 @@ impl ContextPressure {
         // accurate base, converging faster than off a flat estimate.
         let prompt_tokens = estimate_tokens_aware(system_prompt, ratio);
         let overhead = prompt_tokens + tool_schema_tokens;
+        // Per-message, content-aware AND image-aware: `text_content()` drops image
+        // blocks, so summing only the text estimate counts screenshots as zero
+        // tokens. `estimate_message_tokens_aware` adds the per-image charge so a
+        // vision-heavy context reports its true pressure and compaction fires in
+        // time. Image-free messages are byte-identical to the old text estimate.
         let msg_tokens: usize = messages
             .iter()
-            .map(|m| estimate_tokens_aware(&m.text_content(), ratio))
+            .map(|m| estimate_message_tokens_aware(m, ratio))
             .sum();
         let used = overhead + msg_tokens;
         let budget: usize = token_budget.try_into().unwrap_or(usize::MAX);
@@ -581,6 +586,36 @@ mod tests {
             aware.used_tokens > flat_used,
             "content-aware sensor ({}) must exceed flat-3.5 ({flat_used}) for CJK",
             aware.used_tokens
+        );
+    }
+
+    #[test]
+    fn test_context_pressure_counts_images() {
+        use crate::context::budget::pressure::IMAGE_TOKENS_ESTIMATE;
+        use crate::providers::message::ContentBlock;
+
+        // An image-bearing turn must register more pressure than the same text
+        // alone: `text_content()` drops image blocks, so before this fix a
+        // multi-megabyte screenshot counted as zero tokens and a vision session
+        // under-reported pressure by ~IMAGE_TOKENS_ESTIMATE per image.
+        let text_only = vec![UnifiedMessage::user("look at this")];
+        let with_image = vec![UnifiedMessage::user_with_content(vec![
+            ContentBlock::Image {
+                data: "fake_base64".to_string(),
+                mime_type: "image/png".to_string(),
+            },
+            ContentBlock::Text {
+                text: "look at this".to_string(),
+                cache_control: None,
+            },
+        ])];
+
+        let p_text = ContextPressure::compute(&text_only, "", 0, 100_000, 3.5);
+        let p_image = ContextPressure::compute(&with_image, "", 0, 100_000, 3.5);
+        assert_eq!(
+            p_image.used_tokens,
+            p_text.used_tokens + IMAGE_TOKENS_ESTIMATE,
+            "an image turn must cost the text estimate plus one image charge"
         );
     }
 
