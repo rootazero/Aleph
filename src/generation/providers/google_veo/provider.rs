@@ -299,16 +299,11 @@ impl GoogleVeoProvider {
                     GenerationError::serialization(format!("Failed to parse operation: {}", e))
                 })?;
 
-            if operation.done.unwrap_or(false) {
-                info!(
-                    attempts = attempts,
-                    operation = %operation_name,
-                    "Veo operation completed"
-                );
-                return Ok(operation);
-            }
-
-            // Check for error in operation
+            // Check for error in operation BEFORE the `done` short-circuit:
+            // a Google long-running operation that finished in a failed state
+            // sets both `done: true` and a populated `error` object. Checking
+            // `done` first would treat such a failure as success and discard
+            // the real error reason (safety block, quota, internal error).
             if let Some(ref error) = operation.error {
                 return Err(GenerationError::provider(
                     error
@@ -318,6 +313,15 @@ impl GoogleVeoProvider {
                     error.code,
                     "google-veo",
                 ));
+            }
+
+            if operation.done.unwrap_or(false) {
+                info!(
+                    attempts = attempts,
+                    operation = %operation_name,
+                    "Veo operation completed"
+                );
+                return Ok(operation);
             }
 
             // Wait before next poll

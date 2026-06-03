@@ -145,22 +145,22 @@ impl GenerationProvider for DeepgramSttProvider {
             // Decide between URL mode and inline-bytes mode.
             let (body_bytes, content_type, used_url): (
                 Option<Vec<u8>>,
-                &'static str,
+                String,
                 Option<String>,
             ) = {
                 if let Some(ref src) = request.params.reference_audio {
                     if src.starts_with("http://") || src.starts_with("https://") {
-                        (None, "application/json", Some(src.clone()))
+                        (None, "application/json".to_string(), Some(src.clone()))
                     } else if let Some(rest) = src.strip_prefix("data:") {
                         let (bytes, ct) = decode_data_url(rest)?;
-                        (Some(bytes), Box::leak(ct.into_boxed_str()), None)
+                        (Some(bytes), ct, None)
                     } else {
                         let (bytes, ct) = load_local(Path::new(src))?;
-                        (Some(bytes), Box::leak(ct.into_boxed_str()), None)
+                        (Some(bytes), ct, None)
                     }
                 } else if !request.prompt.trim().is_empty() {
                     let (bytes, ct) = load_local(Path::new(&request.prompt))?;
-                    (Some(bytes), Box::leak(ct.into_boxed_str()), None)
+                    (Some(bytes), ct, None)
                 } else {
                     return Err(GenerationError::invalid_parameters(
                         "Deepgram STT requires either request.prompt (local path) or params.reference_audio (URL/path/base64)",
