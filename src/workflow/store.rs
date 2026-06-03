@@ -8,8 +8,9 @@
 //! The persisted document is the [`WorkflowManifest`] superset — the single
 //! source of truth (see [`super::interop::manifest`]). Storing the manifest
 //! rather than the lean [`WorkflowDef`](crate::workflow::def::WorkflowDef)
-//! keeps the `.workflow.js`-compatible metadata (`whenToUse`, `phases`,
-//! per-step `label`/`model`/`phase`/`schema`) durable across
+//! keeps the `.workflow.js`-compatible metadata (`whenToUse`, `phases` with
+//! per-phase `model`, per-step `label`/`model`/`phase`/`schema`/`isolation`/
+//! `agentType`) durable across
 //! `import → save → export`, so an exported template faithfully reproduces the
 //! engineering format. Execution still consumes only the projected core via
 //! [`WorkflowManifest::to_def`] (R10 — the executor never sees the extra
@@ -209,6 +210,8 @@ mod tests {
                     model: None,
                     phase: None,
                     schema: None,
+                    isolation: None,
+                    agent_type: None,
                 },
                 WorkflowManifestStep {
                     id: "write".into(),
@@ -219,6 +222,8 @@ mod tests {
                     model: None,
                     phase: None,
                     schema: None,
+                    isolation: None,
+                    agent_type: None,
                 },
             ],
         }
@@ -244,11 +249,14 @@ mod tests {
         m.phases = vec![WorkflowPhase {
             title: "Gather".into(),
             detail: "collect".into(),
+            model: Some("opus".into()),
         }];
         m.steps[0].model = Some("haiku".into());
         m.steps[0].phase = Some("Gather".into());
         m.steps[0].label = Some("audit:gather".into());
         m.steps[0].schema = Some(serde_json::json!({"type": "object"}));
+        m.steps[0].isolation = Some("worktree".into());
+        m.steps[0].agent_type = Some("Explore".into());
         save_at(tmp.path(), &m).unwrap();
         let back = load_at(tmp.path(), "rich").unwrap();
         assert_eq!(m, back, "rich metadata is durable across save/load");
