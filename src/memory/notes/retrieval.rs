@@ -91,7 +91,7 @@ impl<S: NoteStore> NoteRetrieval<S> {
 
         // 3. Read markdown, parse frontmatter, compute final re-rank score
         let mut scored: Vec<NoteContent> = Vec::new();
-        for (path, cosine) in results {
+        for (path, distance) in results {
             let safe_path = path
                 .replace('\\', "/")
                 .split('/')
@@ -111,7 +111,14 @@ impl<S: NoteStore> NoteRetrieval<S> {
                 Ok(n) => (n.confidence, n.severity),
                 Err(_) => (1.0, Severity::Low),
             };
-            let final_score = rerank_score(cosine, confidence, severity);
+            // `vector_search` returns the raw vec0 L2 distance (lower = more
+            // similar). `rerank_score` and the descending sort below both expect
+            // a *similarity* (higher = better), so convert via the project's
+            // canonical 1/(1+L2) (same formula as `memory.similarity_threshold`).
+            // Feeding the raw distance here inverted the ranking — least-similar
+            // notes scored highest.
+            let similarity = 1.0 / (1.0 + distance);
+            let final_score = rerank_score(similarity, confidence, severity);
             scored.push(NoteContent {
                 path,
                 content,

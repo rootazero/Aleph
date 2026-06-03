@@ -319,14 +319,19 @@ impl Config {
                     }
                 };
 
-            if start >= end {
+            // Only reject an empty (start == end) window. A `start > end` window
+            // is a valid overnight span (e.g. 22:00–06:00) — `is_within_window`
+            // explicitly handles wrap-around, and overnight is the most natural
+            // idle window. Rejecting `start >= end` made that branch unreachable
+            // and forbade the common "after I go to bed" configuration.
+            if start == end {
                 error!(
                     window_start = %self.memory.dreaming.window_start_local,
                     window_end = %self.memory.dreaming.window_end_local,
-                    "Dreaming window start must be before end"
+                    "Dreaming window start must differ from end"
                 );
                 return Err(AlephError::invalid_config(format!(
-                    "memory.dreaming.window_start_local ({}) must be earlier than window_end_local ({})",
+                    "memory.dreaming.window_start_local ({}) must differ from window_end_local ({})",
                     self.memory.dreaming.window_start_local,
                     self.memory.dreaming.window_end_local
                 )));

@@ -582,7 +582,22 @@ impl DreamDaemon {
             })
             .await;
 
-        let result = self.run_dream(run_start, run_date, true).await;
+        // Bound the forced run by `max_duration_seconds`, exactly like the
+        // scheduled path (`check_and_run`). Without this a hung LLM stage would
+        // run forever AND hold the `is_running` latch via `RunGuard`, blocking
+        // every subsequent scheduled cycle.
+        let result = match tokio::time::timeout(
+            Duration::from_secs(self.config.max_duration_seconds as u64),
+            self.run_dream(run_start, run_date, true),
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(_) => Err(AlephError::other(format!(
+                "dream cycle exceeded max_duration_seconds ({})",
+                self.config.max_duration_seconds
+            ))),
+        };
         let duration_ms = ((now_timestamp() - run_start).max(0) as u64) * 1000;
 
         match &result {

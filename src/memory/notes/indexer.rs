@@ -482,13 +482,12 @@ impl<S: NoteStore> NoteIndexer<S> {
         let md = note.to_markdown();
         note.content_hash = sha2_hash(&md);
 
-        // Write file + index
-        fs::write(&file_path, &md)
-            .await
-            .map_err(|e| AlephError::ConfigError {
-                message: format!("Failed to write {:?}: {e}", file_path),
-                suggestion: None,
-            })?;
+        // Write file + index. Use the atomic helper (write-temp + rename) like
+        // every other note writer (`write_note`, `write_note_raw`,
+        // `merge_source_notes_into_note`) — a plain `fs::write` can leave a
+        // truncated/partial markdown file (the source of truth) on a crash or
+        // be observed half-written by a concurrent reader.
+        atomic_write_file(&file_path, &md).await?;
         self.store.index_note(&note, agent_id, &safe_cat).await?;
 
         self.notify_orientation(agent_id, &safe_cat, filename);

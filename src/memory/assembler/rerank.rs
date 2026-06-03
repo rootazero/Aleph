@@ -50,11 +50,17 @@ pub(crate) fn build_prompt(query: &str, candidates: &[Candidate], total_budget: 
         })
         .collect::<Vec<_>>()
         .join("\n");
+    // Substitute the trusted template fields FIRST and the user-controlled
+    // `{query}` LAST. `String::replace` is applied left-to-right, so if the
+    // query were substituted first a query containing the literal `{candidates}`
+    // (or `{budget}`/`{max_sum}`) would later be expanded by the remaining
+    // replacements — letting a crafted query splice in or restructure the
+    // candidate block (prompt-template injection into the rerank call).
     RERANK_PROMPT_V1
-        .replace("{query}", query)
         .replace("{budget}", &total_budget.to_string())
         .replace("{max_sum}", &max_sum.to_string())
         .replace("{candidates}", &cand_block)
+        .replace("{query}", query)
 }
 
 fn slot_name(k: SlotKind) -> &'static str {
@@ -127,7 +133,10 @@ pub(crate) fn parse_response(
     if sum > cap {
         let scale = cap as f32 / sum as f32;
         for (_, _, b) in sanitized.iter_mut() {
-            *b = ((*b as f32) * scale).floor() as u32;
+            // Clamp to >=1: a slot the LLM deliberately selected (it passed the
+            // `tokens_budget == 0` filter above) must not silently floor to 0
+            // here and then be dropped during hydration.
+            *b = (((*b as f32) * scale).floor() as u32).max(1);
         }
     }
     Ok(sanitized)

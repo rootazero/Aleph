@@ -255,30 +255,6 @@ impl CompressionService {
             "Starting note-based compression"
         );
 
-        // 3. Get existing note context (path + first 300 chars of body)
-        let existing_notes = indexer
-            .store()
-            .list_notes(workspace_id)
-            .await
-            .map_err(|e| AlephError::other(format!("Failed to list existing notes: {e}")))?;
-        let mut existing_note_summaries: Vec<String> = Vec::new();
-        for note_idx in &existing_notes {
-            let note_file = indexer
-                .memory_dir()
-                .join(workspace_id)
-                .join(&note_idx.category)
-                .join(format!("{}.md", note_idx.filename));
-            let summary = match tokio::fs::read_to_string(&note_file).await {
-                Ok(content) => {
-                    // Take first 300 chars of body as context
-                    let preview: String = content.chars().take(300).collect();
-                    format!("{}: {}", note_idx.path, preview)
-                }
-                Err(_) => note_idx.path.clone(),
-            };
-            existing_note_summaries.push(summary);
-        }
-
         // 4. Extract note updates via LLM — one call per source group (Spec 1).
         //    When compound_enabled, delegate each source batch to CompoundIngestor
         //    and skip the legacy accumulation path.
