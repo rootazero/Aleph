@@ -123,9 +123,14 @@ impl SamplingHandler {
 
         // Inject context if requested
         if let Some(ref mode) = request.include_context {
-            if let Some(ref client) = *self.client.read().await {
+            // Clone the client Arc under the lock, then release it before the
+            // network round-trips in gather_context. Holding the read lock
+            // across .await would block set_client writers for the duration of
+            // the resource/tool listing (mirrors the callback clone below).
+            let client = self.client.read().await.clone();
+            if let Some(client) = client {
                 let contexts =
-                    ContextInjector::gather_context(client, mode, requesting_server).await;
+                    ContextInjector::gather_context(&client, mode, requesting_server).await;
                 if let Some(context_msg) = ContextInjector::format_as_system_message(&contexts) {
                     // Prepend context message to messages
                     request.messages.insert(0, context_msg);

@@ -13,7 +13,7 @@ use tokio::sync::RwLock;
 use crate::error::{AlephError, Result};
 
 /// OAuth tokens received from an authorization server
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OAuthTokens {
     /// The access token for API requests
     pub access_token: String,
@@ -23,6 +23,21 @@ pub struct OAuthTokens {
     pub expires_at: Option<i64>,
     /// Granted scopes
     pub scope: Option<String>,
+}
+
+// Manual Debug impl: never expose token material in logs/panics/{:?}.
+impl std::fmt::Debug for OAuthTokens {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthTokens")
+            .field("access_token", &"<redacted>")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("expires_at", &self.expires_at)
+            .field("scope", &self.scope)
+            .finish()
+    }
 }
 
 impl OAuthTokens {
@@ -52,7 +67,7 @@ impl OAuthTokens {
 ///
 /// Some OAuth servers support dynamic client registration, where clients
 /// can register themselves at runtime rather than using pre-configured credentials.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ClientInfo {
     /// Client ID received from registration
     pub client_id: String,
@@ -64,10 +79,25 @@ pub struct ClientInfo {
     pub client_secret_expires_at: Option<i64>,
 }
 
+// Manual Debug impl: client_secret is a credential — never log it.
+impl std::fmt::Debug for ClientInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientInfo")
+            .field("client_id", &self.client_id)
+            .field(
+                "client_secret",
+                &self.client_secret.as_ref().map(|_| "<redacted>"),
+            )
+            .field("client_id_issued_at", &self.client_id_issued_at)
+            .field("client_secret_expires_at", &self.client_secret_expires_at)
+            .finish()
+    }
+}
+
 /// OAuth entry for a server
 ///
 /// Stores all OAuth-related information for a single MCP server.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct OAuthEntry {
     /// OAuth tokens
     pub tokens: Option<OAuthTokens>,
@@ -79,6 +109,26 @@ pub struct OAuthEntry {
     pub oauth_state: Option<String>,
     /// The server URL this entry is for
     pub server_url: Option<String>,
+}
+
+// Manual Debug impl: code_verifier (PKCE secret) and oauth_state (CSRF token)
+// must not leak; tokens/client_info redact themselves via their own Debug.
+impl std::fmt::Debug for OAuthEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthEntry")
+            .field("tokens", &self.tokens)
+            .field("client_info", &self.client_info)
+            .field(
+                "code_verifier",
+                &self.code_verifier.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "oauth_state",
+                &self.oauth_state.as_ref().map(|_| "<redacted>"),
+            )
+            .field("server_url", &self.server_url)
+            .finish()
+    }
 }
 
 /// Storage file structure

@@ -106,10 +106,30 @@ impl TokenRefreshManager {
 
     /// Check all servers and refresh tokens as needed
     async fn check_and_refresh_all(&self) {
-        let servers = self.servers.read().await;
+        // Snapshot the tracked servers and release the read lock BEFORE doing
+        // any network I/O. Holding the lock across `check_and_refresh_server`
+        // (which performs a token-endpoint round-trip) would block
+        // `register_server`/`unregister_server` writers for the full duration
+        // of every refresh — and indefinitely if a refresh hangs.
+        let snapshot: Vec<(String, String, OAuthServerMetadata)> = {
+            let servers = self.servers.read().await;
+            servers
+                .iter()
+                .map(|(name, server)| {
+                    (
+                        name.clone(),
+                        server.client_id.clone(),
+                        server.metadata.clone(),
+                    )
+                })
+                .collect()
+        };
 
-        for (name, server) in servers.iter() {
-            if let Err(e) = self.check_and_refresh_server(name, server).await {
+        for (name, client_id, metadata) in &snapshot {
+            if let Err(e) = self
+                .check_and_refresh_server(name, client_id, metadata)
+                .await
+            {
                 tracing::warn!(
                     server = %name,
                     error = %e,
@@ -123,7 +143,8 @@ impl TokenRefreshManager {
     async fn check_and_refresh_server(
         &self,
         server_name: &str,
-        server: &TrackedServer,
+        client_id: &str,
+        metadata: &OAuthServerMetadata,
     ) -> Result<()> {
         let tokens = match self.storage.get_tokens(server_name).await? {
             Some(t) => t,
@@ -150,7 +171,7 @@ impl TokenRefreshManager {
         );
 
         let _new_tokens = provider
-            .refresh_token_with(&server.metadata, &server.client_id, &refresh_token)
+            .refresh_token_with(metadata, client_id, &refresh_token)
             .await?;
 
         tracing::info!(server = %server_name, "Token refreshed successfully");

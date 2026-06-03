@@ -11,6 +11,7 @@
 //! 5. `refresh_token()` - Refresh expired tokens
 
 use crate::sync_primitives::Arc;
+use std::time::Duration;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use rand::Rng;
@@ -85,7 +86,14 @@ impl OAuthProvider {
         callback_url: impl Into<String>,
     ) -> Self {
         Self {
-            client: Client::new(),
+            // Bound every OAuth round-trip (metadata discovery, token exchange,
+            // refresh). reqwest's default client has NO timeout, so a hung
+            // endpoint would block the caller — and, via TokenRefreshManager,
+            // the refresh loop — indefinitely.
+            client: Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             storage,
             server_name: server_name.into(),
             server_url: server_url.into(),
