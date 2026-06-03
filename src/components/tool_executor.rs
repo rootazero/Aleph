@@ -185,7 +185,7 @@ impl ToolExecutor {
         ctx: &EventContext,
     ) -> Result<(String, u32), (String, ErrorKind, u32)> {
         let mut attempt = 0u32;
-        let max_attempts = self.retry_policy.max_retries + 1; // +1 for initial attempt
+        let max_attempts = self.retry_policy.max_retries.saturating_add(1); // +1 for initial attempt
 
         loop {
             attempt += 1;
