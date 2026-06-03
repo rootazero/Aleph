@@ -57,12 +57,32 @@ impl PiiSecretsGuardrail {
         Self { guard, resolver }
     }
 
-    fn map_outbound(result: Result<GuardResult, SecurityGuardError>) -> GuardrailDecision {
+    fn map_outbound(
+        original: &str,
+        result: Result<GuardResult, SecurityGuardError>,
+    ) -> GuardrailDecision {
         match result {
             Ok(GuardResult::Clean { .. }) => GuardrailDecision::Allow,
-            Ok(GuardResult::Warned { warnings, .. }) => GuardrailDecision::Warn {
-                reason: warnings.join("; "),
-            },
+            Ok(GuardResult::Warned { text, warnings }) => {
+                // `Warned.text` carries security-relevant sanitisation applied
+                // at warn severity: invisible/bidi-char stripping, LLM
+                // tokenizer-marker scrubbing, inbound PII warn-masking, and
+                // resolved placeholders. If it differs from the input we MUST
+                // surface it as `Sanitize` so the caller swaps the cleaned text
+                // in — mapping to `Warn` (no caller-visible mutation) would
+                // discard the scrubbed text and let the original through,
+                // defeating the very defense that fired.
+                if text != original {
+                    GuardrailDecision::Sanitize(Replacement {
+                        text,
+                        source: format!("pii_secrets (warn: {})", warnings.join("; ")),
+                    })
+                } else {
+                    GuardrailDecision::Warn {
+                        reason: warnings.join("; "),
+                    }
+                }
+            }
             Ok(GuardResult::Redacted { text, reasons }) => {
                 GuardrailDecision::Sanitize(Replacement {
                     text,
@@ -102,7 +122,7 @@ impl PiiSecretsGuardrail {
                     source: "pii_secrets (placeholder substitution)".to_string(),
                 })
             }
-            other => Self::map_outbound(other),
+            other => Self::map_outbound(original, other),
         }
     }
 }
@@ -115,7 +135,7 @@ impl InputGuardrail for PiiSecretsGuardrail {
     async fn evaluate_input(&self, text: &str) -> GuardrailDecision {
         let ctx = SecurityContext::default();
         let r = self.guard.process_outbound(text, None, ctx).await;
-        Self::map_outbound(r)
+        Self::map_outbound(text, r)
     }
 }
 
@@ -127,7 +147,7 @@ impl OutputGuardrail for PiiSecretsGuardrail {
     async fn evaluate_output(&self, text: &str) -> GuardrailDecision {
         let ctx = SecurityContext::default();
         let r = self.guard.process_inbound(text, &ctx).await;
-        Self::map_outbound(r)
+        Self::map_outbound(text, r)
     }
 }
 
@@ -157,6 +177,46 @@ impl ToolCallGuardrail for PiiSecretsGuardrail {
             .process_outbound(&serialized, resolver_ref, ctx)
             .await;
         Self::map_tool_call(&serialized, r)
+    }
+}
+
+#[cfg(test)]
+mod map_outbound_tests {
+    use super::*;
+
+    /// Regression: `Warned` carrying a *mutated* text (e.g. invisible-char
+    /// stripping / tokenizer-marker scrubbing applied at warn severity) must
+    /// surface as `Sanitize` so the caller swaps the cleaned text in. Mapping
+    /// it to `Warn` would discard the scrub and let the original text through.
+    #[test]
+    fn warned_with_mutated_text_sanitizes() {
+        let dec = PiiSecretsGuardrail::map_outbound(
+            "raw\u{200b}text",
+            Ok(GuardResult::Warned {
+                text: "rawtext".to_string(),
+                warnings: vec!["stripped 1 invisible char".to_string()],
+            }),
+        );
+        match dec {
+            GuardrailDecision::Sanitize(rep) => {
+                assert_eq!(rep.text, "rawtext");
+                assert!(rep.source.contains("warn"));
+            }
+            other => panic!("expected Sanitize for mutated Warned, got {other:?}"),
+        }
+    }
+
+    /// `Warned` whose text equals the input is a pure advisory — stays `Warn`.
+    #[test]
+    fn warned_with_unchanged_text_warns() {
+        let dec = PiiSecretsGuardrail::map_outbound(
+            "same",
+            Ok(GuardResult::Warned {
+                text: "same".to_string(),
+                warnings: vec!["leak detector advisory".to_string()],
+            }),
+        );
+        assert!(matches!(dec, GuardrailDecision::Warn { .. }));
     }
 }
 
