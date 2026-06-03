@@ -148,34 +148,39 @@ fn extract_path(line: &str) -> Option<String> {
     for raw in line.split_whitespace() {
         let tok =
             raw.trim_matches(|c: char| matches!(c, '(' | ')' | '\'' | '"' | ',' | '`' | '[' | ']'));
-        // Must contain a path-ish dot before the first colon and a colon
-        // followed by a digit.
-        let Some(colon) = tok.find(':') else { continue };
-        let (path_part, rest) = tok.split_at(colon);
-        if path_part.is_empty() {
-            continue;
+        // A reference may carry more than one colon: a Windows drive prefix
+        // (`C:\…`) puts a colon *before* the path, and a `:col` suffix puts one
+        // after the line number. Try each colon as the path/line separator and
+        // accept the first that yields a path-ish left side followed by a line
+        // number. The first qualifying colon is taken, so Unix `path:line:col`
+        // behaves exactly as before (its first colon already qualifies).
+        for (colon, _) in tok.match_indices(':') {
+            let path_part = &tok[..colon];
+            if path_part.is_empty() {
+                continue;
+            }
+            // Accept paths that have an extension dot, a Unix slash, or a Windows backslash.
+            if !path_part.contains('.') && !path_part.contains('/') && !path_part.contains('\\') {
+                continue;
+            }
+            let rest = &tok[colon + 1..]; // drop the ':'
+                                          // rest must start with digits (the line number).
+            let line_digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if line_digits.is_empty() {
+                continue;
+            }
+            // Optional `:col`.
+            let after = &rest[line_digits.len()..];
+            let col = after.strip_prefix(':').map(|c| {
+                c.chars()
+                    .take_while(|ch| ch.is_ascii_digit())
+                    .collect::<String>()
+            });
+            return Some(match col {
+                Some(col) if !col.is_empty() => format!("{path_part}:{line_digits}:{col}"),
+                _ => format!("{path_part}:{line_digits}"),
+            });
         }
-        // Accept paths that have an extension dot, a Unix slash, or a Windows backslash.
-        if !path_part.contains('.') && !path_part.contains('/') && !path_part.contains('\\') {
-            continue;
-        }
-        let rest = &rest[1..]; // drop the ':'
-                               // rest must start with digits (the line number).
-        let line_digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-        if line_digits.is_empty() {
-            continue;
-        }
-        // Optional `:col`.
-        let after = &rest[line_digits.len()..];
-        let col = after.strip_prefix(':').map(|c| {
-            c.chars()
-                .take_while(|ch| ch.is_ascii_digit())
-                .collect::<String>()
-        });
-        return Some(match col {
-            Some(col) if !col.is_empty() => format!("{path_part}:{line_digits}:{col}"),
-            _ => format!("{path_part}:{line_digits}"),
-        });
     }
     None
 }
@@ -330,6 +335,20 @@ mod tests {
         assert_eq!(
             extract_path("at lib/foo.py:88 in handler"),
             Some("lib/foo.py:88".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_path_windows_drive_letter() {
+        // The drive-letter colon must not be mistaken for the path/line
+        // separator — the first qualifying colon is the one before `42`.
+        assert_eq!(
+            extract_path("  --> C:\\proj\\src\\main.rs:42:9"),
+            Some("C:\\proj\\src\\main.rs:42:9".to_string())
+        );
+        assert_eq!(
+            extract_path("at C:\\app\\lib.rs:88"),
+            Some("C:\\app\\lib.rs:88".to_string())
         );
     }
 
