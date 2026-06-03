@@ -31,6 +31,19 @@ struct RouteModePayload {
     mode: String,
     #[serde(default)]
     allow_cloud_escalation: bool,
+    /// Preferred local provider name (from the configured `[providers]`), or
+    /// `null`/absent for none. The panel populates this from a dropdown.
+    #[serde(default)]
+    local_provider: Option<String>,
+    /// Preferred cloud provider name, same contract as `local_provider`.
+    #[serde(default)]
+    cloud_provider: Option<String>,
+}
+
+/// Normalise a UI-supplied provider name: blank / whitespace-only → `None` so a
+/// cleared dropdown clears the pin rather than pinning the empty string.
+fn normalize_pin(raw: Option<String>) -> Option<String> {
+    raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
 fn mode_to_str(mode: RouteMode) -> &'static str {
@@ -86,6 +99,8 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
         serde_json::json!({
             "mode": mode_to_str(cfg.route.mode),
             "allow_cloud_escalation": cfg.route.allow_cloud_escalation,
+            "local_provider": cfg.route.local_provider,
+            "cloud_provider": cfg.route.cloud_provider,
             "providers": providers,
         }),
     )
@@ -130,6 +145,8 @@ pub async fn handle_update(
     let new_route = ModelRouteConfig {
         mode,
         allow_cloud_escalation: payload.allow_cloud_escalation,
+        local_provider: normalize_pin(payload.local_provider),
+        cloud_provider: normalize_pin(payload.cloud_provider),
     };
 
     {
@@ -156,6 +173,8 @@ pub async fn handle_update(
         value: serde_json::json!({
             "mode": mode_to_str(mode),
             "allow_cloud_escalation": new_route.allow_cloud_escalation,
+            "local_provider": new_route.local_provider,
+            "cloud_provider": new_route.cloud_provider,
         }),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
@@ -208,5 +227,36 @@ mod tests {
             assert_eq!(mode_from_str(mode_to_str(m)), Some(m));
         }
         assert_eq!(mode_from_str("nope"), None);
+    }
+
+    #[test]
+    fn normalize_pin_blanks_to_none() {
+        assert_eq!(normalize_pin(None), None);
+        assert_eq!(normalize_pin(Some(String::new())), None);
+        assert_eq!(normalize_pin(Some("   ".to_string())), None);
+        assert_eq!(
+            normalize_pin(Some("  ollama ".to_string())).as_deref(),
+            Some("ollama")
+        );
+    }
+
+    #[test]
+    fn payload_parses_provider_pins_and_tolerates_absence() {
+        // Pins present.
+        let p: RouteModePayload = serde_json::from_value(serde_json::json!({
+            "mode": "always_cloud",
+            "allow_cloud_escalation": false,
+            "local_provider": "ollama",
+            "cloud_provider": "anthropic",
+        }))
+        .unwrap();
+        assert_eq!(p.local_provider.as_deref(), Some("ollama"));
+        assert_eq!(p.cloud_provider.as_deref(), Some("anthropic"));
+
+        // Pins absent — backward-compatible with the old two-field payload.
+        let p2: RouteModePayload =
+            serde_json::from_value(serde_json::json!({ "mode": "auto" })).unwrap();
+        assert_eq!(p2.local_provider, None);
+        assert_eq!(p2.cloud_provider, None);
     }
 }

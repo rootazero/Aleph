@@ -36,6 +36,9 @@ pub fn RouteView() -> impl IntoView {
 
     let mode = RwSignal::new(String::from("auto"));
     let allow_escalation = RwSignal::new(false);
+    // Empty string == "no pin / configured order"; a provider name == that pin.
+    let local_provider = RwSignal::new(String::new());
+    let cloud_provider = RwSignal::new(String::new());
     let providers = RwSignal::new(Vec::<RouteProviderInfo>::new());
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
@@ -49,6 +52,8 @@ pub fn RouteView() -> impl IntoView {
                 Ok(view) => {
                     mode.set(view.mode);
                     allow_escalation.set(view.allow_cloud_escalation);
+                    local_provider.set(view.local_provider.unwrap_or_default());
+                    cloud_provider.set(view.cloud_provider.unwrap_or_default());
                     providers.set(view.providers);
                     loading.set(false);
                 }
@@ -66,9 +71,13 @@ pub fn RouteView() -> impl IntoView {
         saved.set(false);
         error.set(None);
         spawn_local(async move {
+            // Empty selection clears the pin (server normalises blank → None).
+            let to_pin = |s: String| if s.is_empty() { None } else { Some(s) };
             let update = RouteConfigUpdate {
                 mode: mode.get(),
                 allow_cloud_escalation: allow_escalation.get(),
+                local_provider: to_pin(local_provider.get()),
+                cloud_provider: to_pin(cloud_provider.get()),
             };
             match RouteConfigApi::update(&state, update).await {
                 Ok(()) => {
@@ -169,18 +178,31 @@ pub fn RouteView() -> impl IntoView {
                         </div>
                     </Show>
 
-                    // Configured providers, grouped by server-assigned tier.
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
-                        <ProviderTierCard
-                            title="Local endpoints".to_string()
-                            tier="local".to_string()
-                            providers=providers
-                        />
-                        <ProviderTierCard
-                            title="Cloud endpoints".to_string()
-                            tier="cloud".to_string()
-                            providers=providers
-                        />
+                    // Preferred providers — pick which configured local/cloud
+                    // endpoint the active route dials first. The dropdowns reuse
+                    // the already-configured providers (nothing is redefined here),
+                    // satisfying the "select from configured provider/model" ask.
+                    <div class="pt-2">
+                        <h3 class="font-semibold text-text-primary mb-1">"Preferred providers"</h3>
+                        <p class="text-sm text-text-secondary mb-3">
+                            "Optional. Pin which configured endpoint each tier dials first — \
+                             the chosen provider jumps to the front of its tier. \
+                             Leave on “Configured order” to keep your provider order."
+                        </p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <ProviderTierSelect
+                                title="Local provider".to_string()
+                                tier="local".to_string()
+                                providers=providers
+                                selected=local_provider
+                            />
+                            <ProviderTierSelect
+                                title="Cloud provider".to_string()
+                                tier="cloud".to_string()
+                                providers=providers
+                                selected=cloud_provider
+                            />
+                        </div>
                     </div>
                 </div>
             </Show>
@@ -188,12 +210,16 @@ pub fn RouteView() -> impl IntoView {
     }
 }
 
-/// One tier column listing the configured providers the server placed in it.
+/// One tier's preferred-provider dropdown, populated from the configured
+/// providers the server placed in that tier. The empty option == "no pin"
+/// (configured order). Selecting a provider pins it; the change is applied on
+/// the page's "Apply" button alongside the mode.
 #[component]
-fn ProviderTierCard(
+fn ProviderTierSelect(
     title: String,
     tier: String,
     providers: RwSignal<Vec<RouteProviderInfo>>,
+    selected: RwSignal<String>,
 ) -> impl IntoView {
     let tier_for_filter = tier.clone();
     let matching = Signal::derive(move || {
@@ -206,34 +232,27 @@ fn ProviderTierCard(
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-4">
-            <h3 class="font-semibold text-text-primary mb-2">{title}</h3>
-            <Show
-                when=move || !matching.get().is_empty()
-                fallback=move || view! {
-                    <p class="text-sm text-text-tertiary">"No configured providers in this tier."</p>
-                }
+            <label class="block font-semibold text-text-primary mb-2">{title}</label>
+            <select
+                class="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-primary"
+                prop:value=move || selected.get()
+                on:change=move |ev| selected.set(event_target_value(&ev))
             >
-                <ul class="space-y-1">
-                    {move || matching.get().into_iter().map(|p| {
-                        let models = if p.models.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" · {}", p.models.join(", "))
-                        };
-                        let dim = !p.enabled;
-                        view! {
-                            <li class=move || if dim {
-                                "text-sm text-text-tertiary"
-                            } else {
-                                "text-sm text-text-secondary"
-                            }>
-                                <span class="font-mono text-text-primary">{p.name.clone()}</span>
-                                {models}
-                                {(!p.enabled).then(|| view! { <span class="ml-1 text-text-tertiary">"(disabled)"</span> })}
-                            </li>
-                        }
-                    }).collect::<Vec<_>>()}
-                </ul>
+                <option value="">"Configured order (no pin)"</option>
+                {move || matching.get().into_iter().map(|p| {
+                    let label = if p.models.is_empty() {
+                        p.name.clone()
+                    } else {
+                        format!("{} · {}", p.name, p.models.join(", "))
+                    };
+                    let suffix = if p.enabled { "" } else { " (disabled)" };
+                    view! {
+                        <option value=p.name.clone()>{label}{suffix}</option>
+                    }
+                }).collect::<Vec<_>>()}
+            </select>
+            <Show when=move || matching.get().is_empty()>
+                <p class="text-xs text-text-tertiary mt-1">"No configured providers in this tier."</p>
             </Show>
         </div>
     }

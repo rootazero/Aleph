@@ -45,7 +45,9 @@ use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
 use crate::providers::llm_retry::{classify, classify_exhausted, RetryVerdict};
 use crate::providers::route_handle::RouteHandle;
-use crate::providers::route_policy::{order_candidates, CandidateAction, EndpointTier};
+use crate::providers::route_policy::{
+    order_candidates, CandidateAction, EndpointTier, RouteTargets,
+};
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::sync_primitives::Arc;
@@ -364,6 +366,16 @@ impl FailoverProvider {
         }
     }
 
+    /// The operator's provider pins to apply *now*: the live handle if attached,
+    /// else empty (no promotion). Pins only ever enter via the boot-wired handle,
+    /// so `new()`/tests see an empty set — byte-identical to unpinned ordering.
+    fn route_targets(&self) -> Arc<RouteTargets> {
+        match &self.route_handle {
+            Some(h) => h.targets(),
+            None => Arc::new(RouteTargets::default()),
+        }
+    }
+
     /// Whether a cloud-borrow escalation for `name` is authorised right now.
     ///
     /// Fails closed: no gate wired → denied (a warn is logged). Mirrors the
@@ -419,7 +431,15 @@ impl FailoverProvider {
             out.push(fb.clone());
         }
         let (mode, allow_escalation) = self.route_preference();
-        order_candidates(out, mode, allow_escalation, |n| n.tier)
+        let targets = self.route_targets();
+        order_candidates(
+            out,
+            mode,
+            allow_escalation,
+            &targets,
+            |n| n.tier,
+            |n| n.name.as_str(),
+        )
     }
 
     /// Whether `name` may be tried now. Transitions `Open → HalfOpen` when the

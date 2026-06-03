@@ -51,6 +51,22 @@ pub struct ModelRouteConfig {
     /// Ignored in `Auto` / `AlwaysCloud`.
     #[serde(default)]
     pub allow_cloud_escalation: bool,
+
+    /// Preferred *local* provider, chosen by name from the already-configured
+    /// `[providers]` (the panel populates a dropdown — no provider is redefined
+    /// here). When set, a local candidate with this name is promoted to the
+    /// front of its tier so the active route dials it first. `None` (default)
+    /// keeps the configured order — byte-identical to pre-selection routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_provider: Option<String>,
+
+    /// Preferred *cloud* provider, chosen by name from the configured
+    /// `[providers]` (same reuse contract as
+    /// [`local_provider`](Self::local_provider)). When set, a cloud candidate
+    /// with this name is promoted to the front of its tier. `None` (default)
+    /// keeps the configured order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cloud_provider: Option<String>,
 }
 
 #[cfg(test)]
@@ -89,5 +105,26 @@ mod tests {
     fn empty_toml_uses_defaults() {
         let c: ModelRouteConfig = toml::from_str("").unwrap();
         assert_eq!(c, ModelRouteConfig::default());
+    }
+
+    #[test]
+    fn provider_pins_default_to_none() {
+        let c = ModelRouteConfig::default();
+        assert_eq!(c.local_provider, None);
+        assert_eq!(c.cloud_provider, None);
+    }
+
+    #[test]
+    fn provider_pins_round_trip_and_omit_when_none() {
+        // Absent pins stay absent on the wire (backward-compatible).
+        let json = serde_json::to_string(&ModelRouteConfig::default()).unwrap();
+        assert!(!json.contains("local_provider"));
+        assert!(!json.contains("cloud_provider"));
+
+        // Present pins survive a TOML round-trip.
+        let toml_src = "mode = \"always_local\"\nlocal_provider = \"ollama\"\ncloud_provider = \"anthropic\"\n";
+        let c: ModelRouteConfig = toml::from_str(toml_src).unwrap();
+        assert_eq!(c.local_provider.as_deref(), Some("ollama"));
+        assert_eq!(c.cloud_provider.as_deref(), Some("anthropic"));
     }
 }
