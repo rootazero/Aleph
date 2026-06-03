@@ -329,12 +329,28 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
             })?;
 
             if let Some(ref job) = job {
+                // Fail closed: a job object that cannot be attached enforces
+                // NONE of its guarantees (memory ceiling, active-process cap,
+                // kill-on-close). Letting the child run unsandboxed while
+                // reporting success would silently defeat the sandbox, so on
+                // any failure we abort the child and surface the error. The
+                // child is terminated by `kill_on_drop(true)` (set above) as
+                // `child` drops on the early return.
                 let pid = child.id().unwrap_or(0);
-                if pid != 0 {
-                    let handle = child.raw_handle().unwrap_or(std::ptr::null_mut());
-                    if !handle.is_null() {
-                        let _ = unsafe { job.assign_process(handle as _) };
-                    }
+                let handle = if pid != 0 {
+                    child.raw_handle().unwrap_or(std::ptr::null_mut())
+                } else {
+                    std::ptr::null_mut()
+                };
+                let assign = if handle.is_null() {
+                    Err("child process handle unavailable for job assignment".to_string())
+                } else {
+                    unsafe { job.assign_process(handle as _) }
+                };
+                if let Err(e) = assign {
+                    return Err(SandboxError::ExecutionFailed(format!(
+                        "failed to assign process to job object: {e}"
+                    )));
                 }
             }
 
