@@ -110,6 +110,7 @@ impl AiProvider for FastToolCallProvider {
                 thinking_signature: None,
                 stop_reason: StopReason::ToolUse,
                 usage: None,
+                truncated_tool_call: None,
             })
         })
     }

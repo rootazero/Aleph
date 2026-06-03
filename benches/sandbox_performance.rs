@@ -55,6 +55,7 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
             alephcore::sandbox::exec_approval::types::ApprovalConfig::default(),
             None,
         ));
+        let shell_security = alephcore::ShellSecurityConfig::default();
 
         b.iter(|| {
             let sandbox = build_sandbox(
@@ -62,6 +63,7 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
                 driver.clone(),
                 approval.clone(),
                 SandboxRateLimitConfig::default(),
+                &shell_security,
             );
             black_box(sandbox);
         });
@@ -80,6 +82,7 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
             alephcore::sandbox::exec_approval::types::ApprovalConfig::default(),
             None,
         ));
+        let shell_security = alephcore::ShellSecurityConfig::default();
 
         b.iter(|| {
             let sandbox = build_sandbox(
@@ -87,6 +90,7 @@ fn benchmark_sandbox_assembly(c: &mut Criterion) {
                 driver.clone(),
                 approval.clone(),
                 SandboxRateLimitConfig::default(),
+                &shell_security,
             );
             black_box(sandbox);
         });

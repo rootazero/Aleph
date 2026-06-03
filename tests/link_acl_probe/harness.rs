@@ -200,10 +200,9 @@ impl LinkAclHarness {
                 group_allow_from: vec![],
                 require_mention: false,
                 bot_name: None,
-                allow_admin_from: vec![],
-                user_allowed_commands: vec![],
-                group_allow_admin_from: vec![],
-                group_user_allowed_commands: vec![],
+                // All-empty slash-access → gating OFF (equivalent to the prior
+                // four empty ACL vecs now folded into SlashAccessConfig).
+                slash_access: Default::default(),
             },
         );
     }
