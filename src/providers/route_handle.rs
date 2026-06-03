@@ -23,7 +23,10 @@
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::OnceLock;
 
+use arc_swap::ArcSwap;
+
 use crate::config::types::{ModelRouteConfig, RouteMode};
+use crate::providers::route_policy::RouteTargets;
 use crate::sync_primitives::Arc;
 
 const MODE_AUTO: u8 = 0;
@@ -50,12 +53,15 @@ fn u8_to_mode(raw: u8) -> RouteMode {
 /// Live local/cloud route preference shared between the failover walk (reader)
 /// and the config-write path (writer).
 ///
-/// Cheap to clone (it is always behind an [`Arc`]); reads and writes are single
-/// relaxed atomic ops.
+/// Cheap to clone (it is always behind an [`Arc`]). The two hard scalar signals
+/// (mode + escalation) are relaxed atomics; the optional provider pins live in
+/// an [`ArcSwap`] so the hot path reads them lock-free too (RCU load, no mutex —
+/// the Rust edge over the reference routers' lock-guarded Python state).
 #[derive(Debug)]
 pub struct RouteHandle {
     mode: AtomicU8,
     allow_escalation: AtomicBool,
+    targets: ArcSwap<RouteTargets>,
 }
 
 impl RouteHandle {
@@ -64,15 +70,18 @@ impl RouteHandle {
         Self {
             mode: AtomicU8::new(mode_to_u8(cfg.mode)),
             allow_escalation: AtomicBool::new(cfg.allow_cloud_escalation),
+            targets: ArcSwap::from_pointee(RouteTargets::from_config(cfg)),
         }
     }
 
     /// Hot-apply a new route preference. Visible to the very next
-    /// [`load`](Self::load) — i.e. the next request's candidate ordering.
+    /// [`load`](Self::load) / [`targets`](Self::targets) — i.e. the next
+    /// request's candidate ordering.
     pub fn store(&self, cfg: &ModelRouteConfig) {
         self.mode.store(mode_to_u8(cfg.mode), Ordering::Relaxed);
         self.allow_escalation
             .store(cfg.allow_cloud_escalation, Ordering::Relaxed);
+        self.targets.store(Arc::new(RouteTargets::from_config(cfg)));
     }
 
     /// Read the current `(mode, allow_cloud_escalation)` — the two hard signals
@@ -82,6 +91,12 @@ impl RouteHandle {
             u8_to_mode(self.mode.load(Ordering::Relaxed)),
             self.allow_escalation.load(Ordering::Relaxed),
         )
+    }
+
+    /// Read the current provider pins. Lock-free RCU load; the returned `Arc` is
+    /// a stable snapshot for the duration of one candidate ordering pass.
+    pub fn targets(&self) -> Arc<RouteTargets> {
+        self.targets.load_full()
     }
 }
 
@@ -121,6 +136,7 @@ mod tests {
             let cfg = ModelRouteConfig {
                 mode,
                 allow_cloud_escalation: esc,
+                ..Default::default()
             };
             let h = RouteHandle::from_config(&cfg);
             assert_eq!(h.load(), (mode, esc));
@@ -135,14 +151,39 @@ mod tests {
         h.store(&ModelRouteConfig {
             mode: RouteMode::AlwaysLocal,
             allow_cloud_escalation: true,
+            ..Default::default()
         });
         assert_eq!(h.load(), (RouteMode::AlwaysLocal, true));
 
         h.store(&ModelRouteConfig {
             mode: RouteMode::AlwaysCloud,
             allow_cloud_escalation: false,
+            ..Default::default()
         });
         assert_eq!(h.load(), (RouteMode::AlwaysCloud, false));
+    }
+
+    #[test]
+    fn targets_default_empty_and_hot_apply() {
+        let h = RouteHandle::from_config(&ModelRouteConfig::default());
+        assert_eq!(*h.targets(), RouteTargets::default());
+
+        h.store(&ModelRouteConfig {
+            mode: RouteMode::AlwaysLocal,
+            local_provider: Some("ollama".to_string()),
+            cloud_provider: Some("anthropic".to_string()),
+            ..Default::default()
+        });
+        let t = h.targets();
+        assert_eq!(t.local_provider.as_deref(), Some("ollama"));
+        assert_eq!(t.cloud_provider.as_deref(), Some("anthropic"));
+        assert!(t.is_pinned("ollama"));
+        assert!(t.is_pinned("anthropic"));
+        assert!(!t.is_pinned("openai"));
+
+        // Clearing pins hot-applies back to empty.
+        h.store(&ModelRouteConfig::default());
+        assert_eq!(*h.targets(), RouteTargets::default());
     }
 
     #[test]

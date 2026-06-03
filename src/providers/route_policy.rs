@@ -13,8 +13,43 @@
 //! in original order, so the policy is a no-op (byte-identical to pre-route
 //! failover).
 
-use crate::config::types::RouteMode;
+use crate::config::types::{ModelRouteConfig, RouteMode};
 use crate::providers::model_catalog::EndpointKind;
+
+/// Operator's explicit per-tier provider preference — "use *this* local /
+/// *this* cloud provider", chosen by name from the already-configured
+/// `[providers]` (the panel never redefines a provider, it just picks one).
+///
+/// Both `None` (default) means no promotion: the configured candidate order is
+/// the route, byte-identical to pre-selection failover. A hard signal like
+/// [`RouteMode`] — names only, never the prompt (R7 preserved).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RouteTargets {
+    /// Preferred local provider name, promoted to the front of the local tier.
+    pub local_provider: Option<String>,
+    /// Preferred cloud provider name, promoted to the front of the cloud tier.
+    pub cloud_provider: Option<String>,
+}
+
+impl RouteTargets {
+    /// Lift the two pins out of a `[route]` config snapshot.
+    pub fn from_config(cfg: &ModelRouteConfig) -> Self {
+        Self {
+            local_provider: cfg.local_provider.clone(),
+            cloud_provider: cfg.cloud_provider.clone(),
+        }
+    }
+
+    /// Whether `name` is the pinned provider for either tier.
+    pub fn is_pinned(&self, name: &str) -> bool {
+        self.local_provider.as_deref() == Some(name) || self.cloud_provider.as_deref() == Some(name)
+    }
+
+    /// Whether any pin is set (the common no-op fast path checks this first).
+    pub fn is_empty(&self) -> bool {
+        self.local_provider.is_none() && self.cloud_provider.is_none()
+    }
+}
 
 /// Runtime endpoint tier carried alongside each failover candidate.
 ///
@@ -98,24 +133,31 @@ pub fn classify_candidate(
     }
 }
 
-/// Order and gate a candidate list under `mode`.
+/// Order and gate a candidate list under `mode`, honouring the operator's
+/// provider pins.
 ///
-/// Partitions into `Allow` candidates (preferred tier, *original relative
-/// order preserved*) followed by `CrossTier` crossings appended LAST, dropping
-/// every `Skip`. Each retained candidate is paired with the
-/// [`CandidateAction`] the failover walk must enforce. Generic over `T` so it
-/// is unit-testable without real providers.
+/// Partitions into `Allow` candidates (preferred tier) followed by `CrossTier`
+/// crossings appended LAST, dropping every `Skip`. Within the `Allow` group a
+/// pinned provider ([`RouteTargets`]) is *stably promoted* to the front so the
+/// active route dials the operator's chosen local/cloud endpoint first; all
+/// other relative order is preserved. Each retained candidate is paired with
+/// the [`CandidateAction`] the failover walk must enforce. Generic over `T` so
+/// it is unit-testable without real providers.
 ///
-/// `tier_of` extracts a candidate's [`EndpointTier`]; the policy is computed
-/// once per candidate.
-pub fn order_candidates<T, F>(
+/// `tier_of` extracts a candidate's [`EndpointTier`]; `name_of` its provider
+/// name (matched against the pins). When `targets` is empty this is identical
+/// to the unpinned ordering.
+pub fn order_candidates<T, FT, FN>(
     candidates: Vec<T>,
     mode: RouteMode,
     allow_cloud_escalation: bool,
-    tier_of: F,
+    targets: &RouteTargets,
+    tier_of: FT,
+    name_of: FN,
 ) -> Vec<(T, CandidateAction)>
 where
-    F: Fn(&T) -> EndpointTier,
+    FT: Fn(&T) -> EndpointTier,
+    FN: Fn(&T) -> &str,
 {
     let mut same_tier: Vec<(T, CandidateAction)> = Vec::new();
     let mut crossings: Vec<(T, CandidateAction)> = Vec::new();
@@ -127,6 +169,17 @@ where
             action @ CandidateAction::CrossTier { .. } => crossings.push((c, action)),
             CandidateAction::Skip => {}
         }
+    }
+
+    // Promote pinned providers to the front of the active tier (stable —
+    // `Vec::partition` preserves relative order within each side). Skipped
+    // entirely when no pin is set, keeping the no-pin path allocation-light.
+    if !targets.is_empty() {
+        let (pinned, rest): (Vec<_>, Vec<_>) = same_tier
+            .into_iter()
+            .partition(|(c, _)| targets.is_pinned(name_of(c)));
+        same_tier = pinned;
+        same_tier.extend(rest);
     }
 
     same_tier.extend(crossings);
@@ -215,7 +268,14 @@ mod tests {
             ("c2", EndpointTier::Cloud),
             ("l2", EndpointTier::Local),
         ];
-        let out = order_candidates(cands, RouteMode::AlwaysLocal, true, |(_, t)| *t);
+        let out = order_candidates(
+            cands,
+            RouteMode::AlwaysLocal,
+            true,
+            &RouteTargets::default(),
+            |(_, t)| *t,
+            |(n, _)| *n,
+        );
         let names: Vec<&str> = out.iter().map(|((n, _), _)| *n).collect();
         assert_eq!(names, vec!["l1", "l2", "c1", "c2"]);
         // The appended crossings are approval-gated.
@@ -234,9 +294,87 @@ mod tests {
             ("b", EndpointTier::Local),
             ("c", EndpointTier::Unknown),
         ];
-        let out = order_candidates(cands.clone(), RouteMode::Auto, false, |(_, t)| *t);
+        let out = order_candidates(
+            cands.clone(),
+            RouteMode::Auto,
+            false,
+            &RouteTargets::default(),
+            |(_, t)| *t,
+            |(n, _)| *n,
+        );
         let names: Vec<&str> = out.iter().map(|((n, _), _)| *n).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
         assert!(out.iter().all(|(_, a)| *a == CandidateAction::Allow));
+    }
+
+    #[test]
+    fn pin_promotes_chosen_provider_within_tier() {
+        // Locals [l1, l2, l3]; pin l3 → l3 jumps to the front, others hold order.
+        let cands = vec![
+            ("l1", EndpointTier::Local),
+            ("l2", EndpointTier::Local),
+            ("l3", EndpointTier::Local),
+        ];
+        let targets = RouteTargets {
+            local_provider: Some("l3".to_string()),
+            cloud_provider: None,
+        };
+        let out = order_candidates(
+            cands,
+            RouteMode::AlwaysLocal,
+            false,
+            &targets,
+            |(_, t)| *t,
+            |(n, _)| *n,
+        );
+        let names: Vec<&str> = out.iter().map(|((n, _), _)| *n).collect();
+        assert_eq!(names, vec!["l3", "l1", "l2"]);
+    }
+
+    #[test]
+    fn pin_in_auto_promotes_both_tier_leaders_stably() {
+        // Auto keeps every candidate; pins bring the chosen local + cloud to the
+        // front in their original relative order, the rest trailing unchanged.
+        let cands = vec![
+            ("c1", EndpointTier::Cloud),
+            ("l1", EndpointTier::Local),
+            ("c2", EndpointTier::Cloud),
+            ("l2", EndpointTier::Local),
+        ];
+        let targets = RouteTargets {
+            local_provider: Some("l2".to_string()),
+            cloud_provider: Some("c2".to_string()),
+        };
+        let out = order_candidates(
+            cands,
+            RouteMode::Auto,
+            false,
+            &targets,
+            |(_, t)| *t,
+            |(n, _)| *n,
+        );
+        let names: Vec<&str> = out.iter().map(|((n, _), _)| *n).collect();
+        // c2 and l2 are pinned → promoted (stable: c2 precedes l2 as in input),
+        // then the unpinned c1, l1 follow in original order.
+        assert_eq!(names, vec!["c2", "l2", "c1", "l1"]);
+    }
+
+    #[test]
+    fn empty_targets_is_byte_identical_ordering() {
+        let cands = vec![
+            ("a", EndpointTier::Local),
+            ("b", EndpointTier::Local),
+            ("c", EndpointTier::Cloud),
+        ];
+        let pinned = order_candidates(
+            cands.clone(),
+            RouteMode::Auto,
+            false,
+            &RouteTargets::default(),
+            |(_, t)| *t,
+            |(n, _)| *n,
+        );
+        let names: Vec<&str> = pinned.iter().map(|((n, _), _)| *n).collect();
+        assert_eq!(names, vec!["a", "b", "c"]);
     }
 }

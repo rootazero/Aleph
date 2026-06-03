@@ -171,6 +171,13 @@ pub struct RouteConfigView {
     pub mode: String,
     #[serde(default)]
     pub allow_cloud_escalation: bool,
+    /// Preferred local provider name (one of `providers` with tier "local"), or
+    /// `None` for "use configured order".
+    #[serde(default)]
+    pub local_provider: Option<String>,
+    /// Preferred cloud provider name (one of `providers` with tier "cloud").
+    #[serde(default)]
+    pub cloud_provider: Option<String>,
     #[serde(default)]
     pub providers: Vec<RouteProviderInfo>,
 }
@@ -180,6 +187,11 @@ pub struct RouteConfigView {
 pub struct RouteConfigUpdate {
     pub mode: String,
     pub allow_cloud_escalation: bool,
+    /// Empty string clears the pin (server normalises blank → `None`).
+    #[serde(default)]
+    pub local_provider: Option<String>,
+    #[serde(default)]
+    pub cloud_provider: Option<String>,
 }
 
 pub struct RouteConfigApi;
