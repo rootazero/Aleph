@@ -10,7 +10,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicU64;
 use tracing::{debug, warn};
+
+/// Monotonic sequence for unique persist() temp-file names. Static `AtomicU64`
+/// must use `std::sync::atomic` (loom's `new` is not `const fn`).
+static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -253,10 +258,22 @@ impl CapabilityLedger {
 
         let content = serde_json::to_string_pretty(self).map_err(std::io::Error::other)?;
 
-        // Atomic write: write to temp file then rename
-        let tmp_path = self.persist_path.with_extension("json.tmp");
+        // Atomic write: write to a *unique* temp file then rename. Several
+        // independent `CapabilityLedger` instances (gateway handlers, warmup,
+        // bootstrap CLI, playwright) target the same `ledger.json` with their
+        // own locks, so a fixed temp name would let concurrent persists clobber
+        // one another's temp file (one rename consumes it, the other ENOENTs).
+        // A pid+sequence suffix keeps each writer's temp private.
+        let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp_path = self
+            .persist_path
+            .with_extension(format!("json.tmp.{}.{}", std::process::id(), seq));
         std::fs::write(&tmp_path, &content)?;
-        std::fs::rename(&tmp_path, &self.persist_path)?;
+        if let Err(e) = std::fs::rename(&tmp_path, &self.persist_path) {
+            // Don't leak the orphan temp on a failed rename.
+            let _ = std::fs::remove_file(&tmp_path);
+            return Err(e);
+        }
 
         debug!("Persisted capability ledger to {:?}", self.persist_path);
         Ok(())
