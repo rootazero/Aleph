@@ -281,7 +281,15 @@ fn collect_string_values(v: &Value, out: &mut String) {
 
     recurse(v, out, 0);
     if out.len() > MAX_TOTAL_LEN {
-        out.truncate(MAX_TOTAL_LEN);
+        // A single `push_str` can overshoot MAX_TOTAL_LEN, so the cut point may
+        // land mid-UTF-8-char. `String::truncate` panics in that case, and tool
+        // inputs routinely carry multi-byte text (CJK, emoji), so walk back to
+        // the nearest char boundary first (project rule P7: UTF-8 safety).
+        let mut cut = MAX_TOTAL_LEN;
+        while cut > 0 && !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
     }
 }
 
@@ -729,6 +737,29 @@ mod tests {
             name: "file_delete".to_string(),
             input: json!({}),
         };
+        assert!(guard.check(&call).is_ok());
+    }
+
+    #[test]
+    fn multibyte_haystack_over_cap_does_not_panic() {
+        // A long multi-byte string whose total haystack length crosses the
+        // MAX_TOTAL_LEN cap at a byte index that is NOT a char boundary.
+        // `String::truncate` would panic on such an index; the guard must
+        // floor to a char boundary instead. Regression for a UTF-8 panic on
+        // the tool-execution safety path.
+        let guard = SafetyGuard::new(
+            vec![r"rm\s+-rf\s+/".to_string()],
+            HashMap::new(),
+            PermissionAction::Allow,
+        );
+        // 5000 × '中' (3 bytes each) = 15_000 bytes, well over the 10_000 cap;
+        // the cut point lands inside a 3-byte char.
+        let big = "中".repeat(5000);
+        let call = ToolCall {
+            name: "shell".to_string(),
+            input: json!({ "command": big }),
+        };
+        // Must not panic; benign input resolves to Allow.
         assert!(guard.check(&call).is_ok());
     }
 
