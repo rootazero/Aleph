@@ -386,9 +386,13 @@ impl InitializationCoordinator {
             })?;
 
         // Migrate from legacy manifest.json or create fresh ledger
-        // Run in spawn_blocking since migrate_from_legacy does sync file I/O
+        // Run in spawn_blocking since migrate_from_legacy does sync file I/O.
+        // Persist the ledger so ledger.json exists on disk: the fresh-install
+        // path of migrate_from_legacy returns an in-memory-only ledger, and
+        // first-run detection (needs_initialization) requires the file to be
+        // present for the runtimes phase to count as completed.
         let dir = runtimes_dir.clone();
-        tokio::task::spawn_blocking(move || migrate_from_legacy(&dir))
+        tokio::task::spawn_blocking(move || migrate_from_legacy(&dir).and_then(|l| l.persist()))
             .await
             .map_err(|e| {
                 let msg = if e.is_panic() {
