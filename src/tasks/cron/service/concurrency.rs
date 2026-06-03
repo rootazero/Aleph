@@ -236,7 +236,7 @@ pub async fn phase3_writeback<C: Clock>(
                 job.state.consecutive_errors = 0;
             }
             RunStatus::Error | RunStatus::Timeout => {
-                job.state.consecutive_errors += 1;
+                job.state.consecutive_errors = job.state.consecutive_errors.saturating_add(1);
             }
         }
 
@@ -280,7 +280,10 @@ pub async fn phase3_writeback<C: Clock>(
             ended_at: Some(result.ended_at),
             duration_ms: Some(result.duration_ms),
             error: result.error.clone(),
-            error_reason: result.error_reason.as_ref().map(|r| format!("{r:?}")),
+            error_reason: result
+                .error_reason
+                .as_ref()
+                .map(|r| r.category().to_string()),
             output_summary: None,
             delivery_status: result
                 .delivery_status

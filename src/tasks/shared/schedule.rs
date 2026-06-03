@@ -73,10 +73,16 @@ pub fn compute_next_every(
         return Some(anchor_ms);
     }
 
-    // Anchor-aligned: anchor + ceil((now - anchor) / every) * every
-    let elapsed = now_ms - anchor_ms;
-    let periods = (elapsed + every_ms - 1) / every_ms; // ceil division
-    Some(anchor_ms + periods * every_ms)
+    // Anchor-aligned: anchor + ceil((now - anchor) / every) * every.
+    // Compute in i128 so an extreme `every_ms`/`elapsed` (config is only
+    // checked for `<= 0`, not an upper bound) can't overflow i64 — a panic in
+    // debug or a wrapped past-timestamp in release that `advance_next_run`
+    // would then spin on. Out-of-range results collapse to `None`.
+    let elapsed = (now_ms - anchor_ms) as i128;
+    let every = every_ms as i128;
+    let periods = (elapsed + every - 1) / every; // ceil division
+    let next = anchor_ms as i128 + periods * every;
+    i64::try_from(next).ok()
 }
 
 /// Apply minimum refire gap to prevent spin loops.
@@ -223,6 +229,14 @@ mod tests {
     #[test]
     fn anchor_aligned_negative_interval() {
         assert!(compute_next_every(1_000, -5_000, 0, None).is_none());
+    }
+
+    #[test]
+    fn anchor_aligned_extreme_values_do_not_overflow() {
+        // Anchor near i64::MAX with a huge interval would overflow the i64
+        // `anchor + periods * every` add (debug panic / release wrap). The
+        // i128 path must instead return None rather than a bogus timestamp.
+        assert!(compute_next_every(i64::MAX, i64::MAX, 1, None).is_none());
     }
 
     // -- apply_min_gap --

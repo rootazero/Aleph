@@ -45,6 +45,18 @@ impl<C: Clock> ServiceState<C> {
         self.is_running.store(running, Ordering::SeqCst);
     }
 
+    /// Atomically claim the running slot: returns `true` if this caller flipped
+    /// the flag from `false` to `true`, `false` if a tick was already running.
+    ///
+    /// This replaces a separate `is_running()` check + `set_running(true)`,
+    /// which has a load→store TOCTOU window where two concurrent callers could
+    /// both observe `false` and both proceed.
+    pub fn try_begin_running(&self) -> bool {
+        self.is_running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+    }
+
     /// Whether a shutdown has been requested.
     pub fn is_shutdown(&self) -> bool {
         self.shutdown.load(Ordering::SeqCst)

@@ -26,6 +26,10 @@ impl IdleState {
     pub fn classify(idle_seconds: Option<f64>) -> Self {
         match idle_seconds {
             None => IdleState::Unknown,
+            // A non-finite reading (NaN/Inf from a glitched idle probe) compares
+            // false against every threshold and would otherwise fall through to
+            // the maximally-idle `Away` bucket — report it as `Unknown` instead.
+            Some(s) if !s.is_finite() => IdleState::Unknown,
             Some(s) if s < 60.0 => IdleState::Active,
             Some(s) if s < 300.0 => IdleState::Idle,
             Some(_) => IdleState::Away,
@@ -63,6 +67,18 @@ mod tests {
         assert_eq!(IdleState::classify(Some(299.9)), IdleState::Idle);
         assert_eq!(IdleState::classify(Some(300.0)), IdleState::Away);
         assert_eq!(IdleState::classify(Some(3_600.0)), IdleState::Away);
+    }
+
+    #[test]
+    fn idle_state_non_finite_is_unknown() {
+        // NaN/Inf compare false against every threshold; must not fall through
+        // to the maximally-idle `Away` bucket.
+        assert_eq!(IdleState::classify(Some(f64::NAN)), IdleState::Unknown);
+        assert_eq!(IdleState::classify(Some(f64::INFINITY)), IdleState::Unknown);
+        assert_eq!(
+            IdleState::classify(Some(f64::NEG_INFINITY)),
+            IdleState::Unknown
+        );
     }
 
     #[test]

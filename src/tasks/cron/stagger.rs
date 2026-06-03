@@ -38,7 +38,10 @@ pub fn compute_staggered_next(
     }
 
     let offset = compute_stagger_offset(job_id, stagger_ms);
-    let staggered = cron_next_ms + offset;
+    // Saturating arithmetic: `cron_next_ms` can be a far-future `At` time
+    // (user-supplied, unbounded) so the offset add and the window advance must
+    // not overflow i64 into a bogus past/negative timestamp.
+    let staggered = cron_next_ms.saturating_add(offset);
 
     if staggered > now_ms {
         staggered
@@ -48,7 +51,7 @@ pub fn compute_staggered_next(
         // only covers up to one window of lag.
         let lag = now_ms - staggered;
         let windows = lag / stagger_ms + 1;
-        staggered + windows * stagger_ms
+        staggered.saturating_add(windows.saturating_mul(stagger_ms))
     }
 }
 
@@ -120,6 +123,14 @@ mod tests {
             result > now,
             "result {result} should be > now {now} after advancing window"
         );
+    }
+
+    #[test]
+    fn staggered_next_extreme_values_do_not_overflow() {
+        // A far-future `At` time near i64::MAX must not overflow the offset add
+        // (or the window advance) into a bogus past/negative timestamp.
+        let result = compute_staggered_next("my-job", i64::MAX, 60_000, 1_000_000);
+        assert_eq!(result, i64::MAX, "offset add must saturate, not wrap");
     }
 
     #[test]

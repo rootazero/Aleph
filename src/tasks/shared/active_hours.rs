@@ -145,7 +145,15 @@ impl ActiveHoursSchedule {
                     0,
                 )?;
                 let start_naive = date.date().and_time(start_time);
-                let start_dt = tz.from_local_datetime(&start_naive).single()?;
+                // A window start landing in a DST spring-forward gap (or a
+                // fall-back ambiguity) yields no single local instant. Skip
+                // just this window rather than aborting the whole 7-day search
+                // — otherwise one unlucky DST boundary would report the gate as
+                // permanently closed and suppress the task for a full day.
+                let start_dt = match tz.from_local_datetime(&start_naive).single() {
+                    Some(dt) => dt,
+                    None => continue,
+                };
                 let start_ms = start_dt.timestamp_millis();
                 if start_ms > now_ms {
                     return Some(start_ms);
@@ -159,7 +167,13 @@ impl ActiveHoursSchedule {
                         0,
                     )?;
                     let end_naive = date.date().and_time(end_time);
-                    let end_dt = tz.from_local_datetime(&end_naive).single()?;
+                    // Same DST hazard as the window start above: if the end
+                    // wall-clock time is unresolvable, treat this window as
+                    // already past and keep scanning later windows/days.
+                    let end_dt = match tz.from_local_datetime(&end_naive).single() {
+                        Some(dt) => dt,
+                        None => continue,
+                    };
                     if end_dt.timestamp_millis() > now_ms {
                         return Some(now_ms + 1);
                     }

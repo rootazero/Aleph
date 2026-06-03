@@ -39,6 +39,14 @@ pub struct MicLevelSnapshot {
 impl MicLevelSnapshot {
     /// Build a snapshot from a level reading + threshold.
     pub fn from_level(level: f32, active_threshold: f32, captured_at: DateTime<Utc>) -> Self {
+        // A glitching native meter can emit NaN/Infinity. serde_json refuses to
+        // serialize non-finite floats, so publishing one silently drops the
+        // event every tick — treat it as a meter fault instead. Also clamp to
+        // the documented 0.0..=1.0 contract downstream consumers rely on.
+        if !level.is_finite() {
+            return Self::unavailable("non-finite mic level", captured_at);
+        }
+        let level = level.clamp(0.0, 1.0);
         let state = if level >= active_threshold {
             MicLevelState::Active
         } else {
@@ -88,6 +96,33 @@ mod tests {
         let now = Utc::now();
         let s = MicLevelSnapshot::from_level(0.05, 0.05, now);
         assert_eq!(s.state, MicLevelState::Active);
+    }
+
+    #[test]
+    fn non_finite_level_is_unavailable() {
+        // serde_json refuses non-finite floats; a NaN/Inf level must become a
+        // meter fault rather than a silently-dropped publish.
+        let now = Utc::now();
+        assert_eq!(
+            MicLevelSnapshot::from_level(f32::NAN, 0.05, now).state,
+            MicLevelState::Unavailable
+        );
+        assert_eq!(
+            MicLevelSnapshot::from_level(f32::INFINITY, 0.05, now).state,
+            MicLevelState::Unavailable
+        );
+    }
+
+    #[test]
+    fn out_of_range_level_is_clamped() {
+        let now = Utc::now();
+        assert_eq!(
+            MicLevelSnapshot::from_level(5.0, 0.05, now).level,
+            Some(1.0)
+        );
+        let lo = MicLevelSnapshot::from_level(-0.3, 0.05, now);
+        assert_eq!(lo.level, Some(0.0));
+        assert_eq!(lo.state, MicLevelState::Quiet);
     }
 
     #[test]

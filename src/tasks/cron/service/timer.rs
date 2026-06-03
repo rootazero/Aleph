@@ -69,13 +69,12 @@ pub async fn run_timer_loop<C: Clock>(
             break;
         }
 
-        // Re-entrancy guard
-        if state.is_running() {
+        // Re-entrancy guard: atomic test-and-set so two concurrent callers
+        // can't both pass the check and double-run a tick.
+        if !state.try_begin_running() {
             debug!("cron timer loop: previous tick still running, skipping");
             continue;
         }
-
-        state.set_running(true);
         let _guard = RunningGuard { state: &state };
 
         if let Err(e) = on_timer_tick(&state, &executor, alert_dispatcher.as_ref()).await {

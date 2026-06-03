@@ -110,14 +110,19 @@ pub async fn run_heartbeat_loop(
             let state = state.clone();
             let semaphore = semaphore.clone();
             tokio::spawn(async move {
+                let task_id = task.id.clone();
                 let _permit = match semaphore.acquire_owned().await {
                     Ok(p) => p,
                     Err(e) => {
-                        error!(error = %e, "heartbeat: failed to acquire semaphore permit");
+                        // The task was already marked running by
+                        // `collect_due_tasks`; if we bail without running it,
+                        // clear the marker so the next tick can retry instead
+                        // of leaving it stuck until daemon restart.
+                        error!(error = %e, task_id = %task_id, "heartbeat: failed to acquire semaphore permit; clearing running marker");
+                        clear_running_marker(&state, &task_id).await;
                         return;
                     }
                 };
-                let task_id = task.id.clone();
                 let result = execute_heartbeat_tick(&task, wake_reason.as_deref(), &ctx).await;
                 writeback_one(&state, &task_id, result).await;
             });
@@ -158,6 +163,23 @@ async fn clear_stale_running_markers(state: &HeartbeatServiceState) {
             cleared,
             "heartbeat: cleared stale running markers on startup"
         );
+    }
+}
+
+/// Clear the running marker for a single task that was marked due but never
+/// actually executed (e.g. the spawned future failed to acquire a permit).
+/// Without this the task is skipped by `collect_due_tasks` until the next
+/// startup stale-marker sweep.
+async fn clear_running_marker(state: &HeartbeatServiceState, task_id: &str) {
+    let mut store = state.store.lock().await;
+    if let Some(task) = store.get_task_mut(task_id) {
+        if task.state.running_at_ms.is_none() {
+            return;
+        }
+        task.state.running_at_ms = None;
+        if let Err(e) = store.persist() {
+            error!(error = %e, task_id, "heartbeat: failed to persist running-marker clear");
+        }
     }
 }
 
@@ -224,12 +246,17 @@ async fn collect_due_tasks(
             due.push((task.clone(), wake_reason));
         }
     }
+    let had_gated = !gated_ids.is_empty();
     for (id, new_next_due) in gated_ids {
         if let Some(task) = store.get_task_mut(&id) {
             task.state.next_due_ms = Some(new_next_due);
         }
     }
-    if !due.is_empty() {
+    // Persist when *either* running markers or gated reschedules changed. A
+    // gated-only tick (every due task is outside its active-hours window)
+    // still advances `next_due_ms` in memory; without persisting it, a restart
+    // re-gates the task from scratch instead of resuming past the window.
+    if !due.is_empty() || had_gated {
         if let Err(e) = store.persist() {
             error!(error = %e, "heartbeat: failed to persist running markers");
         }

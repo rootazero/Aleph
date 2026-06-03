@@ -212,8 +212,10 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
         .map_err(|e| format!("failed to read schema version: {e}"))?;
 
     if version.is_none() {
+        // `INSERT OR IGNORE`: idempotent on the version PRIMARY KEY so a
+        // concurrent first-run init can't fail on a duplicate-key error.
         conn.execute(
-            "INSERT INTO cron_meta (key, value) VALUES ('version', ?1)",
+            "INSERT OR IGNORE INTO cron_meta (key, value) VALUES ('version', ?1)",
             params![CURRENT_VERSION.to_string()],
         )
         .map_err(|e| format!("failed to set schema version: {e}"))?;

@@ -208,6 +208,7 @@ async fn execute_cron_job(
             // typed enum because cron only sees the gateway-side wire
             // form. The label is single-source from
             // `TerminateReason::as_static_str()`.
+            let mut wrote_carryover = false;
             if let Some((label, detail)) = extract_terminate_reason(&collector).await {
                 if label == crate::orchestrator::dispatch::BUDGET_PARTIAL_RESULT_LABEL {
                     if let Some(ref text) = final_response {
@@ -229,6 +230,7 @@ async fn execute_cron_job(
                                  next firing will start without resume context",
                             );
                         } else {
+                            wrote_carryover = true;
                             info!(
                                 job_id = %snapshot.id,
                                 "cron job hit budget cap with partial result; \
@@ -236,6 +238,21 @@ async fn execute_cron_job(
                             );
                         }
                     }
+                }
+            }
+
+            // If this run did not itself produce a fresh carryover, ensure any
+            // prior one is gone. The read-time clear in `build_cron_prompt` is
+            // best-effort; if it failed (transient FS error), this idempotent
+            // post-run clear stops a stale partial from being re-injected into
+            // a later, already-completed run. `clear` is a no-op when absent.
+            if !wrote_carryover {
+                if let Err(e) = crate::tasks::cron::carryover::clear(&snapshot.id) {
+                    warn!(
+                        job_id = %snapshot.id,
+                        error = %e,
+                        "failed to clear stale cron carryover post-run",
+                    );
                 }
             }
 

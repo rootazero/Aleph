@@ -228,6 +228,20 @@ pub enum ErrorReason {
     Permanent(String),
 }
 
+impl ErrorReason {
+    /// Stable snake_case category token (`"transient"` / `"permanent"`).
+    ///
+    /// This is the wire form the `cron_runs.error_reason` column stores and
+    /// that history consumers filter on — never the Rust `Debug` rendering
+    /// (`Transient("…")`), which would make rows unqueryable by category.
+    pub fn category(&self) -> &'static str {
+        match self {
+            Self::Transient(_) => "transient",
+            Self::Permanent(_) => "permanent",
+        }
+    }
+}
+
 // ── SessionTarget ───────────────────────────────────────────────────────
 
 /// Where the cron job agent session runs
@@ -748,6 +762,20 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&RunStatus::Timeout).unwrap(),
             "\"timeout\""
+        );
+    }
+
+    #[test]
+    fn error_reason_category_is_snake_case() {
+        // The history `error_reason` column stores this token, not the Debug
+        // form (`Transient("…")`) — consumers filter on `"transient"`.
+        assert_eq!(
+            ErrorReason::Transient("x".to_string()).category(),
+            "transient"
+        );
+        assert_eq!(
+            ErrorReason::Permanent("y".to_string()).category(),
+            "permanent"
         );
     }
 

@@ -3,7 +3,7 @@
 //! All time-dependent code should receive `&dyn Clock` instead of calling
 //! `Utc::now()` directly, enabling deterministic testing via `FakeClock`.
 
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, Utc};
 
 /// Trait abstracting over system time.
 ///
@@ -17,12 +17,13 @@ pub trait Clock: Send + Sync + 'static {
     ///
     /// Default implementation converts from [`now_ms`](Clock::now_ms).
     fn now_utc(&self) -> DateTime<Utc> {
-        let ms = self.now_ms();
-        let secs = ms / 1000;
-        let nanos = ((ms % 1000) * 1_000_000) as u32;
-        Utc.timestamp_opt(secs, nanos)
-            .single()
-            .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap_or(Utc::now()))
+        // `from_timestamp_millis` handles negative (pre-epoch) and sub-second
+        // values correctly. The hand-rolled `secs`/`nanos` split mis-handled
+        // negative ms: e.g. `ms = -1` produced a negative `nanos` that wrapped
+        // to a huge `u32`, making `timestamp_opt` reject it and silently
+        // collapse to the epoch instead of the true pre-epoch instant.
+        DateTime::from_timestamp_millis(self.now_ms())
+            .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap_or_else(Utc::now))
     }
 }
 
@@ -113,6 +114,14 @@ mod tests {
         let clock = FakeClock::new(0);
         clock.set(99_999);
         assert_eq!(clock.now_ms(), 99_999);
+    }
+
+    #[test]
+    fn now_utc_handles_negative_ms() {
+        // Pre-epoch timestamp: the old hand-rolled secs/nanos split wrapped a
+        // negative nanos into a huge u32 and silently collapsed to the epoch.
+        let clock = FakeClock::new(-1);
+        assert_eq!(clock.now_utc().timestamp_millis(), -1);
     }
 
     #[test]
