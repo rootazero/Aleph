@@ -282,6 +282,24 @@ fn promote_text_tool_calls(
 }
 
 impl AgentHarness {
+    /// Fold a single provider response's billed tokens into the run totals.
+    ///
+    /// Used for *intermediate* responses that the empty-response and
+    /// `max_output_tokens` recovery loops discard before they reach the
+    /// once-per-turn accounting at the end of `run_turn_internal`. Each
+    /// discarded call was a real round-trip the provider billed (input tokens
+    /// always, plus any partial output on a `max_output_tokens` cut), so
+    /// counting only the final surviving response silently dropped those
+    /// tokens from `total_tokens`, the per-component `token_breakdown`, and
+    /// every downstream cost / budget consumer. Mirrors the final accounting
+    /// (`turn_token_total` + `accumulate_token_breakdown`) so each call is
+    /// counted exactly once. R10-safe: pure arithmetic, no decision.
+    fn account_intermediate_tokens(&self, response: &ProviderResponse) {
+        let tokens = super::turn_token_total(&response.usage);
+        self.total_tokens.fetch_add(tokens, Ordering::Relaxed);
+        self.accumulate_token_breakdown(&response.usage);
+    }
+
     /// Internal turn execution with pre-computed counters to avoid O(n²)
     /// event-log scans in the outer loop.
     ///
@@ -612,6 +630,10 @@ impl AgentHarness {
         let mut empty_retries = 0u32;
         while is_empty_response(&response) && empty_retries < EMPTY_RESPONSE_RETRIES {
             empty_retries += 1;
+            // Count the empty call we are about to discard — it was still a
+            // billed round-trip (input tokens), and the final once-per-turn
+            // accounting below only sees the surviving response.
+            self.account_intermediate_tokens(&response);
             tracing::warn!(
                 ?session_id,
                 empty_retries,
@@ -669,6 +691,11 @@ impl AgentHarness {
         ) && max_tokens_retries < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
         {
             max_tokens_retries += 1;
+            // Count the partial (max_output_tokens-cut) call before discarding
+            // it: it billed input tokens plus the partial output the model
+            // already emitted. The once-per-turn accounting below only sees
+            // the final response, so without this those tokens are lost.
+            self.account_intermediate_tokens(&response);
             tracing::warn!(
                 ?session_id,
                 max_tokens_retries,
