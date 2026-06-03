@@ -22,7 +22,7 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
   "name": "research-report",
   "description": "...",
   "whenToUse": "...",
-  "phases": [{ "title": "Gather", "detail": "..." }],
+  "phases": [{ "title": "Gather", "detail": "...", "model": "opus" }],
   "steps": [
     {
       "id": "gather",
@@ -32,15 +32,18 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
       "label": "audit:gather",
       "model": "haiku",
       "phase": "Gather",
-      "schema": { "type": "object" }
+      "schema": { "type": "object" },
+      "isolation": "worktree",
+      "agentType": "Explore"
     }
   ]
 }
 ```
 
 - 必填:顶层 `name` / `steps`;步骤 `id` / `agent` / `prompt`。
-- 可选:`description` / `whenToUse` / `phases`;步骤 `dependsOn`(缺省 `[]`)/ `label` /
-  `model` / `phase` / `schema`(原样透传,Aleph 不解释)。
+- 可选:`description` / `whenToUse` / `phases`(条目可选 `model` 相位级模型覆盖);步骤
+  `dependsOn`(缺省 `[]`)/ `label` / `model` / `phase` / `schema` / `isolation` /
+  `agentType`(均为原样透传,Aleph 不解释、不执行,仅为忠实导出 `.workflow.js`)。
 - 只有 `name` / `description` / `steps{id,agent,prompt,dependsOn}` 映射进 `WorkflowDef`;
   其余字段仅在导出的 `.workflow.js` 头部内嵌块中保留。
 
@@ -48,11 +51,11 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 
 | Claude Code 构造 | 方向 | 说明 |
 |---|---|---|
-| `meta.{name,description,whenToUse,phases}` | ↔ 无损 | manifest 顶层 |
+| `meta.{name,description,whenToUse,phases}`(含 `phase.model`) | ↔ 无损 | manifest 顶层 |
 | 顺序 `await agent()` 链 | ↔ | 线性 `dependsOn` 链 |
 | `parallel([agent, agent])` | ↔ | 同拓扑层、彼此无 `dependsOn` 的兄弟步骤 |
 | `agent()` fan-in | ↔ | 一步 `dependsOn` 多个上游 |
-| `opts.{label,model,phase,schema}` | ↔ 无损(经内嵌块) | 存 manifest,不入 `WorkflowDef` |
+| `opts.{label,model,phase,schema,isolation,agentType}` | ↔ 无损(经内嵌块) | 存 manifest,不入 `WorkflowDef` |
 | `pipeline(items, s1, s2)` | → 导入近似 | 运行时 item 列表未知 → 记 `dropped`;导出不生成 |
 | 循环 / 条件 / `budget` / 嵌套 `workflow()` | ✗ 故意不支持 | 导入记 `dropped`(R7/R10) |
 

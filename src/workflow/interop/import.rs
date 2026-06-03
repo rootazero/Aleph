@@ -116,6 +116,8 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
             model: None,
             phase: None,
             schema: None,
+            isolation: None,
+            agent_type: None,
         })
         .collect();
 
@@ -245,6 +247,9 @@ mod tests {
                     model: None,
                     phase: None,
                     schema: None,
+                    // Exercise the new agent-opts on the lossless roundtrip path.
+                    isolation: Some("worktree".into()),
+                    agent_type: Some("Explore".into()),
                 },
                 WorkflowManifestStep {
                     id: "b".into(),
@@ -255,6 +260,8 @@ mod tests {
                     model: None,
                     phase: None,
                     schema: None,
+                    isolation: None,
+                    agent_type: None,
                 },
             ],
         }
@@ -343,6 +350,8 @@ const r = await pipeline(items, s1, s2)
                 model: None,
                 phase: None,
                 schema: None,
+                isolation: None,
+                agent_type: None,
             }],
         };
         let js = render_workflow_js(&original);

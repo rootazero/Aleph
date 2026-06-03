@@ -84,11 +84,21 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
 fn render_meta(manifest: &WorkflowManifest) -> String {
     let mut phases = String::new();
     for p in &manifest.phases {
-        phases.push_str(&format!(
-            "    {{ title: {}, detail: {} }},\n",
-            js_str(&p.title),
-            js_str(&p.detail)
-        ));
+        // `model` is optional on a `.workflow.js` phase entry; emit it only when
+        // present so model-less phases render byte-identically to before.
+        match &p.model {
+            Some(m) => phases.push_str(&format!(
+                "    {{ title: {}, detail: {}, model: {} }},\n",
+                js_str(&p.title),
+                js_str(&p.detail),
+                js_str(m)
+            )),
+            None => phases.push_str(&format!(
+                "    {{ title: {}, detail: {} }},\n",
+                js_str(&p.title),
+                js_str(&p.detail)
+            )),
+        }
     }
     format!(
         "export const meta = {{\n  name: {},\n  description: {},\n  whenToUse: {},\n  phases: [\n{}  ],\n}}\n",
@@ -114,6 +124,12 @@ fn render_agent_call(step: &WorkflowManifestStep) -> String {
     if let Some(sc) = &step.schema {
         let schema_json = serde_json::to_string(sc).unwrap_or_else(|_| "{}".to_string());
         opts.push(format!("schema: {schema_json}"));
+    }
+    if let Some(iso) = &step.isolation {
+        opts.push(format!("isolation: {}", js_str(iso)));
+    }
+    if let Some(at) = &step.agent_type {
+        opts.push(format!("agentType: {}", js_str(at)));
     }
     if opts.is_empty() {
         format!("agent({})", js_str(&step.prompt))
@@ -188,6 +204,8 @@ mod tests {
             model: None,
             phase: None,
             schema: None,
+            isolation: None,
+            agent_type: None,
         }
     }
 
@@ -243,6 +261,55 @@ mod tests {
         assert!(js.contains("label: \"audit:a\""));
         assert!(js.contains("model: \"haiku\""));
         assert!(js.contains("schema: {\"type\":\"object\"}"));
+    }
+
+    #[test]
+    fn isolation_and_agent_type_opts_rendered() {
+        // The two `.workflow.js` agent-opts unique to the engineering format —
+        // `isolation` (e.g. worktree) and `agentType` (custom subagent) — must
+        // appear verbatim in the rendered call for a faithful export.
+        let mut s = step("a", &[]);
+        s.isolation = Some("worktree".into());
+        s.agent_type = Some("code-reviewer".into());
+        let js = render_workflow_js(&manifest(vec![s]));
+        assert!(js.contains("isolation: \"worktree\""), "isolation: {js}");
+        assert!(
+            js.contains("agentType: \"code-reviewer\""),
+            "agentType: {js}"
+        );
+    }
+
+    #[test]
+    fn phase_entry_model_rendered_only_when_present() {
+        // A phase with a model override emits `model:` in its meta entry; a
+        // model-less phase stays byte-identical to the legacy two-field form.
+        let m = WorkflowManifest {
+            name: "wf".into(),
+            description: "d".into(),
+            when_to_use: String::new(),
+            phases: vec![
+                crate::workflow::interop::manifest::WorkflowPhase {
+                    title: "Heavy".into(),
+                    detail: "deep".into(),
+                    model: Some("opus".into()),
+                },
+                crate::workflow::interop::manifest::WorkflowPhase {
+                    title: "Light".into(),
+                    detail: "quick".into(),
+                    model: None,
+                },
+            ],
+            steps: vec![step("a", &[])],
+        };
+        let js = render_workflow_js(&m);
+        assert!(
+            js.contains("{ title: \"Heavy\", detail: \"deep\", model: \"opus\" }"),
+            "phase with model: {js}"
+        );
+        assert!(
+            js.contains("{ title: \"Light\", detail: \"quick\" }"),
+            "phase without model unchanged: {js}"
+        );
     }
 
     #[test]

@@ -2,9 +2,13 @@
 //! bridges Aleph's `WorkflowDef` and Claude Code's `.workflow.js` format.
 //!
 //! Pure data + field shuffling, no reasoning (R7/R10). The manifest carries the
-//! full `.workflow.js`-compatible metadata (`whenToUse`, `phases`, per-step
-//! `label`/`model`/`phase`/`schema`); only the executable core round-trips into
-//! `WorkflowDef`, the rest is preserved for lossless export.
+//! full `.workflow.js`-compatible metadata (`whenToUse`, `phases` with optional
+//! per-phase `model`, per-step `label`/`model`/`phase`/`schema`/`isolation`/
+//! `agentType`); only the executable core round-trips into `WorkflowDef`, the
+//! rest is preserved for lossless export. The extra agent-opt fields
+//! (`isolation`, `agentType`) and `phase.model` are interchange-only: the Aleph
+//! executor never consumes them (R10), exactly like the opaque `schema`
+//! pass-through.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,6 +41,10 @@ pub struct WorkflowPhase {
     pub title: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    /// Optional per-phase model override, mirroring the `.workflow.js`
+    /// convention of adding `model` to a `meta.phases` entry. Interchange-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -59,6 +67,14 @@ pub struct WorkflowManifestStep {
     /// Opaque JSON Schema, passed through verbatim. Aleph never interprets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<Value>,
+    /// `.workflow.js` `agent(..., { isolation })` hint (e.g. `"worktree"`).
+    /// Interchange-only — preserved for faithful export, never executed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<String>,
+    /// `.workflow.js` `agent(..., { agentType })` — a custom subagent type.
+    /// Interchange-only; Aleph resolves execution via `agent` (the team member).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
 }
 
 impl WorkflowManifest {
@@ -82,14 +98,17 @@ impl WorkflowManifest {
                     model: None,
                     phase: None,
                     schema: None,
+                    isolation: None,
+                    agent_type: None,
                 })
                 .collect(),
         }
     }
 
     /// Validate the manifest by validating its executable projection — the
-    /// extra metadata (`label`/`model`/`phase`/`schema`/`phases`/`whenToUse`)
-    /// is pure interchange data and carries no invariants of its own, so the
+    /// extra metadata (`label`/`model`/`phase`/`schema`/`isolation`/`agentType`/
+    /// `phases`/`whenToUse`) is pure interchange data and carries no invariants
+    /// of its own, so the
     /// `WorkflowDef` checks (unique ids, resolvable deps, acyclic) are the whole
     /// contract. Pure — touches no store.
     pub fn validate(&self) -> Result<()> {
@@ -156,7 +175,9 @@ mod tests {
         assert!(manifest.steps.iter().all(|s| s.label.is_none()
             && s.model.is_none()
             && s.phase.is_none()
-            && s.schema.is_none()));
+            && s.schema.is_none()
+            && s.isolation.is_none()
+            && s.agent_type.is_none()));
     }
 
     #[test]
@@ -168,6 +189,7 @@ mod tests {
             phases: vec![WorkflowPhase {
                 title: "P".into(),
                 detail: "det".into(),
+                model: Some("opus".into()),
             }],
             steps: vec![WorkflowManifestStep {
                 id: "s".into(),
@@ -178,14 +200,16 @@ mod tests {
                 model: Some("haiku".into()),
                 phase: Some("P".into()),
                 schema: Some(serde_json::json!({"type":"object"})),
+                isolation: Some("worktree".into()),
+                agent_type: Some("Explore".into()),
             }],
         };
         let def = manifest.to_def();
         assert_eq!(def.name, "x");
         assert_eq!(def.steps.len(), 1);
         assert_eq!(def.steps[0].id, "s");
-        // WorkflowStepDef has no label/model/phase/schema fields to carry —
-        // their absence is structural.
+        // WorkflowStepDef has no label/model/phase/schema/isolation/agentType
+        // fields to carry — their absence is structural.
     }
 
     #[test]
@@ -204,6 +228,8 @@ mod tests {
                 model: None,
                 phase: None,
                 schema: None,
+                isolation: Some("worktree".into()),
+                agent_type: Some("code-reviewer".into()),
             }],
         };
         let v = serde_json::to_value(&manifest).unwrap();
@@ -212,6 +238,12 @@ mod tests {
             v["steps"][0].get("dependsOn").is_some(),
             "dependsOn camelCase"
         );
+        // `agent_type` serialises as the `.workflow.js` `agentType` key.
+        assert!(
+            v["steps"][0].get("agentType").is_some(),
+            "agentType camelCase"
+        );
+        assert_eq!(v["steps"][0]["isolation"], "worktree");
         // Empty extras are skipped on the wire.
         assert!(v.get("phases").is_none(), "empty phases skipped");
     }

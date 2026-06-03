@@ -692,11 +692,11 @@ mod tests {
   "description": "two-phase audit",
   "whenToUse": "on any subsystem",
   "phases": [
-    { "title": "Scan", "detail": "look" },
+    { "title": "Scan", "detail": "look", "model": "opus" },
     { "title": "Fix", "detail": "patch" }
   ],
   "steps": [
-    { "id": "a", "agent": "scanner", "prompt": "scan {input}", "label": "scan:a", "phase": "Scan", "model": "haiku", "schema": {"type":"object"} },
+    { "id": "a", "agent": "scanner", "prompt": "scan {input}", "label": "scan:a", "phase": "Scan", "model": "haiku", "schema": {"type":"object"}, "isolation": "worktree", "agentType": "Explore" },
     { "id": "b", "agent": "fixer", "prompt": "fix it", "dependsOn": ["a"], "label": "fix:b", "phase": "Fix" }
   ]
 }"#;
@@ -746,10 +746,18 @@ mod tests {
             js.contains("title: \"Scan\"") && js.contains("title: \"Fix\""),
             "phases: {js}"
         );
-        // per-step metadata survived: schema, model, label, phase markers.
+        // per-step metadata survived: schema, model, label, phase markers, plus
+        // the engineering-format agent-opts isolation + agentType.
         assert!(js.contains("schema: {\"type\":\"object\"}"), "schema: {js}");
         assert!(js.contains("model: \"haiku\""), "model: {js}");
         assert!(js.contains("label: \"scan:a\""), "label: {js}");
+        assert!(js.contains("isolation: \"worktree\""), "isolation: {js}");
+        assert!(js.contains("agentType: \"Explore\""), "agentType: {js}");
+        // the Scan phase carries its per-phase model override in the meta block.
+        assert!(
+            js.contains("title: \"Scan\", detail: \"look\", model: \"opus\""),
+            "phase model: {js}"
+        );
         assert!(
             js.contains("phase(\"Scan\")") && js.contains("phase(\"Fix\")"),
             "phase markers: {js}"
