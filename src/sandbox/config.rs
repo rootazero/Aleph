@@ -361,6 +361,27 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub deny_read_globs: Vec<String>,
 
+    /// Absolute paths to Unix-domain sockets a sandboxed command may
+    /// connect to / bind, even under a restricted (or `None`) network
+    /// policy. Local IPC over an `AF_UNIX` socket is otherwise swept up by
+    /// the `(deny network*)` floor, so tools that talk to `ssh-agent`
+    /// (`SSH_AUTH_SOCK`), a PostgreSQL/MySQL `.sock`, `gpg-agent`, or a
+    /// language-server socket fail with no TCP/IP intent. Entries grant
+    /// access to the socket path *and any socket beneath it* (subpath).
+    /// Empty by default → no AF_UNIX allowance (boot unchanged, default
+    /// deny preserved). macOS-seatbelt only today; mirrors codex's
+    /// `network.allow_unix_sockets`.
+    #[serde(default)]
+    pub allow_unix_sockets: Vec<PathBuf>,
+
+    /// Escape hatch mirroring codex's `dangerously_allow_all_unix_sockets`:
+    /// permit *any* `AF_UNIX` socket bind/connect under a restricted network
+    /// policy. Dangerous — a local socket can reach privileged daemons
+    /// (e.g. `docker.sock` → root). Prefer the `allow_unix_sockets`
+    /// allowlist. Default `false`.
+    #[serde(default)]
+    pub dangerously_allow_all_unix_sockets: bool,
+
     #[serde(default)]
     pub linux: LinuxSandboxConfig,
 
@@ -413,6 +434,8 @@ impl Default for SandboxConfig {
             default_timeout_seconds: default_timeout_seconds(),
             max_output_bytes: default_max_output_bytes(),
             deny_read_globs: Vec::new(),
+            allow_unix_sockets: Vec::new(),
+            dangerously_allow_all_unix_sockets: false,
             linux: LinuxSandboxConfig::default(),
             windows: WindowsSandboxConfig::default(),
             rate_limit: SandboxRateLimitConfigSchema {
@@ -494,6 +517,25 @@ mod tests {
         "#;
         let cfg: SandboxConfig = toml::from_str(toml).expect("parses");
         assert_eq!(cfg.deny_read_globs, vec!["**/.env", "**/*.pem"]);
+    }
+
+    #[test]
+    fn allow_unix_sockets_default_empty_and_parses() {
+        // Back-compat: absent keys → empty list + false (boot unchanged).
+        let cfg = SandboxConfig::default();
+        assert!(cfg.allow_unix_sockets.is_empty());
+        assert!(!cfg.dangerously_allow_all_unix_sockets);
+
+        let toml = r#"
+            allow_unix_sockets = ["/tmp/agent.sock", "/var/run/db"]
+            dangerously_allow_all_unix_sockets = true
+        "#;
+        let cfg: SandboxConfig = toml::from_str(toml).expect("parses");
+        assert_eq!(
+            cfg.allow_unix_sockets,
+            vec![PathBuf::from("/tmp/agent.sock"), PathBuf::from("/var/run/db")]
+        );
+        assert!(cfg.dangerously_allow_all_unix_sockets);
     }
 
     #[test]
