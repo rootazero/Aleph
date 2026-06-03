@@ -1,0 +1,127 @@
+//! Provider wrapper that stamps `RequestPayload.model` before delegating.
+//!
+//! Model binding in Aleph is done by *wrapping* the chosen base provider so it
+//! forces a specific model onto every request, rather than threading the model
+//! through every call site. Two consumers share this wrapper:
+//!
+//! * sub-agent spawn — a per-spawn `model` / `model_hint` pins the child's model;
+//! * `pick_llm` — a `BrainRef::Strict { provider, model: Some(..) }` (the "pin"
+//!   form of an agent's configured model) stamps that model onto the picked
+//!   provider, closing the model half of provider/model pinning.
+//!
+//! All trait methods except `process` delegate verbatim to the inner provider,
+//! so wrapping is transparent to name/color/protocol/tool-support.
+
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use crate::error::Result;
+use crate::providers::adapter::{ProviderResponse, RequestPayload};
+use crate::providers::AiProvider;
+
+/// Wraps an [`AiProvider`], stamping `payload.model` with `model` before
+/// delegating. The stamp is unconditional — it overrides any model the caller
+/// already set, which is the intended "pin" behaviour.
+pub struct ModelOverrideProvider {
+    inner: Arc<dyn AiProvider>,
+    model: String,
+}
+
+impl ModelOverrideProvider {
+    /// Wrap `inner`, forcing `model` onto every request.
+    pub fn new(inner: Arc<dyn AiProvider>, model: impl Into<String>) -> Self {
+        Self {
+            inner,
+            model: model.into(),
+        }
+    }
+}
+
+impl AiProvider for ModelOverrideProvider {
+    fn process<'a>(
+        &'a self,
+        mut payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+        payload.model = Some(self.model.clone());
+        self.inner.process(payload)
+    }
+
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn color(&self) -> &str {
+        self.inner.color()
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        self.inner.supports_native_tools()
+    }
+
+    fn protocol(&self) -> &str {
+        self.inner.protocol()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::message::UnifiedMessage;
+    use std::sync::Mutex;
+
+    /// Inner provider that records the `model` it was handed.
+    struct Recorder {
+        seen: Mutex<Option<String>>,
+    }
+
+    impl AiProvider for Recorder {
+        fn process<'a>(
+            &'a self,
+            payload: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            *self.seen.lock().unwrap() = payload.model.clone();
+            Box::pin(async move { Ok(ProviderResponse::text_only("inner".to_string())) })
+        }
+        fn name(&self) -> &str {
+            "recorder"
+        }
+        fn color(&self) -> &str {
+            "#000"
+        }
+    }
+
+    #[tokio::test]
+    async fn stamps_model_onto_payload() {
+        let inner = Arc::new(Recorder {
+            seen: Mutex::new(None),
+        });
+        let wrapped = ModelOverrideProvider::new(inner.clone(), "claude-opus-4");
+        let msgs = [UnifiedMessage::user("hi")];
+        // Caller leaves model unset — the wrapper must fill it.
+        let _ = wrapped.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(inner.seen.lock().unwrap().as_deref(), Some("claude-opus-4"));
+    }
+
+    #[tokio::test]
+    async fn stamp_overrides_caller_model() {
+        let inner = Arc::new(Recorder {
+            seen: Mutex::new(None),
+        });
+        let wrapped = ModelOverrideProvider::new(inner.clone(), "pinned-model");
+        let msgs = [UnifiedMessage::user("hi")];
+        let payload = RequestPayload::new(&msgs).with_model(Some("caller-model".to_string()));
+        let _ = wrapped.process(payload).await.unwrap();
+        assert_eq!(inner.seen.lock().unwrap().as_deref(), Some("pinned-model"));
+    }
+
+    #[test]
+    fn delegates_metadata_to_inner() {
+        let inner = Arc::new(Recorder {
+            seen: Mutex::new(None),
+        });
+        let wrapped = ModelOverrideProvider::new(inner, "m");
+        assert_eq!(wrapped.name(), "recorder");
+        assert_eq!(wrapped.color(), "#000");
+    }
+}

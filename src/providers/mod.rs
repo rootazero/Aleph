@@ -77,6 +77,7 @@ pub mod mock;
 pub mod model_behaviors;
 pub mod model_catalog;
 pub mod model_discovery;
+pub mod model_override_provider;
 pub mod oauth_refresh;
 pub mod ollama;
 pub mod openai;
@@ -114,6 +115,7 @@ pub use http_provider::HttpProvider;
 pub use metering::MeteringProvider;
 pub use mock::{MockError, MockProvider};
 pub use model_catalog::{capabilities_for, infer_vendor, ModelCapabilities};
+pub use model_override_provider::ModelOverrideProvider;
 pub use ollama::OllamaProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
 pub use profile_config::{
