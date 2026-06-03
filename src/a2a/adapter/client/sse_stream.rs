@@ -64,20 +64,25 @@ where
                 }
             };
 
-            // Prepend any incomplete bytes from the previous chunk
+            // `line_buf` already holds the valid UTF-8 decoded so far, which is
+            // the earliest content in wire order. The carried incomplete bytes
+            // from the previous chunk come AFTER `line_buf` and BEFORE the new
+            // chunk. Decode only `carry + chunk` and append the result to
+            // `line_buf` to preserve wire order. (Prepending `carry` ahead of
+            // `line_buf` would splice a partial line in front of the bytes that
+            // complete a chunk-split multi-byte character — e.g. CJK text —
+            // permanently corrupting the decode and dropping all later events.)
             let mut raw_bytes: Vec<u8> = std::mem::take(&mut carry);
-            raw_bytes.extend_from_slice(line_buf.as_bytes());
             raw_bytes.extend_from_slice(chunk.as_ref());
-            line_buf.clear();
             // Decode as much valid UTF-8 as possible, keeping incomplete trailing bytes
             match String::from_utf8(raw_bytes) {
-                Ok(s) => line_buf = s,
+                Ok(s) => line_buf.push_str(&s),
                 Err(e) => {
                     let valid_up_to = e.utf8_error().valid_up_to();
                     let bytes = e.into_bytes();
                     // Safe: valid_up_to is guaranteed to be a valid UTF-8 boundary
-                    line_buf = String::from_utf8(bytes[..valid_up_to].to_vec())
-                        .unwrap_or_default();
+                    line_buf
+                        .push_str(std::str::from_utf8(&bytes[..valid_up_to]).unwrap_or_default());
                     // Store incomplete trailing bytes for the next chunk
                     carry = bytes[valid_up_to..].to_vec();
                 }
@@ -449,6 +454,63 @@ mod tests {
         assert!(matches!(second, Some(Err(A2AError::Timeout(_)))));
 
         assert!(parsed.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn parse_sse_byte_stream_multibyte_char_split_across_chunks() {
+        // Regression: a chunk boundary that lands BOTH mid-multi-byte-char AND
+        // with a pending partial line in `line_buf` must not corrupt the decode.
+        // CJK message text exercises the multi-byte path (Aleph is CJK-first).
+        use futures::StreamExt;
+
+        let event = TaskStatusUpdateEvent {
+            task_id: "任务-1".to_string(),
+            context_id: "上下文-1".to_string(),
+            status: TaskStatus {
+                state: TaskState::Completed,
+                message: Some(A2AMessage::text(A2ARole::Agent, "分析完成：黄金走势看涨")),
+                timestamp: Utc::now(),
+            },
+            is_final: true,
+            metadata: None,
+        };
+        let json = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": UpdateEvent::StatusUpdate(event),
+        })
+        .to_string();
+        let frame = format!("event: status-update\ndata: {}\n\n", json);
+        let bytes = frame.as_bytes();
+
+        // Split at the first byte index that is NOT a char boundary AND falls
+        // after the first '\n' (so "event: status-update" is already a complete
+        // line and "data: {partial" sits in line_buf when the split char arrives).
+        let split = (1..bytes.len())
+            .find(|&i| !frame.is_char_boundary(i) && bytes[..i].contains(&b'\n'))
+            .expect("frame must contain a multi-byte char after a newline");
+        let chunk1 = bytes[..split].to_vec();
+        let chunk2 = bytes[split..].to_vec();
+
+        let byte_stream = futures::stream::iter(vec![
+            Ok::<Vec<u8>, reqwest::Error>(chunk1),
+            Ok::<Vec<u8>, reqwest::Error>(chunk2),
+        ]);
+        let parsed = parse_sse_byte_stream(byte_stream, std::time::Duration::from_secs(5));
+        let events: Vec<_> = parsed.collect().await;
+
+        assert_eq!(events.len(), 1, "exactly one event must survive the split");
+        match &events[0] {
+            Ok(UpdateEvent::StatusUpdate(e)) => {
+                assert_eq!(e.task_id, "任务-1");
+                assert_eq!(
+                    e.status.message.as_ref().unwrap().text_content(),
+                    "分析完成：黄金走势看涨",
+                    "multi-byte message text must be reconstructed intact"
+                );
+            }
+            other => panic!("expected one StatusUpdate, got {:?}", other),
+        }
     }
 
     fn status_event(state: TaskState, msg: Option<&str>, is_final: bool) -> UpdateEvent {

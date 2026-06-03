@@ -1,9 +1,14 @@
 use std::collections::HashSet;
 
+use crate::security::secret_equal::secret_equal_bytes;
+
 /// In-memory store for API tokens.
 ///
-/// Provides simple token validation for the tiered authentication system.
-/// Tokens are stored as plain strings in a HashSet for O(1) lookup.
+/// Provides token validation for the tiered authentication system. Tokens are
+/// deduplicated in a `HashSet`, but validation deliberately avoids the
+/// hash-based `contains` fast path: presented tokens are attacker-controlled
+/// secrets, so each is compared in constant time to avoid leaking a matching
+/// prefix via timing.
 pub struct TokenStore {
     tokens: HashSet<String>,
 }
@@ -16,7 +21,14 @@ impl TokenStore {
     }
 
     pub fn is_valid(&self, token: &str) -> bool {
-        self.tokens.contains(token)
+        // Compare against every stored token without short-circuiting: a plain
+        // `HashSet::contains` (or an early `return true`) would make match
+        // timing observable. `secret_equal_bytes` is itself length-leak-safe.
+        let mut matched = false;
+        for stored in &self.tokens {
+            matched |= secret_equal_bytes(token.as_bytes(), stored.as_bytes());
+        }
+        matched
     }
 
     pub fn add(&mut self, token: String) {
