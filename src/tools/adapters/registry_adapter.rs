@@ -49,6 +49,19 @@ pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
     "channel_manage",
 ];
 
+/// Builtin tools that require explicit user confirmation before they run.
+///
+/// Destructive or security-sensitive operations (secret-vault mutation,
+/// agent deletion, team disband). The adapter reports this through
+/// [`LoopTool::requires_confirmation`], so the live `ScopedToolService`
+/// confirmation gate routes a user prompt before dispatch — no gateway-side
+/// allowlist needed. Co-located with [`EXCLUSIVE_TOOLS`]: both are per-tool
+/// runtime dispatch properties this adapter self-declares. Mirrors the
+/// `AlephTool::requires_confirmation()` overrides on these tools (which feed
+/// the metadata/describe path); keep the two in sync.
+pub(crate) const CONFIRMATION_REQUIRED_TOOLS: &[&str] =
+    &["vault_store", "agent_delete", "team_disband"];
+
 #[async_trait]
 impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     fn name(&self) -> &str {
@@ -65,6 +78,10 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 
     fn is_concurrent_safe(&self, _input: &Value) -> bool {
         !EXCLUSIVE_TOOLS.contains(&self.name.as_str())
+    }
+
+    fn requires_confirmation(&self) -> bool {
+        CONFIRMATION_REQUIRED_TOOLS.contains(&self.name.as_str())
     }
 
     async fn execute(&self, input: Value, cancel: CancellationToken) -> ToolResult {
@@ -294,6 +311,46 @@ mod tests {
             assert!(
                 !EXCLUSIVE_TOOLS.contains(tool),
                 "{} should NOT be in EXCLUSIVE_TOOLS",
+                tool
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_adapter_requires_confirmation() {
+        let tool_registry = Arc::new(MockRegistry {
+            results: HashMap::new(),
+        });
+
+        // A destructive builtin self-declares confirmation through the adapter.
+        let confirm_tools = vec![make_unified_tool("agent_delete", "Delete an agent")];
+        let registry = build_registry_from_tools(tool_registry.clone(), &confirm_tools, None);
+        let agent_delete = registry.get("agent_delete").unwrap();
+        assert!(agent_delete.requires_confirmation());
+
+        // A plain read-only tool does not.
+        let plain_tools = vec![make_unified_tool("search", "Search")];
+        let registry = build_registry_from_tools(tool_registry, &plain_tools, None);
+        let search = registry.get("search").unwrap();
+        assert!(!search.requires_confirmation());
+    }
+
+    #[test]
+    fn test_confirmation_required_tools_list() {
+        // The three destructive builtins must self-declare confirmation,
+        // replacing the deleted gateway `CONFIRMATION_REQUIRED_TOOLS` constant.
+        for tool in &["vault_store", "agent_delete", "team_disband"] {
+            assert!(
+                CONFIRMATION_REQUIRED_TOOLS.contains(tool),
+                "{} should require confirmation",
+                tool
+            );
+        }
+        // Read-only tools must NOT.
+        for tool in &["search", "memory_recall", "web_fetch"] {
+            assert!(
+                !CONFIRMATION_REQUIRED_TOOLS.contains(tool),
+                "{} should not require confirmation",
                 tool
             );
         }
