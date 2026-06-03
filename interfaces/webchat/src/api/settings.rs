@@ -145,3 +145,54 @@ impl GenerationConfigApi {
         Ok(())
     }
 }
+
+// ============================================================================
+// Route Config API — local/cloud three-state route mode
+// ============================================================================
+
+/// One configured provider as the route engine sees it: classified by the
+/// server's `base_url` locality check (so the panel never re-derives tier in
+/// WASM).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteProviderInfo {
+    pub name: String,
+    /// "local" | "cloud" | "unknown".
+    pub tier: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+/// `route_config.get` response: current mode plus the tier-classified providers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteConfigView {
+    /// "auto" | "always_local" | "always_cloud".
+    pub mode: String,
+    #[serde(default)]
+    pub allow_cloud_escalation: bool,
+    #[serde(default)]
+    pub providers: Vec<RouteProviderInfo>,
+}
+
+/// `route_config.update` payload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteConfigUpdate {
+    pub mode: String,
+    pub allow_cloud_escalation: bool,
+}
+
+pub struct RouteConfigApi;
+
+impl RouteConfigApi {
+    pub async fn get(state: &DashboardState) -> Result<RouteConfigView, String> {
+        let result = state.rpc_call("route_config.get", Value::Null).await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
+    pub async fn update(state: &DashboardState, update: RouteConfigUpdate) -> Result<(), String> {
+        let params = serde_json::to_value(&update).map_err(|e| e.to_string())?;
+        state.rpc_call("route_config.update", params).await?;
+        Ok(())
+    }
+}

@@ -350,6 +350,22 @@ impl SelfConfigTool {
 
         match patcher.apply(request).await {
             Ok(result) => {
+                // Hot-apply a route-mode change to the live failover chain so an
+                // LLM-driven switch (R8) takes effect on the next prompt, exactly
+                // like the panel's `route_config.update`. Without this the patch
+                // would only land at the next daemon start.
+                if !dry_run
+                    && result.success
+                    && (config_path == "route" || config_path.starts_with("route."))
+                {
+                    if let (Some(cfg), Some(handle)) = (
+                        self.config.as_ref(),
+                        crate::providers::route_handle::try_global_route_handle(),
+                    ) {
+                        handle.store(&cfg.read().await.route);
+                    }
+                }
+
                 let mode = if dry_run { "dry-run" } else { "applied" };
                 let preview_message = if dry_run && !result.diff.is_empty() {
                     Some(generate_preview_message(config_path, &result.diff))
