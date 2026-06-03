@@ -175,6 +175,9 @@ fn main() {
 
 /// Create the single main window, hosting the splash until the daemon is up.
 fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
+    // `mut` is only needed on macOS, where the title-bar overlay is applied
+    // via reassignment below; other platforms never rebind `builder`.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Aleph")
         .inner_size(1180.0, 800.0)

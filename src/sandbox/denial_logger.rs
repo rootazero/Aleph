@@ -118,6 +118,8 @@ impl DenialLogger {
     /// Stop the underlying `log stream` process. On non-macOS this is a
     /// no-op. Safe to call even if `start` was never called.
     pub async fn stop(&self) {
+        // `mut` is only needed on macOS, where the child handle is taken below.
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
         let mut inner = self.inner.lock().await;
         #[cfg(target_os = "macos")]
         if let Some(mut child) = inner.child.take() {

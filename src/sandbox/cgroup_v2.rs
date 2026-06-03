@@ -230,7 +230,7 @@ impl CgroupV2Scope {
     }
 
     /// Async-signal-safe helper: write the current PID into `path`.
-    fn write_current_pid_to_path(path: &std::path::Path) -> std::io::Result<()> {
+    pub(crate) fn write_current_pid_to_path(path: &std::path::Path) -> std::io::Result<()> {
         use std::os::unix::ffi::OsStrExt;
         let path_bytes = path.as_os_str().as_bytes();
         let mut path_buf = [0u8; 512];

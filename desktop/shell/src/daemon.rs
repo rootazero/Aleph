@@ -343,6 +343,9 @@ pub(crate) fn build_panel_url(bootstrap_url: Option<&str>) -> Result<Url, url::P
 ///
 /// Wired to the macOS "Open in Browser" menu item. The same UX is
 /// available on every platform via the `aleph open` CLI subcommand.
+// Only the macOS tray menu wires this today; other platforms reach the same
+// flow via the CLI, so the symbol is dead in those builds.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) async fn open_in_system_browser() {
     let url = match tokio::task::spawn_blocking(load_bootstrap_url).await {
         Ok(Some(u)) => u,
@@ -415,6 +418,8 @@ pub(crate) fn load_shared_token() -> Option<String> {
 
 /// Cross-platform "open this URL in the default browser" — used by
 /// the menu handler and as the fallback path in `reveal_panel`.
+// Reachable only through the macOS tray menu today; dead in other builds.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn open_url_in_browser(url: &str) {
     let result = if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).status()

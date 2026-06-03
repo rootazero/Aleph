@@ -256,7 +256,7 @@ impl PimCapability for LinuxPim {
             }
         }
 
-        result.sort_by(|a, b| b.date.cmp(&a.date));
+        result.sort_by_key(|b| std::cmp::Reverse(b.date));
         Ok(result)
     }
 
