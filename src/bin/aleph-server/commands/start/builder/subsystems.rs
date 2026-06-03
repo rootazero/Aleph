@@ -580,6 +580,57 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
         }
     }
 
+    // Wire slash-command access tiering for every *other* channel type.
+    //
+    // The `slash_command_gate` infrastructure (admin / per-command allowlists,
+    // DM vs group scopes — hermes-agent `SlashAccessPolicy` parity) was only
+    // ever connected for iMessage above. Every other channel fell through
+    // `channel_configs.get(channel_id) == None` → gating skipped → any group
+    // member could invoke any slash command. This reads the same flat
+    // `allow_admin_from` / `user_allowed_commands` / group-scoped keys from each
+    // channel instance config and registers them under the channel's runtime
+    // id (== instance id for non-iMessage channels).
+    //
+    // Backward-compat: a channel that configures no admins yields an empty
+    // `SlashAccessConfig`; we skip registration entirely so `channel_configs`
+    // stays empty for it and `permission.rs` keeps its allow-all default —
+    // byte-identical to pre-tiering behavior. Gating only activates on opt-in.
+    if let Some(ref cfg_arc) = app_config {
+        let cfg = cfg_arc.read().await;
+        for inst in cfg.resolved_channels() {
+            if inst.channel_type == "imessage" {
+                continue; // handled by the dedicated full-config path above
+            }
+            let slash_access = match serde_json::from_value::<
+                alephcore::gateway::inbound_router::SlashAccessConfig,
+            >(inst.config.clone())
+            {
+                Ok(sa) if !sa.is_empty() => sa,
+                Ok(_) => continue, // no admins configured → keep allow-all default
+                Err(e) => {
+                    tracing::debug!(
+                        "Channel '{}' ({}) slash-access parse skipped: {}",
+                        inst.id,
+                        inst.channel_type,
+                        e
+                    );
+                    continue;
+                }
+            };
+            let channel_config = alephcore::gateway::inbound_router::ChannelConfig {
+                slash_access,
+                ..Default::default()
+            };
+            inbound_router.register_channel_config(&inst.id, channel_config);
+            if !daemon {
+                println!(
+                    "  Inbound router: slash-command access tiering registered for '{}' ({})",
+                    inst.id, inst.channel_type
+                );
+            }
+        }
+    }
+
     // Wire workspace manager for channel-level agent routing
     if let Some(wm) = workspace_manager {
         inbound_router = inbound_router.with_workspace_manager(wm);
