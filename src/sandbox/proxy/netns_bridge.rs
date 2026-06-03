@@ -233,6 +233,12 @@ impl std::fmt::Debug for HostBridgeHandle {
 ///
 /// `socket_dir` is the per-run private directory containing `uds_path`; the
 /// returned handle owns its cleanup.
+///
+/// Unix-domain sockets are a Unix-only `tokio` feature. The host bridge only
+/// matters for the Linux `bwrap` netns routing path (the `workspace.rs` caller
+/// invokes it solely when the platform is `linux/bwrap`), so on non-Unix
+/// targets this is a never-reached stub that keeps the public API present.
+#[cfg(unix)]
 pub async fn spawn_host_bridge(
     uds_path: &Path,
     socket_dir: PathBuf,
@@ -276,6 +282,23 @@ pub async fn spawn_host_bridge(
     Ok(HostBridgeHandle { socket_dir, task })
 }
 
+/// Non-Unix stub. `tokio`'s `UnixListener`/`UnixStream` do not exist on
+/// Windows, and the host bridge is only ever spawned on the Linux `bwrap`
+/// path, so this never runs at runtime — it exists only so `alephcore`
+/// compiles for Windows (and other non-Unix) targets.
+#[cfg(not(unix))]
+pub async fn spawn_host_bridge(
+    _uds_path: &Path,
+    _socket_dir: PathBuf,
+    _upstream: SocketAddr,
+) -> io::Result<HostBridgeHandle> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "netns host bridge is only available on Unix (Linux bwrap netns routing)",
+    ))
+}
+
+#[cfg(unix)]
 async fn bridge_connection(
     mut uds_stream: tokio::net::UnixStream,
     upstream: SocketAddr,
@@ -328,6 +351,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir2);
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn host_bridge_forwards_bytes_uds_to_tcp() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
