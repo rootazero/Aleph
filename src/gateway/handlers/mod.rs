@@ -111,8 +111,6 @@ pub mod session;
 
 pub mod dreaming;
 pub mod skills;
-#[allow(dead_code)] // DTOs only — handlers deferred to Milestone 2
-pub mod supervisor;
 pub mod system_info;
 pub mod teams;
 pub mod tools_cancel;
