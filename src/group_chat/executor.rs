@@ -6,6 +6,7 @@
 //! 3. Invokes each selected persona's LLM in order
 //! 4. Records each persona response and returns the collected messages
 
+use crate::agents::thinking::ThinkLevel;
 use crate::providers::adapter::RequestPayload;
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
@@ -185,11 +186,19 @@ impl GroupChatExecutor {
         // Step 3b: Optionally include coordinator plan as a visible message
         let mut messages = Vec::new();
         let mut seq_offset = 0u32;
+        // Monotonic persistence sequence within this round. The user turn above
+        // occupies slot 0; each subsequent persisted turn (coordinator, then
+        // personas) takes the next distinct slot so that the documented
+        // `ORDER BY round, sequence` replay is unambiguous. This is independent
+        // of the live-stream `sequence` field on the returned messages, which
+        // omits the user turn and therefore numbers from 0.
+        let mut persist_seq = 1u32;
 
         if self.coordinator_visible {
             let speaker = Speaker::Coordinator;
             session.add_turn(round, speaker.clone(), coordinator_raw.clone());
-            self.persist_turn(&session.id, round, 1, &speaker, &coordinator_raw);
+            self.persist_turn(&session.id, round, persist_seq, &speaker, &coordinator_raw);
+            persist_seq += 1;
 
             messages.push(GroupChatMessage {
                 session_id: session.id.clone(),
@@ -225,12 +234,24 @@ impl GroupChatExecutor {
                 &respondent.guidance,
             );
 
-            // Call persona LLM (resolve per-persona provider)
+            // Call persona LLM (resolve per-persona provider, model, thinking level).
+            // `model` / `thinking_level` are honored only when the persona sets
+            // them; otherwise these resolve to `None` and the request is identical
+            // to using the provider's defaults.
             let provider = self.resolve_provider(&persona);
+            let think_level = persona
+                .thinking_level
+                .as_deref()
+                .and_then(|level| level.parse::<ThinkLevel>().ok());
             let persona_response = {
                 let msgs = [UnifiedMessage::user(&persona_prompt)];
                 provider
-                    .process(RequestPayload::new(&msgs).with_system(Some(&persona.system_prompt)))
+                    .process(
+                        RequestPayload::new(&msgs)
+                            .with_system(Some(&persona.system_prompt))
+                            .with_model(persona.model.clone())
+                            .with_think_level(think_level),
+                    )
                     .await
                     .map_err(|e| GroupChatError::PersonaInvocationFailed {
                         persona_id: persona.id.clone(),
@@ -247,7 +268,8 @@ impl GroupChatExecutor {
             session.add_turn(round, speaker.clone(), persona_response.clone());
 
             let sequence = i.try_into().unwrap_or(u32::MAX).saturating_add(seq_offset);
-            self.persist_turn(&session.id, round, sequence, &speaker, &persona_response);
+            self.persist_turn(&session.id, round, persist_seq, &speaker, &persona_response);
+            persist_seq = persist_seq.saturating_add(1);
 
             // Accumulate prior discussion for the next persona
             prior_discussion.push_str(&format!("[{}]: {}\n\n", persona.name, persona_response));
