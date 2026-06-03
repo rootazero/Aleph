@@ -134,14 +134,29 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
         return Ok(());
     }
 
-    // Dial upstream with timeout.
+    // Dial upstream with timeout. `dial_validated` resolves the host once and
+    // pins the connection to a non-SSRF-blocked resolved IP — closing the
+    // DNS-rebinding gap where an allowlisted *name* re-resolves to a loopback /
+    // metadata / internal address at connect time.
     let upstream = match tokio::time::timeout(
         UPSTREAM_DIAL_TIMEOUT,
-        TcpStream::connect((req.host.as_str(), req.port)),
+        super::dial::dial_validated(&req.host, req.port, &allowlist),
     )
     .await
     {
         Ok(Ok(s)) => s,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            tracing::warn!(
+                target = "sandbox.proxy",
+                host = %req.host,
+                port = req.port,
+                "CONNECT blocked: host resolved to an SSRF-blocked address (possible DNS rebinding)"
+            );
+            let _ = wr
+                .write_all(b"HTTP/1.1 403 Forbidden\r\nProxy-Agent: aleph-sandbox\r\n\r\n")
+                .await;
+            return Ok(());
+        }
         Ok(Err(e)) => {
             tracing::debug!(
                 target = "sandbox.proxy",

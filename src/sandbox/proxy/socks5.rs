@@ -114,13 +114,28 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
         return Ok(());
     }
 
+    // `dial_validated` resolves the host once and pins the connection to a
+    // non-SSRF-blocked resolved IP — closing the DNS-rebinding gap where an
+    // allowlisted *name* re-resolves to a loopback / metadata / internal
+    // address at connect time. An SSRF refusal maps to REP_NOT_ALLOWED (a
+    // policy denial), distinct from REP_NET_UNREACHABLE (a network failure).
     let upstream = match tokio::time::timeout(
         UPSTREAM_DIAL_TIMEOUT,
-        TcpStream::connect((host_for_log.as_str(), req.port)),
+        super::dial::dial_validated(&host_for_log, req.port, &allowlist),
     )
     .await
     {
         Ok(Ok(s)) => s,
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            tracing::warn!(
+                target = "sandbox.proxy",
+                host = %host_for_log,
+                port = req.port,
+                "SOCKS5 CONNECT blocked: host resolved to an SSRF-blocked address (possible DNS rebinding)"
+            );
+            write_reply(&mut wr, REP_NOT_ALLOWED).await?;
+            return Ok(());
+        }
         Ok(Err(e)) => {
             tracing::debug!(
                 target = "sandbox.proxy",

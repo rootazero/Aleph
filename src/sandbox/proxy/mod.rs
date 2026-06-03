@@ -41,6 +41,7 @@
 
 mod allowlist;
 mod connect;
+mod dial;
 mod lifecycle;
 mod netns_bridge;
 mod socks5;
