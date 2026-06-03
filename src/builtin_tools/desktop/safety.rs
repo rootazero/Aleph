@@ -157,6 +157,9 @@ fn is_fork_bomb(compact: &str) -> bool {
 
 /// Normalize a key combination to a sorted, de-duplicated set of canonical
 /// modifier/key names so equivalent spellings compare equal.
+// The dangerous-combo table that calls these is macOS/Linux-oriented; on
+// Windows the caller is compiled out, leaving these helpers unreferenced.
+#[cfg_attr(windows, allow(dead_code))]
 fn normalized_combo(keys: &[String]) -> Vec<String> {
     let mut v: Vec<String> = keys.iter().map(|k| normalize_key(k)).collect();
     v.sort();
@@ -165,6 +168,7 @@ fn normalized_combo(keys: &[String]) -> Vec<String> {
 }
 
 /// Map a key spelling to its canonical name (`cmd`/`⌘`/`win` → `meta`, …).
+#[cfg_attr(windows, allow(dead_code))]
 fn normalize_key(key: &str) -> String {
     match key.trim().to_lowercase().as_str() {
         "cmd" | "command" | "meta" | "super" | "win" | "windows" | "⌘" => "meta".to_string(),

@@ -1,3 +1,6 @@
+// The iMessage channel is macOS-only; this fixture test must match.
+#![cfg(target_os = "macos")]
+
 #[test]
 fn test_imessage_fixture_inbound_message() {
     let json_str = include_str!("fixtures/imessage/inbound_message.json");

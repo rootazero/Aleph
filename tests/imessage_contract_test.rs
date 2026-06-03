@@ -1,3 +1,6 @@
+// The iMessage channel is macOS-only; this contract test must match.
+#![cfg(target_os = "macos")]
+
 mod common;
 
 use alephcore::gateway::channel::{Channel, ChannelStatus};

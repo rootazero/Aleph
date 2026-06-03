@@ -10,7 +10,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tracing::{debug, warn};
+use tracing::debug;
 
 use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxError, SandboxOutput};
@@ -296,7 +296,7 @@ impl OsSandboxDriverTrait for WindowsSandboxDriver {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .stdin(std::process::Stdio::piped())
-                .creation_flags(CREATE_NEW_PROCESS_GROUP as u32)
+                .creation_flags(CREATE_NEW_PROCESS_GROUP)
                 // Belt-and-braces: if our future is dropped (e.g. upstream
                 // cancellation) the OS terminates the child instead of
                 // leaking it. The job object below provides the same

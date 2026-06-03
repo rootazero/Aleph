@@ -1,3 +1,7 @@
+// The iMessage channel is only compiled on macOS (see
+// `gateway::interfaces::mod`), so this integration test must be too.
+#![cfg(target_os = "macos")]
+
 use alephcore::gateway::channel::{Channel, OutboundMessage};
 use alephcore::gateway::interfaces::imessage::{IMessageChannel, IMessageConfig};
 

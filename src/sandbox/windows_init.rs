@@ -416,7 +416,7 @@ mod imp {
         use windows_sys::Win32::Security::Isolation::{
             CreateAppContainerProfile, DeleteAppContainerProfile,
         };
-        use windows_sys::Win32::Security::{FreeSid, SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES};
+        use windows_sys::Win32::Security::{SECURITY_CAPABILITIES, SID_AND_ATTRIBUTES};
         use windows_sys::Win32::System::Console::{
             GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
         };
@@ -903,7 +903,7 @@ mod imp {
     /// `mode` and `permission_mask` inside `EXPLICIT_ACCESS_W`.
     ///
     /// Cycle 2 wired this only for the workspace root with `GENERIC_ALL`
-    /// + `GRANT_ACCESS`/`REVOKE_ACCESS`. Cycle 3 generalises so the
+    /// plus `GRANT_ACCESS`/`REVOKE_ACCESS`. Cycle 3 generalises so the
     /// caller can also stamp `DENY_ACCESS` ACEs on protected metadata
     /// subpaths (`.git`, `.aleph`, …) with a narrower mask. Canonical
     /// ACL ordering is handled by `SetEntriesInAclW`, which automatically
@@ -1136,7 +1136,7 @@ mod imp {
             )));
         }
 
-        if pi.hProcess == std::ptr::null_mut() || pi.hProcess == INVALID_HANDLE_VALUE {
+        if pi.hProcess.is_null() || pi.hProcess == INVALID_HANDLE_VALUE {
             return Err(LaunchError::SpawnFailed(
                 "CreateProcess succeeded but returned NULL process HANDLE".into(),
             ));

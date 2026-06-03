@@ -467,7 +467,7 @@ impl OAuthProvider {
 /// Generate a cryptographically random code verifier for PKCE
 fn generate_code_verifier() -> String {
     let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..32).map(|_| rng.gen()).collect();
+    let bytes: Vec<u8> = (0..32).map(|_| rng.gen::<u8>()).collect();
     URL_SAFE_NO_PAD.encode(&bytes)
 }
 
@@ -482,7 +482,7 @@ fn generate_code_challenge(verifier: &str) -> String {
 /// Generate a random state string for CSRF protection
 fn generate_state() -> String {
     let mut rng = rand::thread_rng();
-    let bytes: Vec<u8> = (0..16).map(|_| rng.gen()).collect();
+    let bytes: Vec<u8> = (0..16).map(|_| rng.gen::<u8>()).collect();
     URL_SAFE_NO_PAD.encode(&bytes)
 }
 

@@ -13,8 +13,12 @@
 //! gated behind `with_parent_command = true` and uses a 250 ms timeout via
 //! `Command::output` — the caller chooses whether they can tolerate that.
 
+// `Command`/`Stdio` and `Duration` are only used by the Unix `ps`-shell-out
+// path; on Windows that probe is compiled out, leaving them unused.
+#[cfg_attr(windows, allow(unused_imports))]
 use std::process::{Command, Stdio};
 use std::sync::OnceLock;
+#[cfg_attr(windows, allow(unused_imports))]
 use std::time::{Duration, Instant};
 
 use serde::Serialize;

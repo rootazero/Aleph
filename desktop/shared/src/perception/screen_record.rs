@@ -5,7 +5,11 @@
 //! - **Linux**: `ffmpeg -f x11grab` for X11 / XWayland sessions, with graceful
 //!   `NotImplemented` degradation on pure Wayland.
 
+// These are consumed only by the macOS/Linux recording paths below; on Windows
+// the whole module compiles to stubs, so the imports are unused there.
+#[cfg_attr(windows, allow(unused_imports))]
 use crate::error::{DesktopError, Result};
+#[cfg_attr(windows, allow(unused_imports))]
 use tracing::debug;
 
 // SCRecordingOutput delegate — defined at module scope to avoid ObjC

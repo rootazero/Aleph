@@ -127,6 +127,8 @@ pub fn create_proxy_socket_dir() -> io::Result<PathBuf> {
     let pid = std::process::id();
     for attempt in 0..128 {
         let candidate = parent.join(format!("{PROXY_SOCKET_DIR_PREFIX}{pid}-{attempt}"));
+        // `mut` is only needed where the Unix `mode()` call below mutates it.
+        #[cfg_attr(not(unix), allow(unused_mut))]
         let mut builder = DirBuilder::new();
         #[cfg(unix)]
         builder.mode(0o700);
