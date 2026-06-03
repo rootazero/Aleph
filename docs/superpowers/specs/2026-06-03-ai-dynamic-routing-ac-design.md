@@ -65,25 +65,42 @@ unconstrained / 单 model 路径 byte-identical。
 测试：12 个纯函数行为测试 + 1 个 failover 集成测试（带图请求只 dial gpt-4o，跳过 o1-mini），
 25 failover 测试全绿，`cargo check`/`clippy -D warnings` 干净。
 
-## 5. Phase 2（待实施）：pin/prefer 运行时 teeth + A 层
+## 5. Phase 2（已实施）：pin/prefer 运行时 teeth + select_model tool
 
-Phase 1 让 unset/prefer 的**能力地板**生效。pin 的"provider 精确尊重"与 prefer/pin 的运行时区别
-需要一个 provider-precise channel（[2026-06-01 spec §8](./2026-06-01-agent-default-model-design.md)
-deferred 项），是独立一刀，规格如下：
+实施时的关键发现：模型绑定**不**走 run_loop 的 `resolved`（那只喂 Panel 显示 + health），而是
+`harness_bridge::pick_llm` 通过 **provider wrapper（`ModelOverrideProvider`）stamp `payload.model`**
+的机制（subagent_spawner 已用此法）。`BrainRef` 早有 `Default`(unset)/`Preferred`(prefer)/
+`Strict{provider,model}`(pin) 三档骨架，但 `pick_llm` 只选 provider、**不 stamp model**（注释明写
+"deferred to Phase 6"）。这才是 teeth 的咬合点。
 
-1. **directive channel**：`ResolvedAgent` 增 `route_directive: RouteDirective`
-   （`Pin{provider, model}` | `Prefer{model}` | `Auto`），由 `agent_resolver` 从 `AgentModelRef`
-   （+ 新 `prefer` 标志，untagged serde 向后兼容）映射。
-2. **payload 传递**：`RequestPayload` 增 `route: RouteDirective`（default `Auto` = byte-identical；
-   约 12 处非测试构造点需补字段或 `..Default::default()`）。
-3. **failover 消费**：`candidates()` 据 directive 调整 —— `Pin` 把指定 provider 强制置首并不向其它
-   provider 漫游；`Prefer` 置首但保留 fallback；`Auto` 纯 C 地板。
-4. **A 层**：`select_model` tool（R8，让主循环 LLM 显式改写后续轮次的 model）或 system prompt 注入
-   gated catalog —— **不引入独立 router 模型**（R7/R9）。已有 `providers.catalog` RPC 已把
-   capability/cost 暴露给 LLM，A 层大部分数据基建已就位。
+实施分三块（均已提交、测试、`check`/`clippy -D warnings` 干净）：
 
-**为何不在 Phase 1 一并做**：在 channel 落地前单加 `prefer` 标志或 payload 字段是 R10 禁止的
-"零消费者抽象"。Phase 1 的 C 地板有真实消费者（failover 候选过滤），是非投机的地基。
+1. **Keystone — pick_llm stamp model**（commit `20ede7aac`）：`BrainRef::Strict{provider, model:
+   Some(m)}` 用共享的 `ModelOverrideProvider` 包住所选 provider，stamp `m`。把 subagent_spawner 的
+   私有 wrapper 提升为 `src/providers/model_override_provider.rs`（熵减，一份两用）。这是 pin 的
+   provider+model teeth 在绑定层真正生效。
+2. **select_model tool（A 层，R8）**（commit `4662976bf`）：`select_model{model, provider?}` 让主循环
+   LLM 一次推理里换模型，写进程级 `session_model_handle`（仿 `route_handle`，进程内、按会话、poison-safe）；
+   `harness_bridge.run` 在 `pick_llm` 前读它 → 包 `ModelOverrideProvider`（复用 keystone）。绑定是 per-run，
+   故下一轮生效（tool 回复里说明）。注册进 builtin catalog + tool group。**不引入独立 router 模型**（R7/R9）。
+3. **agent pin teeth**（commit `7b81e57c4`）：`harness_bridge.run` 把 agent 的 `provider_hint`/`model_hint`
+   折进绑定优先级：`select_model 会话 pick > agent pin > flow BrainRef preset`。让 markdown agent 声明的
+   model 在主运行也生效（此前只影响 subagent spawn）。无 model_hint 的 agent 落 `pick_llm` —— byte-identical。
+
+**优先级链**（`harness_bridge.run`）：session-model（select_model）→ agent provider_hint/model_hint →
+flow BrainRef preset。前两者经 `ModelOverrideProvider` stamp；最后一档不变。
+
+测试：keystone 6 + session_model_handle 2 + select_model tool 2 + 33 harness_bridge 全绿；
+顺手把预存未分组的 `desktop_som` 补进 tool group（修复 `test_all_builtin_tools_have_a_group`，
+已验证它在 main 上即未分组）。
+
+### 剩余（可选后续）
+
+- config.toml `AgentDefinition.model`（`AgentModelRef::Qualified` + 新 `prefer` 标志）→ AgentDef
+  `provider_hint`/`model_hint` 的映射：目前 markdown agent 的 hint 已有 teeth；config-toml 定义的
+  agent 走 `AgentInstanceConfig` 路径，其 `Qualified` 自动 pin 需补一条 resolver→registry 映射。
+- 同名 model 跨 provider 的精确区分（[2026-06-01 §8]）在 pin 路径已天然解决（provider 显式），
+  prefer/unset 仍按 C 地板 + failover。
 
 ## 6. 红线对齐
 
