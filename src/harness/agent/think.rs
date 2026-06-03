@@ -753,6 +753,19 @@ impl AgentHarness {
             .map(|u| u.output_tokens as usize)
             .unwrap_or(0);
 
+        // Calibrate the context-budget token estimator against the provider's
+        // ground-truth prompt size. `last_pressure` (set by `before_turn`, or
+        // refreshed by `note_compaction_effect`) is the calibrated estimate of
+        // exactly this prompt, so feeding back the real `prompt_tokens_total`
+        // converges the estimate to this conversation's true tokenizer ratio.
+        // R10-safe: pure accuracy feedback, no new decision category.
+        if let (Some(budget), Some(usage)) =
+            (self.deps.context_budget.as_ref(), response.usage.as_ref())
+        {
+            let observed = usage.prompt_tokens_total() as usize;
+            budget.lock().await.observe_actual_usage(observed);
+        }
+
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
         let turn_id = super::current_turn_id(&events);
         let text = response.text_content();

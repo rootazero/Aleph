@@ -40,6 +40,16 @@ const OVERHEAD_CRITICAL_RATIO: f64 = 0.50;
 /// its count, so a run of ineffective compactions still escalates to
 /// `FinalReply` — the anti-thrash safety stop borrowed from hermes.
 const COMPACTION_EFFECTIVE_DROP: f64 = 0.05;
+/// EWMA weight on the newest observation when smoothing the calibration factor.
+/// Low enough to ride through transient noise (cache swings, recovery resends),
+/// high enough to converge within a handful of turns.
+const CALIBRATION_ALPHA: f64 = 0.3;
+/// Clamp band for a single observation's correction factor. A char-ratio
+/// estimate is rarely off by more than ~2× either way; values outside this band
+/// signal noise (a mid-flight resend, a degenerate provider usage report) and
+/// are clamped rather than allowed to whipsaw the budget.
+const CALIBRATION_MIN: f64 = 0.25;
+const CALIBRATION_MAX: f64 = 4.0;
 
 impl ContextPressure {
     /// Compute a pressure snapshot.
@@ -70,6 +80,32 @@ impl ContextPressure {
             },
             overhead_tokens: overhead,
             available_for_messages: budget.saturating_sub(overhead),
+        }
+    }
+
+    /// Scale every token figure by a calibration `factor` (observed / estimated)
+    /// and recompute the ratio, keeping the snapshot self-consistent.
+    ///
+    /// `factor == 1.0` (the uncalibrated default) returns `self` unchanged, so
+    /// the budget is byte-identical until the first real provider observation
+    /// arrives via [`ContextBudget::observe_actual_usage`].
+    fn calibrated(self, factor: f64) -> Self {
+        if (factor - 1.0).abs() < f64::EPSILON {
+            return self;
+        }
+        let scale = |v: usize| ((v as f64) * factor).round() as usize;
+        let used = scale(self.used_tokens);
+        let overhead = scale(self.overhead_tokens);
+        Self {
+            used_tokens: used,
+            budget_tokens: self.budget_tokens,
+            ratio: if self.budget_tokens == 0 {
+                1.0
+            } else {
+                used as f64 / self.budget_tokens as f64
+            },
+            overhead_tokens: overhead,
+            available_for_messages: self.budget_tokens.saturating_sub(overhead),
         }
     }
 }
@@ -237,6 +273,11 @@ pub struct ContextBudget {
     split_count: usize,
     /// Maximum session splits allowed before the circuit-breaker trip falls back to FinalReply.
     max_splits: usize,
+    /// Self-learning multiplier applied to the heuristic token estimate,
+    /// calibrated against the provider's reported prompt size after each turn.
+    /// `None` until the first observation — the estimate then runs uncalibrated
+    /// (factor 1.0), keeping behaviour byte-identical to the pre-calibration path.
+    calibration: Option<f64>,
 }
 
 impl ContextBudget {
@@ -256,6 +297,7 @@ impl ContextBudget {
             last_pressure: None,
             split_count: 0,
             max_splits: config.max_splits,
+            calibration: None,
         }
     }
 
@@ -300,7 +342,8 @@ impl ContextBudget {
             tool_schema_tokens,
             self.token_budget,
             self.token_estimate_ratio,
-        );
+        )
+        .calibrated(self.calibration.unwrap_or(1.0));
         self.last_pressure = Some(pressure);
 
         // Bootstrap overhead warnings (system prompt + tool definitions)
@@ -397,11 +440,53 @@ impl ContextBudget {
             tool_schema_tokens,
             self.token_budget,
             self.token_estimate_ratio,
-        );
+        )
+        .calibrated(self.calibration.unwrap_or(1.0));
         if before.ratio - after.ratio >= COMPACTION_EFFECTIVE_DROP {
             self.circuit_breaker.record_success();
         }
         self.last_pressure = Some(after);
+    }
+
+    /// Calibrate the heuristic token estimator against the provider's reported
+    /// prompt size for the request that was just sent.
+    ///
+    /// `observed_prompt_tokens` is the ground-truth token count of the prompt
+    /// (system + tools + messages) from [`crate::providers::adapter::TokenUsage::prompt_tokens_total`].
+    /// The snapshot saved by [`ContextBudget::before_turn`] (or refreshed by
+    /// [`ContextBudget::note_compaction_effect`]) is the calibrated estimate of
+    /// that *same* prompt, so `observed / estimated` is the residual error of the
+    /// current calibration. Backing the previous factor out yields the absolute
+    /// correction, which is clamped (rejecting transient noise) and EWMA-smoothed
+    /// into the running multiplier.
+    ///
+    /// The effect: the budget converges to *this conversation's* true tokenizer
+    /// ratio — adapting to content mix, the provider's tokenizer, and cache
+    /// behaviour that the fixed char-per-token ratio cannot capture. This is
+    /// strictly an accuracy improvement to the estimate that already drives every
+    /// compaction decision; it adds no new decision category and makes no LLM call.
+    pub fn observe_actual_usage(&mut self, observed_prompt_tokens: usize) {
+        let Some(p) = self.last_pressure else {
+            return;
+        };
+        if observed_prompt_tokens == 0 || p.used_tokens == 0 {
+            return;
+        }
+        let prev = self.calibration.unwrap_or(1.0);
+        // `p.used_tokens` already had `prev` applied, so multiply it back out to
+        // recover the absolute observed/raw-estimate factor before smoothing.
+        let absolute = (observed_prompt_tokens as f64 / p.used_tokens as f64) * prev;
+        let factor = absolute.clamp(CALIBRATION_MIN, CALIBRATION_MAX);
+        self.calibration = Some(match self.calibration {
+            Some(prev) => CALIBRATION_ALPHA * factor + (1.0 - CALIBRATION_ALPHA) * prev,
+            None => factor,
+        });
+    }
+
+    /// Current calibration multiplier, if any observation has been recorded.
+    /// Exposed for diagnostics/tests; `None` means the estimate is uncalibrated.
+    pub fn calibration(&self) -> Option<f64> {
+        self.calibration
     }
 
     /// Record that a session-split completed. Increments the per-run split
@@ -763,6 +848,122 @@ mod tests {
             second,
             LoopDirective::FinalReply,
             "once max_splits is reached, the breaker trip falls back to FinalReply",
+        );
+    }
+
+    // --- calibration (server-observed token feedback) tests ---
+
+    #[test]
+    fn observe_actual_usage_noop_without_last_pressure() {
+        let mut budget = ContextBudget::new(&default_config());
+        budget.observe_actual_usage(5000);
+        assert_eq!(budget.calibration(), None, "no snapshot → no calibration");
+    }
+
+    #[test]
+    fn observe_actual_usage_ignores_zero_observation() {
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        let msgs = vec![UnifiedMessage::user("x".repeat(100))];
+        budget.before_turn(&msgs, "", 0);
+        budget.observe_actual_usage(0);
+        assert_eq!(budget.calibration(), None);
+    }
+
+    #[test]
+    fn observe_actual_usage_first_factor_is_ratio() {
+        // ratio=1.0 → 100 chars + 0 overhead = 100 estimated tokens.
+        let config = ContextBudgetConfig {
+            token_budget: 10_000,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        let msgs = vec![UnifiedMessage::user("x".repeat(100))];
+        budget.before_turn(&msgs, "", 0);
+        // Provider says the prompt was actually 150 tokens → estimate was 1.5× low.
+        budget.observe_actual_usage(150);
+        let cal = budget.calibration().expect("calibration set");
+        assert!((cal - 1.5).abs() < 1e-6, "first factor == raw ratio, got {cal}");
+    }
+
+    #[test]
+    fn observe_actual_usage_clamps_outliers() {
+        let config = ContextBudgetConfig {
+            token_budget: 10_000,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        let msgs = vec![UnifiedMessage::user("x".repeat(100))];
+        budget.before_turn(&msgs, "", 0);
+        // Absurd 100× observation (e.g. a degenerate usage report) must clamp.
+        budget.observe_actual_usage(10_000);
+        let cal = budget.calibration().expect("calibration set");
+        assert!(
+            (cal - CALIBRATION_MAX).abs() < 1e-6,
+            "outlier clamped to {CALIBRATION_MAX}, got {cal}"
+        );
+    }
+
+    #[test]
+    fn observe_actual_usage_converges_and_is_stable_at_truth() {
+        let config = ContextBudgetConfig {
+            token_budget: 100_000,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        let msgs = vec![UnifiedMessage::user("x".repeat(1000))];
+        // Estimate is consistently 1000; truth is consistently 1300 (estimate
+        // 30% low). Repeated observation should converge the multiplier to ~1.3.
+        for _ in 0..20 {
+            budget.before_turn(&msgs, "", 0);
+            budget.observe_actual_usage(1300);
+        }
+        let cal = budget.calibration().expect("calibration set");
+        assert!(
+            (cal - 1.3).abs() < 0.05,
+            "calibration should converge to ~1.3, got {cal}"
+        );
+        // Once converged, the calibrated estimate matches truth, so the absolute
+        // factor recovered each turn stays ~1.3 (no drift toward 1.0).
+        budget.before_turn(&msgs, "", 0);
+        let calibrated_used = budget.last_pressure().unwrap().used_tokens;
+        assert!(
+            (calibrated_used as i64 - 1300).abs() < 80,
+            "calibrated estimate should track truth (~1300), got {calibrated_used}"
+        );
+    }
+
+    #[test]
+    fn calibration_makes_underestimate_trigger_compaction() {
+        // budget=1000, ratio=1.0. Raw estimate of a 600-char message = 600 tokens
+        // = 60% → below the 70% warning line → Continue. But the provider reports
+        // the prompt is really 800 tokens (80%). After calibration the budget
+        // should see the true pressure and request compaction.
+        let config = ContextBudgetConfig {
+            token_budget: 1000,
+            warning_threshold: 0.70,
+            critical_threshold: 0.95,
+            token_estimate_ratio: 1.0,
+            ..default_config()
+        };
+        let mut budget = ContextBudget::new(&config);
+        let msgs = vec![UnifiedMessage::user("x".repeat(600))];
+        // Turn 1: uncalibrated → 60% → Continue.
+        assert_eq!(budget.before_turn(&msgs, "", 0), LoopDirective::Continue);
+        // Provider ground-truth: the prompt was actually 800 tokens.
+        budget.observe_actual_usage(800);
+        // Turn 2: calibrated estimate ≈ 800 → 80% ≥ warning → compaction.
+        assert_eq!(
+            budget.before_turn(&msgs, "", 0),
+            LoopDirective::CompactAndContinue,
+            "calibration should surface true pressure the heuristic missed"
         );
     }
 

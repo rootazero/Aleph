@@ -124,14 +124,6 @@ image-bearing turn (and outside the fresh tail), replacing each with
 `"[image stripped from history]"`. ~1500 tokens saved per image.
 (Matches Anthropic pricing + hermes constant.)
 
-### Tier-2 stages NOT currently registered
-
-`src/context/budget/{microcompact,context_collapse,autocompact}.rs`
-define additional stages (`MicrocompactStage`, `ContextCollapseStage`,
-`AutocompactStage`) that implement different trait shapes. They are
-*not* registered in the live `PreflightPipeline`. Future cycles may
-wire them in.
-
 ## Tier 3: LLM Compactor
 
 `src/context/compact/compactor.rs::ContextCompactor::compact()` is invoked
@@ -140,9 +132,50 @@ by `harness/agent/think.rs` step 2c when the budget directive is
 failure. The 5-section summary template (Primary Request / Key Decisions /
 Files & Code / Current State / Pending) is hermes-compatible.
 
-The standalone `CompactionOrchestrator` (`src/context/compact/orchestrator.rs`)
-is built but has zero production consumers — the harness calls
-`ContextCompactor` directly.
+## Token-Estimate Calibration (server-observed feedback)
+
+Every tier above reacts to a single number: `ContextPressure::ratio`, derived
+from a heuristic char-per-token estimate (`pressure.rs::detect_content_ratio`,
+1.5 CJK / 2.5 code / 3.5 prose). A fixed ratio is necessarily wrong for any
+given conversation's real token mix, so the budget **calibrates the estimate
+against the provider's reported prompt size** after each turn.
+
+### Mechanism
+
+`src/context/budget/mod.rs`:
+
+```rust
+impl ContextBudget {
+    /// Feed back the provider's ground-truth prompt size for the request just sent.
+    pub fn observe_actual_usage(&mut self, observed_prompt_tokens: usize);
+}
+```
+
+- `before_turn()` / `note_compaction_effect()` scale their `ContextPressure`
+  snapshot by `self.calibration` (via `ContextPressure::calibrated`). Until the
+  first observation `calibration` is `None` → factor `1.0` → **byte-identical**
+  to the pre-calibration path.
+- After each LLM turn, `harness/agent/think.rs` calls
+  `observe_actual_usage(usage.prompt_tokens_total())`. The saved `last_pressure`
+  is the calibrated estimate of *that exact prompt*, so `observed / estimated`
+  (with the previous factor backed out) is the residual error. It is clamped to
+  `[0.25, 4.0]` (rejecting transient noise — mid-flight resends, degenerate
+  usage reports) and EWMA-smoothed (`α = 0.3`) into the running multiplier.
+- `TokenUsage::prompt_tokens_total()` (`src/providers/adapter.rs`) folds the
+  cached + cache-creation portions back in using the same Anthropic-vs-OpenAI
+  convention detection as `cache_hit_ratio`, so a warm cache hit (tiny
+  `input_tokens`) doesn't look like the prompt shrank.
+
+### Effect
+
+The estimate converges to *this conversation's* true tokenizer ratio within a
+few turns, adapting to content mix, the provider's tokenizer, and cache
+behaviour the static ratio cannot capture. This is purely an accuracy
+improvement to the number that already drives compaction — it adds no new
+decision category and makes no LLM call (R7/R10-safe). Compared to codex's
+one-shot `ServerObserved` prefill snapshot, the EWMA multiplier is continuous:
+it also corrects the estimate of the *growing tail* the provider hasn't yet
+counted.
 
 ## Budget Structure
 
