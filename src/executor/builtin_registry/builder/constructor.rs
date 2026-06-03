@@ -154,8 +154,24 @@ impl BuiltinToolRegistry {
             }
         };
 
-        // Desktop tool — platform-native desktop/screen capability only.
-        let desktop_tool = DesktopTool::new().with_platform(Arc::clone(&desktop_platform));
+        // Desktop tool — platform-native desktop/screen capability, plus a
+        // vision bridge so `screenshot {describe:true}` yields an OCR text
+        // layer (offline, platform-native) for text-only models. The bridge's
+        // pipeline starts with the platform OCR provider; registering a
+        // multimodal provider later lights up the scene-`description` layer
+        // with no change here.
+        let vision_bridge = {
+            let mut pipeline = crate::vision::VisionPipeline::new();
+            pipeline.add_provider(Box::new(
+                crate::vision::providers::PlatformOcrProvider::new(),
+            ));
+            Arc::new(crate::builtin_tools::desktop::VisionBridge::new(Arc::new(
+                pipeline,
+            )))
+        };
+        let desktop_tool = DesktopTool::new()
+            .with_platform(Arc::clone(&desktop_platform))
+            .with_vision_bridge(vision_bridge);
 
         // AX query tools (macOS only; tools degrade gracefully on other platforms).
         let desktop_ax_query_focused_tool = crate::builtin_tools::DesktopAxQueryFocused::new()

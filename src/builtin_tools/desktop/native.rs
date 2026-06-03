@@ -90,6 +90,54 @@ fn split_trailing_newline(text: &str) -> (&str, bool) {
 
 /// Platform execution methods for [`super::DesktopTool`].
 impl super::DesktopTool {
+    /// Build the `screenshot` action output, optionally augmenting it with a
+    /// text layer for text-only models.
+    ///
+    /// When `want_describe` is set and a [`VisionBridge`](super::VisionBridge)
+    /// is wired, the captured image is run through the bridge: an `ocr_text`
+    /// field (offline, platform-native) and — when a multimodal provider is
+    /// registered — a `description` field are attached alongside the raw
+    /// `image_base64`. Both are best-effort; an unavailable layer is simply
+    /// omitted (P7). With no bridge or `want_describe == false`, the output is
+    /// byte-identical to the legacy `{image_base64,width,height,format}` shape.
+    async fn screenshot_output(
+        &self,
+        want_describe: bool,
+        image_base64: String,
+        width: u32,
+        height: u32,
+        format: String,
+    ) -> DesktopOutput {
+        let mut obj = serde_json::Map::new();
+
+        if want_describe {
+            if let Some(ref bridge) = self.vision_bridge {
+                let img_fmt = match format.as_str() {
+                    "jpeg" | "jpg" => crate::vision::types::ImageFormat::Jpeg,
+                    _ => crate::vision::types::ImageFormat::Png,
+                };
+                let aug = bridge.augment(&image_base64, img_fmt, true).await;
+                if let Some(text) = aug.ocr_text {
+                    obj.insert("ocr_text".into(), serde_json::json!(text));
+                }
+                if let Some(desc) = aug.description {
+                    obj.insert("description".into(), serde_json::json!(desc));
+                }
+            }
+        }
+
+        obj.insert("image_base64".into(), serde_json::json!(image_base64));
+        obj.insert("width".into(), serde_json::json!(width));
+        obj.insert("height".into(), serde_json::json!(height));
+        obj.insert("format".into(), serde_json::json!(format));
+
+        DesktopOutput {
+            success: true,
+            data: Some(serde_json::Value::Object(obj)),
+            message: None,
+        }
+    }
+
     /// Execute a desktop action via `DesktopPlatform.screen()`.
     ///
     /// Returns `Ok(Some(output))` when the action was recognized and handled
@@ -214,16 +262,16 @@ impl super::DesktopTool {
                             .map_err(|e| {
                                 crate::error::AlephError::other(format!("task join: {e}"))
                             })? {
-                                Ok(processed) => Ok(Some(DesktopOutput {
-                                    success: true,
-                                    data: Some(serde_json::json!({
-                                        "image_base64": processed.image_base64,
-                                        "width": processed.width,
-                                        "height": processed.height,
-                                        "format": processed.format,
-                                    })),
-                                    message: None,
-                                })),
+                                Ok(processed) => Ok(Some(
+                                    self.screenshot_output(
+                                        args.describe == Some(true),
+                                        processed.image_base64,
+                                        processed.width,
+                                        processed.height,
+                                        processed.format,
+                                    )
+                                    .await,
+                                )),
                                 Err(e) => Ok(Some(DesktopOutput {
                                     success: false,
                                     data: None,
@@ -231,16 +279,16 @@ impl super::DesktopTool {
                                 })),
                             }
                         } else {
-                            Ok(Some(DesktopOutput {
-                                success: true,
-                                data: Some(serde_json::json!({
-                                    "image_base64": s.image_base64,
-                                    "width": s.width,
-                                    "height": s.height,
-                                    "format": s.format,
-                                })),
-                                message: None,
-                            }))
+                            Ok(Some(
+                                self.screenshot_output(
+                                    args.describe == Some(true),
+                                    s.image_base64,
+                                    s.width,
+                                    s.height,
+                                    s.format,
+                                )
+                                .await,
+                            ))
                         }
                     }
                     Err(e) => Ok(Some(DesktopOutput {
@@ -927,5 +975,97 @@ mod tests {
         // Interior newlines stay; a bare newline means "just submit".
         assert_eq!(split_trailing_newline("a\nb\n"), ("a\nb", true));
         assert_eq!(split_trailing_newline("\n"), ("", true));
+    }
+
+    // ── Vision bridge wiring (screenshot_output) ──────────────────────
+
+    use crate::builtin_tools::desktop::{DesktopTool, VisionBridge};
+    use crate::sync_primitives::Arc;
+    use crate::vision::provider::VisionProvider;
+    use crate::vision::types::{
+        ImageInput, OcrResult, VisionCapabilities, VisionResult,
+    };
+    use crate::vision::{VisionError, VisionPipeline};
+
+    /// Minimal provider returning fixed OCR text for wiring assertions.
+    struct FixedOcrProvider;
+
+    #[async_trait::async_trait]
+    impl VisionProvider for FixedOcrProvider {
+        async fn understand_image(
+            &self,
+            _image: &ImageInput,
+            _prompt: &str,
+        ) -> std::result::Result<VisionResult, VisionError> {
+            Err(VisionError::UnsupportedCapability("image_understanding".into()))
+        }
+        async fn ocr(
+            &self,
+            _image: &ImageInput,
+        ) -> std::result::Result<OcrResult, VisionError> {
+            Ok(OcrResult {
+                full_text: "Login Submit".into(),
+                lines: vec![],
+            })
+        }
+        fn capabilities(&self) -> VisionCapabilities {
+            VisionCapabilities {
+                image_understanding: false,
+                ocr: true,
+                object_detection: false,
+            }
+        }
+        fn name(&self) -> &str {
+            "fixed-ocr"
+        }
+    }
+
+    #[tokio::test]
+    async fn screenshot_output_without_bridge_is_passthrough() {
+        let tool = DesktopTool::new();
+        let out = tool
+            .screenshot_output(true, "Ymd4".into(), 100, 50, "png".into())
+            .await;
+        assert!(out.success);
+        let data = out.data.unwrap();
+        assert_eq!(data["image_base64"], "Ymd4");
+        assert_eq!(data["width"], 100);
+        assert_eq!(data["format"], "png");
+        // No bridge → no augmentation fields, byte-identical legacy shape.
+        assert!(data.get("ocr_text").is_none());
+        assert!(data.get("description").is_none());
+    }
+
+    #[tokio::test]
+    async fn screenshot_output_attaches_ocr_when_described() {
+        let mut pipeline = VisionPipeline::new();
+        pipeline.add_provider(Box::new(FixedOcrProvider));
+        let bridge = Arc::new(VisionBridge::new(Arc::new(pipeline)));
+        let tool = DesktopTool::new().with_vision_bridge(bridge);
+
+        let out = tool
+            .screenshot_output(true, "aW1n".into(), 10, 10, "png".into())
+            .await;
+        let data = out.data.unwrap();
+        assert_eq!(data["image_base64"], "aW1n");
+        assert_eq!(data["ocr_text"], "Login Submit");
+        // OCR-only provider → description degrades to absent (P7).
+        assert!(data.get("description").is_none());
+    }
+
+    #[tokio::test]
+    async fn screenshot_output_skips_bridge_when_not_described() {
+        let mut pipeline = VisionPipeline::new();
+        pipeline.add_provider(Box::new(FixedOcrProvider));
+        let bridge = Arc::new(VisionBridge::new(Arc::new(pipeline)));
+        let tool = DesktopTool::new().with_vision_bridge(bridge);
+
+        // want_describe=false → no augmentation even though a bridge is wired.
+        let out = tool
+            .screenshot_output(false, "aW1n".into(), 10, 10, "png".into())
+            .await;
+        let data = out.data.unwrap();
+        assert_eq!(data["image_base64"], "aW1n");
+        assert!(data.get("ocr_text").is_none());
     }
 }

@@ -170,6 +170,7 @@ mod tests {
             coord_space: None,
             coord_factors: None,
             script: None,
+            describe: None,
         }
     }
 
