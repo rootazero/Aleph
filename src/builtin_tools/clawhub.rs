@@ -190,10 +190,19 @@ impl ClawHubTool {
 
         // Validate and sanitize the skill directory name
         let skill_name = sanitize_skill_name(slug)?;
-        let dest_dir = Self::skills_dir().join(skill_name);
+        let skills_root = Self::skills_dir();
+        let dest_dir = skills_root.join(&skill_name);
 
-        // Create destination directory
-        std::fs::create_dir_all(&dest_dir)
+        // Extract into a staging directory, never the live install dir. On an
+        // *update*, dest_dir holds the previously-working skill; writing into it
+        // directly means any failure path (oversized entry, blocked by the
+        // security scan, missing SKILL.md, mid-loop I/O error) would corrupt or
+        // delete a working install. Staging + atomic swap keeps the old install
+        // intact until the new one is fully validated.
+        let staging_dir = skills_root.join(format!(".{skill_name}.staging"));
+        // Discard any leftover staging from a previously interrupted run.
+        let _ = std::fs::remove_dir_all(&staging_dir);
+        std::fs::create_dir_all(&staging_dir)
             .map_err(|e| AlephError::tool(format!("Failed to create skill directory: {}", e)))?;
 
         let mut found_skill_md = false;
@@ -209,7 +218,7 @@ impl ClawHubTool {
             // Reject oversized entries (ZIP bomb protection).
             let entry_size = entry.size();
             if entry_size > Self::MAX_ZIP_ENTRY_BYTES {
-                let _ = std::fs::remove_dir_all(&dest_dir);
+                let _ = std::fs::remove_dir_all(&staging_dir);
                 return Err(AlephError::tool(format!(
                     "ZIP entry '{}' exceeds maximum allowed size ({} > {} bytes)",
                     entry.name(),
@@ -219,7 +228,7 @@ impl ClawHubTool {
             }
             total_uncompressed = total_uncompressed.saturating_add(entry_size);
             if total_uncompressed > Self::MAX_TOTAL_UNCOMPRESSED {
-                let _ = std::fs::remove_dir_all(&dest_dir);
+                let _ = std::fs::remove_dir_all(&staging_dir);
                 return Err(AlephError::tool(format!(
                     "Total uncompressed size exceeds maximum allowed ({} > {} bytes)",
                     total_uncompressed,
@@ -244,11 +253,11 @@ impl ClawHubTool {
                 continue;
             }
 
-            let out_path = dest_dir.join(relative_path);
+            let out_path = staging_dir.join(relative_path);
 
             // Canonicalize paths to defend against symlink attacks.
             let canonical_dest =
-                std::fs::canonicalize(&dest_dir).unwrap_or_else(|_| dest_dir.clone());
+                std::fs::canonicalize(&staging_dir).unwrap_or_else(|_| staging_dir.clone());
             let canonical_out = if out_path.exists() {
                 std::fs::canonicalize(&out_path).unwrap_or_else(|_| out_path.clone())
             } else {
@@ -296,7 +305,7 @@ impl ClawHubTool {
         // ClawHub installs are community-trust by default.
         let verdict = crate::skill::merge_verdicts(verdicts);
         if !crate::skill::install_allowed(verdict.level, crate::skill::TrustLevel::Community) {
-            let _ = std::fs::remove_dir_all(&dest_dir);
+            let _ = std::fs::remove_dir_all(&staging_dir);
             let ids: Vec<&str> = verdict.findings.iter().map(|f| f.pattern_id).collect();
             return Err(AlephError::tool(format!(
                 "skill '{}' blocked by security scan ({:?}): {}",
@@ -310,7 +319,7 @@ impl ClawHubTool {
         }
 
         if !found_skill_md {
-            let _ = std::fs::remove_dir_all(&dest_dir);
+            let _ = std::fs::remove_dir_all(&staging_dir);
             return Err(AlephError::tool(
                 "Package does not contain a valid SKILL.md file",
             ));
@@ -324,11 +333,37 @@ impl ClawHubTool {
             installed_at: chrono::Utc::now().to_rfc3339(),
             owner: slug.split('/').next().unwrap_or("").to_string(),
         };
-        let meta_path = dest_dir.join(".clawhub.json");
+        let meta_path = staging_dir.join(".clawhub.json");
         let meta_json = serde_json::to_string_pretty(&meta)
             .map_err(|e| AlephError::tool(format!("Failed to serialize metadata: {}", e)))?;
         std::fs::write(&meta_path, meta_json)
             .map_err(|e| AlephError::tool(format!("Failed to write .clawhub.json: {}", e)))?;
+
+        // Atomic swap: stage is fully validated, so move the old install aside,
+        // promote staging into place, then drop the backup. On a failed promote,
+        // restore the backup so a working install is never lost. Same-directory
+        // renames are atomic on a single filesystem.
+        let backup_dir = skills_root.join(format!(".{skill_name}.backup"));
+        let _ = std::fs::remove_dir_all(&backup_dir);
+        let had_old = dest_dir.exists();
+        if had_old {
+            std::fs::rename(&dest_dir, &backup_dir).map_err(|e| {
+                let _ = std::fs::remove_dir_all(&staging_dir);
+                AlephError::tool(format!("Failed to stage previous install for swap: {}", e))
+            })?;
+        }
+        if let Err(e) = std::fs::rename(&staging_dir, &dest_dir) {
+            // Promote failed — restore the old install and discard staging.
+            if had_old {
+                let _ = std::fs::rename(&backup_dir, &dest_dir);
+            }
+            let _ = std::fs::remove_dir_all(&staging_dir);
+            return Err(AlephError::tool(format!(
+                "Failed to finalize skill install: {}",
+                e
+            )));
+        }
+        let _ = std::fs::remove_dir_all(&backup_dir);
 
         info!(slug, version, dir = %dest_dir.display(), "ClawHub skill installed");
         Ok(version.to_string())

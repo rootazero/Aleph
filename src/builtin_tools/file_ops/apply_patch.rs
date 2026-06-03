@@ -160,7 +160,7 @@ make several coordinated edits at once."#;
         let mut applied = 0usize;
 
         for op in ops {
-            let outcome = self.apply_one(&op, output_dir_ref);
+            let outcome = self.apply_one(&op, output_dir_ref).await;
             if outcome.success {
                 applied += 1;
             } else {
@@ -193,19 +193,19 @@ make several coordinated edits at once."#;
         Ok(out)
     }
 
-    fn apply_one(&self, op: &PatchOp, output_dir: Option<&Path>) -> FileOutcome {
+    async fn apply_one(&self, op: &PatchOp, output_dir: Option<&Path>) -> FileOutcome {
         match op {
-            PatchOp::Add { path, lines } => self.do_add(path, lines, output_dir),
+            PatchOp::Add { path, lines } => self.do_add(path, lines, output_dir).await,
             PatchOp::Delete { path } => self.do_delete(path, output_dir),
             PatchOp::Update {
                 path,
                 move_to,
                 hunks,
-            } => self.do_update(path, move_to.as_deref(), hunks, output_dir),
+            } => self.do_update(path, move_to.as_deref(), hunks, output_dir).await,
         }
     }
 
-    fn do_add(&self, path: &str, lines: &[String], output_dir: Option<&Path>) -> FileOutcome {
+    async fn do_add(&self, path: &str, lines: &[String], output_dir: Option<&Path>) -> FileOutcome {
         let resolved = match self.resolve(path, output_dir) {
             Ok(p) => p,
             Err(msg) => return fail("add", path, msg),
@@ -239,15 +239,16 @@ make several coordinated edits at once."#;
             s.push('\n');
             s
         };
-        match std::fs::write(&resolved, body) {
+        // Atomic write-back (stage to temp + fsync + rename), matching the
+        // durability guarantee of file_edit/file_write — a crash mid-write must
+        // never leave the file truncated.
+        let byte_count = body.len();
+        match crate::utils::atomic_write::atomic_write_file(&resolved, &body).await {
             Ok(()) => FileOutcome {
                 path: resolved.display().to_string(),
                 op: "add",
                 success: true,
-                message: format!(
-                    "created ({} bytes)",
-                    lines.iter().map(|l| l.len() + 1).sum::<usize>()
-                ),
+                message: format!("created ({byte_count} bytes)"),
             },
             Err(e) => fail("add", path, format!("write failed: {}", e)),
         }
@@ -276,7 +277,7 @@ make several coordinated edits at once."#;
         }
     }
 
-    fn do_update(
+    async fn do_update(
         &self,
         path: &str,
         move_to: Option<&str>,
@@ -364,7 +365,8 @@ make several coordinated edits at once."#;
             }
         }
 
-        if let Err(e) = std::fs::write(&resolved, &content) {
+        // Atomic write-back: a crash mid-write must never truncate the file.
+        if let Err(e) = crate::utils::atomic_write::atomic_write_file(&resolved, &content).await {
             return fail("update", path, format!("write-back failed: {}", e));
         }
 
@@ -805,8 +807,8 @@ mod tests {
         assert_eq!(new, "a\nB\nc");
     }
 
-    #[test]
-    fn end_to_end_add_and_update_in_tempdir() {
+    #[tokio::test]
+    async fn end_to_end_add_and_update_in_tempdir() {
         let dir = tempfile::tempdir().expect("tempdir");
         let app_py = dir.path().join("app.py");
         std::fs::write(&app_py, "x = 1\ny = 2\nz = 3\n").unwrap();
@@ -825,32 +827,36 @@ mod tests {
             ],
             eof_anchor: false,
         };
-        let outcome = tool.do_update(app_py.to_str().unwrap(), None, &[hunk], Some(dir.path()));
+        let outcome = tool
+            .do_update(app_py.to_str().unwrap(), None, &[hunk], Some(dir.path()))
+            .await;
         // do_update will reject the absolute path; rerun with relative.
         assert!(!outcome.success);
-        let outcome2 = tool.do_update(
-            "app.py",
-            None,
-            &[Hunk {
-                header: None,
-                lines: vec![
-                    HunkLine::Context("x = 1".into()),
-                    HunkLine::Remove("y = 2".into()),
-                    HunkLine::Add("y = 20".into()),
-                    HunkLine::Context("z = 3".into()),
-                ],
-                eof_anchor: false,
-            }],
-            Some(dir.path()),
-        );
+        let outcome2 = tool
+            .do_update(
+                "app.py",
+                None,
+                &[Hunk {
+                    header: None,
+                    lines: vec![
+                        HunkLine::Context("x = 1".into()),
+                        HunkLine::Remove("y = 2".into()),
+                        HunkLine::Add("y = 20".into()),
+                        HunkLine::Context("z = 3".into()),
+                    ],
+                    eof_anchor: false,
+                }],
+                Some(dir.path()),
+            )
+            .await;
         assert!(outcome2.success, "{:?}", outcome2);
 
         let updated = std::fs::read_to_string(&app_py).unwrap();
         assert_eq!(updated, "x = 1\ny = 20\nz = 3\n");
     }
 
-    #[test]
-    fn update_reports_unmatched_hunk() {
+    #[tokio::test]
+    async fn update_reports_unmatched_hunk() {
         let dir = tempfile::tempdir().expect("tempdir");
         let app_py = dir.path().join("app.py");
         std::fs::write(&app_py, "a\nb\nc\n").unwrap();
@@ -864,13 +870,15 @@ mod tests {
             ],
             eof_anchor: false,
         };
-        let outcome = tool.do_update("app.py", None, &[hunk], Some(dir.path()));
+        let outcome = tool
+            .do_update("app.py", None, &[hunk], Some(dir.path()))
+            .await;
         assert!(!outcome.success);
         assert!(outcome.message.contains("did not match"), "{:?}", outcome);
     }
 
-    #[test]
-    fn update_applies_hunk_despite_trailing_whitespace_drift() {
+    #[tokio::test]
+    async fn update_applies_hunk_despite_trailing_whitespace_drift() {
         // The file's context lines carry trailing whitespace that the model's
         // patch omits. The contiguous-substring locator misses (the block is
         // broken by the `\n`-adjacent spaces); the codex-style line-anchored
@@ -880,28 +888,30 @@ mod tests {
         std::fs::write(&app_py, "x = 1   \ny = 2\nz = 3  \n").unwrap();
 
         let tool = ApplyPatchTool::new();
-        let outcome = tool.do_update(
-            "app.py",
-            None,
-            &[Hunk {
-                header: None,
-                lines: vec![
-                    HunkLine::Context("x = 1".into()),
-                    HunkLine::Remove("y = 2".into()),
-                    HunkLine::Add("y = 20".into()),
-                    HunkLine::Context("z = 3".into()),
-                ],
-                eof_anchor: false,
-            }],
-            Some(dir.path()),
-        );
+        let outcome = tool
+            .do_update(
+                "app.py",
+                None,
+                &[Hunk {
+                    header: None,
+                    lines: vec![
+                        HunkLine::Context("x = 1".into()),
+                        HunkLine::Remove("y = 2".into()),
+                        HunkLine::Add("y = 20".into()),
+                        HunkLine::Context("z = 3".into()),
+                    ],
+                    eof_anchor: false,
+                }],
+                Some(dir.path()),
+            )
+            .await;
         assert!(outcome.success, "{:?}", outcome);
         let updated = std::fs::read_to_string(&app_py).unwrap();
         assert_eq!(updated, "x = 1\ny = 20\nz = 3\n");
     }
 
-    #[test]
-    fn update_eof_anchor_targets_file_tail() {
+    #[tokio::test]
+    async fn update_eof_anchor_targets_file_tail() {
         // Identical sentinel blocks at head and tail; the EOF anchor must make
         // the fallback locator edit the trailing one. (Whitespace drift on the
         // context line forces the line-anchored path.)
@@ -910,16 +920,18 @@ mod tests {
         std::fs::write(&f, "end \nmiddle\nend \n").unwrap();
 
         let tool = ApplyPatchTool::new();
-        let outcome = tool.do_update(
-            "log.txt",
-            None,
-            &[Hunk {
-                header: None,
-                lines: vec![HunkLine::Remove("end".into()), HunkLine::Add("FIN".into())],
-                eof_anchor: true,
-            }],
-            Some(dir.path()),
-        );
+        let outcome = tool
+            .do_update(
+                "log.txt",
+                None,
+                &[Hunk {
+                    header: None,
+                    lines: vec![HunkLine::Remove("end".into()), HunkLine::Add("FIN".into())],
+                    eof_anchor: true,
+                }],
+                Some(dir.path()),
+            )
+            .await;
         assert!(outcome.success, "{:?}", outcome);
         let updated = std::fs::read_to_string(&f).unwrap();
         assert_eq!(updated, "end \nmiddle\nFIN\n");

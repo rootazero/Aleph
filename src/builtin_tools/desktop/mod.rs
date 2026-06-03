@@ -417,7 +417,11 @@ fn check_hard_block(args: &DesktopArgs) -> Option<DesktopOutput> {
             .text
             .as_deref()
             .and_then(|t| safety::check_typed_text(t).err()),
-        "key_combo" => args
+        // `key_button` presses its `keys` as a chord (full press+release),
+        // reaching the same destructive capability as `key_combo` (e.g.
+        // Cmd+Shift+Q logout). The UI-TARS `press`/`release`/`key_down`/
+        // `key_up` verbs route here too, so it must pass the same content gate.
+        "key_combo" | "key_button" => args
             .keys
             .as_deref()
             .and_then(|k| safety::check_key_combo(k).err()),

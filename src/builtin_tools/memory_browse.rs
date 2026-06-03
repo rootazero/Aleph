@@ -13,6 +13,27 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
+/// Reject a `category`/`filename` segment that could escape the agent's
+/// memory directory. Browsing must stay inside `memory_dir/{agent_id}/`;
+/// `Path::join` with `..` traverses upward and with an absolute path replaces
+/// the base, so the raw LLM-supplied segments must be validated first (R5
+/// namespace isolation). Mirrors the guard in `scratchpad.rs`.
+fn validate_path_component(name: &str) -> Result<()> {
+    if name.is_empty()
+        || name.contains("..")
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+        || name.starts_with('.')
+    {
+        return Err(AlephError::tool(format!(
+            "Invalid path segment '{name}': must not be empty, contain path separators, \
+             '..', null bytes, or start with '.'"
+        )));
+    }
+    Ok(())
+}
+
 /// Browse action type
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -64,7 +85,10 @@ impl MemoryBrowseTool {
         let base = self.memory_dir.join(&self.agent_id);
         let target = match category {
             None => base,
-            Some(cat) => base.join(cat),
+            Some(cat) => {
+                validate_path_component(cat)?;
+                base.join(cat)
+            }
         };
 
         if !target.exists() {
@@ -127,6 +151,8 @@ impl MemoryBrowseTool {
         let (category, filename) = path.split_once('/').ok_or_else(|| {
             AlephError::tool("path must be 'category/filename' (e.g. 'reference/rust-ownership')")
         })?;
+        validate_path_component(category)?;
+        validate_path_component(filename)?;
 
         let file = self
             .memory_dir
@@ -271,5 +297,31 @@ mod tests {
         let (tool, _dir) = setup().await;
         let result = tool.handle_read("wiki/missing").await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn read_rejects_path_traversal() {
+        let (tool, _dir) = setup().await;
+        // `..` in either segment must be rejected before touching the filesystem.
+        assert!(tool.handle_read("../../../etc/passwd").await.is_err());
+        assert!(tool.handle_read("wiki/../../secret").await.is_err());
+        assert!(tool.handle_read("..%2f/x").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn list_rejects_path_traversal() {
+        let (tool, _dir) = setup().await;
+        assert!(tool.handle_list(Some("../..")).await.is_err());
+        assert!(tool.handle_list(Some("..")).await.is_err());
+    }
+
+    #[test]
+    fn validate_component_accepts_normal_names() {
+        assert!(validate_path_component("reference").is_ok());
+        assert!(validate_path_component("rust-ownership").is_ok());
+        assert!(validate_path_component("..").is_err());
+        assert!(validate_path_component("a/b").is_err());
+        assert!(validate_path_component(".hidden").is_err());
+        assert!(validate_path_component("").is_err());
     }
 }
