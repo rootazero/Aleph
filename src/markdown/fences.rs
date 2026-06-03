@@ -66,6 +66,17 @@ impl FenceSpan {
     /// Returns `true` if `index` is strictly between `start` and `end`
     /// (exclusive on both boundaries). Boundary positions themselves are
     /// considered outside the fence, making them safe split points.
+    ///
+    /// **Caller contract:** `end` is the byte offset of the *closing fence
+    /// line start*, so the closing marker's own bytes (`end..end +
+    /// marker.len()`) lie OUTSIDE this span. A caller that picks a break
+    /// position from raw byte budgets (rather than newline boundaries) could
+    /// therefore land inside the closing marker — fracturing it — or exactly
+    /// at `end`, emitting a chunk whose fence is left unclosed. Always gate
+    /// such byte-level splits through [`get_fence_split`], which closes and
+    /// reopens the fence correctly. Newline-anchored breaks are inherently
+    /// safe: the `\n` preceding the closing fence sits at `end - 1`, which is
+    /// still inside the span.
     pub fn contains(&self, index: usize) -> bool {
         index > self.start && index < self.end
     }
@@ -506,5 +517,24 @@ mod tests {
         let spans = parse_fence_spans(text);
         // Entire text treated as single line; fences not recognized
         assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn test_crlf_line_endings_offsets() {
+        // \r\n line endings exercise the `line_end + 2` advancement branch.
+        // Byte layout: "```rust"(0..7) \r\n(7,8) "code"(9..13) \r\n(13,14)
+        //              "```"(15..18) \r\n(18,19) "after"(20..25)
+        let text = "```rust\r\ncode\r\n```\r\nafter";
+        let spans = parse_fence_spans(text);
+
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].start(), 0);
+        // `end` is the closing fence line start, not shifted by the \r\n width.
+        assert_eq!(spans[0].end(), 15);
+        assert_eq!(spans[0].language(), Some("rust"));
+        // Boundary semantics survive \r\n offset arithmetic.
+        assert!(spans[0].contains(8));
+        assert!(!spans[0].contains(spans[0].end()));
+        assert!(is_safe_fence_break(&spans, 0));
     }
 }
