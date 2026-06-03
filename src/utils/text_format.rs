@@ -23,13 +23,19 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
 }
 
 pub fn escape_markdown(text: &str) -> String {
-    text.chars()
-        .flat_map(|c| match c {
-            '[' | ']' | '(' | ')' | '*' | '_' | '`' | '\\' => ['\\', c],
-            _ => ['\0', c],
-        })
-        .filter(|&c| c != '\0')
-        .collect()
+    // Prefix each Markdown metacharacter with a backslash. A previous
+    // implementation used '\0' as a "no-prefix" sentinel and filtered it
+    // out afterwards, which silently dropped any literal NUL present in the
+    // input. Pushing directly avoids the sentinel collision and preserves
+    // every input character verbatim.
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '[' | ']' | '(' | ')' | '*' | '_' | '`' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -84,5 +90,14 @@ mod tests {
         assert!(!result.contains("[link]"));
         assert!(result.contains("\\["));
         assert!(result.contains("\\*"));
+    }
+
+    #[test]
+    fn test_escape_markdown_preserves_nul() {
+        // A literal NUL must survive escaping (it was previously dropped by a
+        // '\0' sentinel used to mark "no backslash needed").
+        let text = "a\0b*c";
+        let result = escape_markdown(text);
+        assert_eq!(result, "a\0b\\*c");
     }
 }
