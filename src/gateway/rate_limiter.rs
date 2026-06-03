@@ -402,7 +402,7 @@ pub fn scope_for_method(method: &str) -> RateLimitScope {
         // State-changing writes
         "config.patch" | "config.apply" | "config.set" | "memory.store" | "memory.delete"
         | "session.compact" | "session.delete" | "plugins.install" | "plugins.uninstall"
-        | "skills.install" | "skills.delete" => RateLimitScope::RpcWrite,
+        | "skills.install" | "skills.remove" => RateLimitScope::RpcWrite,
 
         // Resource-intensive operations
         "agent.run" | "chat.send" => RateLimitScope::RpcHeavy,
@@ -577,7 +577,7 @@ mod tests {
             "plugins.install",
             "plugins.uninstall",
             "skills.install",
-            "skills.delete",
+            "skills.remove",
         ] {
             assert_eq!(
                 scope_for_method(method),

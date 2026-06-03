@@ -67,9 +67,12 @@ const OPERATOR_METHODS: &[&str] = &[
     "plugins.uninstall",
     "plugins.enable",
     "plugins.disable",
-    // Skill lifecycle
+    // Skill lifecycle (the registered destructive method is `skills.remove`;
+    // `skills.update` / `skills.install_dep` mutate skill state too)
     "skills.install",
-    "skills.delete",
+    "skills.remove",
+    "skills.update",
+    "skills.install_dep",
     // MCP server lifecycle
     "mcp.start",
     "mcp.stop",
@@ -104,6 +107,14 @@ const OPERATOR_METHODS: &[&str] = &[
     // Background cognition + cross-system observability
     "dreaming.run_now",
     "insights.tools",
+    // Agent routing rules + model-route mode (mutate routing bindings and the
+    // live failover chain; read variants routing_rules.list/get + route_config.get
+    // stay open)
+    "routing_rules.create",
+    "routing_rules.update",
+    "routing_rules.delete",
+    "routing_rules.move",
+    "route_config.update",
     // Gateway control surface (credentials are sensitive; flow.reload mutates routing)
     "gateway.flow.reload",
     "gateway.credentials",
@@ -138,7 +149,9 @@ mod tests {
             "devices.remove",
             "pairing.approve",
             "plugins.install",
-            "skills.delete",
+            "skills.remove",
+            "routing_rules.create",
+            "route_config.update",
             "mcp.start",
             "cron.create",
             "heartbeat.delete",

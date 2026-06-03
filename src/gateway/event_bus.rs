@@ -369,11 +369,10 @@ impl GatewayEventBus {
     ///   `{"topic": "<topic_name>", "data": <frame>}`.
     ///   The handler wraps this into `{"method": "event", "params": {...}}`.
     pub fn publish_frame(&self, frame: &GatewayEventFrame) -> Result<usize, serde_json::Error> {
-        let preview = format!("{:?}", frame);
-        debug!(
-            "Publishing typed event: {}",
-            &preview[..preview.len().min(100)]
-        );
+        // Truncate on a char boundary (frame Debug embeds user/model text which
+        // is frequently multibyte UTF-8); byte-slicing would panic mid-char.
+        let preview: String = format!("{:?}", frame).chars().take(100).collect();
+        debug!("Publishing typed event: {}", preview);
         let frame_value = serde_json::to_value(frame)?;
         let wire_json = if let Some(method) = frame.stream_method() {
             // Streaming events → JSON-RPC notification format

@@ -440,7 +440,13 @@ impl PairingManager {
     /// Rejected per the in-memory side-tables, Expired otherwise.
     pub fn poll_browser_pairing(&self, code: &str) -> PollState {
         self.gc_browser_state();
-        if let Some((_, (session_id, _))) = self.approved_browser_sessions.remove(code) {
+        // PEEK, don't drain: the single-use consumer is the cookie endpoint
+        // `/auth/bootstrap/from_pairing` → `fetch_browser_session`. If this poll
+        // drained the entry, the subsequent bootstrap call would find nothing
+        // and 401, so the cookie would never be issued. The entry expires via
+        // gc_browser_state (APPROVED_SESSION_TTL_MS) if the redirect never runs.
+        if let Some(entry) = self.approved_browser_sessions.get(code) {
+            let session_id = entry.value().0.clone();
             return PollState::Approved { session_id };
         }
         if self.rejected_browser_codes.remove(code).is_some() {
@@ -727,10 +733,13 @@ mod tests {
             PollState::Approved { session_id } => assert_eq!(session_id, "session-xyz"),
             other => panic!("expected Approved, got {other:?}"),
         }
-        // Single-use: a second poll-after-approve falls through to expired
-        // (the approved entry was drained, the DB row was never deleted by
-        // poll itself, but the test approve path mocks that — see handler
-        // tests for the full sequence).
+        // Poll PEEKS (does not drain): a second poll still reports Approved.
+        // The single drain happens in `fetch_browser_session` (the cookie
+        // endpoint) — see `fetch_browser_session_is_single_use`.
+        match manager.poll_browser_pairing(&code) {
+            PollState::Approved { session_id } => assert_eq!(session_id, "session-xyz"),
+            other => panic!("expected Approved on re-poll, got {other:?}"),
+        }
     }
 
     #[test]

@@ -94,7 +94,7 @@ impl Default for SandboxRateLimitConfig {
 pub fn categorize_tool(tool_name: &str) -> ToolCategory {
     match tool_name {
         "config.patch" | "config.set" | "plugins.install" | "plugins.uninstall"
-        | "skills.install" | "skills.delete" => ToolCategory::Admin,
+        | "skills.install" | "skills.remove" => ToolCategory::Admin,
         "code_exec" | "exec" | "bash_exec" => ToolCategory::Dangerous,
         "file_write" | "file_edit" | "file_delete" | "folder_write" => ToolCategory::Write,
         _ => ToolCategory::Read,

@@ -91,13 +91,20 @@ impl PolicyEngine {
                     };
                 };
 
-                // Check expiration
-                if let Some(expires_at) = scope.expires_at {
-                    if identity.created_at > expires_at {
-                        return PermissionResult::Denied {
-                            reason: "Guest token expired".to_string(),
-                        };
-                    }
+                // Check expiration against the CURRENT time, not the context's
+                // creation time. Comparing `created_at` only worked because the
+                // live path rebuilds the guest context per request; any reused
+                // or persisted context would then never expire. Use the
+                // protocol's own helper. A broken clock (pre-epoch) fails safe
+                // to "expired" (deny).
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(i64::MAX);
+                if scope.is_expired(now) {
+                    return PermissionResult::Denied {
+                        reason: "Guest token expired".to_string(),
+                    };
                 }
 
                 // Check tool permission
@@ -288,21 +295,21 @@ mod tests {
 
     #[test]
     fn test_guest_not_expired_allowed() {
+        // Expiry is checked against the current wall-clock, so a genuinely
+        // future timestamp is required (a small constant like 3000 is unix
+        // seconds = 1970, i.e. already expired).
         let scope = GuestScope {
             allowed_tools: vec!["translate".to_string()],
-            expires_at: Some(3000), // Future timestamp
+            expires_at: Some(i64::MAX), // Far-future timestamp
             display_name: None,
         };
 
-        let mut identity = IdentityContext::guest(
+        let identity = IdentityContext::guest(
             "session:guest1".to_string(),
             "guest1".to_string(),
             scope,
             "telegram".to_string(),
         );
-
-        // Set created_at to be before expiry
-        identity.created_at = 2000;
 
         let result = PolicyEngine::check_tool_permission(&identity, "translate");
         assert!(result.is_allowed());

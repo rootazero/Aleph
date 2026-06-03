@@ -125,24 +125,33 @@ impl IdempotencyGuard {
 
         // Atomic check-and-insert via entry() API
         match self.cache.entry(key.to_string()) {
-            Entry::Occupied(e) => {
-                // Another thread beat us — re-check the entry
-                match e.get() {
+            Entry::Occupied(mut e) => {
+                // Another thread beat us — re-check the entry. The shard lock
+                // held by `e` must NOT be released before the expired-replace,
+                // or two concurrent callers can both observe the same expired
+                // Complete, both insert InFlight, and both get Proceed (a
+                // TOCTOU duplicate-execution — the exact race this guard exists
+                // to prevent). So decide while borrowing, then mutate in place.
+                let cached = match e.get() {
                     CacheEntry::Complete(value, inserted_at) => {
                         if inserted_at.elapsed() < self.ttl {
-                            return AcquireResult::Cached(value.clone());
+                            Some(value.clone())
+                        } else {
+                            None
                         }
-                        // Still expired — replace with InFlight
-                        drop(e);
-                        let (tx, _rx) = watch::channel(None);
-                        self.cache.insert(key.to_string(), CacheEntry::InFlight(tx));
-                        AcquireResult::Proceed(IdempotencySlot {
-                            key: key.to_string(),
-                            guard: Some(self.cache.clone()),
-                        })
                     }
-                    CacheEntry::InFlight(tx) => AcquireResult::Waiting(tx.subscribe()),
+                    CacheEntry::InFlight(tx) => return AcquireResult::Waiting(tx.subscribe()),
+                };
+                if let Some(value) = cached {
+                    return AcquireResult::Cached(value);
                 }
+                // Still expired — replace with InFlight without releasing the lock.
+                let (tx, _rx) = watch::channel(None);
+                *e.get_mut() = CacheEntry::InFlight(tx);
+                AcquireResult::Proceed(IdempotencySlot {
+                    key: key.to_string(),
+                    guard: Some(self.cache.clone()),
+                })
             }
             Entry::Vacant(e) => {
                 let (tx, _rx) = watch::channel(None);

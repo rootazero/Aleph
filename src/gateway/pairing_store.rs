@@ -205,18 +205,20 @@ impl PairingStore for SqlitePairingStore {
 
         let (sender_id, code, created_at, metadata_json) = request.ok_or(PairingError::NotFound)?;
 
-        // Add to approved senders
+        // Approve + consume atomically: a crash between the INSERT and the
+        // DELETE would otherwise leave the request pending while the sender is
+        // already approved (an orphaned, re-approvable row).
         let now = Utc::now().to_rfc3339();
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT OR REPLACE INTO approved_senders (channel, sender_id, approved_at) VALUES (?1, ?2, ?3)",
             params![channel, sender_id, now],
         )?;
-
-        // Delete the pairing request
-        conn.execute(
+        tx.execute(
             "DELETE FROM pairing_requests WHERE channel = ?1 AND code = ?2",
             params![channel, code],
         )?;
+        tx.commit()?;
 
         let metadata: HashMap<String, String> =
             serde_json::from_str(&metadata_json).unwrap_or_default();

@@ -8,7 +8,7 @@
 //! - **Query**: Read-only queries (health, echo, config.get, etc.)
 //! - **Execute**: Agent execution (agent.run, chat.send, etc.)
 //! - **Mutate**: State mutations (config.patch, memory.store, etc.)
-//! - **System**: System management (plugins.install, skills.delete, etc.)
+//! - **System**: System management (plugins.install, skills.remove, etc.)
 //!
 //! # Channel-class priority (Panel-first)
 //!
@@ -41,7 +41,7 @@ pub enum Lane {
     Execute,
     /// State mutations (config.patch, config.apply, config.set, memory.store, memory.delete, session.compact, session.delete)
     Mutate,
-    /// System management (plugins.install, plugins.uninstall, skills.install, skills.delete, logs.setLevel)
+    /// System management (plugins.install, plugins.uninstall, skills.install, skills.remove, logs.setLevel)
     System,
 }
 
@@ -101,10 +101,10 @@ impl Lane {
             // putting it on Query keeps it out of the Mutate lane that
             // would otherwise idempotency-guard a side-effect-free call.
             "connect.challenge" => Some(Lane::Query),
-            // skills.delete is package management, not a data delete →
+            // skills.remove is package management, not a data delete →
             // System lane. memory.delete / session.delete / session.truncate
             // are data ops that fall through to default Mutate.
-            "skills.delete" => Some(Lane::System),
+            "skills.remove" => Some(Lane::System),
             // logs.setLevel changes process-wide runtime config →
             // System lane (preserves pre-G1 hardcode behavior).
             "logs.setLevel" => Some(Lane::System),
@@ -432,7 +432,7 @@ mod tests {
         assert_eq!(Lane::for_method("plugins.install"), Lane::System);
         assert_eq!(Lane::for_method("plugins.uninstall"), Lane::System);
         assert_eq!(Lane::for_method("skills.install"), Lane::System);
-        assert_eq!(Lane::for_method("skills.delete"), Lane::System);
+        assert_eq!(Lane::for_method("skills.remove"), Lane::System);
         assert_eq!(Lane::for_method("logs.setLevel"), Lane::System);
     }
 
@@ -592,7 +592,7 @@ mod tests {
         assert_eq!(Lane::for_method("memory.store"), Lane::Mutate);
         assert_eq!(Lane::for_method("memory.delete"), Lane::Mutate);
         assert_eq!(Lane::for_method("session.delete"), Lane::Mutate);
-        assert_eq!(Lane::for_method("skills.delete"), Lane::System);
+        assert_eq!(Lane::for_method("skills.remove"), Lane::System);
         assert_eq!(Lane::for_method("plugins.uninstall"), Lane::System);
         assert_eq!(Lane::for_method("skills.install"), Lane::System);
         assert_eq!(Lane::for_method("logs.setLevel"), Lane::System);
