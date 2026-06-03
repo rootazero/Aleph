@@ -56,6 +56,28 @@ impl ChromeMcpBackend {
             .await
     }
 
+    /// Acquire the per-profile serialization lock. Held across a
+    /// `select_page` → action sequence so concurrent same-profile operations
+    /// can't interleave the server-side page selection.
+    async fn profile_guard(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.driver.profile_lock(&self.profile_name).lock_owned().await
+    }
+
+    /// Atomically (under the per-profile lock) select `tab_id` then invoke
+    /// `tool` with `args`. This is the common shape of nearly every backend
+    /// action; holding the guard across both round-trips closes the
+    /// select-then-act interleave race.
+    async fn select_and_call(
+        &self,
+        tab_id: &str,
+        tool: &str,
+        args: serde_json::Value,
+    ) -> Result<serde_json::Value, BrowserError> {
+        let _guard = self.profile_guard().await;
+        self.select_page(tab_id).await?;
+        self.call(tool, args).await
+    }
+
     /// Select a page by its index before performing operations on it.
     /// Chrome DevTools MCP uses `pageId` (number) for page selection.
     async fn select_page(&self, tab_id: &str) -> Result<(), BrowserError> {
@@ -95,9 +117,13 @@ impl BrowserBackend for ChromeMcpBackend {
         self.ssrf_guard
             .check_url(url)
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
+        // Hold the per-profile lock across new_page + re-list so a concurrent
+        // open on the same profile can't append a tab between the two calls and
+        // steal our "newest is last" id. List inline (not via the public
+        // `list_tabs`, which would re-acquire the same lock and deadlock).
+        let _guard = self.profile_guard().await;
         let _result = self.call("new_page", json!({ "url": url })).await?;
-        // Re-list to find the new page's ID
-        let tabs_text = self.list_tabs().await?;
+        let tabs_text = Self::extract_text(&self.call("list_pages", json!({})).await?);
         // Parse last numeric id from "N: URL" lines (newest tab is last)
         let last_id = tabs_text
             .lines()
@@ -139,15 +165,15 @@ impl BrowserBackend for ChromeMcpBackend {
         self.ssrf_guard
             .check_url(url)
             .map_err(|e| BrowserError::NavigationFailed(e.to_string()))?;
-        self.select_page(tab_id).await?;
-        self.call("navigate_page", json!({ "url": url })).await?;
+        self.select_and_call(tab_id, "navigate_page", json!({ "url": url }))
+            .await?;
         Ok(())
     }
 
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
-        self.select_page(tab_id).await?;
-        self.call("click", json!({ "uid": element })).await?;
+        self.select_and_call(tab_id, "click", json!({ "uid": element }))
+            .await?;
         Ok(())
     }
 
@@ -158,8 +184,7 @@ impl BrowserBackend for ChromeMcpBackend {
         text: &str,
     ) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
-        self.select_page(tab_id).await?;
-        self.call("fill", json!({ "uid": element, "value": text }))
+        self.select_and_call(tab_id, "fill", json!({ "uid": element, "value": text }))
             .await?;
         Ok(())
     }
@@ -171,16 +196,15 @@ impl BrowserBackend for ChromeMcpBackend {
         value: &str,
     ) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
-        self.select_page(tab_id).await?;
-        self.call("fill", json!({ "uid": element, "value": value }))
+        self.select_and_call(tab_id, "fill", json!({ "uid": element, "value": value }))
             .await?;
         Ok(())
     }
 
     async fn hover(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
-        self.select_page(tab_id).await?;
-        self.call("hover", json!({ "uid": element })).await?;
+        self.select_and_call(tab_id, "hover", json!({ "uid": element }))
+            .await?;
         Ok(())
     }
 
@@ -190,32 +214,22 @@ impl BrowserBackend for ChromeMcpBackend {
         _target: ActionTarget,
         direction: ScrollDirection,
     ) -> Result<(), BrowserError> {
-        self.select_page(tab_id).await?;
         // Vertical scrolling: PageUp/PageDown are reliable across pages.
         // Horizontal scrolling: Home/End would jump to start/end-of-document, which
         // is NOT lateral scroll — fall back to window.scrollBy(±400, 0) via JS.
-        match direction {
-            ScrollDirection::Up => {
-                self.call("press_key", json!({ "key": "PageUp" })).await?;
-            }
-            ScrollDirection::Down => {
-                self.call("press_key", json!({ "key": "PageDown" })).await?;
-            }
-            ScrollDirection::Left => {
-                self.call(
-                    "evaluate_script",
-                    json!({ "function": "() => window.scrollBy(-400, 0)" }),
-                )
-                .await?;
-            }
-            ScrollDirection::Right => {
-                self.call(
-                    "evaluate_script",
-                    json!({ "function": "() => window.scrollBy(400, 0)" }),
-                )
-                .await?;
-            }
-        }
+        let (tool, args) = match direction {
+            ScrollDirection::Up => ("press_key", json!({ "key": "PageUp" })),
+            ScrollDirection::Down => ("press_key", json!({ "key": "PageDown" })),
+            ScrollDirection::Left => (
+                "evaluate_script",
+                json!({ "function": "() => window.scrollBy(-400, 0)" }),
+            ),
+            ScrollDirection::Right => (
+                "evaluate_script",
+                json!({ "function": "() => window.scrollBy(400, 0)" }),
+            ),
+        };
+        self.select_and_call(tab_id, tool, args).await?;
         Ok(())
     }
 
@@ -224,8 +238,7 @@ impl BrowserBackend for ChromeMcpBackend {
         tab_id: &str,
         _opts: ScreenshotOpts,
     ) -> Result<ScreenshotOutput, BrowserError> {
-        self.select_page(tab_id).await?;
-        let result = self.call("take_screenshot", json!({})).await?;
+        let result = self.select_and_call(tab_id, "take_screenshot", json!({})).await?;
         // Check if result has image content type with base64 data
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
             for item in content {
@@ -257,8 +270,7 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
-        self.select_page(tab_id).await?;
-        let result = self.call("take_snapshot", json!({})).await?;
+        let result = self.select_and_call(tab_id, "take_snapshot", json!({})).await?;
         let snapshot_text = Self::extract_text(&result);
         // Best-effort: parse page URL and title from snapshot header lines
         let (page_url, page_title) = parse_snapshot_header(&snapshot_text);
@@ -270,9 +282,8 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     async fn evaluate(&self, tab_id: &str, js: &str) -> Result<String, BrowserError> {
-        self.select_page(tab_id).await?;
         let result = self
-            .call("evaluate_script", json!({ "function": js }))
+            .select_and_call(tab_id, "evaluate_script", json!({ "function": js }))
             .await?;
         Ok(Self::extract_text(&result))
     }
@@ -283,12 +294,17 @@ impl BrowserBackend for ChromeMcpBackend {
         target: ActionTarget,
         value: &str,
     ) -> Result<(), BrowserError> {
-        self.fill(tab_id, target, value).await
+        // Inline `fill`'s body rather than delegating: calling the public `fill`
+        // here would re-acquire the per-profile lock and deadlock.
+        let element = Self::extract_element_ref(&target)?;
+        self.select_and_call(tab_id, "fill", json!({ "uid": element, "value": value }))
+            .await?;
+        Ok(())
     }
 
     async fn press_key(&self, tab_id: &str, key: &str) -> Result<(), BrowserError> {
-        self.select_page(tab_id).await?;
-        self.call("press_key", json!({ "key": key })).await?;
+        self.select_and_call(tab_id, "press_key", json!({ "key": key }))
+            .await?;
         Ok(())
     }
 
@@ -298,15 +314,15 @@ impl BrowserBackend for ChromeMcpBackend {
         text: &str,
         timeout_ms: u64,
     ) -> Result<bool, BrowserError> {
-        self.select_page(tab_id).await?;
-        self.call("wait_for", json!({ "text": text, "timeout": timeout_ms }))
+        self.select_and_call(tab_id, "wait_for", json!({ "text": text, "timeout": timeout_ms }))
             .await?;
         Ok(true)
     }
 
     async fn console_messages(&self, tab_id: &str) -> Result<String, BrowserError> {
-        self.select_page(tab_id).await?;
-        let result = self.call("list_console_messages", json!({})).await?;
+        let result = self
+            .select_and_call(tab_id, "list_console_messages", json!({}))
+            .await?;
         Ok(Self::extract_text(&result))
     }
 
@@ -329,18 +345,18 @@ impl BrowserBackend for ChromeMcpBackend {
                 )));
             }
         };
-        self.select_page(tab_id).await?;
         let mut args = json!({ "action": action_norm });
         if let Some(text) = prompt_text {
             args["promptText"] = json!(text);
         }
-        self.call("handle_dialog", args).await?;
+        self.select_and_call(tab_id, "handle_dialog", args).await?;
         Ok(())
     }
 
     async fn network_log(&self, tab_id: &str) -> Result<String, BrowserError> {
-        self.select_page(tab_id).await?;
-        let result = self.call("list_network_requests", json!({})).await?;
+        let result = self
+            .select_and_call(tab_id, "list_network_requests", json!({}))
+            .await?;
         Ok(Self::extract_text(&result))
     }
 
@@ -352,9 +368,12 @@ impl BrowserBackend for ChromeMcpBackend {
     ) -> Result<(), BrowserError> {
         let from_uid = Self::extract_element_ref(&from)?;
         let to_uid = Self::extract_element_ref(&to)?;
-        self.select_page(tab_id).await?;
-        self.call("drag", json!({ "from_uid": from_uid, "to_uid": to_uid }))
-            .await?;
+        self.select_and_call(
+            tab_id,
+            "drag",
+            json!({ "from_uid": from_uid, "to_uid": to_uid }),
+        )
+        .await?;
         Ok(())
     }
 
@@ -377,6 +396,9 @@ impl BrowserBackend for ChromeMcpBackend {
                 "upload requires at least one file path".into(),
             ));
         }
+        // Hold the lock across select_page + the per-file loop so the whole
+        // multi-file upload runs against the selected page atomically.
+        let _guard = self.profile_guard().await;
         self.select_page(tab_id).await?;
         // chrome-devtools-mcp's `upload_file` is single-file; apply each path in order.
         for path in paths {
@@ -387,15 +409,13 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     async fn resize(&self, tab_id: &str, width: u32, height: u32) -> Result<(), BrowserError> {
-        self.select_page(tab_id).await?;
-        self.call("resize_page", json!({ "width": width, "height": height }))
+        self.select_and_call(tab_id, "resize_page", json!({ "width": width, "height": height }))
             .await?;
         Ok(())
     }
 
     async fn emulate(&self, tab_id: &str, opts: &EmulateOptions) -> Result<(), BrowserError> {
         opts.validate().map_err(BrowserError::ActionFailed)?;
-        self.select_page(tab_id).await?;
         // chrome-devtools-mcp exposes a single `emulate` tool covering every
         // override; build its argument object from the set fields only.
         let mut args = serde_json::Map::new();
@@ -427,7 +447,7 @@ impl BrowserBackend for ChromeMcpBackend {
         if let Some(ua) = &opts.user_agent {
             args.insert("userAgent".into(), json!(ua));
         }
-        self.call("emulate", serde_json::Value::Object(args))
+        self.select_and_call(tab_id, "emulate", serde_json::Value::Object(args))
             .await?;
         Ok(())
     }
@@ -440,7 +460,6 @@ impl BrowserBackend for ChromeMcpBackend {
         if fields.is_empty() {
             return Ok(0);
         }
-        self.select_page(tab_id).await?;
         let form_fields: Vec<_> = fields
             .iter()
             .filter_map(|(target, value)| {
@@ -453,7 +472,7 @@ impl BrowserBackend for ChromeMcpBackend {
                 "No valid ref_id targets for fill_form".into(),
             ));
         }
-        self.call("fill_form", json!({ "fields": form_fields }))
+        self.select_and_call(tab_id, "fill_form", json!({ "fields": form_fields }))
             .await?;
         Ok(form_fields.len())
     }

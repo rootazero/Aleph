@@ -5,15 +5,18 @@
 
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::process::Command;
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::sync::RwLock;
 
 use super::discovery::find_chromium;
 use super::error::BrowserError;
 use super::profile::ChromeMcpConfig;
 use crate::mcp::{ExternalServerConfig, McpClient};
+use crate::sync_primitives::Mutex;
 
 /// A running Chrome DevTools MCP session.
 struct ChromeMcpSession {
@@ -26,6 +29,12 @@ pub struct ChromeMcpDriver {
     config: ChromeMcpConfig,
     /// Prevents concurrent Chrome launches from racing.
     chrome_launch_lock: tokio::sync::Mutex<()>,
+    /// Per-profile serialization locks. Page selection in chrome-devtools-mcp
+    /// is server-side state, so a backend's `select_page` → action pair is two
+    /// round-trips that must not interleave with a concurrent same-profile
+    /// operation. The backend holds the matching lock across the whole pair.
+    /// Mirrors `PlaywrightCliDriver`'s per-session lock.
+    profile_locks: Mutex<HashMap<String, Arc<AsyncMutex<()>>>>,
 }
 
 impl ChromeMcpDriver {
@@ -34,7 +43,18 @@ impl ChromeMcpDriver {
             sessions: RwLock::new(HashMap::new()),
             config,
             chrome_launch_lock: tokio::sync::Mutex::new(()),
+            profile_locks: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Get (or lazily create) the per-profile serialization lock. The returned
+    /// `Arc<Mutex>` is held by the backend across a `select_page` → action
+    /// sequence so concurrent operations on the same profile cannot interleave.
+    pub fn profile_lock(&self, profile_name: &str) -> Arc<AsyncMutex<()>> {
+        let mut map = self.profile_locks.lock().unwrap_or_else(|e| e.into_inner());
+        map.entry(profile_name.to_string())
+            .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+            .clone()
     }
 
     /// Call a tool on the Chrome DevTools MCP server for the given profile.
