@@ -313,6 +313,11 @@ impl Config {
                 }
                 if found {
                     section_values.push((section, parts, node.clone()));
+                } else {
+                    warn!(
+                        section = %section,
+                        "save_incremental: section not present in current config; update skipped"
+                    );
                 }
             }
             let _ = current_table; // explicitly drop borrow
@@ -345,6 +350,11 @@ impl Config {
                     t.insert(leaf_key.to_string(), value);
                     debug!(section = %section, "Updated section");
                 }
+            } else {
+                warn!(
+                    section = %section,
+                    "save_incremental: parent path is not a table; update skipped"
+                );
             }
         }
 

@@ -270,13 +270,16 @@ impl GenerationConfig {
             result.push((name.clone(), cfg, GenerationType::Transcription));
         }
 
-        // Legacy format: map by capabilities[0], skip if already seen
+        // Legacy format: emit one entry per declared capability (mirrors
+        // get_providers_for_type's `contains` semantics), skip if already seen.
+        // Using only capabilities[0] would silently hide a multi-capability
+        // legacy provider from every modality after the first.
         for (name, cfg) in &self.providers {
             if seen.contains(name) {
                 continue;
             }
-            if let Some(gen_type) = cfg.capabilities.first().copied() {
-                result.push((name.clone(), cfg.clone(), gen_type));
+            for gen_type in &cfg.capabilities {
+                result.push((name.clone(), cfg.clone(), *gen_type));
             }
         }
 

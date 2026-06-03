@@ -260,14 +260,28 @@ impl ConfigPatcher {
             })?;
             let mut re_patched = latest_json;
             set_nested_value(&mut re_patched, &request.path, &request.patch)?;
+            // Re-validate the value actually being committed. A concurrent
+            // writer may have changed the base between step 2 (the validated
+            // snapshot) and now, so `re_patched` can be a different document
+            // than the one validated in steps 5-7. Without this, an invalid
+            // config could be persisted and installed live under concurrency.
+            self.validate_schema(&re_patched)?;
             let final_config: Config = serde_json::from_value(re_patched).map_err(|e| {
                 AlephError::invalid_config(format!(
                     "Re-patched config failed deserialization: {}",
                     e
                 ))
             })?;
+            final_config.validate()?;
+            // Commit to disk first; only swap in-memory on success. If the
+            // save fails, restore the previous live config so the in-memory
+            // state never diverges from what is on disk.
+            let previous = config.clone();
             *config = final_config;
-            config.save_incremental_to_file(&self.config_path, &[&top_section])?;
+            if let Err(e) = config.save_incremental_to_file(&self.config_path, &[&top_section]) {
+                *config = previous;
+                return Err(e);
+            }
         }
 
         // 14. Update mtime

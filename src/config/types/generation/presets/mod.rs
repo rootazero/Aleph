@@ -120,9 +120,20 @@ pub fn get_preset(name: &str) -> Option<&'static GenerationPreset> {
     PRESETS.get(name)
 }
 
-/// Find a generation preset by provider_type
+/// Find a generation preset by provider_type.
+///
+/// `PRESETS` is a `HashMap`, so a plain `.find()` would return an arbitrary
+/// preset when several share the same `provider_type` (e.g. 17 `fal-*`
+/// presets), making the fallback default model non-deterministic across runs.
+/// Select the lexicographically-smallest preset name for a stable result.
 pub fn get_preset_by_type(provider_type: &str) -> Option<&'static GenerationPreset> {
-    PRESETS.values().find(|p| p.provider_type == provider_type)
+    let mut matches: Vec<(&'static str, &'static GenerationPreset)> = PRESETS
+        .iter()
+        .filter(|(_, p)| p.provider_type == provider_type)
+        .map(|(name, p)| (*name, p))
+        .collect();
+    matches.sort_by_key(|(name, _)| *name);
+    matches.first().map(|(_, p)| *p)
 }
 
 /// Get a generation preset with override support.

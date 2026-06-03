@@ -53,7 +53,7 @@ impl ConfigBackup {
     /// Create a timestamped snapshot of the given config file
     ///
     /// The backup is named `config.toml.<TIMESTAMP>` where TIMESTAMP
-    /// is in `%Y%m%dT%H%M%S` format (e.g., `config.toml.20260301T120000`).
+    /// is in `%Y%m%dT%H%M%S%3f` format (e.g., `config.toml.20260301T120000123`).
     ///
     /// After creating the snapshot, old backups beyond `max_count` are pruned.
     ///
@@ -81,8 +81,11 @@ impl ConfigBackup {
         })?;
         debug!(dir = %self.backup_dir.display(), "Backup directory ensured");
 
-        // Generate timestamp suffix
-        let timestamp = chrono::Local::now().format("%Y%m%dT%H%M%S").to_string();
+        // Generate timestamp suffix. Millisecond precision (%3f) avoids
+        // collisions when snapshots are created within the same second (the
+        // patcher creates one snapshot per patch); second-resolution names
+        // would otherwise overwrite each other and silently lose restore points.
+        let timestamp = chrono::Local::now().format("%Y%m%dT%H%M%S%3f").to_string();
         let backup_filename = format!("config.toml.{}", timestamp);
         let backup_path = self.backup_dir.join(&backup_filename);
 

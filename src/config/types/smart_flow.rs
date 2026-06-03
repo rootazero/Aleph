@@ -388,11 +388,16 @@ impl KeywordRuleConfig {
         self.keywords
             .iter()
             .map(|s| {
-                if let Some((keyword, weight_str)) = s.rsplit_once(':') {
-                    let weight = weight_str.parse::<f32>().unwrap_or(1.0);
-                    (keyword.to_string(), weight)
-                } else {
-                    (s.clone(), 1.0)
+                // Only treat a trailing ":<number>" as an explicit weight.
+                // Otherwise keep the whole string as the keyword, so a keyword
+                // that legitimately contains ':' (e.g. "C:\\path", "c++:lang")
+                // is not silently truncated and mis-weighted.
+                match s.rsplit_once(':') {
+                    Some((keyword, weight_str)) => match weight_str.parse::<f32>() {
+                        Ok(weight) => (keyword.to_string(), weight),
+                        Err(_) => (s.clone(), 1.0),
+                    },
+                    None => (s.clone(), 1.0),
                 }
             })
             .collect()
