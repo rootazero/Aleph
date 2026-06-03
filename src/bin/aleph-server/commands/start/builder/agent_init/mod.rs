@@ -139,7 +139,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // Assigned in both the real-execution branch and the simulated branch
     // below; deferred init keeps the dead initial value out (and lets the
     // compiler prove both modes set it before the `.expect(...)` read).
-    let mut run_manager: Option<Arc<AgentRunManager>>;
+    let run_manager: Option<Arc<AgentRunManager>>;
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;

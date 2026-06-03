@@ -419,7 +419,7 @@ impl GraphClient {
         top: usize,
     ) -> Result<Vec<GraphGroup>, ChannelError> {
         // Escape single quotes for OData filter
-        let escaped = query.replace('\'', "''");
+        let escaped = encode_odata_param(query);
         let filter = format!(
             "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'{}')",
             escaped

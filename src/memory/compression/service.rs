@@ -201,22 +201,14 @@ impl CompressionService {
         Ok(total)
     }
 
-    /// Internal helper: build a `NoteIndexer` from the data directory and
-    /// delegate to `compress_to_notes`.
+    /// Internal helper: delegate to `compress_to_notes`. The notes write path
+    /// is owned by the compound ingestor's own `NoteIndexer` (wired at startup),
+    /// so this layer no longer constructs one.
     async fn compress_default_notes(
         &self,
         workspace_id: &str,
     ) -> Result<CompressionResult, AlephError> {
-        let memory_dir = crate::utils::paths::get_note_memory_dir().unwrap_or_else(|_| {
-            std::env::temp_dir()
-                .join("aleph")
-                .join("memory")
-                .join("note")
-        });
-
-        let indexer = crate::memory::notes::NoteIndexer::new(memory_dir, self.database.clone());
-
-        self.compress_to_notes(workspace_id, &indexer).await
+        self.compress_to_notes(workspace_id).await
     }
 
     /// Compress memories into Knowledge Notes instead of raw facts.
@@ -224,10 +216,9 @@ impl CompressionService {
     /// This method follows the same pipeline as `compress_in_workspace` but
     /// routes extracted information into markdown-based Knowledge Notes via
     /// `NoteIndexer` instead of storing individual `MemoryFact` rows.
-    pub async fn compress_to_notes<S: crate::memory::notes::store::NoteStore + Send + Sync>(
+    pub async fn compress_to_notes(
         &self,
         workspace_id: &str,
-        indexer: &crate::memory::notes::NoteIndexer<S>,
     ) -> Result<CompressionResult, AlephError> {
         let start = Instant::now();
 
@@ -595,7 +586,6 @@ impl CompressionService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::memory::notes::NoteIndexer;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
     use crate::memory::store::SqliteMemoryBackend;
     use crate::providers::create_mock_provider;
@@ -624,42 +614,6 @@ mod tests {
         let service = CompressionService::new(database.clone(), provider, embedder, config);
 
         (service, database, temp_dir)
-    }
-
-    /// Create a test setup that includes a NoteIndexer backed by a separate
-    /// SqliteMemoryBackend (NoteIndexer requires Arc<S: NoteStore> directly,
-    /// not the type-erased MemoryBackend).
-    async fn create_test_service_with_indexer() -> (
-        CompressionService,
-        MemoryBackend,
-        NoteIndexer<SqliteMemoryBackend>,
-        TempDir,
-    ) {
-        let temp_dir = tempdir().unwrap();
-
-        // Separate db file for the compression backend
-        let db_path = temp_dir.path().join("compression.db");
-        let database: MemoryBackend = Arc::new(SqliteMemoryBackend::new(&db_path).unwrap());
-
-        // Separate db file for the notes index (NoteIndexer needs Arc<SqliteMemoryBackend>)
-        let notes_db_path = temp_dir.path().join("notes.db");
-        let notes_backend = Arc::new(SqliteMemoryBackend::new(&notes_db_path).unwrap());
-
-        let memory_dir = temp_dir.path().join("memory");
-        let indexer = NoteIndexer::new(memory_dir, notes_backend);
-
-        let provider = create_mock_provider();
-        let embedder: Arc<dyn EmbeddingProvider> = Arc::new(
-            crate::memory::embedding_provider::tests::MockEmbeddingProvider::new(
-                1024,
-                "mock-model",
-            ),
-        );
-
-        let config = CompressionConfig::default();
-        let service = CompressionService::new(database.clone(), provider, embedder, config);
-
-        (service, database, indexer, temp_dir)
     }
 
     #[tokio::test]
@@ -714,12 +668,9 @@ mod tests {
     /// Empty database: compression returns an empty result without error.
     #[tokio::test]
     async fn test_compress_to_notes_empty_database() {
-        let (service, _database, indexer, _temp_dir) = create_test_service_with_indexer().await;
+        let (service, _database, _temp_dir) = create_test_service_with_tempdir().await;
 
-        let result = service
-            .compress_to_notes("default", &indexer)
-            .await
-            .unwrap();
+        let result = service.compress_to_notes("default").await.unwrap();
 
         assert_eq!(result.memories_processed, 0);
         assert_eq!(result.facts_extracted, 0);
@@ -754,7 +705,7 @@ mod tests {
             }
         }
 
-        let (service, database, indexer, _tmp) = create_test_service_with_indexer().await;
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
         let spy = Arc::new(RecordingIngestor {
             seen: Mutex::new(vec![]),
         });
@@ -773,10 +724,7 @@ mod tests {
         database.insert_raw_memory(&transcript).await.unwrap();
         database.insert_raw_memory(&telemetry).await.unwrap();
 
-        service
-            .compress_to_notes("default", &indexer)
-            .await
-            .unwrap();
+        service.compress_to_notes("default").await.unwrap();
 
         // Only the transcript should have reached the ingestor.
         let seen = spy.seen.lock().unwrap().clone();
