@@ -159,13 +159,17 @@ pub fn resolve_route(
         );
     }
 
-    // 5. Channel match (wildcard account)
+    // 5. Channel match (wildcard or unscoped account).
+    // `None` account_id reaches here only when the input account is "default"
+    // (see `matches_account`), so an account-less `{ channel = "..." }` binding
+    // is a legitimate channel-level default route — treat it like "*" rather
+    // than dropping it to the default agent.
     if let Some(b) = candidates.iter().find(|b| {
         b.match_rule
             .account_id
             .as_ref()
             .map(|a| a == "*")
-            .unwrap_or(false)
+            .unwrap_or(true)
             && b.match_rule.peer.is_none()
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()
@@ -522,6 +526,35 @@ mod tests {
             },
         );
         assert!(route.workspace.is_none());
+    }
+
+    #[test]
+    fn test_channel_binding_without_account_id_matches_default() {
+        // A binding that omits account_id should still route the default
+        // account on that channel (not silently fall through to the default
+        // agent).
+        let bindings = vec![RouteBinding {
+            agent_id: "telegram-agent".to_string(),
+            match_rule: MatchRule {
+                channel: Some("telegram".to_string()),
+                account_id: None,
+                ..Default::default()
+            },
+        }];
+        let route = resolve_route(
+            &bindings,
+            &default_session_cfg(),
+            "main",
+            &RouteInput {
+                channel: "telegram".to_string(),
+                account_id: None,
+                peer: None,
+                guild_id: None,
+                team_id: None,
+            },
+        );
+        assert_eq!(route.agent_id, "telegram-agent");
+        assert_eq!(route.matched_by, MatchedBy::Channel);
     }
 
     #[test]

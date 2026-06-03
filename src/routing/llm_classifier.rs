@@ -133,10 +133,15 @@ fn extract_json(text: &str) -> &str {
         }
     }
 
-    // Try to find raw JSON object
+    // Try to find raw JSON object. Guard `start <= end`: a malformed response
+    // where the first `{` follows the last `}` (e.g. `"} text {"`) would
+    // otherwise slice `start..=end` with start > end and panic. Model output
+    // is untrusted, so this must degrade to "no object" rather than crash.
     if let Some(start) = trimmed.find('{') {
         if let Some(end) = trimmed.rfind('}') {
-            return &trimmed[start..=end];
+            if start <= end {
+                return &trimmed[start..=end];
+            }
         }
     }
 
@@ -199,6 +204,16 @@ mod tests {
     fn invalid_returns_error() {
         let result = parse_classify_response("this is not json at all");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_brace_out_of_order_does_not_panic() {
+        // A response where the last `}` precedes the first `{` must not panic
+        // on the `start..=end` slice — it must degrade to a parse error.
+        for response in ["} {", "} text {incomplete", "}}}   {{{"] {
+            let result = parse_classify_response(response);
+            assert!(result.is_err(), "expected error for {response:?}");
+        }
     }
 
     #[test]

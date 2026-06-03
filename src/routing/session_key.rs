@@ -399,7 +399,13 @@ impl SessionKey {
 
         // Handle Subagent keys: agent:{parent_key}:subagent:{subagent_id}
         // Must check before parse_rest because subagent_id is not bounded.
-        if let Some(pos) = parts.iter().position(|&p| p == "subagent") {
+        //
+        // Use the LAST `subagent` marker so nested subagents round-trip:
+        // `...:subagent:level1:subagent:level2` must parse the outer layer
+        // (level2) with the rest recursed as the parent. Using the first marker
+        // would silently drop every layer above the innermost subagent, collapsing
+        // a sub-subagent session into its grandparent's session.
+        if let Some(pos) = parts.iter().rposition(|&p| p == "subagent") {
             if pos >= 2 && pos + 1 < parts.len() {
                 let parent_str = parts[..pos].join(":");
                 let subagent_id = parts[pos + 1].to_string();
@@ -534,11 +540,21 @@ impl SessionKey {
             // agent:id:main (or any single token as main_key)
             // Must come before the catch-all task pattern so that "main" is
             // not misinterpreted as a task_type.
-            [main_key] => Some(Self::Main {
-                agent_id: agent_id.to_string(),
-                main_key: main_key.to_string(),
-                epoch,
-            }),
+            //
+            // Exclude the structural markers "peer"/"dm"/"ephemeral": these are
+            // the leading tokens of two-segment DM/ephemeral keys. Without this
+            // guard, parsing `agent:id:dm:s1` (a DM with peer_id "s1") would
+            // strip "s1" as an epoch and collapse the leading "dm" into a
+            // Main{main_key:"dm"} — leaking that DM into the agent's main
+            // session. Rejecting them here forces the no-epoch fall-through in
+            // `parse`, which matches the correct `["dm", peer_id]` arm.
+            [main_key] if !matches!(*main_key, "peer" | "dm" | "ephemeral") => {
+                Some(Self::Main {
+                    agent_id: agent_id.to_string(),
+                    main_key: main_key.to_string(),
+                    epoch,
+                })
+            }
 
             [task_type, task_id] => Some(Self::Task {
                 agent_id: agent_id.to_string(),
@@ -986,6 +1002,38 @@ mod tests {
                 s
             );
         }
+    }
+
+    #[test]
+    fn test_parse_dm_peer_id_looks_like_epoch() {
+        // A DM whose peer_id is "s1" must round-trip as a DM, not collapse into
+        // a Main session (which would leak the DM into the agent main thread).
+        let key = SessionKey::dm("main", "telegram", "s1", DmScope::PerPeer);
+        assert_eq!(key.to_key_string(), "agent:main:dm:s1");
+        let parsed = SessionKey::parse("agent:main:dm:s1").expect("must parse");
+        assert!(
+            matches!(&parsed, SessionKey::DirectMessage { peer_id, .. } if peer_id == "s1"),
+            "expected DirectMessage(peer=s1), got {parsed:?}"
+        );
+        assert_eq!(parsed.to_key_string(), key.to_key_string());
+    }
+
+    #[test]
+    fn test_parse_legacy_peer_id_looks_like_epoch() {
+        let parsed = SessionKey::parse("agent:main:peer:s42").expect("must parse");
+        assert!(
+            matches!(&parsed, SessionKey::DirectMessage { peer_id, .. } if peer_id == "s42"),
+            "expected DirectMessage(peer=s42), got {parsed:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_ephemeral_id_looks_like_epoch() {
+        let parsed = SessionKey::parse("agent:main:ephemeral:s7").expect("must parse");
+        assert!(
+            matches!(&parsed, SessionKey::Ephemeral { ephemeral_id, .. } if ephemeral_id == "s7"),
+            "expected Ephemeral(id=s7), got {parsed:?}"
+        );
     }
 
     #[test]
