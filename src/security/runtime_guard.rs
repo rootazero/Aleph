@@ -302,11 +302,22 @@ impl RuntimeSecurityGuard {
                 if report.scrubbed_tokens > 0 {
                     self.log_audit(
                         &context,
-                        AuditEventType::InvisibleCharsDetected,
+                        AuditEventType::TokenizerMarkerScrubbed,
                         AuditSeverity::Warn,
                         format!(
                             "scrubbed {} LLM tokenizer/format marker(s) from external content",
                             report.scrubbed_tokens
+                        ),
+                    );
+                }
+                if report.invisible_chars_removed > 0 {
+                    self.log_audit(
+                        &context,
+                        AuditEventType::InvisibleCharsDetected,
+                        AuditSeverity::Warn,
+                        format!(
+                            "stripped {} invisible/bidi/tag character(s) from external content",
+                            report.invisible_chars_removed
                         ),
                     );
                 }
@@ -649,7 +660,7 @@ mod tests {
             if entry.event_type == AuditEventType::InjectionPatternDetected {
                 got_pattern_event = true;
             }
-            if entry.event_type == AuditEventType::InvisibleCharsDetected
+            if entry.event_type == AuditEventType::TokenizerMarkerScrubbed
                 && entry.detail.contains("scrubbed")
             {
                 got_scrub_event = true;
@@ -661,7 +672,7 @@ mod tests {
         );
         assert!(
             got_scrub_event,
-            "expected scrubbed-tokens audit event (reusing InvisibleCharsDetected variant)"
+            "expected TokenizerMarkerScrubbed audit event"
         );
     }
 }
