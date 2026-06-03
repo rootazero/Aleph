@@ -4,7 +4,6 @@
 //! that races with the request.
 
 use std::path::Path;
-use std::sync::OnceLock;
 
 use anyhow::Context;
 use reqwest::StatusCode;
@@ -71,13 +70,14 @@ fn call_once(
     body: &serde_json::Value,
     token: &str,
 ) -> anyhow::Result<reqwest::blocking::Response> {
-    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
-    let client = CLIENT.get_or_init(|| {
-        reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("reqwest client build should not fail with default config")
-    });
+    // Built per call rather than cached: the CLI is a one-shot process that
+    // sends at most two requests (initial + one 401 retry), so connection
+    // reuse is irrelevant, and propagating a build failure beats panicking
+    // on a user-facing path.
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .context("failed to build HTTP client for admin IPC")?;
     let req = client
         .request(method.as_reqwest(), url)
         .bearer_auth(token)

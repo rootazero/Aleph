@@ -140,32 +140,19 @@ where
     L: FnOnce(&InstanceLock) -> anyhow::Result<T>,
     T: serde::de::DeserializeOwned,
 {
-    match policy {
-        CommandPolicy::NoLock => {
-            anyhow::bail!("NoLock commands must dispatch through run_no_lock, not with_policy")
-        }
-        CommandPolicy::LockOnly => {
-            let lock = acquire_or_held(data_dir).inspect_err(|e| {
-                if let Some(held) = e.downcast_ref::<LockHeldError>() {
-                    eprintln!("{held}");
-                    std::process::exit(64);
-                }
-            })?;
-            local(&lock)
-        }
-        CommandPolicy::LockOrIpc { route, method } => match acquire_or_held(data_dir) {
-            Ok(lock) => local(&lock),
-            Err(e) => {
-                if e.downcast_ref::<LockHeldError>().is_some() {
-                    crate::cli::ipc_client::forward_to_server::<T>(
-                        data_dir, method, route, ipc_body,
-                    )
-                } else {
-                    Err(e)
-                }
+    // Only the LockOnly contention behavior differs from `try_with_policy`
+    // (clean stderr + exit 64 instead of returning an Err). The NoLock and
+    // LockOrIpc arms are identical, so delegate to keep one source of truth.
+    if let CommandPolicy::LockOnly = policy {
+        let lock = acquire_or_held(data_dir).inspect_err(|e| {
+            if let Some(held) = e.downcast_ref::<LockHeldError>() {
+                eprintln!("{held}");
+                std::process::exit(64);
             }
-        },
+        })?;
+        return local(&lock);
     }
+    try_with_policy(policy, data_dir, local, ipc_body)
 }
 
 #[cfg(test)]
