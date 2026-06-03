@@ -466,13 +466,27 @@ that bwrap launches inside its mount namespace:
   landlock is soft-skipped with a warning unless
   `LinuxSandboxConfig.require_landlock = true`.
 - **seccomp-bpf** (kernel ≥ 3.5, universal in practice): syscall
-  denylist returning `EPERM` for ~28 entries covering filesystem
+  denylist returning `EPERM` for ~30 entries covering filesystem
   manipulation (`mount`/`umount`/`pivot_root`/`chroot`), kernel reload
-  (`kexec_*`), module loading (`*_module`), eBPF, perf, ptrace, kernel
-  keyring, `userfaultfd`, io_uring, `mknodat`, swap, `syslog`,
-  `reboot`, namespace switching, and `clone`/`unshare` with
-  `CLONE_NEWUSER` (nested user-ns escape). Snapshot-pinned by the
-  `seccomp_denylist_is_frozen` unit test.
+  (`kexec_*`), module loading (`*_module`), eBPF, perf, `ptrace`,
+  cross-process memory (`process_vm_readv`/`process_vm_writev` — a
+  read/write primitive independent of `ptrace`, critical in the
+  `allow_fork=true` shared-PID-ns path so the target cannot read
+  `aleph-server`'s address space), kernel keyring, `userfaultfd`,
+  io_uring, `mknodat`, swap, `syslog`, `reboot`, namespace switching,
+  and `clone`/`unshare` with `CLONE_NEWUSER` (nested user-ns escape).
+  Snapshot-pinned by the `seccomp_denylist_is_frozen` unit test.
+- **seccomp socket gate** (`SeccompNetworkMode`, mapping codex's
+  `NetworkSeccompMode`): a type-safe three-state gate on
+  `socket`/`socketpair`/`connect` argument values, derived from
+  `NetworkPolicy`:
+  - `Unrestricted` (`AllowAll`, raw `AllowHosts`) — no socket-family
+    filtering; seccomp cannot filter by IP.
+  - `UnixOnly` (`None`) — allow only `AF_UNIX`, deny `connect`.
+  - `ProxyRouted` (loopback-collapsed `AllowHosts` behind the
+    netns→UDS→loopback bridge) — allow only `AF_INET`/`AF_INET6` to
+    reach the local bridge, deny `AF_UNIX` socketpairs so the target
+    cannot sidestep the routed bridge. `connect` stays allowed.
 
 The init subcommand is wired into the existing `aleph-server` binary
 (no separate helper artifact — R3 core minimalism); bwrap bind-mounts
@@ -545,14 +559,17 @@ status` continue to work. Cycle 5 closes the absent-path gap (below).
 
 | Mode | macOS (Seatbelt) | Linux (bwrap) | Windows (AppContainer / token) |
 |---|---|---|---|
-| `None` | `(deny network*)` | `--unshare-net` + Cycle 3 seccomp deny `socket(AF_INET/INET6/NETLINK)` + `connect` | Token restricts; no inbound caps granted |
-| `AllowAll` | `(allow network*)` | shared netns | network capability granted |
-| `AllowHosts(hosts)` | **Cycle 6**: managed proxy enforces hostname allowlist + Seatbelt restricts to loopback only | **Phase B (live)**: managed proxy + netns→UDS→loopback bridge; `--unshare-net` isolates the netns and the only egress is the bridge to the host proxy | **Rejected** — pre-resolved IPs surfaced in error; Phase D (WFP, admin) deferred |
+| `None` | `(deny network*)` | `--unshare-net` + `SeccompNetworkMode::UnixOnly` (allow only `AF_UNIX`, deny `connect`) | Token restricts; no inbound caps granted |
+| `AllowAll` | `(allow network*)` | shared netns (`SeccompNetworkMode::Unrestricted`) | network capability granted |
+| `AllowHosts(hosts)` | **Cycle 6**: managed proxy enforces hostname allowlist + Seatbelt restricts to loopback only | **Phase B (live)**: managed proxy + netns→UDS→loopback bridge; `--unshare-net` isolates the netns and the only egress is the bridge to the host proxy. `SeccompNetworkMode::ProxyRouted` narrows the target's socket surface to `AF_INET`/`AF_INET6` and denies `AF_UNIX` socketpairs | **Rejected** — pre-resolved IPs surfaced in error; Phase D (WFP, admin) deferred |
 | `ProxyOnly` | `(allow ...)` for `localhost:<port>` | Rejected (use `AllowHosts`) | Rejected |
 
 Cycle 3 lifted Linux closer to codex parity by adding seccomp-level
 socket-family deny for `None` mode (defense in depth on top of
-`--unshare-net`). Cycle 6 lit macOS up for hostname allowlists via a
+`--unshare-net`); this is now modeled as the type-safe
+`SeccompNetworkMode` enum, which adds a `ProxyRouted` state (codex
+`NetworkSeccompMode::ProxyRouted` parity) restricting the proxied
+target to IP sockets only. Cycle 6 lit macOS up for hostname allowlists via a
 managed in-process proxy (see "Cycle 6 — managed proxy" below). **Phase B
 extends that proxy to Linux** via a netns→UDS→loopback bridge (a
 Unix-domain socket is a filesystem object, so it crosses the

@@ -45,20 +45,47 @@ pub struct LinuxInitPolicy {
     #[serde(default)]
     pub require_landlock: bool,
 
-    /// Cycle 3: codex-style defense-in-depth — when `true`, the seccomp
-    /// filter denies `socket(AF_INET|AF_INET6|AF_NETLINK)` and
-    /// `connect` with EPERM. The bubblewrap `--unshare-net` mount-ns
-    /// already removes network interfaces, but a process inside that
-    /// netns can still create `AF_INET` sockets that fail at runtime;
-    /// seccomp denies the syscall earlier so audit logs surface the
-    /// attempt clearly. AF_UNIX sockets stay allowed (needed for IPC).
-    ///
-    /// Set when [`SandboxCapabilities::network`] is
-    /// [`NetworkPolicy::None`]; ignored in `AllowAll` / `AllowHosts`
-    /// modes because seccomp cannot filter by IP, only by syscall +
-    /// constant args.
+    /// Socket-family restriction applied by the seccomp filter. See
+    /// [`SeccompNetworkMode`]. Defaults to [`SeccompNetworkMode::Unrestricted`]
+    /// for forward-compatible deserialization of policies that predate the
+    /// field (old wire shape used a `deny_network_sockets: bool`; an absent
+    /// value maps to the old `false` = no socket filtering).
     #[serde(default)]
-    pub deny_network_sockets: bool,
+    pub seccomp_net: SeccompNetworkMode,
+}
+
+/// Type-safe model of the seccomp socket-family gate, mapping codex's
+/// `NetworkSeccompMode` (Restricted / ProxyRouted) plus a third "no
+/// filtering" state into a single enum so illegal combinations are
+/// unrepresentable. The driver picks the variant from
+/// [`SandboxCapabilities::network`]; `apply_seccomp` lowers it to concrete
+/// `socket(2)` / `socketpair(2)` / `connect(2)` argument rules.
+///
+/// The bubblewrap `--unshare-net` netns already strips interfaces, so this
+/// is defense-in-depth: it turns runtime socket failures into early `EPERM`
+/// with a clear audit trail and, in `ProxyRouted` mode, narrows the socket
+/// surface to exactly what the loopback proxy bridge needs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SeccompNetworkMode {
+    /// No socket-family filtering. The kernel namespace and any
+    /// driver-level rules carry network policy. Used for `AllowAll` and
+    /// raw (non-loopback) `AllowHosts`, where seccomp cannot filter by IP.
+    #[default]
+    Unrestricted,
+    /// Network disabled (`NetworkPolicy::None`): allow only `AF_UNIX`
+    /// sockets (needed for local IPC) and deny `connect(2)` outright.
+    /// Mirrors codex `NetworkSeccompMode::Restricted`, minus the
+    /// individual `accept`/`bind`/`sendto`/… denials that bwrap's empty
+    /// netns already makes unreachable.
+    UnixOnly,
+    /// Proxied egress (loopback `AllowHosts` behind the netns→UDS→loopback
+    /// bridge): allow only `AF_INET` / `AF_INET6` sockets (to reach the
+    /// local TCP bridge on `lo`) and deny `AF_UNIX` socketpairs so the
+    /// target cannot open a fresh Unix socket to sidestep the routed
+    /// bridge. Mirrors codex `NetworkSeccompMode::ProxyRouted`. `connect`
+    /// stays allowed — the target must reach `127.0.0.1:<bridge-port>`.
+    ProxyRouted,
 }
 
 /// System-minimum read paths granted unconditionally. Without these,
@@ -107,6 +134,16 @@ pub const SECCOMP_DENYLIST_SIMPLE: &[&str] = &[
     "bpf",
     "perf_event_open",
     "ptrace",
+    // `process_vm_readv` / `process_vm_writev` are a cross-process memory
+    // read/write primitive independent of `ptrace` (no PTRACE_ATTACH, no
+    // `/proc/<pid>/mem` open). Denying `ptrace` alone does NOT close them.
+    // Critical in the `allow_fork=true` path, where bwrap does NOT
+    // `--unshare-pid`, so the target shares the host PID namespace and
+    // could read `aleph-server`'s address space (API keys, the proxy
+    // bridge's in-flight traffic). Codex denies all three together; we
+    // match that. EPERM (not SIGKILL) keeps benign callers survivable.
+    "process_vm_readv",
+    "process_vm_writev",
     "keyctl",
     "add_key",
     "request_key",
@@ -142,14 +179,53 @@ pub fn policy_from_capabilities(
     for p in &caps.fs_write {
         write_paths.push(p.clone());
     }
-    use crate::sandbox::capabilities::NetworkPolicy;
-    let deny_network_sockets = matches!(caps.network, NetworkPolicy::None);
+    let seccomp_net = seccomp_net_for(&caps.network);
     LinuxInitPolicy {
         read_paths,
         write_paths,
         require_landlock,
-        deny_network_sockets,
+        seccomp_net,
     }
+}
+
+/// Map a high-level [`NetworkPolicy`](crate::sandbox::capabilities::NetworkPolicy)
+/// to the concrete seccomp socket gate:
+///
+/// - `None` → [`SeccompNetworkMode::UnixOnly`] (defense-in-depth over
+///   `--unshare-net`).
+/// - `AllowHosts` whose hosts are *all* loopback literals → the
+///   proxy-collapsed form that `WorkspaceSandbox::maybe_spawn_proxy`
+///   produces once the managed proxy + netns→UDS→loopback bridge are
+///   live → [`SeccompNetworkMode::ProxyRouted`]. The detection mirrors
+///   `BubblewrapDriver`'s own loopback dispatch, so the seccomp mode and
+///   the bwrap `--unshare-net` arm always agree.
+/// - `AllowAll`, or raw (non-loopback) `AllowHosts` →
+///   [`SeccompNetworkMode::Unrestricted`] (seccomp cannot filter by IP).
+fn seccomp_net_for(network: &crate::sandbox::capabilities::NetworkPolicy) -> SeccompNetworkMode {
+    use crate::sandbox::capabilities::NetworkPolicy;
+    match network {
+        NetworkPolicy::None => SeccompNetworkMode::UnixOnly,
+        NetworkPolicy::AllowAll => SeccompNetworkMode::Unrestricted,
+        NetworkPolicy::AllowHosts { hosts }
+            if !hosts.is_empty() && hosts.iter().all(|h| is_loopback(h)) =>
+        {
+            SeccompNetworkMode::ProxyRouted
+        }
+        NetworkPolicy::AllowHosts { .. } => SeccompNetworkMode::Unrestricted,
+    }
+}
+
+/// Loopback-literal test, kept local to avoid coupling `sandbox_init` to the
+/// Linux-only `bwrap` module (this fn is compiled cross-platform for unit
+/// tests). Semantics match `bwrap::is_loopback_literal`.
+fn is_loopback(host: &str) -> bool {
+    host == "127.0.0.1"
+        || host == "::1"
+        || host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.is_loopback())
+            .unwrap_or(false)
 }
 
 // ---------------------------------------------------------------------------
@@ -674,44 +750,14 @@ fn apply_seccomp(policy: &LinuxInitPolicy) -> Result<(), String> {
         );
     }
 
-    // Cycle 3 / codex-aligned: when network access is disabled
-    // (NetworkPolicy::None on the host side), block every socket family
-    // other than AF_UNIX at the syscall layer. The bwrap `--unshare-net`
-    // netns already strips interfaces, but a process inside it can still
-    // call `socket(AF_INET, ...)` and `connect()` — they fail at runtime
-    // with cryptic errors. Adding the seccomp rules turns those into
-    // early EPERM failures with a clear audit trail.
-    //
-    // We mirror codex's `socket(family != AF_UNIX)` pattern rather than
-    // enumerating AF_INET / AF_INET6 / AF_NETLINK individually so the
-    // policy also catches AF_PACKET, AF_BLUETOOTH, AF_VSOCK, etc.
-    // automatically. Sock-domain args are 32-bit in the syscall ABI, so
-    // use `Dword` even though `libc::AF_UNIX` happens to be small.
-    if policy.deny_network_sockets {
-        let non_unix_rule = SeccompRule::new(vec![SeccompCondition::new(
-            0, // first arg of socket / socketpair = domain
-            SeccompCmpArgLen::Dword,
-            SeccompCmpOp::Ne,
-            libc::AF_UNIX as u64,
-        )
-        .map_err(|e| format!("build AF_UNIX != condition: {e}"))?])
-        .map_err(|e| format!("build non-AF_UNIX socket rule: {e}"))?;
-        if let Some(nr) = syscall_nr("socket") {
-            rules.insert(nr, vec![non_unix_rule.clone()]);
-        }
-        if let Some(nr) = syscall_nr("socketpair") {
-            rules.insert(nr, vec![non_unix_rule]);
-        }
-        // Deny `connect` unconditionally when network is disabled.
-        // codex applies the same gate; AF_UNIX clients that call
-        // connect() on a Unix-domain socket will be hit by this too,
-        // but sandboxed daemons rarely depend on it and the syscall
-        // returns EPERM which clients propagate as a clear error
-        // rather than crashing.
-        if let Some(nr) = syscall_nr("connect") {
-            rules.insert(nr, vec![]);
-        }
-    }
+    // Socket-family gate, codex-aligned. The bwrap `--unshare-net` netns
+    // already strips interfaces, but a process inside it can still call
+    // `socket(AF_INET, ...)` / `connect()` and fail at runtime with cryptic
+    // errors — these rules turn that into early EPERM with a clear audit
+    // trail, and in `ProxyRouted` mode narrow the surface to exactly what
+    // the loopback bridge needs. Sock-domain args are 32-bit in the syscall
+    // ABI, so use `Dword` even though the AF_* constants are small.
+    apply_socket_gate(&mut rules, policy.seccomp_net)?;
 
     let filter = SeccompFilter::new(
         rules,
@@ -728,6 +774,89 @@ fn apply_seccomp(policy: &LinuxInitPolicy) -> Result<(), String> {
         .map_err(|e| format!("compile BPF program: {e}"))?;
 
     seccompiler::apply_filter(&prog).map_err(|e| format!("apply_filter: {e}"))?;
+    Ok(())
+}
+
+/// Lower a [`SeccompNetworkMode`] into concrete `socket`/`socketpair`/`connect`
+/// argument rules, inserting them into `rules`. Factored out of
+/// [`apply_seccomp`] so the three-way policy is one exhaustive `match`
+/// instead of an `if` chain. Mirrors codex
+/// `install_network_seccomp_filter_on_current_thread`.
+#[cfg(target_os = "linux")]
+fn apply_socket_gate(
+    rules: &mut std::collections::BTreeMap<i64, Vec<seccompiler::SeccompRule>>,
+    mode: SeccompNetworkMode,
+) -> Result<(), String> {
+    use seccompiler::{SeccompCmpArgLen, SeccompCmpOp, SeccompCondition, SeccompRule};
+
+    match mode {
+        // No socket-family filtering — kernel namespace + driver rules carry
+        // network policy (AllowAll / raw AllowHosts).
+        SeccompNetworkMode::Unrestricted => {}
+        SeccompNetworkMode::UnixOnly => {
+            // Allow only AF_UNIX; a single `Ne AF_UNIX` condition denies
+            // AF_INET/AF_INET6/AF_NETLINK/AF_PACKET/AF_VSOCK/… automatically.
+            let non_unix = SeccompRule::new(vec![SeccompCondition::new(
+                0, // socket/socketpair arg0 = domain
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Ne,
+                libc::AF_UNIX as u64,
+            )
+            .map_err(|e| format!("build AF_UNIX != condition: {e}"))?])
+            .map_err(|e| format!("build non-AF_UNIX socket rule: {e}"))?;
+            if let Some(nr) = syscall_nr("socket") {
+                rules.insert(nr, vec![non_unix.clone()]);
+            }
+            if let Some(nr) = syscall_nr("socketpair") {
+                rules.insert(nr, vec![non_unix]);
+            }
+            // Network disabled → deny connect outright. AF_UNIX connect() is
+            // caught too, but sandboxed targets rarely depend on it and EPERM
+            // propagates as a clear error rather than a crash.
+            if let Some(nr) = syscall_nr("connect") {
+                rules.insert(nr, vec![]);
+            }
+        }
+        SeccompNetworkMode::ProxyRouted => {
+            // Allow only AF_INET / AF_INET6 (to reach the loopback TCP
+            // bridge); deny everything else. Two `Ne` conditions ANDed in one
+            // rule → matches (denies) when the domain is neither IP family.
+            let non_ip = SeccompRule::new(vec![
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET as u64,
+                )
+                .map_err(|e| format!("build AF_INET != condition: {e}"))?,
+                SeccompCondition::new(
+                    0,
+                    SeccompCmpArgLen::Dword,
+                    SeccompCmpOp::Ne,
+                    libc::AF_INET6 as u64,
+                )
+                .map_err(|e| format!("build AF_INET6 != condition: {e}"))?,
+            ])
+            .map_err(|e| format!("build non-IP socket rule: {e}"))?;
+            // Deny AF_UNIX socketpairs so the target can't open a fresh Unix
+            // socket to sidestep the routed bridge.
+            let unix_pair = SeccompRule::new(vec![SeccompCondition::new(
+                0,
+                SeccompCmpArgLen::Dword,
+                SeccompCmpOp::Eq,
+                libc::AF_UNIX as u64,
+            )
+            .map_err(|e| format!("build AF_UNIX == condition: {e}"))?])
+            .map_err(|e| format!("build AF_UNIX socketpair rule: {e}"))?;
+            if let Some(nr) = syscall_nr("socket") {
+                rules.insert(nr, vec![non_ip]);
+            }
+            if let Some(nr) = syscall_nr("socketpair") {
+                rules.insert(nr, vec![unix_pair]);
+            }
+            // `connect` stays allowed — the target must reach 127.0.0.1:<bridge>.
+        }
+    }
     Ok(())
 }
 
@@ -754,6 +883,8 @@ fn syscall_nr(name: &str) -> Option<i64> {
         "bpf" => libc::SYS_bpf,
         "perf_event_open" => libc::SYS_perf_event_open,
         "ptrace" => libc::SYS_ptrace,
+        "process_vm_readv" => libc::SYS_process_vm_readv,
+        "process_vm_writev" => libc::SYS_process_vm_writev,
         "keyctl" => libc::SYS_keyctl,
         "add_key" => libc::SYS_add_key,
         "request_key" => libc::SYS_request_key,
@@ -836,7 +967,7 @@ mod tests {
             read_paths: vec!["/usr".into(), "/lib".into()],
             write_paths: vec!["/workspace".into()],
             require_landlock: true,
-            deny_network_sockets: true,
+            seccomp_net: SeccompNetworkMode::ProxyRouted,
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: LinuxInitPolicy = serde_json::from_str(&json).unwrap();
@@ -844,46 +975,100 @@ mod tests {
     }
 
     #[test]
-    fn deny_network_sockets_field_defaults_false_for_forward_compat() {
-        // Existing on-the-wire JSON predates the field; deserialize must
-        // succeed and default to false so old aleph-server binaries can
-        // still talk to new ones.
+    fn seccomp_net_defaults_unrestricted_for_forward_compat() {
+        // On-the-wire JSON that predates `seccomp_net` (and the older
+        // `deny_network_sockets` bool) must still deserialize. The absent
+        // field defaults to `Unrestricted`, matching the legacy
+        // `deny_network_sockets:false` no-filtering behavior so an old
+        // policy never silently gains a restriction it didn't intend.
         let json = r#"{"read_paths":[],"write_paths":[]}"#;
         let parsed: LinuxInitPolicy = serde_json::from_str(json).unwrap();
-        assert!(!parsed.deny_network_sockets);
+        assert_eq!(parsed.seccomp_net, SeccompNetworkMode::Unrestricted);
+        // The legacy bool field is now ignored (serde drops unknown keys),
+        // so a stale `deny_network_sockets` does not break parsing.
+        let legacy = r#"{"read_paths":[],"write_paths":[],"deny_network_sockets":true}"#;
+        let parsed: LinuxInitPolicy = serde_json::from_str(legacy).unwrap();
+        assert_eq!(parsed.seccomp_net, SeccompNetworkMode::Unrestricted);
     }
 
     #[test]
-    fn policy_threads_deny_network_sockets_from_capabilities() {
+    fn seccomp_net_serializes_snake_case() {
+        // Wire shape is `snake_case` so the variant names read naturally in
+        // an audited policy blob.
+        let json = serde_json::to_string(&SeccompNetworkMode::UnixOnly).unwrap();
+        assert_eq!(json, r#""unix_only""#);
+        let json = serde_json::to_string(&SeccompNetworkMode::ProxyRouted).unwrap();
+        assert_eq!(json, r#""proxy_routed""#);
+    }
+
+    #[test]
+    fn policy_threads_seccomp_net_from_capabilities() {
         use crate::sandbox::capabilities::NetworkPolicy;
         let cwd = std::path::Path::new("/workspace");
-        // NetworkPolicy::None → deny_network_sockets = true (defense in
-        // depth on top of bwrap --unshare-net).
+        // None → UnixOnly (defense in depth on top of bwrap --unshare-net).
         let none_caps = SandboxCapabilities {
             network: NetworkPolicy::None,
             ..SandboxCapabilities::strict()
         };
-        assert!(policy_from_capabilities(&none_caps, cwd, false).deny_network_sockets);
+        assert_eq!(
+            policy_from_capabilities(&none_caps, cwd, false).seccomp_net,
+            SeccompNetworkMode::UnixOnly
+        );
 
-        // NetworkPolicy::AllowAll → seccomp lets IP sockets through; the
-        // kernel namespace + driver-level rules carry policy from there.
+        // AllowAll → Unrestricted (kernel ns + driver rules carry policy).
         let all_caps = SandboxCapabilities {
             network: NetworkPolicy::AllowAll,
             ..SandboxCapabilities::strict()
         };
-        assert!(!policy_from_capabilities(&all_caps, cwd, false).deny_network_sockets);
+        assert_eq!(
+            policy_from_capabilities(&all_caps, cwd, false).seccomp_net,
+            SeccompNetworkMode::Unrestricted
+        );
 
-        // NetworkPolicy::AllowHosts also leaves seccomp permissive —
-        // seccomp can't filter by IP, only by socket family. The
-        // per-host gate would have to land somewhere else (a future
-        // spec: managed proxy or nftables-in-netns).
-        let hosts_caps = SandboxCapabilities {
+        // Raw (non-loopback) AllowHosts → Unrestricted: seccomp can't filter
+        // by IP, and the bwrap driver hard-errors this form anyway.
+        let raw_hosts = SandboxCapabilities {
             network: NetworkPolicy::AllowHosts {
                 hosts: vec!["10.0.0.1".into()],
             },
             ..SandboxCapabilities::strict()
         };
-        assert!(!policy_from_capabilities(&hosts_caps, cwd, false).deny_network_sockets);
+        assert_eq!(
+            policy_from_capabilities(&raw_hosts, cwd, false).seccomp_net,
+            SeccompNetworkMode::Unrestricted
+        );
+
+        // Proxy-collapsed loopback AllowHosts → ProxyRouted (the new
+        // least-privilege mode for egress behind the netns→UDS→loopback
+        // bridge). Detection matches the driver's own loopback dispatch.
+        for loopback in [
+            vec!["127.0.0.1".to_string()],
+            vec!["::1".to_string()],
+            vec!["localhost".to_string()],
+        ] {
+            let caps = SandboxCapabilities {
+                network: NetworkPolicy::AllowHosts { hosts: loopback },
+                ..SandboxCapabilities::strict()
+            };
+            assert_eq!(
+                policy_from_capabilities(&caps, cwd, false).seccomp_net,
+                SeccompNetworkMode::ProxyRouted
+            );
+        }
+
+        // A mixed allowlist (one non-loopback host) is NOT proxy-routed —
+        // it stays Unrestricted so we never under-filter a real IP behind a
+        // loopback sibling.
+        let mixed = SandboxCapabilities {
+            network: NetworkPolicy::AllowHosts {
+                hosts: vec!["127.0.0.1".into(), "10.0.0.1".into()],
+            },
+            ..SandboxCapabilities::strict()
+        };
+        assert_eq!(
+            policy_from_capabilities(&mixed, cwd, false).seccomp_net,
+            SeccompNetworkMode::Unrestricted
+        );
     }
 
     /// Pins the denylist by hash so any addition / removal / reorder is
@@ -894,9 +1079,9 @@ mod tests {
         let joined = SECCOMP_DENYLIST_SIMPLE.join(",");
         let expected = "mount,umount,umount2,pivot_root,chroot,kexec_load,kexec_file_load,\
                         init_module,finit_module,delete_module,bpf,perf_event_open,ptrace,\
-                        keyctl,add_key,request_key,userfaultfd,io_uring_setup,\
-                        io_uring_register,io_uring_enter,mknod,mknodat,swapon,swapoff,\
-                        nfsservctl,syslog,reboot,setns";
+                        process_vm_readv,process_vm_writev,keyctl,add_key,request_key,\
+                        userfaultfd,io_uring_setup,io_uring_register,io_uring_enter,mknod,\
+                        mknodat,swapon,swapoff,nfsservctl,syslog,reboot,setns";
         assert_eq!(
             joined, expected,
             "seccomp denylist changed — update SP-2 spec"
@@ -935,7 +1120,7 @@ mod tests {
             read_paths: vec!["/usr".into()],
             write_paths: vec!["/workspace".into()],
             require_landlock: false,
-            deny_network_sockets: false,
+            seccomp_net: SeccompNetworkMode::Unrestricted,
         };
         let json = serde_json::to_string(&policy).unwrap();
         let argv = vec![
