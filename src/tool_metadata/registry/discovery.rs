@@ -154,12 +154,31 @@ impl ToolDiscovery {
     ///
     /// # Returns
     ///
-    /// Full UnifiedTool if found, None otherwise
+    /// Full UnifiedTool if found, None otherwise. When several tools match
+    /// (e.g. one whose `name` equals the query and another whose `id` ends
+    /// with `:{name}`), selection is deterministic: an exact name match wins,
+    /// then highest source priority, then the lexicographically smallest id.
+    /// Without this ordering `HashMap` iteration order would make the meta
+    /// tool return an arbitrary (possibly wrong) tool's schema.
     pub async fn get_tool_definition(&self, name: &str) -> Option<UnifiedTool> {
         let tools = self.tools.read().await;
         tools
             .values()
-            .find(|t| t.name == name || t.id.ends_with(&format!(":{}", name)))
+            .filter(|t| {
+                t.name == name
+                    || t.id
+                        .rsplit_once(':')
+                        .map(|(_, n)| n == name)
+                        .unwrap_or(false)
+            })
+            .max_by(|a, b| {
+                let a_exact = a.name == name;
+                let b_exact = b.name == name;
+                a_exact
+                    .cmp(&b_exact)
+                    .then_with(|| a.source.priority().cmp(&b.source.priority()))
+                    .then_with(|| b.id.cmp(&a.id)) // smaller id wins on tie
+            })
             .cloned()
     }
 

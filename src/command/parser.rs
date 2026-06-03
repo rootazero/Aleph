@@ -125,9 +125,13 @@ fn tool_to_command_context(tool: &UnifiedTool) -> CommandContext {
                 .clone()
                 .unwrap_or_else(|| tool.name.clone()),
         },
-        ToolSource::Plugin { plugin_id } => CommandContext::Mcp {
-            server_name: format!("plugin:{}", plugin_id),
-            tool_name: Some(tool.name.clone()),
+        ToolSource::Plugin { .. } => CommandContext::Builtin {
+            // Plugin tools live in the tool registry under their namespaced id
+            // (`plugin:<plugin_id>:<name>`) and are invoked through the
+            // direct-tool fast path. Routing them as `Mcp` mangled the id into
+            // `mcp__plugin:<id>_<name>`, which never matched a registered tool,
+            // so every plugin slash command failed with a hard execution error.
+            tool_name: tool.id.clone(),
         },
     }
 }
@@ -173,5 +177,37 @@ mod tests {
         let registry = create_test_registry();
         let parser = CommandParser::new(registry);
         assert!(parser.parse_async("hello").await.is_none());
+    }
+
+    /// A plugin slash command must resolve to a direct-tool context carrying the
+    /// registry's canonical id (`plugin:<id>:<name>`). Routing it as `Mcp`
+    /// previously mangled the id and broke every plugin slash command.
+    #[tokio::test]
+    async fn test_parse_async_plugin_routes_to_direct_tool() {
+        let registry = create_test_registry();
+        registry
+            .register_plugin_tools(&[(
+                "diagnostics".to_string(),
+                "ping".to_string(),
+                "Ping the host".to_string(),
+            )])
+            .await;
+
+        let parser = CommandParser::new(registry);
+        let cmd = parser
+            .parse_async("/ping localhost")
+            .await
+            .expect("plugin slash command should resolve");
+
+        assert_eq!(cmd.command_name, "ping");
+        assert_eq!(cmd.arguments, Some("localhost".to_string()));
+        assert!(matches!(cmd.source_type, ToolSourceType::Plugin));
+        // Execution must target the canonical registry id, not a mangled MCP id.
+        match cmd.context {
+            CommandContext::Builtin { tool_name } => {
+                assert_eq!(tool_name, "plugin:diagnostics:ping");
+            }
+            other => panic!("expected Builtin (direct-tool) context, got {:?}", other),
+        }
     }
 }

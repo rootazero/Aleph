@@ -157,7 +157,15 @@ impl FileOps for FileOpsHandler {
         // Apply line range if specified
         let output = if let Some(range) = range {
             let lines: Vec<&str> = content.lines().collect();
-            if range.start == 0 || range.start > lines.len() || range.end > lines.len() {
+            // `LineRange` derives Deserialize with public fields, bypassing the
+            // `end >= start` invariant enforced by `LineRange::new`. Guard the
+            // inverted case explicitly to avoid a slice-index panic on
+            // `lines[(start - 1)..end]` (mirrors the check in `Patch::validate`).
+            if range.start == 0
+                || range.end < range.start
+                || range.start > lines.len()
+                || range.end > lines.len()
+            {
                 return Ok(AtomicResult {
                     success: false,
                     output: String::new(),

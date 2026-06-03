@@ -116,6 +116,13 @@ impl DirectoryScanner {
     ///
     /// Returns paths in priority order (global first, project last).
     pub fn find_upward(&self, filename: &str) -> DiscoveryResult<Vec<PathBuf>> {
+        // Validate up front so the global-config branch below can never be
+        // tricked into escaping ~/.aleph via traversal/separator components.
+        // The project branch validates inside find_file_upward, but that path
+        // is skipped when scan_project_dirs is false — guard here to stay
+        // fail-closed regardless of configuration.
+        validate_path_component(filename)?;
+
         let mut configs = Vec::new();
 
         // 1. Global config (lowest priority)
@@ -219,6 +226,9 @@ impl DirectoryScanner {
                                 scan_dir.priority,
                             ));
                         } else if path.is_file() {
+                            if is_hidden(&path) {
+                                continue;
+                            }
                             // Also include direct .md files (for commands/agents)
                             if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                                 if ext == "md" {
@@ -523,6 +533,65 @@ mod tests {
 
         // Should find both configs
         assert_eq!(configs.len(), 2);
+    }
+
+    #[test]
+    fn test_find_upward_rejects_traversal_when_project_dirs_disabled() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(".aleph")).unwrap();
+
+        let config = DiscoveryConfig {
+            working_dir: root.to_path_buf(),
+            scan_claude_dirs: false,
+            // Project branch (which validates) is skipped — the global branch
+            // must still reject traversal components on its own.
+            scan_project_dirs: false,
+            max_upward_depth: 10,
+        };
+        let scanner = DirectoryScanner {
+            aleph_home: root.join(".aleph"),
+            claude_home: None,
+            git_root: None,
+            working_dir: root.to_path_buf(),
+            config,
+        };
+
+        for bad in ["../escape.jsonc", "", "a/b.jsonc", ".."] {
+            assert!(
+                matches!(scanner.find_upward(bad), Err(DiscoveryError::InvalidPath(_))),
+                "expected InvalidPath for {bad:?}"
+            );
+        }
+        // A legitimate filename still resolves.
+        assert!(scanner.find_upward("aleph.jsonc").is_ok());
+    }
+
+    #[test]
+    fn test_discover_component_skips_hidden_md_files() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        std::fs::create_dir_all(root.join(".aleph/commands")).unwrap();
+        std::fs::write(root.join(".aleph/commands/visible.md"), "cmd").unwrap();
+        std::fs::write(root.join(".aleph/commands/.hidden.md"), "cmd").unwrap();
+
+        let scanner = DirectoryScanner {
+            aleph_home: root.join(".aleph"),
+            claude_home: None,
+            git_root: None,
+            working_dir: root.to_path_buf(),
+            config: DiscoveryConfig {
+                working_dir: root.to_path_buf(),
+                scan_claude_dirs: false,
+                scan_project_dirs: false,
+                max_upward_depth: 10,
+            },
+        };
+
+        let cmds = scanner.discover_component("commands").unwrap();
+        let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"visible.md"), "got {names:?}");
+        assert!(!names.contains(&".hidden.md"), "hidden file leaked: {names:?}");
     }
 
     #[test]

@@ -158,6 +158,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_execute_read_inverted_range_no_panic() {
+        let (executor, temp_dir) = create_test_executor();
+
+        // File with enough lines that start/end both pass the upper-bound check.
+        let test_file = temp_dir.path().join("test.txt");
+        fs::write(&test_file, "l1\nl2\nl3\nl4\nl5\n").unwrap();
+
+        // Inverted range (start > end) constructed via the struct directly,
+        // bypassing LineRange::new validation — must be rejected, not panic.
+        let action = AtomicAction::Read {
+            path: "test.txt".to_string(),
+            range: Some(super::super::LineRange { start: 5, end: 3 }),
+        };
+
+        let result = executor.execute(&action).await.unwrap();
+        assert!(!result.success);
+        assert!(result.error.unwrap().contains("Invalid line range"));
+    }
+
+    #[tokio::test]
     async fn test_execute_write() {
         let (executor, temp_dir) = create_test_executor();
 

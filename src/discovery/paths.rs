@@ -184,7 +184,7 @@ where
 
 /// Validate that a path component (filename or dirname) does not contain
 /// directory traversal or path separators.
-fn validate_path_component(name: &str) -> DiscoveryResult<()> {
+pub(crate) fn validate_path_component(name: &str) -> DiscoveryResult<()> {
     if name.is_empty() {
         return Err(DiscoveryError::InvalidPath(
             "path component cannot be empty".to_string(),
