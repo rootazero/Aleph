@@ -119,6 +119,10 @@ pub fn init_log_level() {
 
 /// Get the current log level
 pub fn get_log_level() -> LogLevel {
+    // Ensure the level is seeded from RUST_LOG before the first read, so the
+    // reported level matches the EnvFilter the logging backend actually uses.
+    // `init_log_level` is idempotent (guarded by `Once`).
+    init_log_level();
     LogLevel::from_u8(CURRENT_LOG_LEVEL.load(Ordering::SeqCst))
 }
 
@@ -131,6 +135,10 @@ pub fn get_log_level() -> LogLevel {
 /// For full dynamic control, the logging system should be reinitialized
 /// with the new level, or use a reload::Layer.
 pub fn set_log_level(level: LogLevel) {
+    // Run the one-time RUST_LOG seed before applying the explicit override, so
+    // an early `set` is never clobbered by a later lazy env seed (the `Once`
+    // fires here first, then the explicit store below wins).
+    init_log_level();
     let old_level = get_log_level();
     CURRENT_LOG_LEVEL.store(level.to_u8(), Ordering::SeqCst);
 
