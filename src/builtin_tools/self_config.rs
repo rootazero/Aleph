@@ -62,6 +62,11 @@ pub enum SelfConfigArgs {
         #[serde(default)]
         dry_run: bool,
     },
+    /// Show the current local/cloud route decision (mode +
+    /// allow_cloud_escalation). The runtime "show route decision" view that
+    /// `read_config` dot-path ergonomics can't express as nicely. To *change*
+    /// the route, use `update_config` with `config_path: "route"`.
+    RouteStatus,
 }
 
 // =============================================================================
@@ -280,6 +285,43 @@ impl SelfConfigTool {
         }
     }
 
+    /// Read-only view of the current local/cloud route decision.
+    async fn route_status(&self) -> Result<SelfConfigOutput> {
+        let config = match &self.config {
+            Some(c) => c,
+            None => {
+                return Ok(SelfConfigOutput {
+                    success: false,
+                    message: "Config handle not available".into(),
+                    data: None,
+                    preview_message: None,
+                });
+            }
+        };
+
+        let route = config.read().await.route.clone();
+        let mode_str = match route.mode {
+            crate::config::types::RouteMode::Auto => "auto",
+            crate::config::types::RouteMode::AlwaysLocal => "always_local",
+            crate::config::types::RouteMode::AlwaysCloud => "always_cloud",
+        };
+        let message = format!(
+            "Route mode: {mode_str} (allow_cloud_escalation: {}). \
+             To change: update_config config_path=\"route\" \
+             config_value={{\"mode\":\"always_local\"}}.",
+            route.allow_cloud_escalation
+        );
+        Ok(SelfConfigOutput {
+            success: true,
+            message,
+            data: Some(serde_json::json!({
+                "mode": mode_str,
+                "allow_cloud_escalation": route.allow_cloud_escalation,
+            })),
+            preview_message: None,
+        })
+    }
+
     async fn update_config(
         &self,
         config_path: &str,
@@ -437,6 +479,7 @@ impl AlephTool for SelfConfigTool {
             SelfConfigArgs::UpdateConfig { config_path, .. } => {
                 notify_tool_start(Self::NAME, &format!("update_config:{}", config_path))
             }
+            SelfConfigArgs::RouteStatus => notify_tool_start(Self::NAME, "route_status"),
         }
 
         let result = match args {
@@ -454,6 +497,7 @@ impl AlephTool for SelfConfigTool {
                 self.update_config(&config_path, config_value, dry_run)
                     .await
             }
+            SelfConfigArgs::RouteStatus => self.route_status().await,
         };
 
         match &result {
@@ -648,5 +692,39 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.message.contains("Failed to read"));
+    }
+
+    #[tokio::test]
+    async fn test_route_status_default_is_auto() {
+        let tmp = TempDir::new().unwrap();
+        let cfg = Arc::new(RwLock::new(Config::default()));
+        let tool = tool_with_dir(tmp.path()).with_config(cfg);
+
+        let result = AlephTool::call(&tool, SelfConfigArgs::RouteStatus)
+            .await
+            .unwrap();
+        assert!(result.success);
+        let data = result.data.unwrap();
+        assert_eq!(data["mode"], "auto");
+        assert_eq!(data["allow_cloud_escalation"], false);
+    }
+
+    #[tokio::test]
+    async fn test_route_status_reflects_configured_mode() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = Config::default();
+        config.route.mode = crate::config::types::RouteMode::AlwaysLocal;
+        config.route.allow_cloud_escalation = true;
+        let cfg = Arc::new(RwLock::new(config));
+        let tool = tool_with_dir(tmp.path()).with_config(cfg);
+
+        let result = AlephTool::call(&tool, SelfConfigArgs::RouteStatus)
+            .await
+            .unwrap();
+        assert!(result.success);
+        let data = result.data.unwrap();
+        assert_eq!(data["mode"], "always_local");
+        assert_eq!(data["allow_cloud_escalation"], true);
+        assert!(result.message.contains("always_local"));
     }
 }

@@ -73,6 +73,13 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // connected servers' advertised `instructions` into the system prompt
     // (`McpInstructionsLayer`). `None` keeps that layer silent.
     mcp_handle: Option<alephcore::mcp::McpManagerHandle>,
+    // Approval gate for route-mode cloud escalation (borrow-cloud under
+    // `[route] mode = always_local`). Reuses the shared `ApprovalGate` whose
+    // channel requester is late-bound after channels are up. `None` fails any
+    // escalation closed.
+    escalation_approval: Option<
+        Arc<dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester>,
+    >,
 ) -> anyhow::Result<Arc<Orchestrator>> {
     // P2 Stage E: load user/project agent definitions from filesystem.
     // Shadow events (higher-tier overrides) are logged at info level; the
@@ -185,6 +192,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         config,
         primary_provider_key,
         default_provider,
+        escalation_approval,
     );
     let default_provider = provider_chain.default.clone();
 

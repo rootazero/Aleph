@@ -111,6 +111,11 @@ pub struct Config {
     /// Task routing decision layer configuration
     #[serde(default)]
     pub task_routing: TaskRoutingConfig,
+    /// Local-vs-cloud failover routing mode. `Auto` (default) is a no-op:
+    /// failover candidate order is unchanged. `AlwaysLocal`/`AlwaysCloud`
+    /// shape the chain by endpoint tier (see `[route]`).
+    #[serde(default)]
+    pub route: crate::config::types::ModelRouteConfig,
     /// Group chat configuration (multi-agent persona orchestration)
     #[serde(default)]
     pub group_chat: GroupChatConfig,
@@ -384,6 +389,7 @@ impl Default for Config {
             orchestrator: OrchestratorConfig::default(),
             subagent: SubAgentConfig::default(),
             task_routing: TaskRoutingConfig::default(),
+            route: crate::config::types::ModelRouteConfig::default(),
             group_chat: GroupChatConfig::default(),
             cron: CronConfig::default(),
             heartbeat: HeartbeatConfig::default(),

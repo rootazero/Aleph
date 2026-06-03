@@ -88,6 +88,7 @@ pub mod recording_mock;
 pub mod registry;
 pub mod responses;
 pub mod retry;
+pub mod route_policy;
 pub mod shared;
 
 // Re-exports
