@@ -161,7 +161,7 @@ pub async fn on_timer_tick<C: Clock>(
                 disp(alerts).await;
             } else {
                 debug!(
-                    count = all_results.len(),
+                    count = alerts.len(),
                     "cron: failure alerts produced but no dispatcher wired; dropping"
                 );
             }

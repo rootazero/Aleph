@@ -358,37 +358,28 @@ pub async fn handle_run(request: JsonRpcRequest, cron: SharedCronService) -> Jso
     };
 
     let service = cron.lock().await;
-    // Verify job exists
-    match service.get_job(&job_id).await {
-        Ok(_view) => {
-            // Set next_run_at to now to trigger immediate execution by the timer loop
-            let state = service.state();
-            let clock_now = state.clock.now_ms();
-            let mut store = state.store.lock().await;
-            match store.get_job_mut(&job_id) {
-                Some(job) => {
-                    job.state.next_run_at_ms = Some(clock_now);
-                    let _ = store.persist();
-                    JsonRpcResponse::success(
-                        request.id,
-                        json!({
-                            "triggered": job_id,
-                            "status": "queued",
-                            "next_run_at_ms": clock_now,
-                        }),
-                    )
-                }
-                None => JsonRpcResponse::error(
-                    request.id,
-                    INTERNAL_ERROR,
-                    format!("Job not found: {}", job_id),
-                ),
-            }
+    // Delegate to `CronService::run_job` rather than poking the store
+    // directly: it validates (enabled + not already running), propagates a
+    // failed persist instead of swallowing it (a dropped write here is
+    // silently discarded by the timer's next `force_reload`, so the job never
+    // actually runs despite a success reply), and emits the `StateChanged`
+    // event so the panel refreshes.
+    match service.run_job(&job_id).await {
+        Ok(()) => {
+            let clock_now = service.state().clock.now_ms();
+            JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "triggered": job_id,
+                    "status": "queued",
+                    "next_run_at_ms": clock_now,
+                }),
+            )
         }
         Err(e) => JsonRpcResponse::error(
             request.id,
             INTERNAL_ERROR,
-            format!("Failed to get job: {}", e),
+            format!("Failed to run job: {}", e),
         ),
     }
 }

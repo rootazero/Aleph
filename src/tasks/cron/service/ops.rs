@@ -4,7 +4,7 @@
 //! Write operations (`add_job`, `update_job`, `toggle_job`, `delete_job`)
 //! modify the store and recompute next run times as needed.
 
-use crate::tasks::cron::config::{CronJob, CronJobView, ScheduleKind};
+use crate::tasks::cron::config::{CronJob, CronJobView, ErrorReason, ScheduleKind};
 use crate::tasks::cron::stagger::compute_staggered_next;
 use crate::tasks::cron::store::CronStore;
 use crate::tasks::shared::clock::Clock;
@@ -104,6 +104,17 @@ pub fn recompute_next_run_maintenance<C: Clock>(job: &mut CronJob, clock: &C) {
     }
     if !job.enabled {
         return; // Don't compute for disabled jobs
+    }
+    // A job whose last run failed *permanently* was deliberately parked by
+    // phase3 (`next_run_at_ms` cleared, operator alerted). This maintenance
+    // pass runs over EVERY job on every writeback tick — including ticks
+    // triggered by *other* jobs — so without this guard a parked permanent
+    // failure is silently resurrected and then re-runs / re-fails on every
+    // subsequent tick, exactly the background churn phase3 set out to stop.
+    // The operator's fix path (update / toggle / enable) goes through
+    // `recompute_next_run_full`, which ignores this guard and reschedules.
+    if matches!(job.state.last_error_reason, Some(ErrorReason::Permanent(_))) {
+        return;
     }
     let now = clock.now_ms();
     job.state.next_run_at_ms = compute_next_run_for_job(job, now);
@@ -484,6 +495,53 @@ mod tests {
         assert!(
             job.state.next_run_at_ms.is_some(),
             "maintenance should fill missing next_run_at_ms"
+        );
+    }
+
+    #[test]
+    fn maintenance_does_not_resurrect_permanently_failed_job() {
+        use crate::tasks::cron::config::{ErrorReason, RunStatus};
+        let clock = FakeClock::new(1_000_000);
+
+        let mut job = make_test_job("perma");
+        job.enabled = true;
+        // State as phase3 leaves a permanent failure: schedule parked, the
+        // last error classified Permanent.
+        job.state.next_run_at_ms = None;
+        job.state.last_run_status = Some(RunStatus::Error);
+        job.state.last_error_reason = Some(ErrorReason::Permanent("agent missing".to_string()));
+
+        recompute_next_run_maintenance(&mut job, &clock);
+        assert_eq!(
+            job.state.next_run_at_ms, None,
+            "a permanently-failed parked job must NOT be resurrected by maintenance"
+        );
+
+        // The operator fix path (update/toggle/enable) goes through the full
+        // recompute, which deliberately reschedules it again.
+        recompute_next_run_full(&mut job, &clock);
+        assert!(
+            job.state.next_run_at_ms.is_some(),
+            "full recompute must still reschedule the job once the operator acts"
+        );
+    }
+
+    #[test]
+    fn maintenance_still_fills_transient_failed_job() {
+        use crate::tasks::cron::config::{ErrorReason, RunStatus};
+        let clock = FakeClock::new(1_000_000);
+
+        let mut job = make_test_job("flaky");
+        job.enabled = true;
+        job.state.next_run_at_ms = None;
+        job.state.last_run_status = Some(RunStatus::Error);
+        // Transient failures are NOT parked — maintenance may still fill them.
+        job.state.last_error_reason = Some(ErrorReason::Transient("rate limited".to_string()));
+
+        recompute_next_run_maintenance(&mut job, &clock);
+        assert!(
+            job.state.next_run_at_ms.is_some(),
+            "transient-failure jobs must still be (re)scheduled by maintenance"
         );
     }
 
