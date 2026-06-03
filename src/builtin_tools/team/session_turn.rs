@@ -113,7 +113,7 @@ impl AlephTool for SessionTurnTool {
                 };
 
                 self.coordinator
-                    .finalize(&args.session_id, outcome)
+                    .finalize(&args.session_id, &self.current_agent_id, outcome)
                     .await
                     .map_err(|e| AlephError::other(format!("Failed to conclude session: {e}")))?;
 

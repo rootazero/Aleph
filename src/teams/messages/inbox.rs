@@ -77,9 +77,10 @@ impl Inbox {
         Ok(messages)
     }
 
-    /// Read all messages in a thread, ordered by creation time.
-    pub async fn read_thread(&self, thread_id: &str) -> Result<Vec<TeamMessage>> {
-        self.msg_store.read_thread(thread_id).await
+    /// Read all messages in a thread, ordered by creation time. Scoped by
+    /// `team_id` for namespace isolation.
+    pub async fn read_thread(&self, team_id: &str, thread_id: &str) -> Result<Vec<TeamMessage>> {
+        self.msg_store.read_thread(team_id, thread_id).await
     }
 
     /// Get unread counts as `(to_count, cc_count)` for an agent in a team.
@@ -258,7 +259,7 @@ mod tests {
             .await
             .unwrap();
 
-        let thread = inbox.read_thread(&thread_id).await.unwrap();
+        let thread = inbox.read_thread("team-1", &thread_id).await.unwrap();
         assert_eq!(thread.len(), 2);
     }
 }

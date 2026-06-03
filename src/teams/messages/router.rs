@@ -182,7 +182,11 @@ impl MessageRouter {
         leader_id: &str,
         from_agent: &str,
     ) {
-        let count = match self.msg_store.count_thread_messages(thread_id).await {
+        let count = match self
+            .msg_store
+            .count_thread_messages(team_id, thread_id)
+            .await
+        {
             Ok(c) => c,
             Err(_) => return,
         };
@@ -192,7 +196,7 @@ impl MessageRouter {
         }
 
         // Check if we already sent a SystemNotification in this thread
-        let thread_msgs = match self.msg_store.read_thread(thread_id).await {
+        let thread_msgs = match self.msg_store.read_thread(team_id, thread_id).await {
             Ok(msgs) => msgs,
             Err(_) => return,
         };

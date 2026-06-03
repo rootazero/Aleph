@@ -90,7 +90,14 @@ pub trait MessageStore: Send + Sync {
     async fn mark_read(&self, message_id: &str, agent_id: &str) -> crate::error::Result<()>;
 
     /// Read all messages in a thread, ordered by creation time.
-    async fn read_thread(&self, thread_id: &str) -> crate::error::Result<Vec<TeamMessage>>;
+    ///
+    /// Scoped by `team_id` so a thread cannot be read across team boundaries
+    /// (namespace isolation), even if its id leaks.
+    async fn read_thread(
+        &self,
+        team_id: &str,
+        thread_id: &str,
+    ) -> crate::error::Result<Vec<TeamMessage>>;
 
     /// Get unread counts as (to_count, cc_count) for an agent in a team.
     async fn get_unread_counts(
@@ -99,8 +106,12 @@ pub trait MessageStore: Send + Sync {
         team_id: &str,
     ) -> crate::error::Result<(u32, u32)>;
 
-    /// Count messages in a thread.
-    async fn count_thread_messages(&self, thread_id: &str) -> crate::error::Result<u32>;
+    /// Count messages in a thread, scoped by `team_id` (namespace isolation).
+    async fn count_thread_messages(
+        &self,
+        team_id: &str,
+        thread_id: &str,
+    ) -> crate::error::Result<u32>;
 
     /// Expire all pending messages for a team (used on disband).
     async fn expire_all_for_team(&self, team_id: &str) -> crate::error::Result<usize>;
@@ -215,7 +226,24 @@ impl SqliteMessageStore {
 
         let thread_id = Self::resolve_thread_id(&conn, &id, &input.reply_to)?;
 
-        conn.execute(
+        // Dedup recipients by agent_id, keeping the first occurrence. The router
+        // appends `to` recipients before `cc`, so a `to` role wins over a `cc`
+        // for the same agent. Without this, an agent listed in both `to` and
+        // `cc` would hit the `(message_id, agent_id)` PRIMARY KEY twice and the
+        // second INSERT would abort the whole send.
+        let mut seen = std::collections::HashSet::new();
+        let recipients: Vec<Recipient> = input
+            .recipients
+            .into_iter()
+            .filter(|r| seen.insert(r.agent_id.clone()))
+            .collect();
+
+        // All three INSERT groups must commit atomically: a failure partway
+        // through (e.g. a malformed recipient/attachment) must not leave an
+        // orphaned `team_messages` row with partial recipients.
+        let tx = conn.unchecked_transaction().map_err(db_err)?;
+
+        tx.execute(
             r#"
             INSERT INTO team_messages (id, team_id, from_agent, msg_type, subject, content, reply_to, thread_id, created_at, expires_at)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -236,8 +264,8 @@ impl SqliteMessageStore {
         .map_err(db_err)?;
 
         // Insert recipients
-        for recipient in &input.recipients {
-            conn.execute(
+        for recipient in &recipients {
+            tx.execute(
                 "INSERT INTO message_recipients (message_id, agent_id, role) VALUES (?1, ?2, ?3)",
                 params![id, recipient.agent_id, recipient.role.as_str()],
             )
@@ -246,12 +274,14 @@ impl SqliteMessageStore {
 
         // Insert attachments
         for artifact_id in &input.attachments {
-            conn.execute(
+            tx.execute(
                 "INSERT INTO message_attachments (message_id, artifact_id) VALUES (?1, ?2)",
                 params![id, artifact_id],
             )
             .map_err(db_err)?;
         }
+
+        tx.commit().map_err(db_err)?;
 
         Ok(TeamMessage {
             id,
@@ -260,7 +290,7 @@ impl SqliteMessageStore {
             msg_type: input.msg_type,
             subject: input.subject,
             content: input.content,
-            recipients: input.recipients,
+            recipients,
             reply_to: input.reply_to,
             thread_id: Some(thread_id),
             attachments: input.attachments,
@@ -545,7 +575,11 @@ impl MessageStore for SqliteMessageStore {
         Ok(())
     }
 
-    async fn read_thread(&self, thread_id: &str) -> crate::error::Result<Vec<TeamMessage>> {
+    async fn read_thread(
+        &self,
+        team_id: &str,
+        thread_id: &str,
+    ) -> crate::error::Result<Vec<TeamMessage>> {
         let conn = self.conn.lock().await;
 
         // Phase 1: read raw rows
@@ -556,13 +590,13 @@ impl MessageStore for SqliteMessageStore {
                     SELECT id, team_id, from_agent, msg_type, subject, content,
                            reply_to, thread_id, created_at, expires_at
                     FROM team_messages
-                    WHERE thread_id = ?1
+                    WHERE thread_id = ?1 AND team_id = ?2
                     ORDER BY created_at ASC
                     "#,
                 )
                 .map_err(db_err)?;
             let result = stmt
-                .query_map(params![thread_id], Self::read_message_row)
+                .query_map(params![thread_id, team_id], Self::read_message_row)
                 .map_err(db_err)?
                 .collect::<rusqlite::Result<Vec<_>>>()
                 .map_err(db_err)?;
@@ -643,13 +677,19 @@ impl MessageStore for SqliteMessageStore {
         Ok((to_count, cc_count))
     }
 
-    async fn count_thread_messages(&self, thread_id: &str) -> crate::error::Result<u32> {
+    async fn count_thread_messages(
+        &self,
+        team_id: &str,
+        thread_id: &str,
+    ) -> crate::error::Result<u32> {
         let conn = self.conn.lock().await;
 
         let count: u32 = conn
-            .prepare_cached("SELECT COUNT(*) FROM team_messages WHERE thread_id = ?1")
+            .prepare_cached(
+                "SELECT COUNT(*) FROM team_messages WHERE thread_id = ?1 AND team_id = ?2",
+            )
             .map_err(db_err)?
-            .query_row(params![thread_id], |row| row.get(0))
+            .query_row(params![thread_id, team_id], |row| row.get(0))
             .map_err(db_err)?;
 
         Ok(count)
@@ -704,6 +744,71 @@ mod tests {
             agent_id: agent_id.to_string(),
             role: RecipientRole::Cc,
         }
+    }
+
+    #[tokio::test]
+    async fn test_recipient_in_both_to_and_cc_is_deduped_to_precedence() {
+        // Regression: an agent listed in both `to` and `cc` must not abort the
+        // send via the (message_id, agent_id) PRIMARY KEY. It is deduped with
+        // `to` winning.
+        let store = SqliteMessageStore::new_in_memory().await;
+
+        let msg = store
+            .send_message(make_msg(
+                "team-1",
+                "agent-a",
+                vec![to_recipient("agent-b"), cc_recipient("agent-b")],
+            ))
+            .await
+            .expect("send must not abort on duplicate recipient");
+
+        assert_eq!(msg.recipients.len(), 1);
+        assert_eq!(msg.recipients[0].agent_id, "agent-b");
+        assert_eq!(msg.recipients[0].role, RecipientRole::To);
+
+        // The recipient should see exactly one unread `to` message.
+        let (to_count, cc_count) = store.get_unread_counts("agent-b", "team-1").await.unwrap();
+        assert_eq!((to_count, cc_count), (1, 0));
+    }
+
+    #[tokio::test]
+    async fn test_thread_queries_are_team_scoped() {
+        // Regression: read_thread / count_thread_messages must not cross team
+        // boundaries even when handed a thread_id from another team.
+        let store = SqliteMessageStore::new_in_memory().await;
+
+        let msg = store
+            .send_message(make_msg("team-1", "agent-a", vec![to_recipient("agent-b")]))
+            .await
+            .unwrap();
+        let thread_id = msg.thread_id.clone().unwrap();
+
+        // Correct team sees the message.
+        assert_eq!(
+            store.read_thread("team-1", &thread_id).await.unwrap().len(),
+            1
+        );
+        assert_eq!(
+            store
+                .count_thread_messages("team-1", &thread_id)
+                .await
+                .unwrap(),
+            1
+        );
+
+        // A different team must see nothing for the same thread_id.
+        assert!(store
+            .read_thread("team-2", &thread_id)
+            .await
+            .unwrap()
+            .is_empty());
+        assert_eq!(
+            store
+                .count_thread_messages("team-2", &thread_id)
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
@@ -772,13 +877,16 @@ mod tests {
         assert_ne!(reply.id, msg1.id);
 
         // Thread should contain both messages
-        let thread = store.read_thread(&thread_id).await.unwrap();
+        let thread = store.read_thread("team-1", &thread_id).await.unwrap();
         assert_eq!(thread.len(), 2);
         assert_eq!(thread[0].id, msg1.id);
         assert_eq!(thread[1].id, reply.id);
 
         // Thread count
-        let count = store.count_thread_messages(&thread_id).await.unwrap();
+        let count = store
+            .count_thread_messages("team-1", &thread_id)
+            .await
+            .unwrap();
         assert_eq!(count, 2);
     }
 

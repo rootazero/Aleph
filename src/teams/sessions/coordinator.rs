@@ -97,6 +97,16 @@ impl SessionCoordinator {
             .await?
             .ok_or_else(|| AlephError::other(format!("Session not found: {session_id}")))?;
 
+        // Authorization: only declared participants may speak in a session.
+        // The `session_participants` table is otherwise never consulted for
+        // access control, so without this any agent that knows a session_id
+        // could inject turns into a discussion it was never invited to.
+        if !session.participants.iter().any(|p| p == agent_id) {
+            return Err(AlephError::other(format!(
+                "agent '{agent_id}' is not a participant of session {session_id}"
+            )));
+        }
+
         let turn_number = self
             .session_store
             .add_turn(
@@ -136,13 +146,28 @@ impl SessionCoordinator {
     }
 
     /// Conclude the session, log an event, and optionally save an artifact.
-    pub async fn finalize(&self, session_id: &str, outcome: SessionOutcome) -> Result<()> {
+    pub async fn finalize(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        outcome: SessionOutcome,
+    ) -> Result<()> {
         // Fetch session info before concluding (for event logging + artifact)
         let session = self
             .session_store
             .get_session(session_id)
             .await?
             .ok_or_else(|| AlephError::other(format!("Session not found: {session_id}")))?;
+
+        // Authorization: only a declared participant may conclude the session
+        // (the leader orchestrates conclusion via this path). Without this,
+        // any agent that knows the session_id could force-conclude a
+        // discussion it does not belong to.
+        if !session.participants.iter().any(|p| p == agent_id) {
+            return Err(AlephError::other(format!(
+                "agent '{agent_id}' is not a participant of session {session_id}"
+            )));
+        }
 
         self.session_store
             .conclude_session(session_id, outcome.clone())
@@ -267,6 +292,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_non_participant_cannot_submit_turn_or_finalize() {
+        // Regression: only declared participants may speak in or conclude a
+        // session. A stranger who knows the session_id must be rejected.
+        let coord = make_coordinator().await;
+
+        let session = coord
+            .start_session(
+                NewSession {
+                    team_id: "team-1".to_string(),
+                    participants: vec!["agent-a".to_string(), "agent-b".to_string()],
+                    topic: "Members only".to_string(),
+                    trigger: SessionTrigger::Explicit {
+                        requested_by: "agent-a".to_string(),
+                    },
+                    thread_id: None,
+                    max_rounds: 5,
+                },
+                "agent-a",
+            )
+            .await
+            .unwrap();
+
+        let turn_err = coord
+            .submit_turn(&session.id, "agent-x", "I don't belong here")
+            .await;
+        assert!(turn_err.is_err(), "non-participant turn must be rejected");
+
+        let outcome = SessionOutcome {
+            conclusion: "hijack".to_string(),
+            agreed_by: vec![],
+            dissent: None,
+        };
+        let conclude_err = coord.finalize(&session.id, "agent-x", outcome).await;
+        assert!(
+            conclude_err.is_err(),
+            "non-participant conclude must be rejected"
+        );
+
+        // A genuine participant still works.
+        coord
+            .submit_turn(&session.id, "agent-a", "hello team")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn test_submit_turn_and_finalize() {
         let coord = make_coordinator().await;
 
@@ -308,7 +379,10 @@ mod tests {
             agreed_by: vec!["agent-a".to_string(), "agent-b".to_string()],
             dissent: None,
         };
-        coord.finalize(&session.id, outcome).await.unwrap();
+        coord
+            .finalize(&session.id, "agent-a", outcome)
+            .await
+            .unwrap();
 
         let concluded = coord
             .session_store

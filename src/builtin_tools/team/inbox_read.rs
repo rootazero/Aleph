@@ -120,7 +120,7 @@ impl AlephTool for InboxReadTool {
                 let thread_id = args.thread_id.as_deref().ok_or_else(|| {
                     AlephError::tool("inbox_read: thread_id is required when mode='thread'")
                 })?;
-                self.inbox.read_thread(thread_id).await?
+                self.inbox.read_thread(&args.team_id, thread_id).await?
             }
             _ if args.peek => {
                 self.inbox

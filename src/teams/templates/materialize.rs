@@ -460,9 +460,20 @@ async fn inject_strategy_prompt(deps: &MaterializeDeps, agent_id: &str, body: &s
     let soul_path = instance.agent_dir().join("SOUL.md");
     let section = format!("\n\n---\n\n## Team Strategy\n\n{body}\n");
     let result = if soul_path.exists() {
-        let existing = tokio::fs::read_to_string(&soul_path)
-            .await
-            .unwrap_or_default();
+        // Read the existing SOUL.md; on a read error we must NOT fall back to an
+        // empty string, because the subsequent write would then truncate the
+        // file to just `section`, silently destroying the agent's persona.
+        let existing = match tokio::fs::read_to_string(&soul_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    path = %soul_path.display(),
+                    error = %e,
+                    "team_template: failed to read SOUL.md, skipping strategy injection"
+                );
+                return;
+            }
+        };
         if existing.contains("## Team Strategy") {
             return;
         }
@@ -488,9 +499,20 @@ async fn inject_role_prompt(deps: &MaterializeDeps, agent_id: &str, role: &str, 
     let section = format!("\n\n---\n\n## Team Role ({role})\n\n{body}\n");
 
     let result = if soul_path.exists() {
-        let existing = tokio::fs::read_to_string(&soul_path)
-            .await
-            .unwrap_or_default();
+        // See `inject_strategy_prompt`: a read error must skip the injection,
+        // never `unwrap_or_default()` — an empty fallback would truncate the
+        // existing SOUL.md on the following write.
+        let existing = match tokio::fs::read_to_string(&soul_path).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(
+                    path = %soul_path.display(),
+                    error = %e,
+                    "team_template: failed to read SOUL.md, skipping role injection"
+                );
+                return;
+            }
+        };
         if existing.contains(&format!("## Team Role ({role})")) {
             return;
         }
