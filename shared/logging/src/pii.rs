@@ -12,6 +12,8 @@ struct PiiPatterns {
     ssn: Regex,
     credit_card: Regex,
     api_key: Regex,
+    /// Generic `key = value` / `key: value` credential assignment, vendor-agnostic.
+    generic_secret: Regex,
     china_mobile: Regex,
     china_id: Regex,
     bank_card: Regex,
@@ -27,7 +29,15 @@ fn get_patterns() -> &'static PiiPatterns {
         phone: Regex::new(r"\b(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b").unwrap(),
         ssn: Regex::new(r"\b\d{3}-\d{2}-\d{4}\b").unwrap(),
         credit_card: Regex::new(r"\b\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}\b").unwrap(),
-        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b").unwrap(),
+        api_key: Regex::new(r"\b(sk-[a-zA-Z0-9\-_]{20,}|sk-ant-[a-zA-Z0-9\-_]{20,}|tvly-[a-zA-Z0-9\-_]{20,}|xai-[a-zA-Z0-9\-_]{20,}|AIza[a-zA-Z0-9\-_]{30,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|Bearer\s+[a-zA-Z0-9._\-]{20,})\b").unwrap(),
+        // Catch arbitrary secrets assigned to a credential-like key, regardless of
+        // vendor prefix: `password=...`, `api_key: ...`, `token = "..."`, etc.
+        // Preserves the key name; redacts only the value. Conservative over-match
+        // is acceptable (this module favours false positives over leaks).
+        generic_secret: Regex::new(
+            r#"(?i)(password|passwd|pwd|secret|token|api[_-]?key|access[_-]?token|authorization)(\s*[:=]\s*)("?)([^\s",}]+)"#,
+        )
+        .unwrap(),
         china_mobile: Regex::new(r"\b1[3-9]\d{9}\b").unwrap(),
         china_id: Regex::new(r"\b\d{17}[\dXx]\b").unwrap(),
         // Covers major card networks: Visa (4...), Mastercard (51-55...), Amex (34/37...), UnionPay (62...), Discover (6...)
@@ -53,6 +63,11 @@ pub fn scrub_pii(text: &str) -> String {
     scrubbed = patterns
         .api_key
         .replace_all(&scrubbed, "[REDACTED]")
+        .to_string();
+    // Generic credential assignments (keeps the key, redacts the value).
+    scrubbed = patterns
+        .generic_secret
+        .replace_all(&scrubbed, "${1}${2}${3}[REDACTED]")
         .to_string();
     scrubbed = patterns
         .china_id
@@ -110,5 +125,36 @@ mod tests {
     fn test_no_pii() {
         let text = "Normal text with no PII.";
         assert_eq!(scrub_pii(text), text);
+    }
+
+    #[test]
+    fn test_scrub_github_token() {
+        let scrubbed = scrub_pii("token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789");
+        assert!(scrubbed.contains("[REDACTED]"));
+        assert!(!scrubbed.contains("ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"));
+    }
+
+    #[test]
+    fn test_scrub_aws_access_key() {
+        let scrubbed = scrub_pii("AKIAIOSFODNN7EXAMPLE in config");
+        assert!(scrubbed.contains("[REDACTED]"));
+        assert!(!scrubbed.contains("AKIAIOSFODNN7EXAMPLE"));
+    }
+
+    #[test]
+    fn test_scrub_generic_password_assignment() {
+        let scrubbed = scrub_pii("db_password=hunter2supersecret host=localhost");
+        assert!(scrubbed.contains("[REDACTED]"));
+        assert!(!scrubbed.contains("hunter2supersecret"));
+        // Non-secret fields are untouched.
+        assert!(scrubbed.contains("host=localhost"));
+    }
+
+    #[test]
+    fn test_generic_secret_keeps_key_name() {
+        let scrubbed = scrub_pii("secret: topsecretvalue");
+        assert!(scrubbed.starts_with("secret"));
+        assert!(scrubbed.contains("[REDACTED]"));
+        assert!(!scrubbed.contains("topsecretvalue"));
     }
 }

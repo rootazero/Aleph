@@ -132,8 +132,15 @@ impl AlephClient {
         event_tx: &mpsc::Sender<StreamEvent>,
         write: &WsWriter,
     ) {
-        // Log all incoming messages for debugging
-        debug!("Received raw message: {}", &text[..text.len().min(500)]);
+        // Log all incoming messages for debugging.
+        // Truncate on a UTF-8 char boundary — a byte slice (`&text[..n]`) panics
+        // when byte `n` lands inside a multi-byte char (common with CJK/emoji),
+        // which would kill the read loop and silently hang every pending request.
+        let preview_end = text
+            .char_indices()
+            .nth(500)
+            .map_or(text.len(), |(i, _)| i);
+        debug!("Received raw message: {}", &text[..preview_end]);
 
         // Try to parse as response first (response to our request)
         // Only treat as response if id is a valid string or number (not null)
@@ -280,7 +287,15 @@ impl AlephClient {
 
         {
             let mut write = self.write.lock().await;
-            write.send(Message::Text(json)).await?;
+            if let Err(e) = write.send(Message::Text(json)).await {
+                // Send failed after the pending entry was registered: drop it so
+                // the pending map doesn't leak across repeated failures, and mark
+                // the connection dead so subsequent calls fail fast.
+                self.pending.write().await.remove(&id);
+                self.connected
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(e.into());
+            }
         }
 
         // Wait for response with timeout

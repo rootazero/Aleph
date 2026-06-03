@@ -37,12 +37,12 @@ impl Role {
 /// Guest permission scope
 ///
 /// Defines what a guest user can do and for how long.
-/// - `allowed_tools`: Tool names (e.g., "translate") or categories (e.g., "text_*")
+/// - `allowed_tools`: Exact tool names (e.g., "translate"), matched verbatim — no wildcards/categories
 /// - `expires_at`: Unix timestamp in seconds (UTC timezone)
 /// - `display_name`: Human-readable identifier for the guest
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuestScope {
-    /// Allowed tool names or categories
+    /// Allowed tool names (exact match — see `allows_tool`)
     pub allowed_tools: Vec<String>,
     /// Token expiration timestamp (Unix seconds, UTC)
     pub expires_at: Option<i64>,

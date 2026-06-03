@@ -520,9 +520,14 @@ fn truncate(s: &str, limit: usize) -> String {
     if char_count <= limit {
         return s.to_string();
     }
+    // For limits smaller than the 3-char ellipsis, appending "..." would itself
+    // exceed `limit`; return a plain character prefix so the contract holds.
+    if limit <= 3 {
+        return s.chars().take(limit).collect();
+    }
     let boundary = s
         .char_indices()
-        .nth(limit.saturating_sub(3))
+        .nth(limit - 3)
         .map_or(s.len(), |(i, _)| i);
     format!("{}...", &s[..boundary])
 }

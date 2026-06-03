@@ -1,3 +1,7 @@
+/// Ceiling for a single backoff delay, so a high attempt count can't produce an
+/// astronomically large (multi-day) wait from `base * 2^attempt`.
+const MAX_DELAY_MS: u64 = 30_000;
+
 pub struct ReconnectStrategy {
     pub max_attempts: u32,
     pub current_attempt: u32,
@@ -20,7 +24,8 @@ impl ReconnectStrategy {
 
         let delay = self
             .base_delay_ms
-            .saturating_mul(2u64.saturating_pow(self.current_attempt));
+            .saturating_mul(2u64.saturating_pow(self.current_attempt))
+            .min(MAX_DELAY_MS);
         self.current_attempt += 1;
         Some(delay)
     }
