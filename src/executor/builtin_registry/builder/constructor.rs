@@ -1744,6 +1744,11 @@ impl BuiltinToolRegistry {
             note_orient_tool,
             note_schema_tool,
             user_profile_tool,
+            // Per-call dependency handles for tools wired into dispatch but not
+            // held as constructed instances (config_audit / media_* / recall_context).
+            config: config.config.clone(),
+            media_pipeline: config.media_pipeline.clone(),
+            recall_context_db: config.memory_db.clone(),
             tools,
         }
     }

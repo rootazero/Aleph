@@ -349,6 +349,15 @@ pub struct BuiltinToolRegistry {
     pub(crate) note_schema_tool: Option<crate::builtin_tools::note_schema::NoteSchemaTool>,
     /// User profile tool (Spec 7 Task 9) — optional, requires ProfileSynthesizer.
     pub(crate) user_profile_tool: Option<crate::builtin_tools::user_profile::UserProfileTool>,
+    /// Live Config handle for the `config_audit` tool (security-posture audit).
+    /// Built per-call from this handle, mirroring `create_tool_boxed`.
+    pub(crate) config: Option<Arc<RwLock<crate::config::Config>>>,
+    /// Media pipeline for `media_understand` / `audio_transcribe` /
+    /// `document_extract`. Built per-call; `None` → tools report "not configured".
+    pub(crate) media_pipeline: Option<Arc<crate::media::MediaPipeline>>,
+    /// Memory backend for the `recall_context` tool (pre-compression recovery).
+    /// Built per-call with the active session id from `session_context_handle`.
+    pub(crate) recall_context_db: Option<crate::memory::store::MemoryBackend>,
     /// Tool metadata for lookup
     pub(super) tools: HashMap<String, UnifiedTool>,
 }
@@ -1605,6 +1614,91 @@ impl ToolRegistry for BuiltinToolRegistry {
                         ))
                     })
                 }
+            }
+
+            // Self-diagnosis / model-switch / config-audit tools.
+            // These are listed in BUILTIN_TOOL_DEFINITIONS (hence advertised to
+            // the LLM) but were never wired into dispatch, so a call fell through
+            // to `_ =>` and returned "Unknown tool". select_model/doctor are
+            // dependency-free unit structs; config_audit needs the live Config
+            // handle (same source as `create_tool_boxed`). (logic-audit fix)
+            "select_model" => {
+                Box::pin(async move { crate::builtin_tools::SelectModelTool.call_json(arguments).await })
+            }
+            "doctor" => {
+                Box::pin(async move { crate::builtin_tools::DoctorTool.call_json(arguments).await })
+            }
+            "config_audit" => Box::pin(async move {
+                let cfg = self.config.as_ref().ok_or_else(|| {
+                    AlephError::tool("config_audit not available: no Config handle configured")
+                })?;
+                crate::builtin_tools::ConfigAuditTool::new(Arc::clone(cfg))
+                    .call_json(arguments)
+                    .await
+            }),
+
+            // Media understanding tools — require a MediaPipeline. Advertised via
+            // BUILTIN_TOOL_DEFINITIONS but previously undispatchable in the loop.
+            "media_understand" => Box::pin(async move {
+                let mp = self.media_pipeline.as_ref().ok_or_else(|| {
+                    AlephError::tool("media_understand not available: no media pipeline configured")
+                })?;
+                crate::builtin_tools::media_tools::MediaUnderstandTool::new(Arc::clone(mp))
+                    .call_json(arguments)
+                    .await
+            }),
+            "audio_transcribe" => Box::pin(async move {
+                let mp = self.media_pipeline.as_ref().ok_or_else(|| {
+                    AlephError::tool("audio_transcribe not available: no media pipeline configured")
+                })?;
+                crate::builtin_tools::media_tools::AudioTranscribeTool::new(Arc::clone(mp))
+                    .call_json(arguments)
+                    .await
+            }),
+            "document_extract" => Box::pin(async move {
+                let mp = self.media_pipeline.as_ref().ok_or_else(|| {
+                    AlephError::tool("document_extract not available: no media pipeline configured")
+                })?;
+                crate::builtin_tools::media_tools::DocumentExtractTool::new(Arc::clone(mp))
+                    .call_json(arguments)
+                    .await
+            }),
+
+            // Pre-compression context recovery — needs a memory backend plus the
+            // active session id (resolved from session context, matching the
+            // session_key the compaction pipeline writes raw chunks under).
+            // RecallContextTool predates AlephTool, so dispatch via call_impl.
+            "recall_context" => {
+                let session_id = self
+                    .session_context_handle
+                    .as_ref()
+                    .and_then(|h| h.try_read().ok())
+                    .map(|ctx| ctx.session_key_str.clone());
+                Box::pin(async move {
+                    let db = self.recall_context_db.as_ref().ok_or_else(|| {
+                        AlephError::tool(
+                            "recall_context not available: no memory backend configured",
+                        )
+                    })?;
+                    let session_id = session_id.ok_or_else(|| {
+                        AlephError::tool(
+                            "recall_context not available: no active session context",
+                        )
+                    })?;
+                    let args: crate::builtin_tools::recall_context::RecallContextArgs =
+                        serde_json::from_value(arguments).map_err(|e| {
+                            AlephError::tool(format!("recall_context: bad args: {e}"))
+                        })?;
+                    let tool =
+                        crate::builtin_tools::RecallContextTool::new(db.clone(), session_id);
+                    let out = tool
+                        .call_impl(args)
+                        .await
+                        .map_err(|e| AlephError::tool(format!("recall_context: {e}")))?;
+                    serde_json::to_value(out).map_err(|e| {
+                        AlephError::tool(format!("recall_context: serialize: {e}"))
+                    })
+                })
             }
 
             _ => {
