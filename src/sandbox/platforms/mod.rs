@@ -33,13 +33,21 @@ pub fn create_platform_driver() -> Arc<dyn crate::sandbox::driver::OsSandboxDriv
 pub fn create_platform_driver_from_config(
     config: &crate::sandbox::config::SandboxConfig,
 ) -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
-    create_platform_driver_with_config(&config.linux, &config.windows, &config.deny_read_globs)
+    create_platform_driver_with_config(
+        &config.linux,
+        &config.windows,
+        &config.deny_read_globs,
+        &config.allow_unix_sockets,
+        config.dangerously_allow_all_unix_sockets,
+    )
 }
 
 pub fn create_platform_driver_with_config(
     linux_config: &crate::sandbox::config::LinuxSandboxConfig,
     windows_config: &crate::sandbox::config::WindowsSandboxConfig,
     deny_read_globs: &[String],
+    allow_unix_sockets: &[std::path::PathBuf],
+    dangerously_allow_all_unix_sockets: bool,
 ) -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
     #[cfg(target_os = "macos")]
     {
@@ -47,14 +55,23 @@ pub fn create_platform_driver_with_config(
         let _ = (linux_config, windows_config);
         Arc::new(SeatbeltDriver::with_options(SeatbeltOptions {
             deny_read_globs: deny_read_globs.to_vec(),
+            allow_unix_sockets: allow_unix_sockets.to_vec(),
+            dangerously_allow_all_unix_sockets,
         }))
     }
     #[cfg(target_os = "linux")]
     {
         use linux::bwrap::{BubblewrapDriver, LinuxSandboxOptions};
-        // `deny_read_globs` is a macOS-seatbelt floor today; bwrap has no
-        // native glob-deny primitive (landlock enforcement deferred).
-        let _ = (windows_config, deny_read_globs);
+        // `deny_read_globs` + unix-socket allowlist are macOS-seatbelt
+        // floors/widenings today; bwrap allows AF_UNIX for local IPC at the
+        // seccomp layer already (see sandbox_init.rs) and has no native
+        // glob-deny primitive (landlock enforcement deferred).
+        let _ = (
+            windows_config,
+            deny_read_globs,
+            allow_unix_sockets,
+            dangerously_allow_all_unix_sockets,
+        );
         let options = LinuxSandboxOptions {
             mount_proc: linux_config.mount_proc,
             no_new_privs: linux_config.no_new_privs,
@@ -70,7 +87,12 @@ pub fn create_platform_driver_with_config(
     #[cfg(target_os = "windows")]
     {
         use windows::driver::{WindowsSandboxDriver, WindowsSandboxOptions};
-        let _ = (linux_config, deny_read_globs);
+        let _ = (
+            linux_config,
+            deny_read_globs,
+            allow_unix_sockets,
+            dangerously_allow_all_unix_sockets,
+        );
         let options = WindowsSandboxOptions {
             use_restricted_token: windows_config.use_restricted_token,
             require_restricted_token: windows_config.require_restricted_token,
@@ -83,7 +105,13 @@ pub fn create_platform_driver_with_config(
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
-        let _ = (linux_config, windows_config, deny_read_globs);
+        let _ = (
+            linux_config,
+            windows_config,
+            deny_read_globs,
+            allow_unix_sockets,
+            dangerously_allow_all_unix_sockets,
+        );
         Arc::new(UnsupportedDriver)
     }
 }

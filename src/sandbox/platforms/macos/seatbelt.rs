@@ -413,6 +413,18 @@ pub struct SeatbeltOptions {
     /// sandboxed command — a security floor over the per-command FS policy.
     /// See [`crate::sandbox::deny_globs`].
     pub deny_read_globs: Vec<String>,
+
+    /// Absolute Unix-domain socket paths a sandboxed command may bind /
+    /// connect even under a restricted (or `None`) network policy. A
+    /// local-IPC widening over the `(deny network*)` floor — default empty
+    /// preserves default-deny. Mirrors codex's `network.allow_unix_sockets`.
+    pub allow_unix_sockets: Vec<std::path::PathBuf>,
+
+    /// Permit *any* `AF_UNIX` socket bind/connect (codex's
+    /// `dangerously_allow_all_unix_sockets`). Dangerous — a local socket can
+    /// reach privileged daemons (e.g. `docker.sock` → root). Prefer the
+    /// allowlist. Default `false`.
+    pub dangerously_allow_all_unix_sockets: bool,
 }
 
 /// Driver for macOS seatbelt sandboxing.
@@ -519,6 +531,15 @@ impl SeatbeltDriver {
 
         // Network policy
         self.add_network_policy(&mut profile, &policy.network)?;
+
+        // Unix-domain socket allowlist (codex parity). AF_UNIX local IPC is
+        // otherwise swept up by the network denies emitted above; emit the
+        // re-allow *after* them so SBPL last-match-wins reinstates the
+        // approved sockets. Redundant under `AllowAll` (network* already
+        // open), so skip there.
+        if !matches!(policy.network, NetworkPolicy::AllowAll) {
+            self.add_unix_socket_policy(&mut profile);
+        }
 
         // Process policy
         self.add_process_policy(&mut profile, &policy.process);
@@ -674,6 +695,47 @@ impl SeatbeltDriver {
             }
             profile.push_str(&format!("(deny file-read* (regex #\"{regex}\"))\n"));
             profile.push_str(&format!("(deny file-write-unlink (regex #\"{regex}\"))\n"));
+        }
+    }
+
+    /// Re-allow `AF_UNIX` local-IPC sockets that the network denies above
+    /// would otherwise sweep up. Mirrors codex's `unix_socket_policy`:
+    /// `dangerously_allow_all_unix_sockets` opens bind/connect broadly,
+    /// otherwise each configured absolute path is granted via `subpath` so
+    /// sockets created beneath an approved directory are covered too.
+    /// Paths are inline-escaped (Aleph convention; equivalent to codex's
+    /// `-D` parameter substitution). Emitted only by `generate_profile`
+    /// after the network denies so last-match-wins reinstates access.
+    fn add_unix_socket_policy(&self, profile: &mut String) {
+        if !self.options.dangerously_allow_all_unix_sockets
+            && self.options.allow_unix_sockets.is_empty()
+        {
+            return;
+        }
+
+        // The socket primitive itself must be permitted before bind/connect.
+        profile.push_str("; unix-domain socket allowlist (local IPC)\n");
+        profile.push_str("(allow system-socket (socket-domain AF_UNIX))\n");
+
+        if self.options.dangerously_allow_all_unix_sockets {
+            // Keep the dangerous escape hatch genuinely broad — no path
+            // qualifier, matching codex's AllowAll arm.
+            profile.push_str("(allow network-bind (local unix-socket))\n");
+            profile.push_str("(allow network-outbound (remote unix-socket))\n");
+            return;
+        }
+
+        for path in &self.options.allow_unix_sockets {
+            let Some(path_str) = path.to_str() else {
+                continue;
+            };
+            let escaped = escape_sbpl(path_str);
+            profile.push_str(&format!(
+                "(allow network-bind (local unix-socket (subpath \"{escaped}\")))\n"
+            ));
+            profile.push_str(&format!(
+                "(allow network-outbound (remote unix-socket (subpath \"{escaped}\")))\n"
+            ));
         }
     }
 
@@ -988,6 +1050,7 @@ mod tests {
     fn deny_read_globs_emit_read_and_unlink_denies_after_allow() {
         let driver = SeatbeltDriver::with_options(SeatbeltOptions {
             deny_read_globs: vec!["**/.env".into(), "**/*.pem".into()],
+            ..Default::default()
         });
         // FullWrite grants broad access; the glob floor must still deny.
         let policy = SandboxPolicy {
@@ -1025,6 +1088,97 @@ mod tests {
         let profile = driver.generate_profile(&policy, cwd).unwrap();
         assert!(!profile.contains("unreadable-glob security floor"));
         assert!(!profile.contains("(deny file-write-unlink"));
+    }
+
+    #[test]
+    fn no_unix_sockets_emits_no_af_unix_allowance() {
+        // Default options → default-deny preserved, byte-identical to before.
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy::default(); // network: None
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+        assert!(!profile.contains("unix-domain socket allowlist"));
+        assert!(!profile.contains("AF_UNIX"));
+        assert!(!profile.contains("unix-socket"));
+    }
+
+    #[test]
+    fn allow_unix_sockets_reallows_after_network_deny() {
+        let driver = SeatbeltDriver::with_options(SeatbeltOptions {
+            allow_unix_sockets: vec![PathBuf::from("/tmp/agent.sock")],
+            ..Default::default()
+        });
+        // Strict default network is `None` → emits `(deny network*)`.
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        assert!(profile.contains("(allow system-socket (socket-domain AF_UNIX))"));
+        let bind = r#"(allow network-bind (local unix-socket (subpath "/tmp/agent.sock")))"#;
+        let out = r#"(allow network-outbound (remote unix-socket (subpath "/tmp/agent.sock")))"#;
+        assert!(profile.contains(bind), "missing unix-socket bind allow");
+        assert!(profile.contains(out), "missing unix-socket outbound allow");
+
+        // Last-match-wins: the AF_UNIX re-allow must come AFTER the deny.
+        let deny_idx = profile.find("(deny network*)").expect("network deny present");
+        let allow_idx = profile.find(bind).unwrap();
+        assert!(deny_idx < allow_idx, "unix re-allow must follow network deny");
+    }
+
+    #[test]
+    fn dangerously_allow_all_unix_sockets_is_broad() {
+        let driver = SeatbeltDriver::with_options(SeatbeltOptions {
+            dangerously_allow_all_unix_sockets: true,
+            // allowlist ignored when allow-all is on.
+            allow_unix_sockets: vec![PathBuf::from("/tmp/ignored.sock")],
+            ..Default::default()
+        });
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        assert!(profile.contains("(allow system-socket (socket-domain AF_UNIX))"));
+        assert!(profile.contains("(allow network-bind (local unix-socket))"));
+        assert!(profile.contains("(allow network-outbound (remote unix-socket))"));
+        // The broad form omits the per-path subpath qualifier.
+        assert!(!profile.contains("(subpath \"/tmp/ignored.sock\")"));
+    }
+
+    #[test]
+    fn unix_sockets_skipped_under_allow_all_network() {
+        // Under AllowAll, network* is already open — no redundant AF_UNIX block.
+        let driver = SeatbeltDriver::with_options(SeatbeltOptions {
+            allow_unix_sockets: vec![PathBuf::from("/tmp/agent.sock")],
+            ..Default::default()
+        });
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowAll,
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+        assert!(profile.contains("(allow network*)"));
+        assert!(!profile.contains("unix-domain socket allowlist"));
+    }
+
+    #[test]
+    fn unix_sockets_reallowed_under_restricted_hosts() {
+        // AllowHosts also emits a network deny floor; the re-allow must apply.
+        let driver = SeatbeltDriver::with_options(SeatbeltOptions {
+            allow_unix_sockets: vec![PathBuf::from("/var/run/db.sock")],
+            ..Default::default()
+        });
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowHosts(vec!["10.0.0.1".into()]),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+        let deny_idx = profile.find("(deny network*)").expect("restricted deny present");
+        let allow_idx = profile
+            .find(r#"(local unix-socket (subpath "/var/run/db.sock"))"#)
+            .expect("unix re-allow present");
+        assert!(deny_idx < allow_idx);
     }
 
     #[test]
