@@ -41,17 +41,47 @@ pub struct ChannelConfig {
     pub require_mention: bool,
     /// Bot name for mention detection
     pub bot_name: Option<String>,
+    /// Slash-command access tiering for this channel (admin / per-command
+    /// allowlists, scoped to DM vs group). Empty → gating OFF (backward-compat).
+    pub slash_access: SlashAccessConfig,
+}
+
+/// Per-channel slash-command access tiering.
+///
+/// Mirrors hermes-agent `SlashAccessPolicy` (per-platform admin + user
+/// allowlists, separate DM / group scopes). All-empty → gating is OFF and every
+/// already-authorized sender may run every command (pre-tiering behavior).
+///
+/// Deserialized directly from each channel instance's config block, so the same
+/// flat keys (`allow_admin_from`, `user_allowed_commands`, …) work uniformly
+/// across every channel type, not just iMessage.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct SlashAccessConfig {
     /// DM-scope admin user IDs — these users can run every registered slash command.
     /// Empty → slash-command gating is OFF for DM scope (backward-compat).
+    #[serde(default)]
     pub allow_admin_from: Vec<String>,
     /// DM-scope allowlist of slash command names non-admin senders may run.
     /// Names are stored lowercased without leading `/`. Ignored when gating is OFF.
+    #[serde(default)]
     pub user_allowed_commands: Vec<String>,
     /// Group-scope admin user IDs.
     /// Empty → slash-command gating is OFF for group scope (backward-compat).
+    #[serde(default)]
     pub group_allow_admin_from: Vec<String>,
     /// Group-scope allowlist of slash command names non-admin senders may run.
+    #[serde(default)]
     pub group_user_allowed_commands: Vec<String>,
+}
+
+impl SlashAccessConfig {
+    /// `true` when no scope has any admin configured, i.e. gating is fully OFF.
+    /// Used by boot wiring to skip registering a channel that opts out, keeping
+    /// `channel_configs` byte-identical to the pre-tiering allow-all default.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.allow_admin_from.is_empty() && self.group_allow_admin_from.is_empty()
+    }
 }
 
 /// Outcome of a slash-command access check.
@@ -115,15 +145,27 @@ impl Default for ChannelConfig {
             group_allow_from: Vec::new(),
             require_mention: true,
             bot_name: None,
-            allow_admin_from: Vec::new(),
-            user_allowed_commands: Vec::new(),
-            group_allow_admin_from: Vec::new(),
-            group_user_allowed_commands: Vec::new(),
+            slash_access: SlashAccessConfig::default(),
         }
     }
 }
 
 impl ChannelConfig {
+    /// Decide whether `sender` may invoke slash command `command_name` in the
+    /// requested scope (dm vs group). Thin delegate to [`SlashAccessConfig`].
+    #[must_use]
+    pub fn slash_command_gate(
+        &self,
+        sender: &str,
+        command_name: &str,
+        is_group: bool,
+    ) -> SlashAccessDecision {
+        self.slash_access
+            .slash_command_gate(sender, command_name, is_group)
+    }
+}
+
+impl SlashAccessConfig {
     /// Decide whether `sender` may invoke slash command `command_name` in
     /// the requested scope (dm vs group).
     ///
@@ -210,10 +252,12 @@ impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConf
             group_allow_from: cfg.group_allow_from.clone(),
             require_mention: cfg.require_mention,
             bot_name: cfg.bot_name.clone(),
-            allow_admin_from: cfg.allow_admin_from.clone(),
-            user_allowed_commands: cfg.user_allowed_commands.clone(),
-            group_allow_admin_from: cfg.group_allow_admin_from.clone(),
-            group_user_allowed_commands: cfg.group_user_allowed_commands.clone(),
+            slash_access: SlashAccessConfig {
+                allow_admin_from: cfg.allow_admin_from.clone(),
+                user_allowed_commands: cfg.user_allowed_commands.clone(),
+                group_allow_admin_from: cfg.group_allow_admin_from.clone(),
+                group_user_allowed_commands: cfg.group_user_allowed_commands.clone(),
+            },
         }
     }
 }
@@ -250,11 +294,14 @@ mod slash_access_tests {
     fn cfg_with_admins(admins: &[&str], allowed: &[&str], is_group: bool) -> ChannelConfig {
         let mut c = ChannelConfig::default();
         if is_group {
-            c.group_allow_admin_from = admins.iter().map(|s| (*s).to_string()).collect();
-            c.group_user_allowed_commands = allowed.iter().map(|s| (*s).to_string()).collect();
+            c.slash_access.group_allow_admin_from =
+                admins.iter().map(|s| (*s).to_string()).collect();
+            c.slash_access.group_user_allowed_commands =
+                allowed.iter().map(|s| (*s).to_string()).collect();
         } else {
-            c.allow_admin_from = admins.iter().map(|s| (*s).to_string()).collect();
-            c.user_allowed_commands = allowed.iter().map(|s| (*s).to_string()).collect();
+            c.slash_access.allow_admin_from = admins.iter().map(|s| (*s).to_string()).collect();
+            c.slash_access.user_allowed_commands =
+                allowed.iter().map(|s| (*s).to_string()).collect();
         }
         c
     }
@@ -328,5 +375,53 @@ mod slash_access_tests {
         assert!(d.gating_enabled);
         assert!(!d.is_admin);
         assert!(!d.allowed);
+    }
+
+    #[test]
+    fn slash_access_is_empty_only_when_no_admins() {
+        assert!(SlashAccessConfig::default().is_empty());
+        let dm_only = SlashAccessConfig {
+            allow_admin_from: vec!["alice".into()],
+            ..Default::default()
+        };
+        assert!(!dm_only.is_empty());
+        let group_only = SlashAccessConfig {
+            group_allow_admin_from: vec!["bob".into()],
+            ..Default::default()
+        };
+        assert!(!group_only.is_empty());
+        // user_allowed_commands without admins still counts as "off" — gating
+        // never activates without an admin, so we must not register it.
+        let user_list_only = SlashAccessConfig {
+            user_allowed_commands: vec!["status".into()],
+            ..Default::default()
+        };
+        assert!(user_list_only.is_empty());
+    }
+
+    #[test]
+    fn slash_access_deserializes_flat_keys_ignoring_channel_fields() {
+        // Mirrors what boot wiring does: parse a full channel instance config
+        // value into SlashAccessConfig, picking up only the slash keys and
+        // ignoring unrelated channel fields (no deny_unknown_fields).
+        let raw = serde_json::json!({
+            "bot_token": "secret",
+            "polling_interval_secs": 5,
+            "allow_admin_from": ["111"],
+            "group_user_allowed_commands": ["status", "ping"],
+        });
+        let sa: SlashAccessConfig = serde_json::from_value(raw).expect("parses");
+        assert_eq!(sa.allow_admin_from, vec!["111".to_string()]);
+        assert_eq!(
+            sa.group_user_allowed_commands,
+            vec!["status".to_string(), "ping".to_string()]
+        );
+        assert!(sa.user_allowed_commands.is_empty());
+        assert!(!sa.is_empty());
+
+        // A channel config with no slash keys parses to the empty (allow-all) form.
+        let bare = serde_json::json!({ "bot_token": "secret" });
+        let sa2: SlashAccessConfig = serde_json::from_value(bare).expect("parses");
+        assert!(sa2.is_empty());
     }
 }
