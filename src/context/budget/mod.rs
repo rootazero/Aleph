@@ -8,8 +8,8 @@ pub mod cheap_passes;
 pub mod preflight;
 pub mod pressure;
 
+use crate::context::budget::pressure::estimate_tokens_aware;
 use crate::context::compact::PressureLevel;
-use crate::memory::session_compactor::context_window::{estimate_tokens, estimate_total_tokens};
 use crate::providers::message::UnifiedMessage;
 
 // =============================================================================
@@ -65,9 +65,19 @@ impl ContextPressure {
         token_budget: u64,
         ratio: f64,
     ) -> Self {
-        let prompt_tokens = estimate_tokens(system_prompt, ratio);
+        // Content-aware estimation: `ratio` is the prose anchor, but CJK/code
+        // content overrides it with denser ratios. This fixes the flat-ratio
+        // blind spot (a fixed 3.5 under-counts CJK ~2.3× and code ~1.4×) that
+        // made the budget sensor overflow on the first turn of a CJK/code-heavy
+        // conversation — before the EWMA calibration in `observe_actual_usage`
+        // ever sees a provider response. The calibration then refines this more
+        // accurate base, converging faster than off a flat estimate.
+        let prompt_tokens = estimate_tokens_aware(system_prompt, ratio);
         let overhead = prompt_tokens + tool_schema_tokens;
-        let msg_tokens = estimate_total_tokens(messages, ratio);
+        let msg_tokens: usize = messages
+            .iter()
+            .map(|m| estimate_tokens_aware(&m.text_content(), ratio))
+            .sum();
         let used = overhead + msg_tokens;
         let budget: usize = token_budget.try_into().unwrap_or(usize::MAX);
         Self {
@@ -553,6 +563,24 @@ mod tests {
         assert_eq!(
             pressure.available_for_messages,
             1000 - pressure.overhead_tokens
+        );
+    }
+
+    #[test]
+    fn test_context_pressure_cjk_not_undercounted() {
+        // A CJK-heavy message must register far more pressure than a flat 3.5
+        // ratio would report — the regression that let CJK sessions overflow the
+        // provider context before compaction triggered. With CJK ratio 1.5 the
+        // sensor should see ~2.3× the tokens a flat 3.5 estimate gave.
+        let cjk = "这是一段很长的中文对话内容用来测试上下文预算传感器是否会低估中文消息的token数量从而导致在压缩触发之前就超出模型上下文窗口".repeat(3);
+        let msgs = vec![UnifiedMessage::user(cjk.clone())];
+        let aware = ContextPressure::compute(&msgs, "", 0, 100_000, 3.5);
+        let chars = cjk.chars().count();
+        let flat_used = (chars as f64 / 3.5).ceil() as usize;
+        assert!(
+            aware.used_tokens > flat_used,
+            "content-aware sensor ({}) must exceed flat-3.5 ({flat_used}) for CJK",
+            aware.used_tokens
         );
     }
 
