@@ -320,7 +320,14 @@ fn pick_option(options: &[Value], wanted: &[&str]) -> Option<String> {
                 .or_else(|| opt.get("name"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            if kind == *want || kind.contains(want) {
+            // Match the whole kind or a `_`/`-`-delimited token — NOT a raw
+            // substring. A substring `contains` would let a reject-ish option
+            // like "disallow" satisfy a wanted "allow", inverting the
+            // permission decision. "allow_once" still matches generic "allow"
+            // via its leading token.
+            let matches = kind == *want
+                || kind.split(['_', '-']).any(|tok| tok == *want);
+            if matches {
                 if let Some(id) = opt.get("optionId").and_then(Value::as_str) {
                     return Some(id.to_string());
                 }
@@ -526,6 +533,40 @@ mod tests {
         assert_eq!(r["result"]["content"], "x");
         let e = HandlerOutcome::method_not_found("foo").into_jsonrpc(8);
         assert_eq!(e["error"]["code"], -32601);
+    }
+
+    #[test]
+    fn pick_option_does_not_invert_disallow_as_allow() {
+        // A reject-ish "disallow" option must NEVER satisfy a wanted "allow"
+        // (a raw substring `contains` would, since "disallow".contains("allow")).
+        let opts = json!([
+            { "optionId": "no", "kind": "disallow" },
+            { "optionId": "yes", "kind": "allow_once" },
+        ]);
+        assert_eq!(
+            pick_option(
+                opts.as_array().unwrap(),
+                &["allow_once", "allow_always", "allow"]
+            ),
+            Some("yes".to_string())
+        );
+
+        // With only a "disallow" option, wanting allow must find nothing.
+        let only_disallow = json!([{ "optionId": "no", "kind": "disallow" }]);
+        assert_eq!(
+            pick_option(
+                only_disallow.as_array().unwrap(),
+                &["allow_once", "allow_always", "allow"]
+            ),
+            None
+        );
+
+        // Generic "allow" still matches the leading token of "allow_always".
+        let only_always = json!([{ "optionId": "aa", "kind": "allow_always" }]);
+        assert_eq!(
+            pick_option(only_always.as_array().unwrap(), &["allow"]),
+            Some("aa".to_string())
+        );
     }
 
     #[test]

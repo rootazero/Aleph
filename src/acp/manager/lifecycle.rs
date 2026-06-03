@@ -58,19 +58,34 @@ impl AcpAdapterManager {
     ) -> Result<SessionEntry> {
         let key = SessionKey::with_name(harness_id, cwd, session_name);
 
-        // Fast path: existing entry whose process is still alive.
-        // Re-check under write lock to close the race between read and write.
-        {
-            let mut sessions = self.sessions.write().await;
-            if let Some(entry) = sessions.get(&key).cloned() {
-                let is_live = {
-                    let mut s = entry.session.lock().await;
-                    s.is_alive() && s.state() != crate::acp::protocol::AcpSessionState::Error
-                };
-                if is_live {
-                    return Ok(entry);
+        // Fast path: clone the entry under a READ lock, then run the liveness
+        // probe WITHOUT holding the map lock. Holding `sessions.write()` across
+        // `entry.session.lock().await` would pin the global sessions lock for
+        // the entire duration of any in-flight prompt that owns the per-session
+        // mutex (up to the request timeout), stalling every other harness/cwd.
+        let existing = { self.sessions.read().await.get(&key).cloned() };
+        if let Some(entry) = existing {
+            let is_live = {
+                let mut s = entry.session.lock().await;
+                s.is_alive() && s.state() != crate::acp::protocol::AcpSessionState::Error
+            };
+            if is_live {
+                return Ok(entry);
+            }
+            // Dead — evict, but only if the slot still holds THIS entry; another
+            // task may have already respawned a replacement. Notify outside the
+            // lock so the (blocking) persistence hook never runs under it.
+            let evicted = {
+                let mut sessions = self.sessions.write().await;
+                match sessions.get(&key) {
+                    Some(cur) if Arc::ptr_eq(&cur.session, &entry.session) => {
+                        sessions.remove(&key);
+                        true
+                    }
+                    _ => false,
                 }
-                // Dead — evict, then fall through to spawn a replacement.
+            };
+            if evicted {
                 warn!(
                     harness_id,
                     "ACP session died or entered error state, respawning"
@@ -81,7 +96,6 @@ impl AcpAdapterManager {
                     session_name: session_name.map(str::to_string),
                 })
                 .await;
-                sessions.remove(&key);
             }
         }
 
@@ -192,7 +206,12 @@ impl AcpAdapterManager {
                 // If not reusing, evict any existing session first so the
                 // next acquire_live_entry spawns a fresh one.
                 if !reuse_session {
-                    if let Some(old) = self.sessions.write().await.remove(&key) {
+                    // Bind the removed entry first so the `sessions` write guard
+                    // is dropped at the `;` — an `if let` scrutinee would keep it
+                    // alive across `lock()`/`kill()` (edition-2021 temporary
+                    // lifetime), pinning the whole map while we kill the child.
+                    let old = self.sessions.write().await.remove(&key);
+                    if let Some(old) = old {
                         let mut s = old.session.lock().await;
                         s.kill().await;
                     }

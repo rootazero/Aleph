@@ -200,17 +200,26 @@ impl AcpAdapterManager {
 
         configs.remove(id);
 
-        // Also kill any active sessions for this harness (all cwds)
+        // Detach all active sessions for this harness (all cwds) from the map,
+        // then release every lock BEFORE killing. `kill()` awaits the OS; doing
+        // it under the sessions/adapters/configs write locks (and across the
+        // per-session mutex, possibly held by a long prompt) would freeze the
+        // whole ACP subsystem for the prompt's lifetime.
         let keys_to_remove: Vec<SessionKey> = sessions
             .keys()
             .filter(|k| k.harness_id == id)
             .cloned()
             .collect();
-        for key in keys_to_remove {
-            if let Some(entry) = sessions.remove(&key) {
-                let mut session = entry.session.lock().await;
-                session.kill().await;
-            }
+        let removed: Vec<SessionEntry> = keys_to_remove
+            .iter()
+            .filter_map(|k| sessions.remove(k))
+            .collect();
+        drop(configs);
+        drop(adapters);
+        drop(sessions);
+        for entry in removed {
+            let mut session = entry.session.lock().await;
+            session.kill().await;
         }
 
         info!(harness_id = %id, "Unregistered ACP harness");
@@ -250,8 +259,13 @@ impl AcpAdapterManager {
             adapters.remove(id);
             configs.insert(id.to_string(), entry);
 
-            // Kill active sessions
+            // Detach sessions, then release all locks before killing (kill()
+            // awaits the OS and may block on a per-session mutex held by a
+            // long-running prompt — don't do it under the write locks).
             let removed = kill_sessions(&mut sessions, id);
+            drop(configs);
+            drop(adapters);
+            drop(sessions);
             for entry in removed {
                 let mut session = entry.session.lock().await;
                 session.kill().await;
@@ -265,8 +279,12 @@ impl AcpAdapterManager {
         adapters.insert(id.to_string(), harness);
         configs.insert(id.to_string(), entry);
 
-        // Kill any active sessions so they will be respawned with the new config
+        // Detach any active sessions so they will be respawned with the new
+        // config, then release all locks before killing (see note above).
         let removed = kill_sessions(&mut sessions, id);
+        drop(configs);
+        drop(adapters);
+        drop(sessions);
         for entry in removed {
             let mut session = entry.session.lock().await;
             session.kill().await;

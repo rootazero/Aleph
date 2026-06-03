@@ -67,17 +67,29 @@ pub async fn wire_persistence(manager: &AcpAdapterManager) {
                     } => {
                         // Match the full triple so a `backend` name doesn't
                         // displace the unnamed/default entry under the same cwd.
+                        // `Created` is re-emitted idempotently after every
+                        // prompt, so preserve the original `created_at` instead
+                        // of resetting it each turn (only `last_used_at` moves).
+                        let prior_created = store
+                            .iter()
+                            .find(|s| {
+                                s.harness_id == *harness_id
+                                    && s.cwd == *cwd
+                                    && s.session_name == *session_name
+                            })
+                            .map(|s| s.created_at);
                         store.retain(|s| {
                             !(s.harness_id == *harness_id
                                 && s.cwd == *cwd
                                 && s.session_name == *session_name)
                         });
+                        let now = chrono::Utc::now();
                         store.push(crate::acp::session::PersistedAcpSession {
                             harness_id: harness_id.clone(),
                             acp_session_id: acp_session_id.clone(),
                             cwd: cwd.clone(),
-                            created_at: chrono::Utc::now(),
-                            last_used_at: chrono::Utc::now(),
+                            created_at: prior_created.unwrap_or(now),
+                            last_used_at: now,
                             session_name: session_name.clone(),
                         });
                     }

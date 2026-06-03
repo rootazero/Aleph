@@ -339,8 +339,16 @@ impl AcpSession {
 
         self.state = AcpSessionState::Busy;
 
-        // Ensure we have an ACP session
-        let session_id = self.create_acp_session(cwd, timeout).await?;
+        // Ensure we have an ACP session. On failure, leave the session in
+        // `Error` (not the `Busy` we just set) so a reused entry isn't stuck
+        // looking active — the prompt-failure paths below do the same.
+        let session_id = match self.create_acp_session(cwd, timeout).await {
+            Ok(sid) => sid,
+            Err(e) => {
+                self.state = AcpSessionState::Error;
+                return Err(e);
+            }
+        };
         let req = AcpRequest::prompt(&session_id, text);
 
         if let Some(cb) = on_chunk {
