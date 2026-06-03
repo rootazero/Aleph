@@ -384,6 +384,7 @@ fn blank_batch_action() -> DesktopBatchAction {
         timeout_ms: None,
         coord_space: None,
         coord_factors: None,
+        describe: None,
     }
 }
 

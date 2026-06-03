@@ -175,6 +175,14 @@ pub struct DesktopArgs {
     /// ignored; `action` may be set to "script" or left as any string.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub script: Option<String>,
+
+    /// Screenshot vision bridge (text-only-model support). When `true` on a
+    /// `screenshot` action, the captured image is augmented with an OCR text
+    /// layer (`ocr_text`) and, when a multimodal provider is wired, a scene
+    /// `description` — so a model that cannot see the image can still act.
+    /// Defaults to off, keeping the screenshot output byte-identical.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub describe: Option<bool>,
 }
 
 /// A single sub-action inside a `batch` operation.
@@ -318,6 +326,11 @@ pub struct DesktopBatchAction {
     /// batch's `coord_factors` when omitted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coord_factors: Option<[u32; 2]>,
+
+    /// Augment a `screenshot` sub-action with OCR / description for text-only
+    /// models. See [`DesktopArgs::describe`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub describe: Option<bool>,
 }
 
 impl From<&DesktopBatchAction> for DesktopArgs {
@@ -356,6 +369,7 @@ impl From<&DesktopBatchAction> for DesktopArgs {
             coord_space: b.coord_space.clone(),
             coord_factors: b.coord_factors,
             script: None,
+            describe: b.describe,
         }
     }
 }

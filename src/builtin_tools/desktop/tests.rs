@@ -41,6 +41,7 @@ fn make_args(action: &str) -> DesktopArgs {
         coord_space: None,
         coord_factors: None,
         script: None,
+        describe: None,
     }
 }
 
@@ -726,6 +727,7 @@ mod e2e_normalized {
             timeout_ms: None,
             coord_space: None, // inherits from batch
             coord_factors: None,
+            describe: None,
         }];
 
         AlephTool::call(&tool, args).await.unwrap();

@@ -13,6 +13,7 @@ mod safety;
 pub mod session_lock;
 mod set_of_marks;
 mod types;
+mod vision_bridge;
 mod wait_visual;
 
 #[cfg(test)]
@@ -30,6 +31,7 @@ pub use gui_locate::{DesktopGuiLocate, DesktopGuiLocateArgs};
 pub use perm::{DesktopCheckPermissions, DesktopCheckPermissionsArgs};
 pub use set_of_marks::{DesktopSom, DesktopSomArgs};
 pub use types::{DesktopArgs, DesktopOutput};
+pub use vision_bridge::{Augmentation, VisionBridge};
 
 use crate::sync_primitives::{Arc, Mutex};
 
@@ -48,6 +50,10 @@ pub struct DesktopTool {
     pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
     pub(super) session_lock: Option<Arc<Mutex<ComputerUseLock>>>,
     pub(super) escape_started: Arc<crate::sync_primitives::AtomicBool>,
+    /// Optional vision bridge: turns a captured screenshot into OCR text + an
+    /// optional scene description so text-only models can still act on it.
+    /// `None` keeps the screenshot path byte-identical to its legacy behavior.
+    pub(super) vision_bridge: Option<Arc<VisionBridge>>,
 }
 
 impl DesktopTool {
@@ -57,7 +63,17 @@ impl DesktopTool {
             platform: None,
             session_lock: None,
             escape_started: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
+            vision_bridge: None,
         }
+    }
+
+    /// Attach a vision bridge so `screenshot` calls that pass `describe: true`
+    /// receive an OCR text layer (and, when a multimodal provider is wired, a
+    /// scene description) alongside the raw image — enabling text-only models
+    /// to perform computer use.
+    pub fn with_vision_bridge(mut self, bridge: Arc<VisionBridge>) -> Self {
+        self.vision_bridge = Some(bridge);
+        self
     }
 
     /// Attach a desktop platform for in-process execution via capability traits.
@@ -463,7 +479,7 @@ accurate than estimating pixels from a screenshot. Use a screenshot only when
 you need to *see* visual state the accessibility tree cannot describe.
 
 Actions:
-- screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen). Oversized captures are auto-compressed to JPEG to stay within the result budget.
+- screenshot: Capture screen as base64. Optional region: {x,y,width,height}. Defaults to PNG; pass format/quality/max_width to re-encode (downscaling above 1920 hurts text legibility — keep max_width at 1920+ when you need to read text on screen). Oversized captures are auto-compressed to JPEG to stay within the result budget. Pass `describe:true` if you cannot see images — the result then also carries an `ocr_text` layer (and a scene `description` when a vision model is configured) so a text-only model can still read the screen and act.
 - ocr: Extract text from screen with bounding boxes. Optional image_base64.
 - click: Click at (x, y). Optional button (left/right/middle).
 - double_click: Double-click at (x, y). Optional button.
@@ -506,6 +522,7 @@ Examples:
 {"action":"wait_visual","timeout_ms":3000}
 {"action":"wait_visual","timeout_ms":8000,"region":{"x":0,"y":0,"width":1280,"height":800}}
 {"action":"screenshot","format":"jpeg","quality":0.9,"max_width":1920}
+{"action":"screenshot","describe":true}
 
 Coordinate space — by default, `x` / `y` / `start_x` / `end_x` / `region` are pixels (top-left origin). To use UI-TARS-style normalized [0, 1000] × [0, 1000] coordinates that scale to any display, set `coord_space:"normalized"` (and optionally `coord_factors:[w,h]` to override the 1000×1000 default). The runtime rescales against the primary display (or `display_id`) before dispatch.
 
