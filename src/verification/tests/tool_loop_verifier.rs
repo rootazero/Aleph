@@ -3,7 +3,7 @@
 use tokio_util::sync::CancellationToken;
 
 use crate::verification::turn_verifier::{
-    ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierVerdict,
+    ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
 use crate::verification::ToolLoopVerifier;
 
@@ -114,6 +114,47 @@ async fn threshold_minimum_is_two() {
     assert_eq!(v.threshold(), 2);
     let v = ToolLoopVerifier::new().with_threshold(1);
     assert_eq!(v.threshold(), 2);
+}
+
+#[tokio::test]
+async fn stop_turn_never_vetoes_on_stale_history() {
+    // A stop turn (`stop_reason.is_some()`) with a buffer full of identical
+    // calls and empty answer text (e.g. a thinking-only finish) must NOT veto:
+    // the death loop is a mid-turn concern and re-judging stale history here
+    // would flip a clean Done into a Continue.
+    let v = ToolLoopVerifier::new().with_threshold(5);
+    let history = vec![make("read", 1); 5];
+    let ctx = TurnVerifyContext {
+        iterations: 5,
+        tool_calls_made: 5,
+        final_text: None,
+        recent_tool_calls: &history,
+        stop_reason: Some("end_turn"),
+        session_id: None,
+    };
+    let cancel = CancellationToken::new();
+    assert!(v.verify(&ctx, &cancel).await.is_continue());
+}
+
+#[tokio::test]
+async fn threshold_clamped_to_history_window() {
+    // A threshold above the ring-buffer capacity could never be satisfied
+    // (`recent_tool_calls.len()` is bounded by the window), silently disabling
+    // detection. `with_threshold` clamps to the window so it can still fire.
+    let v = ToolLoopVerifier::new().with_threshold(TOOL_HISTORY_WINDOW + 100);
+    assert_eq!(v.threshold(), TOOL_HISTORY_WINDOW);
+
+    let history = vec![make("read", 1); TOOL_HISTORY_WINDOW];
+    let ctx = TurnVerifyContext {
+        iterations: TOOL_HISTORY_WINDOW,
+        tool_calls_made: TOOL_HISTORY_WINDOW,
+        final_text: None,
+        recent_tool_calls: &history,
+        stop_reason: None,
+        session_id: None,
+    };
+    let cancel = CancellationToken::new();
+    assert!(v.verify(&ctx, &cancel).await.is_veto());
 }
 
 #[tokio::test]

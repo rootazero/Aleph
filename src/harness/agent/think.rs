@@ -12,7 +12,9 @@ use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload
 use crate::providers::message::UnifiedMessage;
 use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
-use crate::verification::{hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict};
+use crate::verification::{
+    hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
+};
 
 /// Ephemeral nudge appended on the grace turn when the budget hits
 /// critical — the single tool-less LLM call given when
@@ -858,7 +860,7 @@ impl AgentHarness {
 
         // 5. Stage 6a (#10): VerifierChain runs every turn — StopHook + ToolLoop.
         for tc in &response.tool_calls {
-            if tool_history.len() == 8 {
+            if tool_history.len() == TOOL_HISTORY_WINDOW {
                 tool_history.pop_front();
             }
             tool_history.push_back(ToolCallSummary {

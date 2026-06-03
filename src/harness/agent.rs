@@ -38,7 +38,7 @@ use crate::providers::adapter::NativeToolCall;
 
 use crate::session::events::{SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
-use crate::verification::ToolCallSummary;
+use crate::verification::{ToolCallSummary, TOOL_HISTORY_WINDOW};
 
 mod act;
 mod guardrails;
@@ -447,7 +447,7 @@ impl Harness for AgentHarness {
         // turn. Bounded by `MAX_FOLLOWUP_CONTINUATIONS`.
         let mut followup_continuations: usize = 0;
         let mut tool_history: std::collections::VecDeque<ToolCallSummary> =
-            std::collections::VecDeque::with_capacity(8);
+            std::collections::VecDeque::with_capacity(TOOL_HISTORY_WINDOW);
         let result: Result<crate::harness::trace::LoopTraceSessionOutcome, HarnessError> = loop {
             if cancel.is_cancelled() {
                 self.set_terminate_reason(TerminateReason::Cancelled);

@@ -6,6 +6,9 @@
 //! Detection rule (deliberately conservative — false positives are
 //! costly because they inject a [verifier veto] message that disrupts
 //! the model):
+//!   - this is a *mid-turn* turn (`ctx.stop_reason.is_none()`) — the loop
+//!     is still emitting tool calls; the stop turn belongs to the stop /
+//!     goal verifiers, and firing there would only re-judge stale history
 //!   - `ctx.recent_tool_calls.len() >= threshold`
 //!   - the trailing `threshold` entries all have the same `name` and
 //!     `args_hash`
@@ -20,7 +23,9 @@ use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::ErrorClass;
-use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
+use crate::verification::turn_verifier::{
+    TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
+};
 
 pub struct ToolLoopVerifier {
     repeat_threshold: usize,
@@ -36,12 +41,17 @@ impl ToolLoopVerifier {
         }
     }
 
+    /// Set the repetition threshold. Clamped to `[2, TOOL_HISTORY_WINDOW]`:
+    /// the lower bound avoids "single call ⇒ instant veto"; the upper bound
+    /// is the harness ring-buffer capacity — a threshold above it could never
+    /// be satisfied (`recent_tool_calls.len()` is bounded by the window), which
+    /// would silently disable detection.
     pub fn with_threshold(mut self, n: usize) -> Self {
-        self.repeat_threshold = n.max(2);
+        self.repeat_threshold = n.clamp(2, TOOL_HISTORY_WINDOW);
         self
     }
 
-    /// Current repetition threshold (always >= 2).
+    /// Current repetition threshold (always within `[2, TOOL_HISTORY_WINDOW]`).
     pub fn threshold(&self) -> usize {
         self.repeat_threshold
     }
@@ -64,6 +74,18 @@ impl TurnVerifier for ToolLoopVerifier {
         ctx: &TurnVerifyContext<'_>,
         _cancel: &CancellationToken,
     ) -> VerifierVerdict {
+        // Death-loop detection is a *mid-turn* concern: every turn of the loop
+        // emits a tool call, so `stop_reason` is `None` while it is happening
+        // (the stop turn is `StopHookVerifier`/`ScratchpadGoalVerifier`'s job).
+        // Evaluating on a stop turn would only re-examine *stale* buffer
+        // entries from earlier turns and could veto a legitimate stop whose
+        // answer text is empty (e.g. a thinking-only finish), flipping a clean
+        // Done into a Continue. Gate it out — this drops no real detection
+        // because the triggering call always lands on a `stop_reason.is_none()`
+        // turn.
+        if ctx.stop_reason.is_some() {
+            return VerifierVerdict::Continue;
+        }
         if ctx.recent_tool_calls.len() < self.repeat_threshold {
             return VerifierVerdict::Continue;
         }

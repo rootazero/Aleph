@@ -46,5 +46,5 @@ pub use stop_hook_verifier::StopHookVerifier;
 pub use tool_loop_verifier::ToolLoopVerifier;
 pub use turn_verifier::{
     hash_tool_args, ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierChain,
-    VerifierChainBuilder, VerifierVerdict,
+    VerifierChainBuilder, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };

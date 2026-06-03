@@ -23,6 +23,15 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::ErrorClass;
 
+/// Capacity of the harness's recent-tool-call ring buffer (the source of
+/// `TurnVerifyContext::recent_tool_calls`). This is the single source of
+/// truth: `harness::agent` sizes the buffer with it and `ToolLoopVerifier`
+/// clamps its repetition threshold to it. A verifier threshold larger than
+/// this window can never be satisfied — `recent_tool_calls.len()` is bounded
+/// by the window — so detection would silently never fire. Keeping both
+/// sides bound to this constant prevents that drift.
+pub const TOOL_HISTORY_WINDOW: usize = 8;
+
 /// Snapshot of a single attempted tool call. Held in a small ring
 /// buffer by the harness so verifiers can detect repetition cheaply.
 #[derive(Clone, Debug)]
