@@ -44,8 +44,12 @@ typing_speed = 200             # Characters per second (50-400)
 
 ```toml
 [policies]
-# Tool safety
-tool_confirmation_required = ["vault_store", "file_ops"]
+# Top-level policy toggles live in the subsections below.
+
+# Per-tool permission gate
+[policies.tool_permissions]
+default = "allow"              # "allow" | "deny" | "ask"
+# overrides = { vault_store = "ask", agent_delete = "ask" }
 
 [policies.retry]
 max_retries = 3
@@ -64,9 +68,11 @@ auto_save = true
 
 ```toml
 [dispatcher]
-# Tool routing configuration
-max_tool_calls_per_turn = 10
-parallel_tool_calls = true
+enabled = true                 # Master switch for the dispatcher (tool routing)
+l3_enabled = true              # L3 = AI-powered tool inference
+l3_timeout_ms = 5000
+confirmation_threshold = 0.7   # Below this confidence → ask the user before running
+confirmation_timeout_ms = 30000
 ```
 
 ## Common Operations

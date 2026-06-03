@@ -3,7 +3,7 @@
 ## File Paths
 - Global skills: `~/.aleph/skills/`
 - Project skills: `.aleph/skills/` or `.claude/skills/` (in project root)
-- ClawHub metadata: `~/.aleph/skills/<skill>/clawhub.json`
+- ClawHub metadata: `~/.aleph/skills/<skill>/.clawhub.json`
 
 ## Operation Rules
 1. Skills are discovered on next tool registry scan (no restart needed)
@@ -28,9 +28,14 @@
 ```markdown
 ---
 name: my-skill
-description: One-line description for LLM matching
-trigger: keyword or phrase that activates this skill
+description: One-line description for LLM matching — put the trigger words/phrases HERE
+when-to-use: Optional extra hint shown in the skill list
 ---
+
+<!-- Only `name` and `description` are required. There is NO `trigger` field —
+     matching is driven entirely by `description`. Other optional fields:
+     scope, user-invocable, disable-model-invocation, bound-tool,
+     eligibility, install, primary-env, homepage, emoji, when-to-use. -->
 
 # Skill Title
 
@@ -45,14 +50,14 @@ Use the `clawhub` tool: `clawhub(action="install", skill_id="skill-name")`
 
 ### Manual install
 1. Create directory: `mkdir -p ~/.aleph/skills/my-skill`
-2. Create SKILL.md with frontmatter (name, description, trigger)
+2. Create SKILL.md with frontmatter (`name`, `description` — trigger words go in `description`)
 3. Add instruction content
 
 ### Remove a skill
 Delete the skill directory: `rm -rf ~/.aleph/skills/my-skill`
 
 ### List installed skills
-Use `list_skills` tool or `ls ~/.aleph/skills/`
+Use the `skill_status` tool or `ls ~/.aleph/skills/`
 
 ## Caveats
 - SKILL.md is required — directory without it is ignored

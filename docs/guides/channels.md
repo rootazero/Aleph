@@ -2,11 +2,15 @@
 
 ## File Path
 - Main: `~/.aleph/config.toml` section `[channels.<name>]`
-- Channel secrets: encrypted vault (key: `channel:{type}:{id}`)
+- Channel secrets: encrypted vault (key: `channel:{instance_id}:{secret_field}`, e.g. `channel:telegram:bot_token`)
 
 ## Operation Rules
 1. Before modification: `cp ~/.aleph/config.toml ~/.aleph/config.toml.bak`
-2. Bot tokens via `vault_store(action="store", key="channel:<type>:<id>", secret="<token>")`
+2. Two ways to set a secret:
+   - Put the secret field (e.g. `bot_token = "..."`) directly in the channel
+     section — on next load it is auto-migrated into the vault and stripped from
+     config; **or**
+   - Store it explicitly: `vault_store(action="store", key="channel:<instance_id>:bot_token", secret="<token>")`
 3. After modification: requires restart for channel connections
 
 ## Structure
@@ -15,20 +19,20 @@ Channel configs are opaque JSON — each platform has its own fields:
 
 ```toml
 [channels.my-telegram-bot]
-# Type auto-inferred from key if it matches a known platform
-bot_token_key = "channel:telegram:my-telegram-bot"  # Vault key reference
+type = "telegram"          # Explicit type (also auto-inferred when the section name matches a platform)
+bot_token = "123456:ABC..."   # Auto-migrated into vault on load, then stripped from config
 
 [channels.my-discord-bot]
-type = "discord"           # Required if key doesn't match known platform
-guild_id = "123456789"
+type = "discord"
+bot_token = "MTIz..."
 ```
 
 ## Known Platform Types
 
-Auto-inferred from channel key name:
-telegram, discord, whatsapp, slack, imessage, email, matrix, signal, mattermost, irc, webhook, xmpp, nostr
+Auto-inferred from channel section name:
+telegram, discord, whatsapp, slack, imessage, email, matrix, signal, mattermost, irc, webhook, xmpp, nostr, feishu, qq
 
-If key doesn't match any of these, add explicit `type = "..."` field.
+If the section name doesn't match any of these, add an explicit `type = "..."` field.
 
 ## Common Operations
 
@@ -37,7 +41,8 @@ If key doesn't match any of these, add explicit `type = "..."` field.
 2. Add config:
 ```toml
 [channels.telegram]
-bot_token_key = "channel:telegram:mybot"
+type = "telegram"
+# bot_token already in vault from step 1; omit it here (or paste it and let Aleph migrate it)
 ```
 3. Restart Aleph for channel to connect
 
