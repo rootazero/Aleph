@@ -199,10 +199,23 @@ impl MarkdownCliTool {
         // PRIMARY MODE: Direct args array (RECOMMENDED)
         // ==========================================
         if let Some(args_array) = args.get("args").and_then(|v| v.as_array()) {
-            return Ok(args_array
-                .iter()
-                .filter_map(|v| v.as_str().map(String::from))
-                .collect());
+            // Coerce scalars to their string form; reject structured values
+            // rather than silently dropping them — a dropped element would
+            // shift every following positional argument and run a different
+            // command than the LLM intended.
+            let mut out = Vec::with_capacity(args_array.len());
+            for v in args_array {
+                match v {
+                    Value::String(s) => out.push(s.clone()),
+                    Value::Number(n) => out.push(n.to_string()),
+                    Value::Bool(b) => out.push(b.to_string()),
+                    other => anyhow::bail!(
+                        "Invalid 'args' element {other}: only strings, numbers, \
+                         and booleans are allowed"
+                    ),
+                }
+            }
+            return Ok(out);
         }
 
         // ==========================================
@@ -264,11 +277,14 @@ impl MarkdownCliTool {
             cli_args.push(flag);
             cli_args.push(s.to_string());
         } else if let Some(arr) = value.as_array() {
-            // Repeated flags: --tag v1 --tag v2
+            // Repeated flags: --tag v1 --tag v2. Stringify non-string scalars
+            // instead of dropping them silently (which would emit a bare flag
+            // with a missing value).
             for item in arr {
-                if let Some(s) = item.as_str() {
-                    cli_args.push(flag.clone());
-                    cli_args.push(s.to_string());
+                cli_args.push(flag.clone());
+                match item.as_str() {
+                    Some(s) => cli_args.push(s.to_string()),
+                    None => cli_args.push(item.to_string()),
                 }
             }
         } else {

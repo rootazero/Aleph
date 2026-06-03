@@ -199,7 +199,7 @@ pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     }
     // Roughly 4 chars per token; keep ~70 % head + 30 % tail under the budget.
     let target_chars = budget_tokens.saturating_mul(4);
-    let head_chars = (target_chars * 7 / 10).min(text.len());
+    let head_chars = (target_chars.saturating_mul(7) / 10).min(text.len());
     let tail_budget = target_chars.saturating_sub(head_chars);
     let tail_chars = tail_budget.min(text.len().saturating_sub(head_chars));
 

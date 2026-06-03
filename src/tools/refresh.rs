@@ -55,7 +55,11 @@ impl ToolRefreshSource for CompositeRefreshSource {
     fn poll_changes(&self) -> bool {
         // Poll ALL sources — each `poll_changes` updates its own baseline as a
         // side effect, so short-circuiting would leave some sources stale.
-        self.sources.iter().any(|s| s.poll_changes())
+        // `fold` with `poll_changes()` on the left of `||` guarantees every
+        // source is polled even after one reports a change (unlike `.any()`).
+        self.sources
+            .iter()
+            .fold(false, |acc, s| s.poll_changes() || acc)
     }
 
     fn fetch_tools(&self) -> Vec<Box<dyn LoopTool>> {

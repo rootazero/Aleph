@@ -35,7 +35,7 @@ pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
     "code_exec",
     "file_ops",
     "self_manage",
-    "secret_vault",
+    "vault_store",
     "cron_manage",
     "agent_create",
     "agent_delete",
@@ -46,7 +46,7 @@ pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
     "heartbeat_delete",
     "task_create",
     "task_update",
-    "channel_manage",
+    "channel_pairing",
 ];
 
 /// Builtin tools that require explicit user confirmation before they run.
@@ -286,13 +286,13 @@ mod tests {
             "code_exec",
             "file_ops",
             "self_manage",
-            "secret_vault",
+            "vault_store",
             "cron_manage",
             "agent_create",
             "agent_delete",
             "team_create",
             "team_delegate",
-            "channel_manage",
+            "channel_pairing",
         ];
         for tool in write_tools {
             assert!(

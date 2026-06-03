@@ -24,9 +24,16 @@
 //! essentially nil at the steady-state scale of one harness per session.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use crate::sync_primitives::Mutex;
+
+/// Process-wide monotonic source of unique guard identities. Used so an
+/// [`InFlightGuard`] only removes the entry it actually installed — a duplicate
+/// `register` for the same `call_id` overwrites the entry with a fresh id, and
+/// the stale guard must not evict the live registration on drop.
+static NEXT_GUARD_ID: AtomicU64 = AtomicU64::new(1);
 
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -71,6 +78,11 @@ struct InFlightEntry {
     tool_name: String,
     token: CancellationToken,
     started_at_ms: u64,
+    /// Identity of the guard that installed this entry. The matching
+    /// [`InFlightGuard`] only removes the entry when this still equals its own
+    /// `guard_id`, so a stale duplicate-registration guard cannot evict a live
+    /// entry that replaced it.
+    guard_id: u64,
 }
 
 /// Public snapshot of one in-flight call, returned by [`InFlightToolCalls::list`].
@@ -106,17 +118,23 @@ impl InFlightToolCalls {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let guard_id = NEXT_GUARD_ID.fetch_add(1, Ordering::Relaxed);
         let entry = InFlightEntry {
             tool_name: tool_name.to_string(),
             token,
             started_at_ms,
+            guard_id,
         };
-        if let Ok(mut guard) = self.inner.lock() {
-            guard.insert(call_id.to_string(), entry);
-        }
+        // Poison-recover rather than silently skipping the insert (P7); a
+        // dropped insert would leave the call uncancellable.
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(call_id.to_string(), entry);
         InFlightGuard {
             registry: self.clone(),
             call_id: call_id.to_string(),
+            guard_id,
         }
     }
 
@@ -129,9 +147,7 @@ impl InFlightToolCalls {
     /// harness side — that keeps registration and deregistration in one place
     /// and avoids a TOCTOU between cancel and natural completion.
     pub fn cancel(&self, call_id: &str) -> bool {
-        let Ok(guard) = self.inner.lock() else {
-            return false;
-        };
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match guard.get(call_id) {
             Some(entry) => {
                 entry.token.cancel();
@@ -144,9 +160,7 @@ impl InFlightToolCalls {
     /// Snapshot every in-flight call. Useful for diagnostic `tools.in_flight`
     /// RPCs / CLI listings without exposing the raw token.
     pub fn list(&self) -> Vec<InFlightSnapshot> {
-        let Ok(guard) = self.inner.lock() else {
-            return Vec::new();
-        };
+        let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut out: Vec<InFlightSnapshot> = guard
             .iter()
             .map(|(id, entry)| InFlightSnapshot {
@@ -161,7 +175,7 @@ impl InFlightToolCalls {
 
     /// Number of currently-in-flight calls.
     pub fn len(&self) -> usize {
-        self.inner.lock().map(|g| g.len()).unwrap_or(0)
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// True when no calls are in flight.
@@ -176,11 +190,17 @@ impl InFlightToolCalls {
 pub struct InFlightGuard {
     registry: InFlightToolCalls,
     call_id: String,
+    guard_id: u64,
 }
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        if let Ok(mut guard) = self.registry.inner.lock() {
+        let mut guard = self.registry.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // Only evict the entry this guard installed. If a duplicate `register`
+        // for the same `call_id` replaced it (fresh `guard_id`), the live
+        // registration owns the slot and a stale guard must leave it intact —
+        // otherwise the in-flight call silently becomes uncancellable.
+        if guard.get(&self.call_id).map(|e| e.guard_id) == Some(self.guard_id) {
             guard.remove(&self.call_id);
         }
     }
@@ -254,5 +274,27 @@ mod tests {
             !stale.is_cancelled(),
             "stale entry must not be fired — duplicate register replaced it",
         );
+    }
+
+    #[test]
+    fn stale_guard_drop_does_not_evict_live_duplicate() {
+        let reg = InFlightToolCalls::new();
+        let live = CancellationToken::new();
+        // First registration — becomes stale once the second overwrites it.
+        let stale_guard = reg.register("call-1", "bash", CancellationToken::new());
+        // Second registration for the same call_id overwrites the entry; its
+        // token is the live cancel target.
+        let live_guard = reg.register("call-1", "bash", live.clone());
+
+        // The stale guard drops while the live registration is still active.
+        drop(stale_guard);
+
+        // The live entry must survive: the stale guard's id no longer matches.
+        assert_eq!(reg.len(), 1, "live entry must survive stale guard drop");
+        assert!(reg.cancel("call-1"), "live call must still be cancellable");
+        assert!(live.is_cancelled(), "cancel must fire the live token");
+
+        drop(live_guard);
+        assert!(reg.is_empty(), "live guard drop removes the entry");
     }
 }
