@@ -476,12 +476,19 @@ impl SkillSystem {
             .and_then(|c| serde_json::to_value(&c).ok())
             .unwrap_or_else(|| serde_json::json!({}));
 
+        // Snapshot the user's per-skill overrides (enable/disable, scope) so the
+        // rebuilt snapshot reflects them in eligibility and prompt injection.
+        // Cloned under a short-lived lock to avoid holding config + registry
+        // locks simultaneously.
+        let skill_entries = self.inner.config.read().await.entries.clone();
+
         let registry = self.inner.registry.read().await;
         let new_snapshot = SkillSnapshot::build(
             &registry,
             &self.inner.eligibility,
             current_version,
             &config_value,
+            &skill_entries,
         );
         let skill_ids: Vec<String> = registry
             .list_all()

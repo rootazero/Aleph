@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 
 use crate::domain::skill::{SkillId, SkillManifest};
+use crate::skill::config::SkillEntryConfig;
 use crate::skill::eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 use crate::skill::prompt::build_skills_prompt_xml;
 use crate::skill::registry::SkillRegistry;
@@ -49,6 +50,13 @@ impl SkillSnapshot {
     /// and is forwarded to `EligibilityService::evaluate` for `required_config` checks.
     /// Pass `&serde_json::json!({})` when no config context is available.
     ///
+    /// `entries` holds the user's per-skill overrides from `skills.toml`
+    /// (enable/disable, scope override). These are applied **before** prompt
+    /// injection so that a skill the user disabled never reaches the model and a
+    /// scope override actually changes how the skill is surfaced. Pass an empty
+    /// map when no user config is available — the result is then identical to a
+    /// manifest-only evaluation.
+    ///
     /// Iterates every skill, evaluates eligibility, and collects:
     /// - eligible skill IDs
     /// - ineligible skill IDs with reasons
@@ -58,23 +66,42 @@ impl SkillSnapshot {
         eligibility: &EligibilityService,
         version: u64,
         config: &serde_json::Value,
+        entries: &HashMap<String, SkillEntryConfig>,
     ) -> Self {
         let mut eligible = Vec::new();
         let mut ineligible: HashMap<SkillId, Vec<IneligibilityReason>> = HashMap::new();
-        let mut model_visible: Vec<&SkillManifest> = Vec::new();
         let mut eligible_manifests: Vec<SkillManifest> = Vec::new();
 
         // Collect and sort by skill ID for deterministic ordering
-        let mut entries: Vec<_> = registry.iter().collect();
-        entries.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
+        let mut sorted: Vec<_> = registry.iter().collect();
+        sorted.sort_by(|a, b| a.0.as_str().cmp(b.0.as_str()));
 
-        for (id, manifest) in entries {
+        for (id, manifest) in sorted {
+            let entry = entries.get(id.as_str());
+
+            // A config-level disable overrides everything — the skill must not
+            // appear as eligible, nor leak into the injected prompt index.
+            if entry.and_then(|e| e.enabled) == Some(false) {
+                ineligible.insert(id.clone(), vec![IneligibilityReason::Disabled]);
+                continue;
+            }
+
             match eligibility.evaluate(manifest, config) {
                 EligibilityResult::Eligible => {
                     eligible.push(id.clone());
-                    if manifest.is_model_visible() {
-                        model_visible.push(manifest);
-                        eligible_manifests.push(manifest.clone());
+                    // Apply the user's scope override (if any) on a clone so the
+                    // downstream prompt layer, which reads `manifest.scope()`,
+                    // honours it. Without an override this is a plain clone.
+                    let effective = match entry.and_then(|e| e.scope_override.clone()) {
+                        Some(scope) => {
+                            let mut m = manifest.clone();
+                            m.set_scope(scope);
+                            m
+                        }
+                        None => manifest.clone(),
+                    };
+                    if effective.is_model_visible() {
+                        eligible_manifests.push(effective);
                     }
                 }
                 EligibilityResult::Ineligible(reasons) => {
@@ -83,6 +110,7 @@ impl SkillSnapshot {
             }
         }
 
+        let model_visible: Vec<&SkillManifest> = eligible_manifests.iter().collect();
         let prompt_xml = build_skills_prompt_xml(&model_visible);
 
         Self {
@@ -102,6 +130,11 @@ mod tests {
     use crate::domain::skill::{
         EligibilitySpec, InvocationPolicy, PromptScope, SkillContent, SkillManifest, SkillSource,
     };
+
+    /// Helper: an empty user-override map (no enable/disable, no scope override).
+    fn no_overrides() -> HashMap<String, SkillEntryConfig> {
+        HashMap::new()
+    }
 
     /// Helper: create a simple eligible manifest.
     fn make_manifest(name: &str, source: SkillSource) -> SkillManifest {
@@ -140,7 +173,8 @@ mod tests {
         });
         registry.register(m2);
 
-        let snap = SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}));
+        let snap =
+            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &no_overrides());
 
         assert_eq!(snap.version, 1);
         assert_eq!(snap.eligible.len(), 1);
@@ -157,9 +191,10 @@ mod tests {
         let eligibility = EligibilityService::new();
 
         let cfg = serde_json::json!({});
-        let snap1 = SkillSnapshot::build(&registry, &eligibility, 1, &cfg);
-        let snap2 = SkillSnapshot::build(&registry, &eligibility, 2, &cfg);
-        let snap3 = SkillSnapshot::build(&registry, &eligibility, 5, &cfg);
+        let ov = no_overrides();
+        let snap1 = SkillSnapshot::build(&registry, &eligibility, 1, &cfg, &ov);
+        let snap2 = SkillSnapshot::build(&registry, &eligibility, 2, &cfg, &ov);
+        let snap3 = SkillSnapshot::build(&registry, &eligibility, 5, &cfg, &ov);
 
         assert_eq!(snap1.version, 1);
         assert_eq!(snap2.version, 2);
@@ -188,7 +223,8 @@ mod tests {
         m3.set_scope(PromptScope::Disabled);
         registry.register(m3);
 
-        let snap = SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}));
+        let snap =
+            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &no_overrides());
 
         // All three are eligible (no eligibility constraints)
         // But only the visible one should appear in prompt_xml
@@ -217,9 +253,73 @@ mod tests {
         });
         registry.register(m3);
 
-        let snap = SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}));
+        let snap =
+            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &no_overrides());
         assert_eq!(snap.eligible.len(), 3);
         assert_eq!(snap.eligible_manifests.len(), 1);
         assert_eq!(snap.eligible_manifests[0].name(), "visible:skill");
+    }
+
+    #[test]
+    fn config_disable_removes_from_eligible_and_prompt() {
+        let mut registry = SkillRegistry::new();
+        let eligibility = EligibilityService::new();
+        // Manifest itself is fully eligible (no constraints).
+        registry.register(make_manifest("git:commit", SkillSource::Bundled));
+
+        // User disables it via skills.toml.
+        let mut entries = HashMap::new();
+        entries.insert(
+            "git:commit".to_string(),
+            SkillEntryConfig {
+                enabled: Some(false),
+                scope_override: None,
+            },
+        );
+
+        let snap =
+            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries);
+
+        assert!(
+            snap.eligible.is_empty(),
+            "config-disabled skill must not be eligible"
+        );
+        assert!(snap
+            .ineligible
+            .get(&SkillId::new("git:commit"))
+            .is_some_and(|r| r.contains(&IneligibilityReason::Disabled)));
+        assert!(
+            !snap.prompt_xml.contains("git:commit"),
+            "disabled skill must not leak into the injected prompt"
+        );
+        assert!(snap.eligible_manifests.is_empty());
+    }
+
+    #[test]
+    fn config_scope_override_applied_to_prompt() {
+        let mut registry = SkillRegistry::new();
+        let eligibility = EligibilityService::new();
+        // Default scope is System (model-visible). Override it to Disabled so it
+        // drops out of the prompt index even though it stays eligible.
+        registry.register(make_manifest("git:commit", SkillSource::Bundled));
+
+        let mut entries = HashMap::new();
+        entries.insert(
+            "git:commit".to_string(),
+            SkillEntryConfig {
+                enabled: None,
+                scope_override: Some(PromptScope::Disabled),
+            },
+        );
+
+        let snap =
+            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries);
+
+        // Still eligible (eligibility is independent of prompt scope)...
+        assert!(snap.eligible.contains(&SkillId::new("git:commit")));
+        // ...but the scope override made it model-invisible, so it is absent
+        // from both eligible_manifests and the rendered prompt.
+        assert!(snap.eligible_manifests.is_empty());
+        assert!(!snap.prompt_xml.contains("git:commit"));
     }
 }
