@@ -86,7 +86,13 @@ fn convert_list(text: &str) -> String {
 
 fn truncate(text: &str) -> String {
     if text.len() > MAX_MESSAGE_LENGTH {
-        format!("{}...(truncated)", &text[..MAX_MESSAGE_LENGTH])
+        // Walk back to a char boundary so we never slice through a multi-byte
+        // (CJK) codepoint — `&text[..MAX_MESSAGE_LENGTH]` panics otherwise.
+        let mut end = MAX_MESSAGE_LENGTH;
+        while end > 0 && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...(truncated)", &text[..end])
     } else {
         text.to_string()
     }

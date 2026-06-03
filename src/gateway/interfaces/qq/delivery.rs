@@ -87,7 +87,22 @@ pub fn chunk_text(text: &str, max_len: usize) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut start = 0;
     while start < text.len() {
-        let end = (start + max_len).min(text.len());
+        // Walk the hard byte cap back to the nearest char boundary so the
+        // slice below never lands inside a multi-byte (e.g. CJK) codepoint.
+        // QQ messages are predominantly Chinese with no spaces, so the cut
+        // routinely falls mid-character without this guard.
+        let mut end = (start + max_len).min(text.len());
+        while end > start && !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            // Degenerate case: a single codepoint wider than max_len. Advance
+            // to the next boundary to guarantee forward progress.
+            end = start + 1;
+            while end < text.len() && !text.is_char_boundary(end) {
+                end += 1;
+            }
+        }
         let split_at = if end < text.len() {
             text[start..end]
                 .rfind('\n')

@@ -168,11 +168,20 @@ impl IrcMessageOps {
         let chunks = MessageFormatter::split(&formatted, MAX_PRIVMSG_PAYLOAD);
 
         for chunk in &chunks {
-            let raw = format!("PRIVMSG {} :{}\r\n", target, chunk);
-            write_tx
-                .send(raw)
-                .await
-                .map_err(|e| ChannelError::SendFailed(format!("IRC write channel closed: {e}")))?;
+            // IRC messages are strictly single-line: a raw CR/LF inside the
+            // trailing parameter terminates the line and lets the remainder be
+            // parsed by the server as a new command (line/command injection),
+            // and silently corrupts any multi-line reply. Emit one PRIVMSG per
+            // line with embedded control characters removed.
+            for line in chunk.split(['\r', '\n']) {
+                if line.is_empty() {
+                    continue;
+                }
+                let raw = format!("PRIVMSG {target} :{line}\r\n");
+                write_tx.send(raw).await.map_err(|e| {
+                    ChannelError::SendFailed(format!("IRC write channel closed: {e}"))
+                })?;
+            }
         }
 
         Ok(SendResult {

@@ -213,16 +213,25 @@ fn decode_html_entities(html: &str) -> String {
 
 /// Strip HTML tags, preserving text content.
 fn html_to_plain_text(html: &str) -> String {
-    decode_html_entities(
-        html.replace(
-            |c: char| c.is_ascii_alphanumeric() || c == ' ' || c == '\n',
-            " ",
-        )
+    // Remove `<...>` tag spans (preserving the text between them), then decode
+    // entities and collapse whitespace. The previous implementation replaced
+    // every alphanumeric/space char with a space — i.e. it erased exactly the
+    // readable content and kept only punctuation/markup, so quoted-reply bodies
+    // came back garbage/empty.
+    let mut stripped = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => stripped.push(c),
+            _ => {}
+        }
+    }
+    decode_html_entities(&stripped)
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .trim(),
-    )
 }
 
 /// Extract quote info from MS Teams HTML reply attachments.

@@ -334,11 +334,17 @@ impl GraphClient {
         query: &str,
         top: usize,
     ) -> Result<Vec<GraphUser>, ChannelError> {
+        // The `$search` value is a double-quote-delimited phrase embedded in a
+        // URL query string. Strip the `"` delimiter so the query can't break
+        // out of the phrase, then percent-encode so `&`/`#`/`?`/spaces can't
+        // corrupt the query string. (`encode_odata_param` only escapes the `'`
+        // used by `$filter`, which does not protect `$search`.)
+        let safe_query = encode_uri_component(&query.replace('"', " "));
         let url = format!(
             "{}/users?$search=\"displayName:{} OR mail:{}\"&$top={}&$select=id,displayName,userPrincipalName,mail",
             GRAPH_BASE_URL,
-            encode_odata_param(query),
-            encode_odata_param(query),
+            safe_query,
+            safe_query,
             top.min(25)
         );
 
