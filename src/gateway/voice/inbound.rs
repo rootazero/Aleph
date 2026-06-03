@@ -81,8 +81,7 @@ pub fn resolve_stt_config(
 
     let base = pcfg.base_url.as_deref().unwrap_or("https://api.openai.com");
     let resolved = crate::generation::providers::url_normalize::resolve_base_url(base);
-    let stt_endpoint =
-        resolved.primary_endpoint(crate::generation::GenerationType::Transcription);
+    let stt_endpoint = resolved.primary_endpoint(crate::generation::GenerationType::Transcription);
     let stt_base = stt_endpoint
         .trim_end_matches("/audio/transcriptions")
         .to_string();

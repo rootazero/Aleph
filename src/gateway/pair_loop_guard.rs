@@ -190,13 +190,11 @@ pub struct PairLoopGuard {
     state: Mutex<GuardState>,
 }
 
-#[derive(Debug)]
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct GuardState {
     pairs: HashMap<PairKey, PairState>,
     last_prune: Option<Instant>,
 }
-
 
 impl PairLoopGuard {
     pub fn new() -> Self {

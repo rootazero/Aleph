@@ -73,7 +73,8 @@ fn parse_active_tab_id(tabs_text: &str) -> Option<String> {
 fn extract_tab_url(tabs_text: &str, tab_id: &str) -> Option<String> {
     tabs_text
         .lines()
-        .filter_map(parse_tab_line).rfind(|(id, _)| id == tab_id)
+        .filter_map(parse_tab_line)
+        .rfind(|(id, _)| id == tab_id)
         .map(|(_, url)| url)
 }
 

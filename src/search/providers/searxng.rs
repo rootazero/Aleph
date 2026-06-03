@@ -244,7 +244,8 @@ mod tests {
 
     #[test]
     fn test_searxng_provider_creation() {
-        let provider = SearxngProvider::new("http://localhost:8080".to_string(), None, None).unwrap();
+        let provider =
+            SearxngProvider::new("http://localhost:8080".to_string(), None, None).unwrap();
         assert_eq!(provider.name(), "searxng");
         assert!(provider.is_available());
     }
@@ -327,9 +328,12 @@ mod tests {
     /// (so the factory can pass through config values without pre-filtering).
     #[test]
     fn provider_normalizes_empty_engines_to_none() {
-        let p =
-            SearxngProvider::new("http://localhost:8080".to_string(), Some(String::new()), None)
-                .unwrap();
+        let p = SearxngProvider::new(
+            "http://localhost:8080".to_string(),
+            Some(String::new()),
+            None,
+        )
+        .unwrap();
         assert!(p.engines.is_none());
         let p2 = SearxngProvider::new(
             "http://localhost:8080".to_string(),

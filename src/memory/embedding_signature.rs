@@ -84,7 +84,10 @@ mod tests {
         // Same model name, different provider → still a mismatch (no guarantee
         // the two providers produce identical weights).
         assert_eq!(
-            compare(Some("openai:text-embedding-3-small:1536"), "azure:text-embedding-3-small:1536"),
+            compare(
+                Some("openai:text-embedding-3-small:1536"),
+                "azure:text-embedding-3-small:1536"
+            ),
             SignatureStatus::Mismatch {
                 stored: "openai:text-embedding-3-small:1536".to_string(),
                 current: "azure:text-embedding-3-small:1536".to_string(),

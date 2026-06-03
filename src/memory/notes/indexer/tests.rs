@@ -547,12 +547,7 @@ mod reference_hook_tests {
         let indexer = NoteIndexer::new(dir.path().join("note"), backend.clone());
 
         indexer
-            .append_to_note(
-                "default",
-                "learning/rust-async",
-                &["new fact".into()],
-                &[],
-            )
+            .append_to_note("default", "learning/rust-async", &["new fact".into()], &[])
             .await
             .unwrap();
         let listed = backend.list_notes("default").await.unwrap();

@@ -643,9 +643,7 @@ mod tests {
         assert!(is_permanent_failure(
             "OpenAI Chat API error (403): Forbidden — invalid api key"
         ));
-        assert!(is_permanent_failure(
-            "request failed: 401 unauthorized"
-        ));
+        assert!(is_permanent_failure("request failed: 401 unauthorized"));
     }
 
     #[test]

@@ -209,10 +209,7 @@ impl WizardFlow for OnboardingFlow {
             if secondary_provider != "ollama" {
                 let api_key = if secondary_provider == primary_provider {
                     let use_same = prompter
-                        .confirm(
-                            "Use the same API key as the primary provider?",
-                            true,
-                        )
+                        .confirm("Use the same API key as the primary provider?", true)
                         .await?;
                     if use_same {
                         data.primary_api_key.clone()

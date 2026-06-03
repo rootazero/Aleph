@@ -200,7 +200,11 @@ mod tests {
 
     #[test]
     fn mode_string_round_trips() {
-        for m in [RouteMode::Auto, RouteMode::AlwaysLocal, RouteMode::AlwaysCloud] {
+        for m in [
+            RouteMode::Auto,
+            RouteMode::AlwaysLocal,
+            RouteMode::AlwaysCloud,
+        ] {
             assert_eq!(mode_from_str(mode_to_str(m)), Some(m));
         }
         assert_eq!(mode_from_str("nope"), None);

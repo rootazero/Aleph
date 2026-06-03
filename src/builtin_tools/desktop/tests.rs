@@ -922,7 +922,9 @@ async fn test_call_user_verb_bypasses_approval_and_platform() {
     });
     let tool = DesktopTool::new().with_approval_policy(policy);
 
-    let output = AlephTool::call(&tool, make_args("call_user")).await.unwrap();
+    let output = AlephTool::call(&tool, make_args("call_user"))
+        .await
+        .unwrap();
     assert!(output.success);
     assert_eq!(output.data.unwrap()["call_user"], true);
 }

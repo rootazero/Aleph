@@ -117,9 +117,7 @@ impl ScratchpadSnapshot {
     /// complement of [`Self::has_pending_work`] once a plan exists. Empty
     /// plans never count as complete (nothing was decomposed to finish).
     pub fn is_objective_complete(&self) -> bool {
-        self.objective.is_some()
-            && !self.items.is_empty()
-            && self.items.iter().all(|i| i.is_done())
+        self.objective.is_some() && !self.items.is_empty() && self.items.iter().all(|i| i.is_done())
     }
 
     /// Render a judgment-free **completion summary** for a finished goal-loop:
@@ -432,9 +430,8 @@ impl ScratchpadManager {
         for line in content.split_inclusive('\n') {
             let trimmed = line.trim_start();
             let body = trimmed.trim_end_matches(['\n', '\r']);
-            let is_item = body.starts_with("- [ ]")
-                || body.starts_with("- [~]")
-                || body.starts_with("- [x]");
+            let is_item =
+                body.starts_with("- [ ]") || body.starts_with("- [~]") || body.starts_with("- [x]");
             // The placeholder never consumes an index (matches parse_snapshot).
             if is_item && body != "- [ ] ..." {
                 let this = count;
@@ -514,9 +511,7 @@ pub(crate) fn parse_snapshot(content: &str) -> ScratchpadSnapshot {
                     }
                 })
                 // Drop the default `- [ ] ...` placeholder.
-                .filter(|(text, status)| {
-                    !(*status == PlanItemStatus::Pending && *text == "...")
-                })
+                .filter(|(text, status)| !(*status == PlanItemStatus::Pending && *text == "..."))
                 .map(|(text, status)| PlanItem {
                     text: text.to_string(),
                     status,
@@ -564,7 +559,8 @@ mod tests {
     #[test]
     fn parse_snapshot_plan_without_objective_does_not_fire() {
         // Items present but objective never set → hook stays dormant.
-        let md = "## Objective\n[No active task]\n\n## Plan\n- [ ] orphan step\n\n## Working State\n";
+        let md =
+            "## Objective\n[No active task]\n\n## Plan\n- [ ] orphan step\n\n## Working State\n";
         let snap = parse_snapshot(md);
         assert_eq!(snap.objective, None);
         assert!(!snap.has_pending_work());
@@ -577,7 +573,11 @@ mod tests {
         assert_eq!(snap.items.len(), 3);
         // in_progress is not done → still pending work (keeps the loop alive).
         assert!(snap.has_pending_work());
-        assert_eq!(snap.incomplete().len(), 2, "[~] and [ ] are both incomplete");
+        assert_eq!(
+            snap.incomplete().len(),
+            2,
+            "[~] and [ ] are both incomplete"
+        );
         let cur = snap.current().expect("an in-progress step");
         assert_eq!(cur.text, "B");
         assert_eq!(cur.status, PlanItemStatus::InProgress);
@@ -598,18 +598,15 @@ mod tests {
     #[test]
     fn is_objective_complete_only_when_objective_set_and_all_done() {
         // All done + objective → complete.
-        let done = parse_snapshot(
-            "## Objective\nShip\n\n## Plan\n- [x] A\n- [x] B\n\n## Working State\n",
-        );
+        let done =
+            parse_snapshot("## Objective\nShip\n\n## Plan\n- [x] A\n- [x] B\n\n## Working State\n");
         assert!(done.is_objective_complete());
         // A box still open → not complete.
-        let mixed = parse_snapshot(
-            "## Objective\nShip\n\n## Plan\n- [x] A\n- [ ] B\n\n## Working State\n",
-        );
+        let mixed =
+            parse_snapshot("## Objective\nShip\n\n## Plan\n- [x] A\n- [ ] B\n\n## Working State\n");
         assert!(!mixed.is_objective_complete());
         // In-progress is not done → not complete.
-        let wip =
-            parse_snapshot("## Objective\nShip\n\n## Plan\n- [~] A\n\n## Working State\n");
+        let wip = parse_snapshot("## Objective\nShip\n\n## Plan\n- [~] A\n\n## Working State\n");
         assert!(!wip.is_objective_complete());
         // No objective → never complete (dormant gate, matches the verifier).
         let no_obj = parse_snapshot(
@@ -627,7 +624,10 @@ mod tests {
             "## Objective\nShip auth\n\n## Plan\n- [x] Design API\n- [x] Implement\n\n## Working State\n",
         );
         let out = snap.render_completion();
-        assert!(out.starts_with(COMPLETION_BANNER), "must lead with the 收尾 sentinel");
+        assert!(
+            out.starts_with(COMPLETION_BANNER),
+            "must lead with the 收尾 sentinel"
+        );
         assert!(out.contains("Ship auth"));
         assert!(out.contains("全部 2 个步骤已完成"));
         assert!(out.contains("- [x] Design API"));
@@ -649,7 +649,10 @@ mod tests {
 
         manager.complete_item(1).await.unwrap();
         let snap = manager.snapshot().await.unwrap();
-        assert!(snap.current().is_none(), "no item should remain in progress");
+        assert!(
+            snap.current().is_none(),
+            "no item should remain in progress"
+        );
         assert_eq!(snap.items[1].text, "beta");
         assert_eq!(snap.items[1].status, PlanItemStatus::Done);
         // alpha + gamma still pending — beta did not bleed into a sibling.

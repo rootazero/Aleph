@@ -33,14 +33,14 @@ mod trace_sink_adapter;
 mod tests;
 
 pub use engine::ExecutionEngine;
+#[allow(unused_imports)] // wired into run_loop.rs in this commit
+pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
 pub use simple::SimpleExecutionEngine;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use tool_service_builder::build_request_tool_service;
 pub use tool_service_builder::set_confirmation_requester;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use trace_sink_adapter::GatewayTraceSink;
-#[allow(unused_imports)] // wired into run_loop.rs in this commit
-pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
 
 use crate::gateway::media::PendingMedia;
 use crate::sync_primitives::{AtomicU32, AtomicU64, Ordering};

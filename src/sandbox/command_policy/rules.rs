@@ -27,7 +27,6 @@ pub enum RuleAction {
     Warn,
 }
 
-
 /// Global override applied on top of per-rule [`RuleAction`]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]

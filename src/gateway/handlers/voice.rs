@@ -86,9 +86,11 @@ pub async fn handle_transcribe(
         Ok(text) => {
             JsonRpcResponse::success(request.id, serde_json::json!({ "text": text.trim() }))
         }
-        Err(e) => {
-            JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("Transcription failed: {e}"))
-        }
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Transcription failed: {e}"),
+        ),
     }
 }
 
@@ -193,9 +195,7 @@ pub async fn handle_record_stop(
         Err(
             aleph_desktop::DesktopError::NotImplemented(_)
             | aleph_desktop::DesktopError::BridgeDisabled(_),
-        ) => {
-            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, NATIVE_AUDIO_UNAVAILABLE)
-        }
+        ) => return JsonRpcResponse::error(request.id, INTERNAL_ERROR, NATIVE_AUDIO_UNAVAILABLE),
         Err(e) => {
             return JsonRpcResponse::error(
                 request.id,
@@ -278,7 +278,8 @@ pub async fn handle_synthesize(
         snapshot
     };
     let attachment =
-        crate::gateway::voice::outbound::generate_tts(text, &voice_state, &registry, &gen_cfg).await;
+        crate::gateway::voice::outbound::generate_tts(text, &voice_state, &registry, &gen_cfg)
+            .await;
     let Some(attachment) = attachment else {
         return JsonRpcResponse::error(
             request.id,
@@ -376,7 +377,10 @@ mod tests {
         );
         let dir = tempfile::TempDir::new().unwrap();
         let store = Arc::new(SecurityStore::in_memory().unwrap());
-        let vault = Arc::new(SharedTokenManager::new(store, dir.path().join("test.vault")));
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            dir.path().join("test.vault"),
+        ));
         let config = Arc::new(RwLock::new(Config::default()));
         let resp = handle_transcribe(req, config, vault).await;
         // Decode happens before any provider lookup → invalid base64 errors out.

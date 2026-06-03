@@ -1120,9 +1120,14 @@ mod tests {
         assert!(profile.contains(out), "missing unix-socket outbound allow");
 
         // Last-match-wins: the AF_UNIX re-allow must come AFTER the deny.
-        let deny_idx = profile.find("(deny network*)").expect("network deny present");
+        let deny_idx = profile
+            .find("(deny network*)")
+            .expect("network deny present");
         let allow_idx = profile.find(bind).unwrap();
-        assert!(deny_idx < allow_idx, "unix re-allow must follow network deny");
+        assert!(
+            deny_idx < allow_idx,
+            "unix re-allow must follow network deny"
+        );
     }
 
     #[test]
@@ -1174,7 +1179,9 @@ mod tests {
         };
         let cwd = Path::new("/tmp/ws");
         let profile = driver.generate_profile(&policy, cwd).unwrap();
-        let deny_idx = profile.find("(deny network*)").expect("restricted deny present");
+        let deny_idx = profile
+            .find("(deny network*)")
+            .expect("restricted deny present");
         let allow_idx = profile
             .find(r#"(local unix-socket (subpath "/var/run/db.sock"))"#)
             .expect("unix re-allow present");

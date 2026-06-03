@@ -888,7 +888,10 @@ mod tests {
         // Provider says the prompt was actually 150 tokens → estimate was 1.5× low.
         budget.observe_actual_usage(150);
         let cal = budget.calibration().expect("calibration set");
-        assert!((cal - 1.5).abs() < 1e-6, "first factor == raw ratio, got {cal}");
+        assert!(
+            (cal - 1.5).abs() < 1e-6,
+            "first factor == raw ratio, got {cal}"
+        );
     }
 
     #[test]

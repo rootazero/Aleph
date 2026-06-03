@@ -152,15 +152,15 @@ pub fn key_button(keys: &[String], action: crate::PressAction) -> Result<()> {
     let mut press = |dir: Direction, reverse: bool| -> Result<()> {
         if reverse {
             for key in parsed.iter().rev() {
-                enigo.key(*key, dir).map_err(|e| {
-                    DesktopError::InputFailed(format!("Failed key {dir:?}: {e}"))
-                })?;
+                enigo
+                    .key(*key, dir)
+                    .map_err(|e| DesktopError::InputFailed(format!("Failed key {dir:?}: {e}")))?;
             }
         } else {
             for key in &parsed {
-                enigo.key(*key, dir).map_err(|e| {
-                    DesktopError::InputFailed(format!("Failed key {dir:?}: {e}"))
-                })?;
+                enigo
+                    .key(*key, dir)
+                    .map_err(|e| DesktopError::InputFailed(format!("Failed key {dir:?}: {e}")))?;
             }
         }
         Ok(())

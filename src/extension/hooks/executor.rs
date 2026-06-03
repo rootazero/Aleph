@@ -902,19 +902,17 @@ mod tests {
         let hook_a = project_hook("user:project", proj_a.path());
 
         // Active project == the hook's project → fires.
-        let in_a =
-            crate::projects::with_project_root(Some(proj_a.path().to_path_buf()), async {
-                exec.project_scope_allows(&hook_a)
-            })
-            .await;
+        let in_a = crate::projects::with_project_root(Some(proj_a.path().to_path_buf()), async {
+            exec.project_scope_allows(&hook_a)
+        })
+        .await;
         assert!(in_a, "project hook must fire inside its own project");
 
         // A different project is active → suppressed (no cross-project leak).
-        let in_b =
-            crate::projects::with_project_root(Some(proj_b.path().to_path_buf()), async {
-                exec.project_scope_allows(&hook_a)
-            })
-            .await;
+        let in_b = crate::projects::with_project_root(Some(proj_b.path().to_path_buf()), async {
+            exec.project_scope_allows(&hook_a)
+        })
+        .await;
         assert!(!in_b, "project hook must NOT fire inside another project");
     }
 }

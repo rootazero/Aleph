@@ -740,7 +740,9 @@ mod tests {
                     id: "main".to_string(),
                     default: true,
                     name: Some("Main Agent".to_string()),
-                    model: Some(crate::config::types::agents_def::AgentModelRef::Legacy("claude-opus-4".to_string())),
+                    model: Some(crate::config::types::agents_def::AgentModelRef::Legacy(
+                        "claude-opus-4".to_string(),
+                    )),
                     ..Default::default()
                 },
                 AgentDefinition {
@@ -993,7 +995,10 @@ mod tests {
         use crate::config::types::agents_def::AgentModelRef;
         let providers = std::collections::HashMap::new();
         let m = AgentModelRef::Legacy("anything".to_string());
-        assert_eq!(super::resolve_model_ref(&m, &providers), Some("anything".to_string()));
+        assert_eq!(
+            super::resolve_model_ref(&m, &providers),
+            Some("anything".to_string())
+        );
     }
 
     #[test]
@@ -1001,13 +1006,22 @@ mod tests {
         use crate::config::types::agents_def::AgentModelRef;
         use crate::config::types::provider::ProviderConfig;
         let mut providers = std::collections::HashMap::new();
-        providers.insert("anthropic".to_string(), ProviderConfig {
-            enabled: true,
-            models: vec!["claude-sonnet-4".to_string()],
-            ..test_provider()
-        });
-        let m = AgentModelRef::Qualified { provider: "anthropic".to_string(), model: "claude-sonnet-4".to_string() };
-        assert_eq!(super::resolve_model_ref(&m, &providers), Some("claude-sonnet-4".to_string()));
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                enabled: true,
+                models: vec!["claude-sonnet-4".to_string()],
+                ..test_provider()
+            },
+        );
+        let m = AgentModelRef::Qualified {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4".to_string(),
+        };
+        assert_eq!(
+            super::resolve_model_ref(&m, &providers),
+            Some("claude-sonnet-4".to_string())
+        );
     }
 
     #[test]
@@ -1015,13 +1029,39 @@ mod tests {
         use crate::config::types::agents_def::AgentModelRef;
         use crate::config::types::provider::ProviderConfig;
         let mut providers = std::collections::HashMap::new();
-        providers.insert("anthropic".to_string(), ProviderConfig { enabled: false, models: vec!["claude-sonnet-4".to_string()], ..test_provider() });
-        providers.insert("openai".to_string(), ProviderConfig { enabled: true, models: vec!["gpt-5".to_string()], ..test_provider() });
-        let disabled = AgentModelRef::Qualified { provider: "anthropic".into(), model: "claude-sonnet-4".into() };
-        let missing_provider = AgentModelRef::Qualified { provider: "ghost".into(), model: "x".into() };
-        let model_dropped = AgentModelRef::Qualified { provider: "openai".into(), model: "gpt-4".into() };
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                enabled: false,
+                models: vec!["claude-sonnet-4".to_string()],
+                ..test_provider()
+            },
+        );
+        providers.insert(
+            "openai".to_string(),
+            ProviderConfig {
+                enabled: true,
+                models: vec!["gpt-5".to_string()],
+                ..test_provider()
+            },
+        );
+        let disabled = AgentModelRef::Qualified {
+            provider: "anthropic".into(),
+            model: "claude-sonnet-4".into(),
+        };
+        let missing_provider = AgentModelRef::Qualified {
+            provider: "ghost".into(),
+            model: "x".into(),
+        };
+        let model_dropped = AgentModelRef::Qualified {
+            provider: "openai".into(),
+            model: "gpt-4".into(),
+        };
         assert_eq!(super::resolve_model_ref(&disabled, &providers), None);
-        assert_eq!(super::resolve_model_ref(&missing_provider, &providers), None);
+        assert_eq!(
+            super::resolve_model_ref(&missing_provider, &providers),
+            None
+        );
         assert_eq!(super::resolve_model_ref(&model_dropped, &providers), None);
     }
 }

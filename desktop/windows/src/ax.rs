@@ -32,9 +32,7 @@ use async_trait::async_trait;
 
 use aleph_desktop::traits::AccessibilityCapability;
 use aleph_desktop::{DesktopError, Result};
-use aleph_protocol::desktop_bridge::methods::ax::{
-    AxElement, QueryByRoleParams, QueryTreeParams,
-};
+use aleph_protocol::desktop_bridge::methods::ax::{AxElement, QueryByRoleParams, QueryTreeParams};
 
 // ── UIA ControlType → macOS AX role mapping (pure, host-testable) ────────────
 
@@ -320,7 +318,9 @@ mod imp {
             .map(|b| b.to_string())
             .ok()
             .filter(|s| !s.is_empty());
-        let bounds = unsafe { el.CurrentBoundingRectangle() }.ok().map(rect_to_region);
+        let bounds = unsafe { el.CurrentBoundingRectangle() }
+            .ok()
+            .map(rect_to_region);
         let pid = unsafe { el.CurrentProcessId() }.unwrap_or(0);
 
         AxElement {

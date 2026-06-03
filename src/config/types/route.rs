@@ -24,9 +24,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Mirrors the [`CacheRetention`](crate::config::types::provider::CacheRetention)
 /// enum precedent (Copy + Default + snake_case serde).
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RouteMode {
     /// No tier preference — configured order is the route (byte-identical

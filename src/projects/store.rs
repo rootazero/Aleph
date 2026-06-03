@@ -213,9 +213,8 @@ impl ProjectStore {
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             match f(&mut file) {
                 Ok(value) => {
-                    self.write_unlocked(&file).map_err(|e| {
-                        std::io::Error::other(e.to_string())
-                    })?;
+                    self.write_unlocked(&file)
+                        .map_err(|e| std::io::Error::other(e.to_string()))?;
                     Ok(Ok(value))
                 }
                 Err(e) => Ok(Err(e)),

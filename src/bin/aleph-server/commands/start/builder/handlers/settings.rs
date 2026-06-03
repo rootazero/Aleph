@@ -749,12 +749,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     );
 
     // Local/cloud route mode (hot-applies to the live failover chain)
-    register_handler!(
-        server,
-        "route_config.get",
-        route_config::handle_get,
-        config
-    );
+    register_handler!(server, "route_config.get", route_config::handle_get, config);
     register_handler!(
         server,
         "route_config.update",

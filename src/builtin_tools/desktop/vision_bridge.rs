@@ -46,7 +46,8 @@ const DEFAULT_MAX_ENTRIES: usize = 32;
 /// Phrased for an agent that will *act* on the result: it asks for elements,
 /// their text, and rough locations rather than prose, so a text-only model has
 /// enough to choose a next action.
-const DESCRIBE_PROMPT: &str = "You are describing a desktop screenshot for an AI agent that controls \
+const DESCRIBE_PROMPT: &str =
+    "You are describing a desktop screenshot for an AI agent that controls \
 the computer but cannot see images. List the visible UI elements (buttons, fields, menus, links), \
 their visible text, and their approximate on-screen location. Be concise and factual.";
 
@@ -142,7 +143,11 @@ impl VisionBridge {
         };
 
         let description = if want_description {
-            match self.pipeline.understand_image(&image, DESCRIBE_PROMPT).await {
+            match self
+                .pipeline
+                .understand_image(&image, DESCRIBE_PROMPT)
+                .await
+            {
                 Ok(result) => {
                     let trimmed = result.description.trim();
                     if trimmed.is_empty() {
@@ -303,7 +308,10 @@ mod tests {
         let (bridge, _, understand_calls) = bridge_with(VisionCapabilities::all());
         let aug = bridge.augment("aGVsbG8=", ImageFormat::Png, true).await;
         assert_eq!(aug.ocr_text.as_deref(), Some("OK Cancel"));
-        assert_eq!(aug.description.as_deref(), Some("a window with an OK button"));
+        assert_eq!(
+            aug.description.as_deref(),
+            Some("a window with an OK button")
+        );
         assert_eq!(understand_calls.load(Ordering::SeqCst), 1);
     }
 

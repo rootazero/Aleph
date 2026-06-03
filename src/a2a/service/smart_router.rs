@@ -153,7 +153,9 @@ impl SmartRouter {
         if needle.is_empty() {
             return false;
         }
-        haystack.split(|c: char| !c.is_alphanumeric()).any(|word| word == needle)
+        haystack
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|word| word == needle)
     }
 }
 

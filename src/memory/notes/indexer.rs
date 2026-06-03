@@ -252,9 +252,9 @@ impl<S: NoteStore> NoteIndexer<S> {
             if !CATEGORY_DIRS.contains(&entry.category.as_str()) {
                 continue;
             }
-            let file = agent_dir
-                .join(&entry.category)
-                .join(crate::memory::notes::store::note_md_filename(&entry.filename));
+            let file = agent_dir.join(&entry.category).join(
+                crate::memory::notes::store::note_md_filename(&entry.filename),
+            );
             if fs::metadata(&file).await.is_err() {
                 self.store.remove_note_index(&entry.path, agent_id).await?;
                 total.pruned += 1;

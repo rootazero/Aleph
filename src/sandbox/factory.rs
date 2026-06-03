@@ -90,9 +90,8 @@ pub fn build_sandbox(
     // Sourced from `cfg` (no extra `build_sandbox` parameter → no caller
     // churn). Dormant unless `[sandbox.resource_governor] enabled = true`, so
     // boot behaviour is unchanged by default.
-    let governor = crate::sandbox::resource_governor::ResourceGovernor::from_schema(
-        &cfg.resource_governor,
-    );
+    let governor =
+        crate::sandbox::resource_governor::ResourceGovernor::from_schema(&cfg.resource_governor);
     if governor.is_enabled() {
         hooks = hooks.with_before(Arc::new(governor));
     }

@@ -13,13 +13,8 @@ use tokio_util::sync::CancellationToken;
 /// Outcome of a tool execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolResult {
-    Success {
-        output: Value,
-    },
-    Error {
-        error: String,
-        retryable: bool,
-    },
+    Success { output: Value },
+    Error { error: String, retryable: bool },
 }
 
 // =============================================================================

@@ -198,7 +198,8 @@ impl ScopedToolService {
                                 RoutingTarget::Missing => {
                                     return Err(ToolError::Execution {
                                         name: name_owned.clone(),
-                                        cause: "Routing target became Missing after being checked".into(),
+                                        cause: "Routing target became Missing after being checked"
+                                            .into(),
                                     });
                                 }
                             };

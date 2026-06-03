@@ -14,7 +14,6 @@ pub enum AgentSource {
     Project,
 }
 
-
 /// Mode of an agent
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AgentMode {

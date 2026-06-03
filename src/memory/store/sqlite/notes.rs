@@ -1161,10 +1161,9 @@ impl NoteStore for SqliteMemoryBackend {
 /// Load note markdown content from disk given index metadata and agent_id.
 async fn load_note_content_from_disk(entry: &NoteIndexEntry, agent_id: &str) -> Option<String> {
     let memory_dir = crate::utils::paths::get_note_memory_dir().ok()?;
-    let file_path = memory_dir
-        .join(agent_id)
-        .join(&entry.category)
-        .join(crate::memory::notes::store::note_md_filename(&entry.filename));
+    let file_path = memory_dir.join(agent_id).join(&entry.category).join(
+        crate::memory::notes::store::note_md_filename(&entry.filename),
+    );
     tokio::fs::read_to_string(&file_path).await.ok()
 }
 

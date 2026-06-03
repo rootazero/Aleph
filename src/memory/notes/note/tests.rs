@@ -347,7 +347,10 @@ Related: [[Rust Learning]] [[Dev Environment]]
     #[test]
     fn sanitize_title_strips_trailing_md_extension() {
         // A filename leaking in as a title must not yield a "*.md.md" file.
-        assert_eq!(helpers::sanitize_title("toolchain.md").unwrap(), "toolchain");
+        assert_eq!(
+            helpers::sanitize_title("toolchain.md").unwrap(),
+            "toolchain"
+        );
         assert_eq!(
             helpers::sanitize_title("rust-ownership").unwrap(),
             "rust-ownership"

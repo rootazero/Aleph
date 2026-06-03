@@ -380,7 +380,11 @@ pub fn spawn_periodic_sweeper(root: PathBuf, retention: Duration, interval: Dura
             ticker.tick().await;
             let root = root.clone();
             // Move the blocking fs walk off the async runtime.
-            let removed = match tokio::task::spawn_blocking(move || sweep_stale_tool_result_dirs(&root, retention)).await {
+            let removed = match tokio::task::spawn_blocking(move || {
+                sweep_stale_tool_result_dirs(&root, retention)
+            })
+            .await
+            {
                 Ok(count) => count,
                 Err(e) => {
                     tracing::warn!(error = %e, "tool_result sweeper task failed");

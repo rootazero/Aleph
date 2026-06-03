@@ -136,8 +136,7 @@ pub(in crate::commands::start) fn register_memory_handlers(
                         // Resolve the active provider at call time so a provider
                         // switched in the panel takes effect without a restart;
                         // fall back to the boot embedder if it can't be rebuilt.
-                        let embedder =
-                            resolve_active_embedder(&cfg, &vault).await.unwrap_or(emb);
+                        let embedder = resolve_active_embedder(&cfg, &vault).await.unwrap_or(emb);
                         memory_handlers::handle_reembed(req, db, md, embedder, eb, rs).await
                     }
                 });

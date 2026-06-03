@@ -69,17 +69,14 @@ impl ForwardingTraceSink {
             LoopTraceEvent::TurnStateEntered {
                 iteration,
                 state: LoopTraceState::Think,
-            } =>
-            {
-                Some(SubagentProgress {
-                    step: *iteration,
-                    timestamp: std::time::SystemTime::now(),
-                    kind: ProgressKind::LlmThinking,
-                    tool_name: None,
-                    latency_ms: None,
-                    preview: None,
-                })
-            }
+            } => Some(SubagentProgress {
+                step: *iteration,
+                timestamp: std::time::SystemTime::now(),
+                kind: ProgressKind::LlmThinking,
+                tool_name: None,
+                latency_ms: None,
+                preview: None,
+            }),
             LoopTraceEvent::SessionCompleted {
                 outcome: LoopTraceSessionOutcome::Cancelled,
                 iterations,
@@ -149,7 +146,10 @@ mod tests {
     }
     impl TraceSink for CapturingSink {
         fn on_trace(&self, event: &LoopTraceEvent) {
-            self.events.lock().expect("test sink lock").push(event.clone());
+            self.events
+                .lock()
+                .expect("test sink lock")
+                .push(event.clone());
         }
         fn flush(&self) {}
     }

@@ -24,8 +24,7 @@ pub use registry::{GENERATION_METADATA, PRESETS};
 /// The remaining fields are hermes-parity opt-in metadata; defaults are
 /// safe (no aliases, chat-modality-less, no homepage) and entries opt in
 /// via the `with_*` const builders.
-#[derive(Debug, Clone, Copy)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct GenerationPreset {
     // ── Required identity / routing ──────────────────────────────────────────
     /// Provider type identifier (e.g., "openai", "stability")
@@ -50,7 +49,6 @@ pub struct GenerationPreset {
     /// Vendor signup / API-key flow URL.
     pub signup_url: Option<&'static str>,
 }
-
 
 impl GenerationPreset {
     /// Const factory for the required three-tuple; extensions stay defaulted.

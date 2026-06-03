@@ -113,9 +113,9 @@ impl BrowserBackend for ChromeMcpBackend {
             })
             .next_back();
 
-        last_id.ok_or_else(|| BrowserError::TabNotFound(format!(
-            "Could not determine tab ID after opening {url}"
-        )))
+        last_id.ok_or_else(|| {
+            BrowserError::TabNotFound(format!("Could not determine tab ID after opening {url}"))
+        })
     }
 
     async fn close_tab(&self, tab_id: &str) -> Result<(), BrowserError> {

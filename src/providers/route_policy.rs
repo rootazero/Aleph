@@ -139,7 +139,11 @@ mod tests {
 
     #[test]
     fn auto_allows_everything() {
-        for tier in [EndpointTier::Local, EndpointTier::Cloud, EndpointTier::Unknown] {
+        for tier in [
+            EndpointTier::Local,
+            EndpointTier::Cloud,
+            EndpointTier::Unknown,
+        ] {
             assert_eq!(
                 classify_candidate(RouteMode::Auto, tier, false),
                 CandidateAction::Allow
@@ -153,7 +157,11 @@ mod tests {
 
     #[test]
     fn unknown_primary_always_allowed() {
-        for mode in [RouteMode::Auto, RouteMode::AlwaysLocal, RouteMode::AlwaysCloud] {
+        for mode in [
+            RouteMode::Auto,
+            RouteMode::AlwaysLocal,
+            RouteMode::AlwaysCloud,
+        ] {
             assert_eq!(
                 classify_candidate(mode, EndpointTier::Unknown, false),
                 CandidateAction::Allow

@@ -354,6 +354,9 @@ mod tests {
     fn test_action_type_display() {
         assert_eq!(ActionType::BrowserNavigate.to_string(), "browser navigate");
         assert_eq!(ActionType::ShellExec.to_string(), "shell exec");
-        assert_eq!(ActionType::DesktopLaunchApp.to_string(), "desktop launch app");
+        assert_eq!(
+            ActionType::DesktopLaunchApp.to_string(),
+            "desktop launch app"
+        );
     }
 }

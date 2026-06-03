@@ -982,9 +982,7 @@ mod tests {
     use crate::builtin_tools::desktop::{DesktopTool, VisionBridge};
     use crate::sync_primitives::Arc;
     use crate::vision::provider::VisionProvider;
-    use crate::vision::types::{
-        ImageInput, OcrResult, VisionCapabilities, VisionResult,
-    };
+    use crate::vision::types::{ImageInput, OcrResult, VisionCapabilities, VisionResult};
     use crate::vision::{VisionError, VisionPipeline};
 
     /// Minimal provider returning fixed OCR text for wiring assertions.
@@ -997,12 +995,11 @@ mod tests {
             _image: &ImageInput,
             _prompt: &str,
         ) -> std::result::Result<VisionResult, VisionError> {
-            Err(VisionError::UnsupportedCapability("image_understanding".into()))
+            Err(VisionError::UnsupportedCapability(
+                "image_understanding".into(),
+            ))
         }
-        async fn ocr(
-            &self,
-            _image: &ImageInput,
-        ) -> std::result::Result<OcrResult, VisionError> {
+        async fn ocr(&self, _image: &ImageInput) -> std::result::Result<OcrResult, VisionError> {
             Ok(OcrResult {
                 full_text: "Login Submit".into(),
                 lines: vec![],

@@ -113,11 +113,13 @@ pub(crate) fn key_button_args(keys: &[String], action: PressAction) -> Result<Ve
     let codes = keys
         .iter()
         .map(|k| {
-            evdev_keycode(k).or_else(|| evdev_modifier(k)).ok_or_else(|| {
-                DesktopError::InputFailed(format!(
-                    "ydotool: no evdev keycode for key '{k}' (Wayland press/release)"
-                ))
-            })
+            evdev_keycode(k)
+                .or_else(|| evdev_modifier(k))
+                .ok_or_else(|| {
+                    DesktopError::InputFailed(format!(
+                        "ydotool: no evdev keycode for key '{k}' (Wayland press/release)"
+                    ))
+                })
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -306,12 +308,7 @@ pub(crate) fn hover(x: i32, y: i32) -> Result<()> {
 }
 
 #[cfg(target_os = "linux")]
-pub(crate) fn mouse_button(
-    x: i32,
-    y: i32,
-    button: MouseButton,
-    action: PressAction,
-) -> Result<()> {
+pub(crate) fn mouse_button(x: i32, y: i32, button: MouseButton, action: PressAction) -> Result<()> {
     run_ydotool(&mousemove_args(x, y))?;
     run_ydotool(&click_args(button, action))?;
     tracing::info!(x, y, button = ?button, action = ?action, "Mouse button action performed (ydotool/Wayland)");
@@ -327,7 +324,13 @@ pub(crate) fn drag(start_x: i32, start_y: i32, end_x: i32, end_y: i32) -> Result
     run_ydotool(&click_args(MouseButton::Left, PressAction::Press))?;
     run_ydotool(&mousemove_args(end_x, end_y))?;
     run_ydotool(&click_args(MouseButton::Left, PressAction::Release))?;
-    tracing::info!(start_x, start_y, end_x, end_y, "Drag performed (ydotool/Wayland)");
+    tracing::info!(
+        start_x,
+        start_y,
+        end_x,
+        end_y,
+        "Drag performed (ydotool/Wayland)"
+    );
     Ok(())
 }
 
@@ -435,8 +438,7 @@ mod tests {
     #[test]
     fn key_button_args_release_reverses_order() {
         // release ctrl(29)+shift(42): up in reverse order, no down.
-        let args =
-            key_button_args(&["ctrl".into(), "shift".into()], PressAction::Release).unwrap();
+        let args = key_button_args(&["ctrl".into(), "shift".into()], PressAction::Release).unwrap();
         assert_eq!(args, vec!["key", "42:0", "29:0"]);
     }
 

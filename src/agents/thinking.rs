@@ -305,7 +305,10 @@ pub fn supports_xhigh_thinking(provider: &str, model: &str) -> bool {
 
     // Check full reference (provider/model)
     let full_ref = format!("{}/{}", provider_key, model_key);
-    if XHIGH_MODEL_REFS.iter().any(|r| r.eq_ignore_ascii_case(&full_ref)) {
+    if XHIGH_MODEL_REFS
+        .iter()
+        .any(|r| r.eq_ignore_ascii_case(&full_ref))
+    {
         return true;
     }
 

@@ -657,11 +657,17 @@ mod tests {
             .unwrap();
 
         // Fresh teams have no protocol.
-        assert_eq!(store.get_team(&team.id).await.unwrap().unwrap().protocol, None);
+        assert_eq!(
+            store.get_team(&team.id).await.unwrap().unwrap().protocol,
+            None
+        );
 
         // Set it.
         store
-            .set_protocol(&team.id, Some("Reviewer owns QA; merge only on green.".into()))
+            .set_protocol(
+                &team.id,
+                Some("Reviewer owns QA; merge only on green.".into()),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -680,7 +686,10 @@ mod tests {
             .set_protocol(&team.id, Some("   ".into()))
             .await
             .unwrap();
-        assert_eq!(store.get_team(&team.id).await.unwrap().unwrap().protocol, None);
+        assert_eq!(
+            store.get_team(&team.id).await.unwrap().unwrap().protocol,
+            None
+        );
 
         // Unknown team is a NotFound error.
         assert!(store

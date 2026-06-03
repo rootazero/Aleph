@@ -203,7 +203,10 @@ impl IncomingHandler {
         let chosen = if allow {
             pick_option(&options, &["allow_once", "allow_always", "allow"])
         } else {
-            pick_option(&options, &["reject_once", "reject_always", "reject", "deny"])
+            pick_option(
+                &options,
+                &["reject_once", "reject_always", "reject", "deny"],
+            )
         };
 
         match chosen {
@@ -256,9 +259,7 @@ impl IncomingHandler {
             );
             Err(HandlerOutcome::Error {
                 code: PERMISSION_DENIED,
-                message: format!(
-                    "path '{requested}' is outside the session workspace"
-                ),
+                message: format!("path '{requested}' is outside the session workspace"),
             })
         }
     }
@@ -342,7 +343,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("acp_inc_read_{}", std::process::id()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
         let file = dir.join("hello.txt");
-        tokio::fs::write(&file, "line1\nline2\nline3\n").await.unwrap();
+        tokio::fs::write(&file, "line1\nline2\nline3\n")
+            .await
+            .unwrap();
 
         let h = handler_at(&dir, PermissionPolicy::ApproveAll);
         let out = h
@@ -361,7 +364,9 @@ mod tests {
     async fn fs_read_line_window() {
         let dir = std::env::temp_dir().join(format!("acp_inc_win_{}", std::process::id()));
         tokio::fs::create_dir_all(&dir).await.unwrap();
-        tokio::fs::write(dir.join("f.txt"), "a\nb\nc\nd\ne\n").await.unwrap();
+        tokio::fs::write(dir.join("f.txt"), "a\nb\nc\nd\ne\n")
+            .await
+            .unwrap();
         let h = handler_at(&dir, PermissionPolicy::ApproveAll);
         let out = h
             .handle(
@@ -406,7 +411,9 @@ mod tests {
             )
             .await;
         assert!(matches!(out, HandlerOutcome::Result(_)));
-        let written = tokio::fs::read_to_string(dir.join("sub/new.txt")).await.unwrap();
+        let written = tokio::fs::read_to_string(dir.join("sub/new.txt"))
+            .await
+            .unwrap();
         assert_eq!(written, "hi");
         let _ = tokio::fs::remove_dir_all(&dir).await;
     }

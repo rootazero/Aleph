@@ -604,7 +604,10 @@ mod tests {
     fn press_and_release_map_to_key_button() {
         let press = parse_action_script("press(key='ctrl')").unwrap();
         assert_eq!(press[0].action, "key_button");
-        assert_eq!(press[0].keys.as_deref(), Some(["ctrl".to_string()].as_slice()));
+        assert_eq!(
+            press[0].keys.as_deref(),
+            Some(["ctrl".to_string()].as_slice())
+        );
         assert_eq!(press[0].press_action.as_deref(), Some("press"));
 
         let release = parse_action_script("release(key='shift a')").unwrap();

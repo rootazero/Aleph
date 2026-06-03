@@ -46,7 +46,10 @@ pub async fn serve_webchat(
         }
         let host = uri.host().unwrap_or("");
         matches!(host, "127.0.0.1" | "localhost" | "[::1]")
-            || host.parse::<std::net::Ipv4Addr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+            || host
+                .parse::<std::net::Ipv4Addr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(false)
     });
     let app = Router::new().fallback_service(serve_dir).layer(
         tower_http::cors::CorsLayer::new()

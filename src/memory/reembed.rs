@@ -177,10 +177,9 @@ async fn reembed_agent_notes(
         let mut valid_notes = Vec::with_capacity(chunk.len());
 
         for note in chunk {
-            let file_path = memory_dir
-                .join(agent_id)
-                .join(&note.category)
-                .join(crate::memory::notes::store::note_md_filename(&note.filename));
+            let file_path = memory_dir.join(agent_id).join(&note.category).join(
+                crate::memory::notes::store::note_md_filename(&note.filename),
+            );
 
             match tokio::fs::read_to_string(&file_path).await {
                 Ok(content) => {

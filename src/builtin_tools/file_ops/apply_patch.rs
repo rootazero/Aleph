@@ -915,10 +915,7 @@ mod tests {
             None,
             &[Hunk {
                 header: None,
-                lines: vec![
-                    HunkLine::Remove("end".into()),
-                    HunkLine::Add("FIN".into()),
-                ],
+                lines: vec![HunkLine::Remove("end".into()), HunkLine::Add("FIN".into())],
                 eof_anchor: true,
             }],
             Some(dir.path()),

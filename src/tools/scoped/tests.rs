@@ -1132,14 +1132,21 @@ async fn declared_confirmation_tool_runs_when_approved() {
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new())
         .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
 
-    let out = svc.execute("danger", json!({})).await.expect("approved → runs");
+    let out = svc
+        .execute("danger", json!({}))
+        .await
+        .expect("approved → runs");
     let ran = match &out.value {
         Value::Object(_) => out.value == json!({"ran": true}),
         Value::String(s) => serde_json::from_str::<Value>(s).ok() == Some(json!({"ran": true})),
         _ => false,
     };
     assert!(ran, "unexpected output: {:?}", out.value);
-    assert_eq!(requester.calls.load(Ordering::SeqCst), 1, "gate must prompt once");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "gate must prompt once"
+    );
 }
 
 #[tokio::test]
@@ -1177,7 +1184,10 @@ async fn plain_tool_unaffected_by_confirmation_gate() {
     // A tool that does not declare requires_confirmation runs normally even
     // with no requester wired — the change is byte-identical for it.
     let svc = ScopedToolService::new(confirm_registry(), BTreeSet::new());
-    let out = svc.execute("plain", json!({})).await.expect("plain tool runs");
+    let out = svc
+        .execute("plain", json!({}))
+        .await
+        .expect("plain tool runs");
     let ok = matches!(&out.value, Value::Object(_) | Value::String(_));
     assert!(ok, "plain tool should produce output");
 }

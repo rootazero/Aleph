@@ -853,8 +853,6 @@ mod tests {
             Some(stages),
         );
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("cyclic dependency"));
+        assert!(result.unwrap_err().contains("cyclic dependency"));
     }
 }

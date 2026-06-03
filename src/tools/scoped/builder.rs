@@ -244,12 +244,10 @@ impl ScopedToolService {
         use crate::session::events::ToolOutputMetadata;
         use crate::tools::runtime::ToolResult;
         match result {
-            ToolResult::Success { output } => {
-                Ok(ToolOutput {
-                    value: output,
-                    metadata: ToolOutputMetadata::default(),
-                })
-            }
+            ToolResult::Success { output } => Ok(ToolOutput {
+                value: output,
+                metadata: ToolOutputMetadata::default(),
+            }),
             // Map `retryable=true` to `ToolError::Transport` so the
             // one-shot retry helper (which keys off `ToolError::is_retryable`,
             // currently `true` for `Timeout` / `Transport` only) actually

@@ -42,7 +42,6 @@ pub enum BrowserOperatorMode {
     Vision,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DesktopBrowserOperatorArgs {
     /// Strategy preset: `dom`, `hybrid` (default), or `vision`.

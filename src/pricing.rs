@@ -553,7 +553,11 @@ mod tests {
         };
         let est = estimate("deepseek", "deepseek-chat", &breakdown);
         assert_eq!(est.status, CostStatus::Complete);
-        assert!((est.usd - 1.37).abs() < 1e-6, "expected $1.37, got ${}", est.usd);
+        assert!(
+            (est.usd - 1.37).abs() < 1e-6,
+            "expected $1.37, got ${}",
+            est.usd
+        );
     }
 
     #[test]
@@ -564,7 +568,11 @@ mod tests {
             ..Default::default()
         };
         let est = estimate("deepseek", "deepseek-reasoner", &breakdown);
-        assert!((est.usd - 2.19).abs() < 1e-6, "expected $2.19, got ${}", est.usd);
+        assert!(
+            (est.usd - 2.19).abs() < 1e-6,
+            "expected $2.19, got ${}",
+            est.usd
+        );
     }
 
     #[test]
@@ -576,7 +584,11 @@ mod tests {
         };
         let est = estimate("grok", "grok-4", &breakdown);
         assert_eq!(est.status, CostStatus::Complete);
-        assert!((est.usd - 3.0).abs() < 1e-6, "expected $3.00, got ${}", est.usd);
+        assert!(
+            (est.usd - 3.0).abs() < 1e-6,
+            "expected $3.00, got ${}",
+            est.usd
+        );
     }
 
     #[test]

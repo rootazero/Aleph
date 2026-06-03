@@ -26,9 +26,9 @@ impl AsyncSecretResolver for VaultSecretResolver {
         match self.inner.get_secret(name) {
             Ok(Some(decrypted)) => Ok(decrypted),
             Ok(None) => Err(SecretError::NotFound(name.to_string())),
-            Err(e) => Err(SecretError::Io(std::io::Error::other(
-                format!("vault resolve error: {e}"),
-            ))),
+            Err(e) => Err(SecretError::Io(std::io::Error::other(format!(
+                "vault resolve error: {e}"
+            )))),
         }
     }
 }

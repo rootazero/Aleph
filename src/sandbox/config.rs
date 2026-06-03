@@ -533,7 +533,10 @@ mod tests {
         let cfg: SandboxConfig = toml::from_str(toml).expect("parses");
         assert_eq!(
             cfg.allow_unix_sockets,
-            vec![PathBuf::from("/tmp/agent.sock"), PathBuf::from("/var/run/db")]
+            vec![
+                PathBuf::from("/tmp/agent.sock"),
+                PathBuf::from("/var/run/db")
+            ]
         );
         assert!(cfg.dangerously_allow_all_unix_sockets);
     }

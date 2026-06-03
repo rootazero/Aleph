@@ -347,7 +347,10 @@ mod tests {
         assert_eq!(main.id, "main");
         assert!(main.default);
         assert_eq!(main.name, Some("Main Agent".to_string()));
-        assert_eq!(main.model, Some(AgentModelRef::Legacy("claude-opus-4".to_string())));
+        assert_eq!(
+            main.model,
+            Some(AgentModelRef::Legacy("claude-opus-4".to_string()))
+        );
         assert_eq!(
             main.skills,
             Some(vec!["git_*".to_string(), "fs_*".to_string()])
@@ -483,7 +486,10 @@ mod tests {
         "#;
         let config: AgentsConfig = toml::from_str(toml_str).unwrap();
         let agent = &config.list[0];
-        assert_eq!(agent.model, Some(AgentModelRef::Legacy("claude-sonnet-4".to_string())));
+        assert_eq!(
+            agent.model,
+            Some(AgentModelRef::Legacy("claude-sonnet-4".to_string()))
+        );
     }
 
     #[test]
@@ -571,7 +577,10 @@ mod model_ref_tests {
     #[test]
     fn legacy_serializes_back_to_bare_string() {
         let m = AgentModelRef::Legacy("gpt-5".to_string());
-        assert_eq!(serde_json::to_value(&m).unwrap(), serde_json::json!("gpt-5"));
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            serde_json::json!("gpt-5")
+        );
     }
 
     #[test]

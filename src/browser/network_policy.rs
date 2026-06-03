@@ -353,7 +353,9 @@ mod tests {
             Err(PolicyViolation::SecretInUrl(_))
         ));
         // Clean public URL still navigates.
-        assert!(policy.check_navigation("https://public.example/docs").is_ok());
+        assert!(policy
+            .check_navigation("https://public.example/docs")
+            .is_ok());
     }
 
     #[test]

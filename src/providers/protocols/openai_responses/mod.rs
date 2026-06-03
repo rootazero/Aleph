@@ -519,10 +519,9 @@ fn parse_sse_event_multi(
         }
 
         StreamEvent::OutputItemDone {
-            item:
-                OutputItem::FunctionCall {
-                    call_id, arguments, ..
-                },
+            item: OutputItem::FunctionCall {
+                call_id, arguments, ..
+            },
             ..
         } => {
             // Fallback for backends that skip FunctionCallArgumentsDone: the

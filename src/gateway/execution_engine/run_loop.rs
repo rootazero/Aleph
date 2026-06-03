@@ -640,23 +640,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             // watchdog-boundary events mirror to that channel (Telegram /
             // Panel / …). Pure I/O bypass; falls back to the inner sink when
             // the channel registry isn't up yet or no channel is bound.
-            let trace_sink: Arc<dyn crate::harness::TraceSink> = if self
-                .config
-                .scratchpad_progress_push
-                && !turn_context.channel_id.is_empty()
-            {
-                match self.channel_registry.get() {
-                    Some(registry) => Arc::new(super::ScratchpadProgressSink::new(
-                        trace_sink,
-                        registry.clone(),
-                        turn_context.channel_id.clone(),
-                        turn_context.conversation_id.clone(),
-                    )),
-                    None => trace_sink,
-                }
-            } else {
-                trace_sink
-            };
+            let trace_sink: Arc<dyn crate::harness::TraceSink> =
+                if self.config.scratchpad_progress_push && !turn_context.channel_id.is_empty() {
+                    match self.channel_registry.get() {
+                        Some(registry) => Arc::new(super::ScratchpadProgressSink::new(
+                            trace_sink,
+                            registry.clone(),
+                            turn_context.channel_id.clone(),
+                            turn_context.conversation_id.clone(),
+                        )),
+                        None => trace_sink,
+                    }
+                } else {
+                    trace_sink
+                };
 
             // SubagentTool construction
             let subagent_tool = {

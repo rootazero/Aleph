@@ -980,11 +980,7 @@ mod tests {
         // skip it entirely (a later candidate exists), saving the round-trip.
         let dead = ScriptProvider::err("dead", "HTTP 403 Forbidden: bad key");
         let healthy = ScriptProvider::ok("healthy");
-        let fp = build(
-            dead.clone(),
-            vec![],
-            vec![node("healthy", healthy.clone())],
-        );
+        let fp = build(dead.clone(), vec![], vec![node("healthy", healthy.clone())]);
 
         let msgs = [UnifiedMessage::user("hi")];
         // First request: dead is dialed once, trips its circuit, healthy serves.

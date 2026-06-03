@@ -250,9 +250,9 @@ fn promote_text_tool_calls(
     if text.is_empty() {
         return 0;
     }
-    let allowed: std::collections::HashSet<&str> =
-        tools.iter().map(|t| t.name.as_str()).collect();
-    let Some(promotion) = crate::tools::text_tool_call::promote_plain_text_tool_calls(&text, &allowed)
+    let allowed: std::collections::HashSet<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+    let Some(promotion) =
+        crate::tools::text_tool_call::promote_plain_text_tool_calls(&text, &allowed)
     else {
         return 0;
     };

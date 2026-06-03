@@ -277,10 +277,16 @@ mod tests {
     #[test]
     fn reasoning_models_flagged() {
         assert!(capabilities_for("o3-mini").unwrap().supports_reasoning);
-        assert!(capabilities_for("deepseek-reasoner")
-            .unwrap()
-            .supports_reasoning);
-        assert!(!capabilities_for("deepseek-chat").unwrap().supports_reasoning);
+        assert!(
+            capabilities_for("deepseek-reasoner")
+                .unwrap()
+                .supports_reasoning
+        );
+        assert!(
+            !capabilities_for("deepseek-chat")
+                .unwrap()
+                .supports_reasoning
+        );
     }
 
     #[test]

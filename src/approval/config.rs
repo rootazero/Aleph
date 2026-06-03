@@ -322,10 +322,7 @@ impl ApprovalPolicy for ConfigApprovalPolicy {
                     reason: format!("Denied by default policy for {}", action),
                 },
                 DefaultDecision::Ask => ApprovalDecision::Ask {
-                    prompt: format!(
-                        "Action {} on target '{}' requires approval",
-                        action, target
-                    ),
+                    prompt: format!("Action {} on target '{}' requires approval", action, target),
                 },
             };
         }

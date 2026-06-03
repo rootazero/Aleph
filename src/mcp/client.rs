@@ -288,9 +288,9 @@ impl McpClient {
                     .as_ref()
                     .map(|b| b.name().len() < id.len())
                     .unwrap_or(true)
-                {
-                    best = Some(conn);
-                }
+            {
+                best = Some(conn);
+            }
         }
         best
     }

@@ -252,7 +252,10 @@ impl ChromeMcpDriver {
         };
         if let Some(session) = session {
             let _ = session.client.stop_all().await;
-            tracing::info!("Chrome MCP session destroyed for profile '{}'", profile_name);
+            tracing::info!(
+                "Chrome MCP session destroyed for profile '{}'",
+                profile_name
+            );
         }
     }
 }

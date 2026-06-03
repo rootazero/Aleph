@@ -566,8 +566,7 @@ fn agent_patch_model_double_option_wire() {
     let p: AgentPatch = serde_json::from_value(serde_json::json!({})).unwrap();
     assert!(p.model.is_none());
     // explicit null → Some(None) (clear)
-    let p: AgentPatch =
-        serde_json::from_value(serde_json::json!({ "model": null })).unwrap();
+    let p: AgentPatch = serde_json::from_value(serde_json::json!({ "model": null })).unwrap();
     assert_eq!(p.model, Some(None));
     // object → Some(Some(Qualified))
     let p: AgentPatch = serde_json::from_value(

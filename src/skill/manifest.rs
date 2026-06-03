@@ -279,12 +279,7 @@ pub fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseEr
         .enumerate()
         .skip(1) // first line is part of the YAML, not a delimiter
         .find(|(_, line)| line.trim() == "---")
-        .map(|(idx, _)| {
-            rest.split_inclusive('\n')
-                .take(idx)
-                .map(|s| s.len())
-                .sum()
-        })
+        .map(|(idx, _)| rest.split_inclusive('\n').take(idx).map(|s| s.len()).sum())
         .or_else(|| {
             // Handle case where --- is at very start of rest (empty frontmatter)
             if rest.starts_with("---") {

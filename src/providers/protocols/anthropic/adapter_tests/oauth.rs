@@ -47,12 +47,11 @@ fn build_request_uses_x_api_key_for_console_keys() {
         "console keys must NOT set Authorization (would 401)",
     );
     // Claude Code identity headers belong only to OAuth requests
-    assert!(
-        !req.headers()
-            .get("user-agent")
-            .map(|v| v.to_str().unwrap_or("").starts_with("claude-cli/"))
-            .unwrap_or(false)
-    );
+    assert!(!req
+        .headers()
+        .get("user-agent")
+        .map(|v| v.to_str().unwrap_or("").starts_with("claude-cli/"))
+        .unwrap_or(false));
     assert!(req.headers().get("x-app").is_none());
 }
 

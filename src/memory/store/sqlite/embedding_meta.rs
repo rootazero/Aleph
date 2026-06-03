@@ -26,7 +26,9 @@ impl SqliteMemoryBackend {
             .prepare("SELECT value FROM compression_metadata WHERE key = ?1")
             .map_err(|e| AlephError::config(format!("get_embedding_signature prepare: {e}")))?;
 
-        match stmt.query_row(params![EMBEDDING_SIGNATURE_KEY], |row| row.get::<_, String>(0)) {
+        match stmt.query_row(params![EMBEDDING_SIGNATURE_KEY], |row| {
+            row.get::<_, String>(0)
+        }) {
             Ok(value) => Ok(Some(value)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(AlephError::config(format!("get_embedding_signature: {e}"))),

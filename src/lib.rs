@@ -29,7 +29,6 @@
 
 #![allow(clippy::empty_line_after_doc_comments)]
 #![allow(clippy::missing_errors_doc)]
-
 // Consciously-accepted clippy lints. These flag patterns that are either
 // idiomatic for this codebase or whose "fix" is a risky/large refactor that
 // would change runtime behavior or churn hundreds of call sites — neither of
