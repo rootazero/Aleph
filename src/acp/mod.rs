@@ -7,6 +7,7 @@ use crate::sync_primitives::Arc;
 
 pub mod adapter;
 pub mod adapters;
+pub mod incoming;
 pub mod manager;
 #[cfg(test)]
 pub mod mock_server;
