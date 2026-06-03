@@ -317,7 +317,11 @@ impl AgentRuntime {
                 key_findings: key_findings.clone(),
             },
             Err(e) => {
-                let outcome = if e.contains("timed out") {
+                // Match the spawner's exact wall-clock-timeout prefix
+                // ("Sub-agent timed out after Ns") rather than a loose substring —
+                // an inner error merely *containing* "timed out" (e.g. a wrapped
+                // "connection timed out") must not be misclassified as a hard timeout.
+                let outcome = if e.starts_with("Sub-agent timed out") {
                     TranscriptOutcome::Timeout
                 } else {
                     TranscriptOutcome::Error(e.clone())

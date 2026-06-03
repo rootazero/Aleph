@@ -486,8 +486,11 @@ fn extract_supported_values(message: &str) -> Vec<String> {
     // Fall back to comma/and separated values
     text.split([',', ' '])
         .map(|s| {
+            // Keep alphanumerics: providers may report supported levels as digits
+            // (e.g. "supported values: 0, 1, 2"); stripping non-alphabetic chars
+            // would drop the digit and lose the level.
             s.trim()
-                .trim_matches(|c: char| !c.is_alphabetic())
+                .trim_matches(|c: char| !c.is_alphanumeric())
                 .to_string()
         })
         .filter(|s| !s.is_empty() && s != "and" && s != "or")
@@ -786,6 +789,17 @@ mod tests {
         let msg = "Some other error message";
         let values = extract_supported_values(msg);
         assert!(values.is_empty());
+    }
+
+    #[test]
+    fn test_extract_supported_values_numeric() {
+        // Some providers report supported levels as digits; the digit must survive
+        // trimming (regression: `!c.is_alphabetic()` previously stripped it to "").
+        let msg = "Invalid thinking level. Supported values: 0, 1, 2";
+        let values = extract_supported_values(msg);
+        assert!(values.contains(&"0".to_string()));
+        assert!(values.contains(&"1".to_string()));
+        assert!(values.contains(&"2".to_string()));
     }
 
     #[test]

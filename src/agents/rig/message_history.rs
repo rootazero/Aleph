@@ -137,8 +137,12 @@ impl ChatMessage {
                     .extracted_knowledge
                     .iter()
                     .map(|k| {
-                        if k.value.len() > 200 {
-                            format!("{}... [{} chars]", &k.value[..200], k.value.len())
+                        let char_count = k.value.chars().count();
+                        if char_count > 200 {
+                            // Truncate on a char boundary — byte slicing `&k.value[..200]`
+                            // panics when byte 200 lands inside a multibyte UTF-8 char.
+                            let preview: String = k.value.chars().take(200).collect();
+                            format!("{}... [{} chars]", preview, char_count)
                         } else {
                             k.value.clone()
                         }
