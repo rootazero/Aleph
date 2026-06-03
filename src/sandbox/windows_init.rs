@@ -55,6 +55,23 @@ pub struct WindowsInitPolicy {
     /// workspace. `None` → no DACL grant (target may fail on writes).
     #[serde(default)]
     pub workspace_path: Option<String>,
+
+    /// Cycle 7: git-style globs (e.g. `**/.env`, `**/*.pem`, `**/.ssh`)
+    /// identifying secret paths the sandboxed target must NOT be able to
+    /// read, even though they live inside the otherwise-readable
+    /// workspace. The init resolves each glob against `workspace_path`
+    /// and stamps a `DENY_ACCESS` read ACE for the per-execution
+    /// AppContainer SID on every match — the Windows analogue of the
+    /// macOS seatbelt `deny_read_globs` floor (and codex's
+    /// `deny_read_acl`). Empty list → no deny-read pass → byte-identical
+    /// to the pre-Cycle-7 behaviour.
+    ///
+    /// Enforced only on the AppContainer path (the default): the
+    /// restricted-token path shares the host user SID, so a per-SID deny
+    /// would also lock out the parent. With `use_app_container = true`
+    /// (the default) the common path is covered.
+    #[serde(default)]
+    pub deny_read_globs: Vec<String>,
 }
 
 /// Translate `NetworkPolicy` → AppContainer capability names. Lives at
@@ -529,6 +546,14 @@ mod imp {
                 );
             }
             metadata_protection = ensure_protected_metadata_deny(ws, ac_sid);
+
+            // Cycle 7: deny-read floor for configured secret globs. Each
+            // resolved path gets a DENY read ACE for the AppContainer SID;
+            // the paths fold into `metadata_protection.denied` so the
+            // post-wait REVOKE_ACCESS loop (which ignores the mask) cleans
+            // them up alongside the metadata deny-write ACEs.
+            let deny_read = ensure_deny_read_globs(ws, ac_sid, &parsed.policy.deny_read_globs);
+            metadata_protection.denied.extend(deny_read);
         }
 
         // ---------- 4. Build SECURITY_CAPABILITIES + attribute list ----------
@@ -819,6 +844,56 @@ mod imp {
             }
         }
         out
+    }
+
+    /// Cycle 7: stamp a `DENY_ACCESS` read ACE for the per-execution
+    /// AppContainer SID on every secret path under `workspace_path_str`
+    /// that matches one of `deny_read_globs`. The Windows analogue of the
+    /// macOS seatbelt deny-read floor: the workspace-root `GENERIC_ALL`
+    /// grant inherits down to children, so without an explicit deny the
+    /// sandboxed target could read `.env` / `*.pem` / `.ssh/**` sitting
+    /// inside the workspace. The mask is `GENERIC_READ`; canonical ACL
+    /// ordering (deny-before-allow) is handled by `SetEntriesInAclW`.
+    ///
+    /// Returns the paths that received a deny ACE so the caller can revoke
+    /// them after the target exits (REVOKE_ACCESS ignores the mask, so the
+    /// same cleanup path used for metadata deny-write ACEs applies).
+    ///
+    /// Best-effort throughout: a failed match-resolution or ACE stamp is
+    /// logged and skipped; the affected path stays readable but the rest of
+    /// the sandbox is unaffected. Empty globs → no walk, empty result.
+    pub(super) fn ensure_deny_read_globs(
+        workspace_path_str: &str,
+        ac_sid: *mut core::ffi::c_void,
+        deny_read_globs: &[String],
+    ) -> Vec<String> {
+        use windows_sys::Win32::Foundation::GENERIC_READ;
+        use windows_sys::Win32::Security::Authorization::DENY_ACCESS;
+
+        if deny_read_globs.is_empty() {
+            return Vec::new();
+        }
+
+        let root = std::path::Path::new(workspace_path_str);
+        let mut denied = Vec::new();
+        for path in crate::sandbox::deny_globs::resolve_deny_read_paths_under(root, deny_read_globs)
+        {
+            let Some(s) = path.to_str() else {
+                eprintln!(
+                    "aleph sandbox-init-windows: skipping deny-read path with non-UTF-8 \
+                     chars under {workspace_path_str}"
+                );
+                continue;
+            };
+            match unsafe { set_workspace_dacl_entry(s, ac_sid, DENY_ACCESS, GENERIC_READ) } {
+                Ok(()) => denied.push(s.to_string()),
+                Err(e) => eprintln!(
+                    "aleph sandbox-init-windows: deny-read ACE on secret {s} failed ({e}); \
+                     target may be able to read it"
+                ),
+            }
+        }
+        denied
     }
 
     /// SP-6 v2 / Cycle 3: Add or remove an inheritable ACE for `ac_sid`
@@ -1164,6 +1239,7 @@ mod tests {
             require_app_container: false,
             app_container_capabilities: vec!["internetClient".to_string()],
             workspace_path: Some("C:\\workspace\\session-abc".to_string()),
+            deny_read_globs: vec!["**/.env".to_string(), "**/*.pem".to_string()],
         };
         let json = serde_json::to_string(&original).unwrap();
         let parsed: WindowsInitPolicy = serde_json::from_str(&json).unwrap();
@@ -1178,6 +1254,16 @@ mod tests {
         assert!(!p.require_app_container);
         assert!(p.app_container_capabilities.is_empty());
         assert!(p.workspace_path.is_none());
+        assert!(p.deny_read_globs.is_empty());
+    }
+
+    #[test]
+    fn policy_accepts_missing_deny_read_globs_via_serde_default() {
+        // Forward-compat: an older driver that omits the field still
+        // deserializes — deny_read_globs defaults to empty (no floor).
+        let parsed: WindowsInitPolicy =
+            serde_json::from_str(r#"{"workspace_path":"C:\\ws"}"#).unwrap();
+        assert!(parsed.deny_read_globs.is_empty());
     }
 
     #[test]

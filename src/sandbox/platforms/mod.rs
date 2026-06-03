@@ -70,7 +70,7 @@ pub fn create_platform_driver_with_config(
     #[cfg(target_os = "windows")]
     {
         use windows::driver::{WindowsSandboxDriver, WindowsSandboxOptions};
-        let _ = (linux_config, deny_read_globs);
+        let _ = linux_config;
         let options = WindowsSandboxOptions {
             use_restricted_token: windows_config.use_restricted_token,
             require_restricted_token: windows_config.require_restricted_token,
@@ -79,7 +79,13 @@ pub fn create_platform_driver_with_config(
             use_job_object: windows_config.use_job_object,
             max_active_processes: windows_config.max_active_processes,
         };
-        Arc::new(WindowsSandboxDriver::with_options(options))
+        // Cycle 7: thread the deny-read glob floor (previously dropped here)
+        // into the AppContainer init so secrets inside the workspace get
+        // explicit deny-read ACEs — at parity with the macOS seatbelt floor.
+        Arc::new(WindowsSandboxDriver::with_options_and_deny_globs(
+            options,
+            deny_read_globs.to_vec(),
+        ))
     }
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
