@@ -70,7 +70,7 @@ pub(crate) fn scratchpad_progress_line(event: &LoopTraceEvent) -> Option<String>
                 return None;
             }
             let output = match result {
-                ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+                ToolResult::Success { output } => {
                     output
                 }
                 ToolResult::Error { .. } => return None,

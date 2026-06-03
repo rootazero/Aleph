@@ -211,7 +211,6 @@ pub struct AgentTraceToolCallEnd {
 pub enum AgentTraceToolResult {
     Success { output: Value },
     Error { error: String, retryable: bool },
-    SuccessAndStopLoop { output: Value },
 }
 
 impl AgentTraceToolResult {
@@ -222,7 +221,7 @@ impl AgentTraceToolResult {
     pub fn error_text(&self) -> Option<&str> {
         match self {
             Self::Error { error, .. } => Some(error),
-            Self::Success { .. } | Self::SuccessAndStopLoop { .. } => None,
+            Self::Success { .. } => None,
         }
     }
 }

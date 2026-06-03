@@ -254,7 +254,7 @@ mod tests {
             .await;
 
         match result {
-            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+            ToolResult::Success { output } => {
                 assert_eq!(output["found"], 42)
             }
             ToolResult::Error { error, .. } => panic!("expected success: {}", error),

@@ -98,8 +98,7 @@ impl ForwardingTraceSink {
 /// Render a 200-char preview of a tool result for SubagentProgress.preview.
 fn render_tool_result_preview(result: &crate::tools::runtime::ToolResult) -> Option<String> {
     let raw = match result {
-        crate::tools::runtime::ToolResult::Success { output }
-        | crate::tools::runtime::ToolResult::SuccessAndStopLoop { output } => {
+        crate::tools::runtime::ToolResult::Success { output } => {
             serde_json::to_string(output).ok()?
         }
         crate::tools::runtime::ToolResult::Error { error, .. } => error.clone(),

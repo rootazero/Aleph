@@ -179,7 +179,7 @@ mod tests {
 
         let result = adapter.execute(input, CancellationToken::new()).await;
         match result {
-            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+            ToolResult::Success { output } => {
                 assert_eq!(output["result"], "hello");
             }
             ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
@@ -201,7 +201,7 @@ mod tests {
                 // Generic tool errors are not retryable; only network/IO/timeout are.
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+            ToolResult::Success { .. } => {
                 panic!("expected error")
             }
         }
@@ -263,7 +263,7 @@ mod tests {
                     "expected cancellation error, got: {error}"
                 );
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+            ToolResult::Success { .. } => {
                 panic!("expected cancellation error")
             }
         }
