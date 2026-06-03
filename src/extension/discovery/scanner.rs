@@ -162,8 +162,13 @@ fn scan_standalone_file(path: &Path, origin: PluginOrigin) -> Option<PluginCandi
         root_dir: root_dir.clone(),
         origin,
         kind,
-        manifest: PluginManifest::new(id.clone(), id, kind, path.file_name().unwrap().into())
-            .with_root_dir(root_dir),
+        manifest: PluginManifest::new(
+            id.clone(),
+            id,
+            kind,
+            path.file_name().map(Into::into).unwrap_or_default(),
+        )
+        .with_root_dir(root_dir),
     })
 }
 

@@ -275,13 +275,24 @@ fn builtin_config() -> MarketplaceConfig {
 /// The `source` field uses `./`-prefixed paths (e.g. `"./plugins/diagnostics"`).
 /// Strip the leading `./` (or `.`) and join with the marketplace root.
 fn resolve_plugin_path(marketplace_dir: &Path, source: &str) -> PathBuf {
+    use std::path::Component;
+
     // Strip leading "./" or "." to get a plain relative component.
     let relative = source
         .strip_prefix("./")
         .or_else(|| source.strip_prefix('.'))
         .unwrap_or(source);
 
-    marketplace_dir.join(relative)
+    // Defense-in-depth: the `source` field comes from a marketplace manifest,
+    // which may be untrusted. Keep only normal path components so a crafted
+    // value (`../../etc`, `/etc/passwd`) can never escape the marketplace
+    // directory. RootDir/Prefix/ParentDir/CurDir components are dropped.
+    let safe: PathBuf = Path::new(relative)
+        .components()
+        .filter(|c| matches!(c, Component::Normal(_)))
+        .collect();
+
+    marketplace_dir.join(safe)
 }
 
 // =============================================================================

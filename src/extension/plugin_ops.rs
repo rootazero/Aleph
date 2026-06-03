@@ -151,6 +151,25 @@ impl ExtensionManager {
                 .unwrap_or_default()
         };
 
+        // Stop any background services this plugin registered *before* unloading
+        // it — once the plugin is gone the stop handlers can no longer run, which
+        // would leave their background tasks orphaned (and their tooling still
+        // active) for the lifetime of the process.
+        let service_registrations: Vec<crate::extension::registry::ServiceRegistration> = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .list_services()
+                .into_iter()
+                .filter(|s| s.plugin_id == plugin_id)
+                .cloned()
+                .collect()
+        };
+        if !service_registrations.is_empty() {
+            let mut service_manager = self.service_manager.write().await;
+            let loader = self.plugin_loader.read().await;
+            service_manager.stop_plugin_services(plugin_id, &service_registrations, &loader);
+        }
+
         let result = self.plugin_loader.write().await.unload_plugin(plugin_id);
 
         if result.is_ok() && !server_ids.is_empty() {
