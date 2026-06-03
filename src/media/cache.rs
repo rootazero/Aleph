@@ -3,7 +3,7 @@
 //! Resolution priority:
 //! 1. `attachment.data` (inline bytes) → write to temp file
 //! 2. `attachment.path` (local path) → use directly (no copy)
-//! 3. `attachment.url` (remote) → HTTP GET download (30s timeout)
+//! 3. `attachment.url` (remote) → HTTP GET download (60s timeout)
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -341,7 +341,9 @@ impl MediaCache {
                 .decode(data)
                 .map_err(|e| CacheError::Download(format!("Base64 decode failed: {}", e)))?
         } else {
-            data.as_bytes().to_vec()
+            // Non-base64 data URLs carry percent-encoded text per RFC 2397.
+            // Decode the `%XX` escapes rather than storing them as literal bytes.
+            percent_encoding::percent_decode_str(data).collect()
         };
 
         Ok((mime, bytes))
@@ -538,6 +540,24 @@ mod tests {
         assert_eq!(content, "Hello");
 
         let _ = MediaCache::cleanup_session("test-media-item-data");
+    }
+
+    #[test]
+    fn test_decode_data_url_base64() {
+        // "Hello" base64-encoded
+        let (mime, bytes) =
+            MediaCache::decode_data_url("data:text/plain;base64,SGVsbG8=").unwrap();
+        assert_eq!(mime.as_deref(), Some("text/plain"));
+        assert_eq!(bytes, b"Hello");
+    }
+
+    #[test]
+    fn test_decode_data_url_percent_encoded() {
+        // Non-base64 data URL with percent-encoded text must be decoded, not
+        // stored as literal "%20" / "%21" byte sequences.
+        let (mime, bytes) = MediaCache::decode_data_url("data:text/plain,Hello%20World%21").unwrap();
+        assert_eq!(mime.as_deref(), Some("text/plain"));
+        assert_eq!(bytes, b"Hello World!");
     }
 
     #[tokio::test]

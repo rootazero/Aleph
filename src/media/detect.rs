@@ -232,7 +232,19 @@ pub fn detect_from_path(path: &std::path::Path) -> Result<MediaType, MediaError>
     if let Ok(mut f) = std::fs::File::open(path) {
         use std::io::Read;
         let mut buf = [0u8; 16];
-        let n = f.read(&mut buf).unwrap_or(0);
+        // A single `read` may return fewer bytes than requested even when more are
+        // available (short reads are permitted for regular files). Loop until the
+        // buffer is full or EOF so multi-byte magic signatures that live past the
+        // first chunk (WebP/WAV "WEBP"/"WAVE" at offset 8, `ftyp` at offset 4) are
+        // not missed by a truncated read.
+        let mut n = 0usize;
+        while n < buf.len() {
+            match f.read(&mut buf[n..]) {
+                Ok(0) => break,
+                Ok(read) => n += read,
+                Err(_) => break,
+            }
+        }
         if n >= 4 {
             let magic_result = detect_by_magic(&buf[..n]);
             if magic_result != MediaType::Unknown {
@@ -473,6 +485,22 @@ mod tests {
     #[test]
     fn detect_magic_too_short() {
         assert!(matches!(detect_by_magic(&[0x89, 0x50]), MediaType::Unknown));
+    }
+
+    #[test]
+    fn detect_from_path_reads_offset8_signature() {
+        // WebP's "WEBP" marker lives at byte offset 8; the buffer-fill loop in
+        // detect_from_path must read past the first chunk to find it.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("img.bin"); // misleading extension on purpose
+        std::fs::write(&file, b"RIFF\x00\x00\x00\x00WEBPVP8 ").unwrap();
+        assert!(matches!(
+            detect_from_path(&file).unwrap(),
+            MediaType::Image {
+                format: MediaImageFormat::WebP,
+                ..
+            }
+        ));
     }
 
     #[test]
