@@ -116,27 +116,47 @@ impl WizardSession {
                     match result {
                         Ok(()) => {
                             debug!(id = %id, "Wizard flow completed");
-                            *status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Done;
+                            Self::settle(&status, WizardStatus::Done);
                         }
                         Err(WizardSessionError::Cancelled) => {
                             debug!(id = %id, "Wizard flow cancelled");
-                            *status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Cancelled;
+                            Self::settle(&status, WizardStatus::Cancelled);
                         }
                         Err(e) => {
                             error!(id = %id, error = %e, "Wizard flow error");
-                            *status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Error;
-                            *error.write().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+                            // Record the error message only if this call actually
+                            // won the transition to Error (terminal is sticky).
+                            if Self::settle(&status, WizardStatus::Error) {
+                                *error.write().unwrap_or_else(|e| e.into_inner()) = Some(e.to_string());
+                            }
                         }
                     }
                 }
                 _ = cancel_rx => {
                     debug!(id = %id, "Wizard flow cancelled via signal");
-                    *status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Cancelled;
+                    Self::settle(&status, WizardStatus::Cancelled);
                 }
             }
         });
 
         session
+    }
+
+    /// Transition `status` to a terminal state, but only from `Running`.
+    ///
+    /// Terminal states are sticky: once `Done`/`Cancelled`/`Error` is set, later
+    /// transitions are ignored. This guarantees the first settled outcome wins,
+    /// so a late `cancel()` cannot clobber a completed flow's `Done` status (and
+    /// the `finish_data` payload `next()` surfaces with it). Returns `true` iff
+    /// this call performed the transition.
+    fn settle(status: &RwLock<WizardStatus>, terminal: WizardStatus) -> bool {
+        let mut guard = status.write().unwrap_or_else(|e| e.into_inner());
+        if *guard == WizardStatus::Running {
+            *guard = terminal;
+            true
+        } else {
+            false
+        }
     }
 
     /// Get the session ID
@@ -252,7 +272,9 @@ impl WizardSession {
         {
             let _ = tx.send(());
         }
-        *self.status.write().unwrap_or_else(|e| e.into_inner()) = WizardStatus::Cancelled;
+        // Only cancel a still-running flow; never clobber a flow that already
+        // settled as Done/Error (which would discard its result/finish_data).
+        Self::settle(&self.status, WizardStatus::Cancelled);
     }
 
     /// Check if the session is done
@@ -307,5 +329,24 @@ mod tests {
         let result = session.next().await;
         assert!(result.done);
         assert_eq!(result.status, WizardStatus::Done);
+    }
+
+    #[tokio::test]
+    async fn cancel_after_done_preserves_terminal_status() {
+        // A completed flow that is later cancelled (e.g. client-disconnect
+        // cleanup arriving in the result-pending window) must keep its Done
+        // status — otherwise its finish_data result would be discarded.
+        let flow = TestFlow { steps: vec![] };
+        let session = WizardSession::new(Box::new(flow));
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert_eq!(session.status(), WizardStatus::Done);
+
+        session.cancel();
+        assert_eq!(
+            session.status(),
+            WizardStatus::Done,
+            "cancel() must not clobber a completed flow"
+        );
     }
 }

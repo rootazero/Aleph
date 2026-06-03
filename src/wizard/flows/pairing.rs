@@ -70,13 +70,21 @@ impl WizardFlow for PairingFlow {
             .map_err(|e| WizardSessionError::FlowError(format!("request_device_pairing: {e}")))?;
         let code = req.code().to_string();
 
-        // 3. user-visible confirm step
-        prompter
+        // 3. user-visible confirm step — the answer is the human-in-the-loop gate.
+        let approval = prompter
             .prompt(WizardStep::confirm(
                 "pairing-approve",
                 format!("本机配对码：{code}\n点击「Approve」完成同机授权"),
             ))
             .await?;
+
+        // The confirm answer MUST be honoured. A declined (or non-boolean)
+        // answer aborts the flow without approving the device or issuing a
+        // token — otherwise the approval prompt is purely cosmetic and the
+        // device is paired regardless of the user's choice.
+        if approval.as_bool() != Some(true) {
+            return Err(WizardSessionError::Cancelled);
+        }
 
         // 4. internal: consume the pairing row + register device + issue token
         let confirmed = self
@@ -217,6 +225,43 @@ mod tests {
         assert_eq!(
             data.get("device_name").and_then(|v| v.as_str()),
             Some("Test Mac")
+        );
+    }
+
+    #[tokio::test]
+    async fn pairing_flow_declined_does_not_issue_token() {
+        // Answering the confirm step with `false` must abort the flow as
+        // Cancelled without issuing a token — the approval prompt is the
+        // human-in-the-loop gate, not cosmetic.
+        let (pairing, security, devices, tokens) = test_bundle();
+        let flow = PairingFlow::new("Test Mac", pairing, security, devices, tokens);
+        let session = WizardSession::new(Box::new(flow));
+
+        let _ = session.next().await; // welcome note (auto-advances)
+        let _ = session.next().await; // confirm step
+
+        session
+            .answer("pairing-approve", serde_json::Value::Bool(false))
+            .await
+            .unwrap();
+
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            if session.is_done() {
+                break;
+            }
+        }
+
+        let r = session.next().await;
+        assert!(r.done);
+        assert!(
+            matches!(r.status, crate::wizard::WizardStatus::Cancelled),
+            "declined pairing must be Cancelled, got {:?}",
+            r.status
+        );
+        assert!(
+            r.data.is_none(),
+            "declined pairing must not return a token payload"
         );
     }
 
