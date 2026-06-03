@@ -562,10 +562,36 @@ impl HarnessRunner for AgentHarnessRunner {
             .await
             .map_err(|e| FlowError::Internal(format!("session read: {e}")))?;
 
+        // Scope the per-run counters to THIS run: only count events emitted
+        // after this run's own `RunStarted` marker. A reused session
+        // (`FlowInput::History` / `FlowInput::Resume` / `SessionStrategy::Reuse`)
+        // carries prior turns in the same log, so scanning the whole log would
+        // count assistant messages this run never produced — over-counting
+        // `iterations` / `tool_calls_made` and disagreeing with the per-run
+        // `token_breakdown` / `tool_timeline` read from the harness accessors
+        // below. It would also let a run that produces no new text return a
+        // stale prior-turn answer as `final_text`.
+        //
+        // Marker emitted at `SessionEvent::RunStarted { run_id: run_marker_id }`
+        // just before `harness.run`; all seeded history/user events precede it.
+        // On a compaction-driven session split the adopted child id's log lacks
+        // this marker — the `rposition` miss falls back to scanning the whole
+        // (child-only) log, byte-identical to the prior behaviour on that path.
+        let run_scan_start = records
+            .iter()
+            .rposition(|r| {
+                matches!(
+                    &r.event,
+                    SessionEvent::RunStarted { run_id, .. } if run_id == &run_marker_id
+                )
+            })
+            .map(|i| i + 1)
+            .unwrap_or(0);
+
         let mut final_text = String::new();
         let mut iterations: u32 = 0;
         let mut tool_calls_made: u32 = 0;
-        for r in &records {
+        for r in &records[run_scan_start..] {
             match &r.event {
                 SessionEvent::AssistantMessage { content, .. } => {
                     // P5: dropped the 8-layer JSON field extraction
