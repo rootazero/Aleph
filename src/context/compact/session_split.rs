@@ -57,6 +57,13 @@ pub async fn perform_session_split(
         return Err(SplitError::NotSplittable);
     }
 
+    // Clamp the tail boundary to the event count (P7 defensive design): a
+    // `tail_start` past the end would panic the verbatim-copy slice below
+    // (`&events[tail_start..]`). `summarize_pretail` already clamps the same
+    // way; doing it once here keeps both slices consistent and degrades a
+    // bad index to "no fresh tail" (everything summarized) instead of a panic.
+    let tail_start = tail_start.min(events.len());
+
     // 2. Summarize events[..tail_start].
     let summary_text = summarize_pretail(compactor, events, tail_start)
         .await
@@ -482,5 +489,53 @@ mod tests {
             SessionEvent::RunStarted { .. } => {}
             other => panic!("expected RunStarted on child, got {other:?}"),
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Test 3: tail_start past the event count is clamped, not a panic
+    // -------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn tail_start_past_end_is_clamped_not_panic() {
+        // A `tail_start` greater than `events.len()` must NOT panic the
+        // verbatim-copy slice. It is clamped to the event count, which means
+        // "no fresh tail" — every event is summarized and none is copied.
+        let parent = crate::routing::session_key::SessionKey::Main {
+            agent_id: "agent-a".to_string(),
+            main_key: "main".to_string(),
+            epoch: 0,
+        };
+        let events = vec![user_record(1, "only message")];
+
+        let session = RecordingSessionService::new();
+        let registrar = RecordingRegistrar::new();
+        let provider = AlephArc::new(MockProvider::new("summary"));
+        let compactor = ContextCompactor::new(provider, CompactorConfig::default());
+
+        // tail_start = 5 ≫ events.len() = 1.
+        let outcome = perform_session_split(
+            session.as_ref(),
+            registrar.as_ref(),
+            &compactor,
+            &parent,
+            &events,
+            5,
+        )
+        .await
+        .expect("split should succeed with a clamped tail_start");
+
+        assert_eq!(outcome.child_session_id, parent.with_next_epoch());
+
+        // No verbatim fresh-tail event copied (tail clamped to len): the child
+        // sees only SessionForked + SystemMessage(summary), plus the two run
+        // markers — never a copied UserMessage.
+        let emitted = session.emitted().await;
+        assert!(
+            !emitted.iter().any(|(_, e)| matches!(
+                e,
+                SessionEvent::UserMessage { .. }
+            )),
+            "no fresh-tail UserMessage should be copied when tail_start is clamped",
+        );
     }
 }
