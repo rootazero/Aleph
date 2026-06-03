@@ -26,6 +26,7 @@
 
 use crate::sync_primitives::{Arc, Mutex};
 use std::collections::HashMap;
+use std::time::Duration;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{error, info, warn};
 
@@ -39,6 +40,39 @@ use super::voice::VoiceState;
 /// Type alias for a thread-safe, shareable channel handle
 type ChannelHandle = Arc<RwLock<Box<dyn Channel>>>;
 
+/// Policy for retrying transient outbound sends at the registry layer.
+///
+/// Deliberately scoped to [`ChannelError::RateLimited`]: a channel returns that
+/// variant when an upstream `429` rejected the message **before** it was
+/// delivered, so honoring the server-provided `retry_after_secs` and retrying
+/// is *duplicate-safe*. Every other [`ChannelError`] is treated as terminal and
+/// propagates immediately — in particular [`ChannelError::SendFailed`] is
+/// ambiguous (the message may already be on the wire) and must never be retried
+/// here.
+///
+/// Before this existed, only Telegram retried rate limits (inside its own
+/// delivery loop); msteams / feishu / signal surfaced `RateLimited` to a caller
+/// — the reply path — that simply dropped it, losing the reply. Centralizing the
+/// wait here gives every channel consistent, bounded back-pressure.
+#[derive(Debug, Clone)]
+pub struct SendRetryPolicy {
+    /// Maximum number of retry-after waits before giving up. `0` preserves the
+    /// historical fire-once behavior (the `RateLimited` error propagates).
+    pub max_rate_limit_retries: u32,
+    /// Upper bound on a single retry-after wait, so a hostile or buggy
+    /// `retry_after_secs` cannot wedge the send path for an unbounded time.
+    pub max_retry_after: Duration,
+}
+
+impl Default for SendRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_rate_limit_retries: 2,
+            max_retry_after: Duration::from_secs(30),
+        }
+    }
+}
+
 /// Central registry for all channel instances
 pub struct ChannelRegistry {
     /// Registered channel instances
@@ -51,6 +85,8 @@ pub struct ChannelRegistry {
     inbound_rx: Arc<Mutex<Option<broadcast::Receiver<InboundMessage>>>>,
     /// Per-channel voice mode state
     voice_states: RwLock<HashMap<String, VoiceState>>,
+    /// Bounded retry-after policy for rate-limited outbound sends.
+    send_retry: SendRetryPolicy,
 }
 
 impl ChannelRegistry {
@@ -64,7 +100,18 @@ impl ChannelRegistry {
             inbound_tx: InboundMessageSender::from(inbound_tx),
             inbound_rx: Arc::new(Mutex::new(Some(inbound_rx))),
             voice_states: RwLock::new(HashMap::new()),
+            send_retry: SendRetryPolicy::default(),
         }
+    }
+
+    /// Override the outbound send retry policy (builder-style).
+    ///
+    /// Defaults to [`SendRetryPolicy::default`] (2 retries, 30s cap). Pass a
+    /// policy with `max_rate_limit_retries: 0` to restore the historical
+    /// drop-on-rate-limit behavior.
+    pub fn with_send_retry_policy(mut self, policy: SendRetryPolicy) -> Self {
+        self.send_retry = policy;
+        self
     }
 
     /// Register a channel factory
@@ -247,16 +294,20 @@ impl ChannelRegistry {
             ChannelError::NotConnected(format!("Channel not found: {}", channel_id))
         })?;
 
-        let channel = channel_arc.read().await;
-        if channel.status() == ChannelStatus::Disabled {
-            return Err(ChannelError::NotConnected(format!(
-                "Channel {} is disabled",
-                channel_id
-            )));
+        {
+            let channel = channel_arc.read().await;
+            if channel.status() == ChannelStatus::Disabled {
+                return Err(ChannelError::NotConnected(format!(
+                    "Channel {} is disabled",
+                    channel_id
+                )));
+            }
         }
 
         // Extension hooks observe outbound channel traffic. Capture the message
-        // facts before `channel.send` consumes the OutboundMessage.
+        // facts once, before `channel.send` (repeatedly) consumes a clone of the
+        // OutboundMessage. The observer fires a single MessageSending regardless
+        // of how many rate-limit retries follow.
         let hook_channel = channel_id.as_str().to_string();
         let hook_conversation = message.conversation_id.as_str().to_string();
         let hook_chars = message.text.chars().count();
@@ -271,23 +322,49 @@ impl ChannelRegistry {
         )
         .await;
 
-        let result = channel.send(message).await;
+        // Bounded retry-after loop. Only `RateLimited` (a pre-delivery 429
+        // rejection) is retried — every other error is terminal and returned
+        // immediately, matching the pre-existing single-attempt semantics. The
+        // read lock is re-acquired per attempt so a retry-after sleep never
+        // blocks channel restarts.
+        let mut retries_left = self.send_retry.max_rate_limit_retries;
+        loop {
+            let result = {
+                let channel = channel_arc.read().await;
+                channel.send(message.clone()).await
+            };
 
-        if let Ok(ref sent) = result {
-            crate::extension::hooks::fire_global_observer(
-                crate::extension::HookEvent::MessageSent,
-                &hook_conversation,
-                vec![
-                    ("CHANNEL_ID", hook_channel),
-                    ("CONVERSATION_ID", hook_conversation.clone()),
-                    ("MESSAGE_CHARS", hook_chars.to_string()),
-                    ("MESSAGE_ID", sent.message_id.as_str().to_string()),
-                ],
-            )
-            .await;
+            match result {
+                Ok(sent) => {
+                    crate::extension::hooks::fire_global_observer(
+                        crate::extension::HookEvent::MessageSent,
+                        &hook_conversation,
+                        vec![
+                            ("CHANNEL_ID", hook_channel),
+                            ("CONVERSATION_ID", hook_conversation.clone()),
+                            ("MESSAGE_CHARS", hook_chars.to_string()),
+                            ("MESSAGE_ID", sent.message_id.as_str().to_string()),
+                        ],
+                    )
+                    .await;
+                    return Ok(sent);
+                }
+                Err(ChannelError::RateLimited { retry_after_secs }) if retries_left > 0 => {
+                    let wait =
+                        Duration::from_secs(retry_after_secs).min(self.send_retry.max_retry_after);
+                    warn!(
+                        channel = %channel_id,
+                        retry_after_secs,
+                        wait_secs = wait.as_secs(),
+                        retries_left,
+                        "Outbound send rate-limited; honoring retry-after before retry"
+                    );
+                    retries_left -= 1;
+                    tokio::time::sleep(wait).await;
+                }
+                Err(e) => return Err(e),
+            }
         }
-
-        result
     }
 
     /// Edit a previously sent message through a specific channel
@@ -572,6 +649,9 @@ pub struct ChannelHealthSummary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gateway::channel::{ChannelState, MessageId};
+    use chrono::Utc;
+    use std::sync::atomic::{AtomicU32, Ordering};
 
     #[tokio::test]
     async fn test_registry_creation() {
@@ -586,5 +666,153 @@ mod tests {
         let summary = registry.status_summary().await;
         assert_eq!(summary.total, 0);
         assert_eq!(summary.connected, 0);
+    }
+
+    /// Test channel whose `send` returns `RateLimited` for the first
+    /// `fail_times` attempts and then succeeds. If `terminal` is set it always
+    /// returns a non-retryable `SendFailed` instead. `attempts` is shared so the
+    /// test can assert how many sends actually reached the channel.
+    struct FlakyChannel {
+        info: ChannelInfo,
+        state: ChannelState,
+        fail_times: AtomicU32,
+        attempts: Arc<AtomicU32>,
+        terminal: bool,
+    }
+
+    impl FlakyChannel {
+        fn new(fail_times: u32, terminal: bool, attempts: Arc<AtomicU32>) -> Self {
+            Self {
+                info: ChannelInfo {
+                    id: ChannelId::new("flaky"),
+                    name: "flaky".to_string(),
+                    channel_type: "test".to_string(),
+                    status: ChannelStatus::Connected,
+                    capabilities: ChannelCapabilities::default(),
+                },
+                // `retry_after_secs` is 0 in the error below, so the registry's
+                // capped sleep is a no-op — tests stay fast and deterministic.
+                state: ChannelState::new(8),
+                fail_times: AtomicU32::new(fail_times),
+                attempts,
+                terminal,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl Channel for FlakyChannel {
+        fn info(&self) -> &ChannelInfo {
+            &self.info
+        }
+        fn state(&self) -> &ChannelState {
+            &self.state
+        }
+        async fn start(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn stop(&mut self) -> ChannelResult<()> {
+            Ok(())
+        }
+        async fn send(&self, _message: OutboundMessage) -> ChannelResult<SendResult> {
+            self.attempts.fetch_add(1, Ordering::SeqCst);
+            if self.terminal {
+                return Err(ChannelError::SendFailed("permanent".to_string()));
+            }
+            if self.fail_times.load(Ordering::SeqCst) > 0 {
+                self.fail_times.fetch_sub(1, Ordering::SeqCst);
+                return Err(ChannelError::RateLimited {
+                    retry_after_secs: 0,
+                });
+            }
+            Ok(SendResult {
+                message_id: MessageId::new("ok"),
+                timestamp: Utc::now(),
+            })
+        }
+    }
+
+    async fn registry_with(channel: FlakyChannel, policy: SendRetryPolicy) -> ChannelRegistry {
+        let registry = ChannelRegistry::new().with_send_retry_policy(policy);
+        registry.register(Box::new(channel)).await;
+        registry
+    }
+
+    #[tokio::test]
+    async fn rate_limited_then_succeeds_within_budget() {
+        let attempts = Arc::new(AtomicU32::new(0));
+        let registry = registry_with(
+            FlakyChannel::new(2, false, attempts.clone()),
+            SendRetryPolicy::default(),
+        )
+        .await;
+
+        let result = registry
+            .send(&ChannelId::new("flaky"), OutboundMessage::text("c", "hi"))
+            .await;
+
+        assert!(result.is_ok(), "should succeed after honoring retry-after");
+        // 2 rate-limited rejections + 1 success.
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_retries_exhausted_propagates() {
+        let attempts = Arc::new(AtomicU32::new(0));
+        // Fails more times than the budget allows.
+        let registry = registry_with(
+            FlakyChannel::new(10, false, attempts.clone()),
+            SendRetryPolicy {
+                max_rate_limit_retries: 2,
+                max_retry_after: Duration::from_secs(30),
+            },
+        )
+        .await;
+
+        let result = registry
+            .send(&ChannelId::new("flaky"), OutboundMessage::text("c", "hi"))
+            .await;
+
+        assert!(matches!(result, Err(ChannelError::RateLimited { .. })));
+        // Initial attempt + 2 retries.
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn terminal_error_is_not_retried() {
+        let attempts = Arc::new(AtomicU32::new(0));
+        let registry = registry_with(
+            FlakyChannel::new(0, true, attempts.clone()),
+            SendRetryPolicy::default(),
+        )
+        .await;
+
+        let result = registry
+            .send(&ChannelId::new("flaky"), OutboundMessage::text("c", "hi"))
+            .await;
+
+        assert!(matches!(result, Err(ChannelError::SendFailed(_))));
+        // SendFailed is ambiguous (may already be delivered) → exactly one attempt.
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn zero_retry_policy_preserves_legacy_drop() {
+        let attempts = Arc::new(AtomicU32::new(0));
+        let registry = registry_with(
+            FlakyChannel::new(1, false, attempts.clone()),
+            SendRetryPolicy {
+                max_rate_limit_retries: 0,
+                max_retry_after: Duration::from_secs(30),
+            },
+        )
+        .await;
+
+        let result = registry
+            .send(&ChannelId::new("flaky"), OutboundMessage::text("c", "hi"))
+            .await;
+
+        assert!(matches!(result, Err(ChannelError::RateLimited { .. })));
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }
