@@ -262,9 +262,11 @@ pub fn daemonize(
             }
         }
     } else {
-        // Redirect to /dev/null by default
+        // Redirect to /dev/null by default.
+        // Open read+write: the same fd is dup2'd onto STDOUT/STDERR below, and
+        // writing to a read-only fd would fail with EBADF (panicking `println!`).
         use std::os::unix::io::AsRawFd;
-        let dev_null = std::fs::File::open("/dev/null")?;
+        let dev_null = OpenOptions::new().read(true).write(true).open("/dev/null")?;
         let fd = dev_null.as_raw_fd();
 
         // SAFETY: dup2 duplicates the file descriptor. fd is valid (from open file).
