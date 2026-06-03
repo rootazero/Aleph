@@ -284,7 +284,25 @@ impl CompressionService {
         //    and skip the legacy accumulation path.
         if self.compound_enabled {
             if let Some(ing) = self.compound_ingestor.clone() {
-                let ingest_outcome = ing.ingest_batch(workspace_id, raw_memories.clone()).await;
+                // ToolInvocation rows are per-call telemetry, consumed by the
+                // insights aggregator and dream signal metrics (which read them
+                // by source, independent of `is_processed`). They are NOT
+                // knowledge — keep them out of the note-extraction LLM batch so
+                // they neither waste a planning call nor pollute L1 with
+                // "tool X ok in Yms" pseudo-notes. They are still marked
+                // processed below (`consumed_ids` covers every fetched row) so
+                // the unprocessed queue stays bounded.
+                let ingest_rows: Vec<_> = raw_memories
+                    .iter()
+                    .filter(|r| {
+                        !matches!(
+                            r.source,
+                            crate::memory::store::raw_memory::RawMemorySource::ToolInvocation { .. }
+                        )
+                    })
+                    .cloned()
+                    .collect();
+                let ingest_outcome = ing.ingest_batch(workspace_id, ingest_rows).await;
 
                 // ProfileSynthesizer fires INDEPENDENTLY of compound ingest
                 // result: a malformed LLM plan must not block USER.md updates.
@@ -730,6 +748,75 @@ mod tests {
         assert_eq!(result.memories_processed, 0);
         assert_eq!(result.facts_extracted, 0);
         assert_eq!(result.duration_ms, 0, "Empty run should be instant");
+    }
+
+    /// Regression: `ToolInvocation` telemetry rows must be excluded from the
+    /// note-extraction batch (they are metrics for insights/dream signals, not
+    /// knowledge) but must STILL be marked processed so the queue stays
+    /// bounded.
+    #[tokio::test]
+    async fn compress_to_notes_excludes_tool_invocation_telemetry() {
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+        use std::sync::Mutex;
+
+        // Recording ingestor: captures the source of every row handed to it.
+        struct RecordingIngestor {
+            seen: Mutex<Vec<RawMemorySource>>,
+        }
+        #[async_trait::async_trait]
+        impl CompoundIngestor for RecordingIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                raws: Vec<RawMemory>,
+            ) -> Result<ApplyReport, AlephError> {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .extend(raws.iter().map(|r| r.source.clone()));
+                Ok(ApplyReport::default())
+            }
+        }
+
+        let (service, database, indexer, _tmp) = create_test_service_with_indexer().await;
+        let spy = Arc::new(RecordingIngestor {
+            seen: Mutex::new(vec![]),
+        });
+        let service = service.with_compound_ingestor(spy.clone());
+
+        let transcript =
+            RawMemory::new("real conversation".to_string(), RawMemorySource::Transcript);
+        let telemetry = RawMemory::new(
+            "tool grep ok in 5ms".to_string(),
+            RawMemorySource::ToolInvocation {
+                tool_name: "grep".to_string(),
+                success: true,
+                duration_ms: 5,
+            },
+        );
+        database.insert_raw_memory(&transcript).await.unwrap();
+        database.insert_raw_memory(&telemetry).await.unwrap();
+
+        service
+            .compress_to_notes("default", &indexer)
+            .await
+            .unwrap();
+
+        // Only the transcript should have reached the ingestor.
+        let seen = spy.seen.lock().unwrap().clone();
+        assert_eq!(
+            seen.len(),
+            1,
+            "only the non-telemetry row should reach the ingestor"
+        );
+        assert!(matches!(seen[0], RawMemorySource::Transcript));
+
+        // Both rows must still be consumed so the queue stays bounded.
+        assert_eq!(
+            database.count_unprocessed("default").await.unwrap(),
+            0,
+            "telemetry rows must be marked processed too, not left to pile up"
+        );
     }
 
     /// RawMemory round-trip: insert multiple with different sources, query,

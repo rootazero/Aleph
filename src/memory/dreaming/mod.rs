@@ -734,6 +734,27 @@ impl DreamDaemon {
                         last_duration_ms: Some(duration_ms),
                     })
                     .await;
+
+                // Persist the run into the `dream_reports` audit table. This
+                // writer was orphaned during an earlier refactor (the run path
+                // moved to the JSON event log but the SQLite audit trail was
+                // never re-wired), leaving `dream_reports` frozen. Restore it
+                // so the run history is queryable again. Best-effort: a failed
+                // insert (e.g. PK clash on a same-second re-run) is logged but
+                // never blocks the daemon.
+                let persisted = crate::memory::store::sqlite::dream_reports::PersistedDreamReport {
+                    id: format!("dream_{run_start}"),
+                    pipeline_type: report.pipeline_type.clone(),
+                    started_at: run_start,
+                    finished_at: report.finished_at.max(run_start),
+                    duration_ms: duration_ms as i64,
+                    synthesis_count: report.synthesis_count,
+                    errors: report.errors.clone(),
+                    namespace: "owner".to_string(),
+                };
+                if let Err(e) = self.database.insert_dream_report(&persisted) {
+                    warn!(error = %e, "failed to persist dream report row");
+                }
             }
             Ok(Err(err)) => {
                 warn!(error = %err, "DreamDaemon run failed");

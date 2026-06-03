@@ -199,14 +199,36 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             }
         }
         let source = raws[0].source.clone();
-        let related = gather_related(
+        // Related-page gathering is best-effort context enrichment for the
+        // planning LLM: it needs an embedding round-trip to hybrid-search for
+        // related notes. When the embedding endpoint is unavailable
+        // (network/quota outage), this MUST NOT abort the whole batch —
+        // propagating the error here starves the entire L1 note layer because
+        // `compress_to_notes` then returns without marking the raws processed,
+        // so they pile up unprocessed forever and no note is ever written.
+        // Degrade to an empty related set instead: notes are still planned and
+        // written from the raw batch, and vector freshness is backfilled later
+        // by the embedding queue / `reembed_all` safety net (P7 graceful
+        // degradation).
+        let related = match gather_related(
             self.store.clone(),
             self.embedder.clone(),
             &raws,
             agent_id,
             &self.budget,
         )
-        .await?;
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "compound ingest: related-page gathering failed (embedding/store); \
+                     proceeding without related context"
+                );
+                Vec::new()
+            }
+        };
 
         let mut plan = self.plan(agent_id, &raws, &related, &source).await?;
         if plan.ops.is_empty() {
@@ -845,6 +867,68 @@ mod plan_tests {
         assert!(
             body.contains("preference"),
             "index.md must list the touched 'preference' category; got:\n{body}"
+        );
+    }
+
+    /// An embedder that always fails — models a down/quota-exhausted embedding
+    /// endpoint. Used to prove `ingest_batch` degrades gracefully instead of
+    /// starving the note layer.
+    struct FailingEmbeddingProvider;
+
+    #[async_trait]
+    impl crate::memory::embedding_provider::EmbeddingProvider for FailingEmbeddingProvider {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Err(AlephError::other("embedding endpoint unavailable"))
+        }
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Err(AlephError::other("embedding endpoint unavailable"))
+        }
+        fn dimensions(&self) -> usize {
+            1024
+        }
+        fn model_name(&self) -> &str {
+            "failing"
+        }
+        fn provider_id(&self) -> &str {
+            "failing"
+        }
+    }
+
+    /// Regression: when the embedding endpoint is down, `gather_related` fails,
+    /// but the batch must STILL produce a note. Previously the error
+    /// propagated out of `ingest_batch`, `compress_to_notes` returned without
+    /// marking the raws processed, and the L1 note layer starved indefinitely.
+    #[tokio::test]
+    async fn ingest_batch_degrades_when_embedding_fails() {
+        let (dir, backend, indexer) = mk().await;
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"ops":[
+                {"kind":"create","note_path":"learning/tokio","title":"Tokio",
+                 "summary":"async runtime","facts":["event loop"],
+                 "links":["learning/rust-async"],"tags":["rust"]}
+            ]}"#
+            .into(),
+        ));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(FailingEmbeddingProvider),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget::default(),
+            embedding_manager: None,
+            gate: None,
+        };
+
+        let raw = RawMemory::new("some content".to_string(), RawMemorySource::Transcript);
+        let report = ing
+            .ingest_batch("default", vec![raw])
+            .await
+            .expect("ingest must succeed despite embedding failure");
+        assert_eq!(
+            report.created, 1,
+            "note must be created even when related-page embedding fails"
         );
     }
 
