@@ -42,10 +42,13 @@ pub fn parse_approval(text: &Option<String>) -> ApprovalDecision {
     match serde_json::from_str::<ApprovalDecision>(json_str) {
         Ok(decision) => decision,
         Err(e) => {
+            // Char-boundary-safe preview: `&json_str[..100]` panics when the
+            // 100th byte lands mid-codepoint (multibyte JSON content). Take
+            // the first 100 chars instead so the fail-safe path never crashes.
+            let preview: String = json_str.chars().take(100).collect();
             warn!(
                 "Failed to parse exec-approval JSON: {}, raw content: {}, defaulting to ask_user",
-                e,
-                &json_str[..json_str.len().min(100)]
+                e, preview
             );
             ApprovalDecision::default()
         }
@@ -126,6 +129,17 @@ mod tests {
     #[test]
     fn test_none_text_defaults_to_ask_user() {
         let decision = parse_approval(&None);
+        assert!(matches!(decision.action, ApprovalAction::AskUser));
+    }
+
+    #[test]
+    fn test_malformed_multibyte_json_does_not_panic() {
+        // Malformed JSON whose first 100 bytes straddle a multibyte char must
+        // hit the error branch without panicking on a non-char-boundary slice.
+        let payload = "我".repeat(60); // 180 bytes, byte 100 is mid-codepoint
+        let text = Some(format!("<exec-approval>{payload}</exec-approval>"));
+        let decision = parse_approval(&text);
+        // Fails to parse → safe default, no panic.
         assert!(matches!(decision.action, ApprovalAction::AskUser));
     }
 

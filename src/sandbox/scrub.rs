@@ -107,6 +107,34 @@ mod tests {
     }
 
     #[test]
+    fn scrub_redacts_generic_openai_key() {
+        // Classic `sk-…` key (not the sk-proj/sk-ant prefixed forms) printed to
+        // stdout must be redacted, not returned to the model verbatim.
+        let mut input = b"OPENAI_API_KEY=sk-".to_vec();
+        input.extend(std::iter::repeat_n(b'a', 40));
+        let out = scrub_secrets_bytes(&input, &[]);
+        let s = String::from_utf8_lossy(out.bytes.as_ref());
+        assert!(s.contains("[REDACTED:openai_sk]"), "got `{s}`");
+    }
+
+    #[test]
+    fn scrub_redacts_google_api_key() {
+        let mut input = b"key: AIza".to_vec();
+        input.extend(std::iter::repeat_n(b'X', 35));
+        let out = scrub_secrets_bytes(&input, &[]);
+        let s = String::from_utf8_lossy(out.bytes.as_ref());
+        assert!(s.contains("[REDACTED:google_api]"), "got `{s}`");
+    }
+
+    #[test]
+    fn scrub_redacts_pem_private_key_header() {
+        let input = b"-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n".to_vec();
+        let out = scrub_secrets_bytes(&input, &[]);
+        let s = String::from_utf8_lossy(out.bytes.as_ref());
+        assert!(s.contains("[REDACTED:private_key]"), "got `{s}`");
+    }
+
+    #[test]
     fn scrub_skips_whitelisted_injected_secret() {
         let key_str: String = format!("sk-proj-{}", "C".repeat(40));
         let injected = InjectedSecret::from_value("test", &key_str);

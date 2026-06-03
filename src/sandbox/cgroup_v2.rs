@@ -43,7 +43,18 @@ pub fn parse_proc_self_cgroup_path(contents: &str) -> Option<PathBuf> {
         let ctrl = parts.next()?;
         let path = parts.next()?;
         if id == "0" && ctrl.is_empty() {
-            return Some(PathBuf::from(path));
+            let path = PathBuf::from(path);
+            // Defense-in-depth: the unified-hierarchy path is later joined
+            // under `/sys/fs/cgroup`, and `Path::join` does NOT normalize
+            // `..`. A `ParentDir` component would let the join escape the
+            // hierarchy root, so reject it (soft-degrade: SP-5 skipped).
+            if path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+            {
+                return None;
+            }
+            return Some(path);
         }
     }
     None
@@ -373,6 +384,14 @@ mod tests {
     #[test]
     fn parse_proc_self_cgroup_empty_input() {
         assert_eq!(parse_proc_self_cgroup_path(""), None);
+    }
+
+    #[test]
+    fn parse_proc_self_cgroup_rejects_parent_dir_escape() {
+        // A `..` component would let the later `/sys/fs/cgroup`-join escape the
+        // hierarchy root; such a path must be rejected (soft-degrade to None).
+        let input = "0::/user.slice/../../../etc\n";
+        assert_eq!(parse_proc_self_cgroup_path(input), None);
     }
 
     // ---- cpu_quota_max_line -----------------------------------------

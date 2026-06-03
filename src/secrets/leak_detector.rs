@@ -32,18 +32,29 @@ impl LeakDecision {
 
 /// Source-of-truth secret regex strings for the byte-level sandbox scrubber.
 ///
-/// NOTE: These 5 prefixes are intentionally independent from the `LEAK_PATTERNS`
+/// NOTE: This list is intentionally independent from the `LEAK_PATTERNS`
 /// below. The str-side detector pre-dates this list and uses different pattern
-/// boundaries (e.g. `sk-[a-zA-Z0-9]` catches both OpenAI and sk-proj in one
-/// rule, whereas bytes-side splits them for named redaction tags). Refactoring
-/// `LEAK_PATTERNS` to share this list would change existing redaction behavior
-/// and break tests — kept separate by design.
+/// boundaries. Refactoring `LEAK_PATTERNS` to share this list would change
+/// existing redaction behavior and break tests — kept separate by design.
+///
+/// Ordering matters: the specific prefixes (`sk_proj`/`sk_ant`) run before the
+/// generic `openai_sk` catch-all so they win the named redaction tag; once a
+/// match is redacted to `[REDACTED:NAME]` the generic rule no longer matches
+/// it. The trailing three entries (generic OpenAI key, Google API key, PEM
+/// private-key header) mirror the high-confidence `LEAK_PATTERNS` so that
+/// sandbox stdout/stderr is scrubbed of the same secrets the str-side detector
+/// blocks on the network path — closing a previously open leak path where a
+/// command printing a classic `sk-…`, `AIza…`, or PEM key to stdout was
+/// returned to the model un-redacted.
 pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
     ("sk_proj", r"sk-proj-[A-Za-z0-9_\-]{20,}"),
     ("sk_ant", r"sk-ant-[A-Za-z0-9_\-]{20,}"),
     ("aws_akia", r"AKIA[0-9A-Z]{16}"),
     ("github_pat", r"ghp_[A-Za-z0-9]{20,}"),
     ("gitlab_pat", r"glpat-[A-Za-z0-9_\-]{20,}"),
+    ("openai_sk", r"sk-[a-zA-Z0-9\-]{20,}"),
+    ("google_api", r"AIza[a-zA-Z0-9_\-]{35}"),
+    ("private_key", r"-----BEGIN [A-Z ]+ PRIVATE KEY-----"),
 ];
 
 /// Produce bytes-flavored regexes matching the same patterns as
