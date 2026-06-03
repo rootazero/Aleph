@@ -402,6 +402,39 @@ impl TokenUsage {
         }
         Some(cache_read as f64 / total_prompt as f64)
     }
+
+    /// Ground-truth size of the prompt actually sent over the wire (system +
+    /// tools + all messages), in tokens, as reported by the provider.
+    ///
+    /// This is the value to calibrate a heuristic token estimator against. It
+    /// folds the cached and cache-creation portions back in so the figure is
+    /// the *full* prompt, not just the billed-fresh subset — otherwise a warm
+    /// cache hit (where Anthropic reports a tiny `input_tokens`) would look like
+    /// the prompt suddenly shrank tenfold.
+    ///
+    /// Uses the same disjoint-vs-overlapping convention detection as
+    /// [`TokenUsage::cache_hit_ratio`]:
+    /// - **Anthropic** reports `input_tokens` as the non-cached, non-creation
+    ///   portion, with `cache_read`/`cache_creation` disjoint → sum all three.
+    /// - **OpenAI / DeepSeek / Volcengine** report `input_tokens` (prompt
+    ///   tokens) as the total already, with `cache_read` a subset → `input_tokens`.
+    ///
+    /// Returns 0 when the provider reported no usage (all counters zero).
+    pub fn prompt_tokens_total(&self) -> u64 {
+        let input = u64::from(self.input_tokens);
+        let cache_read = u64::from(self.cache_read_tokens.unwrap_or(0));
+        let cache_creation = u64::from(self.cache_creation_tokens.unwrap_or(0));
+        if cache_read > input {
+            // Anthropic shape: input excludes the cached + creation portions.
+            input
+                .saturating_add(cache_read)
+                .saturating_add(cache_creation)
+        } else {
+            // OpenAI-family: input already includes any cache_read; creation is
+            // an Anthropic-only concept (0 here) but folded in defensively.
+            input.saturating_add(cache_creation)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -583,5 +616,52 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(usage.cache_hit_ratio(), Some(0.0));
+    }
+
+    /// OpenAI shape: prompt total == input_tokens (cache_read is a subset, not added).
+    #[test]
+    fn prompt_tokens_total_openai_shape() {
+        let usage = TokenUsage {
+            input_tokens: 1000,
+            cache_read_tokens: Some(800),
+            ..Default::default()
+        };
+        assert_eq!(usage.prompt_tokens_total(), 1000);
+    }
+
+    /// Anthropic warm-cache shape: input excludes cached + creation; sum all three
+    /// so a cache hit doesn't make the prompt look like it shrank.
+    #[test]
+    fn prompt_tokens_total_anthropic_warm_cache() {
+        let usage = TokenUsage {
+            input_tokens: 50,
+            cache_read_tokens: Some(9000),
+            cache_creation_tokens: Some(150),
+            ..Default::default()
+        };
+        assert_eq!(usage.prompt_tokens_total(), 50 + 9000 + 150);
+    }
+
+    /// Anthropic cold-start: cache_read==0, large cache_creation, input is the rest.
+    /// Folds creation in (input + creation = full prompt).
+    #[test]
+    fn prompt_tokens_total_anthropic_cold_start() {
+        let usage = TokenUsage {
+            input_tokens: 2000,
+            cache_read_tokens: Some(0),
+            cache_creation_tokens: Some(500),
+            ..Default::default()
+        };
+        assert_eq!(usage.prompt_tokens_total(), 2500);
+    }
+
+    /// No cache info at all: prompt total is just input_tokens.
+    #[test]
+    fn prompt_tokens_total_no_cache() {
+        let usage = TokenUsage {
+            input_tokens: 1234,
+            ..Default::default()
+        };
+        assert_eq!(usage.prompt_tokens_total(), 1234);
     }
 }
