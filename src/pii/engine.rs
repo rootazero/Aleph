@@ -224,7 +224,7 @@ impl PiiEngine {
         // Sort by start descending so we can replace from back to front
         // without invalidating earlier offsets.
         let mut sorted = deduped;
-        sorted.sort_by(|a, b| b.start.cmp(&a.start));
+        sorted.sort_by_key(|x| std::cmp::Reverse(x.start));
 
         let mut result = text.to_string();
         let mut blocked_count = 0;
@@ -299,7 +299,7 @@ fn dedup_overlapping(mut matches: Vec<PiiMatch>) -> Vec<PiiMatch> {
     }
 
     // Sort by severity descending so higher-severity matches are retained.
-    matches.sort_by(|a, b| b.severity.cmp(&a.severity));
+    matches.sort_by_key(|x| std::cmp::Reverse(x.severity));
 
     let mut result: Vec<PiiMatch> = Vec::new();
     for m in matches {

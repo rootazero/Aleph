@@ -226,7 +226,7 @@ impl ProjectStore {
     /// Return projects ordered by `last_used_at` descending.
     pub fn list(&self) -> Result<Vec<Project>, ProjectError> {
         let mut projects = self.with_locked_read(|f| f.projects.clone())?;
-        projects.sort_by(|a, b| b.last_used_at.cmp(&a.last_used_at));
+        projects.sort_by_key(|x| std::cmp::Reverse(x.last_used_at));
         Ok(projects)
     }
 
@@ -353,7 +353,7 @@ fn evict_overflow(projects: &mut Vec<Project>) {
     if projects.len() <= RECENT_PROJECTS_CAP {
         return;
     }
-    projects.sort_by(|a, b| b.last_used_at.cmp(&a.last_used_at));
+    projects.sort_by_key(|x| std::cmp::Reverse(x.last_used_at));
     projects.truncate(RECENT_PROJECTS_CAP);
 }
 

@@ -361,11 +361,10 @@ impl SoulManifest {
                     manifest.anti_patterns = Self::parse_list_items(content);
                 }
             }
-            "addendum" | "additional context" | "context" => {
-                if manifest.addendum.is_none() {
+            "addendum" | "additional context" | "context"
+                if manifest.addendum.is_none() => {
                     manifest.addendum = Some(content.to_string());
                 }
-            }
             _ => {
                 // Unknown section - ignore
             }

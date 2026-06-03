@@ -2300,7 +2300,7 @@ pub async fn handle_workflow_import_canvas(
     // the task value is moved into `create_task`.
     let mut work: Vec<(String, crate::agents::swarm::tasks::NewCoordTask)> = canvas_node_ids
         .into_iter()
-        .zip(planned.into_iter())
+        .zip(planned)
         .collect();
 
     let mut created: Vec<serde_json::Value> = Vec::with_capacity(work.len());

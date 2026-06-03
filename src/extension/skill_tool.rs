@@ -72,7 +72,7 @@ fn evaluate_permission_rule(rule: &PermissionRule, skill_name: &str) -> Permissi
                 .iter()
                 .filter(|(p, _)| p.ends_with('*') && *p != "*")
                 .collect();
-            prefix_patterns.sort_by(|(a, _), (b, _)| b.len().cmp(&a.len()));
+            prefix_patterns.sort_by_key(|(a, _)| std::cmp::Reverse(a.len()));
 
             for (pattern, action) in prefix_patterns {
                 let prefix = pattern.get(..pattern.len() - 1).unwrap_or("");

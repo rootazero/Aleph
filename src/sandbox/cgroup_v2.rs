@@ -86,6 +86,7 @@ impl CgroupV2Scope {
     /// Absolute path to the cgroup directory. Exposed so `pre_exec`
     /// callbacks can clone-capture `path().join("cgroup.procs")` without
     /// sharing the whole scope (which would risk a fork+exec Drop leak).
+    #[allow(dead_code)]
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
@@ -286,6 +287,7 @@ impl CgroupV2Scope {
     }
 
     /// Write the current process's PID into `<scope>/cgroup.procs`.
+    #[allow(dead_code)]
     pub fn attach_current_pid(&self) -> std::io::Result<()> {
         Self::write_current_pid_to_path(&self.path.join("cgroup.procs"))
     }

@@ -73,7 +73,7 @@ impl IndexMdGenerator {
         for (cat, items) in by_cat.iter() {
             out.push_str(&format!("## {} ({})\n", cat, items.len()));
             let mut sorted = items.clone();
-            sorted.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+            sorted.sort_by_key(|x| std::cmp::Reverse(x.updated_at));
             for e in sorted {
                 let summary = self.summary_for(e).await.unwrap_or_default();
                 let updated = DateTime::<Utc>::from_timestamp(e.updated_at, 0)

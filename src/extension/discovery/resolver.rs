@@ -30,7 +30,7 @@ pub fn resolve_conflicts(candidates: Vec<PluginCandidate>) -> ResolvedPlugins {
             }
         } else {
             // Sort by priority (highest first)
-            group.sort_by(|a, b| b.origin.priority().cmp(&a.origin.priority()));
+            group.sort_by_key(|x| std::cmp::Reverse(x.origin.priority()));
 
             let winner = group.remove(0);
             info!(

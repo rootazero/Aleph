@@ -360,7 +360,7 @@ impl SessionStore for FileSessionStore {
             }
             sessions.push(meta);
         }
-        sessions.sort_by(|a, b| b.last_active_at.cmp(&a.last_active_at));
+        sessions.sort_by_key(|x| std::cmp::Reverse(x.last_active_at));
         if let Some(limit) = filter.limit {
             sessions.truncate(limit);
         }

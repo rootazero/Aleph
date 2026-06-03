@@ -206,7 +206,7 @@ async fn reembed_agent_notes(
 
         match embedder.embed_batch(&text_refs).await {
             Ok(embeddings) => {
-                for (note, embedding) in valid_notes.iter().zip(embeddings.into_iter()) {
+                for (note, embedding) in valid_notes.iter().zip(embeddings) {
                     if embedding.len() != target_dim {
                         warn!(
                             path = %note.path,

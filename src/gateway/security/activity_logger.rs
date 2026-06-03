@@ -190,7 +190,7 @@ impl GuestActivityLogger {
             .collect();
 
         // Sort by timestamp (newest first)
-        filtered.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        filtered.sort_by_key(|x| std::cmp::Reverse(x.timestamp));
 
         let total = filtered.len();
         let offset = query.offset.unwrap_or(0);

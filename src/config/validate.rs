@@ -503,15 +503,14 @@ impl Config {
                                 )));
                             }
                         }
-                        "searxng" => {
-                            if backend_config.base_url.is_none() {
+                        "searxng"
+                            if backend_config.base_url.is_none() => {
                                 error!(backend = %backend_name, "SearXNG backend requires base_url");
                                 return Err(AlephError::invalid_config(format!(
                                     "Search backend '{}' (SearXNG) requires a base_url",
                                     backend_name
                                 )));
                             }
-                        }
                         _ => {
                             // All other providers: api_key (or no
                             // credentials) is validated post-vault injection

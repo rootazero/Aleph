@@ -201,11 +201,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 
 /// Integer mean (`sum / count`), or `0` when `count == 0`.
 fn mean(sum: u64, count: u64) -> u64 {
-    if count == 0 {
-        0
-    } else {
-        sum / count
-    }
+    sum.checked_div(count).unwrap_or(0)
 }
 
 #[cfg(test)]

@@ -201,7 +201,7 @@ impl PatchApplier {
 
         // Sort patches by start_line in descending order (apply from end to start)
         let mut sorted_patches = self.patches.clone();
-        sorted_patches.sort_by(|a, b| b.start_line.cmp(&a.start_line));
+        sorted_patches.sort_by_key(|x| std::cmp::Reverse(x.start_line));
 
         // Apply patches sequentially
         let mut result = file_content.to_string();

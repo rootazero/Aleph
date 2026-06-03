@@ -200,7 +200,7 @@ impl ProcessRegistry {
                 )
             })
             .collect();
-        rows.sort_by(|a, b| b.0.cmp(&a.0));
+        rows.sort_by_key(|x| std::cmp::Reverse(x.0));
         rows.into_iter().map(|(_, s)| s).collect()
     }
 }

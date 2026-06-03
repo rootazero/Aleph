@@ -12,7 +12,10 @@ use crate::sandbox::driver::{OsSandboxDriverTrait, OsSandboxProfile};
 use crate::sandbox::platforms::common::{
     is_wsl, run_child_with_drain, wsl_version, LINUX_PLATFORM_DEFAULT_READ_ROOTS,
 };
-use crate::sandbox::policy::{FsPolicy, NetworkPolicy, ProcessPolicy, SandboxPolicy};
+use crate::sandbox::policy::{FsPolicy, NetworkPolicy, SandboxPolicy};
+// Only the test module constructs a ProcessPolicy directly.
+#[cfg(test)]
+use crate::sandbox::policy::ProcessPolicy;
 
 const BWRAP_CANDIDATES: [&str; 2] = ["/usr/bin/bwrap", "/usr/local/bin/bwrap"];
 

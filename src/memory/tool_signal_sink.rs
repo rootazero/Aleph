@@ -164,11 +164,7 @@ pub async fn aggregate_tool_stats(
         }
     }
 
-    let avg_duration_ms = if total > 0 {
-        total_duration_ms / total
-    } else {
-        0
-    };
+    let avg_duration_ms = total_duration_ms.checked_div(total).unwrap_or(0);
     Ok(ToolStats {
         total,
         succeeded,

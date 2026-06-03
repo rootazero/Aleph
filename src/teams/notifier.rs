@@ -131,9 +131,9 @@ impl EventHandler for TeamNotifier {
                 team_id,
                 task_id,
                 result_summary,
-            } => {
+            }
                 // Only notify once the whole team's work is terminal.
-                if self.team_work_finished(team_id).await {
+                if self.team_work_finished(team_id).await => {
                     let summary = result_summary.as_deref().unwrap_or("");
                     self.notify_leader(
                         team_id,
@@ -145,7 +145,6 @@ impl EventHandler for TeamNotifier {
                     )
                     .await;
                 }
-            }
             // TeamNotifier subscribes exclusively to TeamTaskCompleted and
             // TeamTaskFailed (see `subscriptions()`). All other event variants
             // that reach this handler are intentionally ignored.

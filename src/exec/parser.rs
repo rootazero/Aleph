@@ -36,13 +36,12 @@ fn contains_unquoted_subshell(command: &str) -> bool {
             '"' if !in_single => {
                 in_double = !in_double;
             }
-            '(' if !in_single => {
+            '(' if !in_single
                 // $( — subshell substitution
                 // <( or >( — process substitution (executes arbitrary commands)
-                if prev == '$' || prev == '<' || prev == '>' {
+                && (prev == '$' || prev == '<' || prev == '>') => {
                     return true;
                 }
-            }
             _ => {}
         }
         prev = ch;
@@ -78,13 +77,12 @@ fn contains_unquoted_redirect(command: &str) -> bool {
             '>' | '<' if !in_single && !in_double => {
                 return true;
             }
-            '&' if !in_single && !in_double => {
+            '&' if !in_single && !in_double
                 // Only flag & when it follows > or < (fd duplication redirects like 2>&1)
                 // Do NOT flag && (chain operator) or bare & (background operator)
-                if prev == '>' || prev == '<' {
+                && (prev == '>' || prev == '<') => {
                     return true;
                 }
-            }
             _ => {}
         }
         prev = ch;

@@ -44,7 +44,7 @@ impl SnapshotReader {
             .collect();
 
         // Sort newest first
-        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.sort_by_key(|x| std::cmp::Reverse(x.1));
 
         for (path, _) in candidates {
             if let Ok(content) = std::fs::read_to_string(&path) {

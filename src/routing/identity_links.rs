@@ -96,7 +96,7 @@ pub(crate) fn resolve_linked_peer_id(
     // duplicate IDs (directly-constructed HashMap, not validated config),
     // alphabetic canonical order provides a stable tie-break.
     let mut entries: Vec<_> = identity_links.iter().collect();
-    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    entries.sort_by_key(|(a, _)| *a);
 
     // First pass: prefer scoped match (more specific) for deterministic behavior.
     // A scoped ID like "telegram:123" is more precise than a bare "123" and

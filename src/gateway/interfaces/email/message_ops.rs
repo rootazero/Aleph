@@ -529,10 +529,7 @@ impl EmailMessageOps {
     fn convert_paired_marker(text: &str, marker: &str, open: &str, close: &str) -> String {
         let mut result = text.to_string();
 
-        loop {
-            let Some(start) = result.find(marker) else {
-                break;
-            };
+        while let Some(start) = result.find(marker) {
             let after_start = start + marker.len();
             if after_start >= result.len() {
                 break;

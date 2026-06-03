@@ -154,7 +154,7 @@ impl ArenaHandle {
             .values()
             .flat_map(|s| s.artifacts.iter())
             .collect();
-        all_artifacts.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        all_artifacts.sort_by_key(|x| std::cmp::Reverse(x.created_at));
         let artifacts: Vec<String> = all_artifacts
             .into_iter()
             .take(5)
