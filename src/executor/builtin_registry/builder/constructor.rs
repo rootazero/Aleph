@@ -169,9 +169,18 @@ impl BuiltinToolRegistry {
                 pipeline,
             )))
         };
+        // Approval policy — gates sensitive desktop/PIM actions. Loaded from
+        // `~/.aleph/approval-policy.json`; with no file present it falls back to
+        // a permissive default (desktop actions Allow, shell Deny), so wiring
+        // here is byte-identical to the previous unwired (allow-all) behavior
+        // until the user supplies a policy file. Shared by DesktopTool + PimTool.
+        let approval_policy: Arc<dyn crate::approval::ApprovalPolicy> =
+            Arc::new(crate::approval::ConfigApprovalPolicy::load());
+
         let desktop_tool = DesktopTool::new()
             .with_platform(Arc::clone(&desktop_platform))
-            .with_vision_bridge(vision_bridge);
+            .with_vision_bridge(vision_bridge)
+            .with_approval_policy(Arc::clone(&approval_policy));
 
         // AX query tools (macOS only; tools degrade gracefully on other platforms).
         let desktop_ax_query_focused_tool = crate::builtin_tools::DesktopAxQueryFocused::new()
@@ -196,7 +205,9 @@ impl BuiltinToolRegistry {
         let media_tool = MediaTool::new(Arc::clone(&desktop_platform));
 
         // PIM tool — platform-native notes/calendar/reminders/contacts capability.
-        let pim_tool = PimTool::new().with_platform(Arc::clone(&desktop_platform));
+        let pim_tool = PimTool::new()
+            .with_platform(Arc::clone(&desktop_platform))
+            .with_approval_policy(Arc::clone(&approval_policy));
 
         let scratchpad_tool = ScratchpadTool::new();
 

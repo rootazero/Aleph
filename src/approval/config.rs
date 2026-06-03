@@ -203,10 +203,10 @@ impl ConfigApprovalPolicy {
             },
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 debug!(
-                    "Approval policy file not found at {}. Using defaults.",
+                    "Approval policy file not found at {}. Using permissive defaults.",
                     path.display()
                 );
-                Self::default()
+                Self::permissive_default()
             }
             Err(e) => {
                 error!(
@@ -242,6 +242,37 @@ impl ConfigApprovalPolicy {
         Self::new(PolicyConfig {
             version: 1,
             defaults: HashMap::new(),
+            allowlist: vec![],
+            blocklist: vec![],
+        })
+    }
+
+    /// Permissive fallback used when **no** policy file exists.
+    ///
+    /// Every action type defaults to [`ApprovalDecision::Allow`] except
+    /// [`ActionType::ShellExec`], which stays [`ApprovalDecision::Deny`].
+    ///
+    /// This is the production no-config default: the only tools that hold an
+    /// `ApprovalPolicy` (`DesktopTool`, `PimTool`) emit `Desktop*` action types,
+    /// so an all-`Allow` desktop default keeps autonomous desktop/PIM behavior
+    /// unchanged from when no policy was wired at all. Dropping a
+    /// `~/.aleph/approval-policy.json` is the explicit opt-in to tighten this.
+    fn permissive_default() -> Self {
+        let mut defaults = HashMap::new();
+        defaults.insert(ActionType::BrowserNavigate, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserClick, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserType, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserFill, DefaultDecision::Allow);
+        defaults.insert(ActionType::BrowserEvaluate, DefaultDecision::Allow);
+        defaults.insert(ActionType::DesktopClick, DefaultDecision::Allow);
+        defaults.insert(ActionType::DesktopType, DefaultDecision::Allow);
+        defaults.insert(ActionType::DesktopKeyCombo, DefaultDecision::Allow);
+        defaults.insert(ActionType::DesktopLaunchApp, DefaultDecision::Allow);
+        defaults.insert(ActionType::ShellExec, DefaultDecision::Deny);
+
+        Self::new(PolicyConfig {
+            version: 1,
+            defaults,
             allowlist: vec![],
             blocklist: vec![],
         })

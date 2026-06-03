@@ -237,7 +237,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[tokio::test]
-    async fn test_load_missing_file_returns_default() {
+    async fn test_load_missing_file_returns_permissive_default() {
         // Use a path in a temp directory that does not exist.
         let temp_path = std::env::temp_dir().join("aleph-test-approval-nonexistent");
         let policy = ConfigApprovalPolicy::load_from(temp_path.join("policy.json"));
@@ -245,6 +245,17 @@ mod tests {
         let req = make_request(ActionType::BrowserNavigate, "https://example.com");
         assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
 
+        // Desktop actions are Allow under the permissive no-config default —
+        // this is the byte-identical contract for the only policy-holding tools
+        // (DesktopTool / PimTool), which emit Desktop* action types. Regressing
+        // these to Ask would silently break autonomous desktop/PIM execution.
+        let req = make_request(ActionType::DesktopClick, "click(10,20)");
+        assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
+
+        let req = make_request(ActionType::DesktopLaunchApp, "com.apple.Safari");
+        assert_eq!(policy.check(&req).await, ApprovalDecision::Allow);
+
+        // ShellExec remains denied even in the permissive default.
         let req = make_request(ActionType::ShellExec, "ls");
         assert!(matches!(
             policy.check(&req).await,
