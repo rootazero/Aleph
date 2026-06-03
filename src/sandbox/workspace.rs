@@ -254,7 +254,11 @@ impl Sandbox for WorkspaceSandbox {
                     .request_approval_for_tool(&cmd.program, &reason)
                     .await;
                 match outcome {
-                    ApprovalOutcome::Approved => {
+                    // Either grant flavour elevates; this path already caches the
+                    // grant per-session in `granted_elevations`, so a one-shot
+                    // `Approved` and a session-scoped `ApprovedForSession` are
+                    // equivalent here.
+                    ApprovalOutcome::Approved | ApprovalOutcome::ApprovedForSession => {
                         ws.granted_elevations.write().await.insert(normalized_caps);
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {

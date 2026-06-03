@@ -6,8 +6,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::extension::hooks::{HookContext, PermissionDecision};
 use crate::extension::HookEvent;
-use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
+use crate::sandbox::exec_approval::session_memory;
 use crate::session::events::ToolOutput;
+use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
 use crate::tools::service::ToolError;
 
@@ -78,28 +80,9 @@ impl ScopedToolService {
             match &self.approval_requester {
                 Some(requester) => {
                     let reason = format!("Tool `{name}` requires your confirmation to run.");
-                    // Fire PermissionRequest + Notification (best-effort,
-                    // observer-only) so user-facing channels can pop a
-                    // toast / send an email / etc. without blocking the
-                    // approval path itself.
-                    crate::extension::hooks::fire_global_observer(
-                        crate::extension::HookEvent::PermissionRequest,
-                        &self.hook_session_id,
-                        vec![("TOOL_NAME", name.to_string()), ("REASON", reason.clone())],
-                    )
-                    .await;
-                    crate::extension::hooks::fire_global_observer(
-                        crate::extension::HookEvent::Notification,
-                        &self.hook_session_id,
-                        vec![
-                            ("KIND", "permission_request".to_string()),
-                            ("TOOL_NAME", name.to_string()),
-                            ("MESSAGE", reason.clone()),
-                        ],
-                    )
-                    .await;
-                    let outcome = requester.request_approval(name, &reason).await;
-                    if outcome != ApprovalOutcome::Approved {
+                    if let Err(outcome) =
+                        self.confirm_with_memory(requester, name, &reason).await
+                    {
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
@@ -233,6 +216,94 @@ impl ScopedToolService {
         result
     }
 
+    /// Stable session key for the session approval memory.
+    ///
+    /// Prefers the structured `SessionKey` carried by the turn context (the
+    /// reliable per-conversation identity), falling back to the hook session
+    /// id. Returns `None` when neither is available, which disables session
+    /// memory for this call — a fail-safe so a grant is never shared across an
+    /// unknown / empty session key.
+    fn session_memory_key(&self) -> Option<String> {
+        if let Some(tc) = &self.turn_context {
+            let key = tc.session_key.to_string();
+            if !key.is_empty() {
+                return Some(key);
+            }
+        }
+        if !self.hook_session_id.is_empty() {
+            return Some(self.hook_session_id.clone());
+        }
+        None
+    }
+
+    /// Route a confirmation prompt for `name` through `requester`, consulting
+    /// and updating the session approval memory.
+    ///
+    /// Mirrors codex's `with_cached_approval`: a prior "approve for session"
+    /// (`AllowAlways` → [`ApprovalOutcome::ApprovedForSession`]) short-circuits
+    /// the prompt for the rest of the session. Returns `Ok(())` when the call
+    /// may proceed, or `Err(outcome)` carrying the blocking outcome
+    /// (`Denied` / `Timeout`) so each caller can build its own error text.
+    ///
+    /// Shared by the `confirm_tools` gate and the hook `Ask` gate so the
+    /// observer-firing + prompt + memory logic lives in exactly one place.
+    async fn confirm_with_memory(
+        &self,
+        requester: &Arc<dyn ApprovalRequester>,
+        name: &str,
+        reason: &str,
+    ) -> Result<(), ApprovalOutcome> {
+        let mem_key = self.session_memory_key();
+
+        // Session memory short-circuit: a prior session grant satisfies the
+        // confirmation without re-prompting (and without re-firing observers).
+        if let Some(ref key) = mem_key {
+            if session_memory::global().is_approved(key, name) {
+                tracing::debug!(
+                    tool = %name,
+                    "confirmation satisfied by session approval memory"
+                );
+                return Ok(());
+            }
+        }
+
+        // Fire PermissionRequest + Notification observers (best-effort,
+        // observer-only) so user-facing channels can pop a toast / send an
+        // email / etc. without blocking the approval path itself.
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::PermissionRequest,
+            &self.hook_session_id,
+            vec![
+                ("TOOL_NAME", name.to_string()),
+                ("REASON", reason.to_string()),
+            ],
+        )
+        .await;
+        crate::extension::hooks::fire_global_observer(
+            crate::extension::HookEvent::Notification,
+            &self.hook_session_id,
+            vec![
+                ("KIND", "permission_request".to_string()),
+                ("TOOL_NAME", name.to_string()),
+                ("MESSAGE", reason.to_string()),
+            ],
+        )
+        .await;
+
+        let outcome = requester.request_approval(name, reason).await;
+        if !outcome.is_approved() {
+            return Err(outcome);
+        }
+
+        // Record a session-scoped grant so subsequent calls skip the prompt.
+        if outcome.is_session_grant() {
+            if let Some(ref key) = mem_key {
+                session_memory::global().remember(key, name);
+            }
+        }
+        Ok(())
+    }
+
     /// Fire `BeforeToolCall` interceptors. Returns the (possibly rewritten)
     /// input + any `context:` lines the interceptors emitted (to be wrapped
     /// into the tool result), or a `ToolError` when a hook blocks / denies
@@ -281,26 +352,7 @@ impl ScopedToolService {
         if let Some(PermissionDecision::Ask { reason }) = hook_result.permission_decision {
             match &self.approval_requester {
                 Some(requester) => {
-                    // Mirror confirm_tools: fire PermissionRequest +
-                    // Notification observers for user-attention plumbing.
-                    crate::extension::hooks::fire_global_observer(
-                        crate::extension::HookEvent::PermissionRequest,
-                        &self.hook_session_id,
-                        vec![("TOOL_NAME", name.to_string()), ("REASON", reason.clone())],
-                    )
-                    .await;
-                    crate::extension::hooks::fire_global_observer(
-                        crate::extension::HookEvent::Notification,
-                        &self.hook_session_id,
-                        vec![
-                            ("KIND", "permission_request".to_string()),
-                            ("TOOL_NAME", name.to_string()),
-                            ("MESSAGE", reason.clone()),
-                        ],
-                    )
-                    .await;
-                    let outcome = requester.request_approval(name, &reason).await;
-                    if outcome != ApprovalOutcome::Approved {
+                    if let Err(outcome) = self.confirm_with_memory(requester, name, &reason).await {
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
