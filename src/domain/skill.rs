@@ -254,7 +254,9 @@ pub struct EligibilitySpec {
     /// Explicit enable/disable override.
     ///
     /// - `None` (default): inherit from parent configuration or system default.
-    /// - `Some(true)`: force-enable this skill regardless of other checks.
+    /// - `Some(true)`: explicitly enabled — the skill is still subject to the
+    ///   remaining eligibility checks (OS, binaries, env, config). This is an
+    ///   on/off toggle, NOT a capability-check bypass; use `always` to skip checks.
     /// - `Some(false)`: force-disable this skill; takes precedence over `always`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled: Option<bool>,
