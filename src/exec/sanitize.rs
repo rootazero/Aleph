@@ -2,57 +2,13 @@
 //!
 //! Detects and strips invisible, zero-width, confusable, and dangerous Unicode characters
 //! that could be used to disguise malicious commands from human reviewers.
+//!
+//! The invisible / directional-formatting / tag-character classification is
+//! shared with the external-content sanitizer via
+//! [`crate::security::unicode_guard`]; this module layers shell-specific
+//! confusable-homoglyph handling on top.
 
-/// Returns true if the character is an invisible or potentially dangerous Unicode character.
-fn is_invisible_char(c: char) -> bool {
-    matches!(
-        c,
-        '\u{200B}' // ZERO WIDTH SPACE
-        | '\u{200C}' // ZERO WIDTH NON-JOINER
-        | '\u{200D}' // ZERO WIDTH JOINER
-        | '\u{FEFF}' // BYTE ORDER MARK / ZERO WIDTH NO-BREAK SPACE
-        | '\u{2060}' // WORD JOINER
-        | '\u{2061}' // FUNCTION APPLICATION
-        | '\u{2062}' // INVISIBLE TIMES
-        | '\u{2063}' // INVISIBLE SEPARATOR
-        | '\u{2064}' // INVISIBLE PLUS
-        | '\u{3164}' // HANGUL FILLER
-        | '\u{115F}' // HANGUL CHOSEONG FILLER
-        | '\u{1160}' // HANGUL JUNGSEONG FILLER
-        | '\u{200E}' // LEFT-TO-RIGHT MARK
-        | '\u{200F}' // RIGHT-TO-LEFT MARK
-        | '\u{202A}' // LEFT-TO-RIGHT EMBEDDING
-        | '\u{202B}' // RIGHT-TO-LEFT EMBEDDING
-        | '\u{202C}' // POP DIRECTIONAL FORMATTING
-        | '\u{202D}' // LEFT-TO-RIGHT OVERRIDE
-        | '\u{202E}' // RIGHT-TO-LEFT OVERRIDE
-        | '\u{2066}' // LEFT-TO-RIGHT ISOLATE
-        | '\u{2067}' // RIGHT-TO-LEFT ISOLATE
-        | '\u{2068}' // FIRST STRONG ISOLATE
-        | '\u{2069}' // POP DIRECTIONAL ISOLATE
-        | '\u{FE00}'
-        | '\u{FE01}'
-        | '\u{FE02}'
-        | '\u{FE03}'
-        | '\u{FE04}'
-        | '\u{FE05}'
-        | '\u{FE06}'
-        | '\u{FE07}'
-        | '\u{FE08}'
-        | '\u{FE09}'
-        | '\u{FE0A}'
-        | '\u{FE0B}'
-        | '\u{FE0C}'
-        | '\u{FE0D}'
-        | '\u{FE0E}'
-        | '\u{FE0F}'
-    ) || is_tag_character(c)
-}
-
-/// Returns true if the character is a deprecated Unicode tag character (U+E0001-U+E007F).
-fn is_tag_character(c: char) -> bool {
-    (0xE0001..=0xE007F).contains(&(c as u32))
-}
+use crate::security::unicode_guard::is_invisible_char;
 
 /// Returns true if the character is a confusable homoglyph that could disguise
 /// ASCII letters in shell commands (e.g., Cyrillic 'а' looks like ASCII 'a').

@@ -16,6 +16,7 @@ pub mod runtime_guard;
 pub mod safe_regex;
 pub mod secret_equal;
 pub mod ssrf;
+pub mod unicode_guard;
 
 pub use audit_drain::spawn_audit_drain;
 pub use context_id_hasher::ContextIdHasher;
