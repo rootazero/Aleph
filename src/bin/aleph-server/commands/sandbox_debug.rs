@@ -170,7 +170,14 @@ pub async fn handle_sandbox_debug(
                     println!();
                 }
             }
-            std::process::exit(out.exit_code.unwrap_or(0));
+            // A signal-killed child has `exit_code == None`; mapping that to 0
+            // would report success for a SIGKILL/SIGSEGV. Use the POSIX
+            // `128 + signal` convention so scripted callers see the failure.
+            let code = out
+                .exit_code
+                .or_else(|| out.signal.map(|s| 128 + s))
+                .unwrap_or(1);
+            std::process::exit(code);
         }
         Err(e) => {
             eprintln!("\n=== Error ===\n{e}");

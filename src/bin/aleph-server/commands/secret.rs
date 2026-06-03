@@ -153,7 +153,13 @@ fn handle_secret_providers() -> Result<(), Box<dyn Error>> {
     use alephcore::secrets::provider::SecretProvider;
     use alephcore::secrets::ProviderStatus;
 
-    let config = alephcore::Config::load().unwrap_or_default();
+    // A malformed config.toml would otherwise silently hide every configured
+    // external provider behind the built-in `local` vault. Warn before falling
+    // back so the listing is not mistaken for "no providers configured".
+    let config = alephcore::Config::load().unwrap_or_else(|e| {
+        eprintln!("warning: failed to load config ({e}); showing built-in providers only");
+        alephcore::Config::default()
+    });
 
     println!("{:<15} {:<15} STATUS", "KEY", "TYPE");
     println!("{}", "-".repeat(55));

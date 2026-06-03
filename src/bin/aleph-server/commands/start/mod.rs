@@ -1107,7 +1107,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 tracing::warn!(error = %e, "Failed to assemble Orchestrator — flow composition disabled");
             }
         }
-    } else if !args.daemon {
+    } else {
+        // `tracing` routes to the log file in daemon mode, so this diagnostic
+        // must NOT be gated on `!args.daemon` — daemon is the production path
+        // where a silently disabled orchestrator is hardest to notice.
         tracing::info!("Orchestrator: skipped (no default provider or session service available)");
     }
 

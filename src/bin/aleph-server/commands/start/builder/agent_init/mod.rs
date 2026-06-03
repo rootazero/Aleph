@@ -136,7 +136,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
     // Phase 3 Task 8: sandbox for exec-class tools.
     sandbox: Option<Arc<dyn alephcore::sandbox::Sandbox>>,
 ) -> AgentHandlersResult {
-    let mut run_manager: Option<Arc<AgentRunManager>> = None;
+    // Assigned in both the real-execution branch and the simulated branch
+    // below; deferred init keeps the dead initial value out (and lets the
+    // compiler prove both modes set it before the `.expect(...)` read).
+    let mut run_manager: Option<Arc<AgentRunManager>>;
     let mut exec_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>> = None;
     let mut agent_reg: Option<Arc<AgentRegistry>> = None;
     let mut default_prov: Option<Arc<dyn alephcore::providers::AiProvider>> = None;
@@ -1438,6 +1441,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             let manager = rm_chat.clone();
             async move { chat_handlers::handle_send(req, manager).await }
         });
+
+        // Publish the fallback run manager through the outer `run_manager`
+        // Option. The `agent.status`/`agent.cancel`/`chat.abort` registrations
+        // below and the `_run_manager` field at the end of this fn are both
+        // gated on `Some(run_manager)`; without this assignment simulated mode
+        // skips those handlers and panics on the terminal `.expect(...)`.
+        run_manager = Some(fallback_run_manager);
 
         // Fallback: activity.stats with no execution engine
         let coord_store_fallback = coord_store.clone();

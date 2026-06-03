@@ -75,7 +75,8 @@ pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
     }
 
     let mut printer = ProgressPrinter::new(args.json, args.quiet);
-    let mut any_failed = false;
+    let mut ready_count: usize = 0;
+    let mut failed_count: usize = 0;
 
     for (idx, cap) in targets.iter().enumerate() {
         if args.force {
@@ -93,10 +94,11 @@ pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
                     .map(|e| e.version.clone())
                     .unwrap_or_default();
                 printer.step_done(cap, &path.display().to_string(), &version);
+                ready_count += 1;
             }
             Err(e) => {
                 printer.step_failed(cap, &e.to_string());
-                any_failed = true;
+                failed_count += 1;
                 if !args.best_effort {
                     break;
                 }
@@ -104,7 +106,8 @@ pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
         }
     }
 
-    printer.summary(&targets, any_failed);
+    let any_failed = failed_count > 0;
+    printer.summary(targets.len(), ready_count, failed_count);
 
     if any_failed && !args.best_effort {
         1
@@ -172,17 +175,15 @@ impl ProgressPrinter {
         }
     }
 
-    fn summary(&mut self, targets: &[String], any_failed: bool) {
+    fn summary(&mut self, total: usize, ready: usize, failed: usize) {
         if self.json {
-            let ready = targets.len().saturating_sub(any_failed as usize);
-            eprintln!(
-                r#"{{"event":"summary","ready":{ready},"failed":{},"total":{}}}"#,
-                any_failed as usize,
-                targets.len(),
-            );
+            // Report the actual success/failure counts. In `--best-effort`
+            // mode several targets can fail in one run; reporting `failed` as a
+            // 0/1 bool undercounted multi-failure runs and overcounted `ready`.
+            eprintln!(r#"{{"event":"summary","ready":{ready},"failed":{failed},"total":{total}}}"#);
         } else if !self.quiet {
             eprintln!();
-            if any_failed {
+            if failed > 0 {
                 eprintln!("Runtime bootstrap finished with errors. Re-run to retry.");
             } else {
                 eprintln!("Runtime ready. Ledger: ~/.aleph/runtimes/ledger.json");
