@@ -14,7 +14,6 @@ use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
 use crate::agents::subagent_tool::SubagentTool;
-use crate::executor::CONFIRMATION_REQUIRED_TOOLS;
 use crate::extension::hooks::HookExecutor;
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::tools::refresh::ToolRefreshSource;
@@ -77,13 +76,15 @@ pub fn build_request_tool_service(
         svc = svc.with_result_store(store);
     }
     // Wire the confirmation seam: confirm-flagged tools route a user prompt
-    // before executing. Inert until boot installs the requester.
+    // before executing. Inert until boot installs the requester. Tools
+    // self-declare via `LoopTool::requires_confirmation()` — builtins through
+    // `RegistryToolAdapter`'s `CONFIRMATION_REQUIRED_TOOLS` list, MCP / skill
+    // tools through their own adapters — so no gateway allowlist is passed.
+    // The empty set leaves the dispatch gate to honour each tool's own
+    // declaration; the set parameter remains as an operator-override seam for
+    // runtime-injected confirm tools.
     if let Some(requester) = CONFIRMATION_REQUESTER.get() {
-        let confirm: BTreeSet<String> = CONFIRMATION_REQUIRED_TOOLS
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        svc = svc.with_confirmation(confirm, Arc::clone(requester));
+        svc = svc.with_confirmation(BTreeSet::new(), Arc::clone(requester));
     }
     Arc::new(svc)
 }

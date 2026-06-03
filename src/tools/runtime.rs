@@ -100,13 +100,13 @@ pub trait LoopTool: Send + Sync {
     /// sensitive tools (destructive deletes, credential writes, fund
     /// transfers, MCP / extension tools that declare themselves dangerous)
     /// so the live confirmation gate in `ScopedToolService` routes a user
-    /// approval before dispatch — independent of the static
-    /// `CONFIRMATION_REQUIRED_TOOLS` builtin list. This is the per-tool,
-    /// declaration-driven approval seam: any `LoopTool` (built-in, MCP,
-    /// skill, extension) can opt in without being hard-coded into the
-    /// gateway, mirroring openclaw's per-tool policy and hermes's per-tool
-    /// approval flags. Like `is_concurrent_safe`, the answer is static per
-    /// tool; it is not input-dependent.
+    /// approval before dispatch. This is the per-tool, declaration-driven
+    /// approval seam: any `LoopTool` (built-in, MCP, skill, extension) can
+    /// opt in without being hard-coded into the gateway. Builtins declare it
+    /// through `RegistryToolAdapter`'s `CONFIRMATION_REQUIRED_TOOLS` list
+    /// (sibling to `EXCLUSIVE_TOOLS`). Mirrors openclaw's per-tool policy and
+    /// hermes's per-tool approval flags. Like `is_concurrent_safe`, the
+    /// answer is static per tool; it is not input-dependent.
     fn requires_confirmation(&self) -> bool {
         false
     }
