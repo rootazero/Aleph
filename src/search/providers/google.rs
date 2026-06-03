@@ -47,6 +47,15 @@ fn check_status_google(response: Response, provider_name: &str, api_key: &str) -
     } else if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
         let msg = sanitize_api_key(format!("{} API error: {}", provider_name, status), api_key);
         Err(AlephError::authentication(provider_name, msg))
+    } else if status == StatusCode::TOO_MANY_REQUESTS {
+        // Google CSE returns 429 on daily-quota / per-100s-quota exhaustion.
+        // Mirror base `check_status` so this surfaces as RateLimitError
+        // (kind=rate-limit) instead of a generic provider error.
+        let msg = sanitize_api_key(
+            format!("{} API error: {} (rate limited)", provider_name, status),
+            api_key,
+        );
+        Err(AlephError::rate_limit(msg))
     } else {
         let msg = sanitize_api_key(format!("{} API error: {}", provider_name, status), api_key);
         Err(AlephError::provider(msg))

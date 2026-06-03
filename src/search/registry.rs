@@ -131,6 +131,27 @@ impl SearchRegistry {
             );
             return None;
         }
+        // Defensive (P7): the configured `default_provider` may name a backend
+        // that was skipped above (missing credentials / unknown provider_type).
+        // A registry whose default isn't among the constructed providers would
+        // fail EVERY search with "Default provider not found" — even though
+        // usable backends exist — unless the operator also happened to list
+        // them under `fallback_providers`. Promote a deterministically-chosen
+        // constructed provider to default so the working backends stay
+        // reachable. (`any_added` guarantees `providers` is non-empty here.)
+        if !registry.providers.contains_key(&registry.default_provider) {
+            let mut names: Vec<&String> = registry.providers.keys().collect();
+            names.sort();
+            if let Some(promoted) = names.first() {
+                log::warn!(
+                    "[search] default_provider '{}' was not constructed (missing config?); \
+                     promoting '{}' to default so usable backends remain reachable",
+                    registry.default_provider,
+                    promoted
+                );
+                registry.default_provider = (*promoted).clone();
+            }
+        }
         if let Some(ref fallbacks) = cfg.fallback_providers {
             registry.set_fallback_providers(fallbacks.clone());
         }
@@ -692,6 +713,56 @@ mod tests {
             registry.has_web_fetch_fallback(),
             "default web_fetch_fallback=true must arm the fallback"
         );
+    }
+
+    #[test]
+    fn from_config_promotes_default_when_configured_default_unconstructable() {
+        use crate::config::types::{SearchBackendConfig, SearchConfigInternal};
+        // default_provider names "tavily" but tavily has no api_key, so it is
+        // skipped during construction. The zero-cred "ddg" backend DOES
+        // construct. Without promotion the registry's default would point at
+        // the absent "tavily" and every search would hard-fail.
+        let mut backends = HashMap::new();
+        backends.insert(
+            "tavily".to_string(),
+            SearchBackendConfig {
+                provider_type: "tavily".to_string(),
+                api_key: None,
+                base_url: None,
+                engine_id: None,
+                engines: None,
+                min_request_interval_ms: None,
+                verified: false,
+            },
+        );
+        backends.insert(
+            "ddg".to_string(),
+            SearchBackendConfig {
+                provider_type: "duckduckgo".to_string(),
+                api_key: None,
+                base_url: None,
+                engine_id: None,
+                engines: None,
+                min_request_interval_ms: None,
+                verified: false,
+            },
+        );
+        let cfg = SearchConfigInternal {
+            enabled: true,
+            default_provider: "tavily".to_string(),
+            fallback_providers: None,
+            max_results: 5,
+            timeout_seconds: 10,
+            backends,
+            pii: None,
+            web_fetch_fallback: false,
+        };
+        let registry = SearchRegistry::from_config(Some(&cfg)).expect("registry");
+        assert_eq!(
+            registry.default_provider, "ddg",
+            "unconstructable default must be promoted to a constructed provider"
+        );
+        assert!(registry.get_provider("ddg").is_some());
     }
 
     #[test]
