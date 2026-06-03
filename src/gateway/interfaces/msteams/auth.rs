@@ -366,7 +366,9 @@ fn extract_host(url: &str) -> Option<&str> {
     // Strip scheme
     let rest = if let Some(s) = url.strip_prefix("https://") {
         s
-    } else { url.strip_prefix("http://")? };
+    } else {
+        url.strip_prefix("http://")?
+    };
 
     // Take everything up to the first '/' or end of string
     let host_port = rest.split('/').next()?;

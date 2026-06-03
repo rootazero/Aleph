@@ -80,9 +80,7 @@ impl ScopedToolService {
             match &self.approval_requester {
                 Some(requester) => {
                     let reason = format!("Tool `{name}` requires your confirmation to run.");
-                    if let Err(outcome) =
-                        self.confirm_with_memory(requester, name, &reason).await
-                    {
+                    if let Err(outcome) = self.confirm_with_memory(requester, name, &reason).await {
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(

@@ -154,11 +154,10 @@ fn make_nullable(schema: &mut Value) {
                 );
             }
         }
-        Some(Value::Array(mut arr))
-            if !arr.iter().any(|v| v.as_str() == Some("null")) => {
-                arr.push(Value::String("null".into()));
-                obj.insert("type".into(), Value::Array(arr));
-            }
+        Some(Value::Array(mut arr)) if !arr.iter().any(|v| v.as_str() == Some("null")) => {
+            arr.push(Value::String("null".into()));
+            obj.insert("type".into(), Value::Array(arr));
+        }
         _ => {
             // No type field — could be a $ref or anyOf; leave as-is
         }

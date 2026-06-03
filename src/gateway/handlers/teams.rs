@@ -2298,10 +2298,8 @@ pub async fn handle_workflow_import_canvas(
 
     // Pair each task with its canvas node id so we keep the mapping after
     // the task value is moved into `create_task`.
-    let mut work: Vec<(String, crate::agents::swarm::tasks::NewCoordTask)> = canvas_node_ids
-        .into_iter()
-        .zip(planned)
-        .collect();
+    let mut work: Vec<(String, crate::agents::swarm::tasks::NewCoordTask)> =
+        canvas_node_ids.into_iter().zip(planned).collect();
 
     let mut created: Vec<serde_json::Value> = Vec::with_capacity(work.len());
     // Topological insert with deferral: tasks whose blocked_by still points
