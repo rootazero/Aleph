@@ -20,7 +20,6 @@
 ///     .with_meta("model", "gpt-4");
 /// // ... do work
 /// ```
-use crate::config::MetricsPolicy;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -81,27 +80,6 @@ impl StageTimer {
         }
     }
 
-    /// Create a StageTimer with policy configuration
-    ///
-    /// Uses the policy's warning multiplier and logging settings.
-    pub fn start_with_policy(name: &str, policy: &MetricsPolicy) -> Self {
-        let warning_multiplier =
-            if policy.warning_multiplier.is_finite() && policy.warning_multiplier >= 0.0 {
-                policy.warning_multiplier
-            } else {
-                DEFAULT_WARNING_MULTIPLIER
-            };
-        Self {
-            name: name.to_string(),
-            start: Instant::now(),
-            metadata: None,
-            target_ms: None,
-            warning_multiplier,
-            enable_logging: policy.enable_logging,
-            enable_warnings: policy.enable_warnings,
-        }
-    }
-
     /// Add metadata to be included in the log output
     ///
     /// Metadata is useful for providing context about what happened
@@ -148,17 +126,6 @@ impl StageTimer {
     pub fn with_target(mut self, target_ms: u64) -> Self {
         self.target_ms = Some(target_ms);
         self
-    }
-
-    /// Stop the timer, return the elapsed time, and suppress Drop logging.
-    ///
-    /// Unlike letting the timer go out of scope, this prevents the
-    /// automatic debug/warn log from firing when the value is dropped.
-    /// Useful when the caller wants to handle timing data manually.
-    pub fn stop(mut self) -> u64 {
-        self.enable_logging = false;
-        self.enable_warnings = false;
-        self.elapsed_ms()
     }
 
     /// Get the elapsed time in whole milliseconds.
@@ -219,34 +186,6 @@ impl Drop for StageTimer {
             );
         }
     }
-}
-
-/// Macro for convenient timing with automatic target setting
-///
-/// This macro creates a StageTimer with a predefined target based on
-/// the stage name. It's a convenience wrapper around StageTimer::start().
-///
-/// # Examples
-///
-/// ```rust,ignore
-/// use alephcore::time_stage;
-///
-/// {
-///     let _timer = time_stage!("clipboard_read");
-///     // ... do work
-/// }
-/// ```
-#[macro_export]
-macro_rules! time_stage {
-    ($name:expr) => {{
-        use $crate::metrics::StageTimer;
-        StageTimer::start($name)
-    }};
-
-    ($name:expr, target: $target:expr) => {{
-        use $crate::metrics::StageTimer;
-        StageTimer::start($name).with_target($target)
-    }};
 }
 
 #[cfg(test)]
@@ -355,56 +294,14 @@ mod tests {
     }
 
     #[test]
-    fn test_timer_start_with_policy() {
-        let policy = MetricsPolicy {
-            warning_multiplier: 3.0,
-            enable_logging: false,
-            enable_warnings: false,
-            ..Default::default()
-        };
-        let timer = StageTimer::start_with_policy("policy_test", &policy);
-        assert_eq!(timer.name, "policy_test");
-        assert_eq!(timer.warning_multiplier, 3.0);
-        assert!(!timer.enable_logging);
-        assert!(!timer.enable_warnings);
-    }
-
-    #[test]
-    fn test_timer_stop() {
-        let timer = StageTimer::start("stop_test").with_meta("key", "value");
-        let elapsed = timer.stop();
-        assert!(elapsed < 1000, "stop() should return elapsed time");
-    }
-
-    #[test]
     fn test_timer_target_zero_no_warning() {
         let timer = StageTimer::start("zero_target").with_target(0);
         assert_eq!(timer.target_ms, Some(0));
     }
 
     #[test]
-    fn test_timer_invalid_policy_multiplier() {
-        let mut policy = MetricsPolicy {
-            warning_multiplier: f64::NAN,
-            ..Default::default()
-        };
-        let timer = StageTimer::start_with_policy("nan_test", &policy);
-        assert_eq!(timer.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
-
-        policy.warning_multiplier = -1.0;
-        let timer = StageTimer::start_with_policy("neg_test", &policy);
-        assert_eq!(timer.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
-    }
-
-    #[test]
     fn test_timer_with_empty_metadata() {
         let timer = StageTimer::start("empty_meta_test");
         assert!(timer.metadata.is_none());
-    }
-
-    #[test]
-    fn test_timer_stop_suppresses_logging() {
-        let timer = StageTimer::start("suppress_test");
-        let _elapsed = timer.stop();
     }
 }
