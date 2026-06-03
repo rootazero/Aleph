@@ -60,6 +60,7 @@ pub mod anthropic;
 pub mod auth_profile_registry;
 pub mod auth_profiles;
 pub mod bridge;
+pub mod capability_gate;
 pub mod catalog;
 pub mod codex;
 pub mod default_handle;
@@ -76,6 +77,7 @@ pub mod mock;
 pub mod model_behaviors;
 pub mod model_catalog;
 pub mod model_discovery;
+pub mod model_override_provider;
 pub mod oauth_refresh;
 pub mod ollama;
 pub mod openai;
@@ -90,6 +92,7 @@ pub mod responses;
 pub mod retry;
 pub mod route_handle;
 pub mod route_policy;
+pub mod session_model_handle;
 pub mod shared;
 
 // Re-exports
@@ -113,6 +116,7 @@ pub use http_provider::HttpProvider;
 pub use metering::MeteringProvider;
 pub use mock::{MockError, MockProvider};
 pub use model_catalog::{capabilities_for, infer_vendor, ModelCapabilities};
+pub use model_override_provider::ModelOverrideProvider;
 pub use ollama::OllamaProvider;
 pub use presets::{get_preset, resolve_provider_from_model, ProviderPreset, PRESETS};
 pub use profile_config::{

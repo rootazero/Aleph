@@ -10,9 +10,7 @@
 //! timeout + panic isolation, then walks the child session event log to
 //! synthesize a `LoopRunResult`.
 //!
-use std::future::Future;
 use std::panic::AssertUnwindSafe;
-use std::pin::Pin;
 
 use crate::sync_primitives::Arc;
 
@@ -22,7 +20,6 @@ use tokio_util::sync::CancellationToken;
 use crate::agents::allowlist_tool_service::AllowlistToolService;
 use crate::agents::runtime::LoopRunResult;
 use crate::agents::AgentDef;
-use crate::error::Result as AlephResult;
 use crate::harness::agent::AgentHarness;
 use crate::harness::callback::NoopHarnessCallback;
 use crate::harness::chain_context::ChainContext;
@@ -30,7 +27,6 @@ use crate::harness::deps::HarnessDeps;
 use crate::harness::trait_def::Harness;
 use crate::memory::extensions::MemoryExtensionRegistry;
 use crate::memory::store::raw_memory::RawMemoryStore;
-use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use crate::routing::session_key::SessionKey;
 use crate::sandbox::Sandbox;
@@ -263,10 +259,10 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
             .map(str::to_string)
             .or_else(|| req.agent_def.model_hint.clone());
         let llm: Arc<dyn AiProvider> = match resolved_model {
-            Some(m) => Arc::new(ModelOverrideProvider {
-                inner: base.provider.clone(),
-                model: m,
-            }),
+            Some(m) => Arc::new(crate::providers::ModelOverrideProvider::new(
+                base.provider.clone(),
+                m,
+            )),
             None => base.provider.clone(),
         };
         // Stage J-pre: wrap with MeteringProvider so every LLM call from this
@@ -554,40 +550,6 @@ fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
         return s.clone();
     }
     "panic (non-string payload)".to_string()
-}
-
-/// Provider wrapper that stamps `RequestPayload.model` with a configured
-/// override before delegating to the inner provider. Used when the spawn
-/// request (or agent model_hint) supplies a per-spawn model.
-struct ModelOverrideProvider {
-    inner: Arc<dyn AiProvider>,
-    model: String,
-}
-
-impl AiProvider for ModelOverrideProvider {
-    fn process<'a>(
-        &'a self,
-        mut payload: RequestPayload<'a>,
-    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
-        payload.model = Some(self.model.clone());
-        self.inner.process(payload)
-    }
-
-    fn name(&self) -> &str {
-        self.inner.name()
-    }
-
-    fn color(&self) -> &str {
-        self.inner.color()
-    }
-
-    fn supports_native_tools(&self) -> bool {
-        self.inner.supports_native_tools()
-    }
-
-    fn protocol(&self) -> &str {
-        self.inner.protocol()
-    }
 }
 
 #[cfg(test)]

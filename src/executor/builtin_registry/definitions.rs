@@ -32,8 +32,8 @@ use crate::builtin_tools::{
     DesktopAxQueryByRole, DesktopAxQueryFocused, DesktopAxQueryTree, DesktopAxSnapshot,
     DesktopBrowserOperator, DesktopCheckPermissions, DesktopGuiLocate, DesktopSom, DesktopTool,
     DoctorTool, FileEditTool, FileOpsTool, FileReadTool, FileWriteTool, ImageGenerateTool,
-    PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, SearchTool, SelfManageTool,
-    VaultStoreTool, WebFetchTool,
+    PdfGenerateTool, ReadConfigGuideTool, RecallEventsTool, SearchTool, SelectModelTool,
+    SelfManageTool, VaultStoreTool, WebFetchTool,
 };
 use crate::tools::AlephToolDyn;
 
@@ -200,6 +200,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     BuiltinToolDefinition {
         name: "doctor",
         description: "Self-diagnose runtime health (data dir, instance lock, config parse, hook consent) with structured findings; fix=true applies safe deterministic repairs — read-only by default",
+        requires_config: false,
+    },
+    BuiltinToolDefinition {
+        name: "select_model",
+        description: "Switch the LLM model for the rest of this conversation (larger context, vision, reasoning, or cheaper chat); applies from the next turn",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -808,6 +813,7 @@ pub fn create_tool_boxed(
             .and_then(|c| c.config.as_ref())
             .map(|cfg| Box::new(ConfigAuditTool::new(Arc::clone(cfg))) as Box<dyn AlephToolDyn>),
         "doctor" => Some(Box::new(DoctorTool)),
+        "select_model" => Some(Box::new(SelectModelTool)),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),
         "desktop_ax_query_focused" => Some(Box::new(DesktopAxQueryFocused::new())),

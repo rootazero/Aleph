@@ -224,8 +224,37 @@ impl HarnessRunner for AgentHarnessRunner {
             return Err(FlowError::UnknownAgent(spec.agent.clone()));
         }
 
-        // Step 3: brain pick.
-        let llm = llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?;
+        // Step 3: brain pick. Effective model directive, in precedence order:
+        //   1. a `select_model` pick recorded for this session (A layer, R8) —
+        //      keyed by the canonical `SessionKey` the tool wrote under;
+        //   2. the agent's own configured pin (`provider_hint` + `model_hint`)
+        //      — gives a markdown agent's declared model teeth on main runs,
+        //      matching how `subagent_spawner` already stamps it for spawns;
+        //   3. otherwise the flow's `BrainRef` preset via `pick_llm`.
+        // (1) and (2) stamp the model onto the chosen provider via the shared
+        // ModelOverrideProvider; (3) is byte-identical to before.
+        let session_pref_key = SessionKey::from_key_string(&session_key)
+            .map(|s| s.to_key_string())
+            .unwrap_or_else(|| session_key.clone());
+        let model_directive: Option<(Option<String>, String)> =
+            crate::providers::session_model_handle::get_session_model(&session_pref_key)
+                .map(|p| (p.provider, p.model))
+                .or_else(|| {
+                    self.agent_registry
+                        .get(&spec.agent)
+                        .and_then(|d| d.model_hint.map(|m| (d.provider_hint, m)))
+                });
+        let llm = match model_directive {
+            Some((provider_opt, model)) => {
+                let base = provider_opt
+                    .as_ref()
+                    .and_then(|p| self.named_providers.get(p).cloned())
+                    .unwrap_or_else(|| self.default_provider.current());
+                Arc::new(crate::providers::ModelOverrideProvider::new(base, model))
+                    as Arc<dyn crate::providers::AiProvider>
+            }
+            None => llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
+        };
         // Stage J-pre: wrap the root provider with MeteringProvider so every
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled "root".
         // The trace_sink is available here (per-run, passed in from the gateway)
