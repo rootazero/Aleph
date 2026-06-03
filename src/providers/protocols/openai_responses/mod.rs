@@ -202,7 +202,9 @@ impl OpenAiResponsesProtocol {
             top_logprobs: if config.logprobs == Some(true)
                 && policy.capabilities.supports_logprobs
             {
-                Some(config.top_logprobs.map(u32::from).unwrap_or(0))
+                // Omit when unset (server default) rather than sending a literal
+                // 0, which would mean "zero alternatives" — a different request.
+                config.top_logprobs.map(u32::from)
             } else {
                 None
             },

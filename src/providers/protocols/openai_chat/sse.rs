@@ -176,14 +176,13 @@ pub(crate) fn parse_chat_sse_event(
         };
 
         if let Some(stop) = stop_reason {
-            // Emit ToolCallEnd for all tracked tool calls (by scanning the tracker)
-            // We reconstruct ids from the tracker's internal map (indices 0..N)
-            let mut idx = 0u64;
-            while let Some(call_id) = tracker.get(idx) {
+            // Emit ToolCallEnd for every tracked tool call. Iterate the tracker's
+            // entries (index-ordered) rather than probing 0..N, so a backend that
+            // assigns non-contiguous indices does not lose tool calls past a gap.
+            for call_id in tracker.ids_in_order() {
                 out.push_back(Ok(ProviderDelta::ToolCallEnd {
                     id: call_id.to_string(),
                 }));
-                idx += 1;
             }
             out.push_back(Ok(ProviderDelta::Done(stop)));
         }

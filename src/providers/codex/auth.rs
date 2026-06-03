@@ -122,10 +122,16 @@ pub struct CodexAuth {
     pub session_id: String,
 }
 
+/// Safety margin subtracted from the access-token lifetime so a token is
+/// considered expired slightly early. Guards against clock skew and the
+/// network/POW time spent between the check and the request reaching the
+/// server, both of which can otherwise turn a "just valid" token into a 401.
+const EXPIRY_SKEW: Duration = Duration::from_secs(60);
+
 impl CodexAuth {
-    /// Check if the access token has expired
+    /// Check if the access token has expired (with a clock-skew safety margin)
     pub fn is_expired(&self) -> bool {
-        SystemTime::now() >= self.expires_at
+        SystemTime::now() + EXPIRY_SKEW >= self.expires_at
     }
 
     /// Get the access token, or error if expired

@@ -362,6 +362,17 @@ impl IndexIdTracker {
     pub fn get(&self, index: u64) -> Option<&str> {
         self.map.get(&index).map(|s| s.as_str())
     }
+
+    /// Return every tracked id, ordered by ascending index.
+    ///
+    /// Robust against sparse/non-contiguous indices: some OpenAI-compatible
+    /// backends do not number tool-call deltas contiguously from 0, so probing
+    /// `0,1,2,…` and stopping at the first gap would silently drop tool calls.
+    pub fn ids_in_order(&self) -> Vec<&str> {
+        let mut entries: Vec<(&u64, &String)> = self.map.iter().collect();
+        entries.sort_by_key(|(index, _)| **index);
+        entries.into_iter().map(|(_, id)| id.as_str()).collect()
+    }
 }
 
 // =============================================================================

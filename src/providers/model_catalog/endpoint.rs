@@ -77,6 +77,13 @@ fn extract_host(raw: &str) -> Option<String> {
 
 /// Whether a lowercase host string denotes this machine or the local network.
 fn host_is_local(host: &str) -> bool {
+    // The `url` crate returns IPv6 hosts bracketed (`[::1]`); strip the brackets
+    // so literal comparisons and the `Ipv6Addr` parse below see the bare address.
+    let host = host
+        .strip_prefix('[')
+        .and_then(|h| h.strip_suffix(']'))
+        .unwrap_or(host);
+
     // Loopback / wildcard names and the IPv6 loopback literal.
     if host == "localhost" || host == "::1" || host == "0.0.0.0" {
         return true;
@@ -84,6 +91,22 @@ fn host_is_local(host: &str) -> bool {
     // mDNS / local-suffix names (`printer.local`, `dev.localhost`).
     if host.ends_with(".local") || host.ends_with(".localhost") {
         return true;
+    }
+
+    // IPv6 literal: classify loopback / unspecified / link-local / unique-local.
+    if let Ok(v6) = host.parse::<std::net::Ipv6Addr>() {
+        if v6.is_loopback() || v6.is_unspecified() {
+            return true;
+        }
+        let seg0 = v6.segments()[0];
+        // fe80::/10 link-local
+        if (seg0 & 0xffc0) == 0xfe80 {
+            return true;
+        }
+        // fc00::/7 unique-local
+        if (seg0 & 0xfe00) == 0xfc00 {
+            return true;
+        }
     }
 
     // IPv4 literal: classify by RFC-1918 / loopback / link-local octets.

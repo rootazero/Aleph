@@ -23,6 +23,10 @@ pub struct ConfigurableProtocol {
     base_protocol: Option<Arc<dyn ProtocolAdapter>>,
     /// Template renderer for custom mode
     renderer: TemplateRenderer,
+    /// Protocol name leaked once at construction to satisfy the `&'static str`
+    /// trait signature. Leaking here (once per instance) avoids the per-call
+    /// `Box::leak` that `name()` would otherwise perform on every invocation.
+    name_static: &'static str,
 }
 
 impl ConfigurableProtocol {
@@ -52,11 +56,17 @@ impl ConfigurableProtocol {
         // Initialize template renderer
         let renderer = TemplateRenderer::new()?;
 
+        // SAFETY/INTENT: leak the name once per protocol instance to obtain the
+        // `&'static str` the trait requires. Protocols are constructed rarely
+        // (load / hot-reload), so this is a bounded, one-time leak.
+        let name_static: &'static str = Box::leak(definition.name.clone().into_boxed_str());
+
         Ok(Self {
             definition,
             client,
             base_protocol,
             renderer,
+            name_static,
         })
     }
 
@@ -318,9 +328,8 @@ impl ProtocolAdapter for ConfigurableProtocol {
     }
 
     fn name(&self) -> &'static str {
-        // SAFETY: We leak the string to get a 'static lifetime
-        // This is acceptable for protocol names which are created rarely
-        Box::leak(self.definition.name.clone().into_boxed_str())
+        // Leaked once at construction (see `name_static`); no per-call allocation.
+        self.name_static
     }
 }
 

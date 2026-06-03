@@ -31,7 +31,13 @@ pub(crate) fn parse_anthropic_sse_event(
     match event_type {
         // ── content_block_start ───────────────────────────────────────────────
         "content_block_start" => {
-            let index = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+            // A missing/invalid index is a malformed event — bail rather than
+            // coercing to 0, which would overwrite the index-0 id mapping and
+            // cross-wire tool-call arguments.
+            let index = match v.get("index").and_then(|i| i.as_u64()) {
+                Some(i) => i,
+                None => return,
+            };
             let block = match v.get("content_block") {
                 Some(b) => b,
                 None => return,
@@ -61,7 +67,10 @@ pub(crate) fn parse_anthropic_sse_event(
 
         // ── content_block_delta ───────────────────────────────────────────────
         "content_block_delta" => {
-            let index = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+            let index = match v.get("index").and_then(|i| i.as_u64()) {
+                Some(i) => i,
+                None => return,
+            };
             let delta = match v.get("delta") {
                 Some(d) => d,
                 None => return,
@@ -102,7 +111,10 @@ pub(crate) fn parse_anthropic_sse_event(
 
         // ── content_block_stop ────────────────────────────────────────────────
         "content_block_stop" => {
-            let index = v.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+            let index = match v.get("index").and_then(|i| i.as_u64()) {
+                Some(i) => i,
+                None => return,
+            };
             // Only emit ToolCallEnd if this index was a tool_use block
             if let Some(call_id) = block_ids.get(index) {
                 out.push_back(Ok(ProviderDelta::ToolCallEnd {

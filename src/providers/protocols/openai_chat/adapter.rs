@@ -17,7 +17,9 @@ use super::sse::parse_chat_sse_event;
 use super::{sanitize_tool_name, OpenAiProtocol};
 
 use crate::providers::protocols::openai_common::max_tokens::uses_max_completion_tokens;
-use crate::providers::protocols::openai_common::openai_strict_schema::normalize_strict_schema;
+use crate::providers::protocols::openai_common::openai_strict_schema::{
+    lenient_multi_type_rewrite, normalize_strict_schema, StrictResult,
+};
 use crate::providers::protocols::openai_common::provider_policy::build_payload_policy;
 use crate::providers::protocols::openai_common::response_format::to_chat_response_format;
 
@@ -152,20 +154,35 @@ impl ProtocolAdapter for OpenAiProtocol {
                 .iter()
                 .map(|td| {
                     let mut params = td.parameters.clone();
-                    if policy.capabilities.supports_strict_schema {
-                        normalize_strict_schema(&mut params, true);
-                    }
+                    // Honor the strict-normalization verdict: an `Incompatible`
+                    // schema (e.g. a multi-type field) cannot be shipped with
+                    // `strict: true` — doing so 400s the whole request. Downgrade
+                    // that single tool to non-strict and apply the lenient rewrite
+                    // instead, mirroring the Responses protocol path.
+                    let strict = if policy.capabilities.supports_strict_schema {
+                        match normalize_strict_schema(&mut params, true) {
+                            StrictResult::Ok => Some(true),
+                            StrictResult::Incompatible { reason } => {
+                                debug!(
+                                    tool_name = %td.name,
+                                    reason = %reason,
+                                    "OpenAI strict mode incompatible — downgrading this tool to non-strict",
+                                );
+                                params = td.parameters.clone();
+                                lenient_multi_type_rewrite(&mut params);
+                                None
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     OpenAiTool {
                         tool_type: "function".into(),
                         function: OpenAiFunction {
                             name: sanitize_tool_name(&td.name),
                             description: td.description.clone(),
                             parameters: params,
-                            strict: if policy.capabilities.supports_strict_schema {
-                                Some(true)
-                            } else {
-                                None
-                            },
+                            strict,
                         },
                     }
                 })

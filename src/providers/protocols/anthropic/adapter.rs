@@ -79,11 +79,13 @@ fn split_system_blocks_for_cache(
 }
 
 /// Parse a comma-separated stop-sequences string into a Vec<String>.
-/// Splits on `,`, trims each element, and filters out empties.
+/// Splits on `,`, trims each element, and filters out empties. Capped at 4 —
+/// the Anthropic API rejects requests carrying more than 4 stop sequences.
 fn parse_stop_sequences(csv: &str) -> Vec<String> {
     csv.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .take(4)
         .map(String::from)
         .collect()
 }
