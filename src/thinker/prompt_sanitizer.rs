@@ -107,7 +107,31 @@ fn is_format_char(c: char) -> bool {
 /// - `[INST]`, `[/INST]` (Llama-style instruction markers)
 ///
 /// Case-insensitive matching to prevent trivial bypasses like `<SYSTEM>`.
+///
+/// Stripping is applied to a fixed point: removing one marker can splice the
+/// surrounding text into a *new* marker (e.g. `<sys<system>tem>` → `<system>`),
+/// so we re-scan until a pass removes nothing. Each pass strictly shortens the
+/// string whenever it removes anything, guaranteeing termination; the iteration
+/// cap is a defensive backstop. Without this, untrusted content from third-party
+/// MCP servers / skills could smuggle an intact marker past a single pass.
 fn strip_injection_markers(value: &str) -> String {
+    const MAX_STRIP_PASSES: usize = 16;
+
+    let mut result = value.to_string();
+    for _ in 0..MAX_STRIP_PASSES {
+        let pass = strip_injection_markers_once(&result);
+        if pass.len() == result.len() {
+            // Nothing removed this pass — stable, no marker can re-form.
+            return pass;
+        }
+        result = pass;
+    }
+    result
+}
+
+/// Single removal pass over `value`. Used by [`strip_injection_markers`] inside
+/// its fixed-point loop.
+fn strip_injection_markers_once(value: &str) -> String {
     // Case-insensitive markers (stored lowercase for comparison)
     const CI_MARKERS: &[&str] = &[
         "<system-reminder>",
@@ -287,5 +311,27 @@ mod tests {
         let input = "<system>a</system><SYSTEM>b</SYSTEM>[INST]c[/INST]<|im_start|>d<|im_end|>";
         let result = sanitize_for_prompt(input, SanitizeLevel::Light);
         assert_eq!(result, "abcd");
+    }
+
+    #[test]
+    fn test_light_strips_reformed_markers_after_inner_removal() {
+        // Removing the inner `<system>` splices the remaining text into a NEW
+        // `<system>` marker; the fixed-point loop must catch it too.
+        let input = "<sys<system>tem>evil";
+        let result = sanitize_for_prompt(input, SanitizeLevel::Light);
+        assert_eq!(result, "evil");
+
+        // Same class for the case-sensitive Llama markers.
+        let input = "[IN[INST]ST]payload";
+        let result = sanitize_for_prompt(input, SanitizeLevel::Light);
+        assert_eq!(result, "payload");
+
+        // Deeper nesting must still fully collapse.
+        let input = "<sy<sys<system>tem>stem>x";
+        let result = sanitize_for_prompt(input, SanitizeLevel::Light);
+        assert!(
+            !result.to_ascii_lowercase().contains("<system>"),
+            "no intact marker may survive, got: {result:?}"
+        );
     }
 }
