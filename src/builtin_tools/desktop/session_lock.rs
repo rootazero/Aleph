@@ -1,10 +1,14 @@
 //! File-based session lock for desktop computer use.
 //!
 //! Prevents multiple agent sessions from simultaneously controlling the
-//! desktop. The lock is stored at `~/.aleph/data/computer-use.lock`.
+//! desktop. The lock file lives at `<data_dir>/aleph/computer-use.lock`
+//! (`dirs::data_dir()`, e.g. `~/Library/Application Support/aleph/` on macOS,
+//! `~/.local/share/aleph/` on Linux).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tracing::{debug, warn};
@@ -250,6 +254,70 @@ fn is_pid_alive(pid: u32) -> bool {
         CloseHandle(handle);
         ok != 0 && exit_code == STILL_RUNNING
     }
+}
+
+// ---------------------------------------------------------------------------
+// Process-global, call-time lock acquisition
+// ---------------------------------------------------------------------------
+//
+// The `desktop` tool is a shared singleton (one `DesktopTool` instance serves
+// every session — see `executor/builtin_registry`), so the controlling session
+// cannot be baked into a struct field at construction time. The lock is instead
+// acquired at call time against the live turn's session and held — with
+// re-entrant depth counting — only for as long as a desktop call (or a batch
+// and its sub-actions) is in flight. When the outermost guard drops, the
+// underlying file lock is released so another session can take the desktop.
+
+/// Held computer-use locks, keyed by session id, with an outstanding-guard
+/// depth so nested calls from the same session (a batch and its sub-actions)
+/// share one file lock and release it only when the last guard drops.
+static HELD_LOCKS: LazyLock<Mutex<HashMap<String, (ComputerUseLock, usize)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// RAII guard returned by [`acquire_for_session`]. Releasing the desktop is
+/// deferred to `Drop` so every early-return path in the caller frees the lock.
+pub struct SessionLockGuard {
+    session_id: String,
+}
+
+impl Drop for SessionLockGuard {
+    fn drop(&mut self) {
+        let mut map = HELD_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, depth)) = map.get_mut(&self.session_id) {
+            *depth -= 1;
+            if *depth == 0 {
+                // Removing the entry drops the `ComputerUseLock`, whose own
+                // `Drop` calls `release()` and deletes the lock file.
+                map.remove(&self.session_id);
+            }
+        }
+    }
+}
+
+/// Acquire the desktop computer-use lock for `session_id`, returning an RAII
+/// guard that frees it on drop.
+///
+/// - Re-entrant: a nested call from the same session bumps a depth counter and
+///   shares the one underlying file lock; the file is released only when the
+///   outermost guard drops.
+/// - Mutually exclusive across sessions: if a *different* live session already
+///   holds the lock, returns `Err(message)` and acquires nothing.
+pub fn acquire_for_session(session_id: &str) -> Result<SessionLockGuard, String> {
+    let mut map = HELD_LOCKS.lock().unwrap_or_else(|e| e.into_inner());
+    match map.get_mut(session_id) {
+        Some((_, depth)) => {
+            // Already held by this session (e.g. a batch sub-action).
+            *depth += 1;
+        }
+        None => {
+            let mut lock = ComputerUseLock::new(session_id.to_string());
+            lock.acquire()?;
+            map.insert(session_id.to_string(), (lock, 1));
+        }
+    }
+    Ok(SessionLockGuard {
+        session_id: session_id.to_string(),
+    })
 }
 
 // ---------------------------------------------------------------------------

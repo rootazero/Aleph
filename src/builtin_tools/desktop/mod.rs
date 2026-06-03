@@ -33,7 +33,7 @@ pub use set_of_marks::{DesktopSom, DesktopSomArgs};
 pub use types::{DesktopArgs, DesktopOutput};
 pub use vision_bridge::{Augmentation, VisionBridge};
 
-use crate::sync_primitives::{Arc, Mutex};
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 
@@ -41,14 +41,11 @@ use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolic
 use crate::error::Result;
 use crate::tools::AlephTool;
 
-use session_lock::ComputerUseLock;
-
 /// Desktop tool — gives the AI agent eyes and hands on the desktop.
 #[derive(Clone)]
 pub struct DesktopTool {
     pub(super) approval_policy: Option<Arc<dyn ApprovalPolicy>>,
     pub(super) platform: Option<Arc<dyn aleph_desktop::DesktopPlatform>>,
-    pub(super) session_lock: Option<Arc<Mutex<ComputerUseLock>>>,
     pub(super) escape_started: Arc<crate::sync_primitives::AtomicBool>,
     /// Optional vision bridge: turns a captured screenshot into OCR text + an
     /// optional scene description so text-only models can still act on it.
@@ -61,7 +58,6 @@ impl DesktopTool {
         Self {
             approval_policy: None,
             platform: None,
-            session_lock: None,
             escape_started: Arc::new(crate::sync_primitives::AtomicBool::new(false)),
             vision_bridge: None,
         }
@@ -95,28 +91,29 @@ impl DesktopTool {
         self
     }
 
-    /// Attach a session ID for computer-use locking.
-    pub fn with_session_id(mut self, session_id: &str) -> Self {
-        self.session_lock = Some(Arc::new(Mutex::new(ComputerUseLock::new(session_id))));
-        self
-    }
-
-    /// Acquire session lock for mutating actions.
-    fn acquire_lock(&self) -> std::result::Result<(), DesktopOutput> {
-        if let Some(ref lock) = self.session_lock {
-            let mut guard = lock.lock().unwrap_or_else(|e| {
-                tracing::warn!("Recovering from poisoned computer-use lock");
-                e.into_inner()
-            });
-            if let Err(msg) = guard.acquire() {
-                return Err(DesktopOutput {
-                    success: false,
-                    data: None,
-                    message: Some(msg),
-                });
-            }
+    /// Acquire the computer-use session lock for a mutating action.
+    ///
+    /// The desktop tool is a shared singleton, so the controlling session is
+    /// resolved at call time from the turn context — the same source the
+    /// approval audit uses ([`audit_identity`]). The returned guard holds the
+    /// lock until it drops (end of this `call`), giving cross-session mutual
+    /// exclusion over the one physical desktop. Outside a scoped turn (direct
+    /// calls, tests) there is no session to arbitrate, so locking is skipped.
+    fn acquire_lock(
+        &self,
+    ) -> std::result::Result<Option<session_lock::SessionLockGuard>, DesktopOutput> {
+        let session_id = match crate::tools::turn_context::current_turn_context() {
+            Some(turn) => turn.session_key.to_key_string(),
+            None => return Ok(None),
+        };
+        match session_lock::acquire_for_session(&session_id) {
+            Ok(guard) => Ok(Some(guard)),
+            Err(msg) => Err(DesktopOutput {
+                success: false,
+                data: None,
+                message: Some(msg),
+            }),
         }
-        Ok(())
     }
 
     /// Check escape abort and start listener on first call.
@@ -413,7 +410,12 @@ fn audit_identity(action: &str, target: &str) -> (String, String) {
 /// dispatched through `AlephTool::call`, which re-runs this check.
 fn check_hard_block(args: &DesktopArgs) -> Option<DesktopOutput> {
     let reason: Option<String> = match args.action.as_str() {
-        "type_text" | "paste" => args
+        // `clipboard_write` stages text that the model can then inject with a
+        // manual `key_combo` Cmd/Ctrl+V — an equivalent capability to `paste`
+        // that would otherwise sidestep this content gate. Hold it to the same
+        // bar so the staged-then-pasted path cannot smuggle a catastrophic
+        // payload onto a live desktop.
+        "type_text" | "paste" | "clipboard_write" => args
             .text
             .as_deref()
             .and_then(|t| safety::check_typed_text(t).err()),
@@ -601,12 +603,18 @@ Pythonic action script — UI-TARS-finetuned models can emit `script` containing
             }
         }
 
-        // 4. Session lock (mutating actions only)
-        if is_mutating {
-            if let Err(out) = self.acquire_lock() {
-                return Ok(out);
+        // 4. Session lock (mutating actions only). The guard is held for the
+        //    rest of this call (and, for a batch, across all its sub-actions
+        //    via re-entrant acquisition) and released on drop, so the desktop
+        //    is freed for other sessions once the call returns.
+        let _session_guard = if is_mutating {
+            match self.acquire_lock() {
+                Ok(guard) => guard,
+                Err(out) => return Ok(out),
             }
-        }
+        } else {
+            None
+        };
 
         // 5. Escape abort check (mutating actions only)
         if is_mutating {
