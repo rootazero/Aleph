@@ -95,24 +95,41 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             .max(limit)
     }
 
-    /// Apply retrieval-time recency decay and MMR diversity (after rerank,
-    /// before truncation). A no-op when scoring is inactive, so the default path
-    /// is unchanged. `now` is the current Unix time in seconds.
-    fn apply_scoring(&self, facts: Vec<ScoredFact>, now: i64) -> Vec<ScoredFact> {
+    /// Apply retrieval-time recency decay, reinforcement salience, and MMR
+    /// diversity (after rerank, before truncation). A no-op when scoring is
+    /// inactive, so the default path is unchanged. `now` is the current Unix time
+    /// in seconds. `reinforcement_counts` maps note path → recall-frequency count
+    /// (empty when reinforcement is disabled).
+    fn apply_scoring(
+        &self,
+        facts: Vec<ScoredFact>,
+        now: i64,
+        reinforcement_counts: &HashMap<String, i64>,
+    ) -> Vec<ScoredFact> {
         if !self.scoring.is_active() || facts.len() < 2 {
             return facts;
         }
         let mut facts = facts;
 
-        // 1) Recency reweight + re-sort by adjusted score.
-        if self.scoring.recency_enabled {
+        // 1) Recency + reinforcement reweight, then re-sort by adjusted score.
+        if self.scoring.recency_enabled || self.scoring.reinforcement_enabled {
             for f in facts.iter_mut() {
-                let mult = scoring::recency_multiplier(
-                    f.fact.updated_at,
-                    now,
-                    self.scoring.recency_half_life_days,
-                );
-                f.score = scoring::apply_recency(f.score, mult, self.scoring.recency_weight);
+                if self.scoring.recency_enabled {
+                    let mult = scoring::recency_multiplier(
+                        f.fact.updated_at,
+                        now,
+                        self.scoring.recency_half_life_days,
+                    );
+                    f.score = scoring::apply_recency(f.score, mult, self.scoring.recency_weight);
+                }
+                if self.scoring.reinforcement_enabled {
+                    let hits = reinforcement_counts.get(&f.fact.id).copied().unwrap_or(0);
+                    f.score = scoring::apply_reinforcement(
+                        f.score,
+                        hits,
+                        self.scoring.reinforcement_weight,
+                    );
+                }
             }
             facts.sort_by(|a, b| {
                 b.score
@@ -134,6 +151,21 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         }
 
         facts
+    }
+
+    /// Fetch recall-frequency counts for the candidate notes when reinforcement
+    /// salience is enabled. Returns an empty map when disabled or on any store
+    /// error, degrading gracefully to neutral (legacy) scoring.
+    async fn fetch_reinforcement_counts(&self, facts: &[ScoredFact]) -> HashMap<String, i64> {
+        if !self.scoring.reinforcement_enabled || facts.is_empty() {
+            return HashMap::new();
+        }
+        let paths: Vec<String> = facts.iter().map(|f| f.fact.id.clone()).collect();
+        self.indexer
+            .store()
+            .recall_hit_counts(&paths)
+            .await
+            .unwrap_or_default()
     }
 
     /// Apply the cross-encoder reranker to a candidate set, blending its scores
@@ -198,7 +230,8 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
 
         let facts: Vec<ScoredFact> = results.iter().map(|r| r.to_scored_fact(agent_id)).collect();
         let ranked = self.apply_rerank(query, facts).await;
-        let mut ranked = self.apply_scoring(ranked, now_unix());
+        let counts = self.fetch_reinforcement_counts(&ranked).await;
+        let mut ranked = self.apply_scoring(ranked, now_unix(), &counts);
         ranked.truncate(limit);
         Ok(ranked)
     }
@@ -288,7 +321,8 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         all_results.truncate(self.fetch_limit(limit));
 
         let ranked = self.apply_rerank(query, all_results).await;
-        let mut ranked = self.apply_scoring(ranked, now_unix());
+        let counts = self.fetch_reinforcement_counts(&ranked).await;
+        let mut ranked = self.apply_scoring(ranked, now_unix(), &counts);
         ranked.truncate(limit);
         Ok(ranked)
     }
@@ -579,7 +613,7 @@ mod tests {
         let (retrieval, _dir) = create_retrieval().await;
         // Default scoring config is inactive → order preserved, scores untouched.
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
-        let out = retrieval.apply_scoring(facts, 1_000_000);
+        let out = retrieval.apply_scoring(facts, 1_000_000, &HashMap::new());
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/b"]);
         assert!((out[0].score - 0.9).abs() < 1e-6);
@@ -603,7 +637,7 @@ mod tests {
             scored_at("p/stale", "old knowledge", 0.9, now - 200 * day),
             scored_at("p/fresh", "new knowledge", 0.8, now),
         ];
-        let out = retrieval.apply_scoring(facts, now);
+        let out = retrieval.apply_scoring(facts, now, &HashMap::new());
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(
             order,
@@ -627,9 +661,48 @@ mod tests {
             scored("p/b", "rust async tokio runtime scheduler details", 0.90),
             scored("p/c", "python pandas dataframe analysis", 0.60),
         ];
-        let out = retrieval.apply_scoring(facts, 1_000_000);
+        let out = retrieval.apply_scoring(facts, 1_000_000, &HashMap::new());
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
         assert_eq!(order, vec!["p/a", "p/c", "p/b"]);
+    }
+
+    #[tokio::test]
+    async fn apply_scoring_reinforcement_promotes_hot_note() {
+        let (retrieval, _dir) = create_retrieval().await;
+        let cfg = RetrievalScoringConfig {
+            reinforcement_enabled: true,
+            reinforcement_weight: 0.5,
+            ..RetrievalScoringConfig::default()
+        };
+        let retrieval = retrieval.with_scoring_config(&cfg);
+
+        // Lower raw relevance but recalled many times vs higher relevance never recalled.
+        let facts = vec![
+            scored("p/cold", "rarely used knowledge", 0.80),
+            scored("p/hot", "frequently used knowledge", 0.70),
+        ];
+        let mut counts = HashMap::new();
+        counts.insert("p/hot".to_string(), 40_i64);
+        // 0.70 * (1 + 0.5 * ln(41)) = 0.70 * (1 + 0.5 * 3.714) = 0.70 * 2.857 = 2.0
+        let out = retrieval.apply_scoring(facts, 1_000_000, &counts);
+        let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
+        assert_eq!(
+            order,
+            vec!["p/hot", "p/cold"],
+            "a frequently-recalled note should be promoted above a higher-relevance cold one"
+        );
+    }
+
+    #[tokio::test]
+    async fn apply_scoring_reinforcement_disabled_ignores_counts() {
+        let (retrieval, _dir) = create_retrieval().await;
+        // Default config inactive → counts are ignored, order untouched.
+        let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
+        let mut counts = HashMap::new();
+        counts.insert("p/b".to_string(), 999_i64);
+        let out = retrieval.apply_scoring(facts, 1_000_000, &counts);
+        let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
+        assert_eq!(order, vec!["p/a", "p/b"]);
     }
 
     #[test]

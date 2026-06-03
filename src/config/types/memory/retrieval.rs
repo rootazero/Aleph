@@ -20,6 +20,10 @@ fn default_mmr_lambda() -> f32 {
     0.7
 }
 
+fn default_reinforcement_weight() -> f32 {
+    0.3
+}
+
 /// Configuration for retrieval-time score adjustments applied by
 /// [`crate::memory::note_retrieval::NoteFactRetrieval`].
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -46,13 +50,28 @@ pub struct RetrievalScoringConfig {
     /// MMR trade-off in `[0,1]`: `1.0` = pure relevance, `0.0` = pure diversity.
     #[serde(default = "default_mmr_lambda")]
     pub mmr_lambda: f32,
+
+    /// Boost notes by how often they have been recalled (reinforcement salience),
+    /// so a frequently-retrieved note outranks an equally-relevant never-touched
+    /// one. Reads the already-recorded `recall_signals` counts — no extra LLM
+    /// calls. Default `false` (no change). Inspired by memU's
+    /// `sim × log(reinforcement+1)` salience.
+    #[serde(default)]
+    pub reinforcement_enabled: bool,
+
+    /// Blend strength of reinforcement in `[0,1]`: `score * (1 + w * ln(1+hits))`.
+    /// `0.0` leaves scores untouched; higher values let recall frequency nudge
+    /// ordering. The `ln(1+hits)` shape grows sub-linearly so a note recalled 50
+    /// times never dominates raw relevance.
+    #[serde(default = "default_reinforcement_weight")]
+    pub reinforcement_weight: f32,
 }
 
 impl RetrievalScoringConfig {
     /// True when at least one refinement is active — lets the retrieval engine
     /// skip the over-fetch + reordering work entirely in the default config.
     pub fn is_active(&self) -> bool {
-        self.recency_enabled || self.mmr_enabled
+        self.recency_enabled || self.mmr_enabled || self.reinforcement_enabled
     }
 }
 
@@ -64,6 +83,8 @@ impl Default for RetrievalScoringConfig {
             recency_weight: default_recency_weight(),
             mmr_enabled: false,
             mmr_lambda: default_mmr_lambda(),
+            reinforcement_enabled: false,
+            reinforcement_weight: default_reinforcement_weight(),
         }
     }
 }
@@ -86,6 +107,11 @@ mod tests {
         assert!(cfg.is_active());
         let cfg = RetrievalScoringConfig {
             mmr_enabled: true,
+            ..Default::default()
+        };
+        assert!(cfg.is_active());
+        let cfg = RetrievalScoringConfig {
+            reinforcement_enabled: true,
             ..Default::default()
         };
         assert!(cfg.is_active());

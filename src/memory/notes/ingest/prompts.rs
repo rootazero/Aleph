@@ -39,6 +39,10 @@ to them, emit an IngestPlan that updates the wiki.
     `supersede` (`old_path`/`new_path`), and a `create`'s `links[]`. Only a
     `create`'s own `note_path` is a fresh `category/filename` (a new page,
     so it has no token). An op whose token does not exist is discarded.
+12. ATTRIBUTE each fact to who stated it. Record only durable facts the
+    USER stated or confirmed about themselves or the world. Do NOT record
+    the assistant's own suggestions, hedges, or proposed options as user
+    facts unless the user explicitly accepted them.
 
 ## Page op kinds
 

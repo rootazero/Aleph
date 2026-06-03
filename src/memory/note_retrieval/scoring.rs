@@ -43,6 +43,26 @@ pub fn apply_recency(score: f32, mult: f32, weight: f32) -> f32 {
     score * (1.0 - w + w * mult)
 }
 
+/// Reinforcement (recall-frequency) salience boost.
+///
+/// Multiplies a relevance `score` by `1 + w * ln(1 + hit_count)`, so a note that
+/// has been recalled many times outranks an equally-relevant one that never has.
+/// The `ln(1 + hit_count)` shape grows sub-linearly (0 hits → ×1.0, 1 → ×1.21 at
+/// w=0.3, 10 → ×1.72, 50 → ×2.18) so frequency *nudges* ordering without ever
+/// dominating raw relevance. Inspired by memU's `sim × log(reinforcement+1)`.
+///
+/// `weight == 0.0` or `hit_count <= 0` leaves the score untouched (legacy
+/// behaviour). Reads counts already recorded in `recall_signals`, so no extra
+/// LLM or embedding call is required.
+pub fn apply_reinforcement(score: f32, hit_count: i64, weight: f32) -> f32 {
+    if weight <= 0.0 || hit_count <= 0 {
+        return score;
+    }
+    let w = weight.clamp(0.0, 1.0);
+    let boost = (hit_count as f32).ln_1p(); // ln(1 + hit_count)
+    score * (1.0 + w * boost)
+}
+
 /// Lowercase whitespace-token set, dropping tokens shorter than 3 chars to skip
 /// stopword noise. Used as a cheap content-similarity proxy for MMR.
 fn token_set(content: &str) -> HashSet<&str> {
@@ -155,6 +175,34 @@ mod tests {
     fn apply_recency_partial_weight_blends() {
         // 0.8 * (1 - 0.5 + 0.5 * 0.5) = 0.8 * 0.75 = 0.6
         assert!((apply_recency(0.8, 0.5, 0.5) - 0.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reinforcement_zero_weight_is_identity() {
+        assert!((apply_reinforcement(0.8, 50, 0.0) - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reinforcement_zero_hits_is_identity() {
+        assert!((apply_reinforcement(0.8, 0, 0.3) - 0.8).abs() < 1e-6);
+        assert!((apply_reinforcement(0.8, -1, 0.3) - 0.8).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reinforcement_boosts_frequently_recalled() {
+        // ln(1+10) = 2.3979; 0.8 * (1 + 0.3 * 2.3979) = 0.8 * 1.7194 = 1.3755
+        let boosted = apply_reinforcement(0.8, 10, 0.3);
+        assert!((boosted - 1.3755).abs() < 1e-3, "got {boosted}");
+        // More hits → strictly larger boost, but sub-linear.
+        assert!(apply_reinforcement(0.8, 50, 0.3) > boosted);
+    }
+
+    #[test]
+    fn reinforcement_promotes_hot_note_over_equal_relevance() {
+        // Two equally-relevant notes; the one recalled more often should outscore.
+        let cold = apply_reinforcement(0.7, 0, 0.3);
+        let hot = apply_reinforcement(0.7, 20, 0.3);
+        assert!(hot > cold);
     }
 
     #[test]

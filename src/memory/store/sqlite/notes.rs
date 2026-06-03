@@ -1139,6 +1139,19 @@ impl NoteStore for SqliteMemoryBackend {
             .flatten();
         Ok(v)
     }
+
+    async fn recall_hit_counts(
+        &self,
+        note_paths: &[String],
+    ) -> Result<std::collections::HashMap<String, i64>, AlephError> {
+        // Reuse the existing recall-signal aggregator; `signal_count` is the
+        // per-note recall frequency (deduped by query/day/channel).
+        let aggregates = self.aggregate_for_facts(note_paths)?;
+        Ok(aggregates
+            .into_iter()
+            .map(|a| (a.note_path, a.signal_count))
+            .collect())
+    }
 }
 
 // ---------------------------------------------------------------------------
