@@ -202,7 +202,10 @@ impl SharedArena {
             .agent_progress
             .entry(agent_id.clone())
             .or_default();
-        agent_prog.current = current;
+
+        // Validate before mutating any state, so a rejected report leaves the
+        // agent's progress (including `current`) untouched — the transition is
+        // all-or-nothing.
         if let Some(c) = completed {
             if c < agent_prog.completed {
                 return Err(format!(
@@ -210,6 +213,10 @@ impl SharedArena {
                     agent_prog.completed, c
                 ));
             }
+        }
+
+        agent_prog.current = current;
+        if let Some(c) = completed {
             let delta = c - agent_prog.completed;
             agent_prog.completed = c;
             self.progress.completed_steps = self.progress.completed_steps.saturating_add(delta);
@@ -442,6 +449,27 @@ mod tests {
         // completed_steps should remain unchanged
         assert_eq!(arena.progress().completed_steps, 3);
         assert_eq!(arena.progress().agent_progress["agent-a"].completed, 3);
+    }
+
+    #[test]
+    fn report_progress_rejected_decrease_does_not_mutate_current() {
+        let mut arena = SharedArena::new(test_manifest(&["agent-a"]));
+        arena.activate().unwrap();
+
+        arena
+            .report_progress(&"agent-a".to_string(), Some("task 3".to_string()), Some(3))
+            .unwrap();
+
+        // A rejected (decreasing) report must leave ALL agent progress untouched,
+        // including the `current` description — the update is atomic.
+        let result =
+            arena.report_progress(&"agent-a".to_string(), Some("task 2".to_string()), Some(2));
+        assert!(result.is_err());
+
+        let prog = &arena.progress().agent_progress["agent-a"];
+        assert_eq!(prog.completed, 3);
+        assert_eq!(prog.current.as_deref(), Some("task 3"));
+        assert_eq!(arena.progress().completed_steps, 3);
     }
 
     #[test]

@@ -313,6 +313,20 @@ impl ArenaManifest {
                     return Err("Pipeline stages cannot be empty".to_string());
                 }
 
+                // Reject duplicate stage agent IDs explicitly. Otherwise the
+                // Kahn's-algorithm cycle check (which counts unique nodes vs.
+                // total stage entries) would always misreport duplicates as a
+                // cyclic dependency.
+                let mut seen_stage_agents = std::collections::HashSet::new();
+                for stage in &stages {
+                    if !seen_stage_agents.insert(stage.agent_id.as_str()) {
+                        return Err(format!(
+                            "Duplicate pipeline stage for agent '{}'",
+                            stage.agent_id
+                        ));
+                    }
+                }
+
                 let stage_agent_ids: std::collections::HashSet<_> =
                     stages.iter().map(|s| &s.agent_id).collect();
                 for id in agent_ids {
@@ -829,6 +843,36 @@ mod tests {
         assert!(result
             .unwrap_err()
             .contains("Participant 'agent-b' is not assigned to any pipeline stage"));
+    }
+
+    #[test]
+    fn arena_manifest_build_rejects_duplicate_pipeline_stage() {
+        let stages = vec![
+            StageSpec {
+                agent_id: "agent-a".to_string(),
+                description: "Stage 1".to_string(),
+                depends_on: vec![],
+            },
+            StageSpec {
+                agent_id: "agent-a".to_string(),
+                description: "Stage 1 (duplicate)".to_string(),
+                depends_on: vec![],
+            },
+        ];
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "pipeline",
+            &["agent-a".to_string()],
+            None,
+            Some(stages),
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("Duplicate pipeline stage"),
+            "expected duplicate-stage error, got: {}",
+            err
+        );
     }
 
     #[test]
