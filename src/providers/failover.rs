@@ -43,6 +43,7 @@ use crate::config::types::RouteMode;
 use crate::error::{AlephError, ErrorClass, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::llm_retry::{classify, classify_exhausted, RetryVerdict};
+use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::{order_candidates, CandidateAction, EndpointTier};
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
@@ -289,6 +290,11 @@ pub struct FailoverProvider {
     /// Gate consulted before dialing an approval-gated cross-tier candidate.
     /// `None` (the default) fails escalation closed.
     approval: Option<Arc<dyn ApprovalRequester>>,
+    /// Live route preference. When `Some`, it overrides the boot-snapshot
+    /// `route_mode` / `allow_cloud_escalation` fields on *every* request, so a
+    /// mode switch hot-applies with no rebuild. `None` (tests, `new()`) keeps
+    /// the snapshot fields — byte-identical to pre-handle behaviour.
+    route_handle: Option<Arc<RouteHandle>>,
 }
 
 impl FailoverProvider {
@@ -316,6 +322,7 @@ impl FailoverProvider {
             route_mode: RouteMode::Auto,
             allow_cloud_escalation: false,
             approval: None,
+            route_handle: None,
         }
     }
 
@@ -335,6 +342,25 @@ impl FailoverProvider {
         self.allow_cloud_escalation = allow_cloud_escalation;
         self.approval = approval;
         self
+    }
+
+    /// Attach a live [`RouteHandle`] so the route preference is read fresh on
+    /// every request instead of frozen at boot. The handle overrides the
+    /// snapshot set by [`with_route`](Self::with_route); the approval gate is
+    /// still supplied via `with_route`. Wired only in production
+    /// (`build_failover_chain`); tests omit it and keep the boot snapshot.
+    pub fn with_route_live(mut self, handle: Arc<RouteHandle>) -> Self {
+        self.route_handle = Some(handle);
+        self
+    }
+
+    /// The route preference to apply *now*: the live handle if attached, else
+    /// the boot snapshot.
+    fn route_preference(&self) -> (RouteMode, bool) {
+        match &self.route_handle {
+            Some(h) => h.load(),
+            None => (self.route_mode, self.allow_cloud_escalation),
+        }
     }
 
     /// Whether a cloud-borrow escalation for `name` is authorised right now.
@@ -391,12 +417,8 @@ impl FailoverProvider {
             }
             out.push(fb.clone());
         }
-        order_candidates(
-            out,
-            self.route_mode,
-            self.allow_cloud_escalation,
-            |n| n.tier,
-        )
+        let (mode, allow_escalation) = self.route_preference();
+        order_candidates(out, mode, allow_escalation, |n| n.tier)
     }
 
     /// Whether `name` may be tried now. Transitions `Open → HalfOpen` when the

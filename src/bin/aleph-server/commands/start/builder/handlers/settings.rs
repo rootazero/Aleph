@@ -188,6 +188,7 @@ pub(in crate::commands::start) fn register_config_handlers(
     use alephcore::gateway::handlers::memory_config;
     use alephcore::gateway::handlers::providers;
     use alephcore::gateway::handlers::rerank_config;
+    use alephcore::gateway::handlers::route_config;
     use alephcore::gateway::handlers::routing_rules;
     use alephcore::gateway::handlers::search_config;
     use alephcore::gateway::handlers::security_config;
@@ -743,6 +744,21 @@ pub(in crate::commands::start) fn register_config_handlers(
         server,
         "execution_config.update",
         execution_config::handle_update,
+        config,
+        event_bus
+    );
+
+    // Local/cloud route mode (hot-applies to the live failover chain)
+    register_handler!(
+        server,
+        "route_config.get",
+        route_config::handle_get,
+        config
+    );
+    register_handler!(
+        server,
+        "route_config.update",
+        route_config::handle_update,
         config,
         event_bus
     );

@@ -188,11 +188,18 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
     // `build_failover_chain` also yields the per-`provider_hint` override
     // registry; both are carried on the orchestrator (`with_subagent_routing`)
     // so the gateway routes spawned subagents through the same chain.
+    // Seed the process-global live route handle from the loaded `[route]`
+    // section and hand the chain a clone. Now a `route_config.update` /
+    // `self_config` mode switch hot-applies to the very next prompt with no
+    // daemon restart (the chain is otherwise built once and never rebuilt).
+    let route_handle =
+        alephcore::providers::route_handle::global_route_handle(&config.route);
     let provider_chain = alephcore::orchestrator::build_failover_chain(
         config,
         primary_provider_key,
         default_provider,
         escalation_approval,
+        Some(route_handle),
     );
     let default_provider = provider_chain.default.clone();
 

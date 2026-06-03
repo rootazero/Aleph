@@ -392,6 +392,7 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
             "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
             "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
+            "/settings/model-route" => view! { <RouteView /> }.into_any(),
             "/settings/memory" => view! { <MemoryView /> }.into_any(),
 
             // Browser
