@@ -11,7 +11,7 @@ use crate::sync_primitives::Arc;
 use crate::vision::error::VisionError;
 use crate::vision::provider::VisionProvider;
 use crate::vision::types::{
-    ImageInput, OcrLine, OcrResult, Rect, VisionCapabilities, VisionResult,
+    validate_confidence, ImageInput, OcrLine, OcrResult, Rect, VisionCapabilities, VisionResult,
 };
 
 /// Vision provider backed by the platform-native OCR engine.
@@ -146,13 +146,17 @@ fn convert_platform_ocr_result(result: aleph_desktop::OcrResult) -> OcrResult {
         .into_iter()
         .map(|line| OcrLine {
             text: line.text,
-            bounding_box: line.bounding_box.map(|bb| Rect {
-                x: bb.x,
-                y: bb.y,
-                width: bb.w,
-                height: bb.h,
-            }),
-            confidence: line.confidence.unwrap_or(0.0),
+            // The desktop bridge crosses the R1 brain-limb boundary via IPC, so
+            // its geometry/scores are untrusted: drop non-finite or negative
+            // rects to `None` and clamp out-of-range confidences to 0.0 rather
+            // than propagating poisoned values downstream.
+            bounding_box: line
+                .bounding_box
+                .and_then(|bb| Rect::new(bb.x, bb.y, bb.w, bb.h).ok()),
+            confidence: line
+                .confidence
+                .and_then(|c| validate_confidence(c).ok())
+                .unwrap_or(0.0),
         })
         .collect();
 
@@ -258,6 +262,44 @@ mod tests {
 
         assert_eq!(result.lines[1].text, "Line 2");
         assert!(result.lines[1].bounding_box.is_none());
+    }
+
+    #[test]
+    fn convert_platform_ocr_result_sanitizes_untrusted_geometry_and_confidence() {
+        // Bridge data crossing the R1 IPC boundary may carry invalid geometry
+        // (negative / NaN dimensions) and out-of-range confidence scores.
+        let result = convert_platform_ocr_result(aleph_desktop::OcrResult {
+            full_text: "x".to_string(),
+            lines: vec![
+                aleph_desktop::OcrLine {
+                    text: "negative-width".to_string(),
+                    bounding_box: Some(aleph_desktop::BoundingBox {
+                        x: 0.0,
+                        y: 0.0,
+                        w: -5.0,
+                        h: 30.0,
+                    }),
+                    confidence: Some(2.5),
+                },
+                aleph_desktop::OcrLine {
+                    text: "nan-height".to_string(),
+                    bounding_box: Some(aleph_desktop::BoundingBox {
+                        x: 0.0,
+                        y: 0.0,
+                        w: 10.0,
+                        h: f64::NAN,
+                    }),
+                    confidence: Some(f64::NAN),
+                },
+            ],
+        });
+        assert_eq!(result.lines.len(), 2);
+        // Invalid rects are dropped rather than propagated as poisoned values.
+        assert!(result.lines[0].bounding_box.is_none());
+        assert!(result.lines[1].bounding_box.is_none());
+        // Out-of-range / NaN confidences clamp to 0.0.
+        assert_eq!(result.lines[0].confidence, 0.0);
+        assert_eq!(result.lines[1].confidence, 0.0);
     }
 
     #[test]

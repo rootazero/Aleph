@@ -94,6 +94,17 @@ impl ClaudeVisionProvider {
     fn to_content_block(&self, image: &ImageInput) -> Result<ContentBlock, VisionError> {
         match image {
             ImageInput::Base64 { data, format } => {
+                // Enforce the same size ceiling as the FilePath branch so an
+                // oversized payload is rejected locally with a clean error
+                // instead of being forwarded over the wire. base64 decodes to
+                // ~3/4 of its encoded length; estimate without allocating.
+                let estimated_decoded = (data.len() / 4) * 3;
+                if estimated_decoded as u64 > MAX_IMAGE_FILE_SIZE {
+                    return Err(VisionError::ImageError(format!(
+                        "image data exceeds maximum size of {} MB",
+                        MAX_IMAGE_FILE_SIZE / (1024 * 1024)
+                    )));
+                }
                 let mime = match format {
                     ImageFormat::Png => "image/png",
                     ImageFormat::Jpeg => "image/jpeg",
