@@ -9,6 +9,7 @@ use tokio::process::{ChildStdin, ChildStdout};
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 use tracing::{debug, warn};
 
+use crate::acp::incoming::IncomingHandler;
 use crate::acp::protocol::{AcpRequest, AcpResponse};
 use crate::error::{AlephError, Result};
 
@@ -28,6 +29,11 @@ pub type SharedStdin = Arc<AsyncMutex<ChildStdin>>;
 pub struct StdioTransport {
     stdin: SharedStdin,
     event_rx: mpsc::Receiver<Result<AcpResponse>>,
+    /// Services agent→client requests (`fs/*`, `session/request_permission`).
+    /// `None` for transports created without a handler (e.g. unit tests) — in
+    /// that case incoming requests fall through to the notification path,
+    /// preserving the pre-bidirectional behavior.
+    handler: Option<Arc<IncomingHandler>>,
     _reader_handle: tokio::task::JoinHandle<()>,
 }
 
@@ -37,6 +43,16 @@ impl StdioTransport {
     /// Spawns a background tokio task that reads lines from stdout,
     /// parses them as `AcpResponse`, and sends via an mpsc channel (capacity 256).
     pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
+        Self::with_handler(stdin, stdout, None)
+    }
+
+    /// Like [`new`](Self::new) but wires an [`IncomingHandler`] so agent→client
+    /// requests received mid-prompt are answered instead of dropped.
+    pub fn with_handler(
+        stdin: ChildStdin,
+        stdout: ChildStdout,
+        handler: Option<Arc<IncomingHandler>>,
+    ) -> Self {
         let (tx, rx) = mpsc::channel(256);
 
         let handle = tokio::spawn(async move {
@@ -87,6 +103,7 @@ impl StdioTransport {
         Self {
             stdin: Arc::new(AsyncMutex::new(stdin)),
             event_rx: rx,
+            handler,
             _reader_handle: handle,
         }
     }
@@ -124,6 +141,23 @@ pub async fn write_request(stdin: &SharedStdin, req: &AcpRequest) -> Result<()> 
     Ok(())
 }
 
+/// Write a raw JSON-RPC value (a response to an agent→client request) through a
+/// `SharedStdin` with NDJSON framing.
+pub async fn write_value(stdin: &SharedStdin, value: &serde_json::Value) -> Result<()> {
+    let mut line = serde_json::to_string(value)?;
+    line.push('\n');
+    let mut guard = stdin.lock().await;
+    guard
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| AlephError::IoError(format!("ACP stdin write error: {}", e)))?;
+    guard
+        .flush()
+        .await
+        .map_err(|e| AlephError::IoError(format!("ACP stdin flush error: {}", e)))?;
+    Ok(())
+}
+
 impl StdioTransport {
     /// Receive the next parsed event from the reader channel.
     pub async fn recv(&mut self) -> Option<Result<AcpResponse>> {
@@ -155,6 +189,25 @@ impl StdioTransport {
         .into()
     }
 
+    /// Answer an agent→client request via the configured [`IncomingHandler`],
+    /// writing the JSON-RPC response back to the child's stdin. If no handler
+    /// is wired the request is dropped (legacy half-duplex behavior).
+    async fn dispatch_incoming(&self, resp: &AcpResponse) {
+        let Some(handler) = self.handler.as_ref() else {
+            debug!(method = ?resp.method, "ACP incoming request dropped (no handler)");
+            return;
+        };
+        let Some((id, method, params)) = resp.as_incoming_request() else {
+            return;
+        };
+        debug!(method, id, "ACP handling agent→client request");
+        let outcome = handler.handle(method, params).await;
+        let response = outcome.into_jsonrpc(id);
+        if let Err(e) = write_value(&self.stdin, &response).await {
+            warn!(method, "ACP incoming: failed to write response: {}", e);
+        }
+    }
+
     /// Send a request and wait for a response with matching `id`.
     ///
     /// Collects any notifications received while waiting. Returns the matching
@@ -173,6 +226,13 @@ impl StdioTransport {
             loop {
                 match self.event_rx.recv().await {
                     Some(Ok(resp)) => {
+                        // Agent→client request (has both method + id): answer it
+                        // and keep waiting. Checked BEFORE id matching because
+                        // the agent's request-id namespace overlaps ours.
+                        if resp.is_incoming_request() {
+                            self.dispatch_incoming(&resp).await;
+                            continue;
+                        }
                         // Check if this is the response we're waiting for
                         if resp.id == Some(expected_id) {
                             // Check for ACP error
@@ -231,6 +291,13 @@ impl StdioTransport {
             loop {
                 match self.event_rx.recv().await {
                     Some(Ok(resp)) => {
+                        // Agent→client request: answer it inline (this is the
+                        // hot path — agents issue fs/permission requests while
+                        // streaming a prompt turn).
+                        if resp.is_incoming_request() {
+                            self.dispatch_incoming(&resp).await;
+                            continue;
+                        }
                         if resp.id == Some(expected_id) {
                             if let Some(ref err) = resp.error {
                                 return Err(Self::protocol_err(err));

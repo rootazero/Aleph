@@ -165,7 +165,14 @@ impl AcpSession {
         })?;
         let stderr = child.stderr.take();
 
-        let transport = StdioTransport::new(stdin, stdout);
+        // Wire the agent→client request handler so `fs/*` and
+        // `session/request_permission` issued mid-prompt are answered instead
+        // of dropped. Filesystem access is confined to the session cwd.
+        let handler = std::sync::Arc::new(crate::acp::incoming::IncomingHandler::new(
+            config.cwd.as_deref(),
+            crate::acp::incoming::PermissionPolicy::default(),
+        ));
+        let transport = StdioTransport::with_handler(stdin, stdout, Some(handler));
 
         let stderr_handle = stderr.map(|s| {
             let hid = harness_id.to_string();

@@ -41,7 +41,17 @@ impl AcpRequest {
                     "name": "aleph",
                     "version": env!("ALEPH_VERSION"),
                 },
-                "capabilities": {},
+                // Advertise the client-side capabilities Aleph can service for
+                // agent→client requests. `fs.*` is backed by
+                // `crate::acp::incoming::IncomingHandler`; `terminal` is not yet
+                // implemented so it stays absent (spec-compliant agents won't
+                // send `terminal/*`, and a stray request gets a clean -32601).
+                "capabilities": {
+                    "fs": {
+                        "readTextFile": true,
+                        "writeTextFile": true,
+                    },
+                },
             })),
         }
     }
@@ -194,6 +204,27 @@ impl AcpResponse {
     /// Returns true if this is a notification (has method, no id).
     pub fn is_notification(&self) -> bool {
         self.id.is_none() && self.method.is_some()
+    }
+
+    /// Returns true if this is an **agent→client request** — a JSON-RPC frame
+    /// that carries both a `method` and an `id`, meaning the agent expects us
+    /// to send a response back (`fs/read_text_file`, `session/request_permission`,
+    /// …). A frame is a *request* iff it has a `method`; the `id` namespace of
+    /// inbound requests overlaps our own outbound request ids, so callers MUST
+    /// test `method` presence before matching ids to avoid mistaking an agent
+    /// request for our own response.
+    pub fn is_incoming_request(&self) -> bool {
+        self.id.is_some() && self.method.is_some()
+    }
+
+    /// Borrow `(id, method, params)` when this frame is an agent→client
+    /// request. Returns `None` otherwise.
+    pub fn as_incoming_request(&self) -> Option<(u64, &str, &Value)> {
+        const NULL: &Value = &Value::Null;
+        match (self.id, self.method.as_deref()) {
+            (Some(id), Some(method)) => Some((id, method, self.params.as_ref().unwrap_or(NULL))),
+            _ => None,
+        }
     }
 
     /// Extract text content from the result, if present.
@@ -771,5 +802,62 @@ mod tests {
         let (name, status) = notif.tool_call_info().unwrap();
         assert_eq!(name, "read_file");
         assert_eq!(status, "running");
+    }
+
+    #[test]
+    fn test_incoming_request_classification() {
+        // Agent→client request: has both id and method.
+        let req = AcpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(42),
+            result: None,
+            error: None,
+            method: Some("fs/read_text_file".to_string()),
+            params: Some(serde_json::json!({ "path": "/tmp/x" })),
+        };
+        assert!(req.is_incoming_request());
+        assert!(!req.is_notification());
+        let (id, method, params) = req.as_incoming_request().unwrap();
+        assert_eq!(id, 42);
+        assert_eq!(method, "fs/read_text_file");
+        assert_eq!(params["path"], "/tmp/x");
+    }
+
+    #[test]
+    fn test_response_is_not_incoming_request() {
+        // Our own response: id present, NO method — must not be misclassified.
+        let resp = AcpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: Some(1),
+            result: Some(serde_json::json!({"content": "hi"})),
+            error: None,
+            method: None,
+            params: None,
+        };
+        assert!(!resp.is_incoming_request());
+        assert!(resp.as_incoming_request().is_none());
+    }
+
+    #[test]
+    fn test_notification_is_not_incoming_request() {
+        // Notification: method present, NO id.
+        let notif = AcpResponse {
+            jsonrpc: "2.0".to_string(),
+            id: None,
+            result: None,
+            error: None,
+            method: Some("session/update".to_string()),
+            params: Some(serde_json::json!({})),
+        };
+        assert!(!notif.is_incoming_request());
+        assert!(notif.is_notification());
+    }
+
+    #[test]
+    fn test_initialize_advertises_fs_capabilities() {
+        let init = AcpRequest::initialize();
+        let caps = &init.params.unwrap()["capabilities"];
+        assert_eq!(caps["fs"]["readTextFile"], true);
+        assert_eq!(caps["fs"]["writeTextFile"], true);
     }
 }
