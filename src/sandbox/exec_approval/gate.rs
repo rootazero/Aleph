@@ -167,6 +167,21 @@ pub fn check_always_confirm(tool_name: &str, always_confirm: &HashSet<String>) -
     always_confirm.contains(tool_name)
 }
 
+/// The gate is itself an [`ApprovalRequester`], delegating to its own
+/// late-bound requester via [`request_approval_for_tool`].
+///
+/// This lets one shared `ApprovalGate` (whose channel requester is wired after
+/// channels are up) serve both the sandbox escalation path and the failover
+/// route escalation (borrow-cloud) gate, without exposing the inner requester.
+///
+/// [`request_approval_for_tool`]: ApprovalGate::request_approval_for_tool
+#[async_trait]
+impl ApprovalRequester for ApprovalGate {
+    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
+        self.request_approval_for_tool(tool_name, reason).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

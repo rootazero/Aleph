@@ -8,6 +8,8 @@
 //!   and `presets`.
 //! * [`capabilities`] — per-model context window / output cap / vision /
 //!   tools / reasoning flags. Previously absent in Aleph.
+//! * [`endpoint`] — classify a provider's `base_url` host as on-machine
+//!   ([`EndpointKind::Local`]) or a public API ([`EndpointKind::Cloud`]).
 //!
 //! Cost rates live in [`crate::pricing`] (consumed by the orchestrator's
 //! per-run cost estimate) and reuse this module's canonicalisation so all
@@ -19,6 +21,8 @@
 
 pub mod alias;
 pub mod capabilities;
+pub mod endpoint;
 
 pub use alias::{canonical_provider_id, canonicalize_model_id, infer_vendor};
 pub use capabilities::{capabilities_for, ModelCapabilities};
+pub use endpoint::{endpoint_kind_for_base_url, EndpointKind};

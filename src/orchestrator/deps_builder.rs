@@ -9,13 +9,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::config::types::ProviderConfig;
 use crate::config::Config;
 use crate::context::budget::ContextBudgetConfig;
 use crate::harness::StallConfig;
+use crate::providers::model_catalog::endpoint_kind_for_base_url;
+use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
     FailoverNode, FailoverProvider, StaticDefault,
 };
+use crate::sandbox::exec_approval::gate::ApprovalRequester;
 
 /// Default model context-window estimate (tokens) used when `[context_budget]`
 /// omits `token_budget`. Operators on larger- or smaller-window models should
@@ -37,6 +41,26 @@ pub struct StabilityTriple {
 /// (names come from `[providers]` toml keys), so `FailoverProvider`'s
 /// primary-vs-fallback dedup never drops it.
 const GLOBAL_CHAIN_NODE: &str = "__global_chain__";
+
+/// Endpoint tier for one configured provider, used by the route policy.
+///
+/// Special-cases `protocol == "ollama"` with no `base_url` → [`Local`]
+/// ([`OllamaProvider`](crate::providers::OllamaProvider) defaults to
+/// `http://localhost:11434`). Otherwise defers to
+/// [`endpoint_kind_for_base_url`], which keys on the `base_url` host so
+/// `ollama.com` (Cloud) and a local Ollama (Local) are distinguished.
+///
+/// [`Local`]: EndpointTier::Local
+fn provider_tier(pc: &ProviderConfig) -> EndpointTier {
+    let is_native_ollama = pc
+        .protocol
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("ollama"));
+    if is_native_ollama && pc.base_url.as_deref().is_none_or(str::is_empty) {
+        return EndpointTier::Local;
+    }
+    endpoint_kind_for_base_url(pc.base_url.as_deref()).into()
+}
 
 /// Provider routing assembled once at boot.
 ///
@@ -73,7 +97,12 @@ pub fn build_failover_chain(
     config: &Config,
     primary_provider_key: &str,
     default_provider: Arc<dyn DefaultProviderHandle>,
+    escalation_approval: Option<Arc<dyn ApprovalRequester>>,
 ) -> ProviderChain {
+    // Local/cloud route preference (`[route]`). `Auto` (default) is a no-op,
+    // so an unconfigured deployment is byte-identical to pre-route failover.
+    let route_mode = config.route.mode;
+    let allow_escalation = config.route.allow_cloud_escalation;
     // Catalog of every configured provider's model list, keyed by toml name.
     // Lets the live primary — and each fallback — fail over across models.
     let model_catalog: HashMap<String, Vec<String>> = config
@@ -122,10 +151,18 @@ pub fn build_failover_chain(
                 continue;
             };
             let models = model_catalog.get(&name).cloned().unwrap_or_default();
+            // Tier from the provider's base_url host, so the route policy can
+            // order/gate this fallback by local-vs-cloud.
+            let tier = config
+                .providers
+                .get(&name)
+                .map(provider_tier)
+                .unwrap_or(EndpointTier::Cloud);
             fallbacks.push(FailoverNode {
                 name,
                 models,
                 provider: provider.clone(),
+                tier,
             });
         }
     }
@@ -137,13 +174,16 @@ pub fn build_failover_chain(
         "failover chain assembled"
     );
 
-    let global: Arc<dyn AiProvider> = Arc::new(FailoverProvider::new(
-        default_provider,
-        fallbacks,
-        model_catalog.clone(),
-        health.clone(),
-        FailoverConfig::default(),
-    ));
+    let global: Arc<dyn AiProvider> = Arc::new(
+        FailoverProvider::new(
+            default_provider,
+            fallbacks,
+            model_catalog.clone(),
+            health.clone(),
+            FailoverConfig::default(),
+        )
+        .with_route(route_mode, allow_escalation, escalation_approval.clone()),
+    );
     let default: Arc<dyn DefaultProviderHandle> = Arc::new(StaticDefault::new(global.clone()));
 
     // Per-`provider_hint` overrides: one FailoverProvider per non-primary
@@ -157,11 +197,16 @@ pub fn build_failover_chain(
                     name: GLOBAL_CHAIN_NODE.to_string(),
                     models: Vec::new(),
                     provider: global.clone(),
+                    // The global-chain wrapper is itself route-shaped; tag it
+                    // Unknown so the pinned chain's own route policy never drops
+                    // it (the global chain already enforced the tier policy).
+                    tier: EndpointTier::Unknown,
                 }],
                 model_catalog.clone(),
                 health.clone(),
                 FailoverConfig::default(),
-            );
+            )
+            .with_route(route_mode, allow_escalation, escalation_approval.clone());
             (name, Arc::new(pinned) as Arc<dyn AiProvider>)
         })
         .collect();
@@ -372,7 +417,7 @@ mod tests {
         // No `[fallback_provider]` — the primary is still wrapped so it gains
         // model-level fallback, transient retry, and a circuit breaker.
         let cfg = cfg_with_fallback(None, vec![("primary", mock_provider_config())]);
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None);
         assert_eq!(chain.default.current().name(), "failover");
         // Only the primary is configured → no per-hint overrides.
         assert!(chain.agent_overrides.is_empty());
@@ -390,7 +435,7 @@ mod tests {
                 ("fb", mock_provider_config()),
             ],
         );
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None);
         assert_eq!(chain.default.current().name(), "failover");
         // `fb` is a non-primary configured provider → it gets a pinned override;
         // the primary never gets one (hinting it == no hint).
@@ -411,7 +456,7 @@ mod tests {
             }),
             vec![("primary", mock_provider_config())],
         );
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None);
         assert_eq!(chain.default.current().name(), "failover");
     }
 
@@ -431,7 +476,7 @@ mod tests {
                 ("aux2", mock_provider_config()),
             ],
         );
-        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"));
+        let chain = build_failover_chain(&cfg, "primary", mock_handle("primary"), None);
         assert_eq!(chain.agent_overrides.len(), 2);
         assert!(chain.agent_overrides.contains_key("aux1"));
         assert!(chain.agent_overrides.contains_key("aux2"));

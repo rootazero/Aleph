@@ -1082,6 +1082,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             auth_bundle.auth_ctx.security_store.clone(),
             epoch_registrar_for_orchestrator,
             mcp_handle.clone(),
+            // Route-mode cloud escalation reuses the shared ApprovalGate; its
+            // channel requester is late-bound below at `set_requester`.
+            Some(approval_gate.clone()),
         )
         .await
         {

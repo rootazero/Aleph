@@ -39,10 +39,13 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
+use crate::config::types::RouteMode;
 use crate::error::{AlephError, ErrorClass, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::llm_retry::{classify, classify_exhausted, RetryVerdict};
+use crate::providers::route_policy::{order_candidates, CandidateAction, EndpointTier};
 use crate::providers::{AiProvider, DefaultProviderHandle};
+use crate::sandbox::exec_approval::gate::ApprovalRequester;
 use crate::sync_primitives::Arc;
 
 /// Consecutive failures at which a provider's circuit breaker opens.
@@ -88,6 +91,27 @@ pub struct FailoverNode {
     pub models: Vec<String>,
     /// The underlying provider implementation.
     pub provider: Arc<dyn AiProvider>,
+    /// Endpoint locality tier, used by the route policy. Defaults to
+    /// [`EndpointTier::Unknown`] so existing literals stay valid and the node
+    /// is treated as the operator's configured default (always allowed).
+    pub tier: EndpointTier,
+}
+
+impl FailoverNode {
+    /// Construct a node with an explicit tier.
+    pub fn with_tier(
+        name: String,
+        models: Vec<String>,
+        provider: Arc<dyn AiProvider>,
+        tier: EndpointTier,
+    ) -> Self {
+        Self {
+            name,
+            models,
+            provider,
+            tier,
+        }
+    }
 }
 
 // =============================================================================
@@ -256,6 +280,15 @@ pub struct FailoverProvider {
     /// Shared circuit-breaker state.
     health: FailoverHealth,
     config: FailoverConfig,
+    /// Local/cloud route preference. `Auto` (default) is a no-op — candidates
+    /// keep their configured order (byte-identical to pre-route failover).
+    route_mode: RouteMode,
+    /// In `AlwaysLocal`, whether a cloud candidate may be tried as an
+    /// approval-gated terminal fallback ("borrow cloud").
+    allow_cloud_escalation: bool,
+    /// Gate consulted before dialing an approval-gated cross-tier candidate.
+    /// `None` (the default) fails escalation closed.
+    approval: Option<Arc<dyn ApprovalRequester>>,
 }
 
 impl FailoverProvider {
@@ -280,12 +313,65 @@ impl FailoverProvider {
             model_catalog,
             health,
             config,
+            route_mode: RouteMode::Auto,
+            allow_cloud_escalation: false,
+            approval: None,
+        }
+    }
+
+    /// Attach a local/cloud route preference and the escalation approval gate.
+    ///
+    /// `new()` alone stays `Auto` + no-gate (today's behaviour). In `Auto` the
+    /// `approval` gate is never consulted. In `AlwaysLocal` with
+    /// `allow_cloud_escalation`, the gate authorises borrowing a cloud
+    /// endpoint as a terminal fallback; absent a gate, escalation fails closed.
+    pub fn with_route(
+        mut self,
+        mode: RouteMode,
+        allow_cloud_escalation: bool,
+        approval: Option<Arc<dyn ApprovalRequester>>,
+    ) -> Self {
+        self.route_mode = mode;
+        self.allow_cloud_escalation = allow_cloud_escalation;
+        self.approval = approval;
+        self
+    }
+
+    /// Whether a cloud-borrow escalation for `name` is authorised right now.
+    ///
+    /// Fails closed: no gate wired → denied (a warn is logged). Mirrors the
+    /// sandbox escalation contract — the money-spending action is gated at the
+    /// moment it would happen, not at config-write time.
+    async fn escalation_allowed(&self, name: &str) -> bool {
+        match self.approval.clone() {
+            Some(gate) => {
+                let reason = format!(
+                    "Route mode is AlwaysLocal but no local provider succeeded; \
+                     borrow cloud provider '{name}' to complete this request?"
+                );
+                gate.request_approval("__route_escalate_cloud", &reason)
+                    .await
+                    .is_approved()
+            }
+            None => {
+                tracing::warn!(
+                    provider = %name,
+                    "route: cloud escalation requested but no approval gate wired; denying"
+                );
+                false
+            }
         }
     }
 
     /// Build the ordered candidate list for one request: the live primary
-    /// first, then each fallback whose name differs from the primary's.
-    fn candidates(&self) -> Vec<FailoverNode> {
+    /// first, then each fallback whose name differs from the primary's, then
+    /// shaped by the route policy (tier ordering + cross-tier gating).
+    ///
+    /// The primary slot is tagged [`EndpointTier::Unknown`] — its `base_url` is
+    /// not resolvable from the live `DefaultProviderHandle`, so the route
+    /// policy always allows it as the operator's configured default. Each pair
+    /// carries the [`CandidateAction`] the walk must enforce.
+    fn candidates(&self) -> Vec<(FailoverNode, CandidateAction)> {
         let primary = self.primary.current();
         let primary_name = primary.name().to_string();
         let primary_models = self
@@ -297,6 +383,7 @@ impl FailoverProvider {
             name: primary_name.clone(),
             models: primary_models,
             provider: primary,
+            tier: EndpointTier::Unknown,
         }];
         for fb in &self.fallbacks {
             if fb.name == primary_name {
@@ -304,7 +391,12 @@ impl FailoverProvider {
             }
             out.push(fb.clone());
         }
-        out
+        order_candidates(
+            out,
+            self.route_mode,
+            self.allow_cloud_escalation,
+            |n| n.tier,
+        )
     }
 
     /// Whether `name` may be tried now. Transitions `Open → HalfOpen` when the
@@ -406,7 +498,31 @@ impl AiProvider for FailoverProvider {
             let total = candidates.len();
             let mut last_error: Option<AlephError> = None;
 
-            for (idx, cand) in candidates.into_iter().enumerate() {
+            for (idx, (cand, action)) in candidates.into_iter().enumerate() {
+                // Route gate: an approval-gated cross-tier candidate (borrow
+                // cloud under AlwaysLocal) is skipped unless the user approves
+                // — fail-closed, exactly like an open circuit. Cloud→local
+                // degrade is `CrossTier{requires_approval:false}` and is never
+                // gated (degrading to local spends nothing).
+                if let CandidateAction::CrossTier {
+                    requires_approval: true,
+                } = action
+                {
+                    if !self.escalation_allowed(&cand.name).await {
+                        tracing::warn!(
+                            provider = %cand.name,
+                            "route: cloud escalation denied, skipping candidate"
+                        );
+                        last_error.get_or_insert_with(|| {
+                            AlephError::provider(format!(
+                                "route: cloud escalation to '{}' not approved",
+                                cand.name
+                            ))
+                        });
+                        continue;
+                    }
+                }
+
                 // The circuit breaker may skip a candidate only while a later
                 // one remains; the final candidate is always attempted so a
                 // transient outage cannot hard-fail every request behind an
@@ -631,7 +747,13 @@ mod tests {
             name: name.to_string(),
             models: Vec::new(),
             provider,
+            tier: EndpointTier::Unknown,
         }
+    }
+
+    /// Node with an explicit endpoint tier, for route-mode tests.
+    fn tiered_node(name: &str, provider: Arc<dyn AiProvider>, tier: EndpointTier) -> FailoverNode {
+        FailoverNode::with_tier(name.to_string(), Vec::new(), provider, tier)
     }
 
     // --- decide() unit tests ----------------------------------------------
@@ -880,5 +1002,154 @@ mod tests {
         let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
         assert_eq!(resp.text_content(), "anthropic");
         assert_eq!(dup.call_count(), 0);
+    }
+
+    // --- route-mode integration tests -------------------------------------
+
+    /// An `ApprovalRequester` with a fixed verdict, recording its call count.
+    struct MockApprover {
+        approve: bool,
+        calls: AtomicUsize,
+    }
+
+    impl MockApprover {
+        fn new(approve: bool) -> Arc<Self> {
+            Arc::new(Self {
+                approve,
+                calls: AtomicUsize::new(0),
+            })
+        }
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl ApprovalRequester for MockApprover {
+        async fn request_approval(&self, _tool: &str, _reason: &str) -> ApprovalOutcome {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if self.approve {
+                ApprovalOutcome::Approved
+            } else {
+                ApprovalOutcome::Denied
+            }
+        }
+    }
+
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+
+    /// Build a route-shaped FailoverProvider from explicitly-tiered fallbacks.
+    fn build_routed(
+        primary: Arc<dyn AiProvider>,
+        fallbacks: Vec<FailoverNode>,
+        mode: RouteMode,
+        allow_escalation: bool,
+        approval: Option<Arc<dyn ApprovalRequester>>,
+    ) -> FailoverProvider {
+        FailoverProvider::new(
+            Arc::new(StaticDefault::new(primary)),
+            fallbacks,
+            HashMap::new(),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        )
+        .with_route(mode, allow_escalation, approval)
+    }
+
+    #[tokio::test]
+    async fn auto_mode_is_byte_identical_to_plain_failover() {
+        // Primary fails, a Cloud-tagged fallback succeeds; Auto must not drop
+        // it even though the route engine is now in the path.
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let fb = ScriptProvider::ok("cloud_fb");
+        let fp = build_routed(
+            primary,
+            vec![tiered_node("cloud_fb", fb, EndpointTier::Cloud)],
+            RouteMode::Auto,
+            false,
+            None,
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "cloud_fb");
+    }
+
+    #[tokio::test]
+    async fn always_local_drops_cloud_fallback_without_escalation() {
+        // Primary (Unknown, always allowed) fails; the only fallback is Cloud
+        // and escalation is off → it is dropped → the request fails entirely.
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let cloud = ScriptProvider::ok("cloud_fb");
+        let fp = build_routed(
+            primary,
+            vec![tiered_node("cloud_fb", cloud.clone(), EndpointTier::Cloud)],
+            RouteMode::AlwaysLocal,
+            false,
+            None,
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+        // The dropped cloud fallback was never dialed.
+        assert_eq!(cloud.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn always_local_borrows_cloud_when_approved() {
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let cloud = ScriptProvider::ok("cloud_fb");
+        let approver = MockApprover::new(true);
+        let fp = build_routed(
+            primary,
+            vec![tiered_node("cloud_fb", cloud.clone(), EndpointTier::Cloud)],
+            RouteMode::AlwaysLocal,
+            true,
+            Some(approver.clone()),
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "cloud_fb");
+        assert_eq!(approver.call_count(), 1);
+        assert_eq!(cloud.call_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn always_local_denied_escalation_skips_cloud() {
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let cloud = ScriptProvider::ok("cloud_fb");
+        let approver = MockApprover::new(false);
+        let fp = build_routed(
+            primary,
+            vec![tiered_node("cloud_fb", cloud.clone(), EndpointTier::Cloud)],
+            RouteMode::AlwaysLocal,
+            true,
+            Some(approver.clone()),
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        assert!(fp.process(RequestPayload::new(&msgs)).await.is_err());
+        assert_eq!(approver.call_count(), 1);
+        // Denied → the cloud candidate is never dialed.
+        assert_eq!(cloud.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn always_cloud_degrades_to_local_ungated() {
+        // Primary (Unknown) fails; the Local fallback is a cross-tier degrade
+        // with no approval required — it must be tried with no gate consulted.
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let local = ScriptProvider::ok("local_fb");
+        let approver = MockApprover::new(false); // would deny if consulted
+        let fp = build_routed(
+            primary,
+            vec![tiered_node("local_fb", local.clone(), EndpointTier::Local)],
+            RouteMode::AlwaysCloud,
+            false,
+            Some(approver.clone()),
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "local_fb");
+        // Cloud→local degrade is ungated: the approver was never consulted.
+        assert_eq!(approver.call_count(), 0);
+        assert_eq!(local.call_count(), 1);
     }
 }
