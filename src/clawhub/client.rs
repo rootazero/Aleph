@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use futures::StreamExt;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use reqwest::Client;
 use tracing::{debug, warn};
@@ -125,8 +126,10 @@ impl ClawHubClient {
 
     /// Browse skills with sorting and pagination.
     ///
-    /// The `/api/v1/skills` endpoint may return empty results.
-    /// When that happens, we fall back to search with a broad query.
+    /// The `/api/v1/skills` endpoint may return empty results. When it does,
+    /// this returns an empty list, preserving `next_cursor` (and reporting
+    /// `has_more = true`) when the API still advertises further pages so
+    /// callers can continue paginating.
     pub async fn browse(
         &self,
         sort: SortOrder,
@@ -227,17 +230,31 @@ impl ClawHubClient {
 
         let resp = Self::check_status(resp, "download").await?;
 
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| AlephError::network(format!("ClawHub download read error: {}", e)))?;
+        // Reject early when the server declares an oversized body, before
+        // reading anything into memory.
+        if let Some(len) = resp.content_length() {
+            if len > MAX_DOWNLOAD_BYTES as u64 {
+                return Err(AlephError::network(format!(
+                    "ClawHub download exceeds maximum size ({} > {} bytes)",
+                    len, MAX_DOWNLOAD_BYTES
+                )));
+            }
+        }
 
-        if bytes.len() > MAX_DOWNLOAD_BYTES {
-            return Err(AlephError::network(format!(
-                "ClawHub download exceeds maximum size ({} > {} bytes)",
-                bytes.len(),
-                MAX_DOWNLOAD_BYTES
-            )));
+        // Stream the body and enforce the cap incrementally so a missing or
+        // dishonest Content-Length cannot exhaust memory.
+        let mut stream = resp.bytes_stream();
+        let mut bytes: Vec<u8> = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk
+                .map_err(|e| AlephError::network(format!("ClawHub download read error: {}", e)))?;
+            if bytes.len() + chunk.len() > MAX_DOWNLOAD_BYTES {
+                return Err(AlephError::network(format!(
+                    "ClawHub download exceeds maximum size (> {} bytes)",
+                    MAX_DOWNLOAD_BYTES
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
         }
 
         // Sanitize slug for filename: "owner/skill" → "owner-skill"
@@ -253,7 +270,8 @@ impl ClawHubClient {
             uuid::Uuid::new_v4()
         ));
 
-        std::fs::write(&temp_path, &bytes)
+        tokio::fs::write(&temp_path, &bytes)
+            .await
             .map_err(|e| AlephError::config(format!("Failed to write temp ZIP: {}", e)))?;
 
         Ok(temp_path)
