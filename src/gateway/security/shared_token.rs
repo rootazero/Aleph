@@ -58,8 +58,10 @@ impl SharedTokenManager {
             }
         };
         let vault_path = vault_path.into();
-        let vault =
-            SecretVault::open(&vault_path).unwrap_or_else(|_| SecretVault::empty(vault_path));
+        // Use `open_or_backup`, not `open().unwrap_or_else(empty)`: the latter
+        // silently overwrites an existing-but-unreadable vault on the next
+        // save, destroying all stored secrets.
+        let vault = SecretVault::open_or_backup(vault_path);
         Self {
             store,
             secret,
@@ -75,8 +77,10 @@ impl SharedTokenManager {
         vault_path: impl Into<std::path::PathBuf>,
     ) -> Self {
         let vault_path = vault_path.into();
-        let vault =
-            SecretVault::open(&vault_path).unwrap_or_else(|_| SecretVault::empty(vault_path));
+        // Use `open_or_backup`, not `open().unwrap_or_else(empty)`: the latter
+        // silently overwrites an existing-but-unreadable vault on the next
+        // save, destroying all stored secrets.
+        let vault = SecretVault::open_or_backup(vault_path);
         Self {
             store,
             secret,

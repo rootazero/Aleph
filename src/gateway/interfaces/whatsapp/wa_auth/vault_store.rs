@@ -29,7 +29,9 @@ pub struct WaAuthManager {
 impl WaAuthManager {
     pub fn new(account_id: impl Into<String>) -> Self {
         let path = crate::secrets::vault::SecretVault::default_path();
-        let vault = SecretVault::open(&path).unwrap_or_else(|_| SecretVault::empty(path));
+        // `open_or_backup` preserves a corrupt/incompatible vault instead of
+        // silently overwriting it on the next save (see SecretVault docs).
+        let vault = SecretVault::open_or_backup(path);
         Self::with_vault(vault, account_id)
     }
 

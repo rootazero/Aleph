@@ -10,7 +10,7 @@ use aes_gcm::{
 use hkdf::Hkdf;
 use secrecy::{ExposeSecret, SecretString};
 use sha2::Sha256;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use super::types::SecretError;
 
@@ -45,16 +45,15 @@ impl SecretsCrypto {
     }
 
     /// Derive a per-entry encryption key using HKDF-SHA256.
-    fn derive_key(&self, salt: &[u8; 32]) -> Result<[u8; 32], SecretError> {
+    ///
+    /// The key is wrapped in `Zeroizing` so it is wiped from the stack on drop
+    /// regardless of which path the caller returns through — including every
+    /// error path. Callers therefore never need to zeroize it manually.
+    fn derive_key(&self, salt: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>, SecretError> {
         let hkdf = Hkdf::<Sha256>::new(Some(salt), self.master_key.expose_secret().as_bytes());
-        let mut key = [0u8; 32];
-        if let Err(e) = hkdf.expand(HKDF_INFO, &mut key) {
-            key.zeroize();
-            return Err(SecretError::EncryptionFailed(format!(
-                "HKDF expand failed: {}",
-                e
-            )));
-        }
+        let mut key = Zeroizing::new([0u8; 32]);
+        hkdf.expand(HKDF_INFO, key.as_mut_slice())
+            .map_err(|e| SecretError::EncryptionFailed(format!("HKDF expand failed: {}", e)))?;
         Ok(key)
     }
 
@@ -72,7 +71,7 @@ impl SecretsCrypto {
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
 
         let key = self.derive_key(&salt)?;
-        let cipher = Aes256Gcm::new_from_slice(&key)
+        let cipher = Aes256Gcm::new_from_slice(key.as_slice())
             .map_err(|e| SecretError::EncryptionFailed(format!("AES init failed: {}", e)))?;
 
         let nonce = Nonce::from_slice(&nonce_bytes);
@@ -80,10 +79,8 @@ impl SecretsCrypto {
             .encrypt(nonce, plaintext.as_bytes())
             .map_err(|e| SecretError::EncryptionFailed(format!("AES encrypt failed: {}", e)))?;
 
-        // Zeroize derived key on stack
-        let mut key = key;
-        key.zeroize();
-
+        // `key` is `Zeroizing`, so it is wiped on drop here — including the
+        // early returns above, which the previous manual zeroize missed.
         Ok(EncryptedData {
             ciphertext,
             nonce: nonce_bytes,
@@ -98,21 +95,16 @@ impl SecretsCrypto {
         nonce_bytes: &[u8; 12],
         salt: &[u8; 32],
     ) -> Result<String, SecretError> {
-        let mut key = self.derive_key(salt)?;
-        let cipher = Aes256Gcm::new_from_slice(&key).map_err(|_| {
-            key.zeroize();
-            SecretError::DecryptionFailed
-        })?;
+        let key = self.derive_key(salt)?;
+        let cipher =
+            Aes256Gcm::new_from_slice(key.as_slice()).map_err(|_| SecretError::DecryptionFailed)?;
 
         let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = cipher.decrypt(nonce, ciphertext).map_err(|_| {
-            key.zeroize();
-            SecretError::DecryptionFailed
-        })?;
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_| SecretError::DecryptionFailed)?;
 
-        // Zeroize derived key on stack
-        key.zeroize();
-
+        // `key` is `Zeroizing` and wipes itself on drop on every path.
         String::from_utf8(plaintext).map_err(|_| SecretError::InvalidUtf8)
     }
 }
@@ -210,7 +202,7 @@ mod tests {
         let salt = [0u8; 32];
         let nonce_bytes = [0u8; 12];
         let key = crypto.derive_key(&salt).unwrap();
-        let cipher = Aes256Gcm::new_from_slice(&key).unwrap();
+        let cipher = Aes256Gcm::new_from_slice(key.as_slice()).unwrap();
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let plaintext = vec![0xFF, 0xFE];

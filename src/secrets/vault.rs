@@ -63,6 +63,54 @@ impl SecretVault {
         VaultIo::new_with_path(path.to_path_buf())
     }
 
+    /// Open the vault, or recover gracefully if an existing file is unreadable.
+    ///
+    /// `open()` returns `Err` *only* when a vault file is present but cannot be
+    /// loaded — corruption, an incompatible future version, or an I/O error. A
+    /// missing file is not an error; it yields a fresh empty vault. Because of
+    /// that, the tempting `open(path).unwrap_or_else(|_| empty(path))` shortcut
+    /// is a data-loss trap: it routes the present-but-unreadable case straight
+    /// into an empty in-memory vault, and the next `save()` atomically
+    /// overwrites the original file, destroying every stored secret.
+    ///
+    /// This helper instead renames the unreadable file aside to
+    /// `<path>.corrupt-<unix_ts>` before returning a fresh vault, so the
+    /// original bytes are preserved for recovery and the daemon still starts
+    /// (graceful degradation per P7). If the rename itself fails the directory
+    /// is almost certainly not writable, so the subsequent `save()` would fail
+    /// too and no silent overwrite occurs.
+    pub fn open_or_backup(path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        match Self::open(&path) {
+            Ok(vault) => vault,
+            Err(open_err) => {
+                if path.exists() {
+                    let mut backup = path.clone().into_os_string();
+                    backup.push(format!(".corrupt-{}", chrono::Utc::now().timestamp()));
+                    let backup = PathBuf::from(backup);
+                    match std::fs::rename(&path, &backup) {
+                        Ok(()) => tracing::error!(
+                            path = %path.display(),
+                            backup = %backup.display(),
+                            error = %open_err,
+                            "Vault file could not be loaded; moved aside to preserve it. \
+                             Starting with an empty vault."
+                        ),
+                        Err(rename_err) => tracing::error!(
+                            path = %path.display(),
+                            error = %open_err,
+                            rename_error = %rename_err,
+                            "Vault file could not be loaded and could not be backed up; \
+                             the directory is likely not writable so secrets are not at risk \
+                             of being overwritten."
+                        ),
+                    }
+                }
+                Self::empty(path)
+            }
+        }
+    }
+
     /// Create an empty vault (for when open() fails).
     pub fn empty(path: impl Into<PathBuf>) -> Self {
         Self {
@@ -471,6 +519,56 @@ mod tests {
         assert!(!vault.exists("old_key"));
         assert!(vault.exists("new_key"));
         assert_eq!(vault.len(), 1);
+    }
+
+    #[test]
+    fn test_open_or_backup_preserves_unreadable_vault() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("data.vault");
+
+        // Simulate an existing vault that `open()` rejects (future version).
+        let future_data = VaultData {
+            version: VAULT_VERSION + 1,
+            entries: HashMap::new(),
+        };
+        std::fs::write(&path, bincode::serialize(&future_data).unwrap()).unwrap();
+        let original_bytes = std::fs::read(&path).unwrap();
+
+        // The dangerous `open().unwrap_or_else(empty)` would discard this and
+        // overwrite it on the next save. `open_or_backup` must instead move it
+        // aside and start fresh, leaving the original bytes recoverable.
+        let mut vault = SecretVault::open_or_backup(&path);
+        assert!(vault.is_empty());
+
+        // A write after recovery must not have destroyed the original data.
+        let crypto = SecretsCrypto::new("k");
+        vault.set("new", make_entry(&crypto, "v")).unwrap();
+
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains("data.vault.corrupt-")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "the unreadable vault should be backed up");
+        assert_eq!(
+            std::fs::read(backups[0].path()).unwrap(),
+            original_bytes,
+            "backed-up bytes must match the original unreadable vault"
+        );
+    }
+
+    #[test]
+    fn test_open_or_backup_no_file_is_fresh_vault() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("absent.vault");
+        // A missing file is not an error path — no backup, just a fresh vault.
+        let vault = SecretVault::open_or_backup(&path);
+        assert!(vault.is_empty());
+        assert!(!path.exists());
     }
 
     #[test]
