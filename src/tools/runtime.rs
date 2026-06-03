@@ -20,10 +20,6 @@ pub enum ToolResult {
         error: String,
         retryable: bool,
     },
-    /// Tool succeeded and the agent loop should stop after this iteration.
-    SuccessAndStopLoop {
-        output: Value,
-    },
 }
 
 // =============================================================================
@@ -342,7 +338,7 @@ mod tests {
         let result = tool.execute(input.clone(), CancellationToken::new()).await;
 
         match result {
-            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+            ToolResult::Success { output } => {
                 assert_eq!(output, input);
             }
             ToolResult::Error { .. } => panic!("expected success"),
@@ -370,7 +366,7 @@ mod tests {
             .execute("echo", json!({ "message": "hi" }), CancellationToken::new())
             .await;
         match result {
-            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+            ToolResult::Success { output } => {
                 assert_eq!(output, json!({ "message": "hi" }));
             }
             ToolResult::Error { .. } => panic!("expected success"),
@@ -387,7 +383,7 @@ mod tests {
                 assert!(error.contains("unknown tool"));
                 assert!(!retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+            ToolResult::Success { .. } => {
                 panic!("expected error")
             }
         }

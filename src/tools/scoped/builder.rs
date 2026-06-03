@@ -244,7 +244,7 @@ impl ScopedToolService {
         use crate::session::events::ToolOutputMetadata;
         use crate::tools::runtime::ToolResult;
         match result {
-            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+            ToolResult::Success { output } => {
                 Ok(ToolOutput {
                     value: output,
                     metadata: ToolOutputMetadata::default(),

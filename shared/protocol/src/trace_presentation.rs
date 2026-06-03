@@ -455,8 +455,7 @@ pub fn summarize_tool_output(output: &str, limit: usize) -> String {
 /// Summarize a `AgentTraceToolResult` into a short string.
 pub fn summarize_tool_result(result: &AgentTraceToolResult, limit: usize) -> String {
     match result {
-        AgentTraceToolResult::Success { output }
-        | AgentTraceToolResult::SuccessAndStopLoop { output } => {
+        AgentTraceToolResult::Success { output } => {
             let text = compact_json(output);
             truncate(&text, limit)
         }

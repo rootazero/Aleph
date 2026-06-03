@@ -217,8 +217,7 @@ pub fn render_tool_end(
             let msg = paint(Style::Error, &truncate(&error.replace('\n', " "), ERROR_MAX));
             Some(format!("  {mark} {msg}  {dur}"))
         }
-        AgentTraceToolResult::Success { output }
-        | AgentTraceToolResult::SuccessAndStopLoop { output } => {
+        AgentTraceToolResult::Success { output } => {
             // The scratchpad checklist is the headline progress signal —
             // always render it, regardless of verbosity.
             if tool_name == "scratchpad" {

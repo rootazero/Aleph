@@ -238,9 +238,6 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     crate::tools::runtime::ToolResult::Error { error, retryable } => {
                         aleph_protocol::AgentTraceToolResult::Error { error, retryable }
                     }
-                    crate::tools::runtime::ToolResult::SuccessAndStopLoop { output } => {
-                        aleph_protocol::AgentTraceToolResult::SuccessAndStopLoop { output }
-                    }
                 },
             },
             LoopTraceEvent::ToolSummary { iteration, summary } => {

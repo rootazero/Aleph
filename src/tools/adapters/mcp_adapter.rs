@@ -204,7 +204,7 @@ mod tests {
 
         let result = adapter.execute(input, CancellationToken::new()).await;
         match result {
-            ToolResult::Success { output } | ToolResult::SuccessAndStopLoop { output } => {
+            ToolResult::Success { output } => {
                 // Output is now wrapped with content boundary markers for prompt injection defense.
                 // The wrapped string contains the serialized JSON with boundary tags.
                 let text = output.as_str().expect("output should be a wrapped string");
@@ -241,7 +241,7 @@ mod tests {
                 assert!(error.contains("search-server"));
                 assert!(retryable);
             }
-            ToolResult::Success { .. } | ToolResult::SuccessAndStopLoop { .. } => {
+            ToolResult::Success { .. } => {
                 panic!("expected error")
             }
         }

@@ -321,8 +321,8 @@ pub struct ToolInvocation {
     pub name: String,
     /// Wall-clock duration measured by the harness around `tool.execute()`.
     pub duration_ms: u64,
-    /// `true` when the underlying `ToolResult` was `Success` /
-    /// `SuccessAndStopLoop`; `false` on `Error`.
+    /// `true` when the underlying `ToolResult` was `Success`;
+    /// `false` on `Error`.
     pub success: bool,
     /// Provider error message when [`success`] is `false`.
     pub error: Option<String>,
