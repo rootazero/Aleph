@@ -226,7 +226,11 @@ impl BlockReplyChunker {
 
         // Priority 5: Force break at max_block_size (may require fence handling)
         if self.buffer.len() >= self.config.max_block_size && self.config.fence_aware {
-            let pos = self.config.max_block_size;
+            // Snap to a char boundary: `pos` is later fed to `buffer.drain(..pos)`
+            // in the FenceSplit arm, which panics if it lands mid-multibyte-char
+            // (e.g. CJK/emoji inside a long streamed code fence). Mirrors the
+            // force-split path in `try_emit_blocks`.
+            let pos = Self::snap_char_boundary(&self.buffer, self.config.max_block_size);
             if let Some(split) = get_fence_split(spans, pos) {
                 return Some(BreakPoint::FenceSplit {
                     pos,
@@ -477,6 +481,31 @@ mod tests {
                 all_blocks[1]
             );
         }
+    }
+
+    #[test]
+    fn test_fence_split_multibyte_does_not_panic() {
+        // Regression: a long, unbroken code fence whose force-split byte index
+        // (`max_block_size`) lands in the middle of a multibyte char must not
+        // panic in `buffer.drain(..pos)`. CJK chars are 3 bytes each, so with
+        // max_block_size = 60 the boundary falls mid-char.
+        let config = ChunkerConfig {
+            min_block_size: 20,
+            max_block_size: 60,
+            fence_aware: true,
+            emit_on_sentence: false,
+            emit_on_paragraph: false,
+        };
+        let mut chunker = BlockReplyChunker::new(config);
+
+        // ```\n + 30×"你" (90 bytes) + \n``` — no safe break inside the fence.
+        let text = format!("```\n{}\n```", "你".repeat(30));
+        let blocks = chunker.push(&text); // must not panic
+        let _ = chunker.finalize();
+        assert!(
+            !blocks.is_empty(),
+            "force-split inside multibyte fence should still emit a block"
+        );
     }
 
     #[test]
