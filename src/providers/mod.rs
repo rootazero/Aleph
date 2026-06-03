@@ -92,6 +92,7 @@ pub mod responses;
 pub mod retry;
 pub mod route_handle;
 pub mod route_policy;
+pub mod session_model_handle;
 pub mod shared;
 
 // Re-exports

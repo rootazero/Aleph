@@ -225,7 +225,29 @@ impl HarnessRunner for AgentHarnessRunner {
         }
 
         // Step 3: brain pick.
-        let llm = llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?;
+        // A-layer (R8): a `select_model` pick for this session overrides the
+        // flow's brain — wrap the chosen base provider in a
+        // ModelOverrideProvider so the model is stamped onto every request.
+        // The key is canonicalised to match the form the tool wrote under
+        // (`SessionKey::to_key_string`). Falls through to the flow's BrainRef
+        // when no pick is recorded — byte-identical to before.
+        let session_pref_key = SessionKey::from_key_string(&session_key)
+            .map(|s| s.to_key_string())
+            .unwrap_or_else(|| session_key.clone());
+        let llm = match crate::providers::session_model_handle::get_session_model(&session_pref_key)
+        {
+            Some(pref) => {
+                let base = pref
+                    .provider
+                    .as_ref()
+                    .and_then(|p| self.named_providers.get(p).cloned())
+                    .unwrap_or_else(|| self.default_provider.current());
+                Arc::new(crate::providers::ModelOverrideProvider::new(
+                    base, pref.model,
+                )) as Arc<dyn crate::providers::AiProvider>
+            }
+            None => llm::pick_llm(&spec.brain, &self.default_provider, &self.named_providers)?,
+        };
         // Stage J-pre: wrap the root provider with MeteringProvider so every
         // LLM call emits a LoopTraceEvent::ProviderUsage event labelled "root".
         // The trace_sink is available here (per-run, passed in from the gateway)
