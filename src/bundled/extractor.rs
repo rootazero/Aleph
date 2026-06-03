@@ -64,6 +64,14 @@ pub fn extract_bundled_content(aleph_home: &Path) {
         "Extracting bundled content"
     );
 
+    // Reconcile before extracting so that user skills added since the last run
+    // (manually placed, not yet tracked in the manifest) are marked Local and
+    // therefore skipped by extract_skills. Without this, a bundled skill with
+    // the same name would overwrite and prune the user's files on upgrade.
+    if let Err(e) = manifest.reconcile(&skills_dir) {
+        warn!(error = %e, "Failed to reconcile before extraction; user skills may be at risk");
+    }
+
     // Extract skills
     let skills_ok = extract_skills(&BUNDLED_SKILLS, &skills_dir, &mut manifest);
 
@@ -181,31 +189,52 @@ fn extract_plugins(bundled: &Dir, cache_dir: &Path) -> bool {
     // Extract all files and directories into the temp directory
     match extract_dir_contents(bundled, &tmp_dir) {
         Ok(()) => {
-            // Atomically swap the old cache for the new one.
-            // On Windows rename cannot overwrite, so remove destination first.
-            if let Err(e) = std::fs::rename(&tmp_dir, cache_dir) {
-                if e.kind() == std::io::ErrorKind::AlreadyExists {
-                    if let Err(e) = std::fs::remove_dir_all(cache_dir) {
-                        warn!(error = %e, "Failed to remove old plugin cache before swap");
-                        return false;
-                    }
-                    if let Err(e) = std::fs::rename(&tmp_dir, cache_dir) {
-                        warn!(error = %e, "Failed to atomically swap plugin cache after removing old");
-                        return false;
-                    }
-                } else {
-                    warn!(error = %e, "Failed to atomically swap plugin cache");
-                    return false;
-                }
+            if swap_dir_into_place(&tmp_dir, cache_dir) {
+                info!("Extracted bundled plugins to marketplace cache");
+                true
+            } else {
+                false
             }
-            info!("Extracted bundled plugins to marketplace cache");
-            true
         }
         Err(e) => {
             warn!(error = %e, "Failed to extract bundled plugins");
             false
         }
     }
+}
+
+/// Atomically move `staged` into `dest`, replacing any existing `dest`.
+///
+/// `dest` is expected to already exist (the caller creates it with
+/// `create_dir_all`), so on every run after the first the rename must replace a
+/// *populated* directory. Renaming onto an existing directory fails differently
+/// per platform:
+/// - Unix: a non-empty target yields `ENOTEMPTY` → `ErrorKind::DirectoryNotEmpty`.
+/// - Windows: rename cannot overwrite a directory at all → `ErrorKind::AlreadyExists`.
+///
+/// In both cases the destination already exists, so we remove it and retry.
+/// Returns true on success. (Previously only `AlreadyExists` was handled, so
+/// the swap failed on every Unix upgrade once a cache was present.)
+fn swap_dir_into_place(staged: &Path, dest: &Path) -> bool {
+    if let Err(e) = std::fs::rename(staged, dest) {
+        let dest_exists = matches!(
+            e.kind(),
+            std::io::ErrorKind::AlreadyExists | std::io::ErrorKind::DirectoryNotEmpty
+        );
+        if !dest_exists {
+            warn!(error = %e, "Failed to atomically swap plugin cache");
+            return false;
+        }
+        if let Err(e) = std::fs::remove_dir_all(dest) {
+            warn!(error = %e, "Failed to remove old plugin cache before swap");
+            return false;
+        }
+        if let Err(e) = std::fs::rename(staged, dest) {
+            warn!(error = %e, "Failed to atomically swap plugin cache after removing old");
+            return false;
+        }
+    }
+    true
 }
 
 fn extract_dir_recursive(dir: &Dir, target: &Path) -> std::io::Result<()> {
@@ -285,7 +314,11 @@ fn extract_dir_contents(dir: &Dir, target: &Path) -> std::io::Result<()> {
                 .as_nanos()
         );
         let tmp = target.join(&tmp_name);
-        std::fs::write(&tmp, file.contents())?;
+        if let Err(e) = std::fs::write(&tmp, file.contents()) {
+            // Clean up the (possibly partial) temp file so we don't leak it.
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
         if let Err(e) = std::fs::rename(&tmp, &dest) {
             if e.kind() == std::io::ErrorKind::AlreadyExists {
                 let _ = std::fs::remove_file(&dest);
@@ -335,5 +368,68 @@ fn cleanup_legacy_dir(aleph_home: &Path) {
             path = %legacy.display(),
             "Legacy skills-official exists but is not a directory, skipping removal"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: an upgrade swaps the staged cache over a *non-empty* existing
+    /// cache. On Unix this rename fails with ENOTEMPTY; the swap must fall back
+    /// to remove-then-rename rather than giving up.
+    #[test]
+    fn swap_dir_replaces_nonempty_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("staged");
+        let dest = tmp.path().join("dest");
+
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("new.txt"), b"new").unwrap();
+
+        // Pre-existing, populated destination — the upgrade scenario.
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("old.txt"), b"old").unwrap();
+
+        assert!(swap_dir_into_place(&staged, &dest));
+        assert!(dest.join("new.txt").exists(), "new content present");
+        assert!(!dest.join("old.txt").exists(), "old content replaced");
+        assert!(!staged.exists(), "staged dir consumed by rename");
+    }
+
+    /// First install: destination exists but is empty (created via
+    /// create_dir_all). The direct rename should succeed.
+    #[test]
+    fn swap_dir_into_empty_destination() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("staged");
+        let dest = tmp.path().join("dest");
+
+        std::fs::create_dir_all(&staged).unwrap();
+        std::fs::write(staged.join("f.txt"), b"x").unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+
+        assert!(swap_dir_into_place(&staged, &dest));
+        assert!(dest.join("f.txt").exists());
+    }
+
+    /// Nested content must survive the swap intact.
+    #[test]
+    fn swap_dir_preserves_nested_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let staged = tmp.path().join("staged");
+        let dest = tmp.path().join("dest");
+
+        std::fs::create_dir_all(staged.join("sub")).unwrap();
+        std::fs::write(staged.join("sub").join("deep.txt"), b"deep").unwrap();
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("stale.txt"), b"stale").unwrap();
+
+        assert!(swap_dir_into_place(&staged, &dest));
+        assert_eq!(
+            std::fs::read_to_string(dest.join("sub").join("deep.txt")).unwrap(),
+            "deep"
+        );
+        assert!(!dest.join("stale.txt").exists());
     }
 }
