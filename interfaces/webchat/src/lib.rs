@@ -1,3 +1,18 @@
+// Consciously-accepted clippy lints:
+//   * module_inception   — emitted by the build-script-generated i18n module
+//                         (`mod i18n { mod i18n }`); not hand-editable.
+//   * type_complexity    — a Leptos signal/closure signature clearer inline.
+//   * large_enum_variant — boxing the large variant would churn the view API
+//                         for no real gain in a WASM single-thread context.
+//   * new_ret_no_self    — emitted by the build-script-generated i18n module;
+//                         not hand-editable.
+#![allow(
+    clippy::module_inception,
+    clippy::type_complexity,
+    clippy::large_enum_variant,
+    clippy::new_ret_no_self
+)]
+
 pub mod api;
 pub mod app;
 pub mod appearance;

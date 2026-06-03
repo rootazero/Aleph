@@ -499,7 +499,7 @@ mod tests {
 
     #[test]
     fn build_marks_keeps_only_bounded_elements_with_point_centers() {
-        let els = vec![
+        let els = [
             leaf(
                 "AXButton",
                 Some("Save"),

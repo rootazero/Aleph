@@ -53,6 +53,8 @@ impl RetryCategory {
     }
 
     /// Parse a stable wire token back into a `RetryCategory`.
+    // Inherent `from_str` returning Option is an intentional API; renaming would break callers.
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "rate_limit" => Some(RetryCategory::RateLimit),

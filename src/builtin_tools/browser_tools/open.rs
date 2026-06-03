@@ -130,12 +130,14 @@ mod tests {
     async fn test_browser_open_blocked_domain_list() {
         use crate::browser::network_policy::SsrfConfig;
 
-        let mut config = BrowserSystemConfig::default();
-        config.policy = SsrfConfig {
-            block_private: false,
-            blocked_domains: vec!["*.evil.com".to_string(), "malware.org".to_string()],
-            allowed_domains: vec![],
-            block_secrets_in_url: false,
+        let config = BrowserSystemConfig {
+            policy: SsrfConfig {
+                block_private: false,
+                blocked_domains: vec!["*.evil.com".to_string(), "malware.org".to_string()],
+                allowed_domains: vec![],
+                block_secrets_in_url: false,
+            },
+            ..Default::default()
         };
 
         let manager = Arc::new(ProfileManager::new(config));
@@ -180,12 +182,14 @@ mod tests {
     async fn test_browser_open_allowlist_mode() {
         use crate::browser::network_policy::SsrfConfig;
 
-        let mut config = BrowserSystemConfig::default();
-        config.policy = SsrfConfig {
-            block_private: false,
-            blocked_domains: vec![],
-            allowed_domains: vec!["*.allowed.com".to_string()],
-            block_secrets_in_url: false,
+        let config = BrowserSystemConfig {
+            policy: SsrfConfig {
+                block_private: false,
+                blocked_domains: vec![],
+                allowed_domains: vec!["*.allowed.com".to_string()],
+                block_secrets_in_url: false,
+            },
+            ..Default::default()
         };
 
         let manager = Arc::new(ProfileManager::new(config));

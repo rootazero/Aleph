@@ -19,9 +19,9 @@
 //!
 //! # Concurrency
 //!
-//! Wraps a `Mutex<HashMap>` because lookups happen once per call (registration
-//! + deregistration), not in any hot loop. Lock contention is essentially nil
-//! at the steady-state scale of one harness per session.
+//! Wraps a `Mutex<HashMap>` because lookups happen once per call
+//! (registration + deregistration), not in any hot loop. Lock contention is
+//! essentially nil at the steady-state scale of one harness per session.
 
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};

@@ -146,11 +146,8 @@ fn kimi_cn_alias_resolves_to_moonshot_cn() {
 #[test]
 fn moonshot_fallbacks_include_current_lineup() {
     let p = get_preset("moonshot").expect("moonshot preset");
-    assert!(p
-        .fallback_models
-        .iter()
-        .any(|m| *m == "kimi-k2-turbo-preview"));
-    assert!(p.fallback_models.iter().any(|m| *m == "moonshot-v1-8k"));
+    assert!(p.fallback_models.contains(&"kimi-k2-turbo-preview"));
+    assert!(p.fallback_models.contains(&"moonshot-v1-8k"));
 }
 
 // =========================================================================

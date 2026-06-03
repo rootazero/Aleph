@@ -144,10 +144,12 @@ mod tests {
 
     #[test]
     fn auth_none_drops_required_flag() {
-        let mut cfg = GatewayServerConfig::default();
-        cfg.auth = AuthConfig {
-            mode: AuthMode::None,
-            ..AuthConfig::default()
+        let cfg = GatewayServerConfig {
+            auth: AuthConfig {
+                mode: AuthMode::None,
+                ..AuthConfig::default()
+            },
+            ..GatewayServerConfig::default()
         };
         let plan = build_credential_plan(&cfg, no_env);
         assert_eq!(plan.auth_mode, "none");
@@ -156,10 +158,15 @@ mod tests {
 
     #[test]
     fn hardening_flags_round_trip() {
-        let mut cfg = GatewayServerConfig::default();
-        cfg.require_challenge = true;
-        cfg.require_idempotency_key = true;
-        cfg.auth.allowed_origins = vec!["https://a.local".into(), "https://b.local".into()];
+        let cfg = GatewayServerConfig {
+            require_challenge: true,
+            require_idempotency_key: true,
+            auth: AuthConfig {
+                allowed_origins: vec!["https://a.local".into(), "https://b.local".into()],
+                ..AuthConfig::default()
+            },
+            ..GatewayServerConfig::default()
+        };
         let plan = build_credential_plan(&cfg, no_env);
         assert!(plan.require_challenge);
         assert!(plan.require_idempotency_key);

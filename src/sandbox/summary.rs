@@ -86,7 +86,7 @@ impl SandboxSummary {
                 "read-only"
             };
 
-        let mut writable_roots: Vec<PathBuf> = caps.fs_write.iter().cloned().collect();
+        let mut writable_roots: Vec<PathBuf> = caps.fs_write.to_vec();
         writable_roots.sort();
         writable_roots.dedup();
 

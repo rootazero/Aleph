@@ -7,6 +7,9 @@
 //! Tests 14-17 reuse `TestEnv::build()` — do NOT add per-test seeds inside
 //! `build()`.
 
+// test-only tuple return type reads clearer inline.
+#![allow(clippy::type_complexity)]
+
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

@@ -115,7 +115,7 @@ async fn test_two_agent_collaboration() {
         .iter()
         .filter(|e| e.event_type == TeamEventType::MessageRead)
         .collect();
-    assert!(read_events.len() >= 1);
+    assert!(!read_events.is_empty());
 }
 
 // ---------------------------------------------------------------------------
@@ -352,7 +352,6 @@ async fn test_context_injection_shows_inbox_summary() {
     team_store.migrate().await.unwrap();
 
     let agent_id = "agent-ctx-test";
-    let team_id_str;
 
     // Create a team and add the agent as member
     let team = team_store
@@ -363,7 +362,7 @@ async fn test_context_injection_shows_inbox_summary() {
         })
         .await
         .unwrap();
-    team_id_str = team.id.clone();
+    let team_id_str = team.id.clone();
 
     team_store
         .add_member(NewTeamMember {

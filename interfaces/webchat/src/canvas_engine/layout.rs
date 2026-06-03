@@ -248,7 +248,7 @@ mod radial_tests {
             "owned_by",
         ] {
             let a = sector_center_angle(r);
-            assert!(a >= 0.0 && a < std::f32::consts::TAU, "{r} -> {a}");
+            assert!((0.0..std::f32::consts::TAU).contains(&a), "{r} -> {a}");
         }
     }
 
@@ -261,7 +261,7 @@ mod radial_tests {
         ];
         let assigned = assign_sectors(&relations);
 
-        let mut hash_sorted: Vec<_> = relations.iter().cloned().collect();
+        let mut hash_sorted: Vec<_> = relations.to_vec();
         hash_sorted.sort_by(|a, b| {
             sector_center_angle(a)
                 .partial_cmp(&sector_center_angle(b))
@@ -270,7 +270,7 @@ mod radial_tests {
 
         // After assignment, the relative order in the result should match hash order
         let mut assigned_order: Vec<_> = assigned.iter().collect();
-        assigned_order.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+        assigned_order.sort_by(|a, b| a.1.partial_cmp(b.1).unwrap());
         let final_relations: Vec<String> =
             assigned_order.into_iter().map(|(r, _)| r.clone()).collect();
 

@@ -402,10 +402,14 @@ mod tests {
 
     #[test]
     fn test_filter_with_platform_override() {
-        let mut config = PrivacyConfig::default();
-        config.phone = PiiAction::Block;
-        let mut policy = PlatformPiiPolicy::default();
-        policy.phone = Some(PiiAction::Warn);
+        let mut config = PrivacyConfig {
+            phone: PiiAction::Block,
+            ..Default::default()
+        };
+        let policy = PlatformPiiPolicy {
+            phone: Some(PiiAction::Warn),
+            ..Default::default()
+        };
         config
             .platform_policies
             .insert("discord".to_string(), policy);
@@ -421,10 +425,14 @@ mod tests {
 
     #[test]
     fn test_is_platform_excluded() {
-        let mut config = PrivacyConfig::default();
-        config.exclude_providers = vec!["ollama".to_string()];
-        let mut policy = PlatformPiiPolicy::default();
-        policy.exclude_providers = Some(vec!["local-llm".to_string()]);
+        let mut config = PrivacyConfig {
+            exclude_providers: vec!["ollama".to_string()],
+            ..Default::default()
+        };
+        let policy = PlatformPiiPolicy {
+            exclude_providers: Some(vec!["local-llm".to_string()]),
+            ..Default::default()
+        };
         config
             .platform_policies
             .insert("telegram".to_string(), policy);

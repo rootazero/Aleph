@@ -8,6 +8,7 @@ use super::types::{CanvasNode, Vec2};
 ///      larger than its bare radius, so a bare-radius test toggles hover
 ///      on/off under sub-pixel pointer jitter at the visual edge. A small
 ///      padding gives the held node a forgiving zone, killing the flicker.
+///
 /// Converted to world units via the live zoom so the felt size stays constant
 /// at any scale.
 const HIT_TOLERANCE_PX: f64 = 6.0;

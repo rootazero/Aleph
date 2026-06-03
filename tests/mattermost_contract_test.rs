@@ -54,7 +54,7 @@ async fn test_mattermost_start_with_mock_server() {
     MattermostApiMock::users_me(&server).await;
 
     let config = test_mattermost_config();
-    let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
+    let mut channel = MattermostChannel::for_test("test-mm", config, server.uri());
 
     let result = channel.start().await;
     assert!(
@@ -79,7 +79,7 @@ async fn test_mattermost_start_auth_failure() {
     MattermostApiMock::users_me_unauthorized(&server).await;
 
     let config = test_mattermost_config();
-    let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
+    let mut channel = MattermostChannel::for_test("test-mm", config, server.uri());
 
     let result = channel.start().await;
     assert!(result.is_err(), "start() should fail with 401");

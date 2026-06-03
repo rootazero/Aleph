@@ -211,14 +211,11 @@ mod delegation_tests {
     async fn output_does_not_resolve_placeholder() {
         let g = guard(true);
         let dec = g.evaluate_output("LLM said {{secret:test_key}}").await;
-        match dec {
-            GuardrailDecision::Sanitize(rep) => {
-                assert!(
-                    !rep.text.contains("resolved-VAL"),
-                    "output must never expose plaintext secret"
-                );
-            }
-            _ => {}
+        if let GuardrailDecision::Sanitize(rep) = dec {
+            assert!(
+                !rep.text.contains("resolved-VAL"),
+                "output must never expose plaintext secret"
+            );
         }
     }
 

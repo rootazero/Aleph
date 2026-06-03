@@ -46,9 +46,9 @@ pub fn TaskDetailDrawer(
         events.set(Vec::new());
         if let Some(task) = task_opt {
             let id = task.id.clone();
-            let dash_runs = dash.clone();
-            let dash_comments = dash.clone();
-            let dash_events = dash.clone();
+            let dash_runs = dash;
+            let dash_comments = dash;
+            let dash_events = dash;
             let id_runs = id.clone();
             let id_comments = id.clone();
             let id_events = id;

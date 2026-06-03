@@ -773,7 +773,7 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
     let harness = AgentHarness::new(deps);
     let cancel = CancellationToken::new();
     let mut cb = crate::harness::NoopHarnessCallback;
-    let _ = harness
+    harness
         .run(&sample_session_id(), &mut cb, &cancel)
         .await
         .expect("harness.run should complete via hit_limit");

@@ -190,8 +190,10 @@ mod tests {
             Arc::new(ErrorCooldown::new()),
             "123",
         );
-        let mut config = StreamingOptions::default();
-        config.reasoning_lane_enabled = true;
+        let config = StreamingOptions {
+            reasoning_lane_enabled: true,
+            ..Default::default()
+        };
         let (orchestrator, tx) = StreamOrchestrator::new(delivery, config);
 
         let inbound = InboundMessage {
@@ -263,8 +265,10 @@ mod tests {
             Arc::new(ErrorCooldown::new()),
             "123",
         );
-        let mut config = StreamingOptions::default();
-        config.reasoning_lane_enabled = true;
+        let config = StreamingOptions {
+            reasoning_lane_enabled: true,
+            ..Default::default()
+        };
         let (orchestrator, tx) = StreamOrchestrator::new(delivery, config);
 
         let inbound = InboundMessage {

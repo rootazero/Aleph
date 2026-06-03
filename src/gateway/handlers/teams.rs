@@ -1902,9 +1902,8 @@ mod snapshot_handler_tests {
         )
         .await;
         assert!(resp.error.is_none());
-        assert_eq!(
+        assert!(
             resp.result.as_ref().unwrap()["dry_run"].as_bool().unwrap(),
-            true,
             "default apply must be false → dry_run true"
         );
 
@@ -1915,10 +1914,7 @@ mod snapshot_handler_tests {
         )
         .await;
         assert!(resp.error.is_none());
-        assert_eq!(
-            resp.result.as_ref().unwrap()["existed"].as_bool().unwrap(),
-            true
-        );
+        assert!(resp.result.as_ref().unwrap()["existed"].as_bool().unwrap());
 
         // delete again → existed:false (idempotent)
         let resp = handle_snapshot_delete(
@@ -1927,10 +1923,7 @@ mod snapshot_handler_tests {
         )
         .await;
         assert!(resp.error.is_none());
-        assert_eq!(
-            resp.result.as_ref().unwrap()["existed"].as_bool().unwrap(),
-            false
-        );
+        assert!(!resp.result.as_ref().unwrap()["existed"].as_bool().unwrap());
 
         // get after delete → not found
         let resp = handle_snapshot_get(

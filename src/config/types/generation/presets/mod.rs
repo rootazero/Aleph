@@ -25,6 +25,7 @@ pub use registry::{GENERATION_METADATA, PRESETS};
 /// safe (no aliases, chat-modality-less, no homepage) and entries opt in
 /// via the `with_*` const builders.
 #[derive(Debug, Clone, Copy)]
+#[derive(Default)]
 pub struct GenerationPreset {
     // ── Required identity / routing ──────────────────────────────────────────
     /// Provider type identifier (e.g., "openai", "stability")
@@ -50,20 +51,6 @@ pub struct GenerationPreset {
     pub signup_url: Option<&'static str>,
 }
 
-impl Default for GenerationPreset {
-    fn default() -> Self {
-        Self {
-            provider_type: "",
-            default_model: "",
-            base_url: None,
-            modalities: &[],
-            display_name: None,
-            description: None,
-            homepage: None,
-            signup_url: None,
-        }
-    }
-}
 
 impl GenerationPreset {
     /// Const factory for the required three-tuple; extensions stay defaulted.

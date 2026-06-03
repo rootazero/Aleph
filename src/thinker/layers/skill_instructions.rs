@@ -97,7 +97,7 @@ mod tests {
         let mut m = SkillManifest::new(
             name.to_lowercase().replace(' ', "-"),
             name,
-            &format!("{} description", name),
+            format!("{} description", name),
             SkillContent::new("content"),
             SkillSource::Bundled,
         );

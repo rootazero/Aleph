@@ -612,11 +612,11 @@ mod tests {
 
     #[test]
     fn test_command_info_from_node() {
-        let node = CommandNode::new("test", "Test command", CommandType::Action)
+        let node = CommandNode::new_with_source("test", "Test command", ToolSourceType::Builtin)
+            .with_node_type(CommandType::Action)
             .with_icon("star")
             .with_hint("Test hint")
-            .with_source_id("builtin:test")
-            .with_source_type(ToolSourceType::Builtin);
+            .with_source_id("builtin:test");
 
         let info = CommandInfo::from(node);
 

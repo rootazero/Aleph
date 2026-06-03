@@ -320,7 +320,7 @@ mod tests {
     #[test]
     fn should_run_false_no_recent_updates() {
         let old_ts = chrono::Utc::now().timestamp() - 8 * 86_400; // 8 days ago
-        let notes = vec![
+        let notes = [
             make_note("reference/rust", "reference", old_ts),
             make_note("reference/cargo", "reference", old_ts),
         ];
@@ -331,9 +331,9 @@ mod tests {
 
     #[test]
     fn should_run_true_with_recent_update() {
-        let recent_ts = chrono::Utc::now().timestamp() - 1 * 86_400; // 1 day ago
+        let recent_ts = chrono::Utc::now().timestamp() - 86_400; // 1 day ago
         let old_ts = chrono::Utc::now().timestamp() - 10 * 86_400;
-        let notes = vec![
+        let notes = [
             make_note("reference/rust", "reference", old_ts),
             make_note("reference/cargo", "reference", recent_ts),
         ];
@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn resolve_link_path_finds_by_filename_segment() {
         // Simulate the relevant part of ctx.notes
-        let notes = vec![
+        let notes = [
             make_note("reference/rust-ownership", "reference", 0),
             make_note("preference/editor", "preference", 0),
         ];
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn resolve_link_path_returns_none_for_unknown_target() {
-        let notes = vec![make_note("reference/rust-ownership", "reference", 0)];
+        let notes = [make_note("reference/rust-ownership", "reference", 0)];
         let target = "nonexistent-note";
         let found = notes.iter().find(|n| {
             n.path

@@ -69,6 +69,5 @@ mod tests {
     #[test]
     fn test_store_memory_disabled() {
         // Verify the struct can be constructed (no noise_filter field needed)
-        assert!(true);
     }
 }

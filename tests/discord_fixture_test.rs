@@ -8,6 +8,6 @@ fn test_discord_message_fixture() {
     assert_eq!(data["guild_id"].as_str().unwrap(), "987654321");
     assert_eq!(data["author"]["id"].as_str().unwrap(), "111222333");
     assert_eq!(data["author"]["username"].as_str().unwrap(), "testuser");
-    assert_eq!(data["author"]["bot"].as_bool().unwrap(), false);
+    assert!(!data["author"]["bot"].as_bool().unwrap());
     assert_eq!(data["content"].as_str().unwrap(), "Hello from Discord!");
 }

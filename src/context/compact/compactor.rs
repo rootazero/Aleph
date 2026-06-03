@@ -141,6 +141,7 @@ impl ContextCompactor {
     /// 5. On success: replace the window with a single summary message.
     /// 6. On failure + fallback enabled: deterministic truncation.
     /// 7. On failure + fallback disabled: skip.
+    ///
     /// `session_id` enables the zero-API-cost session-summary reuse path when a
     /// memory backend is also wired (see [`ContextCompactor::with_summary_reuse`]).
     pub async fn compact(

@@ -80,7 +80,7 @@ fn animated_apply(client_x: f64, client_y: f64, apply: impl FnOnce() + 'static) 
 
     // startViewTransition(cb) snapshots the old DOM, runs cb synchronously to
     // mutate the theme, then animates from old → new snapshot.
-    let cb = Closure::once_into_js(move || apply());
+    let cb = Closure::once_into_js(apply);
     let _ = start_fn.call1(document.as_ref(), &cb);
 }
 

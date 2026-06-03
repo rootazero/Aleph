@@ -22,7 +22,7 @@ async fn test_mattermost_send_message() {
     MattermostApiMock::create_post(&server).await;
 
     let config = test_mattermost_config();
-    let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
+    let mut channel = MattermostChannel::for_test("test-mm", config, server.uri());
     channel.start().await.unwrap();
 
     let result = channel
@@ -46,7 +46,7 @@ async fn test_mattermost_send_threaded_reply() {
     MattermostApiMock::create_post_with_root_id(&server).await;
 
     let config = test_mattermost_config();
-    let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
+    let mut channel = MattermostChannel::for_test("test-mm", config, server.uri());
     channel.start().await.unwrap();
 
     let mut msg = OutboundMessage::text("ch-789", "Thread reply");
@@ -75,7 +75,7 @@ async fn test_mattermost_edit_message() {
     MattermostApiMock::edit_post(&server).await;
 
     let config = test_mattermost_config();
-    let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
+    let mut channel = MattermostChannel::for_test("test-mm", config, server.uri());
     channel.start().await.unwrap();
 
     let result = channel
@@ -101,7 +101,7 @@ async fn test_mattermost_delete_message() {
     MattermostApiMock::delete_post(&server).await;
 
     let config = test_mattermost_config();
-    let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
+    let mut channel = MattermostChannel::for_test("test-mm", config, server.uri());
     channel.start().await.unwrap();
 
     let result = channel
@@ -130,7 +130,7 @@ async fn test_mattermost_react_message() {
     MattermostApiMock::create_reaction(&server).await;
 
     let config = test_mattermost_config();
-    let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
+    let mut channel = MattermostChannel::for_test("test-mm", config, server.uri());
     channel.start().await.unwrap();
 
     let result = channel
@@ -157,7 +157,7 @@ async fn test_mattermost_send_typing() {
 
     let mut config = test_mattermost_config();
     config.send_typing = true;
-    let mut channel = MattermostChannel::for_test("test-mm", config, &server.uri());
+    let mut channel = MattermostChannel::for_test("test-mm", config, server.uri());
     channel.start().await.unwrap();
 
     let result = channel.send_typing(&ConversationId::new("ch-789")).await;

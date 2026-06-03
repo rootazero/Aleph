@@ -432,6 +432,6 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _pim = LinuxPim::default();
+        let _pim = LinuxPim;
     }
 }

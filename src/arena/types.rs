@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn arena_status_is_value_object() {
         let status = ArenaStatus::Active;
-        let cloned = status.clone();
+        let cloned = status;
         assert_eq!(status, cloned);
 
         // Different variants are not equal

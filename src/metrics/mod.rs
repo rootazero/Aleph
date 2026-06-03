@@ -356,10 +356,12 @@ mod tests {
 
     #[test]
     fn test_timer_start_with_policy() {
-        let mut policy = MetricsPolicy::default();
-        policy.warning_multiplier = 3.0;
-        policy.enable_logging = false;
-        policy.enable_warnings = false;
+        let policy = MetricsPolicy {
+            warning_multiplier: 3.0,
+            enable_logging: false,
+            enable_warnings: false,
+            ..Default::default()
+        };
         let timer = StageTimer::start_with_policy("policy_test", &policy);
         assert_eq!(timer.name, "policy_test");
         assert_eq!(timer.warning_multiplier, 3.0);
@@ -382,8 +384,10 @@ mod tests {
 
     #[test]
     fn test_timer_invalid_policy_multiplier() {
-        let mut policy = MetricsPolicy::default();
-        policy.warning_multiplier = f64::NAN;
+        let mut policy = MetricsPolicy {
+            warning_multiplier: f64::NAN,
+            ..Default::default()
+        };
         let timer = StageTimer::start_with_policy("nan_test", &policy);
         assert_eq!(timer.warning_multiplier, DEFAULT_WARNING_MULTIPLIER);
 

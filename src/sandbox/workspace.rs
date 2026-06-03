@@ -1462,7 +1462,7 @@ mod scrub_integration_tests {
         // Plant a recognisable OpenAI-style key in stdout.
         let mut leak = b"out:".to_vec();
         leak.extend_from_slice(b"sk-proj-");
-        leak.extend(std::iter::repeat(b'Z').take(40));
+        leak.extend(std::iter::repeat_n(b'Z', 40));
 
         let tmp = tempfile::tempdir().unwrap();
         let sandbox = build_leak_sandbox(&tmp, leak.clone(), Vec::new());
@@ -1471,7 +1471,7 @@ mod scrub_integration_tests {
         // The raw key must not appear in the returned bytes.
         let raw_key: Vec<u8> = {
             let mut k = b"sk-proj-".to_vec();
-            k.extend(std::iter::repeat(b'Z').take(40));
+            k.extend(std::iter::repeat_n(b'Z', 40));
             k
         };
         assert!(
@@ -1495,7 +1495,7 @@ mod scrub_integration_tests {
         // Plant a recognisable key in stderr.
         let mut leak = b"err:".to_vec();
         leak.extend_from_slice(b"sk-proj-");
-        leak.extend(std::iter::repeat(b'A').take(40));
+        leak.extend(std::iter::repeat_n(b'A', 40));
 
         let tmp = tempfile::tempdir().unwrap();
         let sandbox = build_leak_sandbox(&tmp, Vec::new(), leak.clone());
@@ -1503,7 +1503,7 @@ mod scrub_integration_tests {
 
         let raw_key: Vec<u8> = {
             let mut k = b"sk-proj-".to_vec();
-            k.extend(std::iter::repeat(b'A').take(40));
+            k.extend(std::iter::repeat_n(b'A', 40));
             k
         };
         assert!(

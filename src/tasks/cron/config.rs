@@ -947,7 +947,7 @@ mod tests {
         let view = CronJobView::from(&job);
         assert_eq!(view.id, job.id);
         assert_eq!(view.name, "View Test");
-        assert_eq!(view.enabled, true);
+        assert!(view.enabled);
         assert_eq!(view.agent_id, "agent-1");
     }
 }

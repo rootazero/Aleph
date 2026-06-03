@@ -66,8 +66,10 @@ impl ForwardingTraceSink {
                     preview,
                 })
             }
-            LoopTraceEvent::TurnStateEntered { iteration, state }
-                if matches!(state, LoopTraceState::Think) =>
+            LoopTraceEvent::TurnStateEntered {
+                iteration,
+                state: LoopTraceState::Think,
+            } =>
             {
                 Some(SubagentProgress {
                     step: *iteration,

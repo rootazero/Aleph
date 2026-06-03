@@ -62,7 +62,7 @@ async fn consume_sets_cookie_on_loopback() {
     use tempfile::tempdir;
 
     let dir = tempdir().expect("tempdir");
-    let store = Arc::new(SecurityStore::open(&dir.path().join("sec.db")).expect("open store"));
+    let store = Arc::new(SecurityStore::open(dir.path().join("sec.db")).expect("open store"));
     let shared = Arc::new(SharedTokenManager::new(
         store.clone(),
         dir.path().join("vault"),
@@ -136,7 +136,7 @@ async fn replay_is_refused() {
     use tempfile::tempdir;
 
     let dir = tempdir().expect("tempdir");
-    let store = Arc::new(SecurityStore::open(&dir.path().join("sec.db")).expect("open store"));
+    let store = Arc::new(SecurityStore::open(dir.path().join("sec.db")).expect("open store"));
     let shared = Arc::new(SharedTokenManager::new(
         store.clone(),
         dir.path().join("vault"),

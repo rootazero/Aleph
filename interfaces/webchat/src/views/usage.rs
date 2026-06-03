@@ -21,9 +21,9 @@ fn format_thousands(n: u64) -> String {
     let mut out = String::with_capacity(s.len() + s.len() / 3);
     let first = bytes.len() % 3;
     for (i, b) in bytes.iter().enumerate() {
-        if i != 0 && (i.saturating_sub(first)) % 3 == 0 && i >= first && first != 0 {
-            out.push(',');
-        } else if first == 0 && i != 0 && i % 3 == 0 {
+        if (i != 0 && (i.saturating_sub(first)) % 3 == 0 && i >= first && first != 0)
+            || (first == 0 && i != 0 && i % 3 == 0)
+        {
             out.push(',');
         }
         out.push(*b as char);
@@ -167,7 +167,7 @@ pub fn UsageView() -> impl IntoView {
                     } else if let Some(err) = usage_error.get() {
                         view! {
                             <Card class="p-6">
-                                <p class="text-sm text-danger">{format!("{}{}", t_string!(i18n, usage.error_prefix).to_string(), err)}</p>
+                                <p class="text-sm text-danger">{format!("{}{}", t_string!(i18n, usage.error_prefix), err)}</p>
                             </Card>
                         }.into_any()
                     } else if let Some(usage) = team_usage.get() {
@@ -215,7 +215,7 @@ fn LaneCard(row: LaneOccupancy) -> impl IntoView {
             {move || match desktop_split {
                 Some((dtotal, dused)) => view! {
                     <div class="text-[10px] text-text-tertiary uppercase font-bold tracking-wider mt-2">
-                        {format!("{} {}/{}", t_string!(i18n, usage.desktop_reserve).to_string(), dused, dtotal)}
+                        {format!("{} {}/{}", t_string!(i18n, usage.desktop_reserve), dused, dtotal)}
                     </div>
                 }.into_any(),
                 None => view! { <div></div> }.into_any(),

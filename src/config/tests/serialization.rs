@@ -162,12 +162,13 @@ fn test_full_config_conversion() {
 
 #[test]
 fn test_config_toml_round_trip() {
-    let mut config = Config::default();
-
-    config.behavior = Some(BehaviorConfig {
-        output_mode: "instant".to_string(),
-        typing_speed: 100,
-    });
+    let mut config = Config {
+        behavior: Some(BehaviorConfig {
+            output_mode: "instant".to_string(),
+            typing_speed: 100,
+        }),
+        ..Default::default()
+    };
 
     let provider = ProviderConfig::test_config("gpt-4o");
     config.providers.insert("openai".to_string(), provider);

@@ -47,6 +47,6 @@ impl MessageOps {
 mod tests {
     #[test]
     fn test_capabilities() {
-        assert!(true);
+        // Placeholder test: presence of this no-op asserts the module compiles.
     }
 }

@@ -372,19 +372,23 @@ mod tests {
 
     #[test]
     fn latest_activity_picks_newest() {
-        let mut s = UsageStats::default();
-        s.last_used_at = Some("2026-01-01T00:00:00Z".into());
-        s.last_viewed_at = Some("2026-02-01T00:00:00Z".into());
-        s.last_patched_at = Some("2026-01-15T00:00:00Z".into());
+        let s = UsageStats {
+            last_used_at: Some("2026-01-01T00:00:00Z".into()),
+            last_viewed_at: Some("2026-02-01T00:00:00Z".into()),
+            last_patched_at: Some("2026-01-15T00:00:00Z".into()),
+            ..Default::default()
+        };
         assert_eq!(s.latest_activity_at(), Some("2026-02-01T00:00:00Z"));
     }
 
     #[test]
     fn activity_count_sums_all_three() {
-        let mut s = UsageStats::default();
-        s.use_count = 3;
-        s.view_count = 5;
-        s.patch_count = 2;
+        let s = UsageStats {
+            use_count: 3,
+            view_count: 5,
+            patch_count: 2,
+            ..Default::default()
+        };
         assert_eq!(s.activity_count(), 10);
     }
 

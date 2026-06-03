@@ -327,7 +327,6 @@ async fn test_execute_with_agent_type() {
             assert!(output["tool_calls_made"].is_number());
         }
         ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
-        _ => panic!("expected ToolResult::Success"),
     }
 }
 
@@ -351,7 +350,6 @@ async fn test_execute_with_aliased_agent_type() {
             assert!(output["result"].is_string());
         }
         ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
-        _ => panic!("expected ToolResult::Success"),
     }
 }
 
@@ -399,7 +397,6 @@ async fn test_execute_background() {
             assert!(output["message"].is_string());
         }
         ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
-        _ => panic!("expected ToolResult::Success"),
     }
 }
 
@@ -490,7 +487,6 @@ async fn test_execute_success() {
             assert!(output["tool_calls_made"].is_number());
         }
         ToolResult::Error { error, .. } => panic!("expected success, got error: {}", error),
-        _ => panic!("expected ToolResult::Success"),
     }
 }
 
@@ -613,7 +609,6 @@ async fn execute_batch_sync_returns_aggregated_results() {
             }
         }
         ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
-        _ => panic!("expected ToolResult::Success"),
     }
 }
 
@@ -861,7 +856,6 @@ async fn execute_batch_background_returns_request_ids() {
             }
         }
         ToolResult::Error { error, .. } => panic!("expected success, got error: {error}"),
-        _ => panic!("expected ToolResult::Success"),
     }
 }
 

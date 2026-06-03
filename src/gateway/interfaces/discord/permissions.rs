@@ -303,7 +303,7 @@ mod tests {
         // Grant only the required permissions, skip recommended and optional
         let required_only: u64 = ALEPH_PERMISSIONS
             .iter()
-            .filter(|&&(_, _, ref level)| matches!(level, RequirementLevel::Required))
+            .filter(|(_, _, level)| matches!(level, RequirementLevel::Required))
             .fold(0u64, |acc, &(flag, _, _)| acc | flag);
 
         let audit = audit_permissions(9999, "Partial Guild", required_only);

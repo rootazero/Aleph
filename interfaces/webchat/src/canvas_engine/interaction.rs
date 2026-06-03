@@ -84,6 +84,12 @@ pub struct CanvasInteractionState {
     pub hovered: Option<String>,
 }
 
+impl Default for CanvasInteractionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CanvasInteractionState {
     pub fn new() -> Self {
         Self {

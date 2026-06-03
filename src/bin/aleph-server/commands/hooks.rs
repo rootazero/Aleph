@@ -40,8 +40,8 @@ fn list(consent: &ShellHookConsent) -> CmdResult {
 
     println!("Shell-command hooks ({}):", entries.len());
     println!(
-        "{:<18} {:<9} {:<20} {}",
-        "FINGERPRINT", "STATUS", "PLUGIN", "COMMAND"
+        "{:<18} {:<9} {:<20} COMMAND",
+        "FINGERPRINT", "STATUS", "PLUGIN"
     );
     println!("{}", "-".repeat(88));
     for e in &entries {

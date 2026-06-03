@@ -788,7 +788,7 @@ async fn test_high_risk_tool_channel_restriction() {
 
 /// Helper: register a tool with a dotted name directly
 async fn register_tool(registry: &ToolCatalog, id: &str, name: &str) {
-    let tool = UnifiedTool::new(id, name, &format!("Tool {}", name), ToolSource::Builtin);
+    let tool = UnifiedTool::new(id, name, format!("Tool {}", name), ToolSource::Builtin);
     registry.register_with_conflict_resolution(tool).await;
 }
 

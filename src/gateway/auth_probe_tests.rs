@@ -237,7 +237,7 @@ mod tests {
             .to_string();
         assert!(!device_token.is_empty());
         assert!(!device_id.is_empty());
-        assert!(result.get("permissions").unwrap().as_array().unwrap().len() > 0);
+        assert!(!result.get("permissions").unwrap().as_array().unwrap().is_empty());
 
         // Step 2: Reconnect with device token (same flow as Panel localStorage)
         let req2 = JsonRpcRequest::new(

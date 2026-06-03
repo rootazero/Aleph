@@ -7,7 +7,7 @@
 //!   the same tasks the Kanban edits, ordered by `dependencies` depth.
 //! - Replay: R3 unified audit timeline (runs + comments + events + artifacts
 //!   + exit journal) per task — the read-side surface of the `task_exit_journal`
-//!   builtin tool and `teams.task.trace` RPC.
+//!     builtin tool and `teams.task.trace` RPC.
 //! - Workers: live ACP harness session pool (acpx-parity Phase 2) —
 //!   surfaces external coding agents (Claude Code / Codex / Gemini /
 //!   custom) as first-class workers visible to humans.

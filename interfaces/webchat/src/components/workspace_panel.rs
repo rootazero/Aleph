@@ -5,7 +5,7 @@
 //!
 //! - `Empty`     — hero placeholder
 //! - `ToolDetail` — looks the tool entry up in `ChatState.messages` and
-//!                  dispatches it through the [`ToolRendererRegistry`]
+//!   dispatches it through the [`ToolRendererRegistry`]
 //!
 //! Mount is conditional in `app.rs`: only when chat mode is active AND
 //! `LayoutMode::Split` is set, the panel slides in as a flex sibling of

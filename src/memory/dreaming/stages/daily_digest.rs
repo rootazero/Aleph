@@ -114,7 +114,7 @@ mod tests {
         // We only need to test the filtering logic, so construct a minimal
         // notes list and check `should_run` without a full DreamContext.
         // The predicate: any(n.updated_at > day_ago || n.created_at > day_ago)
-        let notes = vec![
+        let notes = [
             make_note("knowledge/rust", "knowledge", old_ts),
             make_note("journal/entry1", "journal", old_ts - 100),
         ];
@@ -139,7 +139,7 @@ mod tests {
         let recent_ts = now - 3600;
         let old_ts = now - 86400 - 3600;
 
-        let notes = vec![
+        let notes = [
             make_note("knowledge/rust", "knowledge", old_ts),
             make_note("journal/today", "journal", recent_ts),
         ];

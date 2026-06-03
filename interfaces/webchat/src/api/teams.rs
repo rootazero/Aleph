@@ -360,8 +360,8 @@ impl TeamsApi {
     }
 
     /// teams.task.trace — unified audit timeline (task + runs + comments
-    /// + events + artifacts + journal) in one round-trip. Returns the
-    /// raw JSON envelope; callers cherry-pick the fields they render.
+    ///   + events + artifacts + journal) in one round-trip. Returns the
+    ///     raw JSON envelope; callers cherry-pick the fields they render.
     pub async fn task_trace(state: &DashboardState, task_id: &str) -> Result<Value, String> {
         state
             .rpc_call("teams.task.trace", json!({ "task_id": task_id }))

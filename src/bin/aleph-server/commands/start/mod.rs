@@ -914,7 +914,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // The handler is fire-and-forget (handle returns empty vec), so we pass a
     // dummy EventContext — it never calls ctx.bus.publish().
     if let Some(event_store) = agent_result.event_store.clone() {
-        (|| {
+        {
             use alephcore::event::{
                 EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
             };
@@ -956,7 +956,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
                 tracing::info!("Team event handlers registered (TeamEventLogger)");
             });
-        })();
+        };
     }
 
     // Register TeamNotifier on GlobalBus — routes autonomous dispatcher task
@@ -966,7 +966,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         agent_result.coord_task_store.clone(),
         agent_result.message_router.clone(),
     ) {
-        (|| {
+        {
             use alephcore::event::{
                 EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
             };
@@ -997,7 +997,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     .await;
                 tracing::info!("Team notifier registered (TeamNotifier)");
             });
-        })();
+        };
     }
 
     // Wire OpenAI-compatible API dependencies into GatewayServer
@@ -1789,6 +1789,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     event_bus.as_ref().clone(),
                     presence_cfg,
                 );
+                // Detached background task: the JoinHandle is intentionally
+                // dropped (dropping it does not cancel the spawned task).
+                #[allow(clippy::let_underscore_future)]
                 let _ = reporter.spawn();
                 if !args.daemon {
                     println!("Presence reporter: started");
@@ -1830,6 +1833,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     event_bus.as_ref().clone(),
                     mic_cfg,
                 );
+                // Detached background task: the JoinHandle is intentionally
+                // dropped (dropping it does not cancel the spawned task).
+                #[allow(clippy::let_underscore_future)]
                 let _ = reporter.spawn();
                 if !args.daemon {
                     println!("Mic-level reporter: started");
@@ -2089,7 +2095,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Inject ChannelRegistry into BuiltinToolRegistry (deferred — channels created after tools)
     if let Some(ref cell) = agent_result.channel_registry_cell {
-        if let Err(_) = cell.set(channel_registry.clone()) {
+        if cell.set(channel_registry.clone()).is_err() {
             tracing::warn!("Failed to inject ChannelRegistry into BuiltinToolRegistry: cell already initialized");
         } else {
             tracing::info!(
@@ -2100,7 +2106,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Inject ClarificationManager into BuiltinToolRegistry (deferred) — enables `ask_user` (HITL P4).
     if let Some(ref cell) = agent_result.clarification_manager_cell {
-        if let Err(_) = cell.set(clarification_manager.clone()) {
+        if cell.set(clarification_manager.clone()).is_err() {
             tracing::warn!("Failed to inject ClarificationManager into BuiltinToolRegistry: cell already initialized");
         } else {
             tracing::info!(

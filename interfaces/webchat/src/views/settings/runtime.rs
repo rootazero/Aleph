@@ -18,7 +18,6 @@ pub fn RuntimeView() -> impl IntoView {
 
     // Initial load on mount.
     {
-        let state = state;
         spawn_local(async move {
             match RuntimesApi::list(&state).await {
                 Ok(r) => {
@@ -32,7 +31,6 @@ pub fn RuntimeView() -> impl IntoView {
     }
 
     let do_refresh = {
-        let state = state;
         move |_ev: web_sys::MouseEvent| {
             let state = state;
             busy.set(true);
@@ -51,7 +49,6 @@ pub fn RuntimeView() -> impl IntoView {
     };
 
     let do_install_missing = {
-        let state = state;
         move |_ev: web_sys::MouseEvent| {
             let state = state;
             let targets: Vec<String> = runtimes
@@ -132,7 +129,7 @@ pub fn RuntimeView() -> impl IntoView {
                             </div>
                             <div class="flex items-center gap-2 pt-4 border-t border-border">
                                 <button
-                                    on:click=do_install_missing.clone()
+                                    on:click=do_install_missing
                                     disabled=move || busy.get()
                                     class="px-3 py-2 bg-primary text-white rounded-lg text-sm \
                                            font-medium disabled:opacity-50 hover:bg-primary/90 \
@@ -141,7 +138,7 @@ pub fn RuntimeView() -> impl IntoView {
                                     {t!(i18n, runtime_deps.install_missing)}
                                 </button>
                                 <button
-                                    on:click=do_refresh.clone()
+                                    on:click=do_refresh
                                     disabled=move || busy.get()
                                     class="px-3 py-2 bg-surface border border-border \
                                            text-text-primary rounded-lg text-sm font-medium \

@@ -115,26 +115,24 @@ impl SessionScheduler {
             if queue.is_idle() {
                 queue.active_run_id = Some(run_id.clone());
                 true
+            } else if queue.pending.len() >= MAX_QUEUE_DEPTH {
+                warn!(
+                    session = %session_key_str,
+                    depth = queue.pending.len(),
+                    "Queue depth exceeded — dropping message"
+                );
+                false
             } else {
-                if queue.pending.len() >= MAX_QUEUE_DEPTH {
-                    warn!(
-                        session = %session_key_str,
-                        depth = queue.pending.len(),
-                        "Queue depth exceeded — dropping message"
-                    );
-                    false
-                } else {
-                    debug!(
-                        session = %session_key_str,
-                        depth = queue.pending.len() + 1,
-                        "Session busy — queuing message"
-                    );
-                    queue.pending.push_back(QueuedTask {
-                        enriched: enriched.clone(),
-                        enqueued_at: Instant::now(),
-                    });
-                    false
-                }
+                debug!(
+                    session = %session_key_str,
+                    depth = queue.pending.len() + 1,
+                    "Session busy — queuing message"
+                );
+                queue.pending.push_back(QueuedTask {
+                    enriched: enriched.clone(),
+                    enqueued_at: Instant::now(),
+                });
+                false
             }
         };
 

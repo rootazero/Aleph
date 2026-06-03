@@ -248,7 +248,6 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
     let message_run_id = run_id_from_message_id(&message.id);
     let tool_calls_view = if has_tools {
         let tools = message.tool_calls.clone();
-        let workspace = workspace;
         let run_id_for_chips = message_run_id.clone();
         Some(view! {
             <div class="mb-2 space-y-1">

@@ -115,6 +115,6 @@ mod tests {
     fn sandbox_trait_is_object_safe() {
         // Exercises trait object assembly via the shared NoopSandbox stub
         // exported from `factory`. Task 6 provides the real WorkspaceSandbox.
-        let _sandbox: Arc<dyn Sandbox> = Arc::new(NoopSandbox::default());
+        let _sandbox: Arc<dyn Sandbox> = Arc::new(NoopSandbox);
     }
 }

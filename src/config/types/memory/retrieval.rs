@@ -79,11 +79,15 @@ mod tests {
 
     #[test]
     fn active_when_any_enabled() {
-        let mut cfg = RetrievalScoringConfig::default();
-        cfg.recency_enabled = true;
+        let cfg = RetrievalScoringConfig {
+            recency_enabled: true,
+            ..Default::default()
+        };
         assert!(cfg.is_active());
-        let mut cfg = RetrievalScoringConfig::default();
-        cfg.mmr_enabled = true;
+        let cfg = RetrievalScoringConfig {
+            mmr_enabled: true,
+            ..Default::default()
+        };
         assert!(cfg.is_active());
     }
 }

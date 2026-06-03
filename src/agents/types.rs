@@ -6,17 +6,14 @@ use serde::{Deserialize, Serialize};
 /// hardcoded `builtin_agents()` entries default to `Builtin`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AgentSource {
+    #[default]
     Builtin,
     User,
     Project,
 }
 
-impl Default for AgentSource {
-    fn default() -> Self {
-        Self::Builtin
-    }
-}
 
 /// Mode of an agent
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,7 +277,7 @@ impl AgentDef {
         // Stage G (P2): named allowed_tool_sets
         for set_name in &self.allowed_tool_sets {
             if let Some(tools) = crate::agents::tool_sets::resolve(set_name) {
-                if tools.iter().any(|t| *t == tool_name) {
+                if tools.contains(&tool_name) {
                     return true;
                 }
             }

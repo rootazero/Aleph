@@ -402,7 +402,7 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _m = WindowsMedia::default();
+        let _m = WindowsMedia;
     }
 
     #[test]

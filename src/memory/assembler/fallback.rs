@@ -147,8 +147,10 @@ mod tests {
 
     #[test]
     fn zero_budget_slot_is_excluded() {
-        let mut skel = FallbackSkeleton::default();
-        skel.relevant_notes_tokens = 0;
+        let skel = FallbackSkeleton {
+            relevant_notes_tokens: 0,
+            ..Default::default()
+        };
         let now = 1_700_000_000;
         let c = [cand(
             "note://reference/a",

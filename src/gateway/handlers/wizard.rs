@@ -580,11 +580,10 @@ mod tests {
 
         // Assert payload shape: cancelled must be true.
         let result = resp.result.expect("expected result payload");
-        assert_eq!(
+        assert!(
             result["cancelled"]
                 .as_bool()
                 .expect("cancelled must be a bool"),
-            true,
             "cancelled must be true"
         );
     }

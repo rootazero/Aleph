@@ -27,7 +27,7 @@ fn cli_secret_set_then_verify_works_when_server_down() {
     {
         use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
         let store =
-            Arc::new(SecurityStore::open(&data_dir.join("security.db")).expect("security store"));
+            Arc::new(SecurityStore::open(data_dir.join("security.db")).expect("security store"));
         let mgr = SharedTokenManager::new(store, data_dir.join("secrets.vault"));
         mgr.generate_token().expect("seed token");
     }

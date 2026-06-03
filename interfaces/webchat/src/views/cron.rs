@@ -944,10 +944,10 @@ fn JobEditor(
 
             if let Some(job) = jobs.get().get(idx).cloned() {
                 let job_id = job.id.clone();
-                let state_for_spawn = state.clone();
-                let runs_for_spawn = runs.clone();
-                let error_for_spawn = error.clone();
-                let success_for_spawn = run_success.clone();
+                let state_for_spawn = state;
+                let runs_for_spawn = runs;
+                let error_for_spawn = error;
+                let success_for_spawn = run_success;
                 spawn_local(async move {
                     match CronApi::run_now(&state_for_spawn, &job_id).await {
                         Ok(_) => {

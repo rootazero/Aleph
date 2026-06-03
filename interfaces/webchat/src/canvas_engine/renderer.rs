@@ -344,8 +344,8 @@ fn draw_edges_for_node(
             // Determine adjacency to the highlight anchor.
             let is_adjacent = highlight_anchor
                 .map(|h| {
-                    idx_to_id(e.from_idx).map_or(false, |id| id == h)
-                        || idx_to_id(e.to_idx).map_or(false, |id| id == h)
+                    (idx_to_id(e.from_idx) == Some(h))
+                        || (idx_to_id(e.to_idx) == Some(h))
                 })
                 .unwrap_or(false);
 
@@ -521,7 +521,7 @@ fn draw_dragged_node(ctx: &CanvasRenderingContext2d, n: &CanvasNode, overlay: &D
         ctx.set_line_width(3.0);
         ctx.begin_path();
         let _ = ctx.arc(cx, cy, r + 6.0, 0.0, TAU);
-        let _ = ctx.stroke();
+        ctx.stroke();
     }
 }
 

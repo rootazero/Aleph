@@ -477,7 +477,7 @@ impl Channel for TelegramChannel {
                             let reply_to_bot = msg
                                 .reply_to_message()
                                 .and_then(|r| r.from.as_ref())
-                                .map_or(false, |u| {
+                                .is_some_and(|u| {
                                     u.is_bot
                                         && match (bot_uname, u.username.as_deref()) {
                                             (Some(b), Some(ru)) => b.eq_ignore_ascii_case(ru),

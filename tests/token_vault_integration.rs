@@ -489,8 +489,8 @@ fn tampered_vault_file_detected() {
     // Flip bytes in the middle (where ciphertext likely lives)
     let mid = bytes.len() / 2;
     if mid + 4 < bytes.len() {
-        for i in mid..mid + 4 {
-            bytes[i] ^= 0xFF;
+        for byte in &mut bytes[mid..mid + 4] {
+            *byte ^= 0xFF;
         }
     }
     std::fs::write(&vault_path, &bytes).unwrap();

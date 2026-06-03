@@ -576,10 +576,10 @@ pub(super) fn render_table_aligned(headers: &[&str], rows: &[Vec<&str>]) -> Stri
 
     // Compute per-column width from header + all rows.
     let mut widths = vec![0usize; cols];
-    for c in 0..cols {
-        widths[c] = cell(headers, c).chars().count();
+    for (c, width) in widths.iter_mut().enumerate() {
+        *width = cell(headers, c).chars().count();
         for row in rows {
-            widths[c] = widths[c].max(cell(row, c).chars().count());
+            *width = (*width).max(cell(row, c).chars().count());
         }
     }
 

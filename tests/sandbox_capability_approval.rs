@@ -8,6 +8,9 @@
 //!
 //! Spec: `docs/superpowers/specs/2026-04-19-sandbox-workspace-design.md` §8.
 
+// test-only tuple return type reads clearer inline.
+#![allow(clippy::type_complexity)]
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;

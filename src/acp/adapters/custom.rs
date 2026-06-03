@@ -6,14 +6,11 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::process::Command;
-use tracing::{debug, error};
 
 use crate::acp::adapter::{AcpAdapter, AdapterMode};
-use crate::acp::output_format::OutputFormat;
 use crate::acp::session::AdapterConfig;
 use crate::config::types::acp::AcpAdapterEntry;
-use crate::error::{AlephError, Result};
+use crate::error::Result;
 
 /// ACP harness built from user-provided `AcpAdapterEntry` configuration.
 ///

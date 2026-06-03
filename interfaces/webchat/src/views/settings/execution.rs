@@ -63,7 +63,6 @@ pub fn ExecutionView() -> impl IntoView {
 
     // Load on mount
     {
-        let state = state.clone();
         spawn_local(async move {
             match ExecutionConfigApi::get(&state).await {
                 Ok(c) => {
@@ -79,7 +78,7 @@ pub fn ExecutionView() -> impl IntoView {
     }
 
     let save = move |_| {
-        let state = state.clone();
+        let state = state;
         saving.set(true);
         error.set(None);
         spawn_local(async move {

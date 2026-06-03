@@ -2,6 +2,9 @@
 //!
 //! Executes Direct-mode commands without going through Agent Loop.
 
+// Not yet wired into the dispatch path; retained as the intended handler abstraction.
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use std::collections::HashMap;
 

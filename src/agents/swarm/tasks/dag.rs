@@ -167,7 +167,7 @@ mod tests {
         // Now try to make A depend on C → would create A←C←B←A cycle.
         // A already exists, so we check as if we were creating a new task
         // with id = a_id that wants to depend on c_id.
-        let result = check_no_cycle(&store, &a_id, &[c_id.clone()]).await;
+        let result = check_no_cycle(&store, &a_id, std::slice::from_ref(&c_id)).await;
         assert!(result.is_err(), "A→C when C→B→A should be a cycle");
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains(&a_id), "error should mention the task id");
@@ -181,7 +181,7 @@ mod tests {
         let a_id = make_task(&store, "A", vec![]).await;
 
         // Try to make A depend on itself.
-        let result = check_no_cycle(&store, &a_id, &[a_id.clone()]).await;
+        let result = check_no_cycle(&store, &a_id, std::slice::from_ref(&a_id)).await;
         assert!(result.is_err(), "A→A is a self-cycle");
     }
 
@@ -225,7 +225,7 @@ mod tests {
         // Mark A as depending on B — A already exists but we do this via
         // creating a NEW task with a_id equivalent logic isn't possible;
         // instead, directly test check_no_cycle with A's id and B as dep.
-        let cycle_result = check_no_cycle(&store, &a_id, &[b_id.clone()]).await;
+        let cycle_result = check_no_cycle(&store, &a_id, std::slice::from_ref(&b_id)).await;
         assert!(
             cycle_result.is_err(),
             "B→A when A is upstream of B is a cycle"

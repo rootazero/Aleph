@@ -2,7 +2,6 @@
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos::*;
 use std::rc::Rc;
 
 use crate::api::{

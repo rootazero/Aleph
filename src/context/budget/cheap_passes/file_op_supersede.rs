@@ -25,8 +25,8 @@
 //!    `path: ` line scan is brittle on mixed JSON / text outputs).
 //!
 //! R7 alignment: the rule is *structural and deterministic* (path equality
-//! + op ordering). No similarity heuristic, no relevance scoring, no
-//! LLM-style judgement is replicated in code.
+//!   + op ordering). No similarity heuristic, no relevance scoring, no
+//!     LLM-style judgement is replicated in code.
 //!
 //! R10 alignment: lives in `src/context/budget/cheap_passes/`, alongside
 //! the other deterministic transforms ([`ToolResultPruningStage`],

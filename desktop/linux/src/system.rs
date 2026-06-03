@@ -340,7 +340,7 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _sys = LinuxSystem::default();
+        let _sys = LinuxSystem;
     }
 
     #[test]

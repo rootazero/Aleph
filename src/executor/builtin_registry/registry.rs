@@ -270,9 +270,9 @@ pub struct BuiltinToolRegistry {
     /// One-shot team instantiation from a TOML blueprint (optional — requires
     /// TeamStore + CoordTaskStore + AgentRegistry + SessionStore).
     pub(crate) team_from_template_tool: Option<crate::builtin_tools::team::TeamFromTemplateTool>,
-    /// Unified team-snapshot tool (optional — requires TeamStore + CoordTaskStore
-    /// + SqliteSnapshotStore; the snapshot store is constructed alongside
-    /// coord_task_store in the boot path so they share a connection).
+    /// Unified team-snapshot tool (optional — requires TeamStore +
+    /// CoordTaskStore + SqliteSnapshotStore; the snapshot store is constructed
+    /// alongside coord_task_store in the boot path so they share a connection).
     pub(crate) team_snapshot_tool: Option<crate::builtin_tools::team::TeamSnapshotTool>,
     /// Per-team token usage aggregation (optional — requires TeamStore +
     /// StateDatabase; both are populated alongside the other team-coord
@@ -1094,12 +1094,12 @@ impl ToolRegistry for BuiltinToolRegistry {
                     }),
                     _ => {
                         let tool = tool_name.to_string();
-                        return Box::pin(async move {
+                        Box::pin(async move {
                             Err(AlephError::tool(format!(
                                 "Agent tool '{}' is not yet wired",
                                 tool
                             )))
-                        });
+                        })
                     }
                 }
             }

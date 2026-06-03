@@ -218,10 +218,12 @@ mod tests {
     }
 
     fn kernel_with_workspace() -> WasmCapabilityKernel {
-        let mut caps = WasmCapabilities::default();
-        caps.workspace = Some(WorkspaceCapability {
-            allowed_prefixes: vec!["docs/".to_string(), "config/".to_string()],
-        });
+        let caps = WasmCapabilities {
+            workspace: Some(WorkspaceCapability {
+                allowed_prefixes: vec!["docs/".to_string(), "config/".to_string()],
+            }),
+            ..Default::default()
+        };
         WasmCapabilityKernel::new(
             "test-plugin".to_string(),
             caps,
@@ -230,10 +232,12 @@ mod tests {
     }
 
     fn kernel_with_secrets() -> WasmCapabilityKernel {
-        let mut caps = WasmCapabilities::default();
-        caps.secrets = Some(SecretsCapability {
-            allowed_patterns: vec!["slack_*".to_string()],
-        });
+        let caps = WasmCapabilities {
+            secrets: Some(SecretsCapability {
+                allowed_patterns: vec!["slack_*".to_string()],
+            }),
+            ..Default::default()
+        };
         WasmCapabilityKernel::new(
             "test-plugin".to_string(),
             caps,

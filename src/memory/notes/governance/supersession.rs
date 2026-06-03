@@ -75,7 +75,7 @@ mod tests {
     fn idempotent_when_already_synced() {
         let md = "---\ncategory: preference\ntags: []\nsuperseded_by: [preference/new]\n---\n\n- x\n\n## Superseded by [[preference/new]]\n";
         let n = KnowledgeNote::from_markdown("old", md).unwrap();
-        let again = ensure_supersession_section(&md, &n);
+        let again = ensure_supersession_section(md, &n);
         let count = again.matches("## Superseded by [[preference/new]]").count();
         assert_eq!(count, 1);
     }

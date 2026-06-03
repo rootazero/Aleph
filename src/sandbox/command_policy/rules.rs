@@ -18,20 +18,15 @@ use serde::{Deserialize, Serialize};
 /// What a matched rule asks the policy to do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum RuleAction {
     /// Refuse execution outright (subject to the global [`EnforcementMode`]).
+    #[default]
     Block,
     /// Allow execution but emit an audit log line.
     Warn,
 }
 
-impl Default for RuleAction {
-    fn default() -> Self {
-        // A custom rule with no explicit action defaults to the strongest
-        // posture — opting in to a rule signals intent to stop something.
-        RuleAction::Block
-    }
-}
 
 /// Global override applied on top of per-rule [`RuleAction`]s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]

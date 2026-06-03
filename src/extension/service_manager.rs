@@ -618,12 +618,12 @@ mod tests {
     #[test]
     fn test_start_service_plugin_not_loaded() {
         let mut manager = ServiceManager::new();
-        let mut loader = PluginLoader::new();
+        let loader = PluginLoader::new();
 
         let registration = make_test_registration("nonexistent-plugin", "worker");
 
         // Should fail because the plugin is not loaded
-        let result = manager.start_service(&registration, &mut loader);
+        let result = manager.start_service(&registration, &loader);
         assert!(result.is_ok()); // We return Ok with Failed state
 
         let info = result.unwrap();
@@ -634,12 +634,12 @@ mod tests {
     #[test]
     fn test_stop_service_not_running() {
         let mut manager = ServiceManager::new();
-        let mut loader = PluginLoader::new();
+        let loader = PluginLoader::new();
 
         let registration = make_test_registration("test-plugin", "worker");
 
         // Stopping a service that was never started should return Stopped state
-        let result = manager.stop_service(&registration, &mut loader);
+        let result = manager.stop_service(&registration, &loader);
         assert!(result.is_ok());
 
         let info = result.unwrap();
@@ -649,9 +649,9 @@ mod tests {
     #[test]
     fn test_stop_plugin_services_empty() {
         let mut manager = ServiceManager::new();
-        let mut loader = PluginLoader::new();
+        let loader = PluginLoader::new();
 
-        let results = manager.stop_plugin_services("test-plugin", &[], &mut loader);
+        let results = manager.stop_plugin_services("test-plugin", &[], &loader);
 
         assert!(results.is_empty());
     }
@@ -659,7 +659,7 @@ mod tests {
     #[test]
     fn test_stop_plugin_services_filters_by_plugin_id() {
         let mut manager = ServiceManager::new();
-        let mut loader = PluginLoader::new();
+        let loader = PluginLoader::new();
 
         // Create registrations for different plugins
         let registrations = vec![
@@ -669,7 +669,7 @@ mod tests {
         ];
 
         // Stop services for plugin-a only
-        let results = manager.stop_plugin_services("plugin-a", &registrations, &mut loader);
+        let results = manager.stop_plugin_services("plugin-a", &registrations, &loader);
 
         // Should only stop the two plugin-a services
         assert_eq!(results.len(), 2);

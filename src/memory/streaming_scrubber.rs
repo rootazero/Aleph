@@ -205,12 +205,7 @@ fn find_ascii_ci(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         return None;
     }
     let last = haystack.len() - needle.len();
-    for i in 0..=last {
-        if haystack[i..i + needle.len()].eq_ignore_ascii_case(needle) {
-            return Some(i);
-        }
-    }
-    None
+    (0..=last).find(|&i| haystack[i..i + needle.len()].eq_ignore_ascii_case(needle))
 }
 
 /// Return the length of the longest suffix of `buf` that is a strict prefix

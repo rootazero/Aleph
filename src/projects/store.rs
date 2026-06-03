@@ -195,7 +195,7 @@ impl ProjectStore {
         let value: T = with_file_lock(&lock_path, |_| {
             let file = self
                 .read_unlocked()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             Ok(f(&file))
         })?;
         Ok(value)
@@ -210,11 +210,11 @@ impl ProjectStore {
         let result: Result<T, ProjectError> = with_file_lock(&lock_path, |_| {
             let mut file = self
                 .read_unlocked()
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
             match f(&mut file) {
                 Ok(value) => {
                     self.write_unlocked(&file).map_err(|e| {
-                        std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                        std::io::Error::other(e.to_string())
                     })?;
                     Ok(Ok(value))
                 }
@@ -445,7 +445,7 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1100));
         store.touch(&project.id).unwrap();
         let after = store.get(&project.id).unwrap().unwrap();
-        assert!(after.last_used_at >= before + 1);
+        assert!(after.last_used_at > before);
     }
 
     #[test]

@@ -50,6 +50,9 @@
 //! echo '{"jsonrpc":"2.0","method":"version","id":3}' | websocat ws://127.0.0.1:18790/ws
 //! ```
 
+// DI-heavy boot/builder fns; bundling args into a struct is pure churn.
+#![allow(clippy::too_many_arguments)]
+
 mod cli;
 mod commands;
 mod daemon;

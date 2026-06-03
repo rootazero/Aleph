@@ -156,7 +156,7 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                &format!("invalid params: {e}"),
+                format!("invalid params: {e}"),
             );
         }
     };
@@ -182,14 +182,14 @@ pub async fn handle_list_dir(request: JsonRpcRequest, config: SharedConfig) -> J
             return JsonRpcResponse::error(
                 request.id,
                 NOT_FOUND,
-                &format!("not found: {}", canon.display()),
+                format!("not found: {}", canon.display()),
             );
         }
         Err(e) => {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
-                &format!("read_dir failed: {e}"),
+                format!("read_dir failed: {e}"),
             );
         }
     };
@@ -267,7 +267,7 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
             return JsonRpcResponse::error(
                 request.id,
                 INVALID_PARAMS,
-                &format!("invalid params: {e}"),
+                format!("invalid params: {e}"),
             );
         }
     };
@@ -308,11 +308,11 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
         return JsonRpcResponse::error(
             request.id,
             INVALID_PARAMS,
-            &format!("already exists: {}", target.display()),
+            format!("already exists: {}", target.display()),
         );
     }
     if let Err(e) = std::fs::create_dir_all(&target) {
-        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, &format!("mkdir failed: {e}"));
+        return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("mkdir failed: {e}"));
     }
     // canonicalise so the returned path matches list_dir's output style
     // (the new dir definitely exists now, so canonicalize won't fail).

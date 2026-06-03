@@ -248,8 +248,7 @@ mod tests {
                 agent_id: "worker".into(),
             })
             .await
-            .err()
-            .expect("must refuse non-acp member");
+            .expect_err("must refuse non-acp member");
         assert!(format!("{err:?}").contains("not ACP-backed"));
     }
 }

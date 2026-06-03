@@ -231,8 +231,8 @@ pub fn daemonize(
     unsafe { libc::umask(0o022) };
 
     // SAFETY: chdir("/") avoids holding references to mount points.
-    // The null-terminated byte string is valid C string.
-    if unsafe { libc::chdir(b"/\0".as_ptr() as *const libc::c_char) } == -1 {
+    // The C string literal is null-terminated.
+    if unsafe { libc::chdir(c"/".as_ptr()) } == -1 {
         return Err("chdir to / failed".into());
     }
 

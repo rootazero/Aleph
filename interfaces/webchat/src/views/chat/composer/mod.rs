@@ -129,7 +129,6 @@ pub(super) fn InputArea() -> impl IntoView {
     // route it through the normal send pipeline so prompt-guard +
     // idempotency + error classification apply identically.
     {
-        let send_message = send_message.clone();
         Effect::new(move |prev_pulse: Option<u32>| {
             let pulse = chat.retry_pulse.get();
             if prev_pulse.is_some() && Some(pulse) != prev_pulse {
@@ -274,8 +273,6 @@ pub(super) fn InputArea() -> impl IntoView {
     };
 
     let on_keydown = {
-        let send_message = send_message.clone();
-        let select_palette_entry = select_palette_entry.clone();
         move |ev: web_sys::KeyboardEvent| {
             if show_palette.get_untracked() {
                 let entries = palette_entries.get_untracked();
@@ -377,7 +374,7 @@ pub(super) fn InputArea() -> impl IntoView {
         }
     };
 
-    let select_for_callback = select_palette_entry.clone();
+    let select_for_callback = select_palette_entry;
     let on_palette_select: Callback<PaletteEntry> =
         Callback::new(move |entry: PaletteEntry| select_for_callback(entry));
 

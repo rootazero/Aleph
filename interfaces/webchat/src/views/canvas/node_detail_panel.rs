@@ -178,7 +178,7 @@ fn DetailFor(
             </h3>
             {move || if is_editing.get() {
                 let save = save_edit.clone();
-                let cancel = cancel_edit.clone();
+                let cancel = cancel_edit;
                 view! {
                     <div>
                         <textarea

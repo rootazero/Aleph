@@ -244,7 +244,7 @@ fn PrimitiveString(text: String) -> impl IntoView {
             "\""
             <Show when=move || is_long fallback=|| view! { <span /> }>
                 <button
-                    on:click=toggle.clone()
+                    on:click=toggle
                     class="ml-1 text-text-tertiary hover:text-text-primary text-[10px] underline"
                 >
                     {move || if expanded.get() { "less" } else { "more" }}

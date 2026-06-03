@@ -49,10 +49,12 @@ mod tests {
 
     #[tokio::test]
     async fn reflects_auth_none() {
-        let mut cfg = GatewayServerConfig::default();
-        cfg.auth = AuthConfig {
-            mode: AuthMode::None,
-            ..AuthConfig::default()
+        let cfg = GatewayServerConfig {
+            auth: AuthConfig {
+                mode: AuthMode::None,
+                ..AuthConfig::default()
+            },
+            ..GatewayServerConfig::default()
         };
         let cfg = Arc::new(cfg);
         let req = JsonRpcRequest::with_id("gateway.credentials", None, json!(1));

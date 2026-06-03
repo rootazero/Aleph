@@ -304,7 +304,7 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _m = LinuxMedia::default();
+        let _m = LinuxMedia;
     }
 
     #[test]

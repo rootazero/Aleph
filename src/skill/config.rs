@@ -129,7 +129,7 @@ mod tests {
         config.save(tmp.path()).unwrap();
 
         let loaded = SkillsConfig::load(tmp.path());
-        assert_eq!(loaded.install_preferences.prefer_brew, true);
+        assert!(loaded.install_preferences.prefer_brew);
         let entry = loaded.entries.get("test:skill").unwrap();
         assert_eq!(entry.enabled, Some(false));
     }

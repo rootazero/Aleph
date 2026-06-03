@@ -15,7 +15,6 @@ pub fn RuntimesView() -> impl IntoView {
     let error_msg = RwSignal::new(Option::<String>::None);
 
     {
-        let state = state;
         spawn_local(async move {
             match RuntimesApi::list(&state).await {
                 Ok(r) => {
@@ -29,7 +28,6 @@ pub fn RuntimesView() -> impl IntoView {
     }
 
     let refresh = {
-        let state = state;
         move |_| {
             loading.set(true);
             let state = state;
@@ -107,7 +105,6 @@ fn RuntimeCard(info: RuntimeInfo) -> impl IntoView {
     let can_install = matches!(info.status, RuntimeStatus::Missing) && info.supported_on_current_os;
 
     let install_handler = {
-        let state = state;
         let name_clone = name.clone();
         move |_| {
             installing.set(true);

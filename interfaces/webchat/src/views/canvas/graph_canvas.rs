@@ -171,7 +171,7 @@ pub fn GraphCanvas(
             return;
         };
 
-        let canvas: web_sys::HtmlCanvasElement = canvas_el.into();
+        let canvas: web_sys::HtmlCanvasElement = canvas_el;
 
         // Attach IntersectionObserver to flip `is_visible` without forcing
         // synchronous layout. `offset_width`/`getBoundingClientRect` would
@@ -182,10 +182,9 @@ pub fn GraphCanvas(
         let is_visible_obs = is_visible_for_effect.clone();
         let observer_cb: Closure<dyn FnMut(js_sys::Array)> =
             Closure::new(move |entries: js_sys::Array| {
-                if let Some(entry_val) = entries
+                if let Ok(entry_val) = entries
                     .get(0)
                     .dyn_into::<web_sys::IntersectionObserverEntry>()
-                    .ok()
                 {
                     is_visible_obs.set(entry_val.is_intersecting());
                 }

@@ -191,19 +191,12 @@ pub struct PairLoopGuard {
 }
 
 #[derive(Debug)]
+#[derive(Default)]
 struct GuardState {
     pairs: HashMap<PairKey, PairState>,
     last_prune: Option<Instant>,
 }
 
-impl Default for GuardState {
-    fn default() -> Self {
-        Self {
-            pairs: HashMap::new(),
-            last_prune: None,
-        }
-    }
-}
 
 impl PairLoopGuard {
     pub fn new() -> Self {

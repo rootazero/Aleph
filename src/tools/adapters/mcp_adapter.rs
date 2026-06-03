@@ -147,10 +147,9 @@ mod tests {
     impl McpTransportTrait for FakeTransport {
         async fn call_tool(&self, server: &str, tool: &str, args: Value) -> anyhow::Result<Value> {
             if self.should_fail {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("transport error: server={server} tool={tool}"),
-                )
+                return Err(std::io::Error::other(format!(
+                    "transport error: server={server} tool={tool}"
+                ))
                 .into());
             }
             // Echo back with metadata so tests can verify routing.

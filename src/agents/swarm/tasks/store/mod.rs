@@ -28,109 +28,6 @@ use super::{
     CoordTaskStore, CoordTaskUpdate, NewCoordTask, ReviewVerdict, ReviewerKind, TaskRunStatus,
 };
 
-#[cfg(test)]
-mod review_tests {
-    use super::SqliteCoordTaskStore;
-    use crate::agents::swarm::tasks::{
-        CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority, ReviewVerdict,
-        ReviewerKind, TaskRunStatus,
-    };
-
-    async fn make_store() -> SqliteCoordTaskStore {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        let store = SqliteCoordTaskStore::new(conn);
-        store.migrate().await.unwrap();
-        store
-    }
-
-    #[tokio::test]
-    async fn record_run_review_stamps_latest_finished_run() {
-        let store = make_store().await;
-        let task = store
-            .create_task(NewCoordTask {
-                team_id: Some("t1".into()),
-                subject: "review-me".into(),
-                description: String::new(),
-                owner: Some("worker".into()),
-                priority: Priority::Normal,
-                blocked_by: Vec::new(),
-                metadata: serde_json::json!({}),
-            })
-            .await
-            .unwrap();
-
-        let run_id = store.start_task_run(&task.id, "worker").await.unwrap();
-        store
-            .finish_task_run(&run_id, TaskRunStatus::Completed, Some("ok".into()), None)
-            .await
-            .unwrap();
-
-        store
-            .record_run_review(
-                &task.id,
-                ReviewVerdict::Approved,
-                ReviewerKind::User,
-                Some("alice"),
-            )
-            .await
-            .unwrap();
-
-        let runs = store.list_task_runs(&task.id).await.unwrap();
-        let last = runs.last().expect("at least one run");
-        assert_eq!(last.review_verdict, Some(ReviewVerdict::Approved));
-        assert_eq!(last.reviewer_kind, Some(ReviewerKind::User));
-        assert_eq!(last.reviewer_id.as_deref(), Some("alice"));
-    }
-
-    #[tokio::test]
-    async fn skipped_satisfies_dependency_at_query_time() {
-        let store = make_store().await;
-        let parent = store
-            .create_task(NewCoordTask {
-                team_id: Some("t1".into()),
-                subject: "parent".into(),
-                description: String::new(),
-                owner: Some("worker".into()),
-                priority: Priority::Normal,
-                blocked_by: Vec::new(),
-                metadata: serde_json::json!({}),
-            })
-            .await
-            .unwrap();
-        let child = store
-            .create_task(NewCoordTask {
-                team_id: Some("t1".into()),
-                subject: "child".into(),
-                description: String::new(),
-                owner: Some("worker".into()),
-                priority: Priority::Normal,
-                blocked_by: vec![parent.id.clone()],
-                metadata: serde_json::json!({}),
-            })
-            .await
-            .unwrap();
-
-        // Child sees Blocked while parent is Pending.
-        let pending_child = store.get_task(&child.id).await.unwrap().unwrap();
-        assert_eq!(pending_child.status, CoordTaskStatus::Blocked);
-
-        // Mark parent as Skipped — child should become Pending (unblocked).
-        store
-            .update_task(
-                &parent.id,
-                CoordTaskUpdate {
-                    status: Some(CoordTaskStatus::Skipped),
-                    ..Default::default()
-                },
-            )
-            .await
-            .unwrap();
-
-        let unblocked_child = store.get_task(&child.id).await.unwrap().unwrap();
-        assert_eq!(unblocked_child.status, CoordTaskStatus::Pending);
-    }
-}
-
 use helpers::{db_err, now_epoch, summarize};
 use row_decode::{load_dependencies, load_task, read_task_row};
 
@@ -1035,5 +932,108 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             out.push(r.map_err(db_err)?);
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::SqliteCoordTaskStore;
+    use crate::agents::swarm::tasks::{
+        CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority, ReviewVerdict,
+        ReviewerKind, TaskRunStatus,
+    };
+
+    async fn make_store() -> SqliteCoordTaskStore {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let store = SqliteCoordTaskStore::new(conn);
+        store.migrate().await.unwrap();
+        store
+    }
+
+    #[tokio::test]
+    async fn record_run_review_stamps_latest_finished_run() {
+        let store = make_store().await;
+        let task = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "review-me".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: Vec::new(),
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        let run_id = store.start_task_run(&task.id, "worker").await.unwrap();
+        store
+            .finish_task_run(&run_id, TaskRunStatus::Completed, Some("ok".into()), None)
+            .await
+            .unwrap();
+
+        store
+            .record_run_review(
+                &task.id,
+                ReviewVerdict::Approved,
+                ReviewerKind::User,
+                Some("alice"),
+            )
+            .await
+            .unwrap();
+
+        let runs = store.list_task_runs(&task.id).await.unwrap();
+        let last = runs.last().expect("at least one run");
+        assert_eq!(last.review_verdict, Some(ReviewVerdict::Approved));
+        assert_eq!(last.reviewer_kind, Some(ReviewerKind::User));
+        assert_eq!(last.reviewer_id.as_deref(), Some("alice"));
+    }
+
+    #[tokio::test]
+    async fn skipped_satisfies_dependency_at_query_time() {
+        let store = make_store().await;
+        let parent = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "parent".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: Vec::new(),
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        let child = store
+            .create_task(NewCoordTask {
+                team_id: Some("t1".into()),
+                subject: "child".into(),
+                description: String::new(),
+                owner: Some("worker".into()),
+                priority: Priority::Normal,
+                blocked_by: vec![parent.id.clone()],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+
+        // Child sees Blocked while parent is Pending.
+        let pending_child = store.get_task(&child.id).await.unwrap().unwrap();
+        assert_eq!(pending_child.status, CoordTaskStatus::Blocked);
+
+        // Mark parent as Skipped — child should become Pending (unblocked).
+        store
+            .update_task(
+                &parent.id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Skipped),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let unblocked_child = store.get_task(&child.id).await.unwrap().unwrap();
+        assert_eq!(unblocked_child.status, CoordTaskStatus::Pending);
     }
 }

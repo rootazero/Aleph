@@ -246,7 +246,7 @@ mod tests {
                     error_reason: None,
                     delivery_status: None,
                     agent_used_messaging_tool: false,
-                    trigger_source: snapshot.trigger_source.clone(),
+                    trigger_source: snapshot.trigger_source,
                     retry_hint: None,
                 }
             })

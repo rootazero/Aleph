@@ -296,8 +296,10 @@ mod tests {
     #[test]
     fn missing_config_key_makes_skill_ineligible() {
         let svc = EligibilityService::new();
-        let mut spec = EligibilitySpec::default();
-        spec.required_config = vec!["definitely.absent.key".to_string()];
+        let spec = EligibilitySpec {
+            required_config: vec!["definitely.absent.key".to_string()],
+            ..Default::default()
+        };
         let result = svc.evaluate_spec(&spec, &serde_json::json!({}));
         match result {
             EligibilityResult::Ineligible(reasons) => assert!(reasons
@@ -310,8 +312,10 @@ mod tests {
     #[test]
     fn present_config_key_passes() {
         let svc = EligibilityService::new();
-        let mut spec = EligibilitySpec::default();
-        spec.required_config = vec!["a.b".to_string()];
+        let spec = EligibilitySpec {
+            required_config: vec!["a.b".to_string()],
+            ..Default::default()
+        };
         let cfg = serde_json::json!({"a": {"b": 1}});
         let result = svc.evaluate_spec(&spec, &cfg);
         assert!(matches!(result, EligibilityResult::Eligible));

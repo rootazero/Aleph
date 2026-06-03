@@ -570,7 +570,7 @@ mod tests {
     #[test]
     fn should_run_false_with_single_note() {
         let stage = NoteConsolidateStage;
-        let notes = vec![make_note("reference/rust", "reference")];
+        let notes = [make_note("reference/rust", "reference")];
         // Predicate: notes.len() >= 2
         assert!(
             !notes.len() >= 2,
@@ -582,7 +582,7 @@ mod tests {
     #[test]
     fn should_run_true_with_multiple_notes() {
         let stage = NoteConsolidateStage;
-        let notes = vec![
+        let notes = [
             make_note("reference/rust", "reference"),
             make_note("reference/rust-ownership", "reference"),
         ];
@@ -613,7 +613,7 @@ mod tests {
 
     #[test]
     fn title_heuristic_finds_prefix_pair() {
-        let notes = vec![
+        let notes = [
             make_note("reference/rust-ownership", "reference"),
             make_note("reference/rust-ownership-rules", "reference"),
             make_note("reference/python-async", "reference"),

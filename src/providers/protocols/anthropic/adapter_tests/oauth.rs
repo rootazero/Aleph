@@ -48,11 +48,10 @@ fn build_request_uses_x_api_key_for_console_keys() {
     );
     // Claude Code identity headers belong only to OAuth requests
     assert!(
-        req.headers()
+        !req.headers()
             .get("user-agent")
             .map(|v| v.to_str().unwrap_or("").starts_with("claude-cli/"))
             .unwrap_or(false)
-            == false
     );
     assert!(req.headers().get("x-app").is_none());
 }

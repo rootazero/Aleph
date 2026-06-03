@@ -13,11 +13,11 @@
 //! RPCs:
 //! - `hooks.list` → `{ events: { EventName: [Group] }, path, exists }`
 //! - `hooks.add` (params: `{ event, command|prompt|agent|http, matcher?, timeout_secs? }`)
-//!     → appends one entry; returns the same shape as `hooks.list`
+//!   → appends one entry; returns the same shape as `hooks.list`
 //! - `hooks.remove` (params: `{ event, command? | index? }`)
-//!     → filters out matching entries; returns the new view
+//!   → filters out matching entries; returns the new view
 //! - `hooks.reload` → forces a full extension-manager reload from disk;
-//!     returns `{ user_hooks_count }`
+//!   returns `{ user_hooks_count }`
 //! - `hooks.events` → `{ events: [String] }` — list of valid event names
 
 use std::fs;

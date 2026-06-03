@@ -2,6 +2,9 @@
 //!
 //! Spec: docs/superpowers/specs/2026-05-21-mid-run-trajectory-resume-design.md §7.
 
+// test-only tuple return type reads clearer inline.
+#![allow(clippy::type_complexity)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

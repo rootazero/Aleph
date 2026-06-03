@@ -36,6 +36,9 @@ pub fn StatusBadge(level: AlertLevel, #[prop(optional)] count: Option<u32>) -> i
     let (bg_class, animation_class) = match level {
         AlertLevel::None => {
             return {
+                // `view! {}` expands to a unit value; the explicit unit type and
+                // `().into_any()` are intentional, so silence the macro-driven lint.
+                #[allow(clippy::unused_unit)]
                 let _: () = view! {};
                 ().into_any()
             }

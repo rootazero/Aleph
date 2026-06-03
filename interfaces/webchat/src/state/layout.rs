@@ -37,18 +37,15 @@ pub struct ToolPayload {
 /// Top-level layout mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum LayoutMode {
     /// Chat occupies the full main area (Aleph's pre-parity layout).
+    #[default]
     ChatOnly,
     /// Chat (33%) + Workspace (66%) split-pane.
     Split,
 }
 
-impl Default for LayoutMode {
-    fn default() -> Self {
-        Self::ChatOnly
-    }
-}
 
 impl LayoutMode {
     /// Token written to / read from `localStorage`.
@@ -81,19 +78,16 @@ impl LayoutMode {
 /// Variants intentionally enum-shaped (not stringy) so the panel
 /// dispatcher and `ToolRendererRegistry` can pattern-match exhaustively.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum WorkspaceContent {
     /// Default — workspace pane is open but empty (shows hero).
+    #[default]
     Empty,
     /// A specific tool call from a chat message is being inspected.
     /// Lookup happens via `ChatState.messages` for the matching tool_id.
     ToolDetail { run_id: String, tool_id: String },
 }
 
-impl Default for WorkspaceContent {
-    fn default() -> Self {
-        Self::Empty
-    }
-}
 
 /// Reactive workspace state. Provided once via context, cloned via `Copy`.
 #[derive(Clone, Copy)]

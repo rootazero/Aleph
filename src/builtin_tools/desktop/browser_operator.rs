@@ -26,6 +26,7 @@ use super::types::DesktopOutput;
 /// trivially implemented as a discriminator over which tools to recommend.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum BrowserOperatorMode {
     /// Structured DOM-first: relies on the in-process browser manager's DOM
     /// snapshot + click-by-selector tools. Fastest, most robust on pages
@@ -34,17 +35,13 @@ pub enum BrowserOperatorMode {
     /// Default — combines DOM tools with screenshot/visual grounding as a
     /// fallback for content the DOM path can't reach (canvas widgets,
     /// shadow-DOM components, video, ads).
+    #[default]
     Hybrid,
     /// Pure pixel — no DOM. Useful when driving a third-party browser via
     /// system input, or when the page actively defeats DOM automation.
     Vision,
 }
 
-impl Default for BrowserOperatorMode {
-    fn default() -> Self {
-        Self::Hybrid
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct DesktopBrowserOperatorArgs {

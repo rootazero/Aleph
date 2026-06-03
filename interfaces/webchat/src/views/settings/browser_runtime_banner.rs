@@ -19,7 +19,6 @@ pub fn RuntimeSummaryBanner() -> impl IntoView {
     let loaded = RwSignal::new(false);
 
     {
-        let state = state.clone();
         spawn_local(async move {
             if let Ok(r) = RuntimesApi::list(&state).await {
                 runtimes.set(r.runtimes);
@@ -54,7 +53,7 @@ pub fn RuntimeSummaryBanner() -> impl IntoView {
                 let names = missing.join(", ");
                 Some(view! {
                     <div class="p-3 bg-warning-subtle border border-warning/20 rounded-lg text-warning text-sm flex items-center justify-between gap-2">
-                        <span>{format!("{}{names}", t_string!(i18n, browser_banner.missing_prefix).to_string())}</span>
+                        <span>{format!("{}{names}", t_string!(i18n, browser_banner.missing_prefix))}</span>
                         <a href="/settings/runtime"
                            class="text-sm font-medium underline hover:no-underline">
                             {t!(i18n, browser_banner.configure)}

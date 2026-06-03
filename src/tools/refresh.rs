@@ -57,8 +57,7 @@ impl ToolRefreshSource for CompositeRefreshSource {
         // side effect, so short-circuiting would leave some sources stale.
         self.sources
             .iter()
-            .map(|s| s.poll_changes())
-            .fold(false, |a, b| a || b)
+            .any(|s| s.poll_changes())
     }
 
     fn fetch_tools(&self) -> Vec<Box<dyn LoopTool>> {

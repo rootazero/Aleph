@@ -162,7 +162,6 @@ pub fn to_neighborhood(
             n.position = Vec2::new(t.x as f64, t.y as f64);
         }
     }
-    let mut two_hop = two_hop;
     for n in two_hop.iter_mut() {
         if let Some(t) = target_positions.get(&n.id) {
             n.position = Vec2::new(t.x as f64, t.y as f64);

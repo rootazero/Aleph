@@ -256,7 +256,10 @@ mod tests {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
         let migration = EventSourcingMigration::new(db.clone());
         let original = make_test_fact("rt1", "Roundtrip test", true);
-        migration.migrate_facts(&[original.clone()]).await.unwrap();
+        migration
+            .migrate_facts(std::slice::from_ref(&original))
+            .await
+            .unwrap();
 
         let events = db.get_memory_events_for_fact("rt1").await.unwrap();
         let rebuilt = super::super::projector::EventProjector::fold_events_to_note(&events)
@@ -265,6 +268,6 @@ mod tests {
         assert_eq!(rebuilt.id, "rt1");
         assert_eq!(rebuilt.content, "Roundtrip test");
         assert_eq!(rebuilt.access_count, 5);
-        assert_eq!(rebuilt.is_valid, true);
+        assert!(rebuilt.is_valid);
     }
 }

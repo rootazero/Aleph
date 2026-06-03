@@ -57,7 +57,7 @@ async fn cli_secret_set_forwards_to_admin_endpoint_when_lock_held() {
     // Seed bearer token. forward_to_server will read it via
     // read_current_token_readonly and pass as Bearer auth.
     {
-        let store = SecurityStore::open(&data_dir.join("security.db")).expect("open security db");
+        let store = SecurityStore::open(data_dir.join("security.db")).expect("open security db");
         store
             .set_shared_token_with_secret("hash-1", &[1u8; 32], Some("test-bearer-token"))
             .expect("seed token");

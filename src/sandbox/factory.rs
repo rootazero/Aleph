@@ -259,7 +259,7 @@ mod tests {
             resource_governor: Default::default(),
             command_policy: Default::default(),
         };
-        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver);
         let sandbox = build_sandbox(
             &cfg,
             driver,
@@ -314,7 +314,7 @@ mod tests {
             resource_governor: Default::default(),
             command_policy: Default::default(),
         };
-        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver::default());
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeRunDriver);
         let sandbox = build_sandbox(
             &cfg,
             driver,

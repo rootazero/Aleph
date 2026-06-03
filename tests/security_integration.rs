@@ -1,3 +1,6 @@
+// short-lived sync guards held across await; reviewed non-contending.
+#![allow(clippy::await_holding_lock)]
+
 use alephcore::media::{MediaPlaceholder, MediaPlaceholderType, MediaRecord, MediaRegistry};
 use alephcore::pii::{PiiAction, PiiEngine, PlatformPiiPolicy, PrivacyConfig};
 use alephcore::secrets::injection::AsyncSecretResolver;
@@ -218,8 +221,10 @@ async fn test_platform_pii_policy_warn_mode_end_to_end() {
     let _lock = PII_MUTEX.lock().unwrap();
 
     let mut config = PrivacyConfig::default();
-    let mut policy = PlatformPiiPolicy::default();
-    policy.phone = Some(PiiAction::Warn);
+    let policy = PlatformPiiPolicy {
+        phone: Some(PiiAction::Warn),
+        ..Default::default()
+    };
     config
         .platform_policies
         .insert("discord".to_string(), policy);
@@ -260,8 +265,10 @@ async fn test_platform_excluded_provider_end_to_end() {
     let _lock = PII_MUTEX.lock().unwrap();
 
     let mut config = PrivacyConfig::default();
-    let mut policy = PlatformPiiPolicy::default();
-    policy.exclude_providers = Some(vec!["local-llm".to_string()]);
+    let policy = PlatformPiiPolicy {
+        exclude_providers: Some(vec!["local-llm".to_string()]),
+        ..Default::default()
+    };
     config
         .platform_policies
         .insert("telegram".to_string(), policy);
@@ -376,8 +383,10 @@ async fn test_audit_outbound_pii_detected() {
     let _lock = PII_MUTEX.lock().unwrap();
 
     let mut privacy_config = PrivacyConfig::default();
-    let mut policy = PlatformPiiPolicy::default();
-    policy.phone = Some(PiiAction::Warn);
+    let policy = PlatformPiiPolicy {
+        phone: Some(PiiAction::Warn),
+        ..Default::default()
+    };
     privacy_config
         .platform_policies
         .insert("discord".to_string(), policy);
@@ -388,8 +397,10 @@ async fn test_audit_outbound_pii_detected() {
         PiiEngine::init(privacy_config);
     }
 
-    let mut config = SecurityGuardConfig::default();
-    config.pii_filtering = true;
+    let config = SecurityGuardConfig {
+        pii_filtering: true,
+        ..Default::default()
+    };
     let (guard, mut rx) = RuntimeSecurityGuard::new_with_audit(config);
 
     let context = SecurityContext {

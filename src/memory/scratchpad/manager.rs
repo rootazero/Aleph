@@ -131,7 +131,7 @@ impl ScratchpadSnapshot {
     pub fn render_completion(&self) -> String {
         let mut out = String::from(COMPLETION_BANNER);
         if let Some(obj) = &self.objective {
-            out.push_str("：");
+            out.push('：');
             out.push_str(obj);
         }
         out.push_str(&format!("\n全部 {} 个步骤已完成：", self.items.len()));

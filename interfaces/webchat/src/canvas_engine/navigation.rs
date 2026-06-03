@@ -114,6 +114,7 @@ impl NavController {
     /// - `Loading` / `Idle` / `Error` → `Active(to)`, no animation (defensive: in
     ///   normal flow Effect-refold guards on `last_response.is_some()` which only
     ///   becomes true after a successful fetch, so these arms are unreachable)
+    ///
     /// True while a `retarget` tween is animating between two neighborhoods.
     /// Used by the canvas view to gate user input that would conflict with the
     /// tween (e.g. starting a node-drag while the focus is mid-flight).

@@ -157,7 +157,7 @@ pub fn ChannelConfigTemplate(
                 Err(e) => {
                     error.set(Some(format!(
                         "{}{}",
-                        t_string!(i18n, channel_config.toast_save_failed).to_string(),
+                        t_string!(i18n, channel_config.toast_save_failed),
                         e
                     )));
                 }
@@ -195,7 +195,7 @@ pub fn ChannelConfigTemplate(
                     channel_status.set(ChannelStatus::Error);
                     error.set(Some(format!(
                         "{}{}",
-                        t_string!(i18n, channel_config.toast_connect_failed).to_string(),
+                        t_string!(i18n, channel_config.toast_connect_failed),
                         e
                     )));
                 }
@@ -227,7 +227,7 @@ pub fn ChannelConfigTemplate(
                 Err(e) => {
                     error.set(Some(format!(
                         "{}{}",
-                        t_string!(i18n, channel_config.toast_disconnect_failed).to_string(),
+                        t_string!(i18n, channel_config.toast_disconnect_failed),
                         e
                     )));
                 }
@@ -255,7 +255,7 @@ pub fn ChannelConfigTemplate(
                 Err(e) => {
                     error.set(Some(format!(
                         "{}{}",
-                        t_string!(i18n, channel_config.toast_delete_failed).to_string(),
+                        t_string!(i18n, channel_config.toast_delete_failed),
                         e
                     )));
                     deleting.set(false);
@@ -703,7 +703,7 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                 Err(e) => {
                     pairing_error.set(Some(format!(
                         "{}{}",
-                        t_string!(i18n, channel_config.pairing_approve_failed).to_string(),
+                        t_string!(i18n, channel_config.pairing_approve_failed),
                         e
                     )));
                 }

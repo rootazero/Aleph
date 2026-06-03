@@ -19,7 +19,7 @@ async fn test_line_send_text_message() {
     let server = MockServer::start().await;
     LineApiMock::push_message(&server).await;
 
-    let mut channel = LineChannel::for_test("test-line", test_line_config(), &server.uri());
+    let mut channel = LineChannel::for_test("test-line", test_line_config(), server.uri());
     channel.start().await.unwrap();
 
     let result = channel
@@ -42,7 +42,7 @@ async fn test_line_delete_message() {
     LineApiMock::push_message(&server).await;
     LineApiMock::delete_message(&server).await;
 
-    let mut channel = LineChannel::for_test("test-line", test_line_config(), &server.uri());
+    let mut channel = LineChannel::for_test("test-line", test_line_config(), server.uri());
     channel.start().await.unwrap();
 
     let result = channel

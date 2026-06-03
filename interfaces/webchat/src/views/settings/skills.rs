@@ -170,7 +170,6 @@ pub fn SkillsView() -> impl IntoView {
     });
 
     let on_toggle = {
-        let state = state;
         Callback::new(move |(id, enabled): (String, bool)| {
             let state = state;
             spawn_local(async move {

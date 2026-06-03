@@ -667,7 +667,7 @@ fn RadialCanvasView() -> impl IntoView {
                     }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                { () }
+                {  }
             }
         </div>
     }

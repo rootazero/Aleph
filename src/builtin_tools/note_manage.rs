@@ -263,9 +263,9 @@ impl NoteManageTool {
     /// run, the base id is composed with the project namespace so notes are
     /// isolated per project directory (the existing `note/{agent_id}/…` layout
     /// + `(agent_id, …)` table keys do the partitioning, no schema change).
-    /// Outside a project — or with the feature off — the base id is returned
-    /// unchanged. This is the only path callers should use when they need an
-    /// agent-scoped operation.
+    ///   Outside a project — or with the feature off — the base id is returned
+    ///   unchanged. This is the only path callers should use when they need an
+    ///   agent-scoped operation.
     fn resolve_agent_id(&self, args: &NoteManageArgs) -> String {
         let base = args.agent_id.as_deref().unwrap_or_else(|| self.agent_id());
         crate::memory::project_scope::scoped_or_base(

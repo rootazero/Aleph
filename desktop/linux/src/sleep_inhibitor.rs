@@ -68,6 +68,6 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _power = LinuxPower::default();
+        let _power = LinuxPower;
     }
 }

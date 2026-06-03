@@ -53,6 +53,10 @@ impl<T> PrefetchCache<T> {
         self.entries.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Drop the cache entry for `id`, if present. Used by the event-driven
     /// invalidation path (memory.note.changed / NoteDeleted) so the next
     /// navigation refetches instead of serving a stale neighborhood.
@@ -79,6 +83,12 @@ impl<T> Default for PrefetchCache<T> {
 pub struct HoverDebouncer {
     current_id: Option<String>,
     started_at_ms: f64,
+}
+
+impl Default for HoverDebouncer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl HoverDebouncer {
@@ -140,6 +150,10 @@ impl InFlightSet {
 
     pub fn len(&self) -> usize {
         self.ids.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn contains(&self, id: &str) -> bool {

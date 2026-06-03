@@ -417,7 +417,7 @@ mod tests {
         // Construct a synthetic outcome with many tools to overflow the cap.
         let mut outcome = outcome_with_tools();
         let inv = outcome.tool_timeline[0].clone();
-        outcome.tool_timeline = std::iter::repeat(inv).take(400).collect();
+        outcome.tool_timeline = std::iter::repeat_n(inv, 400).collect();
         let s = outcome.render(SummaryStyle::Telegram);
         assert!(
             s.len() <= TELEGRAM_HARD_LIMIT,

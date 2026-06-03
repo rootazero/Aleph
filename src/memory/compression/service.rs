@@ -863,7 +863,7 @@ mod tests {
 
         // Mark raw3 as processed
         backend
-            .mark_raw_as_processed(&[raw3.id.clone()])
+            .mark_raw_as_processed(std::slice::from_ref(&raw3.id))
             .await
             .unwrap();
 

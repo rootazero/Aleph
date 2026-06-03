@@ -550,8 +550,8 @@ mod reference_hook_tests {
             .append_to_note(
                 "default",
                 "learning/rust-async",
-                &vec!["new fact".into()],
-                &vec![],
+                &["new fact".into()],
+                &[],
             )
             .await
             .unwrap();
@@ -622,7 +622,7 @@ mod reference_hook_tests {
         let after = read_confidence(dir.path(), "default", "skill/topic").await;
         // 0.4 + 5 * 0.05 = 0.65 — within float tolerance.
         assert!(
-            after >= 0.6499 && after <= 0.6501,
+            (0.6499..=0.6501).contains(&after),
             "expected confidence ~0.65, got {after}"
         );
     }

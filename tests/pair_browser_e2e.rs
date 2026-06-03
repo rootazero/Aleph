@@ -30,7 +30,7 @@ use tempfile::tempdir;
 /// `src/bin/aleph-server/commands/start/builder/subsystems.rs`.
 fn setup() -> (Arc<AuthContext>, Arc<AuthState>) {
     let dir = tempdir().expect("tempdir");
-    let store = Arc::new(SecurityStore::open(&dir.path().join("sec.db")).expect("open store"));
+    let store = Arc::new(SecurityStore::open(dir.path().join("sec.db")).expect("open store"));
 
     let shared_token_mgr = Arc::new(SharedTokenManager::new(
         store.clone(),

@@ -87,7 +87,7 @@ mod tests {
     #[test]
     fn scrub_redacts_sk_proj_in_utf8() {
         let mut input = b"key=sk-proj-".to_vec();
-        input.extend(std::iter::repeat(b'A').take(40));
+        input.extend(std::iter::repeat_n(b'A', 40));
         let out = scrub_secrets_bytes(&input, &[]);
         let s = String::from_utf8_lossy(out.bytes.as_ref());
         assert!(s.contains("[REDACTED:sk_proj]"), "got `{s}`");
@@ -98,7 +98,7 @@ mod tests {
     fn scrub_finds_sk_around_nonutf8_bytes() {
         let mut input = b"prefix:".to_vec();
         input.extend_from_slice(b"sk-proj-");
-        input.extend(std::iter::repeat(b'B').take(40));
+        input.extend(std::iter::repeat_n(b'B', 40));
         input.push(0xFF);
         input.extend_from_slice(b":suffix");
         let out = scrub_secrets_bytes(&input, &[]);

@@ -509,7 +509,7 @@ async fn test_request_processor_dispatch() {
     let resp = processor.process(request, auth.clone()).await;
     assert!(resp.error.is_none());
     let tasks = &resp.result.unwrap()["tasks"];
-    assert!(tasks.as_array().unwrap().len() >= 1);
+    assert!(!tasks.as_array().unwrap().is_empty());
 
     // Test unknown method
     let request = JsonRpcRequest {

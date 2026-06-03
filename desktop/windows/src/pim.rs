@@ -483,6 +483,6 @@ mod tests {
 
     #[test]
     fn create_default() {
-        let _pim = WindowsPim::default();
+        let _pim = WindowsPim;
     }
 }
