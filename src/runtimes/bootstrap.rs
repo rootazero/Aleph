@@ -87,6 +87,14 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
     // re-probe `which` lookup succeeds without forcing a daemon restart.
     enrich_path_for_reprobe();
 
+    // `Via`-parent runtimes (node via fnm, playwright-cli via node→fnm) land in
+    // a version-manager-controlled bin dir that is never on the daemon's PATH.
+    // Resolve and prepend it so the re-probe `which`/`where` lookup below finds
+    // the binary and records its absolute path (which then feeds build_path()).
+    if let InstallStrategy::Via { parent, .. } = &os_install.strategy {
+        enrich_path_for_via_parent(parent).await;
+    }
+
     // 2. Re-probe to get binary path + version.
     let probe_result = probe::probe(name);
     if !probe_result.found {
@@ -197,6 +205,13 @@ fn enrich_path_for_reprobe() {
         candidates.push(PathBuf::from(r"C:\Program Files\Git\cmd"));
     }
 
+    prepend_existing_dirs(candidates);
+}
+
+/// Prepend the given directories to the process PATH, skipping any that don't
+/// exist or are already present. Idempotent. Shared by `enrich_path_for_reprobe`
+/// and `enrich_path_for_via_parent`.
+fn prepend_existing_dirs(candidates: Vec<PathBuf>) {
     let current = std::env::var_os("PATH").unwrap_or_default();
     let mut existing: std::collections::HashSet<PathBuf> =
         std::env::split_paths(&current).collect();
@@ -212,6 +227,56 @@ fn enrich_path_for_reprobe() {
     prepended.extend(std::env::split_paths(&current));
     if let Ok(joined) = std::env::join_paths(&prepended) {
         std::env::set_var("PATH", joined);
+    }
+}
+
+/// Resolve and prepend the version-manager-controlled bin directory for a
+/// `Via`-parent install. fnm keeps node — and every npm-global CLI installed
+/// through it, such as `playwright-cli` — under a versioned install directory
+/// (`<fnm-dir>/node-versions/<v>/installation/bin` on Unix) that is never on
+/// the daemon's PATH. Both `node` (parent `fnm`) and `playwright-cli`
+/// (parent `node`) resolve to that same fnm-managed lts bin dir.
+async fn enrich_path_for_via_parent(parent: &str) {
+    let bin_dir = match parent {
+        "fnm" | "node" => fnm_lts_bin_dir().await,
+        // uv/cargo Via-parents install onto PATH-visible dirs already covered
+        // by enrich_path_for_reprobe; nothing extra to resolve.
+        _ => None,
+    };
+    if let Some(dir) = bin_dir {
+        prepend_existing_dirs(vec![dir]);
+    }
+}
+
+/// Absolute path of the fnm-managed LTS node install's bin directory, or `None`
+/// if fnm/node can't be invoked. Asks node for its own executable path
+/// (`process.execPath`) and returns the containing directory — correct on every
+/// platform regardless of the fnm install layout.
+async fn fnm_lts_bin_dir() -> Option<PathBuf> {
+    let result = timeout(
+        Duration::from_secs(30),
+        Command::new("fnm")
+            .args([
+                "exec",
+                "--using",
+                "lts",
+                "--",
+                "node",
+                "-e",
+                "process.stdout.write(require('path').dirname(process.execPath))",
+            ])
+            .output(),
+    )
+    .await;
+    let output = match result {
+        Ok(Ok(o)) if o.status.success() => o,
+        _ => return None,
+    };
+    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if path.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(path))
     }
 }
 
@@ -261,6 +326,25 @@ mod tests {
     async fn test_install_unknown_capability() {
         let result = install("totally-unknown-capability").await.unwrap();
         assert!(matches!(result, BootstrapResult::UnknownCapability { .. }));
+    }
+
+    #[test]
+    fn test_prepend_existing_dirs_skips_missing() {
+        // A non-existent dir must be skipped — PATH unchanged.
+        let before = std::env::var_os("PATH").unwrap_or_default();
+        prepend_existing_dirs(vec![PathBuf::from("/definitely/not/a/real/dir/xyz123")]);
+        let after = std::env::var_os("PATH").unwrap_or_default();
+        assert_eq!(before, after, "missing dirs must not alter PATH");
+    }
+
+    #[tokio::test]
+    async fn test_enrich_path_for_via_parent_unknown_is_noop() {
+        // Unknown parents short-circuit before invoking any external command,
+        // so this is deterministic regardless of whether fnm is installed.
+        let before = std::env::var_os("PATH").unwrap_or_default();
+        enrich_path_for_via_parent("totally-unknown-parent").await;
+        let after = std::env::var_os("PATH").unwrap_or_default();
+        assert_eq!(before, after, "unknown Via parent must not touch PATH");
     }
 
     #[tokio::test]
