@@ -115,13 +115,20 @@ impl StateDatabase {
             // leaving schema_info and the vec0 table disagreeing on the
             // dimension and breaking every later embedding insert. Dropping
             // both lets create_schema rebuild memories_vec at the new
-            // dimension, mirroring new_with_dim().
-            conn.execute_batch("DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec;")
-                .map_err(|e| AlephError::config(format!("Failed to drop old table: {}", e)))?;
+            // dimension, mirroring new_with_dim(). `memories_fts` is an
+            // external-content FTS5 index over `memories`; dropping `memories`
+            // does not drop it, so without an explicit drop it would retain
+            // stale rows pointing at rowids that no longer exist (phantom
+            // search hits). create_schema recreates it empty alongside the
+            // memories table and its sync triggers.
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec; DROP TABLE IF EXISTS memories_fts;",
+            )
+            .map_err(|e| AlephError::config(format!("Failed to drop old table: {}", e)))?;
 
             tracing::info!(
                 new_dim = DEFAULT_EMBEDDING_DIM,
-                "Cleared memories + memories_vec tables for embedding dimension migration"
+                "Cleared memories + memories_vec + memories_fts tables for embedding dimension migration"
             );
         }
 
@@ -197,12 +204,24 @@ impl StateDatabase {
         let dim_changed = Self::check_dimension_change(&conn, embedding_dim)?;
 
         if dim_changed {
-            conn.execute_batch("DROP TABLE IF EXISTS memories_vec;")
-                .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {}", e)))?;
+            // Drop `memories` alongside `memories_vec` (and the derived FTS
+            // index), mirroring `new()`. Dropping only `memories_vec` would
+            // leave stale, old-dimension embedding BLOBs in `memories`; nothing
+            // re-indexes them here (migrate_to_vec0 is skipped below on a
+            // dimension change), and on the *next* restart — where the stored
+            // dimension matches and `dim_changed` is false — migrate_to_vec0
+            // would copy those old-dimension blobs into the new-dimension
+            // `memories_vec`, hitting a vec0 dimension-mismatch and failing
+            // startup. Clearing the rows keeps the dimension migration safe
+            // across restarts.
+            conn.execute_batch(
+                "DROP TABLE IF EXISTS memories; DROP TABLE IF EXISTS memories_vec; DROP TABLE IF EXISTS memories_fts;",
+            )
+            .map_err(|e| AlephError::config(format!("Failed to drop vec0 tables: {}", e)))?;
 
             tracing::info!(
                 new_dim = embedding_dim,
-                "Dropped vec0 tables for dimension change. Embeddings will be re-indexed."
+                "Cleared memories + memories_vec + memories_fts for dimension change. Embeddings will be re-indexed."
             );
         }
 

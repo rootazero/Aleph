@@ -205,12 +205,41 @@ pub fn migrate_task_traces_to_agent_trace(conn: &Connection) -> Result<(), Aleph
         AlephError::config(format!("Failed to recreate task_traces table: {}", e))
     })?;
 
+    // Legacy DBs predate strict FK enforcement; a trace whose parent
+    // `agent_tasks` row was later removed would violate the new table's
+    // FOREIGN KEY on insert and abort the whole migration (and thus startup,
+    // since `new()` propagates the error). Such orphans are useless for replay
+    // anyway. Count them for visibility, then skip them via the SELECT filter
+    // below so the migration is robust on real-world databases.
+    let orphan_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM task_traces_legacy \
+             WHERE task_id NOT IN (SELECT id FROM agent_tasks)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| {
+            if let Err(rollback_err) =
+                conn.execute_batch("ROLLBACK TO migration_task_traces_agent_trace")
+            {
+                tracing::warn!(error = %rollback_err, "Rollback of migration_task_traces_agent_trace failed");
+            }
+            AlephError::config(format!("Failed to count orphaned legacy traces: {}", e))
+        })?;
+    if orphan_count > 0 {
+        tracing::warn!(
+            orphan_count,
+            "Skipping orphaned task_traces rows with no surviving agent_tasks parent during migration"
+        );
+    }
+
     {
         let mut select = conn
             .prepare(
                 r#"
                 SELECT id, task_id, step_index, role, content_json, timestamp
                 FROM task_traces_legacy
+                WHERE task_id IN (SELECT id FROM agent_tasks)
                 ORDER BY id ASC
                 "#,
             )

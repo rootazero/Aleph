@@ -234,3 +234,49 @@ fn test_new_with_dim_default() {
         .unwrap();
     assert_eq!(dim, "1024");
 }
+
+/// Regression: a dimension change via `new_with_dim` must leave the database
+/// in a state that reopens cleanly on the *next* restart. Previously only
+/// `memories_vec` was dropped on a dimension change, leaving stale
+/// old-dimension embedding BLOBs in `memories`; the following restart (same
+/// dimension, so `dim_changed == false`) ran `migrate_to_vec0`, which copied
+/// those old blobs into the new-dimension `memories_vec` and failed to open.
+#[test]
+fn test_new_with_dim_change_survives_restart() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("dimchange.db");
+
+    // First boot at 384, seed one memory row with a 384-dim embedding.
+    {
+        let db = StateDatabase::new_with_dim(db_path.clone(), 384).unwrap();
+        let conn = db.conn.lock().unwrap();
+        let embedding = StateDatabase::serialize_embedding(&vec![0.1f32; 384]);
+        conn.execute(
+            "INSERT INTO memories (id, window_title, user_input, ai_output, embedding, timestamp, session_id) \
+             VALUES ('m1', 'w', 'u', 'a', ?1, 0, 's')",
+            rusqlite::params![embedding],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO memories_vec (rowid, embedding) SELECT rowid, embedding FROM memories",
+            [],
+        )
+        .unwrap();
+    }
+
+    // Second boot switches the dimension to 1024 (dim_changed == true).
+    StateDatabase::new_with_dim(db_path.clone(), 1024).unwrap();
+
+    // Third boot at the same 1024 dimension (dim_changed == false) runs
+    // migrate_to_vec0 — this must NOT fail on stale 384-dim blobs.
+    let db = StateDatabase::new_with_dim(db_path, 1024).unwrap();
+    let conn = db.conn.lock().unwrap();
+    let dim: String = conn
+        .query_row(
+            "SELECT value FROM schema_info WHERE key = 'embedding_dimension'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(dim, "1024");
+}
