@@ -10,9 +10,36 @@ use crate::runtimes::ledger::{
 };
 use crate::runtimes::probe;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
+
+/// Process-global per-capability install lock.
+///
+/// Serializes the probe→bootstrap section of `ensure_capability` for a single
+/// capability name. Without this, two concurrent callers (e.g. two
+/// `runtimes.install` RPCs — each spawns its own task — or a CLI run racing a
+/// Panel click) both observe `Missing` and run the installer twice, racing on
+/// shared install prefixes (`~/.cargo`, `~/.aleph/.venv`, npm `-g`). The
+/// status-based guard in the ledger cannot prevent this on its own because the
+/// ledger lock is intentionally released across the long `bootstrap::install`
+/// await, and `update_status` is a no-op for a not-yet-inserted capability.
+///
+/// The map is keyed by capability name and never reclaimed — the spec set is a
+/// small fixed list, so it is effectively bounded.
+fn capability_lock(capability: &str) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<
+        crate::sync_primitives::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    > = OnceLock::new();
+    let map = LOCKS.get_or_init(|| crate::sync_primitives::Mutex::new(HashMap::new()));
+    let mut guard = map.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .entry(capability.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -68,6 +95,13 @@ async fn ensure_capability_recursive(
             }
         }
     }
+
+    // Serialize the probe→bootstrap section per capability. Acquired AFTER the
+    // already-Ready fast path above so the common case stays lock-free; held
+    // across the whole install so a sibling caller waits here and then exits via
+    // the re-check below instead of launching a duplicate installer.
+    let cap_lock = capability_lock(capability);
+    let _install_guard = cap_lock.lock().await;
 
     // Probe phase
     info!("Probing for capability: {}", capability);
@@ -283,6 +317,24 @@ mod tests {
         let result = ensure_capability("test-shell", &ledger).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), bin);
+    }
+
+    #[test]
+    fn test_capability_lock_is_per_name_and_stable() {
+        // Same capability name must hand back the *same* lock instance — that
+        // shared instance is what serializes concurrent installers. Different
+        // names must get distinct locks so unrelated installs run in parallel.
+        let a1 = capability_lock("alpha");
+        let a2 = capability_lock("alpha");
+        let b = capability_lock("beta");
+        assert!(
+            Arc::ptr_eq(&a1, &a2),
+            "same capability must reuse one lock"
+        );
+        assert!(
+            !Arc::ptr_eq(&a1, &b),
+            "distinct capabilities must not share a lock"
+        );
     }
 
     #[tokio::test]
