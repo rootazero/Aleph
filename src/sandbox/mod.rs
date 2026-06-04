@@ -52,7 +52,7 @@ pub use resource_governor::{
     AdmissionDecision, GovernorThresholds, LoadProbe, LoadSample, ResourceGovernor,
 };
 pub use scrub::{scrub_secrets_bytes, ScrubResult};
-pub use summary::{NetworkState, SandboxSummary};
+pub use summary::{NetworkState, PolicyTier, SandboxSummary};
 pub use worktree::{WorktreeError, WorktreeHandle, WorktreeSandbox};
 
 #[async_trait]

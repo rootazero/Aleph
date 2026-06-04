@@ -168,7 +168,7 @@ impl Sandbox for WorkspaceSandbox {
         // logs/telemetry, making correlation easy.
         Some(crate::sandbox::summary::SandboxSummary {
             backend: self.os_driver.platform(),
-            policy_tier: "workspace-write",
+            policy_tier: crate::sandbox::summary::PolicyTier::WorkspaceWrite.as_str(),
             writable_roots: vec![self.workspace_root.clone()],
             // Default operational posture allows network; per-call
             // capability checks may tighten this. The summary reflects the

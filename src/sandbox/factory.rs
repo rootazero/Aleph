@@ -121,7 +121,7 @@ impl Sandbox for NoopSandbox {
         // active when it is not. Mirrors codex's `permission_profile_sandbox_tag = "none"`.
         Some(crate::sandbox::summary::SandboxSummary {
             backend: "none/disabled",
-            policy_tier: "danger-full-access",
+            policy_tier: crate::sandbox::summary::PolicyTier::DangerFullAccess.as_str(),
             writable_roots: Vec::new(),
             network: crate::sandbox::summary::NetworkState::AllowAll,
             max_memory_mb: None,
