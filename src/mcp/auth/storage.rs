@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use tokio::fs;
@@ -164,6 +165,12 @@ struct StorageFile {
 pub struct OAuthStorage {
     file_path: PathBuf,
     cache: RwLock<Option<StorageFile>>,
+    /// Modified-time of `file_path` when `cache` was last populated. Lets a
+    /// long-running process notice tokens refreshed on disk by *another*
+    /// process (a cron job, the `aleph` CLI, the desktop app) instead of
+    /// serving a stale in-memory copy until restart. Mirrors Claude Code's
+    /// `invalidateOAuthCacheIfDiskChanged`.
+    cached_mtime: RwLock<Option<SystemTime>>,
 }
 
 impl OAuthStorage {
@@ -172,7 +179,18 @@ impl OAuthStorage {
         Self {
             file_path,
             cache: RwLock::new(None),
+            cached_mtime: RwLock::new(None),
         }
+    }
+
+    /// Current modified-time of the storage file, or `None` if it cannot be
+    /// stat'd (missing, permission error). `None` is treated as "do not
+    /// invalidate" so a transient stat failure never thrashes the cache.
+    async fn file_mtime(&self) -> Option<SystemTime> {
+        fs::metadata(&self.file_path)
+            .await
+            .ok()
+            .and_then(|m| m.modified().ok())
     }
 
     /// Get the default storage location
@@ -191,11 +209,18 @@ impl OAuthStorage {
 
     /// Load storage file
     async fn load(&self) -> Result<StorageFile> {
-        // Check cache first
+        // Check cache first — but only trust it if the file on disk has not
+        // been rewritten by another process since we cached it. If the stat
+        // fails (disk_mtime is None) we keep the cache rather than thrash.
         {
             let cache = self.cache.read().await;
             if let Some(ref storage) = *cache {
-                return Ok(storage.clone());
+                let disk_mtime = self.file_mtime().await;
+                let cached_mtime = *self.cached_mtime.read().await;
+                if disk_mtime.is_none() || disk_mtime == cached_mtime {
+                    return Ok(storage.clone());
+                }
+                tracing::debug!("OAuth storage changed on disk; reloading cached credentials");
             }
         }
 
@@ -216,10 +241,13 @@ impl OAuthStorage {
         let storage: StorageFile = serde_json::from_str(&content)
             .map_err(|e| AlephError::IoError(format!("Failed to parse OAuth storage: {}", e)))?;
 
-        // Update cache
+        // Update cache, recording the mtime so the next load can detect an
+        // out-of-process rewrite.
+        let disk_mtime = self.file_mtime().await;
         {
             let mut cache = self.cache.write().await;
             *cache = Some(storage.clone());
+            *self.cached_mtime.write().await = disk_mtime;
         }
 
         Ok(storage)
@@ -254,6 +282,11 @@ impl OAuthStorage {
                 );
             }
         }
+
+        // Record the mtime of the file we just wrote so the disk-watch in
+        // `load()` does not mistake our own write for an out-of-process change.
+        // Covers every writer (save_tokens/client_info/entry, remove) at once.
+        *self.cached_mtime.write().await = self.file_mtime().await;
 
         Ok(())
     }
@@ -396,6 +429,65 @@ mod tests {
         let loaded = storage.get_tokens("test-server").await.unwrap();
         assert!(loaded.is_some());
         assert_eq!(loaded.unwrap().access_token, "test_token");
+    }
+
+    #[tokio::test]
+    async fn external_overwrite_is_picked_up() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("mcp-auth.json");
+
+        let storage = OAuthStorage::new(path.clone());
+        let v1 = OAuthTokens {
+            access_token: "v1".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scope: None,
+        };
+        storage.save_tokens("srv", &v1).await.unwrap();
+        assert_eq!(
+            storage.get_tokens("srv").await.unwrap().unwrap().access_token,
+            "v1"
+        );
+
+        // Ensure the next write lands with a strictly newer mtime.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        // Another process rewrites the same file with fresh tokens.
+        let other = OAuthStorage::new(path.clone());
+        let v2 = OAuthTokens {
+            access_token: "v2".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scope: None,
+        };
+        other.save_tokens("srv", &v2).await.unwrap();
+
+        // The original handle must observe the on-disk change, not serve "v1".
+        assert_eq!(
+            storage.get_tokens("srv").await.unwrap().unwrap().access_token,
+            "v2"
+        );
+    }
+
+    #[tokio::test]
+    async fn cache_is_served_when_disk_unchanged() {
+        let dir = tempdir().unwrap();
+        let storage = OAuthStorage::new(dir.path().join("mcp-auth.json"));
+        let tokens = OAuthTokens {
+            access_token: "stable".to_string(),
+            refresh_token: None,
+            expires_at: None,
+            scope: None,
+        };
+        storage.save_tokens("s", &tokens).await.unwrap();
+
+        // Repeated reads with no external writer keep returning the cached value.
+        for _ in 0..3 {
+            assert_eq!(
+                storage.get_tokens("s").await.unwrap().unwrap().access_token,
+                "stable"
+            );
+        }
     }
 
     #[tokio::test]
