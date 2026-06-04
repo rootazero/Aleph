@@ -176,30 +176,132 @@ fn scan_meta_field(src: &str, field: &str) -> Option<String> {
 /// place the literal immediately after optional whitespace, so this is the
 /// correct shape, not just a safer one.
 fn read_first_string_literal(s: &str) -> Option<String> {
-    let mut chars = s.chars();
-    let quote = loop {
-        match chars.next()? {
-            c @ ('\'' | '"') => break c,
-            c if c.is_whitespace() => continue,
-            // First non-whitespace token is not a string literal — give up
-            // rather than over-reaching to a later, unrelated literal.
-            _ => return None,
-        }
-    };
+    let chars: Vec<char> = s.chars().collect();
+    let i = first_non_ws(&chars, 0);
+    match chars.get(i).copied() {
+        Some('\'') | Some('"') => read_literal_at(&chars, i).map(|(lit, _)| lit),
+        // First non-whitespace token is not a string literal — give up rather
+        // than over-reaching to a later, unrelated literal.
+        _ => None,
+    }
+}
+
+/// Index of the first non-whitespace char at or after `start` (clamped to len).
+fn first_non_ws(chars: &[char], start: usize) -> usize {
+    let mut i = start;
+    while i < chars.len() && chars[i].is_whitespace() {
+        i += 1;
+    }
+    i
+}
+
+/// Read the quoted string literal beginning at `chars[start]` (which must be a
+/// quote). Returns the decoded content and the index just past the closing
+/// quote. Standard JS escapes are interpreted (`\n`/`\t`/`\r`/`\0` → the control
+/// char; `\"`/`\'`/`\\`/`\/` and any other escape → the char verbatim) so a
+/// `.join("\n")` separator decodes to a real newline — the round-trip inverse of
+/// `export`'s `js_str`. UTF-8 safe (operates on `char`s).
+fn read_literal_at(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let quote = *chars.get(start)?;
+    let mut i = start + 1;
     let mut out = String::new();
-    while let Some(c) = chars.next() {
+    while i < chars.len() {
+        let c = chars[i];
         if c == '\\' {
-            if let Some(esc) = chars.next() {
-                out.push(esc);
-            }
+            let esc = *chars.get(i + 1)?;
+            out.push(match esc {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                '0' => '\0',
+                other => other,
+            });
+            i += 2;
             continue;
         }
         if c == quote {
-            return Some(out);
+            return Some((out, i + 1));
         }
         out.push(c);
+        i += 1;
     }
     None
+}
+
+/// Read the prompt argument of an `agent(` call from `s` (the source *after* the
+/// open paren). Handles the two declarative prompt shapes of the engineering
+/// format:
+///   * `agent("prompt", …)`              → the single string literal;
+///   * `agent([ "a", "b" ].join("\n"), …)` → the array elements joined by the
+///     `.join` separator (the format's signature multi-line idiom).
+///
+/// Returns `None` for a non-literal argument (`agent(promptVar)`, a `.map(...)`
+/// expression, or an array with a non-literal element) — those are dynamic and
+/// intentionally not statically importable (R7/R10); they surface elsewhere as
+/// `dropped` constructs rather than being half-captured.
+fn read_agent_prompt(s: &str) -> Option<String> {
+    let chars: Vec<char> = s.chars().collect();
+    let i = first_non_ws(&chars, 0);
+    match *chars.get(i)? {
+        '\'' | '"' => read_literal_at(&chars, i).map(|(lit, _)| lit),
+        '[' => read_joined_array(&chars, i),
+        _ => None,
+    }
+}
+
+/// Parse `[ "a", "b", … ].join("sep")` starting at `chars[start] == '['`.
+/// Every element must be a plain string literal; a non-literal element or an
+/// element-level concatenation (`'a' + x`) makes the joined value not statically
+/// known, so the whole read abstains (returns `None`). The separator defaults to
+/// `"\n"` (the format's convention) when no explicit `.join(...)` follows.
+fn read_joined_array(chars: &[char], start: usize) -> Option<String> {
+    let n = chars.len();
+    let mut i = start + 1; // past '['
+    let mut parts: Vec<String> = Vec::new();
+    loop {
+        while i < n && (chars[i].is_whitespace() || chars[i] == ',') {
+            i += 1;
+        }
+        match *chars.get(i)? {
+            ']' => {
+                i += 1;
+                break;
+            }
+            '\'' | '"' => {
+                let (lit, next) = read_literal_at(chars, i)?;
+                // `'a' + x` concatenation → joined string not statically known.
+                if chars.get(first_non_ws(chars, next)) == Some(&'+') {
+                    return None;
+                }
+                parts.push(lit);
+                i = next;
+            }
+            // Identifier / expression element → dynamic array, abstain.
+            _ => return None,
+        }
+    }
+    let sep = parse_join_separator(chars, i).unwrap_or_else(|| "\n".to_string());
+    Some(parts.join(&sep))
+}
+
+/// After a `]`, read an optional `.join("sep")` and return the separator
+/// literal. `None` if no well-formed `.join(<string literal>)` follows.
+fn parse_join_separator(chars: &[char], start: usize) -> Option<String> {
+    let i = first_non_ws(chars, start);
+    // Match the `.join` identifier exactly.
+    let dotjoin = ['.', 'j', 'o', 'i', 'n'];
+    if (0..dotjoin.len()).any(|k| chars.get(i + k) != Some(&dotjoin[k])) {
+        return None;
+    }
+    let i = first_non_ws(chars, i + dotjoin.len());
+    if chars.get(i) != Some(&'(') {
+        return None;
+    }
+    let i = first_non_ws(chars, i + 1);
+    match *chars.get(i)? {
+        '\'' | '"' => read_literal_at(chars, i).map(|(lit, _)| lit),
+        _ => None,
+    }
 }
 
 /// Blank out the contents of every string literal (`'`, `"`, `` ` ``) so a
@@ -288,12 +390,20 @@ fn scan_events(src: &str) -> Vec<ScanEvent> {
                 }
                 if j < n && chars[j] == '(' {
                     let after: String = chars[j + 1..].iter().collect();
-                    if let Some(lit) = read_first_string_literal(&after) {
-                        match ident.as_str() {
-                            "phase" => events.push(ScanEvent::Phase(lit)),
-                            "agent" => events.push(ScanEvent::Agent(lit)),
-                            _ => {}
+                    match ident.as_str() {
+                        // A phase title is always a plain literal.
+                        "phase" => {
+                            if let Some(lit) = read_first_string_literal(&after) {
+                                events.push(ScanEvent::Phase(lit));
+                            }
                         }
+                        // An agent prompt may be a literal or a `[...].join()` array.
+                        "agent" => {
+                            if let Some(prompt) = read_agent_prompt(&after) {
+                                events.push(ScanEvent::Agent(prompt));
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -580,5 +690,88 @@ await agent('fix more')
             second.manifest, first.manifest,
             "phase plan survives export round-trip"
         );
+    }
+
+    #[test]
+    fn bare_js_imports_join_array_prompt() {
+        // The engineering format's signature multi-line idiom: a
+        // `[ 'a', 'b' ].join('\n')` prompt array must import as the joined
+        // string (the separator literal decodes to a real newline).
+        let src = "export const meta = { name: 'arr' }\n\
+                   await agent([ 'first line', 'second line' ].join('\\n'))";
+        let outcome = parse_workflow_js(src).expect("scan array prompt");
+        assert_eq!(outcome.manifest.steps.len(), 1);
+        assert_eq!(
+            outcome.manifest.steps[0].prompt, "first line\nsecond line",
+            "array elements joined by the decoded separator"
+        );
+    }
+
+    #[test]
+    fn multiline_export_reimports_through_bare_scan() {
+        // Export a multi-line prompt, drop the lossless embed header, and prove
+        // the bare scanner reconstructs the EXACT prompt from the rendered
+        // `[...].join("\n")` array — export and import are symmetric even
+        // without the header.
+        let m = WorkflowManifest {
+            name: "ml".into(),
+            description: String::new(),
+            when_to_use: String::new(),
+            phases: vec![],
+            steps: vec![WorkflowManifestStep {
+                id: "a".into(),
+                agent: "agent".into(),
+                prompt: "Line one.\nLine two.\nLine three.".into(),
+                depends_on: vec![],
+                label: None,
+                model: None,
+                phase: None,
+                schema: None,
+                isolation: None,
+                agent_type: None,
+            }],
+        };
+        let js = render_workflow_js(&m);
+        // Skip the first line (the `/* @aleph-workflow {...} */` embed header) so
+        // import is forced down the bare-scan path.
+        let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert!(
+            !bare.contains("@aleph-workflow"),
+            "embed header stripped: {bare}"
+        );
+        let outcome = parse_workflow_js(&bare).expect("bare scan of multi-line export");
+        assert_eq!(outcome.manifest.steps.len(), 1);
+        assert_eq!(
+            outcome.manifest.steps[0].prompt, "Line one.\nLine two.\nLine three.",
+            "exact prompt reconstructed from the join array"
+        );
+    }
+
+    #[test]
+    fn join_array_with_nonliteral_element_abstains() {
+        // A `GROUND_TRUTH` identifier inside the array makes the joined value
+        // dynamic → the array agent is not captured (R7/R10); only the adjacent
+        // plain-literal agent becomes a step.
+        let src = "export const meta = { name: 'dyn' }\n\
+                   await agent([ 'intro', GROUND_TRUTH ].join('\\n'))\n\
+                   await agent('plain real prompt')";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert_eq!(
+            outcome.manifest.steps.len(),
+            1,
+            "dynamic array abstains; only the literal agent counts"
+        );
+        assert_eq!(outcome.manifest.steps[0].prompt, "plain real prompt");
+    }
+
+    #[test]
+    fn join_array_with_concatenation_abstains() {
+        // Element-level concatenation (`'prefix ' + name`) is also dynamic.
+        let src = "export const meta = { name: 'cat' }\n\
+                   await agent([ 'prefix ' + name ].join('\\n'))\n\
+                   await agent('real')";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert_eq!(outcome.manifest.steps.len(), 1);
+        assert_eq!(outcome.manifest.steps[0].prompt, "real");
     }
 }

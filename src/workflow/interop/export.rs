@@ -171,10 +171,41 @@ fn render_agent_call(step: &WorkflowManifestStep) -> String {
         opts.push(format!("agentType: {}", js_str(at)));
     }
     if opts.is_empty() {
-        format!("agent({})", js_str(&step.prompt))
+        format!("agent({})", render_prompt_arg(&step.prompt))
     } else {
-        format!("agent({}, {{ {} }})", js_str(&step.prompt), opts.join(", "))
+        format!(
+            "agent({}, {{ {} }})",
+            render_prompt_arg(&step.prompt),
+            opts.join(", ")
+        )
     }
+}
+
+/// Render a step prompt as the `agent()` first argument.
+///
+/// A single-line prompt renders as a plain string literal (byte-identical to
+/// the legacy output). A multi-line prompt renders as the engineering format's
+/// signature idiom — a `[ "line", ... ].join("\n")` array — so an exported
+/// `.workflow.js` reads natively and stays editable line-by-line instead of
+/// becoming one unreadable mega-string. The split/join is exact: `import`'s
+/// array-join reader reconstructs the identical prompt (round-trip safe even on
+/// the header-less bare-scan path).
+fn render_prompt_arg(prompt: &str) -> String {
+    if !prompt.contains('\n') {
+        return js_str(prompt);
+    }
+    let mut out = String::from("[\n");
+    for line in prompt.split('\n') {
+        out.push_str("    ");
+        out.push_str(&js_str(line));
+        out.push_str(",\n");
+    }
+    // `.join("\n")` recombines the lines; the separator is itself a JS literal
+    // (`js_str("\n")` → `"\n"`) so the source stays parseable.
+    out.push_str("  ].join(");
+    out.push_str(&js_str("\n"));
+    out.push(')');
+    out
 }
 
 /// Render a Rust string as a safe double-quoted JS string literal (handles all
@@ -349,6 +380,24 @@ mod tests {
             js.contains("{ title: \"Light\", detail: \"quick\" }"),
             "phase without model unchanged: {js}"
         );
+    }
+
+    #[test]
+    fn multiline_prompt_renders_as_join_array() {
+        // A prompt with newlines renders as the engineering format's
+        // `[ "line", ... ].join("\n")` idiom, one element per line, instead of
+        // a single unreadable mega-string.
+        let mut s = step("a", &[]);
+        s.prompt = "You are auditing X.\nRead the files.\nReport gaps.".into();
+        let js = render_workflow_js(&manifest(vec![s]));
+        assert!(js.contains("agent([\n"), "array opener: {js}");
+        assert!(js.contains("\"You are auditing X.\","), "first line: {js}");
+        assert!(js.contains("\"Read the files.\","), "middle line: {js}");
+        assert!(js.contains("\"Report gaps.\","), "last line: {js}");
+        assert!(js.contains("].join(\"\\n\")"), "join separator: {js}");
+        // A single-line prompt stays a plain literal (no array).
+        let plain = render_workflow_js(&manifest(vec![step("b", &[])]));
+        assert!(!plain.contains(".join("), "single-line stays plain: {plain}");
     }
 
     #[test]
