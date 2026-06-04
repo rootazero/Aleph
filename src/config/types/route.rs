@@ -37,6 +37,33 @@ pub enum RouteMode {
     AlwaysCloud,
 }
 
+/// Load-balancing strategy applied *within* the same-tier candidate group of
+/// the failover chain (the fallback pool around the live primary).
+///
+/// Pure **infrastructure** (R7 赋能层): decides ordering from prompt-blind hard
+/// signals only — runtime in-flight counts, observed latency, a rotation
+/// counter — never from message content. Maps the reference routers' strategies
+/// (LiteLLM `least-busy` / `latency-based`, Bifrost weighted selection) onto
+/// Aleph's lock-free atomics.
+///
+/// [`Ordered`](LoadBalanceStrategy::Ordered) (the default) is a no-op: the
+/// configured chain order is preserved, byte-identical to pre-balance failover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LoadBalanceStrategy {
+    /// Keep the configured fallback order (byte-identical to pre-balance).
+    #[default]
+    Ordered,
+    /// Rotate the first-choice fallback each request by a global counter, so a
+    /// steady stream of requests is spread evenly across equivalent endpoints.
+    RoundRobin,
+    /// Prefer the fallback with the fewest in-flight requests right now.
+    LeastBusy,
+    /// Prefer the fallback with the lowest observed EWMA latency (unsampled
+    /// endpoints are tried first so they gain a measurement).
+    LatencyAware,
+}
+
 /// `[route]` section. Defaults to `Auto` + no escalation — fully
 /// backward-compatible (absent section == today's failover behaviour).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -44,6 +71,12 @@ pub struct ModelRouteConfig {
     /// Local/cloud routing preference. Default [`RouteMode::Auto`].
     #[serde(default)]
     pub mode: RouteMode,
+
+    /// Load-balancing strategy for the same-tier fallback pool. Default
+    /// [`LoadBalanceStrategy::Ordered`] — configured order, byte-identical to
+    /// pre-balance failover. A live operator signal like [`RouteMode`].
+    #[serde(default)]
+    pub load_balance: LoadBalanceStrategy,
 
     /// In [`RouteMode::AlwaysLocal`], whether a cloud candidate may still be
     /// tried as an *approval-gated* terminal fallback ("borrow cloud"). When
@@ -126,5 +159,35 @@ mod tests {
         let c: ModelRouteConfig = toml::from_str(toml_src).unwrap();
         assert_eq!(c.local_provider.as_deref(), Some("ollama"));
         assert_eq!(c.cloud_provider.as_deref(), Some("anthropic"));
+    }
+
+    #[test]
+    fn load_balance_defaults_to_ordered() {
+        assert_eq!(
+            ModelRouteConfig::default().load_balance,
+            LoadBalanceStrategy::Ordered
+        );
+        // Absent from an old config → defaults in, byte-identical behaviour.
+        let c: ModelRouteConfig = toml::from_str("mode = \"auto\"\n").unwrap();
+        assert_eq!(c.load_balance, LoadBalanceStrategy::Ordered);
+    }
+
+    #[test]
+    fn load_balance_serializes_snake_case_and_round_trips() {
+        assert_eq!(
+            serde_json::to_string(&LoadBalanceStrategy::LeastBusy).unwrap(),
+            "\"least_busy\""
+        );
+        assert_eq!(
+            serde_json::to_string(&LoadBalanceStrategy::LatencyAware).unwrap(),
+            "\"latency_aware\""
+        );
+        assert_eq!(
+            serde_json::to_string(&LoadBalanceStrategy::RoundRobin).unwrap(),
+            "\"round_robin\""
+        );
+        let c: ModelRouteConfig =
+            toml::from_str("mode = \"auto\"\nload_balance = \"least_busy\"\n").unwrap();
+        assert_eq!(c.load_balance, LoadBalanceStrategy::LeastBusy);
     }
 }

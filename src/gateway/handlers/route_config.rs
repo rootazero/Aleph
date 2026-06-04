@@ -12,7 +12,7 @@
 //! never the prompt. The route decision still lives in
 //! [`route_policy`](crate::providers::route_policy).
 
-use crate::config::types::{ModelRouteConfig, RouteMode};
+use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -38,6 +38,12 @@ struct RouteModePayload {
     /// Preferred cloud provider name, same contract as `local_provider`.
     #[serde(default)]
     cloud_provider: Option<String>,
+    /// Load-balancing strategy for the same-tier fallback pool:
+    /// "ordered" | "round_robin" | "least_busy" | "latency_aware".
+    /// Absent → unchanged default ("ordered"), backward-compatible with the
+    /// pre-balance payload.
+    #[serde(default)]
+    load_balance: Option<String>,
 }
 
 /// Normalise a UI-supplied provider name: blank / whitespace-only → `None` so a
@@ -59,6 +65,25 @@ fn mode_from_str(raw: &str) -> Option<RouteMode> {
         "auto" => Some(RouteMode::Auto),
         "always_local" => Some(RouteMode::AlwaysLocal),
         "always_cloud" => Some(RouteMode::AlwaysCloud),
+        _ => None,
+    }
+}
+
+fn lb_to_str(s: LoadBalanceStrategy) -> &'static str {
+    match s {
+        LoadBalanceStrategy::Ordered => "ordered",
+        LoadBalanceStrategy::RoundRobin => "round_robin",
+        LoadBalanceStrategy::LeastBusy => "least_busy",
+        LoadBalanceStrategy::LatencyAware => "latency_aware",
+    }
+}
+
+fn lb_from_str(raw: &str) -> Option<LoadBalanceStrategy> {
+    match raw {
+        "ordered" => Some(LoadBalanceStrategy::Ordered),
+        "round_robin" => Some(LoadBalanceStrategy::RoundRobin),
+        "least_busy" => Some(LoadBalanceStrategy::LeastBusy),
+        "latency_aware" => Some(LoadBalanceStrategy::LatencyAware),
         _ => None,
     }
 }
@@ -99,6 +124,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
         serde_json::json!({
             "mode": mode_to_str(cfg.route.mode),
             "allow_cloud_escalation": cfg.route.allow_cloud_escalation,
+            "load_balance": lb_to_str(cfg.route.load_balance),
             "local_provider": cfg.route.local_provider,
             "cloud_provider": cfg.route.cloud_provider,
             "providers": providers,
@@ -142,8 +168,28 @@ pub async fn handle_update(
         }
     };
 
+    // Strategy: absent → Ordered (no-op, backward-compatible); present-but-bad
+    // → reject rather than silently coerce (mirrors the mode contract).
+    let load_balance = match payload.load_balance.as_deref() {
+        None => LoadBalanceStrategy::Ordered,
+        Some(raw) => match lb_from_str(raw) {
+            Some(s) => s,
+            None => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!(
+                        "load_balance must be one of ordered|round_robin|least_busy|latency_aware, got '{}'",
+                        raw
+                    ),
+                );
+            }
+        },
+    };
+
     let new_route = ModelRouteConfig {
         mode,
+        load_balance,
         allow_cloud_escalation: payload.allow_cloud_escalation,
         local_provider: normalize_pin(payload.local_provider),
         cloud_provider: normalize_pin(payload.cloud_provider),
@@ -173,6 +219,7 @@ pub async fn handle_update(
         value: serde_json::json!({
             "mode": mode_to_str(mode),
             "allow_cloud_escalation": new_route.allow_cloud_escalation,
+            "load_balance": lb_to_str(new_route.load_balance),
             "local_provider": new_route.local_provider,
             "cloud_provider": new_route.cloud_provider,
         }),
@@ -258,5 +305,48 @@ mod tests {
             serde_json::from_value(serde_json::json!({ "mode": "auto" })).unwrap();
         assert_eq!(p2.local_provider, None);
         assert_eq!(p2.cloud_provider, None);
+        // Old payloads omit load_balance entirely.
+        assert_eq!(p2.load_balance, None);
+    }
+
+    #[test]
+    fn lb_string_round_trips() {
+        for s in [
+            LoadBalanceStrategy::Ordered,
+            LoadBalanceStrategy::RoundRobin,
+            LoadBalanceStrategy::LeastBusy,
+            LoadBalanceStrategy::LatencyAware,
+        ] {
+            assert_eq!(lb_from_str(lb_to_str(s)), Some(s));
+        }
+        assert_eq!(lb_from_str("nope"), None);
+    }
+
+    #[tokio::test]
+    async fn update_rejects_unknown_load_balance() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let bus = Arc::new(GatewayEventBus::new());
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::from(1)),
+            method: "route_config.update".to_string(),
+            params: Some(serde_json::json!({ "mode": "auto", "load_balance": "magic" })),
+        };
+        let resp = handle_update(req, config, bus).await;
+        assert!(resp.error.is_some());
+    }
+
+    #[tokio::test]
+    async fn get_includes_load_balance() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::from(1)),
+            method: "route_config.get".to_string(),
+            params: None,
+        };
+        let resp = handle_get(req, config).await;
+        let result = resp.result.expect("result");
+        assert_eq!(result["load_balance"], "ordered");
     }
 }

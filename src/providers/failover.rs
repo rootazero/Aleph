@@ -39,14 +39,16 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::RwLock;
 
-use crate::config::types::RouteMode;
+use crate::config::types::{LoadBalanceStrategy, RouteMode};
 use crate::error::{AlephError, ErrorClass, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
 use crate::providers::llm_retry::{classify, classify_exhausted, RetryVerdict};
+use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::{
-    classify_candidate, order_candidates, CandidateAction, EndpointTier, RouteTargets,
+    classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
+    RouteTargets,
 };
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
@@ -306,6 +308,12 @@ pub struct FailoverProvider {
     /// gate or skip an explicit cross-tier pin via the borrow-cloud approval —
     /// the dynamic pick stops silently overriding the operator's policy.
     primary_tier: EndpointTier,
+    /// Shared runtime load registry driving the load-balancing strategy. `None`
+    /// (tests, `new()`) disables balancing entirely — the chain keeps configured
+    /// order, byte-identical to pre-balance failover. Shared (`Arc`) across the
+    /// global chain and every per-hint override, like [`FailoverHealth`], so one
+    /// endpoint's in-flight/latency picture is visible to every chain.
+    load: Option<Arc<LoadStats>>,
 }
 
 impl FailoverProvider {
@@ -335,6 +343,7 @@ impl FailoverProvider {
             approval: None,
             route_handle: None,
             primary_tier: EndpointTier::Unknown,
+            load: None,
         }
     }
 
@@ -376,6 +385,24 @@ impl FailoverProvider {
     pub fn with_primary_tier(mut self, tier: EndpointTier) -> Self {
         self.primary_tier = tier;
         self
+    }
+
+    /// Attach the shared runtime load registry that drives the load-balancing
+    /// strategy. Wired only in production (`build_failover_chain`) with one
+    /// registry cloned across all chains; tests omit it and keep the configured
+    /// order (byte-identical to pre-balance failover).
+    pub fn with_load_stats(mut self, load: Arc<LoadStats>) -> Self {
+        self.load = Some(load);
+        self
+    }
+
+    /// The load-balancing strategy to apply *now*: the live handle if attached,
+    /// else the safe no-op [`LoadBalanceStrategy::Ordered`] (tests / `new()`).
+    fn route_load_balance(&self) -> LoadBalanceStrategy {
+        self.route_handle
+            .as_ref()
+            .map(|h| h.load_balance())
+            .unwrap_or_default()
     }
 
     /// The route preference to apply *now*: the live handle if attached, else
@@ -479,14 +506,37 @@ impl FailoverProvider {
             CandidateAction::Skip => {}
             action => out.push((primary_node, action)),
         }
-        out.extend(order_candidates(
-            fallbacks,
-            mode,
-            allow_escalation,
-            &targets,
-            |n| n.tier,
-            |n| n.name.as_str(),
-        ));
+        // Order the fallback pool. With a load registry and a non-`Ordered`
+        // strategy, balance the same-tier group by the live runtime signals;
+        // otherwise take the configured-order path (byte-identical to before).
+        let strategy = self.route_load_balance();
+        let ordered = match &self.load {
+            Some(load) if strategy != LoadBalanceStrategy::Ordered => {
+                // One rotation tick per request drives RoundRobin; the sort
+                // strategies ignore it.
+                let rr_base = load.next_round_robin();
+                order_candidates_balanced(
+                    fallbacks,
+                    mode,
+                    allow_escalation,
+                    &targets,
+                    |n| n.tier,
+                    |n| n.name.as_str(),
+                    strategy,
+                    rr_base,
+                    |name| load.metric(name),
+                )
+            }
+            _ => order_candidates(
+                fallbacks,
+                mode,
+                allow_escalation,
+                &targets,
+                |n| n.tier,
+                |n| n.name.as_str(),
+            ),
+        };
+        out.extend(ordered);
         out
     }
 
@@ -681,8 +731,18 @@ impl AiProvider for FailoverProvider {
                             model: model.clone(),
                             metadata: metadata.clone(),
                         };
+                        // Count this attempt as in-flight for the duration of
+                        // the await (RAII: decremented on Ok, Err, retry, and
+                        // panic alike). `None` load → no-op, zero overhead.
+                        let _load_guard = self.load.as_ref().map(|l| l.begin(&cand.name));
+                        let started = Instant::now();
                         match cand.provider.process(inner).await {
                             Ok(resp) => {
+                                // Feed the successful round-trip into the EWMA so
+                                // LatencyAware ordering reflects reality.
+                                if let Some(g) = &_load_guard {
+                                    g.record_latency(started.elapsed());
+                                }
                                 self.mark_healthy(&cand.name).await;
                                 return Ok(resp);
                             }
@@ -1474,5 +1534,74 @@ mod tests {
         let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
         assert_eq!(resp.text_content(), "default");
         assert_eq!(approver.call_count(), 0);
+    }
+
+    // --- load-balance integration -----------------------------------------
+
+    #[tokio::test]
+    async fn least_busy_orders_fallback_pool_by_in_flight() {
+        use crate::config::types::ModelRouteConfig;
+        // Primary fails; two equal cloud fallbacks. fb_a is pre-loaded with one
+        // in-flight request, so the LeastBusy strategy must try fb_b (idle)
+        // first — proving the live load registry shapes the candidate order.
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let fb_a = ScriptProvider::ok("fb_a");
+        let fb_b = ScriptProvider::ok("fb_b");
+        let stats = Arc::new(LoadStats::new());
+        let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+            load_balance: LoadBalanceStrategy::LeastBusy,
+            ..Default::default()
+        }));
+        let fp = FailoverProvider::new(
+            Arc::new(StaticDefault::new(primary)),
+            vec![
+                tiered_node("fb_a", fb_a.clone(), EndpointTier::Cloud),
+                tiered_node("fb_b", fb_b.clone(), EndpointTier::Cloud),
+            ],
+            HashMap::new(),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        )
+        .with_route_live(handle)
+        .with_load_stats(stats.clone());
+
+        // Hold one in-flight request against fb_a for the duration of the call.
+        let _busy = stats.begin("fb_a");
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "fb_b");
+        // fb_b (idle) was preferred → fb_a never dialed.
+        assert_eq!(fb_a.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn no_load_stats_is_byte_identical_ordering() {
+        // Without a load registry the configured order holds even if a strategy
+        // is set on the handle — balancing is inert until wired (regression).
+        use crate::config::types::ModelRouteConfig;
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let fb_a = ScriptProvider::ok("fb_a");
+        let fb_b = ScriptProvider::ok("fb_b");
+        let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+            load_balance: LoadBalanceStrategy::RoundRobin,
+            ..Default::default()
+        }));
+        let fp = FailoverProvider::new(
+            Arc::new(StaticDefault::new(primary)),
+            vec![
+                tiered_node("fb_a", fb_a.clone(), EndpointTier::Cloud),
+                tiered_node("fb_b", fb_b.clone(), EndpointTier::Cloud),
+            ],
+            HashMap::new(),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        )
+        .with_route_live(handle); // no with_load_stats
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        // Configured order: fb_a first.
+        assert_eq!(resp.text_content(), "fb_a");
     }
 }

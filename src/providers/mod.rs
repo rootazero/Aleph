@@ -70,6 +70,7 @@ pub mod gemini;
 pub mod health;
 pub mod http_provider;
 pub mod llm_retry;
+pub mod load_stats;
 pub mod message;
 pub mod metadata;
 pub mod metering;
@@ -111,6 +112,7 @@ pub use delta::{
     response_to_delta_stream, DeltaCollector, DeltaSink, IndexIdTracker, NoopSink, ProviderDelta,
 };
 pub use failover::{FailoverConfig, FailoverHealth, FailoverNode, FailoverProvider};
+pub use load_stats::{InFlightGuard, LoadStats};
 pub use health::{ModelInfo, ProviderError, ProviderHealth, ResolvedModel};
 pub use http_provider::HttpProvider;
 pub use metering::MeteringProvider;
