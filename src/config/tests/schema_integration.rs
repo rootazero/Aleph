@@ -3,35 +3,24 @@
 //! These tests verify that all schema-related components work together correctly,
 //! including schema generation and UI hints.
 
-use crate::config::schema::generate_config_schema;
 use crate::config::{build_ui_hints, generate_config_schema_json};
 
 #[test]
 fn test_full_schema_generation() {
-    let schema = generate_config_schema();
-
-    // Check schema has metadata
-    assert!(
-        schema.schema.metadata.is_some(),
-        "Schema should have metadata"
-    );
-
-    // Check definitions exist for nested types
-    assert!(
-        !schema.definitions.is_empty(),
-        "Schema should have definitions for nested types"
-    );
-
-    // Verify JSON serialization works
+    // schemars 1.x emits draft 2020-12: inspect the serialized JSON, since
+    // `Schema` is a transparent wrapper over `serde_json::Value`.
     let json = generate_config_schema_json();
     assert!(json.is_object(), "Schema JSON should be an object");
     assert!(
         json.get("$schema").is_some(),
         "Schema JSON should have $schema field"
     );
+
+    // Nested types live under `$defs` (renamed from draft-07's `definitions`).
+    let defs = json.get("$defs").and_then(|d| d.as_object());
     assert!(
-        json.get("definitions").is_some(),
-        "Schema JSON should have definitions"
+        defs.is_some_and(|d| !d.is_empty()),
+        "Schema should have $defs for nested types"
     );
 }
 
@@ -227,16 +216,20 @@ fn test_field_hints_have_valid_groups() {
 
 #[test]
 fn test_schema_definitions_not_empty() {
-    let schema = generate_config_schema();
+    let json = generate_config_schema_json();
 
-    // Verify definitions are present
+    // Verify $defs are present (draft 2020-12 home for complex types).
+    let defs = json
+        .get("$defs")
+        .and_then(|d| d.as_object())
+        .expect("Schema should have $defs for complex types");
     assert!(
-        !schema.definitions.is_empty(),
-        "Schema should have definitions for complex types"
+        !defs.is_empty(),
+        "Schema should have $defs for complex types"
     );
 
-    // Each definition should have content
-    for (name, _def) in schema.definitions.iter() {
+    // Each definition should have a non-empty name.
+    for name in defs.keys() {
         assert!(!name.is_empty(), "Definition name should not be empty");
     }
 }

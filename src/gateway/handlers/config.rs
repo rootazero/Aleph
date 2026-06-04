@@ -808,7 +808,8 @@ model = "claude-opus-4-5"
         assert!(result.get("schema").is_some());
         let schema = result.get("schema").unwrap();
         assert!(schema.get("$schema").is_some());
-        assert!(schema.get("definitions").is_some());
+        // schemars 1.x (draft 2020-12) places nested types under `$defs`.
+        assert!(schema.get("$defs").is_some());
 
         // Check ui_hints is present
         assert!(result.get("ui_hints").is_some());

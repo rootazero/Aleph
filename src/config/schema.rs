@@ -1,10 +1,13 @@
 //! JSON Schema generation for Aleph configuration.
 
 use crate::config::Config;
-use schemars::{schema::RootSchema, schema_for};
+use schemars::{schema_for, Schema};
 
 /// Generate JSON Schema for the main Config struct.
-pub(crate) fn generate_config_schema() -> RootSchema {
+///
+/// schemars 1.x emits a draft 2020-12 schema: `Schema` is a transparent wrapper
+/// over `serde_json::Value`, and nested types live under `$defs` (not `definitions`).
+pub(crate) fn generate_config_schema() -> Schema {
     schema_for!(Config)
 }
 
@@ -23,9 +26,6 @@ mod tests {
 
     #[test]
     fn test_schema_generation() {
-        let schema = generate_config_schema();
-        assert!(schema.schema.metadata.is_some());
-
         let json = generate_config_schema_json();
         assert!(json.is_object());
         assert!(json.get("$schema").is_some());
@@ -33,8 +33,9 @@ mod tests {
 
     #[test]
     fn test_schema_has_definitions() {
-        let schema = generate_config_schema();
-        // Should have definitions for nested types
-        assert!(!schema.definitions.is_empty());
+        let json = generate_config_schema_json();
+        // schemars 1.x (draft 2020-12) places nested types under `$defs`.
+        let defs = json.get("$defs").and_then(|d| d.as_object());
+        assert!(defs.is_some_and(|d| !d.is_empty()));
     }
 }
