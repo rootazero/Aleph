@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.5]
+
+### Added
+
+- **Terminal, shell & code tooling** — an embedded PTY terminal stream over a
+  single multiplexed gateway port (`portable-pty`); `bash` background-process
+  execution with a poll / kill / list registry; and a new `code_check` tool
+  that auto-detects the project's typecheck / lint and returns structured
+  diagnostics.
+- **Installed-plugin update lifecycle** — plugins can now be updated in place
+  (crash-safe atomic swap with rollback, semver no-downgrade guard) via
+  `plugin update [name] [--force]` and the `plugin.update` RPC, instead of
+  being pinned forever at install time.
+- **Intent-based tool discovery & repair** — a `search_tools` meta-tool surfaces
+  relevant tools by intent, and a unified tool-name repair resolver fixes
+  model-emitted typos / separator swaps before dispatch.
+- **AI-assisted doctor repair** — `aleph doctor --fix` (or the interactive
+  F-key) routes failing diagnostics through the LLM for guided repair instead
+  of stopping at a static hint.
+- **Provider routing & cost** — a pluggable load-balancing layer over failover
+  routing with fair per-owner multi-agent scheduling; long-context tiered
+  pricing (Gemini / Claude 1M-beta) that stops undercounting large-context
+  runs; and a Kimi CN-region preset with a refreshed Moonshot lineup.
+- **Desktop computer-use depth** — a vision bridge so text-only models can act
+  on screenshots; native push-to-talk audio capture for the Panel voice
+  channel; window move / resize geometry control on macOS, Windows
+  (`SetWindowPos`), and Linux; a Windows UI-Automation accessibility backend;
+  Linux `PermissionCapability` + real OCR bounding boxes; and a `ydotool`
+  Wayland input fallback.
+- **Matrix channel** — auto-join, per-room `@mention` gating, and inbound media
+  download.
+- **Gateway delivery & observability** — a durable outbound delivery queue
+  (SQLite-backed retry), a request-latency histogram with a per-IP connection
+  cap, effective-working-directory surfaced to the model each turn, and an
+  `insights.tools` per-tool usage-introspection RPC.
+- **Smarter memory** — write-time semantic dedup at compound ingest, Mem0-style
+  reference-token indirection, dormant cross-encoder rerank and salience
+  scoring wired into recall, and a dedicated recall slot for user-taught
+  feedback rules.
+- **Approval & security tiers** — a session-scoped approval tier
+  (`AllowSession`) between once and always; a shared vendor-credential catalog
+  that widens leak detection across ~15 providers; a per-path config
+  reload-impact classifier; a `config_audit` posture tool; and a hard floor on
+  dangerous tools for guest / remote surfaces.
+- **Capability health & hooks** — capability health probes for browser and
+  media-generation tools, `SubagentStart` / `SubagentStop` lifecycle hook
+  events, and a `BeforeCompaction` interceptor that can pin context surviving
+  compaction.
+- **ACP & A2A** — bidirectional incoming-request support over ACP and an
+  `a2a` `tasks/resubscribe` streaming method.
+- **Panel polish** — an Appearance settings page with consolidated theme logic,
+  an order-preserving substring filter on the chat model picker, and a
+  day-separated message timeline.
+- **Toolchain & dependencies** — pinned to Rust 1.96 (MSRV 1.95) with a broad
+  dependency refresh (`schemars` 0.8 → 1.2, `rand` 0.8 → 0.10, `sha3`
+  0.10 → 0.12, `sysinfo`, `teloxide`, `handlebars`, `tokio-tungstenite`,
+  `printpdf`, and the consolidation onto a single `reqwest` 0.12).
+
+### Fixed
+
+- **Sandbox hardening** — Linux seccomp now denies the full socket-control
+  surface and the FS-handle escape syscalls that bypassed path-based Landlock;
+  macOS seatbelt adds `allow_local_binding` for loopback servers; Windows
+  serializes workspace DACL read-modify-write across concurrent inits; and
+  arch-absent syscalls are skipped instead of aborting.
+- **Secret egress, fail-closed** — shell output now fails closed on
+  catastrophic secrets (private keys) instead of only redacting, browser
+  page-content egress redacts embedded credentials in both directions, and
+  command output is sanitized of ANSI escapes and binary control bytes.
+- **Large static-audit sweep** — logic, security, and UTF-8 bugs fixed across
+  the gateway, memory, daemon, extension, generation, agents, a2a, context,
+  components, and CLI subsystems, plus removal of several zero-consumer dead
+  modules (R10 YAGNI).
+- **Gateway streaming resilience** — the event-bus → client forwarder now
+  survives transient `broadcast` lag instead of silently starving the socket,
+  and streaming edits use adaptive flood-control backoff that honors the
+  channel's `retry_after` hint.
+- **CLI output & connectivity** — agent final-result text now falls back to
+  `RunSummary.final_response` so reasoning / tool-only runs are no longer
+  printed empty, the broken default gateway URL is fixed, `ask` accepts stdin
+  piping, and version is sourced from the `VERSION` file.
+- **Provider correctness** — typed Anthropic error-envelope classification with
+  explicit thinking-disable honored, truncated-stream detection surfaced as
+  retryable, Gemini schema fidelity (required reconciliation, `$ref` sibling
+  preservation), and spec-conformant OpenAI array-form content + stream usage.
+- **Approval & redaction** — the exec approval decision set is derived from
+  command risk (no allow-always for danger), `LeakAction::Redact` masks raw
+  secrets in redacted text, the `**` glob spans newlines to close a blocklist
+  evasion, and `clawhub` slug paths drop dot segments to block traversal.
+- **Memory & migration** — fixed a curated-store deadlock under concurrent
+  writes, note-layer starvation under embedding degrade, and a stale
+  embedding-dimension left after `StateDatabase` migration.
+
 ## [26.5.30]
 
 ### Added
