@@ -833,6 +833,8 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         max_related_pages: cfg.max_related_pages,
                         preview_char_cap: cfg.related_preview_char_cap,
                         total_byte_cap: cfg.related_total_byte_cap,
+                        dedup_enabled: cfg.dedup_enabled,
+                        dedup_similarity_threshold: cfg.dedup_similarity_threshold,
                     };
                     let note_dir_opt = if let Some(dir) = note_memory_dir.clone() {
                         Some(dir)

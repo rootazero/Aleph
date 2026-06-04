@@ -18,6 +18,15 @@ pub struct CompoundIngestConfig {
     pub failure_cooldown_seconds: u64,
     #[serde(default = "super::defaults::default_tx_residue_gc_seconds")]
     pub tx_residue_gc_seconds: u64,
+    /// mem0-style write-time semantic dedup. When enabled, a planned `Create`
+    /// whose embedding is within `dedup_similarity_threshold` cosine of an
+    /// existing related note is redirected into an `Append` so near-duplicate
+    /// pages never enter the store (instead of waiting for the offline dream
+    /// consolidator to merge them).
+    #[serde(default = "super::defaults::default_dedup_enabled")]
+    pub dedup_enabled: bool,
+    #[serde(default = "super::defaults::default_dedup_similarity_threshold")]
+    pub dedup_similarity_threshold: f32,
 }
 
 impl Default for CompoundIngestConfig {
@@ -30,6 +39,8 @@ impl Default for CompoundIngestConfig {
             replan_on_hash_conflict: 1,
             failure_cooldown_seconds: 300,
             tx_residue_gc_seconds: 3600,
+            dedup_enabled: false,
+            dedup_similarity_threshold: 0.92,
         }
     }
 }
