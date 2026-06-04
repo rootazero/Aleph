@@ -32,7 +32,7 @@
 //! | chat | Chat control |
 //! | cron | Cron job management |
 //! | exec_approvals | Exec approval management |
-//! | supervisor | Process supervision via PTY |
+//! | pty | Embedded interactive terminal sessions (spawn/input/resize/close/list) |
 //! | identity | Identity/soul management |
 //! | workspace | Workspace isolation management |
 //! | daemon | Daemon status, shutdown, logs |
@@ -93,6 +93,7 @@ pub mod pairing;
 pub mod plugins;
 pub mod profiles;
 pub mod projects;
+pub mod pty;
 pub mod providers;
 pub mod request_state;
 pub mod rerank_config;
@@ -314,6 +315,16 @@ impl HandlerRegistry {
         registry.register("services.stop", services::handle_stop);
         registry.register("services.list", services::handle_list);
         registry.register("services.status", services::handle_status);
+
+        // Embedded PTY terminal handlers (operator-only via method_authz).
+        // Stateless: they reach the process-global `pty::manager()` accessor;
+        // the event bus is attached once in `GatewayServer::build_router`, so
+        // no boot-time wiring is required here.
+        registry.register("pty.spawn", pty::handle_spawn);
+        registry.register("pty.input", pty::handle_input);
+        registry.register("pty.resize", pty::handle_resize);
+        registry.register("pty.close", pty::handle_close);
+        registry.register("pty.list", pty::handle_list);
 
         // Cron handlers (stubs — real handlers wired with CronService in Gateway startup)
         registry.register("cron.list", cron::handle_list_stub);
