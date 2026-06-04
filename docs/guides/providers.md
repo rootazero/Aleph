@@ -33,7 +33,7 @@ top_p = 0.9                # 0.0-1.0
 ### Add a new provider
 1. Add `[providers.<name>]` section to config.toml
 2. Set protocol, models, enabled = true
-3. Store API key: `vault_store(action="store", key="provider:<name>", secret="...")`
+3. Store API key: `vault_store(action="store", key="ai:<name>", secret="...")`
 
 ### Change default provider
 ```toml
@@ -46,7 +46,7 @@ Set `enabled = false` in the provider section.
 
 ### Delete a provider
 1. Remove `[providers.<name>]` section from config.toml
-2. Remove API key: `vault_store(action="delete", key="provider:<name>")`
+2. Remove API key: `vault_store(action="delete", key="ai:<name>")`
 
 ## Protocol-Specific Fields
 - **anthropic**: `max_tokens` (optional in config — Aleph supplies a default), `stop_sequences`

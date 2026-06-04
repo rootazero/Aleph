@@ -69,8 +69,8 @@ impl AlephTool for VaultStoreTool {
 
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
-            r#"vault.store(action="store", key="provider:openai", secret="sk-...")"#.into(),
-            r#"vault.store(action="delete", key="provider:openai")"#.into(),
+            r#"vault.store(action="store", key="ai:openai", secret="sk-...")"#.into(),
+            r#"vault.store(action="delete", key="ai:openai")"#.into(),
             r#"vault.store(action="list")"#.into(),
         ])
     }
