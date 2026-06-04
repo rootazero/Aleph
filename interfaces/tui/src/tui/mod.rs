@@ -715,9 +715,15 @@ fn handle_dialog_key(state: &mut AppState, key: KeyEvent) -> Action {
         }
         KeyCode::Enter => {
             if let Some(dialog) = &state.dialog {
-                let run_id = dialog.run_id.clone();
-                let choice = dialog.options[dialog.selected].clone();
-                Action::RespondToDialog { run_id, choice }
+                if let Some(choice) = dialog.options.get(dialog.selected) {
+                    let run_id = dialog.run_id.clone();
+                    Action::RespondToDialog {
+                        run_id,
+                        choice: choice.clone(),
+                    }
+                } else {
+                    Action::None
+                }
             } else {
                 Action::None
             }

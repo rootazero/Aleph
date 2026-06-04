@@ -124,7 +124,10 @@ pub fn start(
     }
 
     let mut cmd = Command::new(&binary);
-    cmd.arg("serve");
+    // `aleph-server` starts the gateway when invoked with no subcommand
+    // (Command::Start is the default). The `--port`/`--daemon`/`--config`
+    // flags are top-level args, so they are accepted without a subcommand.
+    // (Passing a bogus `serve` subcommand made clap reject the invocation.)
 
     if let Some(p) = port {
         cmd.arg("--port").arg(p.to_string());
@@ -377,12 +380,19 @@ fn read_log_entries(log_dir: &std::path::Path, lines: usize, level: Option<&str>
         return vec![];
     };
 
-    // Find the most recent log file
+    // Find the most recent log file by modification time. `read_dir` yields
+    // entries in an unspecified order, so we must compare mtimes rather than
+    // relying on iteration order.
     let mut log_file: Option<PathBuf> = None;
+    let mut newest_mtime: Option<std::time::SystemTime> = None;
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().map(|e| e == "log").unwrap_or(false) {
-            log_file = Some(path);
+            let mtime = entry.metadata().and_then(|m| m.modified()).ok();
+            if log_file.is_none() || mtime > newest_mtime {
+                newest_mtime = mtime;
+                log_file = Some(path);
+            }
         }
     }
 

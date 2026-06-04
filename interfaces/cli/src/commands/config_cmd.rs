@@ -48,12 +48,13 @@ pub async fn set(
     // Parse value as JSON, fall back to string
     let json_value: Value = serde_json::from_str(value).unwrap_or(Value::String(value.to_string()));
 
-    // Build nested patch object from dot-path
-    let patch = build_patch_from_path(path, json_value);
-
+    // The server deep-merges `patch` *at* `path` (see config.patch handler:
+    // `set_nested_value(config, path, patch)`). So the full dot-path goes in
+    // `path` and the bare value goes in `patch` — re-nesting the value under
+    // the path would double-nest it (e.g. `gateway.gateway.port`).
     let params = serde_json::json!({
-        "path": path.split('.').next().unwrap_or(path),
-        "patch": patch,
+        "path": path,
+        "patch": json_value,
     });
 
     let result: Value = client.call("config.patch", Some(params)).await?;
@@ -167,49 +168,3 @@ pub fn edit() -> CliResult<()> {
     Ok(())
 }
 
-/// Build a nested JSON object from a dot-separated path
-fn build_patch_from_path(path: &str, value: Value) -> Value {
-    let parts: Vec<&str> = path.split('.').collect();
-    let mut result = value;
-
-    for part in parts.into_iter().rev() {
-        result = serde_json::json!({ part: result });
-    }
-
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_patch_single() {
-        let patch = build_patch_from_path("timeout", serde_json::json!(30));
-        assert_eq!(patch, serde_json::json!({ "timeout": 30 }));
-    }
-
-    #[test]
-    fn test_build_patch_nested() {
-        let patch = build_patch_from_path("gateway.port", serde_json::json!(18790));
-        assert_eq!(patch, serde_json::json!({ "gateway": { "port": 18790 } }));
-    }
-
-    #[test]
-    fn test_build_patch_deep() {
-        let patch = build_patch_from_path("channels.telegram.enabled", serde_json::json!(true));
-        assert_eq!(
-            patch,
-            serde_json::json!({ "channels": { "telegram": { "enabled": true } } })
-        );
-    }
-
-    #[test]
-    fn test_build_patch_string_value() {
-        let patch = build_patch_from_path("general.language", serde_json::json!("zh-Hans"));
-        assert_eq!(
-            patch,
-            serde_json::json!({ "general": { "language": "zh-Hans" } })
-        );
-    }
-}

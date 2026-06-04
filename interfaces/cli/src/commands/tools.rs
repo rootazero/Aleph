@@ -71,9 +71,11 @@ pub async fn run(server_url: &str, category: Option<&str>, json: bool) -> CliRes
         if let Some(cmds) = sources.get(&src) {
             for cmd in cmds {
                 print!("  • {}", cmd.key);
-                // Truncate long descriptions
-                let desc = if cmd.description.len() > 50 {
-                    format!("{}...", &cmd.description[..47])
+                // Truncate long descriptions (char-safe — descriptions may be
+                // CJK, so byte slicing could split a UTF-8 scalar and panic).
+                let desc = if cmd.description.chars().count() > 50 {
+                    let head: String = cmd.description.chars().take(47).collect();
+                    format!("{head}...")
                 } else {
                     cmd.description.clone()
                 };
