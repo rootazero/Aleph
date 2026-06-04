@@ -220,7 +220,12 @@ impl OpenAiResponsesProtocol {
                 .and_then(|m| m.get("session_id"))
                 .filter(|s| !s.is_empty())
                 .filter(|_| policy.capabilities.supports_prompt_cache)
-                .cloned(),
+                .map(|s| {
+                    crate::providers::protocols::openai_common::prompt_cache::clamp_prompt_cache_key(
+                        s,
+                    )
+                    .into_owned()
+                }),
         }
     }
 }

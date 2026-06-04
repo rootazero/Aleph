@@ -115,7 +115,8 @@ impl ProtocolAdapter for OpenAiProtocol {
                 .and_then(|m| m.get("session_id"))
                 .filter(|s| !s.is_empty())
             {
-                body["prompt_cache_key"] = json!(key);
+                let key = super::super::openai_common::prompt_cache::clamp_prompt_cache_key(key);
+                body["prompt_cache_key"] = json!(key.as_ref());
             }
         }
 
