@@ -8,6 +8,7 @@
 //! - File-based persistence with optimistic locking
 //! - Async approval manager for RPC integration
 
+pub mod allowed_decisions;
 pub mod allowlist;
 pub mod analysis;
 pub mod approval;

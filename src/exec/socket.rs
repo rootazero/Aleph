@@ -56,6 +56,16 @@ pub struct ApprovalRequestPayload {
 
     /// All command segments
     pub segments: Vec<SegmentInfo>,
+
+    /// Decisions the UI is permitted to offer for this command.
+    ///
+    /// Derived from the command's assessed risk: low-risk commands carry the
+    /// full set, while a destructive command omits `allow-always` so it cannot
+    /// be permanently allowlisted in one click. UIs MUST render only the
+    /// decisions present here. Defaults to the full set so payloads serialized
+    /// before this field existed deserialize to the historical behavior.
+    #[serde(default = "crate::exec::allowed_decisions::full_set")]
+    pub allowed_decisions: Vec<ApprovalDecisionType>,
 }
 
 /// Information about a command segment for display
@@ -118,6 +128,9 @@ impl ApprovalRequestPayload {
             executable: primary.map(|s| s.executable.clone()).unwrap_or_default(),
             resolved_path: primary.and_then(|s| s.resolved_path.clone()),
             segments,
+            allowed_decisions: crate::exec::allowed_decisions::assess_command_decisions(
+                &request.command,
+            ),
         }
     }
 }
@@ -144,6 +157,7 @@ mod tests {
                     resolved_path: Some("/usr/bin/npm".into()),
                     args: vec!["install".into()],
                 }],
+                allowed_decisions: crate::exec::allowed_decisions::full_set(),
             },
         };
 
@@ -176,6 +190,53 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn test_allowed_decisions_default_backfills_full_set() {
+        // A payload serialized before `allowed_decisions` existed (field absent)
+        // must deserialize to the historical full set, not an empty list.
+        let json = r#"{
+            "command":"npm install",
+            "cwd":null,
+            "agent_id":"main",
+            "session_key":"agent:main:main",
+            "executable":"npm",
+            "resolved_path":null,
+            "segments":[]
+        }"#;
+        let payload: ApprovalRequestPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            payload.allowed_decisions,
+            crate::exec::allowed_decisions::full_set()
+        );
+    }
+
+    #[test]
+    fn test_from_request_danger_command_drops_allow_always() {
+        use crate::exec::decision::ApprovalRequest;
+        use crate::exec::parser::analyze_shell_command;
+
+        let command = "rm -rf ./build";
+        let request = ApprovalRequest {
+            id: "req-danger".into(),
+            command: command.into(),
+            cwd: None,
+            analysis: analyze_shell_command(command, None, None),
+            agent_id: "main".into(),
+            session_key: "agent:main:main".into(),
+        };
+
+        let payload = ApprovalRequestPayload::from_request(&request);
+        assert!(
+            !payload
+                .allowed_decisions
+                .contains(&ApprovalDecisionType::AllowAlways),
+            "destructive command must not offer allow-always"
+        );
+        assert!(payload
+            .allowed_decisions
+            .contains(&ApprovalDecisionType::Deny));
     }
 
     #[test]
