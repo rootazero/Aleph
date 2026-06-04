@@ -165,6 +165,8 @@
     "send_placeholder": "Send a message...",
     "attach": "Attach files",
     "stop": "Stop",
+    "queue": "Queue for after this turn",
+    "queued": "Queued",
     "remove": "Remove",
     "clear": "Clear draft",
     "voice_start": "Voice input",

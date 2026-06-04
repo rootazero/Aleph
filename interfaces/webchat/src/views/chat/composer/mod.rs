@@ -9,16 +9,18 @@
 
 mod attachments;
 mod palette;
+mod queue_bar;
 mod voice;
 
 use attachments::{read_file_list_into, AttachmentPreviewBar};
+use queue_bar::QueuedPromptBar;
 use palette::{
     build_palette_entries, parse_command_info, CommandInfo, PaletteEntry, PaletteLabels,
     SlashPaletteView,
 };
 
 use super::project_menu::ProjectMenu;
-use super::state::{ChatSendError, ChatSendErrorCode, ChatState};
+use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt};
 use crate::api::chat::{ChatApi, ChatAttachment};
 use crate::context::DashboardState;
 use crate::i18n::*;
@@ -27,6 +29,7 @@ use leptos::task::spawn_local;
 use shared_ui_logic::safety::{
     check_prompt_injection, prompt_guard_message, PromptInjectionVerdict,
 };
+use shared_ui_logic::state::should_auto_drain_on_settle;
 
 /// Textarea + side buttons + palette popup + injection-guard banner.
 /// Mounted by [`super::view::ChatView`] at the viewport bottom.
@@ -38,6 +41,10 @@ pub(super) fn InputArea() -> impl IntoView {
 
     let input_text = RwSignal::new(String::new());
     let is_sending = RwSignal::new(false);
+    // One-shot flag: set when the user presses Stop, consumed by the queue
+    // drain Effect so an explicit interrupt suppresses exactly one auto-drain
+    // (mirrors hermes-agent's `shouldAutoDrainOnSettle`).
+    let user_interrupted = RwSignal::new(false);
     // Attachments live on ChatState so the chat-surface drop zone (G5)
     // can share the same list as the paperclip input.
     let attachments = chat.pending_attachments;
@@ -124,6 +131,36 @@ pub(super) fn InputArea() -> impl IntoView {
         });
     };
 
+    // Queue a follow-up while a run is active instead of sending it now.
+    // Runs the same client-side injection guard as `send_message` so a
+    // blocked prompt never enters the queue, then stashes the draft on
+    // `ChatState` and clears the composer for the next line of input.
+    let enqueue_message = move || {
+        let text = input_text.get_untracked().trim().to_string();
+        let files = attachments.get_untracked();
+        if text.is_empty() && files.is_empty() {
+            return;
+        }
+        if !text.is_empty() {
+            let check = check_prompt_injection(&text);
+            if check.verdict == PromptInjectionVerdict::Block {
+                chat.set_send_error(ChatSendError::new(
+                    ChatSendErrorCode::PromptBlocked,
+                    prompt_guard_message(&check),
+                ));
+                return;
+            }
+        }
+        chat.enqueue_prompt(QueuedPrompt {
+            text,
+            attachments: files,
+        });
+        input_text.set(String::new());
+        attachments.set(Vec::new());
+        show_palette.set(false);
+        current_namespace.set(None);
+    };
+
     // G4 retry plumbing — MessageBubble's Retry button bumps
     // `chat.retry_pulse`; we re-take the most recent user message and
     // route it through the normal send pipeline so prompt-guard +
@@ -138,6 +175,37 @@ pub(super) fn InputArea() -> impl IntoView {
                 }
             }
             pulse
+        });
+    }
+
+    // Queue auto-drain — when a run settles naturally (busy → idle), replay
+    // the head of the queue through the normal send pipeline. An explicit
+    // Stop sets `user_interrupted`, which suppresses exactly one drain so
+    // cancelling a turn doesn't immediately re-fire the queued prompt. The
+    // decision itself is the pure `should_auto_drain_on_settle` (host-tested
+    // in `shared_ui_logic::state`); this Effect only owns the side effects.
+    {
+        Effect::new(move |prev_busy: Option<bool>| {
+            let is_busy = chat.active_run_id.get().is_some();
+            let was_busy = prev_busy.unwrap_or(false);
+            let queue_len = chat.prompt_queue.get_untracked().len();
+            if should_auto_drain_on_settle(
+                was_busy,
+                is_busy,
+                queue_len,
+                user_interrupted.get_untracked(),
+            ) {
+                if let Some(entry) = chat.dequeue_prompt_front() {
+                    input_text.set(entry.text);
+                    attachments.set(entry.attachments);
+                    send_message();
+                }
+            }
+            // Reset the one-shot interrupt flag once we've crossed the edge.
+            if was_busy && !is_busy {
+                user_interrupted.set(false);
+            }
+            is_busy
         });
     }
 
@@ -339,13 +407,26 @@ pub(super) fn InputArea() -> impl IntoView {
                     }
                 }
                 ev.prevent_default();
-                send_message();
+                // While a run is active, Enter queues the follow-up instead
+                // of sending (there is no live send slot until it settles).
+                if chat.active_run_id.get_untracked().is_some() {
+                    enqueue_message();
+                } else {
+                    send_message();
+                }
             }
         }
     };
 
     let can_send = Memo::new(move |_| {
         (!input_text.get().trim().is_empty() || !attachments.get().is_empty()) && !is_sending.get()
+    });
+
+    // Draft is non-empty (text or attachments) — gates the queue button while
+    // a run is active. Independent of `is_sending` (that's the brief outbound
+    // HTTP window, not the whole run).
+    let has_draft = Memo::new(move |_| {
+        !input_text.get().trim().is_empty() || !attachments.get().is_empty()
     });
 
     let on_attach_click = move |_: web_sys::MouseEvent| {
@@ -366,6 +447,9 @@ pub(super) fn InputArea() -> impl IntoView {
     };
 
     let on_abort = move |_: web_sys::MouseEvent| {
+        // Suppress exactly one auto-drain: an explicit Stop must not let the
+        // queue immediately re-fire its head (the "Stop does nothing" trap).
+        user_interrupted.set(true);
         if let Some(run_id) = chat.active_run_id.get() {
             let dash = dashboard;
             spawn_local(async move {
@@ -382,6 +466,8 @@ pub(super) fn InputArea() -> impl IntoView {
         <div class="px-4 pb-5 pt-2">
             <div class="max-w-3xl mx-auto">
                 <AttachmentPreviewBar attachments=attachments />
+
+                <QueuedPromptBar queue=chat.prompt_queue />
 
                 <SlashPaletteView
                     show=show_palette
@@ -495,6 +581,27 @@ pub(super) fn InputArea() -> impl IntoView {
                             <svg xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5"
                                  viewBox="0 0 20 20" fill="currentColor">
                                 <path d="M6.28 5.22a.75.75 0 0 0-1.06 1.06L8.94 10l-3.72 3.72a.75.75 0 1 0 1.06 1.06L10 11.06l3.72 3.72a.75.75 0 1 0 1.06-1.06L11.06 10l3.72-3.72a.75.75 0 0 0-1.06-1.06L10 8.94 6.28 5.22Z" />
+                            </svg>
+                        </button>
+                    </Show>
+
+                    // Queue button — only while a run is active. Lets the user
+                    // line up a follow-up that auto-sends when the turn settles.
+                    <Show when=move || chat.active_run_id.get().is_some()>
+                        <button
+                            class="w-8 h-8 rounded-full bg-surface-sunken text-text-secondary
+                                   flex items-center justify-center hover:bg-surface-raised
+                                   hover:text-text-primary disabled:opacity-35
+                                   disabled:cursor-not-allowed transition-colors flex-shrink-0"
+                            title=move || t_string!(i18n, chat.queue).to_string()
+                            disabled=move || !has_draft.get()
+                            on:click=move |_| enqueue_message()
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4"
+                                 viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd"
+                                      d="M10 3a.75.75 0 0 1 .75.75v5.5h5.5a.75.75 0 0 1 0 1.5h-5.5v5.5a.75.75 0 0 1-1.5 0v-5.5h-5.5a.75.75 0 0 1 0-1.5h5.5v-5.5A.75.75 0 0 1 10 3Z"
+                                      clip-rule="evenodd" />
                             </svg>
                         </button>
                     </Show>
