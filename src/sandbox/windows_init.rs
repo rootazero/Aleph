@@ -107,6 +107,29 @@ pub fn capability_names_for_network(
 #[allow(dead_code)]
 pub(crate) const DACL_INHERIT_FLAGS_FOR_APPCONTAINER: u32 = 0x2 | 0x1;
 
+/// Cycle 8: name of the OS mutex that serializes the workspace DACL
+/// read-modify-write across concurrent `sandbox-init-windows` processes.
+///
+/// Aleph is a multi-agent system, so several inits can run at once against
+/// the *same* workspace — sharing the `.git` / `.aleph` metadata subpaths
+/// and any deny-read targets. `set_workspace_dacl_entry` mutates a path's
+/// DACL with a non-atomic `GetNamedSecurityInfoW → SetEntriesInAclW →
+/// SetNamedSecurityInfoW` sequence; without serialization two inits race on
+/// the shared path's DACL (init B reads the DACL before init A writes its
+/// ACE, so A's ACE is lost when B writes back). Dropping a per-execution
+/// *deny* ACE is the dangerous case: a `.git` that should be read-only for
+/// init A's AppContainer SID silently becomes writable.
+///
+/// We close the window exactly as codex does with its
+/// `Local\CodexSandboxReadAcl` named mutex. `Local\` scope is correct here:
+/// every aleph sandbox-init is a child of the one aleph-server daemon in a
+/// single logon session, and `Global\` would demand the
+/// `SeCreateGlobalPrivilege` that a standard user lacks. Kept at crate top
+/// (non-gated) so the regression test compiles on macOS / Linux dev boxes
+/// alongside the rest of this module's cross-platform surface.
+#[allow(dead_code)]
+pub(crate) const DACL_SERIALIZATION_MUTEX_NAME: &str = "Local\\Aleph.Sandbox.WorkspaceDacl";
+
 /// Cycle 5: one protected-metadata subpath under a workspace root,
 /// tagged with whether it was absent on disk at classification time.
 #[allow(dead_code)]
@@ -896,6 +919,79 @@ mod imp {
         denied
     }
 
+    /// Cycle 8: RAII handle on the session-local DACL serialization mutex
+    /// (see [`super::DACL_SERIALIZATION_MUTEX_NAME`]). [`acquire`] blocks
+    /// until the mutex is free — bounded by `WAIT_TIMEOUT_MS` so a wedged
+    /// peer cannot deadlock a spawn — and `Drop` releases + closes it.
+    ///
+    /// Best-effort by construction: if `CreateMutexW` or the wait fails (or
+    /// times out), the guard holds a NULL handle and is a no-op, so the
+    /// caller's read-modify-write proceeds unserialized — identical to the
+    /// pre-Cycle-8 behaviour. A hardening primitive must never turn a
+    /// working spawn into a failed one.
+    ///
+    /// [`acquire`]: DaclMutex::acquire
+    struct DaclMutex {
+        handle: HANDLE,
+        acquired: bool,
+    }
+
+    impl DaclMutex {
+        fn acquire() -> Self {
+            use std::iter::once;
+            use windows_sys::Win32::System::Threading::CreateMutexW;
+
+            let name_w: Vec<u16> = super::DACL_SERIALIZATION_MUTEX_NAME
+                .encode_utf16()
+                .chain(once(0))
+                .collect();
+            // bInitialOwner = FALSE: every acquirer goes through the wait
+            // below, so the abandoned-owner case is handled uniformly.
+            let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name_w.as_ptr()) };
+            if handle.is_null() {
+                return Self {
+                    handle: std::ptr::null_mut(),
+                    acquired: false,
+                };
+            }
+
+            // WAIT_OBJECT_0 → acquired cleanly. WAIT_ABANDONED → a prior
+            // holder died without releasing; we still own the mutex now and
+            // re-read the DACL under it anyway, so the path is identical.
+            const WAIT_OBJECT_0: u32 = 0x0000_0000;
+            const WAIT_ABANDONED: u32 = 0x0000_0080;
+            const WAIT_TIMEOUT_MS: u32 = 10_000;
+            let rc = unsafe { WaitForSingleObject(handle, WAIT_TIMEOUT_MS) };
+            if rc == WAIT_OBJECT_0 || rc == WAIT_ABANDONED {
+                Self {
+                    handle,
+                    acquired: true,
+                }
+            } else {
+                // Timed out or wait failed — drop the lock and proceed
+                // lock-free rather than block the spawn indefinitely.
+                unsafe { CloseHandle(handle) };
+                Self {
+                    handle: std::ptr::null_mut(),
+                    acquired: false,
+                }
+            }
+        }
+    }
+
+    impl Drop for DaclMutex {
+        fn drop(&mut self) {
+            if self.handle.is_null() {
+                return;
+            }
+            use windows_sys::Win32::System::Threading::ReleaseMutex;
+            if self.acquired {
+                unsafe { ReleaseMutex(self.handle) };
+            }
+            unsafe { CloseHandle(self.handle) };
+        }
+    }
+
     /// SP-6 v2 / Cycle 3: Add or remove an inheritable ACE for `ac_sid`
     /// on `target_path` with the supplied access mask. Same code path
     /// for grant (`mode = GRANT_ACCESS`), deny (`mode = DENY_ACCESS`),
@@ -930,6 +1026,14 @@ mod imp {
             SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_UNKNOWN,
         };
         use windows_sys::Win32::Security::{ACL, DACL_SECURITY_INFORMATION};
+
+        // Cycle 8: serialize the read-modify-write below against every other
+        // concurrent `sandbox-init-windows` process touching the same path's
+        // DACL. Held only for this single path's RMW — released on return —
+        // so concurrent inits still run their targets in parallel; only the
+        // DACL mutations are serialized. Fail-soft: a no-op guard (mutex
+        // unavailable) just reproduces the pre-Cycle-8 unserialized path.
+        let _dacl_guard = DaclMutex::acquire();
 
         let path_w: Vec<u16> = target_path.encode_utf16().chain(once(0)).collect();
 
@@ -1351,6 +1455,28 @@ mod tests {
         ];
         let err = parse_init_args(&argv).unwrap_err();
         assert!(err.contains("JSON parse error"), "got: {err}");
+    }
+
+    #[test]
+    fn dacl_serialization_mutex_name_is_session_local() {
+        // `Local\` (not `Global\`) so a standard user without
+        // SeCreateGlobalPrivilege can still create the mutex; the leading
+        // scope and the stable suffix are what every concurrent init must
+        // agree on, so pin both. Drift here silently de-serializes the DACL
+        // read-modify-write and reopens the multi-agent lost-update race
+        // that can drop a per-execution deny ACE on `.git`.
+        assert!(
+            DACL_SERIALIZATION_MUTEX_NAME.starts_with("Local\\"),
+            "mutex must be session-local, got: {DACL_SERIALIZATION_MUTEX_NAME}"
+        );
+        assert!(
+            DACL_SERIALIZATION_MUTEX_NAME.ends_with("Sandbox.WorkspaceDacl"),
+            "mutex suffix drifted, got: {DACL_SERIALIZATION_MUTEX_NAME}"
+        );
+        assert!(
+            !DACL_SERIALIZATION_MUTEX_NAME.starts_with("Global\\"),
+            "Global\\ scope would require SeCreateGlobalPrivilege a standard user lacks"
+        );
     }
 
     #[test]
