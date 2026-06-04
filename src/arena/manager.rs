@@ -122,9 +122,12 @@ impl ArenaManager {
         let shared = self.arenas.get(arena_id)?;
         let arena = shared.read().unwrap_or_else(|e| e.into_inner());
 
-        let slot_summaries: Vec<Value> = arena
-            .slots()
-            .values()
+        // Sort by agent_id for deterministic output (HashMap iteration order is
+        // non-deterministic); matches the ordering in `snapshot_for_context`.
+        let mut slots_sorted: Vec<&ArenaSlot> = arena.slots().values().collect();
+        slots_sorted.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+        let slot_summaries: Vec<Value> = slots_sorted
+            .into_iter()
             .map(|slot| {
                 json!({
                     "agent_id": slot.agent_id,
@@ -295,6 +298,22 @@ mod tests {
         // unknown agent is not a participant
         let active = manager.active_arenas_for(&"unknown".to_string());
         assert!(active.is_empty());
+    }
+
+    #[test]
+    fn query_arena_returns_slots_sorted_by_agent_id() {
+        let mut manager = ArenaManager::new();
+        // Participants supplied out of alphabetical order (coordinator is first).
+        let manifest = test_manifest(&["agent-z", "agent-a", "agent-m"]);
+        let (arena_id, _) = manager.create_arena(manifest).unwrap();
+
+        let snapshot = manager.query_arena(&arena_id).unwrap();
+        let slots = snapshot["slots"].as_array().unwrap();
+        let ids: Vec<&str> = slots
+            .iter()
+            .map(|s| s["agent_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec!["agent-a", "agent-m", "agent-z"]);
     }
 
     #[test]

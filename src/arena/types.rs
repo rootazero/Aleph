@@ -269,6 +269,12 @@ impl ArenaManifest {
             ));
         }
 
+        // Pipeline stages are meaningless for the peer strategy. Reject them
+        // rather than silently dropping them, so a malformed request fails fast.
+        if strategy_str == "peer" && stages.is_some() {
+            return Err("Pipeline stages are only valid for the 'pipeline' strategy".to_string());
+        }
+
         let strategy = match strategy_str {
             "peer" => CoordinationStrategy::Peer {
                 coordinator: coord.clone(),
@@ -873,6 +879,26 @@ mod tests {
             "expected duplicate-stage error, got: {}",
             err
         );
+    }
+
+    #[test]
+    fn arena_manifest_build_rejects_stages_for_peer_strategy() {
+        let stages = vec![StageSpec {
+            agent_id: "agent-a".to_string(),
+            description: "Stage 1".to_string(),
+            depends_on: vec![],
+        }];
+        let result = ArenaManifest::build(
+            "test".to_string(),
+            "peer",
+            &["agent-a".to_string()],
+            None,
+            Some(stages),
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("only valid for the 'pipeline' strategy"));
     }
 
     #[test]
