@@ -35,7 +35,6 @@ pub mod session;
 pub use session::{ClarificationManager, DEFAULT_CLARIFY_TIMEOUT};
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Type of clarification request
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -45,8 +44,6 @@ pub enum ClarificationType {
     Select,
     /// Free-form text input
     Text,
-    /// Multiple question groups (each group is a single-select question)
-    MultiGroup,
 }
 
 /// A single option in a select-type clarification
@@ -69,57 +66,6 @@ impl ClarificationOption {
             description: None,
         }
     }
-
-    /// Create a new option with description
-    pub fn with_description(value: &str, label: &str, description: &str) -> Self {
-        Self {
-            label: label.to_string(),
-            value: value.to_string(),
-            description: Some(description.to_string()),
-        }
-    }
-}
-
-/// A single question group for multi-group clarifications
-///
-/// Example: In a poetry configuration, you might have three groups:
-/// - Group 1: Select rhyme book (3 options)
-/// - Group 2: Select character type (2 options)
-/// - Group 3: Select template version (2 options)
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QuestionGroup {
-    /// Unique ID for this group (e.g., "yunsh", "font", "cipu")
-    pub id: String,
-    /// Question prompt (e.g., "Select a rhyme dictionary (for rhyming and validation)")
-    pub prompt: String,
-    /// Options for this group
-    pub options: Vec<ClarificationOption>,
-    /// Default selected index (0-based)
-    pub default_index: Option<u32>,
-}
-
-impl QuestionGroup {
-    /// Create a new question group
-    pub fn new(id: &str, prompt: &str, options: Vec<ClarificationOption>) -> Self {
-        Self {
-            id: id.to_string(),
-            prompt: prompt.to_string(),
-            default_index: if options.is_empty() { None } else { Some(0) },
-            options,
-        }
-    }
-
-    /// Set default selection, clamped to valid range.
-    ///
-    /// If `index` is out of bounds or options is empty, sets `default_index` to `None`.
-    pub fn with_default(mut self, index: u32) -> Self {
-        if let Some(max_index) = self.options.len().checked_sub(1) {
-            self.default_index = Some((index as usize).min(max_index) as u32);
-        } else {
-            self.default_index = None;
-        }
-        self
-    }
 }
 
 /// Request for user clarification through Halo overlay
@@ -127,20 +73,16 @@ impl QuestionGroup {
 pub struct ClarificationRequest {
     /// Unique request ID (for tracking/logging)
     pub id: String,
-    /// Prompt text to display (overall instruction for multi-group)
+    /// Prompt text to display
     pub prompt: String,
     /// Type of clarification
     pub clarification_type: ClarificationType,
-    /// Options for select-type (None for text-type or multi-group)
+    /// Options for select-type (None for text-type)
     pub options: Option<Vec<ClarificationOption>>,
-    /// Question groups for multi-group type (None for select/text)
-    pub groups: Option<Vec<QuestionGroup>>,
-    /// Default value (index as string for select, text for text-type)
+    /// Default value (1-based index as string for select, text for text-type)
     pub default_value: Option<String>,
     /// Placeholder text for text-type input
     pub placeholder: Option<String>,
-    /// Source identifier (e.g., "skill:refine-text", "mcp:git")
-    pub source: Option<String>,
 }
 
 impl ClarificationRequest {
@@ -152,14 +94,12 @@ impl ClarificationRequest {
             prompt: prompt.to_string(),
             clarification_type: ClarificationType::Select,
             options: Some(options),
-            groups: None,
             default_value: if has_options {
                 Some("1".to_string())
             } else {
                 None
             },
             placeholder: None,
-            source: None,
         }
     }
 
@@ -170,66 +110,9 @@ impl ClarificationRequest {
             prompt: prompt.to_string(),
             clarification_type: ClarificationType::Text,
             options: None,
-            groups: None,
             default_value: None,
             placeholder: placeholder.map(|s| s.to_string()),
-            source: None,
         }
-    }
-
-    /// Create a multi-group clarification request
-    ///
-    /// Example:
-    /// ```rust,no_run
-    /// use alephcore::clarification::{ClarificationRequest, QuestionGroup, ClarificationOption};
-    ///
-    /// let request = ClarificationRequest::multi_group(
-    ///     "poetry-config",
-    ///     "Need to confirm 3 items",
-    ///     vec![
-    ///         QuestionGroup::new(
-    ///             "yunsh",
-    ///             "Select a rhyme dictionary (for rhyming and validation)",
-    ///             vec![
-    ///                 ClarificationOption::new("pingshui", "Pingshui Rhymes (traditional)"),
-    ///                 ClarificationOption::new("cilin", "Cilin Zhengyun (specialized for ci poetry)"),
-    ///                 ClarificationOption::new("xingyun", "Zhonghua Xinyun (modern)"),
-    ///             ],
-    ///         ),
-    ///         QuestionGroup::new(
-    ///             "font",
-    ///             "Character set: Simplified or Traditional?",
-    ///             vec![
-    ///                 ClarificationOption::new("simplified", "Simplified"),
-    ///                 ClarificationOption::new("traditional", "Traditional"),
-    ///             ],
-    ///         ),
-    ///     ],
-    /// );
-    /// ```
-    pub fn multi_group(id: &str, prompt: &str, groups: Vec<QuestionGroup>) -> Self {
-        Self {
-            id: id.to_string(),
-            prompt: prompt.to_string(),
-            clarification_type: ClarificationType::MultiGroup,
-            options: None,
-            groups: Some(groups),
-            default_value: None,
-            placeholder: None,
-            source: None,
-        }
-    }
-
-    /// Set the source identifier
-    pub fn with_source(mut self, source: &str) -> Self {
-        self.source = Some(source.to_string());
-        self
-    }
-
-    /// Set the default value
-    pub fn with_default(mut self, default: &str) -> Self {
-        self.default_value = Some(default.to_string());
-        self
     }
 }
 
@@ -255,9 +138,6 @@ pub struct ClarificationResult {
     pub selected_index: Option<u32>,
     /// Value (selected option value or text input)
     pub value: Option<String>,
-    /// Group answers for multi-group type (group_id -> selected_value)
-    /// Example: {"yunsh": "cilin", "font": "simplified", "cipu": "qinding"}
-    pub group_answers: Option<HashMap<String, String>>,
 }
 
 impl ClarificationResult {
@@ -267,7 +147,6 @@ impl ClarificationResult {
             result_type: ClarificationResultType::Selected,
             selected_index: Some(index),
             value: Some(value),
-            group_answers: None,
         }
     }
 
@@ -277,34 +156,6 @@ impl ClarificationResult {
             result_type: ClarificationResultType::TextInput,
             selected_index: None,
             value: Some(value),
-            group_answers: None,
-        }
-    }
-
-    /// Create a multi-group result
-    ///
-    /// The result type is `Selected` since multi-group answers represent
-    /// a selection of options across multiple question groups.
-    /// Use `get_group_answers()` to retrieve the individual group selections.
-    ///
-    /// Example:
-    /// ```rust
-    /// use std::collections::HashMap;
-    /// use alephcore::clarification::ClarificationResult;
-    ///
-    /// let mut answers = HashMap::new();
-    /// answers.insert("yunsh".to_string(), "cilin".to_string());
-    /// answers.insert("font".to_string(), "simplified".to_string());
-    /// answers.insert("cipu".to_string(), "qinding".to_string());
-    ///
-    /// let result = ClarificationResult::multi_group(answers);
-    /// ```
-    pub fn multi_group(answers: HashMap<String, String>) -> Self {
-        Self {
-            result_type: ClarificationResultType::Selected,
-            selected_index: None,
-            value: None,
-            group_answers: Some(answers),
         }
     }
 
@@ -314,7 +165,6 @@ impl ClarificationResult {
             result_type: ClarificationResultType::Cancelled,
             selected_index: None,
             value: None,
-            group_answers: None,
         }
     }
 
@@ -324,7 +174,6 @@ impl ClarificationResult {
             result_type: ClarificationResultType::Timeout,
             selected_index: None,
             value: None,
-            group_answers: None,
         }
     }
 
@@ -340,11 +189,6 @@ impl ClarificationResult {
     pub fn get_value(&self) -> Option<&str> {
         self.value.as_deref()
     }
-
-    /// Get group answers, if any
-    pub fn get_group_answers(&self) -> Option<&HashMap<String, String>> {
-        self.group_answers.as_ref()
-    }
 }
 
 #[cfg(test)]
@@ -357,15 +201,6 @@ mod tests {
         assert_eq!(option.value, "pro");
         assert_eq!(option.label, "Professional");
         assert!(option.description.is_none());
-    }
-
-    #[test]
-    fn test_clarification_option_with_description() {
-        let option =
-            ClarificationOption::with_description("pro", "Professional", "Formal business tone");
-        assert_eq!(option.value, "pro");
-        assert_eq!(option.label, "Professional");
-        assert_eq!(option.description, Some("Formal business tone".to_string()));
     }
 
     #[test]
@@ -396,14 +231,6 @@ mod tests {
         assert_eq!(request.clarification_type, ClarificationType::Text);
         assert!(request.options.is_none());
         assert_eq!(request.placeholder, Some("e.g., John Doe".to_string()));
-    }
-
-    #[test]
-    fn test_clarification_request_with_source() {
-        let request =
-            ClarificationRequest::select("test", "Prompt", vec![]).with_source("skill:refine-text");
-
-        assert_eq!(request.source, Some("skill:refine-text".to_string()));
     }
 
     #[test]
@@ -446,119 +273,5 @@ mod tests {
     fn test_clarification_type_default() {
         let default = ClarificationType::default();
         assert_eq!(default, ClarificationType::Select);
-    }
-
-    #[test]
-    fn test_question_group_new() {
-        let group = QuestionGroup::new(
-            "test-group",
-            "Select an option",
-            vec![
-                ClarificationOption::new("a", "Option A"),
-                ClarificationOption::new("b", "Option B"),
-            ],
-        );
-
-        assert_eq!(group.id, "test-group");
-        assert_eq!(group.prompt, "Select an option");
-        assert_eq!(group.options.len(), 2);
-        assert_eq!(group.default_index, Some(0));
-    }
-
-    #[test]
-    fn test_question_group_with_default_empty_options() {
-        let group = QuestionGroup::new("test", "Prompt", vec![]).with_default(3);
-
-        assert_eq!(group.default_index, None);
-    }
-
-    #[test]
-    fn test_question_group_with_default_in_bounds() {
-        let group = QuestionGroup::new(
-            "test",
-            "Prompt",
-            vec![
-                ClarificationOption::new("a", "Option A"),
-                ClarificationOption::new("b", "Option B"),
-            ],
-        )
-        .with_default(1);
-
-        assert_eq!(group.default_index, Some(1));
-    }
-
-    #[test]
-    fn test_question_group_with_default_out_of_bounds() {
-        let group = QuestionGroup::new(
-            "test",
-            "Prompt",
-            vec![
-                ClarificationOption::new("a", "Option A"),
-                ClarificationOption::new("b", "Option B"),
-            ],
-        )
-        .with_default(5);
-
-        assert_eq!(group.default_index, Some(1)); // clamped to last valid index
-    }
-
-    #[test]
-    fn test_clarification_request_multi_group() {
-        let request = ClarificationRequest::multi_group(
-            "poetry-config",
-            "需要确认3项信息",
-            vec![
-                QuestionGroup::new(
-                    "yunsh",
-                    "请选择韵书",
-                    vec![
-                        ClarificationOption::new("pingshui", "平水韵"),
-                        ClarificationOption::new("cilin", "词林正韵"),
-                    ],
-                ),
-                QuestionGroup::new(
-                    "font",
-                    "用字类型",
-                    vec![
-                        ClarificationOption::new("simplified", "简体"),
-                        ClarificationOption::new("traditional", "繁体"),
-                    ],
-                ),
-            ],
-        );
-
-        assert_eq!(request.id, "poetry-config");
-        assert_eq!(request.prompt, "需要确认3项信息");
-        assert_eq!(request.clarification_type, ClarificationType::MultiGroup);
-        assert!(request.options.is_none());
-        assert!(request.groups.is_some());
-        assert_eq!(request.groups.as_ref().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn test_clarification_result_multi_group() {
-        let mut answers = HashMap::new();
-        answers.insert("yunsh".to_string(), "cilin".to_string());
-        answers.insert("font".to_string(), "simplified".to_string());
-
-        let result = ClarificationResult::multi_group(answers.clone());
-
-        assert_eq!(result.result_type, ClarificationResultType::Selected);
-        assert!(result.selected_index.is_none());
-        assert!(result.value.is_none());
-        assert_eq!(result.group_answers, Some(answers));
-        assert!(result.is_success());
-    }
-
-    #[test]
-    fn test_clarification_result_get_group_answers() {
-        let mut answers = HashMap::new();
-        answers.insert("key1".to_string(), "value1".to_string());
-
-        let result = ClarificationResult::multi_group(answers.clone());
-        let retrieved = result.get_group_answers();
-
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().get("key1"), Some(&"value1".to_string()));
     }
 }

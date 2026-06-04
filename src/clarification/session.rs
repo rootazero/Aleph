@@ -197,13 +197,6 @@ fn interpret_reply(request: &ClarificationRequest, reply: &str) -> Clarification
             ClarificationResult::text_input(trimmed.to_string())
         }
         ClarificationType::Text => ClarificationResult::text_input(trimmed.to_string()),
-        ClarificationType::MultiGroup => {
-            // TODO: MultiGroup replies should be parsed from a structured format
-            // (e.g., JSON with group_id -> selected_value mappings). For now,
-            // fall back to text input since MultiGroup is typically resolved
-            // through a structured UI rather than free-text replies.
-            ClarificationResult::text_input(trimmed.to_string())
-        }
     }
 }
 
