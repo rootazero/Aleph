@@ -10,7 +10,7 @@ use super::error_cooldown::ErrorCooldown;
 use super::offset::OffsetTracker;
 use crate::gateway::channel::ChannelStatus;
 use crate::sync_primitives::Arc;
-use rand::Rng;
+use rand::RngExt;
 use std::time::Instant;
 use teloxide::dispatching::UpdateHandler;
 use teloxide::prelude::*;
@@ -48,7 +48,7 @@ impl PollingState {
     fn backoff_secs(&self) -> f64 {
         let base = 2.0_f64 * 1.8_f64.powi(self.attempt.saturating_sub(1) as i32);
         let capped = base.min(30.0);
-        let jitter = rand::thread_rng().gen_range(-0.25..=0.25);
+        let jitter = rand::rng().random_range(-0.25..=0.25);
         capped * (1.0 + jitter)
     }
 }

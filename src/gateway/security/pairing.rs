@@ -472,10 +472,10 @@ impl PairingManager {
     /// `100000..=999999` (always 6 digits, never collides with the 8-char
     /// Base32 device codespace).
     fn generate_unique_browser_code(&self) -> Result<String, PairingError> {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
+        use rand::RngExt;
+        let mut rng = rand::rng();
         for _ in 0..10 {
-            let code = format!("{:06}", rng.gen_range(100_000..=999_999));
+            let code = format!("{:06}", rng.random_range(100_000..=999_999));
             let existing = self
                 .store
                 .get_pairing_request(&code)

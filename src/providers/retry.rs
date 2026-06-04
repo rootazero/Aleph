@@ -5,7 +5,7 @@
 use crate::config::RetryPolicy;
 use crate::error::{AlephError, Result};
 use crate::tool_metadata::DEFAULT_MAX_RETRIES;
-use rand::Rng;
+use rand::RngExt;
 use std::future::Future;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -49,7 +49,7 @@ pub fn apply_jitter(base: Duration, factor: f64) -> Duration {
     if max_extra_ms == 0 {
         return base;
     }
-    let extra = rand::thread_rng().gen_range(0..=max_extra_ms);
+    let extra = rand::rng().random_range(0..=max_extra_ms);
     Duration::from_millis(base_ms.saturating_add(extra))
 }
 
