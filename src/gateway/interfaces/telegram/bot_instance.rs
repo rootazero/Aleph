@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 
 fn create_bot_with_proxy(token: &str, proxy_url: Option<&str>) -> Bot {
     match proxy_url {
-        Some(url) if !url.is_empty() => match reqwest_legacy::Proxy::all(url) {
+        Some(url) if !url.is_empty() => match reqwest::Proxy::all(url) {
             Ok(proxy) => {
                 match teloxide::net::default_reqwest_settings()
                     .proxy(proxy)

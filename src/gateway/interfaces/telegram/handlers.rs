@@ -61,7 +61,7 @@ pub(crate) async fn convert_message(
             MediaKind::Voice(voice) => voice.caption.clone().unwrap_or_default(),
             MediaKind::Sticker(s) => {
                 let emoji = s.sticker.emoji.as_deref().unwrap_or("?");
-                let file_unique_id = &s.sticker.file.unique_id;
+                let file_unique_id = &s.sticker.file.unique_id.0;
                 let desc = sticker_pipeline
                     .resolve_description(file_unique_id, "")
                     .await;
@@ -190,14 +190,14 @@ pub(crate) async fn extract_attachments(
             match &common.media_kind {
                 MediaKind::Photo(photo) => photo.photo.last().map(|largest| {
                     (
-                        largest.file.id.clone(),
+                        largest.file.id.0.clone(),
                         "image/jpeg".to_string(),
                         None,
                         largest.file.size as u64,
                     )
                 }),
                 MediaKind::Document(doc) => Some((
-                    doc.document.file.id.clone(),
+                    doc.document.file.id.0.clone(),
                     doc.document
                         .mime_type
                         .as_ref()
@@ -207,7 +207,7 @@ pub(crate) async fn extract_attachments(
                     doc.document.file.size as u64,
                 )),
                 MediaKind::Audio(audio) => Some((
-                    audio.audio.file.id.clone(),
+                    audio.audio.file.id.0.clone(),
                     audio
                         .audio
                         .mime_type
@@ -218,7 +218,7 @@ pub(crate) async fn extract_attachments(
                     audio.audio.file.size as u64,
                 )),
                 MediaKind::Video(video) => Some((
-                    video.video.file.id.clone(),
+                    video.video.file.id.0.clone(),
                     video
                         .video
                         .mime_type
@@ -229,7 +229,7 @@ pub(crate) async fn extract_attachments(
                     video.video.file.size as u64,
                 )),
                 MediaKind::Voice(voice) => Some((
-                    voice.voice.file.id.clone(),
+                    voice.voice.file.id.0.clone(),
                     voice
                         .voice
                         .mime_type
@@ -248,7 +248,7 @@ pub(crate) async fn extract_attachments(
                         "image/webp".to_string()
                     };
                     Some((
-                        s.sticker.file.id.clone(),
+                        s.sticker.file.id.0.clone(),
                         mime,
                         None,
                         s.sticker.file.size as u64,
@@ -265,7 +265,12 @@ pub(crate) async fn extract_attachments(
     };
 
     // Resolve file URL via Bot API (with 5s timeout to prevent handler blocking)
-    let url = match tokio::time::timeout(Duration::from_secs(5), bot.get_file(&file_id)).await {
+    let url = match tokio::time::timeout(
+        Duration::from_secs(5),
+        bot.get_file(teloxide::types::FileId(file_id.clone())),
+    )
+    .await
+    {
         Ok(Ok(file)) => Some(format!(
             "https://api.telegram.org/file/bot{}/{}",
             bot.token(),

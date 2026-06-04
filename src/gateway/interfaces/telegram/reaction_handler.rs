@@ -22,7 +22,7 @@ pub fn convert_reaction(
         return None;
     }
 
-    let user = update.user.as_ref()?;
+    let user = update.user()?;
 
     Some(InboundMessage {
         id: MessageId::new(format!(
@@ -51,7 +51,8 @@ mod tests {
     use super::*;
     use crate::gateway::channel::MessageId;
     use teloxide::types::{
-        Chat, ChatId, ChatKind, ChatPrivate, MessageId as TgMessageId, User, UserId as TgUserId,
+        Chat, ChatId, ChatKind, ChatPrivate, MaybeAnonymousUser, MessageId as TgMessageId, User,
+        UserId as TgUserId,
     };
 
     fn make_test_update(emojis: Vec<String>) -> MessageReactionUpdated {
@@ -62,22 +63,11 @@ mod tests {
                     username: None,
                     first_name: Some("Test".to_string()),
                     last_name: None,
-                    bio: None,
-                    has_private_forwards: None,
-                    has_restricted_voice_and_video_messages: None,
                 }),
-                photo: None,
-                pinned_message: None,
-                message_auto_delete_time: None,
-                has_hidden_members: false,
-                has_aggressive_anti_spam_enabled: false,
-                available_reactions: None,
-                chat_full_info: teloxide::types::ChatFullInfo::default(),
             },
             message_id: TgMessageId(42),
             date: chrono::Utc::now(),
-            actor_chat: None,
-            user: Some(User {
+            actor: MaybeAnonymousUser::User(User {
                 id: TgUserId(12345),
                 is_bot: false,
                 first_name: "Alice".to_string(),

@@ -639,7 +639,7 @@ impl Channel for TelegramChannel {
                             }
                         }
 
-                        if let Err(e) = bot.answer_callback_query(&q.id).await {
+                        if let Err(e) = bot.answer_callback_query(q.id).await {
                             tracing::warn!("Failed to answer callback query: {}", e);
                         }
 
@@ -655,14 +655,14 @@ impl Channel for TelegramChannel {
                     let channel_id = channel_id_for_poll.clone();
                     async move {
                         let (conversation_id, sender_id, sender_name) = match &q.voter {
-                            teloxide::types::Voter::User(user) => (
+                            teloxide::types::MaybeAnonymousUser::User(user) => (
                                 ConversationId::new(user.id.to_string()),
                                 UserId::new(user.id.to_string()),
                                 user.username
                                     .clone()
                                     .or_else(|| Some(user.first_name.clone())),
                             ),
-                            teloxide::types::Voter::Chat(chat) => (
+                            teloxide::types::MaybeAnonymousUser::Chat(chat) => (
                                 ConversationId::new(chat.id.0.to_string()),
                                 UserId::new(chat.id.0.to_string()),
                                 chat.title().map(|t| t.to_string()),
@@ -682,7 +682,7 @@ impl Channel for TelegramChannel {
                             is_group: false,
                             raw: None,
                             metadata: vec![MessageMeta::PollAnswer {
-                                poll_id: q.poll_id,
+                                poll_id: q.poll_id.to_string(),
                                 option_ids: q.option_ids,
                             }],
                         };

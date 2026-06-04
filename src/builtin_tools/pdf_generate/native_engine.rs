@@ -3,8 +3,6 @@
 //! Provides fast, dependency-free PDF generation for plain text and Markdown.
 //! Supports CJK text rendering with system font discovery.
 
-use std::fs::File;
-use std::io::BufWriter;
 use std::path::{Path, PathBuf};
 
 use printpdf::*;
@@ -23,81 +21,25 @@ pub fn generate(
     output_path: &Path,
 ) -> Result<PdfGenerateOutput, ToolError> {
     let (page_width_mm, page_height_mm) = args.page_size.dimensions_mm();
-    let _margin = Mm(args.margin_mm);
 
-    // Create document
-    let (doc, page1, layer1) = PdfDocument::new(
-        args.title.as_deref().unwrap_or("Document"),
-        Mm(page_width_mm),
-        Mm(page_height_mm),
-        "Layer 1",
-    );
+    // Create document (printpdf 0.9 builds pages as `Vec<Op>` and serializes at save).
+    let mut doc = PdfDocument::new(args.title.as_deref().unwrap_or("Document"));
 
-    let mut current_layer = doc.get_page(page1).get_layer(layer1);
-    let mut current_page = page1;
-    let mut page_count = 1;
-
-    // Try to load a font
-    let font = if let Some(font_path) = find_system_font() {
-        debug!("Using system font: {:?}", font_path);
-        match doc.add_external_font(
-            File::open(&font_path)
-                .map_err(|e| ToolError::Execution(format!("Failed to open font file: {}", e)))?,
-        ) {
-            Ok(f) => Some(f),
-            Err(e) => {
-                warn!("Failed to load font: {}, using built-in font", e);
-                None
-            }
-        }
-    } else {
-        warn!("No system font found, using built-in font");
-        None
-    };
-
-    // Use built-in font if external font failed
-    let builtin_font = doc
-        .add_builtin_font(BuiltinFont::Helvetica)
-        .map_err(|e| ToolError::Execution(format!("Failed to add built-in font: {}", e)))?;
-
-    let active_font = font.as_ref().unwrap_or(&builtin_font);
+    // Resolve the active font handle: a parsed system font when available,
+    // otherwise the built-in Helvetica.
+    let active_font = load_font(&mut doc);
 
     // Calculate text area
     let text_width = page_width_mm - (args.margin_mm * 2.0);
     let line_height = args.font_size * args.line_spacing;
     let mut y_position = page_height_mm - args.margin_mm - args.font_size;
 
-    // Helper to add new page
-    let add_new_page = |doc: &PdfDocumentReference| -> (PdfPageIndex, PdfLayerReference) {
-        let (new_page, new_layer) = doc.add_page(Mm(page_width_mm), Mm(page_height_mm), "Layer 1");
-        (new_page, doc.get_page(new_page).get_layer(new_layer))
-    };
-
-    // Helper to check and handle page break
-    let check_page_break = |y: &mut f32,
-                            doc: &PdfDocumentReference,
-                            layer: &mut PdfLayerReference,
-                            page: &mut PdfPageIndex,
-                            count: &mut usize| {
-        if *y < args.margin_mm + line_height {
-            let (new_page, new_layer) = add_new_page(doc);
-            *page = new_page;
-            *layer = new_layer;
-            *count += 1;
-            *y = page_height_mm - args.margin_mm - args.font_size;
-        }
-    };
+    let mut builder = DocBuilder::new(Mm(page_width_mm), Mm(page_height_mm));
 
     // Render title if provided
     if let Some(ref title) = args.title {
         let title_size = args.font_size * 1.5;
-        current_layer.use_text(
-            title,
-            title_size,
-            Mm(args.margin_mm),
-            Mm(y_position),
-            active_font,
-        );
+        builder.draw_line(title, title_size, args.margin_mm, y_position, &active_font);
         y_position -= line_height * 2.0;
     }
 
@@ -108,10 +50,11 @@ pub fn generate(
             for line in args.content.lines() {
                 check_page_break(
                     &mut y_position,
-                    &doc,
-                    &mut current_layer,
-                    &mut current_page,
-                    &mut page_count,
+                    &mut builder,
+                    line_height,
+                    args.margin_mm,
+                    args.font_size,
+                    page_height_mm,
                 );
 
                 // Word wrap
@@ -119,18 +62,19 @@ pub fn generate(
                 for wrapped_line in wrapped_lines {
                     check_page_break(
                         &mut y_position,
-                        &doc,
-                        &mut current_layer,
-                        &mut current_page,
-                        &mut page_count,
+                        &mut builder,
+                        line_height,
+                        args.margin_mm,
+                        args.font_size,
+                        page_height_mm,
                     );
 
-                    current_layer.use_text(
+                    builder.draw_line(
                         &wrapped_line,
                         args.font_size,
-                        Mm(args.margin_mm),
-                        Mm(y_position),
-                        active_font,
+                        args.margin_mm,
+                        y_position,
+                        &active_font,
                     );
                     y_position -= line_height;
                 }
@@ -159,13 +103,9 @@ pub fn generate(
                                     text_width,
                                     line_height,
                                     &mut y_position,
-                                    &doc,
-                                    &mut current_layer,
-                                    &mut current_page,
-                                    &mut page_count,
-                                    page_width_mm,
+                                    &mut builder,
                                     page_height_mm,
-                                    active_font,
+                                    &active_font,
                                 );
                                 current_text.clear();
                             }
@@ -204,13 +144,9 @@ pub fn generate(
                                 text_width,
                                 line_height,
                                 &mut y_position,
-                                &doc,
-                                &mut current_layer,
-                                &mut current_page,
-                                &mut page_count,
-                                page_width_mm,
+                                &mut builder,
                                 page_height_mm,
-                                active_font,
+                                &active_font,
                             );
                             current_text.clear();
                             current_font_size = args.font_size;
@@ -224,13 +160,9 @@ pub fn generate(
                                 text_width,
                                 line_height,
                                 &mut y_position,
-                                &doc,
-                                &mut current_layer,
-                                &mut current_page,
-                                &mut page_count,
-                                page_width_mm,
+                                &mut builder,
                                 page_height_mm,
-                                active_font,
+                                &active_font,
                             );
                             current_text.clear();
                             y_position -= line_height * 0.5; // Paragraph spacing
@@ -243,13 +175,9 @@ pub fn generate(
                                 text_width - 10.0,
                                 line_height,
                                 &mut y_position,
-                                &doc,
-                                &mut current_layer,
-                                &mut current_page,
-                                &mut page_count,
-                                page_width_mm,
+                                &mut builder,
                                 page_height_mm,
-                                active_font,
+                                &active_font,
                             );
                             current_text.clear();
                             in_code_block = false;
@@ -270,13 +198,9 @@ pub fn generate(
                                 text_width,
                                 line_height,
                                 &mut y_position,
-                                &doc,
-                                &mut current_layer,
-                                &mut current_page,
-                                &mut page_count,
-                                page_width_mm,
+                                &mut builder,
                                 page_height_mm,
-                                active_font,
+                                &active_font,
                             );
                             current_text.clear();
                         }
@@ -313,17 +237,21 @@ pub fn generate(
                     text_width,
                     line_height,
                     &mut y_position,
-                    &doc,
-                    &mut current_layer,
-                    &mut current_page,
-                    &mut page_count,
-                    page_width_mm,
+                    &mut builder,
                     page_height_mm,
-                    active_font,
+                    &active_font,
                 );
             }
         }
     }
+
+    let pages = builder.finish();
+    let page_count = pages.len();
+
+    // Serialize the document to PDF bytes.
+    let pdf_bytes = doc
+        .with_pages(pages)
+        .save(&PdfSaveOptions::default(), &mut Vec::new());
 
     // Create parent directories if needed
     if let Some(parent) = output_path.parent() {
@@ -332,12 +260,9 @@ pub fn generate(
         })?;
     }
 
-    // Save PDF
-    let file = File::create(output_path)
-        .map_err(|e| ToolError::Execution(format!("Failed to create PDF file: {}", e)))?;
-
-    doc.save(&mut BufWriter::new(file))
-        .map_err(|e| ToolError::Execution(format!("Failed to save PDF: {}", e)))?;
+    // Write the PDF bytes to disk.
+    std::fs::write(output_path, &pdf_bytes)
+        .map_err(|e| ToolError::Execution(format!("Failed to write PDF file: {}", e)))?;
 
     info!(
         output = %output_path.display(),
@@ -355,6 +280,108 @@ pub fn generate(
             output_path.display()
         ),
     })
+}
+
+/// Accumulates page content as `Vec<Op>` for printpdf 0.9's imperative model.
+///
+/// Each drawn line is emitted as a self-contained text object
+/// (`StartTextSection` … `EndTextSection`) so that `SetTextCursor` (which maps
+/// to the relative PDF `Td` operator) resolves against a freshly reset text
+/// matrix — giving absolute positioning per line, matching the old
+/// `layer.use_text` behaviour.
+struct DocBuilder {
+    /// Completed pages.
+    pages: Vec<PdfPage>,
+    /// Operations accumulated for the page currently being built.
+    ops: Vec<Op>,
+    page_width: Mm,
+    page_height: Mm,
+}
+
+impl DocBuilder {
+    fn new(page_width: Mm, page_height: Mm) -> Self {
+        Self {
+            pages: Vec::new(),
+            ops: Vec::new(),
+            page_width,
+            page_height,
+        }
+    }
+
+    /// Draw a single line of text with its baseline at `(x_mm, y_mm)` from the
+    /// bottom-left corner of the page.
+    fn draw_line(&mut self, text: &str, font_size: f32, x_mm: f32, y_mm: f32, font: &PdfFontHandle) {
+        self.ops.push(Op::StartTextSection);
+        self.ops.push(Op::SetFont {
+            font: font.clone(),
+            size: Pt(font_size),
+        });
+        self.ops.push(Op::SetTextCursor {
+            pos: Point::new(Mm(x_mm), Mm(y_mm)),
+        });
+        self.ops.push(Op::ShowText {
+            items: vec![TextItem::Text(text.to_string())],
+        });
+        self.ops.push(Op::EndTextSection);
+    }
+
+    /// Finalize the current page and start a fresh one.
+    fn new_page(&mut self) {
+        let ops = std::mem::take(&mut self.ops);
+        self.pages
+            .push(PdfPage::new(self.page_width, self.page_height, ops));
+    }
+
+    /// Finalize the document, flushing the in-progress page, and return all pages.
+    fn finish(mut self) -> Vec<PdfPage> {
+        let ops = std::mem::take(&mut self.ops);
+        self.pages
+            .push(PdfPage::new(self.page_width, self.page_height, ops));
+        self.pages
+    }
+}
+
+/// Resolve the active font: a parsed system font registered with the document,
+/// falling back to the built-in Helvetica when none is available or parseable.
+fn load_font(doc: &mut PdfDocument) -> PdfFontHandle {
+    if let Some(font_path) = find_system_font() {
+        match std::fs::read(&font_path) {
+            Ok(bytes) => {
+                let mut warnings = Vec::new();
+                if let Some(parsed) = ParsedFont::from_bytes(&bytes, 0, &mut warnings) {
+                    debug!("Using system font: {:?}", font_path);
+                    return PdfFontHandle::External(doc.add_font(&parsed));
+                }
+                warn!(
+                    "Failed to parse font {:?}, using built-in font",
+                    font_path
+                );
+            }
+            Err(e) => warn!(
+                "Failed to read font {:?}: {}, using built-in font",
+                font_path, e
+            ),
+        }
+    } else {
+        warn!("No system font found, using built-in font");
+    }
+    PdfFontHandle::Builtin(BuiltinFont::Helvetica)
+}
+
+/// Start a new page and reset the vertical cursor when the next line would
+/// overflow the bottom margin.
+fn check_page_break(
+    y: &mut f32,
+    builder: &mut DocBuilder,
+    line_height: f32,
+    margin: f32,
+    font_size: f32,
+    page_height_mm: f32,
+) {
+    if *y < margin + line_height {
+        builder.new_page();
+        *y = page_height_mm - margin - font_size;
+    }
 }
 
 /// Check if a character is CJK (Chinese, Japanese, Korean) or full-width
@@ -455,37 +482,29 @@ pub fn wrap_text(text: &str, max_width_mm: f32, font_size: f32) -> Vec<String> {
     lines
 }
 
-/// Render text with word wrapping and page breaks
+/// Render text with word wrapping and page breaks.
 #[allow(clippy::too_many_arguments)]
-pub fn render_text(
+fn render_text(
     text: &str,
     font_size: f32,
     margin: f32,
     text_width: f32,
     line_height: f32,
     y_position: &mut f32,
-    doc: &PdfDocumentReference,
-    current_layer: &mut PdfLayerReference,
-    current_page: &mut PdfPageIndex,
-    page_count: &mut usize,
-    page_width_mm: f32,
+    builder: &mut DocBuilder,
     page_height_mm: f32,
-    font: &IndirectFontRef,
+    font: &PdfFontHandle,
 ) {
     for line in text.lines() {
         let wrapped_lines = wrap_text(line, text_width, font_size);
         for wrapped_line in wrapped_lines {
             // Check for page break
             if *y_position < margin + line_height {
-                let (new_page, new_layer) =
-                    doc.add_page(Mm(page_width_mm), Mm(page_height_mm), "Layer 1");
-                *current_page = new_page;
-                *current_layer = doc.get_page(new_page).get_layer(new_layer);
-                *page_count += 1;
+                builder.new_page();
                 *y_position = page_height_mm - margin - font_size;
             }
 
-            current_layer.use_text(&wrapped_line, font_size, Mm(margin), Mm(*y_position), font);
+            builder.draw_line(&wrapped_line, font_size, margin, *y_position, font);
             *y_position -= line_height;
         }
     }
