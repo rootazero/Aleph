@@ -92,6 +92,22 @@ pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
     }
 }
 
+/// Check whether `path` is under `prefix` on a path-segment boundary.
+///
+/// Plain `starts_with` would let a narrowing prefix `/api` authorise
+/// `/apikeys/dump`; this requires the match to end at a `/` boundary (or
+/// exactly equal the prefix). An empty or `/` prefix matches everything.
+fn path_has_prefix(path: &str, prefix: &str) -> bool {
+    if prefix.is_empty() || prefix == "/" {
+        return true;
+    }
+    let prefix = prefix.strip_suffix('/').unwrap_or(prefix);
+    match path.strip_prefix(prefix) {
+        Some(rest) => rest.is_empty() || rest.starts_with('/'),
+        None => false,
+    }
+}
+
 impl EndpointPattern {
     /// Check whether a request (method, host, path) matches this pattern.
     pub fn matches(&self, method: &str, host: &str, path: &str) -> bool {
@@ -101,8 +117,8 @@ impl EndpointPattern {
             return false;
         }
 
-        // Path prefix check
-        if !path.starts_with(&self.path_prefix) {
+        // Path prefix check (segment-boundary aware)
+        if !path_has_prefix(path, &self.path_prefix) {
             return false;
         }
 

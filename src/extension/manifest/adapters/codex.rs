@@ -23,15 +23,21 @@ impl ManifestAdapter for CodexAdapter {
         let content = std::fs::read_to_string(&manifest_path)?;
         let json: serde_json::Value = serde_json::from_str(&content)?;
 
-        let plugin_id = json
+        // Sanitize the declared name into a valid plugin id so a third-party
+        // manifest cannot claim an arbitrary/colliding id (e.g. "network",
+        // "../x", "Other/Name") as the capability-registry key.
+        let raw_id = json
             .get("name")
             .and_then(|v| v.as_str())
             .unwrap_or_else(|| {
                 dir.file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("unknown")
-            })
-            .to_string();
+            });
+        let mut plugin_id = crate::extension::manifest::sanitize_plugin_id(raw_id);
+        if plugin_id.is_empty() {
+            plugin_id = "unknown".to_string();
+        }
 
         let mut caps = vec![];
 

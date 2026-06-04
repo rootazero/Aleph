@@ -108,7 +108,7 @@ fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError
 /// - Single-line comments (`// ...`)
 /// - Multi-line comments (`/* ... */`)
 /// - Preserves strings that contain comment-like patterns
-fn strip_json_comments(input: &str) -> String {
+pub(crate) fn strip_json_comments(input: &str) -> String {
     let mut result = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
     let mut in_string = false;

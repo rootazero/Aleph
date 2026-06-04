@@ -49,8 +49,21 @@ impl ConfigManager {
         // Merge all configs in priority order
         let mut all_files: Vec<_> = config_files.into_iter().chain(alt_files).collect();
 
-        // Deduplicate (prefer .jsonc over .json for same directory)
-        all_files.sort();
+        // Deduplicate (prefer .jsonc over .json for same directory).
+        // Sort by parent, then place `.jsonc` before `.json` within a directory
+        // so `dedup_by` (which keeps the *first* of each adjacent pair) retains
+        // the richer comment-supporting variant. A plain `sort()` would order
+        // `aleph.json` before `aleph.jsonc` and drop the `.jsonc`.
+        all_files.sort_by(|a, b| {
+            let ext_rank = |p: &Path| match p.extension().and_then(|e| e.to_str()) {
+                Some("jsonc") => 0,
+                _ => 1,
+            };
+            a.parent()
+                .cmp(&b.parent())
+                .then_with(|| ext_rank(a).cmp(&ext_rank(b)))
+                .then_with(|| a.cmp(b))
+        });
         all_files.dedup_by(|a, b| a.parent() == b.parent() && a.extension() != b.extension());
 
         debug!("Found {} config files to merge", all_files.len());
@@ -190,67 +203,15 @@ impl ConfigManager {
 
 /// Parse JSONC (JSON with comments)
 fn parse_jsonc(content: &str, path: &Path) -> Result<AlephConfig, ExtensionError> {
-    // Remove single-line comments
-    let mut cleaned = String::new();
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("//") {
-            continue;
-        }
-        // Handle inline comments
-        if let Some(pos) = line.find("//") {
-            // Check if it's inside a string (naive check)
-            let before = &line[..pos];
-            let quote_count = before.matches('"').count();
-            if quote_count % 2 == 0 {
-                // Not inside a string, remove comment
-                cleaned.push_str(&line[..pos]);
-                cleaned.push('\n');
-                continue;
-            }
-        }
-        cleaned.push_str(line);
-        cleaned.push('\n');
-    }
-
-    // Remove block comments /* ... */
-    let mut result = String::new();
-    let mut chars = cleaned.chars().peekable();
-    let mut in_string = false;
-
-    while let Some(ch) = chars.next() {
-        if ch == '"' && !in_string {
-            in_string = true;
-            result.push(ch);
-        } else if ch == '"' && in_string {
-            in_string = false;
-            result.push(ch);
-        } else if ch == '/' && !in_string {
-            if chars.peek() == Some(&'*') {
-                chars.next(); // consume *
-                              // Skip until */
-                loop {
-                    match chars.next() {
-                        Some('*') if chars.peek() == Some(&'/') => {
-                            chars.next();
-                            break;
-                        }
-                        None => break,
-                        _ => {}
-                    }
-                }
-            } else {
-                result.push(ch);
-            }
-        } else {
-            result.push(ch);
-        }
-    }
+    // Strip comments via the shared, escape-aware implementation (the previous
+    // naive line/quote-count stripper mis-tracked `\"` inside strings and could
+    // corrupt valid config).
+    let stripped = loader::strip_json_comments(content);
 
     // Handle trailing commas (common in JSONC)
     // Use regex to handle commas followed by whitespace before ] or }
     let trailing_comma_re = regex::Regex::new(r",(\s*[\]}])").unwrap();
-    let result = trailing_comma_re.replace_all(&result, "$1").to_string();
+    let result = trailing_comma_re.replace_all(&stripped, "$1").to_string();
 
     serde_json::from_str(&result)
         .map_err(|e| ExtensionError::config_parse(path, format!("JSONC parse error: {}", e)))

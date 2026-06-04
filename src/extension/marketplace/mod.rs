@@ -224,6 +224,12 @@ impl MarketplaceManager {
             )),
             1 => {
                 let result = &results[0];
+                // Verify integrity before installing when the marketplace entry
+                // declares a hash (no-op when `sha256` is absent).
+                installer::verify_plugin_integrity(
+                    &result.plugin_path,
+                    result.plugin.sha256.as_deref(),
+                )?;
                 let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
                 installer::install_plugin_from_cache(&result.plugin_path, &install_dir, plugin_name)
             }

@@ -636,7 +636,7 @@ impl HookExecutor {
         // Sort by priority (lower value = earlier execution)
         interceptors.sort_by_key(|h| h.priority.as_i32());
 
-        let current_context = context;
+        let mut current_context = context;
 
         for hook in interceptors {
             // Check matcher pattern
@@ -698,6 +698,13 @@ impl HookExecutor {
                         return Ok((current_context, accumulated));
                     }
                 }
+            }
+
+            // Thread this interceptor's input rewrite forward so the next
+            // interceptor in the chain observes the updated arguments (the
+            // documented "each hook receives the previous result" contract).
+            if let Some(ref updated) = accumulated.updated_input {
+                current_context.arguments = Some(updated.to_string());
             }
         }
 

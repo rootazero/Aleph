@@ -72,6 +72,7 @@ impl AdapterRegistry {
     /// Registered adapters (by descending priority):
     /// - Claude Code TOML (100)
     /// - Claude Code JSON (90)
+    /// - Aleph native TOML (85)
     /// - Codex CLI (80)
     /// - Cursor IDE (70)
     /// - Auto-discover (-100)
@@ -79,6 +80,7 @@ impl AdapterRegistry {
         let mut registry = Self::new();
         registry.register(Box::new(super::cc_plugin_toml::ClaudeCodeTomlAdapter));
         registry.register(Box::new(super::cc_plugin_json::ClaudeCodeJsonAdapter));
+        registry.register(Box::new(super::adapters::aleph_toml::AlephTomlAdapter));
         registry.register(Box::new(super::adapters::codex::CodexAdapter));
         registry.register(Box::new(super::adapters::cursor::CursorAdapter));
         registry.register(Box::new(

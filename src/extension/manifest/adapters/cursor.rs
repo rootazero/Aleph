@@ -33,9 +33,20 @@ impl ManifestAdapter for CursorAdapter {
 
         // Try .cursor-plugin/plugin.json first
         if let Ok(content) = std::fs::read_to_string(dir.join(".cursor-plugin/plugin.json")) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Err(e) => tracing::warn!(
+                    "Malformed .cursor-plugin/plugin.json in {}: {}",
+                    dir.display(),
+                    e
+                ),
+                Ok(json) => {
                 if let Some(n) = json.get("name").and_then(|v| v.as_str()) {
-                    plugin_id = n.to_string();
+                    // Sanitize so a third-party manifest cannot claim an
+                    // arbitrary/colliding capability-registry id.
+                    let sanitized = crate::extension::manifest::sanitize_plugin_id(n);
+                    if !sanitized.is_empty() {
+                        plugin_id = sanitized;
+                    }
                 }
                 name = json.get("name").and_then(|v| v.as_str()).map(String::from);
                 version = json
@@ -80,6 +91,7 @@ impl ManifestAdapter for CursorAdapter {
                     if let Ok(r) = parsers::parse_skills_dir(dir, rules_path, &plugin_id) {
                         caps.extend(r);
                     }
+                }
                 }
             }
         }

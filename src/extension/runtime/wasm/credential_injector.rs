@@ -111,14 +111,46 @@ pub fn inject_credential(
 
         CredentialInject::Query { param_name } => {
             let mut parsed = parsed;
-            parsed
-                .query_pairs_mut()
-                .append_pair(param_name, secret_value);
+            // Drop any plugin-supplied value for the credential param so it
+            // cannot shadow (server-precedence dependent) or read back the
+            // injected secret, then append our own.
+            let preserved: Vec<(String, String)> = parsed
+                .query_pairs()
+                .filter(|(k, _)| k.as_ref() != param_name.as_str())
+                .map(|(k, v)| (k.into_owned(), v.into_owned()))
+                .collect();
+            {
+                let mut serializer = parsed.query_pairs_mut();
+                serializer.clear();
+                serializer.extend_pairs(preserved);
+                serializer.append_pair(param_name, secret_value);
+            }
             Ok(Some(parsed.to_string()))
         }
 
         CredentialInject::UrlPath { placeholder } => {
-            let modified = url.replace(placeholder, secret_value);
+            // Percent-encode the structure-breaking characters of the secret so
+            // it cannot alter the URL (host confusion via '@', extra path
+            // segments via '/', query/fragment injection via '?'/'#', etc.).
+            // Unreserved characters (alphanumerics, '-', '_', '.', '~') and
+            // sub-delims are left intact so ordinary tokens pass through.
+            use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
+            const PATH_SEGMENT: &AsciiSet = &CONTROLS
+                .add(b' ')
+                .add(b'"')
+                .add(b'#')
+                .add(b'<')
+                .add(b'>')
+                .add(b'?')
+                .add(b'`')
+                .add(b'{')
+                .add(b'}')
+                .add(b'/')
+                .add(b'\\')
+                .add(b'@')
+                .add(b'%');
+            let encoded = utf8_percent_encode(secret_value, PATH_SEGMENT).to_string();
+            let modified = url.replace(placeholder, &encoded);
             Ok(Some(modified))
         }
     }

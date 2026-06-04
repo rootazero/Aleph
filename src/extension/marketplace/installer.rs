@@ -64,8 +64,25 @@ pub fn install_plugin_from_cache(
         )
     })?;
 
-    // 4. Copy the plugin directory recursively.
-    copy_dir_recursive(source_path, &dest)?;
+    // 4. Stage into a temp dir, then atomically rename into place. A direct
+    //    recursive copy that fails partway (disk full, permission error, or a
+    //    concurrent install) would leave a half-populated directory at `dest`
+    //    that both looks installed and blocks reinstall.
+    let staging = install_dir.join(format!(".tmp-install-{plugin_name}"));
+    if staging.exists() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    if let Err(e) = copy_dir_recursive(source_path, &staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&staging, &dest) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!(
+            "Failed to finalize install of '{plugin_name}' into '{}': {e}",
+            dest.display()
+        ));
+    }
 
     Ok(dest)
 }

@@ -102,7 +102,7 @@ impl WasmCapabilityKernel {
             .unwrap_or(false)
     }
 
-    pub fn log(&self, _level: &str, msg: &str) -> Result<(), CapabilityError> {
+    pub fn log(&self, level: &str, msg: &str) -> Result<(), CapabilityError> {
         let prev = self.log_count.fetch_add(1, Ordering::SeqCst);
         if prev >= self.limits.max_log_entries {
             self.log_count.fetch_sub(1, Ordering::SeqCst);
@@ -110,7 +110,7 @@ impl WasmCapabilityKernel {
                 "log entry limit exceeded".to_string(),
             ));
         }
-        let _msg = if msg.len() > self.limits.max_log_message_bytes {
+        let msg = if msg.len() > self.limits.max_log_message_bytes {
             // Find a valid char boundary at or before the byte limit
             let mut end = self.limits.max_log_message_bytes;
             while end > 0 && !msg.is_char_boundary(end) {
@@ -120,6 +120,15 @@ impl WasmCapabilityKernel {
         } else {
             msg
         };
+        // Actually emit the (rate-limited, truncated) plugin log line. Without
+        // this the entire host log function was a silent no-op.
+        let plugin_id = &self.plugin_id;
+        match level {
+            "error" => tracing::error!(target: "wasm_plugin", plugin_id, "{}", msg),
+            "warn" => tracing::warn!(target: "wasm_plugin", plugin_id, "{}", msg),
+            "debug" | "trace" => tracing::debug!(target: "wasm_plugin", plugin_id, "{}", msg),
+            _ => tracing::info!(target: "wasm_plugin", plugin_id, "{}", msg),
+        }
         Ok(())
     }
 
