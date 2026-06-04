@@ -81,6 +81,27 @@ impl SemanticUnit {
             SemanticUnit::ToolRound { tool_use_index, .. } => *tool_use_index,
         }
     }
+
+    /// The latest (largest) message index in this unit.
+    ///
+    /// For a `ToolRound` this is the follow-up (if present), else the tool
+    /// result — a round can straddle a tail boundary that its `first_index`
+    /// (the tool-use message) sits below.
+    pub fn last_index(&self) -> usize {
+        match self {
+            SemanticUnit::UserMessage { index } => *index,
+            SemanticUnit::AssistantText { index } => *index,
+            SemanticUnit::ToolRound {
+                tool_use_index,
+                tool_result_index,
+                follow_up_index,
+                ..
+            } => follow_up_index
+                .unwrap_or(*tool_result_index)
+                .max(*tool_result_index)
+                .max(*tool_use_index),
+        }
+    }
 }
 
 // =============================================================================
@@ -219,8 +240,11 @@ impl ToolAwareChunker {
     /// # Parameters
     /// - `units` — the semantic units to group.
     /// - `messages` — the original message slice (used for token estimation).
-    /// - `fresh_start` — units whose `first_index() >= fresh_start` are excluded
-    ///   (they belong to the protected "fresh tail").
+    /// - `fresh_start` — units that touch the protected "fresh tail" are
+    ///   excluded. A unit is excluded when *any* of its messages falls at or
+    ///   beyond `fresh_start` (checked via `last_index()`), so a `ToolRound`
+    ///   whose tool-use sits below the boundary but whose result/follow-up
+    ///   crosses it is never both summarized here and kept verbatim in the tail.
     ///
     /// # Invariants
     /// - A single unit is **never split**, even if it alone exceeds the limit.
@@ -236,8 +260,9 @@ impl ToolAwareChunker {
         let mut current_tokens: usize = 0;
 
         for unit in units {
-            // Skip units that touch the fresh tail.
-            if unit.first_index() >= fresh_start {
+            // Skip units that touch the fresh tail. Guard on the unit's last
+            // index so a ToolRound straddling the boundary is excluded whole.
+            if unit.last_index() >= fresh_start {
                 break;
             }
 

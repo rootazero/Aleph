@@ -169,6 +169,14 @@ impl ContentIndex {
         let tx = conn.transaction()?;
         let mut previews = Vec::new();
         {
+            // Re-indexing the same `source` replaces its prior chunks rather
+            // than appending. `(source, chunk_no)` is the logical identity used
+            // by RRF fusion; a second insert under the same source (e.g. a tool
+            // result replayed on retry) would otherwise produce duplicate
+            // `chunk_no`s, silently merging physically distinct chunks during
+            // fusion and double-counting sections.
+            tx.execute("DELETE FROM chunks WHERE source = ?1", params![source])?;
+            tx.execute("DELETE FROM chunks_tri WHERE source = ?1", params![source])?;
             let mut stmt = tx.prepare(
                 "INSERT INTO chunks (title, body, source, chunk_no) VALUES (?1, ?2, ?3, ?4)",
             )?;
@@ -288,7 +296,10 @@ fn query_index(
          LIMIT ?2"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![match_expr, fetch as i64], |row| {
+    // Clamp to i64 so a very large `fetch` cannot truncate to a negative
+    // value, which SQLite would interpret as "no limit" (unbounded scan).
+    let fetch = i64::try_from(fetch).unwrap_or(i64::MAX);
+    let rows = stmt.query_map(params![match_expr, fetch], |row| {
         Ok(RankedRow {
             source: row.get(0)?,
             chunk_no: row.get(1)?,
