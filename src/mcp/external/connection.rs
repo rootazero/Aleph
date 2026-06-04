@@ -470,11 +470,30 @@ impl McpServerConnection {
             "Calling tool"
         );
 
-        let response = self.transport.send_request(&request).await?;
+        let response = match self.transport.send_request(&request).await {
+            Ok(r) => r,
+            Err(e) => {
+                // Classify the failure for actionable diagnostics, then surface
+                // the original error unchanged (variant-preserving, non-breaking).
+                let kind = crate::mcp::classify_mcp_error(&e.to_string());
+                tracing::warn!(
+                    server = %self.name,
+                    tool = %tool_name,
+                    error_kind = kind.as_str(),
+                    error = %e,
+                    "MCP tool call failed at transport"
+                );
+                return Err(e);
+            }
+        };
         let result = response.into_result().map_err(|e| {
+            let kind = crate::mcp::classify_mcp_error(&e.to_string());
             AlephError::IoError(format!(
-                "Tool call '{}' on '{}' failed: {}",
-                tool_name, self.name, e
+                "Tool call '{}' on '{}' failed: {}{}",
+                tool_name,
+                self.name,
+                e,
+                kind.guidance_suffix()
             ))
         })?;
 
@@ -499,9 +518,12 @@ impl McpServerConnection {
                 .collect::<Vec<_>>()
                 .join("\n");
 
+            let kind = crate::mcp::classify_mcp_error(&error_text);
             return Err(AlephError::IoError(format!(
-                "Tool '{}' returned error: {}",
-                tool_name, error_text
+                "Tool '{}' returned error: {}{}",
+                tool_name,
+                error_text,
+                kind.guidance_suffix()
             )));
         }
 
