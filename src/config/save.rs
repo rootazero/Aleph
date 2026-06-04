@@ -6,10 +6,7 @@ use crate::config::Config;
 use crate::error::{AlephError, Result};
 use std::fs;
 use std::path::Path;
-use tracing::{debug, error, info};
-// `warn` is only used by the Unix permission-setting path below.
-#[cfg(unix)]
-use tracing::warn;
+use tracing::{debug, error, info, warn};
 
 impl Config {
     /// Save configuration to a TOML file with atomic write
