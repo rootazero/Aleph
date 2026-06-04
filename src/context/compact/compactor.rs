@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use super::summary_utils::{strip_analysis_block, IDENTIFIER_PRESERVATION};
+use super::summary_utils::{build_window_summary_prompt, latest_user_task, strip_analysis_block};
 use crate::memory::session_compactor::summary_source::SessionSummarySource;
 use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
@@ -233,44 +233,16 @@ impl ContextCompactor {
         let transcript = serialize_transcript(window);
         let tokens_before = estimate_tokens(&transcript);
 
-        // Step 4: build prompt with token budget
+        // Step 4: build prompt with token budget, anchored to the live task.
+        // The user's current request lives in the fresh tail we are about to
+        // keep (`messages[cut_end..]`); deriving the focus from it here means
+        // task-anchoring needs no extra plumbing from the harness — the live
+        // task is already in the message list the compactor owns. Biasing the
+        // summary toward the active task is the convergent gap vs hermes
+        // ("Active Task") / openclaw ("last thing the user requested").
         let token_budget = (tokens_before as f32 * self.config.target_ratio) as usize;
-        let prompt = format!(
-            "Summarize the following conversation transcript in at most {token_budget} tokens.\n\
-             \n\
-             First, analyze the conversation in an <analysis> block (this will be stripped):\n\
-             \n\
-             <analysis>\n\
-             1. User's primary request and intent\n\
-             2. Key technical concepts and decisions made\n\
-             3. Files and code sections involved (preserve exact paths)\n\
-             4. Errors encountered and how they were resolved\n\
-             5. Problem-solving approaches tried (what worked, what didn't)\n\
-             </analysis>\n\
-             \n\
-             Then produce the final summary in a <summary> block using these MANDATORY sections:\n\
-             \n\
-             <summary>\n\
-             ## Primary Request\n\
-             [User's primary request and intent — never lose this]\n\
-             \n\
-             ## Key Decisions\n\
-             [Decisions made and their rationale]\n\
-             \n\
-             ## Files & Code\n\
-             [File paths and code sections involved — preserve exact paths]\n\
-             \n\
-             ## Current State\n\
-             [Most recent operations and current work state, detailed]\n\
-             \n\
-             ## Pending\n\
-             [Pending tasks, unresolved problems, and next steps]\n\
-             </summary>\n\
-             \n\
-             Omit: greetings, filler, redundant confirmations.{IDENTIFIER_PRESERVATION}\n\
-             \n\
-             ---TRANSCRIPT---\n{transcript}\n---END---"
-        );
+        let focus = latest_user_task(&messages[cut_end..]);
+        let prompt = build_window_summary_prompt(&transcript, token_budget, focus.as_deref());
 
         // Step 5–7: attempt LLM call with timeout. The emptiness check runs on
         // the *stripped* output, not the raw LLM text: a model (especially the
@@ -339,9 +311,15 @@ impl ContextCompactor {
     /// Used by `session_split::summarize_pretail` to produce the seed text for
     /// a child session without running a full `compact()` in-place.  Falls back
     /// to deterministic truncation when the LLM call fails (mirrors `compact`).
+    ///
+    /// `focus` is the user's active task (the most recent request preserved
+    /// verbatim in the child's fresh tail). Passing it anchors the pre-tail
+    /// summary to the live work — the heavy-compaction path where losing the
+    /// task thread hurts most. `None` keeps the historical static prompt.
     pub(crate) async fn summarize_slice(
         &self,
         messages: &[UnifiedMessage],
+        focus: Option<&str>,
     ) -> anyhow::Result<String> {
         if messages.is_empty() {
             return Ok(String::new());
@@ -351,42 +329,7 @@ impl ContextCompactor {
         let tokens_before = estimate_tokens(&transcript);
         let token_budget = (tokens_before as f32 * self.config.target_ratio) as usize;
 
-        let prompt = format!(
-            "Summarize the following conversation transcript in at most {token_budget} tokens.\n\
-             \n\
-             First, analyze the conversation in an <analysis> block (this will be stripped):\n\
-             \n\
-             <analysis>\n\
-             1. User's primary request and intent\n\
-             2. Key technical concepts and decisions made\n\
-             3. Files and code sections involved (preserve exact paths)\n\
-             4. Errors encountered and how they were resolved\n\
-             5. Problem-solving approaches tried (what worked, what didn't)\n\
-             </analysis>\n\
-             \n\
-             Then produce the final summary in a <summary> block using these MANDATORY sections:\n\
-             \n\
-             <summary>\n\
-             ## Primary Request\n\
-             [User's primary request and intent — never lose this]\n\
-             \n\
-             ## Key Decisions\n\
-             [Decisions made and their rationale]\n\
-             \n\
-             ## Files & Code\n\
-             [File paths and code sections involved — preserve exact paths]\n\
-             \n\
-             ## Current State\n\
-             [Most recent operations and current work state, detailed]\n\
-             \n\
-             ## Pending\n\
-             [Pending tasks, unresolved problems, and next steps]\n\
-             </summary>\n\
-             \n\
-             Omit: greetings, filler, redundant confirmations.{IDENTIFIER_PRESERVATION}\n\
-             \n\
-             ---TRANSCRIPT---\n{transcript}\n---END---"
-        );
+        let prompt = build_window_summary_prompt(&transcript, token_budget, focus);
 
         let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
 
@@ -692,6 +635,81 @@ mod tests {
         );
     }
 
+    /// Provider that records the prompt text of the last `process()` call so a
+    /// test can assert what actually reached the summarizer.
+    #[derive(Clone)]
+    struct CapturingProvider {
+        last_prompt: Arc<std::sync::Mutex<String>>,
+        response: String,
+    }
+
+    impl CapturingProvider {
+        fn new(response: impl Into<String>) -> Self {
+            Self {
+                last_prompt: Arc::new(std::sync::Mutex::new(String::new())),
+                response: response.into(),
+            }
+        }
+        fn prompt(&self) -> String {
+            self.last_prompt.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::providers::AiProvider for CapturingProvider {
+        fn process(
+            &self,
+            payload: crate::providers::adapter::RequestPayload<'_>,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = crate::error::Result<crate::providers::adapter::ProviderResponse>,
+                    > + Send
+                    + '_,
+            >,
+        > {
+            if let Some(first) = payload.messages.first() {
+                *self.last_prompt.lock().unwrap() = first.text_content();
+            }
+            let resp = self.response.clone();
+            Box::pin(
+                async move { Ok(crate::providers::adapter::ProviderResponse::text_only(resp)) },
+            )
+        }
+        fn name(&self) -> &str {
+            "capturing"
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    #[tokio::test]
+    async fn compaction_anchors_summary_to_live_task_in_tail() {
+        // The user's current request lives in the kept fresh tail. The compactor
+        // must derive it as the focus and inject it into the summarizer prompt so
+        // the summary of older turns is biased toward the active task (hermes /
+        // openclaw task-anchoring parity).
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nok\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider.clone(), CompactorConfig::default());
+
+        // 12 messages, fresh_tail 6 → window = [0..6], tail = [6..12]. Make the
+        // last user turn a distinctive live task.
+        let mut messages = make_messages(12);
+        messages[10] = UnifiedMessage::user("LIVE_TASK: migrate the vector store");
+
+        let result = compactor.compact(&mut messages, 6, None).await.unwrap();
+        assert_eq!(result.strategy_used, CompactStrategy::LlmSummary);
+
+        let prompt = provider.prompt();
+        assert!(
+            prompt.contains("<conversation_focus>")
+                && prompt.contains("LIVE_TASK: migrate the vector store"),
+            "summarizer prompt must carry the live task as focus; got:\n{prompt}"
+        );
+    }
+
     #[tokio::test]
     async fn summarize_slice_recovers_on_analysis_only_output() {
         // Same degenerate case for the session-split seed path: an analysis-only
@@ -703,7 +721,7 @@ mod tests {
         let compactor = ContextCompactor::new(provider, CompactorConfig::default());
 
         let messages = make_messages(6);
-        let seed = compactor.summarize_slice(&messages).await.unwrap();
+        let seed = compactor.summarize_slice(&messages, None).await.unwrap();
 
         assert!(
             !seed.trim().is_empty(),
@@ -768,7 +786,9 @@ mod tests {
                 arguments: serde_json::json!({}),
             }],
         }); // index 7
-        messages.push(UnifiedMessage::tool_result("pair", "search", "answer", false)); // index 8
+        messages.push(UnifiedMessage::tool_result(
+            "pair", "search", "answer", false,
+        )); // index 8
         messages.push(UnifiedMessage::user("end")); // index 9
 
         compactor.compact(&mut messages, 2, None).await.unwrap();
