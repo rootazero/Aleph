@@ -326,7 +326,8 @@
       "policies": "策略",
       "routing_rules": "路由规则",
       "security": "安全",
-      "auth": "令牌认证"
+      "auth": "令牌认证",
+      "model_route": "模型路由"
     },
     "general": {
       "title": "通用设置",
@@ -1217,6 +1218,28 @@
       "default_audio_provider": "默认音频提供商",
       "default_video_provider": "默认视频提供商",
       "no_provider": "未配置提供商"
+    },
+    "route": {
+      "title": "模型路由",
+      "description": "选择请求如何在本地模型与云端模型之间分配。切换在你的下一条消息生效——无需重启。",
+      "loading": "加载中…",
+      "mode_auto": "自动",
+      "mode_auto_desc": "保持已配置的故障转移顺序。智能默认值——本地与云端平等，按你的提供商配置排序。",
+      "mode_local": "始终本地",
+      "mode_local_desc": "仅限本机端点（例如 http://localhost:11434）。云端被排除——适用于离线或敏感工作。",
+      "mode_cloud": "始终云端",
+      "mode_cloud_desc": "优先使用公共 API 旗舰模型。本地作为不设门槛的最后兜底降级保留。",
+      "allow_escalation": "允许借用云端（需审批）",
+      "allow_escalation_desc": "若没有本地提供商成功，在尝试云端提供商作为最后手段前先征求确认。关闭时：此模式下绝不使用云端。",
+      "apply": "应用",
+      "saving": "保存中…",
+      "applied": "已应用——你的下一条消息将使用此路由。",
+      "preferred_providers": "首选提供商",
+      "preferred_providers_desc": "可选。固定每个层级首先拨打的已配置端点——所选提供商会跳到其层级最前。保持“配置顺序”则沿用你的提供商顺序。",
+      "local_provider": "本地提供商",
+      "cloud_provider": "云端提供商",
+      "configured_order": "配置顺序（不固定）",
+      "no_providers": "此层级没有已配置的提供商。"
     }
   },
   "agents": {

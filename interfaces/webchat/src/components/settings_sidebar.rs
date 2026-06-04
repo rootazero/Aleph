@@ -89,7 +89,7 @@ impl SettingsTab {
             Self::EmbeddingProviders => t_string!(i18n, settings.tabs.embedding).to_string(),
             Self::RerankingProviders => t_string!(i18n, settings.tabs.reranking).to_string(),
             Self::GenerationProviders => t_string!(i18n, settings.tabs.generation).to_string(),
-            Self::ModelRoute => "Model Routing".to_string(),
+            Self::ModelRoute => t_string!(i18n, settings.tabs.model_route).to_string(),
             Self::Memory => t_string!(i18n, settings.tabs.memory).to_string(),
             Self::Mcp => t_string!(i18n, settings.tabs.mcp).to_string(),
             Self::Plugins => t_string!(i18n, settings.tabs.plugins).to_string(),

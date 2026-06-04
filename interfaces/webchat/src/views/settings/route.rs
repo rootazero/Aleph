@@ -8,31 +8,18 @@
 
 use crate::api::{RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
 use crate::context::DashboardState;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-/// The three selectable modes with their display copy.
-const MODES: &[(&str, &str, &str)] = &[
-    (
-        "auto",
-        "Auto",
-        "Keep the configured failover order. The smart default — local and cloud are peers, ordered by your provider config.",
-    ),
-    (
-        "always_local",
-        "Always Local",
-        "Only on-machine endpoints (e.g. http://localhost:11434). Cloud is dropped — for offline or sensitive work.",
-    ),
-    (
-        "always_cloud",
-        "Always Cloud",
-        "Prefer public-API flagship models. Local stays as an ungated last-resort degrade.",
-    ),
-];
+/// The three selectable mode keys. Display copy is resolved per-locale from the
+/// `settings.route.*` translation table at render time.
+const MODE_KEYS: &[&str] = &["auto", "always_local", "always_cloud"];
 
 #[component]
 pub fn RouteView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let mode = RwSignal::new(String::from("auto"));
     let allow_escalation = RwSignal::new(false);
@@ -94,24 +81,31 @@ pub fn RouteView() -> impl IntoView {
 
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-5xl mx-auto">
-            <h1 class="text-2xl font-bold mb-1 text-text-primary">"Model Routing"</h1>
+            <h1 class="text-2xl font-bold mb-1 text-text-primary">{t!(i18n, settings.route.title)}</h1>
             <p class="text-sm text-text-secondary mb-6">
-                "Choose how requests split between on-machine and cloud models. \
-                 Switching takes effect on your next message — no restart."
+                {t!(i18n, settings.route.description)}
             </p>
 
             <Show when=move || loading.get()>
-                <p class="text-text-secondary">"Loading…"</p>
+                <p class="text-text-secondary">{t!(i18n, settings.route.loading)}</p>
             </Show>
 
             <Show when=move || !loading.get()>
                 <div class="space-y-6">
                     // Mode selector cards
                     <div class="space-y-3">
-                        {MODES.iter().map(|(key, label, desc)| {
+                        {MODE_KEYS.iter().map(|key| {
                             let key = *key;
-                            let label = *label;
-                            let desc = *desc;
+                            let label = move || match key {
+                                "auto" => t_string!(i18n, settings.route.mode_auto),
+                                "always_local" => t_string!(i18n, settings.route.mode_local),
+                                _ => t_string!(i18n, settings.route.mode_cloud),
+                            };
+                            let desc = move || match key {
+                                "auto" => t_string!(i18n, settings.route.mode_auto_desc),
+                                "always_local" => t_string!(i18n, settings.route.mode_local_desc),
+                                _ => t_string!(i18n, settings.route.mode_cloud_desc),
+                            };
                             let selected = Signal::derive(move || mode.get() == key);
                             view! {
                                 <button
@@ -149,10 +143,9 @@ pub fn RouteView() -> impl IntoView {
                                 }
                             />
                             <div>
-                                <div class="font-medium text-text-primary">"Allow borrowing cloud (approval-gated)"</div>
+                                <div class="font-medium text-text-primary">{t!(i18n, settings.route.allow_escalation)}</div>
                                 <p class="text-sm text-text-secondary">
-                                    "If no local provider succeeds, ask before trying a cloud provider as a last resort. \
-                                     Off: cloud is never used in this mode."
+                                    {t!(i18n, settings.route.allow_escalation_desc)}
                                 </p>
                             </div>
                         </div>
@@ -165,10 +158,14 @@ pub fn RouteView() -> impl IntoView {
                             disabled=move || saving.get()
                             on:click=save
                         >
-                            {move || if saving.get() { "Saving…" } else { "Apply" }}
+                            {move || if saving.get() {
+                                t_string!(i18n, settings.route.saving).to_string()
+                            } else {
+                                t_string!(i18n, settings.route.apply).to_string()
+                            }}
                         </button>
                         <Show when=move || saved.get()>
-                            <span class="text-sm text-green-500">"Applied — your next message uses this route."</span>
+                            <span class="text-sm text-green-500">{t!(i18n, settings.route.applied)}</span>
                         </Show>
                     </div>
 
@@ -183,21 +180,17 @@ pub fn RouteView() -> impl IntoView {
                     // the already-configured providers (nothing is redefined here),
                     // satisfying the "select from configured provider/model" ask.
                     <div class="pt-2">
-                        <h3 class="font-semibold text-text-primary mb-1">"Preferred providers"</h3>
+                        <h3 class="font-semibold text-text-primary mb-1">{t!(i18n, settings.route.preferred_providers)}</h3>
                         <p class="text-sm text-text-secondary mb-3">
-                            "Optional. Pin which configured endpoint each tier dials first — \
-                             the chosen provider jumps to the front of its tier. \
-                             Leave on “Configured order” to keep your provider order."
+                            {t!(i18n, settings.route.preferred_providers_desc)}
                         </p>
                         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <ProviderTierSelect
-                                title="Local provider".to_string()
                                 tier="local".to_string()
                                 providers=providers
                                 selected=local_provider
                             />
                             <ProviderTierSelect
-                                title="Cloud provider".to_string()
                                 tier="cloud".to_string()
                                 providers=providers
                                 selected=cloud_provider
@@ -216,11 +209,12 @@ pub fn RouteView() -> impl IntoView {
 /// the page's "Apply" button alongside the mode.
 #[component]
 fn ProviderTierSelect(
-    title: String,
     tier: String,
     providers: RwSignal<Vec<RouteProviderInfo>>,
     selected: RwSignal<String>,
 ) -> impl IntoView {
+    let i18n = use_i18n();
+    let is_local = tier == "local";
     let tier_for_filter = tier.clone();
     let matching = Signal::derive(move || {
         providers
@@ -232,13 +226,19 @@ fn ProviderTierSelect(
 
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-4">
-            <label class="block font-semibold text-text-primary mb-2">{title}</label>
+            <label class="block font-semibold text-text-primary mb-2">
+                {move || if is_local {
+                    t_string!(i18n, settings.route.local_provider).to_string()
+                } else {
+                    t_string!(i18n, settings.route.cloud_provider).to_string()
+                }}
+            </label>
             <select
                 class="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-primary"
                 prop:value=move || selected.get()
                 on:change=move |ev| selected.set(event_target_value(&ev))
             >
-                <option value="">"Configured order (no pin)"</option>
+                <option value="">{t!(i18n, settings.route.configured_order)}</option>
                 {move || matching.get().into_iter().map(|p| {
                     let label = if p.models.is_empty() {
                         p.name.clone()
@@ -252,7 +252,7 @@ fn ProviderTierSelect(
                 }).collect::<Vec<_>>()}
             </select>
             <Show when=move || matching.get().is_empty()>
-                <p class="text-xs text-text-tertiary mt-1">"No configured providers in this tier."</p>
+                <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.route.no_providers)}</p>
             </Show>
         </div>
     }

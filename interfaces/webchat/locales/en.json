@@ -326,7 +326,8 @@
       "policies": "Policies",
       "routing_rules": "Routing Rules",
       "security": "Security",
-      "auth": "Token Auth"
+      "auth": "Token Auth",
+      "model_route": "Model Routing"
     },
     "general": {
       "title": "General Settings",
@@ -1217,6 +1218,28 @@
       "default_audio_provider": "Default Audio Provider",
       "default_video_provider": "Default Video Provider",
       "no_provider": "No provider configured"
+    },
+    "route": {
+      "title": "Model Routing",
+      "description": "Choose how requests split between on-machine and cloud models. Switching takes effect on your next message — no restart.",
+      "loading": "Loading…",
+      "mode_auto": "Auto",
+      "mode_auto_desc": "Keep the configured failover order. The smart default — local and cloud are peers, ordered by your provider config.",
+      "mode_local": "Always Local",
+      "mode_local_desc": "Only on-machine endpoints (e.g. http://localhost:11434). Cloud is dropped — for offline or sensitive work.",
+      "mode_cloud": "Always Cloud",
+      "mode_cloud_desc": "Prefer public-API flagship models. Local stays as an ungated last-resort degrade.",
+      "allow_escalation": "Allow borrowing cloud (approval-gated)",
+      "allow_escalation_desc": "If no local provider succeeds, ask before trying a cloud provider as a last resort. Off: cloud is never used in this mode.",
+      "apply": "Apply",
+      "saving": "Saving…",
+      "applied": "Applied — your next message uses this route.",
+      "preferred_providers": "Preferred providers",
+      "preferred_providers_desc": "Optional. Pin which configured endpoint each tier dials first — the chosen provider jumps to the front of its tier. Leave on “Configured order” to keep your provider order.",
+      "local_provider": "Local provider",
+      "cloud_provider": "Cloud provider",
+      "configured_order": "Configured order (no pin)",
+      "no_providers": "No configured providers in this tier."
     }
   },
   "agents": {
