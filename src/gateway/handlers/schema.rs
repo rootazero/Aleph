@@ -277,7 +277,7 @@ impl TypedHandlerRegistry {
         }
 
         serde_json::json!({
-            "$schema": "https://json-schema.org/draft-07/schema#",
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
             "title": "Aleph Gateway RPC Protocol",
             "description": "JSON-RPC 2.0 protocol schema for Aleph Gateway",
             "methods": methods_schema
@@ -293,7 +293,7 @@ impl TypedHandlerRegistry {
 
             let params_schema = &handler.params_schema;
             let request_body_schema = params_schema
-                .get("definitions")
+                .get("$defs")
                 .and_then(|d| d.get("Root"))
                 .or_else(|| params_schema.get("properties"))
                 .cloned()
