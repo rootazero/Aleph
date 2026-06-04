@@ -2,6 +2,7 @@
 
 use crate::domain::skill::SkillManifest;
 use crate::thinker::xml_util::escape_xml;
+use std::borrow::Cow;
 
 /// Deferred loading guidance appended after skill index in system prompts.
 /// Tells the LLM to call `skill_read` before executing a skill.
@@ -74,6 +75,29 @@ fn render_skill_fragment(skill: &SkillManifest) -> String {
     buf
 }
 
+/// Render a single skill to a *compact* `<skill>…</skill>` XML fragment that
+/// keeps the skill discoverable at a fraction of the character cost.
+///
+/// Emits only the `<name>` and (when present) `<when>` trigger — the
+/// `<description>` is elided. The model still sees the skill exists and what
+/// activates it, and the standing [`DEFERRED_LOADING_GUIDANCE`] tells it to
+/// call `skill_read` for the full instructions anyway, so dropping the inline
+/// description costs no real capability. Used as the second degradation tier
+/// when a full render would overflow the prompt budget.
+fn render_skill_fragment_compact(skill: &SkillManifest) -> String {
+    let mut buf = String::from("  <skill>\n");
+    buf.push_str("    <name>");
+    buf.push_str(&escape_xml(skill.name()));
+    buf.push_str("</name>\n");
+    if let Some(when) = skill.when_to_use() {
+        buf.push_str("    <when>");
+        buf.push_str(&escape_xml(when));
+        buf.push_str("</when>\n");
+    }
+    buf.push_str("  </skill>\n");
+    buf
+}
+
 /// Build an XML fragment listing the given skills for injection into a system prompt.
 ///
 /// Applies [`SkillPromptBudget::default`]; see
@@ -100,10 +124,23 @@ pub fn build_skills_prompt_xml(skills: &[&SkillManifest]) -> String {
 ///
 /// Fast path: when the full set fits within both budget dimensions the skills
 /// are emitted in their original input order (byte-identical to an uncapped
-/// render). Over budget, entries are selected by descending [`SkillSource`]
-/// priority (Workspace > Plugin > Global > Bundled, then name) so the most
-/// specific / user-authored skills survive truncation, and a `<note>` element
-/// tells the model how many were omitted and to call `skill_list`.
+/// render).
+///
+/// Over budget, entries are walked by descending [`SkillSource`] priority
+/// (Workspace > Plugin > Global > Bundled, then name) so the most specific /
+/// user-authored skills keep full detail, then degraded in two tiers rather
+/// than hard-dropped:
+///
+/// 1. **Full** (`<name>` + `<description>` + `<when>`) while the char budget
+///    allows — the first entry is always admitted even if it alone exceeds the
+///    cap.
+/// 2. **Compact** ([`render_skill_fragment_compact`]: `<name>` + `<when>`, the
+///    description elided) for the remainder, so a surviving skill stays
+///    nameable and the model can still `skill_read` it on demand.
+///
+/// `max_skills` caps the total number of rendered entries (full and compact
+/// alike). Only skills that fit in neither tier are omitted, and a `<note>`
+/// element then tells the model how many were dropped and to call `skill_list`.
 ///
 /// [`SkillSource`]: crate::domain::skill::SkillSource
 pub fn build_skills_prompt_xml_with_budget(
@@ -125,8 +162,8 @@ pub fn build_skills_prompt_xml_with_budget(
         return wrap_skills(fragments.iter().map(String::as_str), 0);
     }
 
-    // Over budget: select by descending source priority, then name ascending,
-    // so higher-value skills survive. Stable on ties via name.
+    // Over budget: walk by descending source priority, then name ascending,
+    // so higher-value skills keep full detail. Stable on ties via name.
     let mut order: Vec<usize> = (0..skills.len()).collect();
     order.sort_by(|&a, &b| {
         skills[b]
@@ -146,23 +183,33 @@ pub fn build_skills_prompt_xml_with_budget(
         budget.max_chars
     };
 
-    let mut selected: Vec<&str> = Vec::new();
+    let mut selected: Vec<Cow<'_, str>> = Vec::new();
     let mut used = 0usize;
     for &idx in &order {
+        // `max_skills` caps the total rendered entries (full + compact alike).
         if selected.len() >= cap_skills {
             break;
         }
-        let frag = fragments[idx].as_str();
-        // Always include at least one skill, even if it alone exceeds cap_chars.
-        if !selected.is_empty() && used + frag.len() > cap_chars {
-            break;
+        let full = fragments[idx].as_str();
+        // Tier 1 — full fragment. Always admit the first entry even if it alone
+        // exceeds the char cap.
+        if selected.is_empty() || used + full.len() <= cap_chars {
+            used += full.len();
+            selected.push(Cow::Borrowed(full));
+            continue;
         }
-        used += frag.len();
-        selected.push(frag);
+        // Tier 2 — compact fragment (name + when). Keeps the skill discoverable
+        // at a fraction of the cost; omit only if even this overflows. Keep
+        // scanning so a shorter lower-priority entry may still fit.
+        let compact = render_skill_fragment_compact(skills[idx]);
+        if used + compact.len() <= cap_chars {
+            used += compact.len();
+            selected.push(Cow::Owned(compact));
+        }
     }
 
     let omitted = skills.len() - selected.len();
-    wrap_skills(selected.into_iter(), omitted)
+    wrap_skills(selected.iter().map(|frag| frag.as_ref()), omitted)
 }
 
 /// Wrap rendered `<skill>` fragments in the `<available_skills>` envelope,
@@ -425,5 +472,83 @@ mod tests {
         let xml = build_skills_prompt_xml_with_budget(&refs, &SkillPromptBudget::unlimited());
         assert_eq!(xml.matches("<skill>").count(), 100);
         assert!(!xml.contains("<note>"));
+    }
+
+    fn make_skill_with_when(name: &str, desc: &str, when: &str) -> SkillManifest {
+        let mut m = SkillManifest::new(
+            SkillId::new(name.to_lowercase().replace(' ', "-")),
+            name,
+            desc,
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+        m.set_when_to_use(when.to_string());
+        m
+    }
+
+    #[test]
+    fn compact_fragment_keeps_name_and_when_drops_description() {
+        let skill = make_skill_with_when("Deploy", "a very long description", "on release");
+        let frag = render_skill_fragment_compact(&skill);
+        assert!(frag.contains("<name>Deploy</name>"));
+        assert!(frag.contains("<when>on release</when>"));
+        assert!(!frag.contains("<description>"));
+    }
+
+    #[test]
+    fn over_char_budget_degrades_tail_to_compact_instead_of_dropping() {
+        // Four equal-priority skills with long descriptions. The char budget
+        // fits one full fragment plus several compact ones — the old behaviour
+        // hard-dropped the tail (3 omitted); graceful degradation keeps every
+        // name visible (0 omitted) by eliding descriptions on the tail.
+        let long = "d".repeat(200);
+        let skills: Vec<SkillManifest> = (0..4)
+            .map(|i| make_skill_with_when(&format!("Skill{i}"), &long, &format!("trig{i}")))
+            .collect();
+        let refs: Vec<&SkillManifest> = skills.iter().collect();
+
+        // One full fragment is ~300 chars; a compact one is ~68. Budget admits
+        // the first full (~300) plus the three compact tails (~204).
+        let budget = SkillPromptBudget {
+            max_skills: 0,
+            max_chars: 520,
+        };
+        let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
+
+        // Every skill name stays discoverable.
+        for i in 0..4 {
+            assert!(
+                xml.contains(&format!("<name>Skill{i}</name>")),
+                "Skill{i} name must remain visible after degradation"
+            );
+        }
+        // Exactly one full description survives; the rest degraded to compact.
+        assert_eq!(
+            xml.matches("<description>").count(),
+            1,
+            "only the highest-priority entry keeps its description"
+        );
+        // Compact tails preserve their <when> trigger for discovery.
+        assert!(xml.contains("<when>trig3</when>"));
+        // Nothing was actually dropped, so no omission note.
+        assert!(!xml.contains("<note>"));
+    }
+
+    #[test]
+    fn compact_tier_still_omits_and_notes_when_even_compact_overflows() {
+        // A 1-char budget cannot fit even a compact fragment, so the tail is
+        // truly omitted and the note is emitted — preserving the prior contract.
+        let skills: Vec<SkillManifest> = (0..3)
+            .map(|i| make_skill_with_when(&format!("Skill{i}"), "d", &format!("trig{i}")))
+            .collect();
+        let refs: Vec<&SkillManifest> = skills.iter().collect();
+        let budget = SkillPromptBudget {
+            max_skills: 0,
+            max_chars: 1,
+        };
+
+        let xml = build_skills_prompt_xml_with_budget(&refs, &budget);
+        assert_eq!(xml.matches("<skill>").count(), 1);
+        assert!(xml.contains("2 additional skill(s) omitted"));
     }
 }
