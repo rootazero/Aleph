@@ -799,11 +799,16 @@ impl AgentHarness {
         let turn_id = super::current_turn_id(&events);
         let text = response.text_content();
 
-        // 4a. Stage 5a (#9): Output guardrail. `Block` aborts with
-        // `HarnessError::Llm(ErrorClass::Fixable)` so the orchestrator can
-        // retry; `Sanitize` rewrites the text before persistence and stream.
-        // Tool-use blocks are not rewritten here — Stage 5b's
-        // `ToolCallGuardrail` covers their args.
+        // 4a. Stage 5a (#9): Output guardrail. `Block` aborts the turn with a
+        // terminal `HarnessError::Llm`. The decision's `class` is preserved
+        // through the wrapped `AlephError` so `HarnessError::class()` (and the
+        // security-block trace) reflects whether this was a content-policy
+        // block (`Fixable`) or a fail-closed security-infra error
+        // (`Unexpected`). NOTE: the orchestrator's retry-vs-terminal decision
+        // is currently message-based (`harness_bridge/error.rs`) and does not
+        // yet branch on `class` — both currently terminate. `Sanitize` rewrites
+        // the text before persistence and stream. Tool-use blocks are not
+        // rewritten here — Stage 5b's `ToolCallGuardrail` covers their args.
         let text = if let Some(registry) = self.deps.guardrails.as_ref() {
             match registry.evaluate_output(&text).await {
                 crate::guardrails::GuardrailDecision::Allow => text,
@@ -815,11 +820,20 @@ impl AgentHarness {
                     callback.on_safety_block(&format!("output sanitized by {}", rep.source));
                     rep.text
                 }
-                crate::guardrails::GuardrailDecision::Block { reason, class: _ } => {
+                crate::guardrails::GuardrailDecision::Block { reason, class } => {
                     callback.on_safety_block(&reason);
-                    return Err(HarnessError::Llm(crate::error::AlephError::other(format!(
-                        "output guardrail blocked: {reason}"
-                    ))));
+                    let msg = format!("output guardrail blocked: {reason}");
+                    // Preserve the guardrail's ErrorClass through the wrapped
+                    // AlephError: `Fixable` (model-correctable content/leak
+                    // policy) → a Fixable-classed error; everything else
+                    // (e.g. a fail-closed security-infra failure) → Unexpected.
+                    let err = match class {
+                        crate::error::ErrorClass::Fixable => {
+                            crate::error::AlephError::Validation(msg)
+                        }
+                        _ => crate::error::AlephError::other(msg),
+                    };
+                    return Err(HarnessError::Llm(err));
                 }
             }
         } else {

@@ -14,8 +14,19 @@ pub enum GuardrailDecision {
     /// Replace the content (e.g. PII redaction). Caller MUST swap in
     /// `replacement.text` before continuing.
     Sanitize(Replacement),
-    /// Reject and abort. `class` tells the orchestrator how to propagate:
-    /// `Fixable` feeds back into the model, `Unexpected` aborts the session.
+    /// Reject. `class` is advisory metadata describing the *intended*
+    /// propagation: `Fixable` = a content/policy block the model could
+    /// self-correct, `Unexpected` = a fail-closed/terminal failure.
+    ///
+    /// It is surfaced through the wrapped `HarnessError` so
+    /// `HarnessError::class()` and the security-block trace are accurate, but
+    /// control flow does NOT branch on it today: the output call-site turns
+    /// every `Block` into a terminal `HarnessError`, the input call-site ends
+    /// the turn, and the tool-call call-site skips the single dispatch. The
+    /// orchestrator classifies harness errors by message, not by this class
+    /// (see `orchestrator/harness_bridge/error.rs`; phase6c TODO switches it to
+    /// structural class-based matching). Set `class` correctly anyway so that
+    /// future classifier works without revisiting every call-site.
     Block { reason: String, class: ErrorClass },
     /// Allow but record the warning (no caller-visible mutation).
     Warn { reason: String },
