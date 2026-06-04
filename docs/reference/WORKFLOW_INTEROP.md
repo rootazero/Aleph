@@ -53,6 +53,8 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 |---|---|---|
 | `meta.{name,description,whenToUse,phases}`(含 `phase.model`) | ↔ 无损 | manifest 顶层 |
 | 顺序 `await agent()` 链 | ↔ | 线性 `dependsOn` 链 |
+| `agent("prompt")` 单行 prompt | ↔ 无损 | 字符串字面量 ↔ `prompt` |
+| `agent([ "l1","l2" ].join("\n"))` 多行 prompt | ↔ 无损 | 工程格式签名惯用法:导出按 `\n` 拆行渲染数组,导入按 `.join` 分隔符还原(转义正确解码),裸路径亦对称 |
 | `parallel([agent, agent])` | ↔ | 同拓扑层、彼此无 `dependsOn` 的兄弟步骤 |
 | `agent()` fan-in | ↔ | 一步 `dependsOn` 多个上游 |
 | `opts.{label,model,phase,schema,isolation,agentType}` | ↔ 无损(经内嵌块) | 存 manifest,不入 `WorkflowDef` |
@@ -68,11 +70,16 @@ JSON,camelCase 键(贴合 `.workflow.js` 的 `meta`)。
 ```
 
 导入优先读此块 → 精确还原(`dropped` 为空)。无此块的裸文件则走轻量扫描:提取
-`meta.{name,description,whenToUse}` + 各 `agent()` 的首个字符串字面量为步骤(线性链),
+`meta.{name,description,whenToUse}` + 各 `agent()` 的 prompt 实参为步骤(线性链),
 并把识别到的命令式构造写入 `dropped`。
 
-裸扫描的两点保真处理:
+裸扫描的三点保真处理:
 
+- **多行 prompt 数组**:`agent()` 实参支持两种声明式形态——单行字面量,或
+  `[ "l1","l2" ].join("sep")` 数组(工程格式的主力惯用法);后者把各字符串元素按
+  `.join` 分隔符拼回。元素含标识符(如 `GROUND_TRUTH`)或拼接(`'a' + x`)即视为动态,
+  整条 `agent()` 弃权不导入(R7/R10),与 `.map(...)` 一样属"故意不静态化"。导出端对
+  含 `\n` 的 prompt 也按此惯用法渲染,故导出/导入即便脱去内嵌头亦完全对称。
 - **命令式 needle 只扫代码骨架**:检测 `for`/`if`/`pipeline(`/`parallel(` 等构造前,
   先剥离所有字符串字面量内容(保留引号定界符),因此 prompt 文本里的
   "search **for** files" 不会误报成 `for` 循环。
