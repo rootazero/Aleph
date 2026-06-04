@@ -474,7 +474,11 @@ that bwrap launches inside its mount namespace:
   `allow_fork=true` shared-PID-ns path so the target cannot read
   `aleph-server`'s address space), kernel keyring, `userfaultfd`,
   io_uring, `mknodat`, swap, `syslog`, `reboot`, namespace switching,
-  and `clone`/`unshare` with `CLONE_NEWUSER` (nested user-ns escape).
+  `clone`/`unshare` with `CLONE_NEWUSER` (nested user-ns escape), and the
+  filesystem-handle escape primitives `open_by_handle_at`/`name_to_handle_at`
+  (these reopen an inode from an opaque handle with no pathname, bypassing the
+  **path-based** Landlock hierarchy check — denying them closes the seam
+  between the Landlock and seccomp confinement layers).
   Snapshot-pinned by the `seccomp_denylist_is_frozen` unit test.
 - **seccomp socket gate** (`SeccompNetworkMode`, mapping codex's
   `NetworkSeccompMode`): a type-safe three-state gate on

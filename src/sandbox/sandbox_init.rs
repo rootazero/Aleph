@@ -159,6 +159,18 @@ pub const SECCOMP_DENYLIST_SIMPLE: &[&str] = &[
     "syslog",
     "reboot",
     "setns",
+    // Filesystem-handle escape primitives. Aleph confines the filesystem with
+    // Landlock, which is **path-based**: every rule is a `PathBeneath` over a
+    // permitted directory hierarchy. `open_by_handle_at(2)` opens a file from
+    // an opaque `file_handle` (obtained via `name_to_handle_at(2)`) WITHOUT a
+    // pathname, so the kernel's path-walk — and therefore the Landlock
+    // hierarchy check — is bypassed entirely: a handle to an inode outside the
+    // permitted roots reopens it. Denying both closes that seam between the
+    // Landlock (path) and seccomp (syscall) confinement layers. Neither is used
+    // by ordinary tooling (`open_by_handle_at` needs `CAP_DAC_READ_SEARCH` and
+    // appears only in NFS servers / backup daemons), so EPERM is non-disruptive.
+    "open_by_handle_at",
+    "name_to_handle_at",
 ];
 
 /// Frozen socket-control denylist applied in [`SeccompNetworkMode::UnixOnly`]
@@ -950,6 +962,9 @@ fn syscall_nr(name: &str) -> Option<i64> {
         "syslog" => libc::SYS_syslog,
         "reboot" => libc::SYS_reboot,
         "setns" => libc::SYS_setns,
+        // Filesystem-handle escape primitives (bypass path-based Landlock).
+        "open_by_handle_at" => libc::SYS_open_by_handle_at,
+        "name_to_handle_at" => libc::SYS_name_to_handle_at,
         "clone" => libc::SYS_clone,
         "unshare" => libc::SYS_unshare,
         "socket" => libc::SYS_socket,
@@ -1147,11 +1162,16 @@ mod tests {
                         init_module,finit_module,delete_module,bpf,perf_event_open,ptrace,\
                         process_vm_readv,process_vm_writev,keyctl,add_key,request_key,\
                         userfaultfd,io_uring_setup,io_uring_register,io_uring_enter,mknod,\
-                        mknodat,swapon,swapoff,nfsservctl,syslog,reboot,setns";
+                        mknodat,swapon,swapoff,nfsservctl,syslog,reboot,setns,\
+                        open_by_handle_at,name_to_handle_at";
         assert_eq!(
             joined, expected,
             "seccomp denylist changed — update SP-2 spec"
         );
+        // The FS-handle escape primitives must stay denied: they reopen inodes
+        // from opaque handles, bypassing path-based Landlock confinement.
+        assert!(SECCOMP_DENYLIST_SIMPLE.contains(&"open_by_handle_at"));
+        assert!(SECCOMP_DENYLIST_SIMPLE.contains(&"name_to_handle_at"));
     }
 
     /// Pins the pseudo-device grant sets. These compensate for the
