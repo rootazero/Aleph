@@ -232,8 +232,15 @@ impl AcpAdapterManager {
 
                 match result {
                     Ok((text, _notifications)) => {
-                        if session.is_alive() {
-                            if let Some(sid) = session.acp_session_id() {
+                        // Read liveness + id, then release the per-session mutex
+                        // BEFORE emitting — the persistence hook performs blocking
+                        // disk I/O and must never run under the session lock
+                        // (matches the Removed paths above and the Err arm below).
+                        let alive = session.is_alive();
+                        let sid = if alive { session.acp_session_id() } else { None };
+                        drop(session);
+                        if alive {
+                            if let Some(sid) = sid {
                                 // Idempotent Created: ensure_session can't fire
                                 // it because session_id is None at spawn time.
                                 self.emit_persistence_event(crate::acp::AcpSessionEvent::Created {
@@ -245,9 +252,7 @@ impl AcpAdapterManager {
                                 .await;
                             }
                         } else {
-                            // Process died — evict the entry. Drop session
-                            // lock first to avoid holding it across the write.
-                            drop(session);
+                            // Process died — evict the entry.
                             self.sessions.write().await.remove(&key);
                             self.emit_persistence_event(crate::acp::AcpSessionEvent::Removed {
                                 harness_id: harness_id.to_string(),

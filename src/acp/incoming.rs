@@ -298,15 +298,19 @@ fn apply_line_window(content: &str, line: Option<u64>, limit: Option<u64>) -> St
     if line.is_none() && limit.is_none() {
         return content.to_string();
     }
-    let start = line.unwrap_or(1).max(1) as usize - 1;
+    // Subtract in u64 space (line is clamped to >=1, so this never underflows),
+    // then convert. Width is bounded by the file's line count below.
+    let start = (line.unwrap_or(1).max(1) - 1) as usize;
     let lines: Vec<&str> = content.lines().collect();
-    let end = match limit {
-        Some(n) => (start + n as usize).min(lines.len()),
-        None => lines.len(),
-    };
     if start >= lines.len() {
         return String::new();
     }
+    // `saturating_add` so an attacker-supplied huge `limit` can't overflow
+    // `usize` (a debug-build panic in this "never panics" handler).
+    let end = match limit {
+        Some(n) => start.saturating_add(n as usize).min(lines.len()),
+        None => lines.len(),
+    };
     lines[start..end].join("\n")
 }
 
