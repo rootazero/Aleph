@@ -44,7 +44,13 @@ pub enum MethodPrivilege {
 /// Whole namespaces (method prefixes) that are operator-only in their
 /// entirety — every method under them mutates control-plane state or exposes
 /// secrets, with no guest-safe read variant.
-const OPERATOR_NAMESPACES: &[&str] = &["secret.", "secrets."];
+const OPERATOR_NAMESPACES: &[&str] = &[
+    "secret.",
+    "secrets.",
+    // Embedded PTY terminal: spawning/driving an interactive host shell is a
+    // privileged control-plane action — never expose it to guest/node roles.
+    "pty.",
+];
 
 /// Exact operator-only methods. These are administrative, destructive, or
 /// lifecycle/config-mutating control-plane RPCs. Read-only siblings in the
@@ -200,6 +206,17 @@ mod tests {
             required_privilege("secrets.list"),
             MethodPrivilege::Operator
         );
+    }
+
+    #[test]
+    fn pty_namespace_is_fully_operator() {
+        for m in ["pty.spawn", "pty.input", "pty.resize", "pty.close", "pty.list"] {
+            assert_eq!(
+                required_privilege(m),
+                MethodPrivilege::Operator,
+                "{m} should be operator-only"
+            );
+        }
     }
 
     #[test]
