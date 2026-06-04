@@ -122,9 +122,21 @@ impl ImageData {
             }
         };
 
-        let decoded = general_purpose::STANDARD
-            .decode(base64_data)
-            .map_err(|e| AlephError::other(format!("Base64 decoding failed: {}", e)))?;
+        // Tolerate ASCII whitespace in the payload: data URIs are frequently
+        // line-wrapped (MIME 76-column wrapping) or copy-pasted with stray
+        // newlines. Whitespace carries no base64 bits, so stripping it does not
+        // weaken validation. Only allocate when whitespace is actually present
+        // to keep the common (clean) path zero-cost.
+        let decoded = if base64_data.bytes().any(|b| b.is_ascii_whitespace()) {
+            let cleaned: String = base64_data
+                .chars()
+                .filter(|c| !c.is_ascii_whitespace())
+                .collect();
+            general_purpose::STANDARD.decode(&cleaned)
+        } else {
+            general_purpose::STANDARD.decode(base64_data)
+        }
+        .map_err(|e| AlephError::other(format!("Base64 decoding failed: {}", e)))?;
 
         if decoded.len() > MAX_IMAGE_SIZE_BYTES {
             return Err(AlephError::other(format!(
@@ -290,6 +302,19 @@ mod tests {
             "Error should mention size limit: {}",
             err
         );
+    }
+
+    #[test]
+    fn from_base64_tolerates_whitespace_in_payload() {
+        // "hello" -> base64 "aGVsbG8=", wrapped with a newline as MIME encoders do.
+        let data_uri = "data:image/png;base64,aGVs\nbG8=";
+        let result = ImageData::from_base64(data_uri).unwrap();
+        assert_eq!(result.data, b"hello");
+        assert_eq!(result.format, ImageFormat::Png);
+
+        // Leading/trailing/interior spaces are also tolerated.
+        let spaced = "data:image/png;base64, aGVs bG8= ";
+        assert_eq!(ImageData::from_base64(spaced).unwrap().data, b"hello");
     }
 
     #[test]
