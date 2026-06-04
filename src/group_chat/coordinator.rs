@@ -294,6 +294,23 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_coordinator_plan_tolerates_omitted_optional_fields() {
+        // The coordinator LLM frequently drops the optional `need_summary` and
+        // `guidance` fields. Such a plan must still parse (honoring the model's
+        // respondent selection) rather than failing and falling back to all
+        // personas. `order` defaults to 0, preserving declaration order.
+        let json = r#"{"respondents":[{"persona_id":"arch"},{"persona_id":"pm"}]}"#;
+        let plan = parse_coordinator_plan(json).expect("plan with omitted optionals should parse");
+
+        assert_eq!(plan.respondents.len(), 2);
+        assert_eq!(plan.respondents[0].persona_id, "arch");
+        assert_eq!(plan.respondents[0].order, 0);
+        assert!(plan.respondents[0].guidance.is_empty());
+        assert_eq!(plan.respondents[1].persona_id, "pm");
+        assert!(!plan.need_summary);
+    }
+
+    #[test]
     fn test_parse_coordinator_plan_invalid() {
         let result = parse_coordinator_plan("not json at all");
         assert!(result.is_err());

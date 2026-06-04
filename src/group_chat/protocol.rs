@@ -296,6 +296,11 @@ pub struct CoordinatorPlan {
     /// The personas that should respond in this round, in order.
     pub respondents: Vec<RespondentPlan>,
     /// Whether a summary should be generated after all respondents have spoken.
+    ///
+    /// Defaults to `false` when omitted by the coordinator LLM. Tolerating this
+    /// omission prevents an otherwise-valid plan from being discarded in favor of
+    /// the all-personas fallback just because the model dropped an optional field.
+    #[serde(default)]
     pub need_summary: bool,
 }
 
@@ -305,8 +310,16 @@ pub struct RespondentPlan {
     /// The ID of the persona that should respond.
     pub persona_id: String,
     /// The order in which this persona should respond (lower = earlier).
+    ///
+    /// Defaults to `0` when omitted; respondents are sorted by `order` with a
+    /// stable sort, so omitted orders preserve the coordinator's declaration order.
+    #[serde(default)]
     pub order: u32,
     /// Guidance for the persona on what to focus on.
+    ///
+    /// Defaults to empty when omitted by the coordinator LLM (same as the
+    /// fallback plan), so a missing guidance string never discards the plan.
+    #[serde(default)]
     pub guidance: String,
 }
 
