@@ -39,6 +39,7 @@ pub fn create_platform_driver_from_config(
         &config.deny_read_globs,
         &config.allow_unix_sockets,
         config.dangerously_allow_all_unix_sockets,
+        config.allow_local_binding,
     )
 }
 
@@ -48,6 +49,7 @@ pub fn create_platform_driver_with_config(
     deny_read_globs: &[String],
     allow_unix_sockets: &[std::path::PathBuf],
     dangerously_allow_all_unix_sockets: bool,
+    allow_local_binding: bool,
 ) -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
     #[cfg(target_os = "macos")]
     {
@@ -57,6 +59,7 @@ pub fn create_platform_driver_with_config(
             deny_read_globs: deny_read_globs.to_vec(),
             allow_unix_sockets: allow_unix_sockets.to_vec(),
             dangerously_allow_all_unix_sockets,
+            allow_local_binding,
         }))
     }
     #[cfg(target_os = "linux")]
@@ -71,6 +74,7 @@ pub fn create_platform_driver_with_config(
             deny_read_globs,
             allow_unix_sockets,
             dangerously_allow_all_unix_sockets,
+            allow_local_binding,
         );
         let options = LinuxSandboxOptions {
             mount_proc: linux_config.mount_proc,
@@ -94,6 +98,7 @@ pub fn create_platform_driver_with_config(
             linux_config,
             allow_unix_sockets,
             dangerously_allow_all_unix_sockets,
+            allow_local_binding,
         );
         let options = WindowsSandboxOptions {
             use_restricted_token: windows_config.use_restricted_token,
@@ -119,6 +124,7 @@ pub fn create_platform_driver_with_config(
             deny_read_globs,
             allow_unix_sockets,
             dangerously_allow_all_unix_sockets,
+            allow_local_binding,
         );
         Arc::new(UnsupportedDriver)
     }
