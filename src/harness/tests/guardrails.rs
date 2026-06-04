@@ -801,3 +801,207 @@ async fn tool_call_allow_passes_through_unchanged() {
     assert_eq!(seen[0].1, call.arguments);
     assert!(cb.safety_blocks.is_empty());
 }
+
+// ===========================================================================
+// Stage 5b — Tool-call guardrail on the PARALLEL fast path
+//
+// Before this change the parallel fast path bowed out entirely when any
+// guardrail was wired, so guardrailed deployments never got parallel tool
+// dispatch. The guardrail gate now runs in `act_parallel`'s sequential
+// PASS 0 (Pi-style prep phase), so Block / Sanitize keep working while the
+// execute phase still overlaps. These tests pin that behaviour.
+// ===========================================================================
+
+/// Like `RecordingTools` but reports every call as concurrent-safe, so the
+/// harness takes the `act_parallel` fast path (the default trait impl returns
+/// `false`, which would force the serial loop).
+struct ConcurrentRecordingTools {
+    seen: Mutex<Vec<(String, serde_json::Value)>>,
+}
+
+impl ConcurrentRecordingTools {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            seen: Mutex::new(Vec::new()),
+        })
+    }
+}
+
+#[async_trait]
+impl ToolService for ConcurrentRecordingTools {
+    async fn execute(
+        &self,
+        name: &str,
+        input: serde_json::Value,
+    ) -> Result<crate::session::events::ToolOutput, ToolError> {
+        self.seen.lock().await.push((name.to_string(), input));
+        Ok(crate::session::events::ToolOutput {
+            value: serde_json::json!({"ok": true}),
+            metadata: Default::default(),
+        })
+    }
+    async fn list(&self) -> Vec<ToolDefinition> {
+        Vec::new()
+    }
+    async fn describe(&self, _name: &str) -> Option<ToolDefinition> {
+        None
+    }
+    fn metadata_schema(&self) -> std::sync::Arc<[crate::tool_metadata::ToolDefinition]> {
+        std::sync::Arc::from([])
+    }
+    async fn is_call_concurrent_safe(&self, _name: &str, _input: &serde_json::Value) -> bool {
+        true
+    }
+}
+
+/// Same shape as `make_deps_with_tools` but with the parallel fast path armed
+/// (`parallel_tool_concurrency: Some(8)`) and a `dyn ToolService` so any
+/// concurrent-safe tool fixture can be plugged in.
+fn make_parallel_deps(
+    session: Arc<MockSession>,
+    provider: Arc<dyn AiProvider>,
+    tools: Arc<dyn ToolService>,
+    registry: GuardrailRegistry,
+) -> HarnessDeps {
+    HarnessDeps {
+        session,
+        tools,
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider,
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: Some(Arc::new(registry)),
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: std::sync::Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: Some(8),
+    }
+}
+
+#[tokio::test]
+async fn tool_call_guardrail_block_applies_on_parallel_fast_path() {
+    // Two concurrent-safe calls; the first is blocked by the guardrail. The
+    // fast path must still apply the Block (only the safe call dispatches) and
+    // keep Stage 5b semantics: 1 ToolError + 1 ToolResult, one safety_block.
+    let blocked = NativeToolCall {
+        thought_signature: None,
+        id: "p1".into(),
+        name: "forbidden_tool".into(),
+        arguments: serde_json::json!({"x": 1}),
+    };
+    let allowed = NativeToolCall {
+        thought_signature: None,
+        id: "p2".into(),
+        name: "safe_tool".into(),
+        arguments: serde_json::json!({"y": 2}),
+    };
+    let session = MockSession::new(vec![turn_started(), user_message("run both")]);
+    let provider = provider_with_two_calls(blocked, allowed);
+    let tools = ConcurrentRecordingTools::new();
+    let registry = GuardrailRegistry::builder()
+        .with_tool_call(Arc::new(BlockToolByName("forbidden_tool")))
+        .build();
+    let harness = AgentHarness::new(make_parallel_deps(
+        session.clone(),
+        provider as Arc<dyn AiProvider>,
+        tools.clone(),
+        registry,
+    ));
+
+    let mut cb = CapturingCallback::default();
+    let state = harness
+        .run_turn(&sample_session_id(), &mut cb)
+        .await
+        .expect("run_turn ok");
+    assert_eq!(state, TurnState::Continue);
+
+    let seen = tools.seen.lock().await.clone();
+    assert_eq!(
+        seen.len(),
+        1,
+        "guardrail Block must be applied on the parallel path, got {seen:?}"
+    );
+    assert_eq!(seen[0].0, "safe_tool");
+
+    assert_eq!(cb.safety_blocks.len(), 1, "got {:?}", cb.safety_blocks);
+    assert!(cb.safety_blocks[0].contains("forbidden_tool"));
+
+    let log = session.snapshot().await;
+    let tool_errors = log
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolError { .. }))
+        .count();
+    let tool_results = log
+        .iter()
+        .filter(|r| matches!(r.event, SessionEvent::ToolResult { .. }))
+        .count();
+    assert_eq!(tool_errors, 1, "expected 1 ToolError, got log={log:?}");
+    assert_eq!(tool_results, 1, "expected 1 ToolResult, got log={log:?}");
+}
+
+#[tokio::test]
+async fn tool_call_guardrail_sanitize_applies_on_parallel_fast_path() {
+    // Two concurrent-safe calls, both carrying a SECRET. The guardrail rewrites
+    // each args payload BEFORE the parallel execute phase, so both tools see
+    // [REDACTED] and the fast path still overlaps them.
+    let dirty1 = NativeToolCall {
+        thought_signature: None,
+        id: "p1".into(),
+        name: "send_a".into(),
+        arguments: serde_json::json!({"body": "key is SECRET"}),
+    };
+    let dirty2 = NativeToolCall {
+        thought_signature: None,
+        id: "p2".into(),
+        name: "send_b".into(),
+        arguments: serde_json::json!({"body": "also SECRET here"}),
+    };
+    let session = MockSession::new(vec![turn_started(), user_message("send")]);
+    let provider = provider_with_two_calls(dirty1, dirty2);
+    let tools = ConcurrentRecordingTools::new();
+    let registry = GuardrailRegistry::builder()
+        .with_tool_call(Arc::new(SanitizeToolArgs))
+        .build();
+    let harness = AgentHarness::new(make_parallel_deps(
+        session.clone(),
+        provider as Arc<dyn AiProvider>,
+        tools.clone(),
+        registry,
+    ));
+
+    let mut cb = CapturingCallback::default();
+    let _ = harness
+        .run_turn(&sample_session_id(), &mut cb)
+        .await
+        .expect("run_turn ok");
+
+    let seen = tools.seen.lock().await.clone();
+    assert_eq!(
+        seen.len(),
+        2,
+        "both sanitized calls should dispatch on the parallel path, got {seen:?}"
+    );
+    for (_, args) in &seen {
+        let s = serde_json::to_string(args).unwrap();
+        assert!(s.contains("[REDACTED]"), "tool should see redacted args: {s}");
+        assert!(!s.contains("SECRET"), "raw SECRET leaked into tool args: {s}");
+    }
+    assert!(
+        cb.safety_blocks.is_empty(),
+        "Sanitize must not fire on_safety_block, got {:?}",
+        cb.safety_blocks
+    );
+}

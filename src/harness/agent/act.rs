@@ -18,9 +18,14 @@
 //!   parallel mode skips within-batch dedup, so duplicates fall back to the
 //!   serial path where the memo correctly emits a cached result for the
 //!   second occurrence.
-//! * no guardrail registry is wired — the serial path's three-way Block /
-//!   Sanitize / Pass machinery is intentionally not duplicated here; batches
-//!   with guardrails always run serially.
+//!
+//! A wired guardrail registry no longer forces a serial fall-back. The
+//! tool-call guardrail (Block / Sanitize / Pass) is applied sequentially in
+//! `act_parallel`'s PASS 0 — the same prep/execute split Pi uses (sequential
+//! validate + approval, then concurrent execute) — so guardrailed deployments
+//! keep the parallel fast path. Block reuses the cross-batch-dedup
+//! None-future plumbing (the call is skipped and the guardrail emits its own
+//! `ToolError`); Sanitize rewrites the args the execute phase runs.
 //!
 //! Any failing precondition falls through to the existing serial loop with no
 //! observable behavior change.
@@ -354,20 +359,19 @@ impl AgentHarness {
     ///
     /// All preconditions are checked in O(n) for batch size n; the
     /// `is_call_concurrent_safe` query is one trait await per call. Returns
-    /// `false` cheaply when concurrency is disabled, when guardrails are
-    /// wired, or when there are fewer than two calls.
+    /// `false` cheaply when concurrency is disabled or when there are fewer
+    /// than two calls.
+    ///
+    /// Guardrails no longer force a serial fall-back: the tool-call guardrail
+    /// (Block / Sanitize / Pass) is applied sequentially in `act_parallel`'s
+    /// PASS 0 — the same prep/execute split Pi uses (sequential validate +
+    /// approval, then concurrent execute) — so guardrailed deployments keep
+    /// the parallel fast path instead of paying a full-serial penalty.
     async fn can_parallel_dispatch(&self, tool_calls: &[NativeToolCall]) -> bool {
         let Some(par_n) = self.deps.parallel_tool_concurrency else {
             return false;
         };
         if par_n < 2 || tool_calls.len() < 2 {
-            return false;
-        }
-        // Guardrails (Block / Sanitize / Pass) gate dispatch in the serial
-        // loop. Replicating that surface inside the parallel pipeline would
-        // double the failure modes of the fast path; for now any batch with
-        // guardrails wired falls through to serial.
-        if self.deps.guardrails.is_some() {
             return false;
         }
         // Reject batches with within-batch duplicates so the serial dedup
@@ -426,7 +430,7 @@ impl AgentHarness {
         // ToolError below alongside the normal request-event emission so the
         // session timeline stays linear. PASS 1 then dispatches ONLY the
         // surviving calls in parallel, preserving original input order.
-        let canonical_args: Vec<String> = tool_calls
+        let mut canonical_args: Vec<String> = tool_calls
             .iter()
             .map(|c| super::canonical_json_string(&c.arguments))
             .collect();
@@ -435,6 +439,18 @@ impl AgentHarness {
             .zip(canonical_args.iter())
             .map(|(c, args)| self.is_recent_failure(&c.name, args))
             .collect();
+
+        // Per-index guardrail outcome, populated in PASS 0 (mirrors the serial
+        // path's Stage 5b). `blocked[idx]` => the tool-call guardrail returned
+        // Block (which already emitted a `ToolError` + trace internally), so
+        // PASS 1 builds no future and PASS 2 skips it — reusing the same
+        // None-future plumbing as cross-batch dedup. `sanitized[idx]` carries
+        // rewritten arguments the guardrail wants executed in place of the
+        // model's original (the original args still appear in the already-
+        // emitted `ToolCallRequested` event, matching serial semantics where
+        // the request is logged before sanitisation mutates the call).
+        let mut blocked: Vec<bool> = vec![false; tool_calls.len()];
+        let mut sanitized: Vec<Option<serde_json::Value>> = vec![None; tool_calls.len()];
 
         // PASS 0 — serial: notify callback, emit ToolCallStarted trace,
         // emit ToolCallRequested SessionEvent. Resolve effective per-tool
@@ -462,6 +478,45 @@ impl AgentHarness {
                 at: now_ms(),
             };
             self.deps.session.emit_event(session_id, requested).await?;
+
+            // Stage 5b (#9): tool-call guardrail — applied here in the serial
+            // PASS 0 (Pi-style prep phase) so the parallel execute pass below
+            // stays guardrail-safe. Order matches the serial path: after the
+            // request is logged, before cross-batch dedup.
+            if let Some(registry) = self.deps.guardrails.as_ref() {
+                match self
+                    .apply_tool_call_guardrail(
+                        registry,
+                        session_id,
+                        turn_id,
+                        call,
+                        started_at[idx],
+                        iteration,
+                        callback,
+                    )
+                    .await?
+                {
+                    ToolCallGuardOutcome::Pass => {}
+                    ToolCallGuardOutcome::Sanitize(args) => {
+                        // Execute the rewritten args; keep the canonical
+                        // signature in sync so a later failure records the
+                        // sanitised form (serial parity).
+                        canonical_args[idx] = super::canonical_json_string(&args);
+                        sanitized[idx] = Some(args);
+                    }
+                    ToolCallGuardOutcome::Block => {
+                        // The guardrail already emitted ToolError + trace.
+                        // Treat exactly like a dedup-skipped call: no future,
+                        // no PASS 2 emission.
+                        blocked[idx] = true;
+                        if let Some(ref tracker) = self.stall_tracker {
+                            tracker.record_activity().await;
+                        }
+                        budgets.push(None);
+                        continue;
+                    }
+                }
+            }
 
             if skip[idx] {
                 tracing::warn!(
@@ -528,13 +583,17 @@ impl AgentHarness {
         // later than every future resolves.
         let mut in_flight_guards: Vec<crate::tools::in_flight::InFlightGuard> = Vec::new();
         for (idx, call) in tool_calls.iter().enumerate() {
-            if skip[idx] {
+            if skip[idx] || blocked[idx] {
                 boxed_futs_opt.push(None);
                 continue;
             }
             let tools = self.deps.tools.clone();
             let name = call.name.clone();
-            let args = call.arguments.clone();
+            // Guardrail-sanitised args win over the model's original (the
+            // `ToolCallRequested` event already logged the original).
+            let args = sanitized[idx]
+                .clone()
+                .unwrap_or_else(|| call.arguments.clone());
             let budget = budgets[idx];
             let started = started_at[idx];
             // Each parallel call owns a fresh child token forked from the
