@@ -132,6 +132,18 @@ pub(crate) fn build_prompt(
         messages.push(UnifiedMessage::user(&summary));
     }
 
+    // P2 (sibling of the failure summary above): idempotent-tool no-progress
+    // loop detector. Fires only when a pure-read tool returned the identical
+    // result on the same args ≥ NO_PROGRESS_THRESHOLD times in the visible
+    // window — the success-loop blind spot the failure summary cannot see.
+    // Same `<system-reminder>` channel; a nudge, never a control-flow branch
+    // (R7/R10). Scoped to `events[tail_start..]`, recomputed fresh every Think.
+    if let Some(notice) =
+        crate::tools::no_progress::render_no_progress_notice(&events[tail_start..])
+    {
+        messages.push(UnifiedMessage::user(&notice));
+    }
+
     messages
 }
 
