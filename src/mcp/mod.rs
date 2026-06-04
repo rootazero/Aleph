@@ -49,6 +49,7 @@ pub mod external;
 pub mod jsonrpc;
 pub mod manager;
 mod notifications;
+mod preflight;
 mod prompts;
 pub mod protocol;
 mod redact;
@@ -71,6 +72,7 @@ pub use jsonrpc::{
     IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
 pub use notifications::{McpEvent, McpEventHandler, McpNotificationRouter};
+pub use preflight::preflight_remote_url;
 pub use prompts::{
     McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult,
 };
