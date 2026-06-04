@@ -196,6 +196,7 @@ mod tests {
             is_intermediate: false,
             error: None,
             model_info: None,
+            timestamp: None,
         }
     }
 

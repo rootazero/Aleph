@@ -187,6 +187,8 @@
     "hero_title": "我们从哪里开始？",
     "hero_subtitle": "直接输入消息,或输入 / 调用命令与技能。",
     "new_messages": "新消息",
+    "today": "今天",
+    "yesterday": "昨天",
     "dismiss": "关闭",
     "inspect_in_workspace": "在工作区中查看",
     "copy_message": "复制消息",

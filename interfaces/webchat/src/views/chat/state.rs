@@ -133,6 +133,12 @@ pub struct ChatMessage {
     pub error: Option<String>,
     #[serde(default)]
     pub model_info: Option<ModelInfo>,
+    /// Wall-clock creation time in epoch milliseconds. Stamped client-side on
+    /// the message-creation path and hydrated from `chat.history` rows.
+    /// `serde(default)` keeps older session snapshots (no field) loadable —
+    /// they deserialize to `None` and simply render without a clock/separator.
+    #[serde(default)]
+    pub timestamp: Option<i64>,
 }
 
 /// Minimal tool call record for display.
@@ -345,6 +351,7 @@ impl ChatState {
                 is_intermediate: false,
                 error: None,
                 model_info: None,
+                timestamp: Some(super::timeline::now_millis()),
             });
         });
         self.error_message.set(None);
@@ -363,6 +370,7 @@ impl ChatState {
                 is_intermediate: false,
                 error: None,
                 model_info: None,
+                timestamp: Some(super::timeline::now_millis()),
             });
         });
         self.active_run_id.set(Some(run_id.to_string()));
@@ -399,6 +407,7 @@ impl ChatState {
                 is_intermediate: false,
                 error: None,
                 model_info: None,
+                timestamp: Some(super::timeline::now_millis()),
             });
         });
         self.phase.set(ChatPhase::Thinking);

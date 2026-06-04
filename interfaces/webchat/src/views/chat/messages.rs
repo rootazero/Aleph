@@ -6,6 +6,7 @@
 
 use super::reasoning::ReasoningPanel;
 use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
+use super::timeline::{self, TimelineRow};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
 use crate::i18n::*;
 use crate::state::layout::WorkspaceState;
@@ -57,6 +58,17 @@ pub(super) fn MessageList() -> impl IntoView {
     let chat = expect_context::<ChatState>();
     let i18n = use_i18n();
     let scroll_ref = NodeRef::<leptos::html::Div>::new();
+
+    // Memoized timeline: the flat message vector folded into day-separated
+    // render rows. Recomputes only when `messages` changes (not on every
+    // reactive read), so the per-day segmentation is paid once per update.
+    let rows = Memo::new(move |_| {
+        let msgs = chat.messages.get();
+        let today = t_string!(i18n, chat.today).to_string();
+        let yesterday = t_string!(i18n, chat.yesterday).to_string();
+        timeline::derive_timeline(&msgs, &today, &yesterday)
+    });
+
     // True iff the viewport bottom is within 64px of scroll_height.
     let stuck_to_bottom = RwSignal::new(true);
     // Pulse incremented whenever new content lands while NOT stuck — drives
@@ -117,10 +129,15 @@ pub(super) fn MessageList() -> impl IntoView {
                             // outbound send failed; colour-coded by error code.
                             <SendErrorBanner />
                             <For
-                                each=move || chat.messages.get()
-                                key=|msg| format!("{}:{}:{}:{}:{}:{}", msg.id, msg.content.len(), msg.is_streaming, msg.is_intermediate, msg.tool_calls.len(), msg.model_info.is_some())
-                                children=move |msg| {
-                                    view! { <MessageBubble message=msg /> }
+                                each=move || rows.get()
+                                key=timeline::row_key
+                                children=move |row| match row {
+                                    TimelineRow::DaySeparator { label, .. } => view! {
+                                        <DaySeparator label=label />
+                                    }.into_any(),
+                                    TimelineRow::Message { message, clock } => view! {
+                                        <MessageBubble message=message clock=clock />
+                                    }.into_any(),
                                 }
                             />
                             // Reasoning transcript — collapsible chain-of-thought
@@ -210,9 +227,24 @@ fn run_id_from_message_id(message_id: &str) -> String {
         .unwrap_or_else(|| message_id.to_string())
 }
 
-/// Single message bubble.
+/// Calendar-day separator row — a centered pill anchoring the run of messages
+/// that follow it to "Today" / "Yesterday" / an absolute date.
 #[component]
-fn MessageBubble(message: ChatMessage) -> impl IntoView {
+fn DaySeparator(label: String) -> impl IntoView {
+    view! {
+        <div class="flex items-center justify-center py-1.5 select-none">
+            <span class="px-2.5 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-wider
+                         text-text-tertiary bg-surface-sunken/60">
+                {label}
+            </span>
+        </div>
+    }
+}
+
+/// Single message bubble. `clock` is a pre-resolved "HH:MM" label (empty for
+/// undated/legacy rows) shown in the hover action bar.
+#[component]
+fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     let i18n = use_i18n();
     let is_user = message.role == "user";
     let has_error = message.error.is_some();
@@ -428,8 +460,13 @@ fn MessageBubble(message: ChatMessage) -> impl IntoView {
                 // Model info (with fallback indicator)
                 {model_view}
             </div>
-            // Hover action bar — Copy (all bubbles) + Retry (final assistant).
+            // Hover action bar — timestamp + Copy (all bubbles) + Retry (final assistant).
             <div class=action_class>
+                {(!clock.is_empty()).then(move || view! {
+                    <span class="px-1 self-center text-[10px] text-text-tertiary tabular-nums leading-6">
+                        {clock}
+                    </span>
+                })}
                 <button
                     class="px-1.5 h-6 rounded-md bg-surface-raised border border-border
                            text-[11px] text-text-tertiary hover:text-text-primary hover:bg-surface-sunken
