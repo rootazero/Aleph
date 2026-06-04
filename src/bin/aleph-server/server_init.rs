@@ -30,26 +30,13 @@ pub async fn serve_webchat(
         .append_index_html_on_directories(true)
         .fallback(ServeFile::new(&index_path));
 
-    let allowed_origins = tower_http::cors::AllowOrigin::predicate(|origin, _| {
-        // `origin` is the raw `Origin` header value, not a parsed URI — parse it
-        // before inspecting scheme/host. A bare prefix match would otherwise
-        // accept hostile origins like `http://127.evil.com`.
-        let Ok(origin_str) = origin.to_str() else {
-            return false;
-        };
-        let Ok(uri) = origin_str.parse::<axum::http::Uri>() else {
-            return false;
-        };
-        let scheme = uri.scheme_str().unwrap_or("");
-        if scheme != "http" && scheme != "https" {
-            return false;
-        }
-        let host = uri.host().unwrap_or("");
-        matches!(host, "127.0.0.1" | "localhost" | "[::1]")
-            || host
-                .parse::<std::net::Ipv4Addr>()
-                .map(|ip| ip.is_loopback())
-                .unwrap_or(false)
+    // Loopback-only origin rule, shared with the `/ws` upgrade guard so the
+    // same-machine parsing lives in one place (`OriginPolicy`) instead of being
+    // duplicated inline. The static-asset server has no same-origin notion, so
+    // `host` is `None`: only loopback / `tauri:` origins pass.
+    let policy = alephcore::gateway::origin_policy::OriginPolicy::loopback_only();
+    let allowed_origins = tower_http::cors::AllowOrigin::predicate(move |origin, _| {
+        policy.is_allowed(origin.to_str().ok(), None)
     });
     let app = Router::new().fallback_service(serve_dir).layer(
         tower_http::cors::CorsLayer::new()

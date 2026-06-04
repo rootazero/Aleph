@@ -39,6 +39,7 @@ pub mod memory_monitor;
 pub mod message_dedup;
 pub mod middleware;
 pub mod model_override;
+pub mod origin_policy;
 pub mod protocol;
 pub mod router;
 pub mod runtime_footer;
