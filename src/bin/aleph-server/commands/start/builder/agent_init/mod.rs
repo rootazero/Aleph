@@ -593,6 +593,27 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
+        // LLM-only builtin tools: deliberately kept OUT of BUILTIN_TOOL_DEFINITIONS
+        // (and thus the command/slash catalog) but still must be callable by the
+        // model. `scratchpad` is driven by the harness steering preamble ("call
+        // the scratchpad tool…") and its progress sink; `voice_mode_set` ceded
+        // its command surface to `/voice` (commit 8d66abb33) yet stays an LLM
+        // tool. Both are registered in the runtime map with full schemas, but the
+        // loop tool list is sourced from BUILTIN_TOOL_DEFINITIONS — so without
+        // this append they were invisible to the model. Pull their already-built
+        // UnifiedTool metadata (incl. parameter schema) straight from the registry.
+        {
+            use alephcore::executor::ToolRegistry;
+            for name in ["scratchpad", "voice_mode_set"] {
+                if tools.iter().any(|t| t.name == name) {
+                    continue;
+                }
+                if let Some(t) = tool_registry.get_tool(name) {
+                    tools.push(t.clone());
+                }
+            }
+        }
+
         {
             let plugin_tool_count = tools
                 .iter()

@@ -708,7 +708,10 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     // voice_mode_set is a LLM tool only — NOT a slash command.
     // Use /voice on|off instead. Excluded from BUILTIN_TOOL_DEFINITIONS
-    // to avoid appearing in command lists.
+    // to avoid appearing in command lists. Because the loop tool list is
+    // sourced from BUILTIN_TOOL_DEFINITIONS, the agent-init builder appends
+    // it (and `scratchpad`) to the LLM tool list from the registry map so it
+    // stays callable — see agent_init/mod.rs "LLM-only builtin tools".
 
     // Skill management tools — LLM-callable tools for querying and configuring skills
     BuiltinToolDefinition {
