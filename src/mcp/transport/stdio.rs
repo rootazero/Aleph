@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::sync::{oneshot, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
@@ -133,7 +133,10 @@ impl StdioTransport {
         cmd.args(args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            // Capture stderr instead of discarding it: a server that fails to
+            // start or errors writes its only diagnostics here. A drain task
+            // (below) surfaces them through tracing.
+            .stderr(Stdio::piped())
             .kill_on_drop(true);
 
         for (key, value) in env {
@@ -172,6 +175,14 @@ impl StdioTransport {
         let stdout = child.stdout.take().ok_or_else(|| {
             AlephError::IoError(format!("MCP server '{}' stdout not available", name))
         })?;
+
+        // Drain stderr in the background so server diagnostics are not lost.
+        // Non-essential: if the pipe is somehow unavailable we simply skip it.
+        // The task ends at EOF, which arrives when the child exits
+        // (`kill_on_drop` guarantees that on transport drop), so it cannot leak.
+        if let Some(stderr) = child.stderr.take() {
+            tokio::spawn(stderr_loop(stderr, name.clone()));
+        }
 
         let pending: Arc<PendingMap> = Arc::new(StdMutex::new(HashMap::new()));
         let notification_handler: Arc<StdMutex<Option<NotificationCallback>>> =
@@ -453,6 +464,31 @@ async fn reader_loop(
     // Dropping each sender resolves its receiver to a `RecvError`.
     lock(&pending).clear();
     tracing::debug!(server = %server_name, "MCP stdio reader task exited");
+}
+
+/// Drain an MCP server's stderr, surfacing each line through `tracing`.
+///
+/// The subprocess's stderr was previously discarded (`Stdio::null()`), so a
+/// server that failed to start or errored left no diagnostic trail — only a
+/// generic connection failure reached the operator. Routing it through
+/// `tracing` (rather than a flat shared log file, as the reference does) keeps
+/// per-server context and lets the existing log filters control verbosity.
+/// The task ends at EOF, which arrives when the child closes stderr on exit.
+async fn stderr_loop(stderr: ChildStderr, server_name: String) {
+    let mut reader = BufReader::new(stderr);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => break, // EOF — child closed stderr
+            Ok(_) => {}
+            Err(_) => break, // pipe error; nothing actionable, stop draining
+        }
+        let trimmed = line.trim_end();
+        if !trimmed.is_empty() {
+            tracing::debug!(server = %server_name, "mcp server stderr: {}", trimmed);
+        }
+    }
 }
 
 /// Implementation of the McpTransport trait for StdioTransport
