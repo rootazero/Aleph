@@ -78,9 +78,14 @@ impl ToolCallTracker {
 /// This is the core formatter used by the passthrough path. It maps each
 /// provider delta to the corresponding OpenAI-compatible SSE chunk, tracking
 /// tool call indices and accumulating usage statistics.
+/// `include_usage` mirrors the request's `stream_options.include_usage`. When
+/// false (the OpenAI default) no usage is sent in the stream at all. When true,
+/// usage is emitted as a dedicated terminal chunk with an empty `choices` array,
+/// after the finish chunk and before `[DONE]` — the shape OpenAI SDK clients read.
 pub fn provider_deltas_to_sse(
     deltas: BoxStream<'static, anyhow::Result<ProviderDelta>>,
     model: String,
+    include_usage: bool,
 ) -> BoxStream<'static, String> {
     let id = completion_id();
     let created = now_timestamp();
@@ -102,11 +107,16 @@ pub fn provider_deltas_to_sse(
                 loop {
                     match deltas.next().await {
                         None => {
-                            // Stream ended without a Done delta — emit [DONE]
-                            return Some((
-                                SSE_DONE.to_string(),
-                                (deltas, tracker, usage_acc, true),
-                            ));
+                            // Stream ended without a Done delta. Flush a usage
+                            // chunk first when requested, then [DONE].
+                            let frame = match (include_usage, usage_acc.take()) {
+                                (true, Some(u)) => format!(
+                                    "{}{SSE_DONE}",
+                                    sse_data(&usage_chunk(&id, created, &model, u))
+                                ),
+                                _ => SSE_DONE.to_string(),
+                            };
+                            return Some((frame, (deltas, tracker, usage_acc, true)));
                         }
                         Some(Err(e)) => {
                             // Infrastructure error — emit error JSON + [DONE]
@@ -226,7 +236,9 @@ pub fn provider_deltas_to_sse(
                                         completion_tokens: u.output_tokens,
                                         total_tokens: u.input_tokens + u.output_tokens,
                                     });
-                                    // Don't emit a frame; usage is included in the final chunk
+                                    // Don't emit a frame here; usage (if requested
+                                    // via stream_options) ships as a dedicated
+                                    // terminal chunk after the finish chunk.
                                     continue;
                                 }
                                 ProviderDelta::Done(reason) => {
@@ -240,6 +252,9 @@ pub fn provider_deltas_to_sse(
                                         StopReason::Sensitive => "content_filter",
                                         StopReason::Unknown => "stop",
                                     };
+                                    // Finish chunk never carries usage — OpenAI
+                                    // reports it only on the trailing empty-choices
+                                    // chunk, and only when the client opted in.
                                     let chunk = make_chunk(
                                         &id,
                                         created,
@@ -250,9 +265,15 @@ pub fn provider_deltas_to_sse(
                                             tool_calls: None,
                                         },
                                         Some(finish_reason.to_string()),
-                                        usage_acc.take(),
+                                        None,
                                     );
-                                    let frame = format!("{}{SSE_DONE}", sse_data(&chunk));
+                                    let mut frame = sse_data(&chunk);
+                                    if let (true, Some(u)) = (include_usage, usage_acc.take()) {
+                                        frame.push_str(&sse_data(&usage_chunk(
+                                            &id, created, &model, u,
+                                        )));
+                                    }
+                                    frame.push_str(SSE_DONE);
                                     return Some((frame, (deltas, tracker, usage_acc, true)));
                                 }
                                 ProviderDelta::Error(e) => {
@@ -298,6 +319,19 @@ fn make_chunk(
             finish_reason,
         }],
         usage,
+    }
+}
+
+/// Build the trailing usage-only chunk: an empty `choices` array with usage set,
+/// matching OpenAI's `stream_options.include_usage` contract.
+fn usage_chunk(id: &str, created: u64, model: &str, usage: Usage) -> ChatCompletionChunk {
+    ChatCompletionChunk {
+        id: id.to_string(),
+        object: "chat.completion.chunk".to_string(),
+        created,
+        model: model.to_string(),
+        choices: vec![],
+        usage: Some(usage),
     }
 }
 
@@ -377,7 +411,7 @@ mod tests {
         ];
         let input = Box::pin(stream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string())
+        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string(), false)
             .collect()
             .await;
 
@@ -405,17 +439,50 @@ mod tests {
         ];
         let input = Box::pin(stream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string())
+        // include_usage = true → usage rides a dedicated trailing chunk.
+        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string(), true)
             .collect()
             .await;
 
-        // Usage is not a separate frame; it's included in the final chunk
-        assert_eq!(frames.len(), 2); // text + finish+done
+        // text chunk, then (finish chunk + usage chunk + [DONE]) in one frame.
+        assert_eq!(frames.len(), 2);
         let final_frame = &frames[1];
-        assert!(final_frame.contains("prompt_tokens"));
+        // Finish reason and usage both present; usage rides an empty-choices chunk.
+        assert!(final_frame.contains("\"finish_reason\":\"stop\""));
+        assert!(final_frame.contains("\"choices\":[]"));
         assert!(final_frame.contains("\"prompt_tokens\":10"));
         assert!(final_frame.contains("\"completion_tokens\":5"));
         assert!(final_frame.contains("\"total_tokens\":15"));
+        assert!(final_frame.contains("[DONE]"));
+    }
+
+    #[tokio::test]
+    async fn test_provider_deltas_to_sse_usage_suppressed_by_default() {
+        let deltas: Vec<anyhow::Result<ProviderDelta>> = vec![
+            Ok(ProviderDelta::TextDelta("hi".to_string())),
+            Ok(ProviderDelta::Usage(TokenUsage {
+                input_tokens: 10,
+                output_tokens: 5,
+                cache_read_tokens: None,
+                cache_creation_tokens: None,
+                thinking_tokens: None,
+                cost: None,
+            })),
+            Ok(ProviderDelta::Done(StopReason::EndTurn)),
+        ];
+        let input = Box::pin(stream::iter(deltas)) as BoxStream<'static, _>;
+
+        // include_usage = false (OpenAI default) → no usage anywhere in the stream.
+        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string(), false)
+            .collect()
+            .await;
+
+        assert_eq!(frames.len(), 2);
+        let final_frame = &frames[1];
+        assert!(final_frame.contains("\"finish_reason\":\"stop\""));
+        assert!(!final_frame.contains("prompt_tokens"));
+        assert!(!final_frame.contains("\"choices\":[]"));
+        assert!(final_frame.contains("[DONE]"));
     }
 
     #[tokio::test]
@@ -437,7 +504,7 @@ mod tests {
         ];
         let input = Box::pin(stream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string())
+        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string(), false)
             .collect()
             .await;
 
@@ -458,7 +525,7 @@ mod tests {
         ];
         let input = Box::pin(stream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string())
+        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string(), false)
             .collect()
             .await;
 
@@ -476,7 +543,7 @@ mod tests {
         ];
         let input = Box::pin(stream::iter(deltas)) as BoxStream<'static, _>;
 
-        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string())
+        let frames: Vec<String> = provider_deltas_to_sse(input, "gpt-4".to_string(), false)
             .collect()
             .await;
 

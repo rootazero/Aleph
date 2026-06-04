@@ -25,13 +25,71 @@ pub struct ChatCompletionRequest {
     pub frequency_penalty: Option<f64>,
     #[serde(default)]
     pub presence_penalty: Option<f64>,
+    /// OpenAI streaming control. Only `include_usage` is honored; when true the
+    /// stream emits a dedicated final chunk carrying token usage with an empty
+    /// `choices` array (per the OpenAI Chat Completions streaming contract).
+    #[serde(default)]
+    pub stream_options: Option<StreamOptions>,
+}
+
+/// Streaming options block (`stream_options`) of a chat completion request.
+#[derive(Debug, Default, Deserialize)]
+pub struct StreamOptions {
+    #[serde(default)]
+    pub include_usage: Option<bool>,
+}
+
+/// Deserialize a message `content` field that may be either a plain string or
+/// an array of content parts, flattening the array form to concatenated text.
+///
+/// OpenAI's `content` is a `string | array` union. The previous `Option<String>`
+/// field rejected the array form outright, failing the *entire* request with a
+/// 400 for any client (notably the official OpenAI SDK) that sends segmented or
+/// multimodal content. This accepts both and yields the text the downstream
+/// text-only pipeline consumes; non-text parts (images, audio, files) are
+/// dropped rather than rejected.
+fn deserialize_message_content<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        Text(String),
+        Parts(Vec<serde_json::Value>),
+    }
+
+    let raw = Option::<Raw>::deserialize(deserializer)?;
+    Ok(raw.map(|raw| match raw {
+        Raw::Text(text) => text,
+        Raw::Parts(parts) => flatten_content_parts(&parts),
+    }))
+}
+
+/// Concatenate the text of all `{"type":"text","text":...}` parts in order.
+fn flatten_content_parts(parts: &[serde_json::Value]) -> String {
+    parts
+        .iter()
+        .filter(|part| part.get("type").and_then(|t| t.as_str()) == Some("text"))
+        .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 /// A single message in a chat conversation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // Request side accepts both the plain-string form and the structured
+    // content-parts array form (`[{"type":"text","text":...}, ...]`) that the
+    // OpenAI SDK emits for multimodal / segmented messages; the custom
+    // deserializer flattens parts to their concatenated text. Response side
+    // always serializes a plain string, so the wire shape is unchanged.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_message_content",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<serde_json::Value>>,
@@ -228,6 +286,64 @@ pub struct ResponsesUsage {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_array_content_flattens_to_text() {
+        // The OpenAI SDK sends `content` as an array of parts for segmented /
+        // multimodal messages. This previously hard-failed the whole request.
+        let req: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "user", "content": [
+                    {"type": "text", "text": "Describe "},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,xx"}},
+                    {"type": "text", "text": "this image"}
+                ]}
+            ]
+        }))
+        .expect("array-form content must parse, not 400");
+        // Text parts are concatenated in order; non-text parts dropped.
+        assert_eq!(req.messages[0].content.as_deref(), Some("Describe this image"));
+    }
+
+    #[test]
+    fn test_string_content_unchanged() {
+        let req: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "plain"}]
+        }))
+        .unwrap();
+        assert_eq!(req.messages[0].content.as_deref(), Some("plain"));
+    }
+
+    #[test]
+    fn test_null_and_absent_content() {
+        let req: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "gpt-4",
+            "messages": [
+                {"role": "assistant", "content": null},
+                {"role": "assistant"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(req.messages[0].content, None);
+        assert_eq!(req.messages[1].content, None);
+    }
+
+    #[test]
+    fn test_stream_options_include_usage_parses() {
+        let req: ChatCompletionRequest = serde_json::from_value(json!({
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": true,
+            "stream_options": {"include_usage": true}
+        }))
+        .unwrap();
+        assert_eq!(
+            req.stream_options.and_then(|o| o.include_usage),
+            Some(true)
+        );
+    }
 
     #[test]
     fn test_chat_completion_request_deserializes() {

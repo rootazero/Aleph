@@ -175,6 +175,11 @@ pub async fn handle(
     };
 
     let is_streaming = req.stream.unwrap_or(false);
+    let include_usage = req
+        .stream_options
+        .as_ref()
+        .and_then(|o| o.include_usage)
+        .unwrap_or(false);
 
     if is_streaming {
         // Streaming path
@@ -183,7 +188,7 @@ pub async fn handle(
             .await
             .map_err(|e| ApiError::BadGateway(format!("Provider stream error: {e}")))?;
 
-        let sse_stream = stream::provider_deltas_to_sse(delta_stream, req.model);
+        let sse_stream = stream::provider_deltas_to_sse(delta_stream, req.model, include_usage);
 
         let body = Body::from_stream(sse_stream.map(Ok::<_, std::convert::Infallible>));
         Ok(Response::builder()
