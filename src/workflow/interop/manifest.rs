@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::Result;
-use crate::workflow::def::{WorkflowDef, WorkflowStepDef};
+use crate::workflow::def::{WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 
 // NOTE: no `JsonSchema` derive — these types never appear in a tool arg schema
 // (the `workflow` tool's args use `WorkflowDef`), so deriving it would be dead
@@ -75,6 +75,15 @@ pub struct WorkflowManifestStep {
     /// Interchange-only; Aleph resolves execution via `agent` (the team member).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// Step kind — `agent` (default) or `clarify`. Part of the executable core,
+    /// so it round-trips through [`to_def`](WorkflowManifest::to_def). Omitted on
+    /// the wire for agent steps (byte-identical to legacy manifests).
+    #[serde(default, skip_serializing_if = "WorkflowStepKind::is_agent")]
+    pub kind: WorkflowStepKind,
+    /// Clarify menu of answers (empty → free-text). Executable core; meaningful
+    /// only for a clarify step.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<String>,
 }
 
 impl WorkflowManifest {
@@ -100,6 +109,8 @@ impl WorkflowManifest {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    kind: s.kind,
+                    choices: s.choices.clone(),
                 })
                 .collect(),
         }
@@ -129,6 +140,8 @@ impl WorkflowManifest {
                     agent: s.agent.clone(),
                     prompt: s.prompt.clone(),
                     depends_on: s.depends_on.clone(),
+                    kind: s.kind,
+                    choices: s.choices.clone(),
                 })
                 .collect(),
         }
@@ -149,12 +162,16 @@ mod tests {
                     agent: "researcher".into(),
                     prompt: "research {input}".into(),
                     depends_on: vec![],
+                    kind: WorkflowStepKind::Agent,
+                    choices: vec![],
                 },
                 WorkflowStepDef {
                     id: "b".into(),
                     agent: "writer".into(),
                     prompt: "write".into(),
                     depends_on: vec!["a".into()],
+                    kind: WorkflowStepKind::Agent,
+                    choices: vec![],
                 },
             ],
         }
@@ -202,6 +219,8 @@ mod tests {
                 schema: Some(serde_json::json!({"type":"object"})),
                 isolation: Some("worktree".into()),
                 agent_type: Some("Explore".into()),
+                kind: WorkflowStepKind::Agent,
+                choices: vec![],
             }],
         };
         let def = manifest.to_def();
@@ -230,6 +249,8 @@ mod tests {
                 schema: None,
                 isolation: Some("worktree".into()),
                 agent_type: Some("code-reviewer".into()),
+                kind: WorkflowStepKind::Agent,
+                choices: vec![],
             }],
         };
         let v = serde_json::to_value(&manifest).unwrap();
@@ -251,6 +272,34 @@ mod tests {
     #[test]
     fn manifest_roundtrips_through_json() {
         let manifest = WorkflowManifest::from_def(&core_def());
+        let s = serde_json::to_string(&manifest).unwrap();
+        let back: WorkflowManifest = serde_json::from_str(&s).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    #[test]
+    fn clarify_step_roundtrips_through_def_and_json() {
+        let def = WorkflowDef {
+            name: "deploy".into(),
+            description: String::new(),
+            steps: vec![WorkflowStepDef {
+                id: "ask".into(),
+                agent: String::new(),
+                prompt: "Deploy where?".into(),
+                depends_on: vec![],
+                kind: WorkflowStepKind::Clarify,
+                choices: vec!["staging".into(), "prod".into()],
+            }],
+        };
+        // The clarify kind + choices survive the manifest projection both ways.
+        let manifest = WorkflowManifest::from_def(&def);
+        assert_eq!(manifest.steps[0].kind, WorkflowStepKind::Clarify);
+        assert_eq!(manifest.steps[0].choices, vec!["staging", "prod"]);
+        assert_eq!(manifest.to_def(), def);
+
+        // And they survive the on-disk JSON round-trip (camelCase keys present).
+        let v = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(v["steps"][0]["kind"], "clarify");
         let s = serde_json::to_string(&manifest).unwrap();
         let back: WorkflowManifest = serde_json::from_str(&s).unwrap();
         assert_eq!(manifest, back);

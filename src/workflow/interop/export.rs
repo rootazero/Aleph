@@ -13,6 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::workflow::def::WorkflowStepKind;
 use crate::workflow::interop::manifest::{WorkflowManifest, WorkflowManifestStep, WorkflowPhase};
 
 /// Embedded round-trip marker. `import` reads the JSON between prefix/suffix.
@@ -63,14 +64,14 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
                 if layer.len() == 1 {
                     out.push_str(&format!(
                         "await {}\n",
-                        render_agent_call(&manifest.steps[layer[0]])
+                        render_step_call(&manifest.steps[layer[0]])
                     ));
                 } else {
                     out.push_str("await parallel([\n");
                     for &i in layer {
                         out.push_str(&format!(
                             "  () => {},\n",
-                            render_agent_call(&manifest.steps[i])
+                            render_step_call(&manifest.steps[i])
                         ));
                     }
                     out.push_str("])\n");
@@ -81,7 +82,7 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
             // Cycle / unknown dep — should not happen for a validated manifest.
             // Degrade to a flat sequence rather than panicking.
             for step in &manifest.steps {
-                out.push_str(&format!("await {}\n", render_agent_call(step)));
+                out.push_str(&format!("await {}\n", render_step_call(step)));
             }
         }
     }
@@ -146,6 +147,33 @@ fn render_meta(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>]>) -> St
         js_str(&manifest.when_to_use),
         phases
     )
+}
+
+/// Render a step's body call, dispatching on kind: a clarify step becomes a
+/// `clarify(prompt, [choices])` call (an Aleph extension to the `.workflow.js`
+/// vocabulary), every other step an `agent(...)` call. The embedded
+/// `@aleph-workflow` header is the canonical lossless round-trip; this body call
+/// keeps the rendered source readable and re-importable on the bare-scan path.
+fn render_step_call(step: &WorkflowManifestStep) -> String {
+    match step.kind {
+        WorkflowStepKind::Clarify => render_clarify_call(step),
+        WorkflowStepKind::Agent => render_agent_call(step),
+    }
+}
+
+/// Render a `clarify("question", ["a", "b"])` call. Choices are omitted for a
+/// free-text clarification.
+fn render_clarify_call(step: &WorkflowManifestStep) -> String {
+    if step.choices.is_empty() {
+        format!("clarify({})", render_prompt_arg(&step.prompt))
+    } else {
+        let choices: Vec<String> = step.choices.iter().map(|c| js_str(c)).collect();
+        format!(
+            "clarify({}, [{}])",
+            render_prompt_arg(&step.prompt),
+            choices.join(", ")
+        )
+    }
 }
 
 /// Render a single `agent(prompt, { opts })` call.
@@ -276,6 +304,25 @@ mod tests {
             schema: None,
             isolation: None,
             agent_type: None,
+            kind: WorkflowStepKind::Agent,
+            choices: vec![],
+        }
+    }
+
+    fn clarify_step(id: &str, question: &str, choices: &[&str], deps: &[&str]) -> WorkflowManifestStep {
+        WorkflowManifestStep {
+            id: id.into(),
+            agent: String::new(),
+            prompt: question.into(),
+            depends_on: deps.iter().map(|s| s.to_string()).collect(),
+            label: None,
+            model: None,
+            phase: None,
+            schema: None,
+            isolation: None,
+            agent_type: None,
+            kind: WorkflowStepKind::Clarify,
+            choices: choices.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -456,6 +503,39 @@ mod tests {
             1,
             "no duplicate Scan entry: {js}"
         );
+    }
+
+    #[test]
+    fn clarify_step_renders_clarify_call() {
+        // A clarify step renders as `clarify(question, [choices])`, not agent(...).
+        let js = render_workflow_js(&manifest(vec![clarify_step(
+            "ask",
+            "Deploy where?",
+            &["staging", "prod"],
+            &[],
+        )]));
+        assert!(js.contains("await clarify("), "clarify call: {js}");
+        assert!(js.contains("\"Deploy where?\""), "question: {js}");
+        assert!(js.contains("[\"staging\", \"prod\"]"), "choices array: {js}");
+        assert!(!js.contains("agent("), "no agent() for a clarify step: {js}");
+    }
+
+    #[test]
+    fn clarify_step_without_choices_renders_no_array() {
+        let js = render_workflow_js(&manifest(vec![clarify_step("ask", "Which file?", &[], &[])]));
+        assert!(js.contains("await clarify(\"Which file?\")"), "free-text clarify: {js}");
+    }
+
+    #[test]
+    fn clarify_step_roundtrips_via_embedded_header() {
+        // The embedded @aleph-workflow header is the lossless path: export then
+        // re-import reconstructs the clarify kind + choices exactly.
+        use crate::workflow::interop::import::parse_workflow_js;
+        let original = manifest(vec![clarify_step("ask", "Pick env", &["a", "b"], &[])]);
+        let js = render_workflow_js(&original);
+        let back = parse_workflow_js(&js).expect("import").manifest;
+        assert_eq!(back.steps[0].kind, WorkflowStepKind::Clarify);
+        assert_eq!(back.steps[0].choices, vec!["a", "b"]);
     }
 
     #[test]

@@ -87,6 +87,10 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
         ("while ", "while loop"),
         ("if (", "if conditional"),
         ("if(", "if conditional"),
+        (
+            "clarify(",
+            "clarify(...) step — re-import via the @aleph-workflow header to preserve it (bare scan maps only agent())",
+        ),
     ] {
         if skeleton.contains(needle) {
             dropped.push(label.to_string());
@@ -128,6 +132,8 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    kind: crate::workflow::def::WorkflowStepKind::Agent,
+                    choices: vec![],
                 });
             }
         }
@@ -439,6 +445,8 @@ mod tests {
                     // Exercise the new agent-opts on the lossless roundtrip path.
                     isolation: Some("worktree".into()),
                     agent_type: Some("Explore".into()),
+                    kind: crate::workflow::def::WorkflowStepKind::Agent,
+                    choices: vec![],
                 },
                 WorkflowManifestStep {
                     id: "b".into(),
@@ -451,6 +459,8 @@ mod tests {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    kind: crate::workflow::def::WorkflowStepKind::Agent,
+                    choices: vec![],
                 },
             ],
         }
@@ -541,6 +551,8 @@ const r = await pipeline(items, s1, s2)
                 schema: None,
                 isolation: None,
                 agent_type: None,
+                kind: crate::workflow::def::WorkflowStepKind::Agent,
+                choices: vec![],
             }],
         };
         let js = render_workflow_js(&original);
@@ -729,6 +741,8 @@ await agent('fix more')
                 schema: None,
                 isolation: None,
                 agent_type: None,
+                kind: crate::workflow::def::WorkflowStepKind::Agent,
+                choices: vec![],
             }],
         };
         let js = render_workflow_js(&m);

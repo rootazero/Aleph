@@ -2165,6 +2165,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         approval_callback_sink,
         exec_approval_manager,
         clarification_manager.clone(),
+        agent_result.coord_task_store.clone(),
+        agent_result.dispatch_signal.clone(),
         args.daemon,
     )
     .await;

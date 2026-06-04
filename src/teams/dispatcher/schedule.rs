@@ -215,6 +215,15 @@ impl TeamDispatcher {
 
         // 4. Claim + launch each selected task.
         for task in selected {
+            // Clarify steps are not agent runs: deliver the question to the
+            // user's channel and park the task awaiting their reply. They take
+            // no worker slot and skip owner resolution (the owner is a sentinel,
+            // not a team member). See [`super::clarify`].
+            if crate::workflow::clarify::is_clarify_task(&task) {
+                self.handle_clarify_task(&task).await;
+                continue;
+            }
+
             let permit = match Arc::clone(&self.semaphore).try_acquire_owned() {
                 Ok(p) => p,
                 Err(_) => break, // concurrency cap reached
@@ -538,7 +547,10 @@ impl TeamDispatcher {
     /// emitted by [`CoordTaskStore::emit_task_topic`] inside `update_task`,
     /// so panel-driven failure (drawer "Fail" button) gets the same listener
     /// fan-out without per-caller wiring.
-    async fn fail_task(&self, task: &CoordTask, error: &str) {
+    ///
+    /// `pub(super)` so the clarify executor ([`super::clarify`]) can terminate
+    /// an unanswerable clarification with the same path.
+    pub(super) async fn fail_task(&self, task: &CoordTask, error: &str) {
         if let Err(e) = self
             .coord_store
             .update_task(

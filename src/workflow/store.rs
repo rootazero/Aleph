@@ -228,6 +228,8 @@ mod tests {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    kind: crate::workflow::def::WorkflowStepKind::Agent,
+                    choices: vec![],
                 },
                 WorkflowManifestStep {
                     id: "write".into(),
@@ -240,6 +242,8 @@ mod tests {
                     schema: None,
                     isolation: None,
                     agent_type: None,
+                    kind: crate::workflow::def::WorkflowStepKind::Agent,
+                    choices: vec![],
                 },
             ],
         }

@@ -16,12 +16,14 @@
 //! agent run; dependency edges drive Tokio-concurrent execution that the
 //! single-agent reference designs (e.g. OpenHands) cannot express.
 
+pub mod clarify;
 pub mod compile;
 pub mod def;
 pub mod interop;
 pub mod store;
 
+pub use clarify::{is_clarify_task, ClarifyContext, ClarifyTaskMeta, CLARIFY_META_KEY, CLARIFY_OWNER};
 pub use compile::{materialize, MaterializedWorkflow};
-pub use def::{render_prompt, WorkflowDef, WorkflowStepDef};
+pub use def::{render_prompt, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};
 pub use store::{WorkflowMeta, WORKFLOW_EXT};

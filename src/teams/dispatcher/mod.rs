@@ -11,6 +11,7 @@
 //! mechanically executes what the DAG already says is runnable.
 
 pub mod acp_bridge;
+pub mod clarify;
 pub mod handoff;
 pub mod runner;
 pub mod schedule;
@@ -21,6 +22,7 @@ use std::time::Duration;
 use tokio::sync::{Mutex, Notify, Semaphore};
 
 use crate::agents::swarm::tasks::{CoordTaskId, CoordTaskStore};
+use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::context::GatewayContext;
 use crate::sync_primitives::Arc;
 use crate::teams::artifacts::ArtifactStore;
@@ -98,6 +100,12 @@ pub struct TeamDispatcher {
     /// the keys alone preserve the original "don't re-claim a running task"
     /// semantics for reclamation.
     pub(crate) running: Arc<Mutex<HashMap<CoordTaskId, String>>>,
+    /// Channel registry used to deliver a workflow `clarify` step's question to
+    /// the originating channel. Held as a `OnceCell` because the registry is
+    /// injected after the dispatcher is constructed (the same deferred-injection
+    /// the tool registry uses). Unset / unfilled → clarify steps cannot reach a
+    /// user and are failed with a clear reason rather than stalling the DAG.
+    pub(crate) channels: Option<Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>>,
     /// Cooperative shutdown signal. Fires from `Self::shutdown()` and breaks
     /// the `spawn_loop` `tokio::select!` so the loop exits cleanly on
     /// graceful shutdown / signal handling. Without this the dispatcher
@@ -129,8 +137,21 @@ impl TeamDispatcher {
             signal,
             semaphore,
             running: Arc::new(Mutex::new(HashMap::new())),
+            channels: None,
             shutdown_token: tokio_util::sync::CancellationToken::new(),
         }
+    }
+
+    /// Wire the channel-registry cell so workflow `clarify` steps can deliver
+    /// their question to the user's originating channel once the registry is
+    /// injected. Without it, clarify steps fail fast (the rest of the dispatcher
+    /// is unaffected).
+    pub fn with_clarify_delivery(
+        mut self,
+        channels: Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>>,
+    ) -> Self {
+        self.channels = Some(channels);
+        self
     }
 
     /// Wake the dispatch loop for one tick.

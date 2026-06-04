@@ -129,6 +129,14 @@ pub struct InboundMessageRouter {
     /// Clarification manager — routes a reply back to a pending `ask_user`
     /// question instead of starting a new agent turn (HITL P4).
     pub(super) clarification_manager: Option<Arc<crate::clarification::ClarificationManager>>,
+    /// Coord-task store — resolves a reply to a paused workflow `clarify` step.
+    /// Unlike `ask_user` (in-memory), a clarify step's awaiting record is the
+    /// durable `coord_task` row, so resolution is a stateless lookup that
+    /// survives a restart. `None` → workflow clarify resolution disabled.
+    pub(super) workflow_clarify_store: Option<Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>>,
+    /// Wakes the team dispatcher after a clarify reply completes its task, so the
+    /// now-unblocked dependents are picked up without waiting for the next tick.
+    pub(super) dispatch_signal: Option<Arc<tokio::sync::Notify>>,
 }
 
 impl InboundMessageRouter {
@@ -166,6 +174,8 @@ impl InboundMessageRouter {
             approval_callback_sink: None,
             exec_approval_manager: None,
             clarification_manager: None,
+            workflow_clarify_store: None,
+            dispatch_signal: None,
         }
     }
 
@@ -228,6 +238,20 @@ impl InboundMessageRouter {
     ) -> Self {
         self.exec_approval_manager = Some(exec_approval_manager);
         self.clarification_manager = Some(clarification_manager);
+        self
+    }
+
+    /// Wire workflow `clarify` resolution: a reply to a paused clarify step is
+    /// completed against its durable `coord_task` (not the in-memory
+    /// `ask_user` registry), then the dispatcher is signalled to unblock the
+    /// step's dependents.
+    pub fn with_workflow_clarify(
+        mut self,
+        coord_store: Arc<dyn crate::agents::swarm::tasks::CoordTaskStore>,
+        dispatch_signal: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        self.workflow_clarify_store = Some(coord_store);
+        self.dispatch_signal = Some(dispatch_signal);
         self
     }
 
@@ -946,6 +970,87 @@ impl InboundMessageRouter {
             }
         }
 
+        // Workflow clarify reply: a paused `clarify` step for this session is
+        // completed with the answer, unblocking its dependents on the next tick.
+        if let Some(ref store) = self.workflow_clarify_store {
+            if self
+                .try_resolve_workflow_clarify(store.as_ref(), &session_key, &ctx.message.text)
+                .await
+            {
+                info!("[Router] Routed reply to workflow clarify step for {session_key}");
+                return true;
+            }
+        }
+
+        false
+    }
+
+    /// Complete a paused workflow `clarify` step for `session_key` from the
+    /// user's `reply`, if one is awaiting. Returns `true` when a step was
+    /// resolved.
+    ///
+    /// The `coord_task` row is the awaiting record (durable across restart), so
+    /// this is a stateless lookup: find the paused clarify task whose stored
+    /// `session_key` matches, interpret the reply against its question/choices
+    /// exactly as `ask_user` does, write the answer into the task's `result`,
+    /// and mark it `Completed`. The dispatcher's handoff context then feeds that
+    /// answer into the downstream steps.
+    async fn try_resolve_workflow_clarify(
+        &self,
+        store: &dyn crate::agents::swarm::tasks::CoordTaskStore,
+        session_key: &str,
+        reply: &str,
+    ) -> bool {
+        use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate};
+        use crate::workflow::clarify::ClarifyTaskMeta;
+
+        if session_key.is_empty() {
+            return false;
+        }
+        let paused = match store
+            .list_tasks(CoordTaskFilter {
+                status: Some(CoordTaskStatus::Paused),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(tasks) => tasks,
+            Err(e) => {
+                warn!(error = %e, "[Router] workflow clarify: list_tasks failed");
+                return false;
+            }
+        };
+
+        for task in paused {
+            let Some(meta) = ClarifyTaskMeta::from_metadata(&task.metadata) else {
+                continue;
+            };
+            if meta.session_key != session_key {
+                continue;
+            }
+            // Interpret number / label / free-text exactly like `ask_user`.
+            let request = meta.build_request(&task.id);
+            let result = crate::clarification::session::interpret_reply(&request, reply);
+            let answer = result.value.unwrap_or_default();
+            if let Err(e) = store
+                .update_task(
+                    &task.id,
+                    CoordTaskUpdate {
+                        status: Some(CoordTaskStatus::Completed),
+                        result: Some(answer),
+                        ..Default::default()
+                    },
+                )
+                .await
+            {
+                warn!(task_id = %task.id, error = %e, "[Router] workflow clarify: complete failed");
+                return false;
+            }
+            if let Some(ref signal) = self.dispatch_signal {
+                signal.notify_one();
+            }
+            return true;
+        }
         false
     }
 
