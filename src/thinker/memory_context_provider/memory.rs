@@ -66,7 +66,8 @@ impl MemoryContextProvider {
         // Wrap recalled memory in the guarded `<memory-context>` fence + system
         // note so the model treats it as reference data, not new user input
         // (hermes-parity prompt-injection hardening). The same fence tags are
-        // stripped from streamed output by StreamingDeltaSink's scrubber.
+        // stripped from streamed output by the gateway drain's
+        // `StreamingContextScrubber` (see `execution_engine::event_drain`).
         Ok(Some(UnifiedMessage::user(wrap_memory_context(&rendered))))
     }
 }
