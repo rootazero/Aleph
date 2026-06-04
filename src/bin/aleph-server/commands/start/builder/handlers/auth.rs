@@ -33,8 +33,9 @@ pub(in crate::commands::start) fn register_auth_handlers(
     );
     // Anonymous cold-browser pairing surface — reachable without a token
     // because the calling browser doesn't have one yet (see
-    // gateway::server::handler::allow_unauth_loopback_pairing for the
-    // auth bypass).
+    // gateway::server::handler::allow_unauth_browser_pairing for the
+    // auth bypass; note it is intentionally NOT loopback-gated — a remote
+    // LAN browser is an expected caller).
     register_handler!(
         server,
         "pairing.start_browser",

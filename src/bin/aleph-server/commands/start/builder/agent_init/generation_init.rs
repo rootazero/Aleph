@@ -83,8 +83,16 @@ pub(super) fn init_generation_registry(
                     if !provider_cfg.enabled {
                         continue;
                     }
-                    // Resolve API key from vault (RPC handlers store keys in vault, not config)
-                    if provider_cfg.api_key.is_none() {
+                    // Resolve API key from vault (RPC handlers store keys in vault, not config).
+                    // Match the initial-build guard: treat Some("") as "no key" so a
+                    // provider carrying an empty-string key still hydrates from vault
+                    // (otherwise a Panel edit drops a provider that worked at boot).
+                    if provider_cfg
+                        .api_key
+                        .as_ref()
+                        .map(|k| k.is_empty())
+                        .unwrap_or(true)
+                    {
                         if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
                             provider_cfg.api_key = Some(secret.expose().to_string());
                         }

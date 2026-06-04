@@ -81,6 +81,17 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
         .next_back()
         .unwrap_or("plugin")
         .trim_end_matches(".git");
+    // The repo name is derived from external (URL) input — reject anything that
+    // could escape the plugins dir or otherwise resolve outside it.
+    if repo_name.is_empty()
+        || repo_name == "."
+        || repo_name == ".."
+        || repo_name.contains('/')
+        || repo_name.contains('\\')
+    {
+        eprintln!("Error: cannot derive a safe plugin directory name from URL: {url}");
+        std::process::exit(1);
+    }
     let dest_path = plugins_dir.join(repo_name);
 
     if dest_path.exists() {

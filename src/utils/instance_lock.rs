@@ -33,6 +33,25 @@ impl InstanceLock {
     pub fn into_file(self) -> File {
         self.file
     }
+
+    /// Rewrite the lock file's holder PID to the *current* process id.
+    ///
+    /// Call this after `fork()`/daemonization: the flock is held on a fd that
+    /// survives `fork()`, so the daemonized grandchild still owns the lock —
+    /// but the lock file *content* still names the original (now-exited) parent
+    /// PID that called `try_acquire`. Without this, `diagnose_holder` and the
+    /// PID readback in `try_acquire` mistake the live daemon for a stale /
+    /// orphaned lock, and a second `start` can print "safe to `rm`" advice for
+    /// a lock that is in fact held by a running process.
+    pub fn rewrite_holder_pid(&mut self) -> std::io::Result<()> {
+        let pid = std::process::id();
+        self.file.set_len(0)?;
+        self.file.seek(SeekFrom::Start(0))?;
+        writeln!(self.file, "{pid}")?;
+        self.file.sync_all()?;
+        self.holder_pid = pid;
+        Ok(())
+    }
 }
 
 // Drop releases the OS-level fs2 lock automatically when `file` is dropped.

@@ -2259,9 +2259,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     )
     .await;
 
-    run_result?;
-
-    // Graceful shutdown: stop heartbeat, ACP harnesses, and mDNS
+    // Graceful shutdown: stop heartbeat, ACP harnesses, and mDNS. Run these
+    // BEFORE propagating `run_result` so a fatal run error still tears down
+    // external resources (ACP subprocesses, mDNS advertisement) instead of
+    // orphaning them — mirroring the memory/channel monitor shutdowns above.
     if let Some(ref hb_svc) = heartbeat_service {
         let svc = hb_svc.lock().await;
         svc.request_shutdown();
@@ -2274,6 +2275,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if let Some(broadcaster) = auth_bundle.mdns_broadcaster {
         broadcaster.shutdown();
     }
+
+    run_result?;
 
     Ok(())
 }

@@ -210,7 +210,7 @@ pub async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error:
         move |_lock| reject_locked(&code).map_err(|e| anyhow::anyhow!("{:#}", e)),
         serde_json::Value::Null,
     )
-    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })
+    .map_err(|e| -> Box<dyn std::error::Error> { format!("{:#}", e).into() })
 }
 
 fn reject_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -224,8 +224,14 @@ fn reject_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     match manager.cancel_pairing(code) {
         Ok(true) => println!("Pairing request rejected: {}", code),
-        Ok(false) | Err(_) => {
+        Ok(false) => {
             eprintln!("Error: Invalid or expired pairing code: {}", code);
+            std::process::exit(1);
+        }
+        Err(e) => {
+            // A storage/IO fault is NOT a bad code — surface the real error
+            // instead of masking it as "invalid code".
+            eprintln!("Error: failed to reject pairing code {}: {:#}", code, e);
             std::process::exit(1);
         }
     }

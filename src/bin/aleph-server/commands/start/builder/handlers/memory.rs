@@ -113,33 +113,49 @@ pub(in crate::commands::start) fn register_memory_handlers(
         let reembed_state =
             std::sync::Arc::new(alephcore::gateway::handlers::memory::ReembedState::new());
 
-        {
-            let db = ::std::sync::Arc::clone(memory_db);
-            let emb = ::std::sync::Arc::clone(emb);
-            let eb = ::std::sync::Arc::clone(event_bus);
-            let rs = ::std::sync::Arc::clone(&reembed_state);
-            let cfg = ::std::sync::Arc::clone(app_config);
-            let vault = ::std::sync::Arc::clone(shared_token_mgr);
-            let mem_dir = alephcore::utils::paths::get_note_memory_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from(""));
-            server
-                .handlers_mut()
-                .register("memory.reembed", move |req| {
-                    let db = ::std::sync::Arc::clone(&db);
-                    let emb = ::std::sync::Arc::clone(&emb);
-                    let eb = ::std::sync::Arc::clone(&eb);
-                    let rs = ::std::sync::Arc::clone(&rs);
-                    let cfg = ::std::sync::Arc::clone(&cfg);
-                    let vault = ::std::sync::Arc::clone(&vault);
-                    let md = mem_dir.clone();
-                    async move {
-                        // Resolve the active provider at call time so a provider
-                        // switched in the panel takes effect without a restart;
-                        // fall back to the boot embedder if it can't be rebuilt.
-                        let embedder = resolve_active_embedder(&cfg, &vault).await.unwrap_or(emb);
-                        memory_handlers::handle_reembed(req, db, md, embedder, eb, rs).await
-                    }
-                });
+        // Resolve the note-memory dir up front: if it can't be resolved, wire an
+        // error stub rather than registering the handler against an empty path
+        // (which would silently re-embed against the wrong/CWD-relative location).
+        match alephcore::utils::paths::get_note_memory_dir() {
+            Ok(mem_dir) => {
+                let db = ::std::sync::Arc::clone(memory_db);
+                let emb = ::std::sync::Arc::clone(emb);
+                let eb = ::std::sync::Arc::clone(event_bus);
+                let rs = ::std::sync::Arc::clone(&reembed_state);
+                let cfg = ::std::sync::Arc::clone(app_config);
+                let vault = ::std::sync::Arc::clone(shared_token_mgr);
+                server
+                    .handlers_mut()
+                    .register("memory.reembed", move |req| {
+                        let db = ::std::sync::Arc::clone(&db);
+                        let emb = ::std::sync::Arc::clone(&emb);
+                        let eb = ::std::sync::Arc::clone(&eb);
+                        let rs = ::std::sync::Arc::clone(&rs);
+                        let cfg = ::std::sync::Arc::clone(&cfg);
+                        let vault = ::std::sync::Arc::clone(&vault);
+                        let md = mem_dir.clone();
+                        async move {
+                            // Resolve the active provider at call time so a provider
+                            // switched in the panel takes effect without a restart;
+                            // fall back to the boot embedder if it can't be rebuilt.
+                            let embedder =
+                                resolve_active_embedder(&cfg, &vault).await.unwrap_or(emb);
+                            memory_handlers::handle_reembed(req, db, md, embedder, eb, rs).await
+                        }
+                    });
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "memory.reembed unavailable: cannot resolve note memory dir");
+                server
+                    .handlers_mut()
+                    .register("memory.reembed", |req| async move {
+                        alephcore::gateway::protocol::JsonRpcResponse::error(
+                            req.id,
+                            alephcore::gateway::protocol::INTERNAL_ERROR,
+                            "Reembed not available: note memory directory unresolved".to_string(),
+                        )
+                    });
+            }
         }
 
         {

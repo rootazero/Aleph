@@ -83,7 +83,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // threads — i.e., in this synchronous `main()`. The fcntl/flock is
     // held on a fd that survives `fork()`, so the daemonized child
     // continues to own the lock after the parent exits.
-    let _instance_lock = match args.command {
+    let mut _instance_lock = match args.command {
         Some(Command::Start) | None => {
             use std::path::PathBuf;
             let data_dir = dirs::home_dir()
@@ -161,6 +161,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .clone()
             .or_else(|| Some(PathBuf::from(cli::DEFAULT_LOG_FILE)));
         daemon::daemonize(&args.pid_file, log_file.as_ref())?;
+        // Only the daemonized grandchild reaches here (intermediate parents
+        // exit inside `daemonize`). The flock fd survived the forks, but the
+        // lock file content still names the original parent PID — rewrite it to
+        // the live grandchild so lock diagnostics don't flag a running daemon
+        // as a stale/orphaned lock.
+        if let Some(lock) = _instance_lock.as_mut() {
+            if let Err(e) = lock.rewrite_holder_pid() {
+                eprintln!("Warning: failed to update instance lock PID after daemonize: {e}");
+            }
+        }
     }
 
     // Now build the tokio runtime in the (potentially forked) child process

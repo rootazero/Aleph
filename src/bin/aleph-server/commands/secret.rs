@@ -234,7 +234,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 |_lock| list_locked().map_err(|e| anyhow::anyhow!("{}", e)),
                 serde_json::Value::Null,
             )
-            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            .map_err(|e| -> Box<dyn Error> { format!("{:#}", e).into() })?;
             println!("Secret vault ready ({} entries)", summaries.len());
             Ok(())
         }
@@ -255,7 +255,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 },
                 body,
             )
-            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            .map_err(|e| -> Box<dyn Error> { format!("{:#}", e).into() })?;
             println!("Stored secret '{}'", summary.key);
             Ok(())
         }
@@ -269,7 +269,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 |_lock| list_locked().map_err(|e| anyhow::anyhow!("{}", e)),
                 serde_json::Value::Null,
             )
-            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            .map_err(|e| -> Box<dyn Error> { format!("{:#}", e).into() })?;
 
             if summaries.is_empty() {
                 println!("No secrets found");
@@ -294,7 +294,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 move |_lock| delete_locked(&name_local).map_err(|e| anyhow::anyhow!("{}", e)),
                 serde_json::Value::Null,
             )
-            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            .map_err(|e| -> Box<dyn Error> { format!("{:#}", e).into() })?;
             println!("Deleted secret '{}'", name);
             Ok(())
         }
@@ -307,7 +307,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
                 move |_lock| verify_locked(&name_local).map_err(|e| anyhow::anyhow!("{}", e)),
                 serde_json::Value::Null,
             )
-            .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+            .map_err(|e| -> Box<dyn Error> { format!("{:#}", e).into() })?;
             println!(
                 "Secret '{}' is available ({} bytes, value redacted)",
                 name, len
@@ -317,7 +317,7 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
         SecretAction::Providers => {
             // NoLock: doesn't touch the vault.
             run_no_lock(|| Ok::<(), anyhow::Error>(()))
-                .map_err(|e| -> Box<dyn Error> { e.to_string().into() })?;
+                .map_err(|e| -> Box<dyn Error> { format!("{:#}", e).into() })?;
             handle_secret_providers()
         }
     }

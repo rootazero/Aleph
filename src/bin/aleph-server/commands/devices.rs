@@ -37,11 +37,10 @@ pub fn handle_devices_list() -> Result<(), Box<dyn std::error::Error>> {
         println!("{}", "-".repeat(90));
         for device in devices {
             let device_type = device.device_type.unwrap_or_else(|| "-".to_string());
-            let approved_at = if device.approved_at.len() >= 19 {
-                &device.approved_at[..19]
-            } else {
-                &device.approved_at
-            };
+            // `approved_at` is a machine-generated RFC3339 timestamp (ASCII), but
+            // slice on a char boundary defensively so a corrupt non-ASCII row can
+            // never panic mid-codepoint.
+            let approved_at = device.approved_at.get(..19).unwrap_or(&device.approved_at);
             println!(
                 "{:<36} {:<20} {:<10} {:<20}",
                 device.device_id, device.device_name, device_type, approved_at
@@ -56,7 +55,7 @@ pub fn handle_devices_revoke(device_id: &str) -> Result<(), Box<dyn std::error::
     use alephcore::cli::policy::{with_policy, CommandPolicy};
 
     let data_dir = alephcore::utils::paths::get_data_dir()
-        .map_err(|e| format!("Failed to resolve data dir: {}", e))?;
+        .map_err(|e| format!("Failed to resolve data dir: {:#}", e))?;
 
     with_policy::<_, ()>(
         CommandPolicy::LockOnly,
@@ -64,7 +63,7 @@ pub fn handle_devices_revoke(device_id: &str) -> Result<(), Box<dyn std::error::
         |_lock| revoke_locked(device_id),
         serde_json::Value::Null,
     )
-    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })
+    .map_err(|e| -> Box<dyn std::error::Error> { format!("{:#}", e).into() })
 }
 
 fn revoke_locked(device_id: &str) -> anyhow::Result<()> {

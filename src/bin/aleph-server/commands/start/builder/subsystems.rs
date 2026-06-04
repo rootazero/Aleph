@@ -396,30 +396,41 @@ pub(in crate::commands::start) async fn initialize_channels(
         {
             // Pass ToolCatalog to telegram instances so they self-register slash commands
             if inst.channel_type == "telegram" {
-                if let Ok(tg_config) = parse_telegram_channel_config(config_with_secrets.clone()) {
-                    let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
-                    if let Some(ref reg) = tool_catalog {
-                        tg_channel.set_tool_registry(reg.clone());
+                match parse_telegram_channel_config(config_with_secrets.clone()) {
+                    Ok(tg_config) => {
+                        let mut tg_channel = TelegramChannel::new(&inst.id, tg_config);
+                        if let Some(ref reg) = tool_catalog {
+                            tg_channel.set_tool_registry(reg.clone());
+                        }
+                        if let Some(ref db) = state_db {
+                            // Wire offset tracker for persistent polling resume
+                            let tracker = OffsetTracker::new(db.clone(), inst.id.clone());
+                            tg_channel.set_offset_tracker(Arc::new(tracker));
+                            // Wire state database for pairing persistence
+                            tg_channel.set_state_database(db.clone());
+                        }
+                        channel = Box::new(tg_channel);
                     }
-                    if let Some(ref db) = state_db {
-                        // Wire offset tracker for persistent polling resume
-                        let tracker = OffsetTracker::new(db.clone(), inst.id.clone());
-                        tg_channel.set_offset_tracker(Arc::new(tracker));
-                        // Wire state database for pairing persistence
-                        tg_channel.set_state_database(db.clone());
-                    }
-                    channel = Box::new(tg_channel);
+                    Err(e) => tracing::warn!(
+                        id = %inst.id, error = %e,
+                        "telegram channel config parse failed; keeping generic channel (offset/tool wiring skipped)"
+                    ),
                 }
             }
 
             if inst.channel_type == "qq" {
-                if let Ok(qq_config) = serde_json::from_value::<
-                    alephcore::gateway::interfaces::qq::QQConfig,
-                >(config_with_secrets.clone())
-                {
-                    let qq_channel =
-                        alephcore::gateway::interfaces::qq::QQChannel::new(&inst.id, qq_config);
-                    channel = Box::new(qq_channel);
+                match serde_json::from_value::<alephcore::gateway::interfaces::qq::QQConfig>(
+                    config_with_secrets.clone(),
+                ) {
+                    Ok(qq_config) => {
+                        let qq_channel =
+                            alephcore::gateway::interfaces::qq::QQChannel::new(&inst.id, qq_config);
+                        channel = Box::new(qq_channel);
+                    }
+                    Err(e) => tracing::warn!(
+                        id = %inst.id, error = %e,
+                        "qq channel config parse failed; keeping generic channel"
+                    ),
                 }
             }
 
@@ -427,14 +438,21 @@ pub(in crate::commands::start) async fn initialize_channels(
             // real instance id so the registry keys the channel correctly and
             // multi-instance configs are addressable.
             if inst.channel_type == "whatsapp" {
-                if let Ok(wa_config) = serde_json::from_value::<
+                match serde_json::from_value::<
                     alephcore::gateway::interfaces::whatsapp::WhatsAppConfig,
                 >(config_with_secrets.clone())
                 {
-                    let wa_channel = alephcore::gateway::interfaces::whatsapp::WhatsAppChannel::new(
-                        &inst.id, wa_config,
-                    );
-                    channel = Box::new(wa_channel);
+                    Ok(wa_config) => {
+                        let wa_channel =
+                            alephcore::gateway::interfaces::whatsapp::WhatsAppChannel::new(
+                                &inst.id, wa_config,
+                            );
+                        channel = Box::new(wa_channel);
+                    }
+                    Err(e) => tracing::warn!(
+                        id = %inst.id, error = %e,
+                        "whatsapp channel config parse failed; keeping generic channel with hardcoded id"
+                    ),
                 }
             }
 
