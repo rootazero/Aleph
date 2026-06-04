@@ -539,6 +539,11 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     >,
     exec_approval_manager: Arc<alephcore::exec::manager::ExecApprovalManager>,
     clarification_manager: Arc<alephcore::clarification::ClarificationManager>,
+    // Coord-task store + dispatcher signal wire workflow `clarify` step
+    // resolution: a reply to a paused clarify step completes its durable task
+    // and wakes the dispatcher to unblock the dependents.
+    workflow_clarify_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
+    dispatch_signal: Option<Arc<tokio::sync::Notify>>,
     daemon: bool,
 ) {
     let routing_config = RoutingConfig::default();
@@ -791,6 +796,12 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
 
     // Wire HITL managers for /approve · /deny · ask_user reply interception.
     inbound_router = inbound_router.with_hitl(exec_approval_manager, clarification_manager);
+
+    // Wire workflow `clarify` reply interception when the coord store and the
+    // dispatcher signal are both available (an agent-engine run with teams).
+    if let (Some(store), Some(signal)) = (workflow_clarify_store, dispatch_signal) {
+        inbound_router = inbound_router.with_workflow_clarify(store, signal);
+    }
 
     let inbound_router = Arc::new(inbound_router);
 

@@ -18,8 +18,9 @@ use tracing::debug;
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
+use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
-use crate::workflow::{self, WorkflowDef, WorkflowManifest};
+use crate::workflow::{self, ClarifyContext, WorkflowDef, WorkflowManifest};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -208,8 +209,26 @@ impl AlephTool for WorkflowTool {
                 // id/agent/prompt/depends_on (R10: the executor never sees the
                 // interchange metadata).
                 let def = workflow::store::load(&name)?.to_def();
-                let mat = workflow::materialize(&def, &input, &team_id, self.coord_store.as_ref())
-                    .await?;
+                // Capture the originating channel so any `clarify` step can reach
+                // the user from the autonomous dispatcher, where the launching
+                // turn no longer exists. A non-interactive run yields `None`;
+                // clarify steps then fail fast at delivery (clear reason) rather
+                // than stalling the DAG.
+                let clarify_ctx = current_turn_context()
+                    .filter(|t| t.is_channel_routable())
+                    .map(|t| ClarifyContext {
+                        channel_id: t.channel_id.clone(),
+                        conversation_id: t.conversation_id.clone(),
+                        session_key: t.session_key.to_string(),
+                    });
+                let mat = workflow::materialize(
+                    &def,
+                    &input,
+                    &team_id,
+                    self.coord_store.as_ref(),
+                    clarify_ctx.as_ref(),
+                )
+                .await?;
                 if let Some(signal) = &self.dispatch_signal {
                     signal.notify_one();
                 }
@@ -331,12 +350,16 @@ mod tests {
                     agent: "researcher".into(),
                     prompt: "research {input}".into(),
                     depends_on: vec![],
+                    kind: crate::workflow::WorkflowStepKind::Agent,
+                    choices: vec![],
                 },
                 WorkflowStepDef {
                     id: "write".into(),
                     agent: "writer".into(),
                     prompt: "write a report".into(),
                     depends_on: vec!["gather".into()],
+                    kind: crate::workflow::WorkflowStepKind::Agent,
+                    choices: vec![],
                 },
             ],
         }

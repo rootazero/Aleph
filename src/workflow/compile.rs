@@ -21,6 +21,7 @@ use crate::agents::swarm::tasks::{
 };
 use crate::error::Result;
 use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
+use crate::workflow::clarify::{ClarifyContext, ClarifyTaskMeta, CLARIFY_META_KEY, CLARIFY_OWNER};
 use crate::workflow::def::{render_prompt, WorkflowDef};
 
 /// The set of `coord_task` ids minted for one workflow run.
@@ -34,14 +35,22 @@ pub struct MaterializedWorkflow {
 /// into each step's prompt. Returns the created task ids in topological order.
 ///
 /// The caller is responsible for ensuring `team_id` refers to a team whose
-/// members cover every `step.agent` (create one with `team_create` first).
-/// After this returns, signal the dispatcher (or let its fallback tick fire)
-/// to begin execution.
+/// members cover every agent step's `step.agent` (create one with `team_create`
+/// first). After this returns, signal the dispatcher (or let its fallback tick
+/// fire) to begin execution.
+///
+/// `clarify_ctx` carries the originating channel address captured at run start;
+/// it is stamped into every clarify step so the dispatcher knows where to push
+/// the question and the inbound router knows which session's reply completes it.
+/// When `None` (e.g. a non-interactive run), clarify steps still materialise but
+/// have no channel to reach — the dispatcher fails them with a clear reason
+/// rather than stalling the DAG.
 pub async fn materialize(
     def: &WorkflowDef,
     input: &str,
     team_id: &str,
     store: &dyn CoordTaskStore,
+    clarify_ctx: Option<&ClarifyContext>,
 ) -> Result<MaterializedWorkflow> {
     def.validate()?;
     let order = def.topo_order()?;
@@ -74,18 +83,47 @@ pub async fn materialize(
             }
         }
 
-        let metadata = json!({
-            MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
-            "workflow": def.name,
-            "workflow_step": step.id,
-        });
+        // The rendered prompt doubles as the clarify question.
+        let rendered = render_prompt(&step.prompt, input);
+
+        // A clarify step is owned by the sentinel and carries its awaiting
+        // record in metadata; an agent step is owned by its agent. Both keep the
+        // dispatcher-managed + workflow provenance tags.
+        let (owner, metadata) = if step.is_clarify() {
+            let ctx = clarify_ctx.cloned().unwrap_or_default();
+            let clarify_meta = ClarifyTaskMeta {
+                question: rendered.clone(),
+                choices: step.choices.clone(),
+                channel_id: ctx.channel_id,
+                conversation_id: ctx.conversation_id,
+                session_key: ctx.session_key,
+            };
+            (
+                CLARIFY_OWNER.to_string(),
+                json!({
+                    MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
+                    "workflow": def.name,
+                    "workflow_step": step.id,
+                    CLARIFY_META_KEY: clarify_meta.to_value(),
+                }),
+            )
+        } else {
+            (
+                step.agent.clone(),
+                json!({
+                    MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
+                    "workflow": def.name,
+                    "workflow_step": step.id,
+                }),
+            )
+        };
 
         let created = match store
             .create_task(NewCoordTask {
                 team_id: Some(team_id.to_string()),
                 subject: format!("{}:{}", def.name, step.id),
-                description: render_prompt(&step.prompt, input),
-                owner: Some(step.agent.clone()),
+                description: rendered,
+                owner: Some(owner),
                 priority: Priority::Normal,
                 blocked_by,
                 metadata,
@@ -147,6 +185,19 @@ mod tests {
             agent: agent.into(),
             prompt: format!("handle {{input}} for {id}"),
             depends_on: deps.iter().map(|s| s.to_string()).collect(),
+            kind: crate::workflow::def::WorkflowStepKind::Agent,
+            choices: vec![],
+        }
+    }
+
+    fn clarify_step(id: &str, question: &str, choices: &[&str], deps: &[&str]) -> WorkflowStepDef {
+        WorkflowStepDef {
+            id: id.into(),
+            agent: String::new(),
+            prompt: question.into(),
+            depends_on: deps.iter().map(|s| s.to_string()).collect(),
+            kind: crate::workflow::def::WorkflowStepKind::Clarify,
+            choices: choices.iter().map(|s| s.to_string()).collect(),
         }
     }
 
@@ -164,7 +215,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_creates_one_task_per_step() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "the topic", "team-1", &store)
+        let mat = materialize(&linear_def(), "the topic", "team-1", &store, None)
             .await
             .expect("materialise");
         assert_eq!(mat.task_ids.len(), 2);
@@ -173,7 +224,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_substitutes_input_and_tags_dispatcher() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "quantum computing", "team-1", &store)
+        let mat = materialize(&linear_def(), "quantum computing", "team-1", &store, None)
             .await
             .unwrap();
 
@@ -194,7 +245,7 @@ mod tests {
     #[tokio::test]
     async fn materialize_wires_dependency_so_dependent_is_blocked() {
         let store = setup_store().await;
-        let mat = materialize(&linear_def(), "x", "team-1", &store)
+        let mat = materialize(&linear_def(), "x", "team-1", &store, None)
             .await
             .unwrap();
 
@@ -238,7 +289,7 @@ mod tests {
                 step("b", "w", &["a", "a"]),
             ],
         };
-        let mat = materialize(&def, "x", "t", &store)
+        let mat = materialize(&def, "x", "t", &store, None)
             .await
             .expect("duplicate dep collapses instead of aborting");
         assert_eq!(mat.task_ids.len(), 2);
@@ -252,7 +303,7 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].depends_on = vec!["ghost".into()];
-        assert!(materialize(&def, "x", "team-1", &store).await.is_err());
+        assert!(materialize(&def, "x", "team-1", &store, None).await.is_err());
     }
 
     #[tokio::test]
@@ -268,7 +319,7 @@ mod tests {
                 step("d", "w", &["b", "c"]),
             ],
         };
-        let mat = materialize(&def, "x", "t", &store).await.unwrap();
+        let mat = materialize(&def, "x", "t", &store, None).await.unwrap();
         assert_eq!(mat.task_ids.len(), 4);
         // The final task "d" must be blocked until both b and c complete.
         let last = store
@@ -278,5 +329,58 @@ mod tests {
             .unwrap();
         assert_eq!(last.subject, "diamond:d");
         assert_eq!(last.status, CoordTaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn materialize_clarify_step_stamps_owner_and_meta() {
+        use crate::workflow::clarify::{ClarifyContext, ClarifyTaskMeta, CLARIFY_OWNER};
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "deploy".into(),
+            description: String::new(),
+            steps: vec![
+                clarify_step("ask", "Deploy to {input}?", &["staging", "prod"], &[]),
+                step("run", "deployer", &["ask"]),
+            ],
+        };
+        let ctx = ClarifyContext {
+            channel_id: "telegram".into(),
+            conversation_id: "user-1".into(),
+            session_key: "telegram:bot:1:user-1".into(),
+        };
+        let mat = materialize(&def, "us-east", "team-1", &store, Some(&ctx))
+            .await
+            .unwrap();
+
+        let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        // Owned by the sentinel — never routed to a team member.
+        assert_eq!(ask.owner.as_deref(), Some(CLARIFY_OWNER));
+        // The awaiting record carries the rendered question, choices, and the
+        // originating channel address.
+        let meta = ClarifyTaskMeta::from_metadata(&ask.metadata).expect("clarify meta present");
+        assert_eq!(meta.question, "Deploy to us-east?");
+        assert_eq!(meta.choices, vec!["staging", "prod"]);
+        assert_eq!(meta.channel_id, "telegram");
+        assert_eq!(meta.session_key, "telegram:bot:1:user-1");
+
+        // The downstream agent step waits on the clarify answer.
+        let run = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert_eq!(run.status, CoordTaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn materialize_clarify_without_context_has_empty_address() {
+        use crate::workflow::clarify::ClarifyTaskMeta;
+        let store = setup_store().await;
+        let def = WorkflowDef {
+            name: "wf".into(),
+            description: String::new(),
+            steps: vec![clarify_step("ask", "Which file?", &[], &[])],
+        };
+        let mat = materialize(&def, "x", "t", &store, None).await.unwrap();
+        let ask = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        let meta = ClarifyTaskMeta::from_metadata(&ask.metadata).expect("clarify meta present");
+        assert!(meta.channel_id.is_empty());
+        assert!(meta.session_key.is_empty());
     }
 }

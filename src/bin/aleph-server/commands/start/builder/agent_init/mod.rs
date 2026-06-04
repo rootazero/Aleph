@@ -1361,7 +1361,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     }
                     Arc::new(p)
                 });
-                let dispatcher = Arc::new(TeamDispatcher::new(
+                let mut dispatcher = TeamDispatcher::new(
                     cs,
                     ts,
                     artifact_store.clone(),
@@ -1369,7 +1369,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     (*gateway_ctx).clone(),
                     DispatcherConfig::default(),
                     dispatch_signal.clone(),
-                ));
+                );
+                // Wire the channel-registry cell so workflow `clarify` steps can
+                // push their question to the user's originating channel once the
+                // registry is injected (deferred, like the tool registry's).
+                if let Some(cell) = channel_reg_cell.clone() {
+                    dispatcher = dispatcher.with_clarify_delivery(cell);
+                }
+                let dispatcher = Arc::new(dispatcher);
                 dispatcher.spawn_loop();
                 if !daemon {
                     println!("  Team dispatcher started");
