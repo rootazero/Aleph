@@ -5,10 +5,15 @@
 //! `agent()` skeleton; imperative control flow is never emitted (Aleph's source
 //! has none). A `/* @aleph-workflow {json} */` header carries the full manifest
 //! for lossless re-import.
+//!
+//! The `meta.phases` plan is *reconciled* with the body: any phase a step
+//! references via its `phase` field is declared in `meta.phases` even when the
+//! authored manifest left it out, so every body `phase()` marker has a matching
+//! declaration (the `.workflow.js` convention).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::workflow::interop::manifest::{WorkflowManifest, WorkflowManifestStep};
+use crate::workflow::interop::manifest::{WorkflowManifest, WorkflowManifestStep, WorkflowPhase};
 
 /// Embedded round-trip marker. `import` reads the JSON between prefix/suffix.
 pub const EMBED_PREFIX: &str = "/* @aleph-workflow ";
@@ -30,15 +35,19 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
     out.push_str(EMBED_SUFFIX);
     out.push('\n');
 
+    // Topological layers drive both the meta phase plan and the body skeleton;
+    // compute once and share so the plan lists every phase the body emits.
+    let levels = topo_levels(manifest);
+
     // 2. meta block (pure literal).
-    out.push_str(&render_meta(manifest));
+    out.push_str(&render_meta(manifest, levels.as_deref()));
     out.push('\n');
 
     // 3. Body: topological layers → parallel/sequential agent() skeleton.
-    match topo_levels(manifest) {
+    match &levels {
         Some(levels) => {
             let mut last_phase: Option<&str> = None;
-            for layer in &levels {
+            for layer in levels {
                 // The phase marker reflects only the layer's first step. Mixed
                 // per-step phases within one parallel layer are NOT all rendered
                 // in the body, but every step's `phase` is preserved losslessly
@@ -80,10 +89,40 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
     out
 }
 
+/// Compute the `meta.phases` plan: the declared phases (preserving
+/// detail/model/order) plus any phase a step references but the manifest did not
+/// declare, appended in topological first-occurrence order. Guarantees every
+/// body `phase()` marker is also declared in `meta`, matching the `.workflow.js`
+/// convention ("use the same titles in meta.phases as in phase() calls"). Pure
+/// field shuffling — no reasoning (R10).
+fn effective_phases(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>]>) -> Vec<WorkflowPhase> {
+    let mut out = manifest.phases.clone();
+    let mut seen: HashSet<String> = manifest.phases.iter().map(|p| p.title.clone()).collect();
+    // Visit steps in the order the body emits them so a derived phase lines up
+    // with its first `phase()` marker. Fall back to list order if the DAG is
+    // degenerate (never happens for a validated manifest).
+    let order: Vec<usize> = match levels {
+        Some(levels) => levels.iter().flatten().copied().collect(),
+        None => (0..manifest.steps.len()).collect(),
+    };
+    for i in order {
+        if let Some(ph) = manifest.steps[i].phase.as_deref() {
+            if seen.insert(ph.to_string()) {
+                out.push(WorkflowPhase {
+                    title: ph.to_string(),
+                    detail: String::new(),
+                    model: None,
+                });
+            }
+        }
+    }
+    out
+}
+
 /// Render the `export const meta = {...}` literal.
-fn render_meta(manifest: &WorkflowManifest) -> String {
+fn render_meta(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>]>) -> String {
     let mut phases = String::new();
-    for p in &manifest.phases {
+    for p in &effective_phases(manifest, levels) {
         // `model` is optional on a `.workflow.js` phase entry; emit it only when
         // present so model-less phases render byte-identically to before.
         match &p.model {
@@ -321,5 +360,61 @@ mod tests {
         // the escaped quote and \n, never a raw newline inside the call.
         assert!(js.contains("say \\\"hi\\\""));
         assert!(js.contains("\\n"));
+    }
+
+    #[test]
+    fn meta_phases_include_step_referenced_phases() {
+        // A phase a step references but the manifest never declared must still
+        // appear in meta.phases (every body phase() is declared), in topological
+        // first-occurrence order: Audit (layer 0) before Verify (layer 1).
+        let mut a = step("a", &[]);
+        a.phase = Some("Audit".into());
+        let mut b = step("b", &["a"]);
+        b.phase = Some("Verify".into());
+        let js = render_workflow_js(&manifest(vec![a, b]));
+        assert!(
+            js.contains("{ title: \"Audit\", detail: \"\" }"),
+            "derived Audit in meta: {js}"
+        );
+        assert!(
+            js.contains("{ title: \"Verify\", detail: \"\" }"),
+            "derived Verify in meta: {js}"
+        );
+        let ai = js.find("title: \"Audit\"").unwrap();
+        let vi = js.find("title: \"Verify\"").unwrap();
+        assert!(ai < vi, "topological phase order in meta: {js}");
+    }
+
+    #[test]
+    fn declared_phase_not_duplicated_by_step_reference() {
+        // A declared phase keeps its detail/model and is NOT re-emitted as a bare
+        // derived entry when a step also references it.
+        let mut a = step("a", &[]);
+        a.phase = Some("Scan".into());
+        let mut m = manifest(vec![a]);
+        m.phases = vec![WorkflowPhase {
+            title: "Scan".into(),
+            detail: "deep".into(),
+            model: Some("opus".into()),
+        }];
+        let js = render_workflow_js(&m);
+        assert!(
+            js.contains("{ title: \"Scan\", detail: \"deep\", model: \"opus\" }"),
+            "declared detail/model preserved: {js}"
+        );
+        assert_eq!(
+            js.matches("title: \"Scan\"").count(),
+            1,
+            "no duplicate Scan entry: {js}"
+        );
+    }
+
+    #[test]
+    fn no_step_phase_keeps_meta_phases_byte_identical() {
+        // Regression guard: with no per-step phase and no declared phases, the
+        // reconciliation adds nothing — the meta block is byte-identical to the
+        // pre-reconciliation output (empty phases list).
+        let js = render_workflow_js(&manifest(vec![step("a", &[]), step("b", &["a"])]));
+        assert!(js.contains("phases: [\n  ],"), "empty phase plan: {js}");
     }
 }
