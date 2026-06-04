@@ -59,6 +59,15 @@ impl ScanResult {
         self.findings.iter().any(|f| f.action == LeakAction::Warn)
     }
 
+    /// Returns true if any finding requires redaction.
+    ///
+    /// A `Redact` finding is neither a block nor a warning, so consumers that
+    /// only check `has_blocks()`/`has_warnings()` would silently let the matched
+    /// secret through. Callers must consult this and apply [`LeakDetector::redact`].
+    pub fn has_redacts(&self) -> bool {
+        self.findings.iter().any(|f| f.action == LeakAction::Redact)
+    }
+
     /// Returns true if no findings were detected.
     pub fn is_clean(&self) -> bool {
         self.findings.is_empty()
@@ -151,6 +160,26 @@ impl LeakDetector {
     /// Scan inbound content (received from LLM or external service).
     pub fn scan_inbound(&self, content: &str) -> ScanResult {
         self.scan(content)
+    }
+
+    /// Replace every `Redact`-action pattern match with a redaction marker,
+    /// returning the sanitized content.
+    ///
+    /// Only `Redact` patterns are rewritten; `Block`/`Warn` matches are left
+    /// untouched because their disposition is the caller's policy decision
+    /// (block the whole message, or warn-and-pass). This is the missing "last
+    /// mile" for `LeakAction::Redact`, which otherwise has no honoring consumer.
+    pub fn redact(&self, content: &str) -> String {
+        let mut current = content.to_string();
+        for pattern in &self.patterns {
+            if pattern.action == LeakAction::Redact {
+                current = pattern
+                    .regex
+                    .replace_all(&current, "***REDACTED***")
+                    .into_owned();
+            }
+        }
+        current
     }
 }
 
@@ -278,6 +307,33 @@ mod tests {
             LeakAction::Redact,
             "bearer token should be Redact, not Block"
         );
+    }
+
+    #[test]
+    fn test_bearer_token_redact_removes_secret() {
+        let detector = LeakDetector::default_patterns();
+        let token = "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        let scan = detector.scan_outbound(token);
+        assert!(scan.has_redacts(), "bearer token should report a redact");
+        assert!(!scan.has_blocks(), "bearer token is not a block");
+        let redacted = detector.redact(token);
+        assert!(
+            !redacted.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"),
+            "secret must be removed: {redacted}"
+        );
+        assert!(
+            redacted.contains("***REDACTED***"),
+            "redaction marker expected: {redacted}"
+        );
+    }
+
+    #[test]
+    fn test_redact_leaves_block_secrets_untouched() {
+        // `redact` only rewrites Redact-action matches; Block secrets are the
+        // caller's policy decision and must not be silently mutated here.
+        let detector = LeakDetector::default_patterns();
+        let content = "key=AKIAIOSFODNN7EXAMPLE";
+        assert_eq!(detector.redact(content), content);
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use crate::exec::leak_detector::{LeakAction, LeakDetector as ExecLeakDetector};
+use crate::exec::SecretMasker;
 use crate::pii::engine::{FilterResult, PiiEngine};
 use crate::secrets::injection::{AsyncSecretResolver, InjectedSecret};
 use crate::secrets::leak_detector::{LeakDecision, LeakDetector as SecretLeakDetector};
@@ -206,12 +207,16 @@ impl RuntimeSecurityGuard {
                 exec_scan.has_blocks() || matches!(secret_scan, LeakDecision::Block { .. });
 
             if has_blocks {
+                // The returned text must be safe to log/display — mask every
+                // known secret class. An exec-only block previously returned the
+                // raw, unmasked text in a field literally named `redacted_text`.
+                let masker = SecretMasker::new();
                 let redacted_text = match secret_scan {
                     LeakDecision::Block {
                         ref redacted_content,
                         ..
-                    } => Some(redacted_content.clone()),
-                    _ => Some(current_text.clone()),
+                    } => Some(masker.mask(redacted_content)),
+                    _ => Some(masker.mask(&current_text)),
                 };
                 let detail = format!(
                     "outbound leak blocked; exec_findings={}, secret_block={}",
@@ -237,6 +242,23 @@ impl RuntimeSecurityGuard {
                     AuditEventType::LeakWarning,
                     AuditSeverity::Warn,
                     "outbound leak detector warning".to_string(),
+                );
+            }
+
+            // Honor `Redact`-action findings (e.g. bearer tokens). Without this
+            // the matched secret would pass through untouched, since it is
+            // neither a block nor a warning.
+            if exec_scan.has_redacts() {
+                current_text = {
+                    let detector = self.exec_leak_detector.lock().await;
+                    detector.redact(&current_text)
+                };
+                reasons.push("Outbound leak detector redacted sensitive token".to_string());
+                self.log_audit(
+                    &context,
+                    AuditEventType::LeakWarning,
+                    AuditSeverity::Warn,
+                    "outbound leak detector redacted sensitive token".to_string(),
                 );
             }
         }
@@ -420,7 +442,29 @@ impl RuntimeSecurityGuard {
             );
             return Ok(GuardResult::Blocked {
                 reason: "Leak detector found sensitive data in inbound content".to_string(),
-                redacted_text: Some(text.to_string()),
+                // Mask before handing back — never return the raw secret in a
+                // field named `redacted_text`.
+                redacted_text: Some(SecretMasker::new().mask(text)),
+            });
+        }
+
+        // Honor `Redact`-action findings (e.g. bearer tokens) before any other
+        // pass-through. Without this the matched secret would be returned to the
+        // caller untouched, since it is neither a block nor a warning.
+        if exec_scan.has_redacts() {
+            let redacted = {
+                let detector = self.exec_leak_detector.lock().await;
+                detector.redact(text)
+            };
+            self.log_audit(
+                context,
+                AuditEventType::LeakWarning,
+                AuditSeverity::Warn,
+                "inbound leak detector redacted sensitive token".to_string(),
+            );
+            return Ok(GuardResult::Redacted {
+                text: redacted,
+                reasons: vec!["Inbound leak detector redacted sensitive token".to_string()],
             });
         }
 
