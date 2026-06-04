@@ -248,6 +248,15 @@ impl ProfileManager {
         self.ssrf_guard.check_navigation(url)
     }
 
+    /// Redact embedded credentials from page-derived `text` before it is
+    /// returned to the LLM (the OUT half of the secret-egress boundary). Used by
+    /// the content-read tools (snapshot / console / network / evaluate) via the
+    /// shared `redact_and_wrap` egress chokepoint. Zero-copy when redaction is
+    /// disabled or the text carries no secret.
+    pub fn redact_content<'a>(&self, text: &'a str) -> std::borrow::Cow<'a, str> {
+        self.ssrf_guard.redact_content(text)
+    }
+
     /// Record activity on a profile to reset its idle timer.
     pub fn record_activity(&self, profile_name: &str) {
         let mut profiles = self.profiles.write().unwrap_or_else(|e| e.into_inner());

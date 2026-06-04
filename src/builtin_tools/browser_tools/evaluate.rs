@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
-use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
@@ -53,17 +52,17 @@ impl AlephTool for BrowserEvaluateTool {
                 Ok(value) => {
                     // evaluate() returns String; try to parse as JSON, else treat as raw text.
                     let json_value: serde_json::Value = match serde_json::from_str(&value) {
-                        // Free page text (not JSON) is untrusted external content — wrap it
-                        // with injection-boundary markers, consistent with snapshot/console/
-                        // network. Structured JSON results stay typed (low injection surface;
-                        // wrapping would corrupt the value).
-                        Err(_) => serde_json::Value::String(wrap_external_content(
-                            &value,
-                            ContentSource::BrowserContent,
-                        )),
-                        Ok(serde_json::Value::String(s)) => serde_json::Value::String(
-                            wrap_external_content(&s, ContentSource::BrowserContent),
-                        ),
+                        // Free page text (not JSON) is untrusted external content — redact
+                        // credentials and wrap with injection-boundary markers, consistent
+                        // with snapshot/console/network (see `redact_and_wrap`). Structured
+                        // JSON results stay typed (low injection surface; wrapping would
+                        // corrupt the value).
+                        Err(_) => {
+                            serde_json::Value::String(super::redact_and_wrap(&self.manager, &value))
+                        }
+                        Ok(serde_json::Value::String(s)) => {
+                            serde_json::Value::String(super::redact_and_wrap(&self.manager, &s))
+                        }
                         Ok(other) => other,
                     };
                     Ok(BrowserEvaluateOutput {
