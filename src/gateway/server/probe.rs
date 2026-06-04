@@ -101,6 +101,7 @@ mod tests {
             token_manager: None,
             middleware_chain: MiddlewareChain::new(handlers, rate_limiter),
             trusted_proxies: Arc::new(TrustedProxies::default()),
+            origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::loopback_only()),
         })
     }
 

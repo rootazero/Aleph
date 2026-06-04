@@ -161,6 +161,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         lane: full_config.gateway.lane.clone(),
         require_idempotency_key: full_config.gateway.require_idempotency_key,
         trusted_proxies: full_config.gateway.trusted_proxies.clone(),
+        allowed_origins: full_config.gateway.auth.allowed_origins.clone(),
     };
     let mut server = GatewayServer::with_config(addr, server_config);
 

@@ -275,6 +275,25 @@ pub(super) async fn ws_upgrade_handler(
         .trusted_proxies
         .real_client_ip(peer_addr.ip(), &headers);
 
+    // Cross-origin / DNS-rebinding guard. A browser always attaches an
+    // `Origin` header to a WS upgrade and cannot forge it, so a malicious page
+    // that reaches this loopback socket is rejected when its origin is neither
+    // same-origin nor allow-listed. Native clients (CLI, bots, bridges) send
+    // no `Origin` and pass through untouched. Enforces the long-documented
+    // `[gateway.auth] allowed_origins` contract.
+    {
+        let origin = headers.get(header::ORIGIN).and_then(|v| v.to_str().ok());
+        let host = headers.get(header::HOST).and_then(|v| v.to_str().ok());
+        if !state.origin_policy.is_allowed(origin, host) {
+            warn!(
+                peer = %peer_addr,
+                origin = origin.unwrap_or("<none>"),
+                "rejected WebSocket upgrade: disallowed origin (cross-origin / DNS-rebinding guard)"
+            );
+            return (axum::http::StatusCode::FORBIDDEN, "origin not allowed").into_response();
+        }
+    }
+
     // Check connection limits before upgrading. One read guard covers both the
     // global cap and the per-IP cap so we hold the lock once.
     {

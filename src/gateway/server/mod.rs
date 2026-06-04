@@ -194,6 +194,11 @@ pub struct GatewaySharedState {
     /// per-IP connection cap and rate limiting. Empty (default) ⇒ the socket
     /// peer address is used verbatim, and `X-Forwarded-For` is never trusted.
     pub trusted_proxies: Arc<crate::gateway::trusted_proxy::TrustedProxies>,
+    /// Cross-origin policy enforced at the `/ws` upgrade. Rejects browser
+    /// pages whose `Origin` is neither same-origin, loopback, `tauri:`, nor
+    /// operator-allow-listed — the DNS-rebinding / cross-origin-WebSocket
+    /// guard. Native clients (no `Origin` header) are unaffected.
+    pub origin_policy: Arc<crate::gateway::origin_policy::OriginPolicy>,
 }
 
 /// Configuration for the Gateway server
@@ -231,6 +236,12 @@ pub struct GatewayConfig {
     /// trusted to carry the real client IP. Empty (default) ⇒ the socket peer
     /// address is used verbatim. See `GatewayServerConfig::trusted_proxies`.
     pub trusted_proxies: Vec<String>,
+    /// Extra browser origins allowed on the `/ws` upgrade, in addition to the
+    /// built-in same-origin / loopback / `tauri:` rules. Populated by the
+    /// binary from the TOML `[gateway.auth] allowed_origins`. Empty (default)
+    /// ⇒ only same-origin and same-machine clients may open a WebSocket. See
+    /// [`crate::gateway::origin_policy::OriginPolicy`].
+    pub allowed_origins: Vec<String>,
 }
 
 impl Default for GatewayConfig {
@@ -243,6 +254,7 @@ impl Default for GatewayConfig {
             ping_interval_secs: 30,
             idle_timeout_secs: 90,
             trusted_proxies: Vec::new(),
+            allowed_origins: Vec::new(),
             lane: LaneConfig::default(),
             require_idempotency_key: false,
         }
@@ -569,6 +581,9 @@ impl GatewayServer {
             token_manager: self.token_manager.clone(),
             middleware_chain,
             trusted_proxies,
+            origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::new(
+                self.config.allowed_origins.clone(),
+            )),
         });
 
         let control_plane = create_control_plane_router();
