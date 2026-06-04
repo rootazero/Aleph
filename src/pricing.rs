@@ -22,6 +22,16 @@
 //! more-specific entries (e.g. `claude-opus-4`) come before broader ones
 //! (`claude`). Operators bumping prices update one numeric literal and
 //! recompile — there is no runtime config knob.
+//!
+//! # Long-context tiers
+//!
+//! Some vendors charge a premium once a prompt crosses an input-token
+//! threshold (Gemini 2.5 Pro and Claude Sonnet's 1M-context beta both step
+//! up at 200K). [`PRICE_TABLE`] holds the base rate; the parallel
+//! [`TIER_TABLE`] holds the >threshold overrides. [`estimate`] picks the
+//! tier from the prompt's input size, so long-context runs are no longer
+//! billed at the (≈2x cheaper) base rate. Flat-priced models skip the tier
+//! lookup entirely and stay byte-identical.
 
 use serde::{Deserialize, Serialize};
 
@@ -83,6 +93,25 @@ struct Rates {
     cache_creation_per_mtok: Option<f64>,
     /// Reasoning tokens — only Gemini bills these separately. Anthropic
     /// already folds reasoning into `output`; OpenAI o-series likewise.
+    reasoning_per_mtok: Option<f64>,
+}
+
+/// One long-context pricing tier on the **input-token axis**.
+///
+/// Several vendors charge a premium once a request's prompt crosses a
+/// threshold (Gemini 2.5 Pro at 200K, Claude Sonnet's 1M-context beta at
+/// 200K, …). The flat [`Rates`] entry encodes the base (below-threshold)
+/// rate; a [`PriceTier`] overrides it once `min_input_tokens` is reached.
+/// Components left `None` inherit the base [`Rates`] value, so a tier never
+/// silently drops a rate the base had.
+#[derive(Debug, Clone, Copy)]
+struct PriceTier {
+    /// Tier applies when the prompt's input-token count is `>=` this value.
+    min_input_tokens: u32,
+    input_per_mtok: Option<f64>,
+    output_per_mtok: Option<f64>,
+    cache_read_per_mtok: Option<f64>,
+    cache_creation_per_mtok: Option<f64>,
     reasoning_per_mtok: Option<f64>,
 }
 
@@ -288,6 +317,43 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     ),
 ];
 
+/// Long-context pricing tiers, parallel to [`PRICE_TABLE`] and keyed the same
+/// way `(provider, model_prefix)`. Kept separate (mirroring
+/// [`crate::providers::metadata`]'s sibling-table pattern) so the common
+/// flat-priced models in [`PRICE_TABLE`] stay untouched — only the handful of
+/// models with a published >threshold premium appear here. Tiers within an
+/// entry are sorted ascending by `min_input_tokens`; the highest threshold the
+/// prompt has crossed wins. Sources are vendor pricing pages as of 2026-05.
+const TIER_TABLE: &[(&str, &str, &[PriceTier])] = &[
+    (
+        "google",
+        // Gemini 2.5 Pro: prompts over 200K input tokens bill at ~2x.
+        "gemini-2.5-pro",
+        &[PriceTier {
+            min_input_tokens: 200_000,
+            input_per_mtok: Some(2.50),
+            output_per_mtok: Some(15.0),
+            cache_read_per_mtok: None,
+            cache_creation_per_mtok: None,
+            reasoning_per_mtok: Some(15.0),
+        }],
+    ),
+    (
+        "anthropic",
+        // Claude Sonnet 4.x 1M-context beta: prompts over 200K input tokens
+        // bill input/cache at 2x and output at 1.5x.
+        "claude-sonnet-4",
+        &[PriceTier {
+            min_input_tokens: 200_000,
+            input_per_mtok: Some(6.0),
+            output_per_mtok: Some(22.50),
+            cache_read_per_mtok: Some(0.60),
+            cache_creation_per_mtok: Some(7.50),
+            reasoning_per_mtok: None,
+        }],
+    ),
+];
+
 /// Lower-case the provider id and accept a few common synonyms so callers
 /// can pass the raw provider name from `ProviderConfig` without tagging.
 ///
@@ -339,6 +405,53 @@ fn lookup_rates(provider: &str, model: &str) -> Option<&'static Rates> {
         .find(|r| canonical.starts_with(r.model_prefix))
 }
 
+/// Resolve the [`PriceTier`] slice for an already-canonicalised
+/// `(provider_key, model)` pair, or `None` when the model is flat-priced
+/// (the common case). Same prefix-match semantics as [`lookup_rates`].
+fn lookup_tiers(provider_key: &str, canonical_model: &str) -> Option<&'static [PriceTier]> {
+    if provider_key.is_empty() {
+        return None;
+    }
+    TIER_TABLE
+        .iter()
+        .find(|(p, prefix, _)| *p == provider_key && canonical_model.starts_with(*prefix))
+        .map(|(_, _, tiers)| *tiers)
+}
+
+/// Return the rates in effect for a prompt of `prompt_tokens` input tokens:
+/// the flat `base` rates with any crossed [`PriceTier`] applied on top.
+///
+/// Flat-priced models (no [`TIER_TABLE`] entry) and prompts below the first
+/// threshold return `*base` unchanged, keeping their estimates byte-identical
+/// to the pre-tier behaviour. A crossed tier overrides each component it
+/// specifies; `None` components fall back to the base rate via `.or`, so a
+/// tier can never downgrade a priced component to "missing".
+fn effective_rates(
+    provider_key: &str,
+    canonical_model: &str,
+    base: &Rates,
+    prompt_tokens: u32,
+) -> Rates {
+    let Some(tiers) = lookup_tiers(provider_key, canonical_model) else {
+        return *base;
+    };
+    let crossed = tiers
+        .iter()
+        .filter(|t| prompt_tokens >= t.min_input_tokens)
+        .max_by_key(|t| t.min_input_tokens);
+    match crossed {
+        Some(t) => Rates {
+            model_prefix: base.model_prefix,
+            input_per_mtok: t.input_per_mtok.or(base.input_per_mtok),
+            output_per_mtok: t.output_per_mtok.or(base.output_per_mtok),
+            cache_read_per_mtok: t.cache_read_per_mtok.or(base.cache_read_per_mtok),
+            cache_creation_per_mtok: t.cache_creation_per_mtok.or(base.cache_creation_per_mtok),
+            reasoning_per_mtok: t.reasoning_per_mtok.or(base.reasoning_per_mtok),
+        },
+        None => *base,
+    }
+}
+
 /// Return the per-million-token [`RateCard`] for a `(provider, model)` pair,
 /// or `None` when the model is not priced. Powers the model picker's
 /// cost-at-a-glance column (`providers.catalog`).
@@ -380,11 +493,23 @@ fn apply_rates(b: &TokenBreakdown, r: &Rates) -> (f64, CostStatus) {
 /// Returns `CostStatus::Unknown` when either provider or model is not in
 /// the table — callers should treat that as "no estimate available".
 pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> CostEstimate {
-    let rate = match lookup_rates(provider, model) {
+    let base = match lookup_rates(provider, model) {
         Some(r) => r,
         None => return CostEstimate::unknown(provider, model),
     };
-    let (usd, status) = apply_rates(breakdown, rate);
+    // Select the long-context tier (if any) from the prompt's input size —
+    // the cached portions of the prompt count toward the threshold.
+    let prompt_tokens = breakdown
+        .input
+        .saturating_add(breakdown.cache_read)
+        .saturating_add(breakdown.cache_creation);
+    let effective = effective_rates(
+        canonical_provider(provider),
+        &canonicalize_model(model),
+        base,
+        prompt_tokens,
+    );
+    let (usd, status) = apply_rates(breakdown, &effective);
     CostEstimate {
         usd,
         status,
@@ -434,7 +559,9 @@ mod tests {
 
     #[test]
     fn anthropic_sonnet_complete_estimate() {
-        // 1M input + 1M output @ $3 + $15 = $18.00
+        // 1M input is well past the 200K long-context threshold, so the tier
+        // rates apply: 1M input @ $6 + 1M output @ $22.50 = $28.50.
+        // (See `claude_sonnet_below_threshold_uses_base_rate` for base rates.)
         let breakdown = TokenBreakdown {
             input: 1_000_000,
             output: 1_000_000,
@@ -443,15 +570,16 @@ mod tests {
         let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
         assert_eq!(est.status, CostStatus::Complete);
         assert!(
-            (est.usd - 18.0).abs() < 1e-6,
-            "expected $18.00, got ${}",
+            (est.usd - 28.5).abs() < 1e-6,
+            "expected $28.50 (long-context tier), got ${}",
             est.usd
         );
     }
 
     #[test]
     fn anthropic_cache_components_billed_separately() {
-        // 1M cache_read @ $0.30 + 1M cache_creation @ $3.75 = $4.05
+        // 1M cache_read + 1M cache_creation = a 2M-token prompt, past the
+        // 200K threshold → tier cache rates: 1M @ $0.60 + 1M @ $7.50 = $8.10.
         let breakdown = TokenBreakdown {
             cache_read: 1_000_000,
             cache_creation: 1_000_000,
@@ -460,8 +588,8 @@ mod tests {
         let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
         assert_eq!(est.status, CostStatus::Complete);
         assert!(
-            (est.usd - 4.05).abs() < 1e-6,
-            "expected $4.05, got ${}",
+            (est.usd - 8.10).abs() < 1e-6,
+            "expected $8.10 (long-context tier), got ${}",
             est.usd
         );
     }
@@ -603,5 +731,143 @@ mod tests {
     fn rate_card_unknown_model_is_none() {
         assert!(rate_card("anthropic", "claude-imaginary-99").is_none());
         assert!(rate_card("nonexistent", "whatever").is_none());
+    }
+
+    #[test]
+    fn gemini_pro_below_threshold_uses_base_rate() {
+        // 100K input < 200K tier threshold → base $1.25.
+        let breakdown = TokenBreakdown {
+            input: 100_000,
+            ..Default::default()
+        };
+        let est = estimate("google", "gemini-2.5-pro", &breakdown);
+        assert_eq!(est.status, CostStatus::Complete);
+        // 100K * $1.25/M = $0.125
+        assert!(
+            (est.usd - 0.125).abs() < 1e-6,
+            "expected $0.125 (base), got ${}",
+            est.usd
+        );
+    }
+
+    #[test]
+    fn gemini_pro_above_threshold_uses_tier_rate() {
+        // 250K input >= 200K threshold → tier input $2.50, output $15.
+        let breakdown = TokenBreakdown {
+            input: 250_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        let est = estimate("google", "gemini-2.5-pro", &breakdown);
+        assert_eq!(est.status, CostStatus::Complete);
+        // 250K * $2.50/M + 1M * $15/M = 0.625 + 15.0 = 15.625
+        assert!(
+            (est.usd - 15.625).abs() < 1e-6,
+            "expected $15.625 (tier), got ${}",
+            est.usd
+        );
+    }
+
+    #[test]
+    fn gemini_pro_reasoning_follows_tier() {
+        // Above threshold, reasoning tokens bill at the tier rate ($15), not
+        // the base ($10).
+        let breakdown = TokenBreakdown {
+            input: 300_000,
+            reasoning: 1_000_000,
+            ..Default::default()
+        };
+        let est = estimate("google", "gemini-2.5-pro", &breakdown);
+        // 300K * $2.50/M + 1M * $15/M = 0.75 + 15.0 = 15.75
+        assert!(
+            (est.usd - 15.75).abs() < 1e-6,
+            "expected $15.75 (tier reasoning), got ${}",
+            est.usd
+        );
+    }
+
+    #[test]
+    fn claude_sonnet_long_context_tier_doubles_input() {
+        // 200K input (exactly at threshold) + 1M output → tier rates:
+        // input $6, output $22.50.
+        let breakdown = TokenBreakdown {
+            input: 200_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
+        assert_eq!(est.status, CostStatus::Complete);
+        // 200K * $6/M + 1M * $22.50/M = 1.2 + 22.5 = 23.7
+        assert!(
+            (est.usd - 23.7).abs() < 1e-6,
+            "expected $23.70 (long-context tier), got ${}",
+            est.usd
+        );
+    }
+
+    #[test]
+    fn claude_sonnet_cached_prompt_counts_toward_threshold() {
+        // Prompt size = input + cache_read + cache_creation. A prompt that is
+        // 50K fresh + 160K cached (210K total) crosses the 200K threshold even
+        // though `input` alone is below it.
+        let breakdown = TokenBreakdown {
+            input: 50_000,
+            cache_read: 160_000,
+            ..Default::default()
+        };
+        let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
+        // input 50K * $6/M + cache_read 160K * $0.60/M = 0.3 + 0.096 = 0.396
+        assert!(
+            (est.usd - 0.396).abs() < 1e-6,
+            "expected $0.396 (tier via cached prompt), got ${}",
+            est.usd
+        );
+    }
+
+    #[test]
+    fn claude_sonnet_below_threshold_uses_base_rate() {
+        // Below the 200K threshold the long-context tier must not perturb the
+        // estimate — base rates ($3 input / $15 output) apply.
+        let breakdown = TokenBreakdown {
+            input: 100_000,
+            output: 100_000,
+            ..Default::default()
+        };
+        let est = estimate("anthropic", "claude-sonnet-4-6", &breakdown);
+        // 100K * $3/M + 100K * $15/M = 0.3 + 1.5 = 1.8
+        assert!(
+            (est.usd - 1.8).abs() < 1e-6,
+            "expected $1.80 (base), got ${}",
+            est.usd
+        );
+    }
+
+    #[test]
+    fn flat_priced_model_ignores_tier_table() {
+        // Opus has no tier entry — a huge prompt still uses flat rates.
+        let breakdown = TokenBreakdown {
+            input: 1_000_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        let est = estimate("anthropic", "claude-opus-4-1", &breakdown);
+        assert_eq!(est.status, CostStatus::Complete);
+        // 1M * $15/M + 1M * $75/M = 90.0 (flat opus rates, unchanged)
+        assert!(
+            (est.usd - 90.0).abs() < 1e-6,
+            "expected $90.00 (flat opus), got ${}",
+            est.usd
+        );
+    }
+
+    #[test]
+    fn lookup_tiers_only_matches_tiered_models() {
+        assert!(lookup_tiers("google", "gemini-2.5-pro").is_some());
+        assert!(lookup_tiers("anthropic", "claude-sonnet-4-6").is_some());
+        // Flat-priced families resolve to no tier.
+        assert!(lookup_tiers("anthropic", "claude-opus-4-1").is_none());
+        assert!(lookup_tiers("openai", "gpt-4o").is_none());
+        // Empty provider key never matches.
+        assert!(lookup_tiers("", "gemini-2.5-pro").is_none());
     }
 }
