@@ -187,8 +187,22 @@ mod tests {
     async fn test_check_path_denies_protected() {
         let tool = FileOpsTool::new();
 
-        // Test that protected paths are denied
-        let protected_paths = vec!["~/.ssh/test", "~/.gnupg/test", "~/.aws/test"];
+        // Test that protected paths are denied — the original SSH/PGP/AWS set
+        // plus the broadened cloud/registry/secret-store credential coverage.
+        let protected_paths = vec![
+            "~/.ssh/test",
+            "~/.gnupg/test",
+            "~/.aws/test",
+            "~/.config/gcloud/credentials.db",
+            "~/.kube/config",
+            "~/.azure/accessTokens.json",
+            "~/.docker/config.json",
+            "~/.npmrc",
+            "~/.pypirc",
+            "~/.password-store/x.gpg",
+            "~/.netrc",
+            "~/.git-credentials",
+        ];
 
         for path in protected_paths {
             let result = tool.check_path(std::path::Path::new(path));

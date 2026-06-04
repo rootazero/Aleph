@@ -6,13 +6,34 @@ use tracing::info;
 use super::state::get_working_dir;
 use crate::builtin_tools::error::ToolError;
 
-/// Denied paths for security
+/// Denied paths for security.
+///
+/// Adding entries here is backwards-compatible (strictly tighter) — these are
+/// well-known credential stores an agent should never read or overwrite.
+/// Matched by [`check_and_resolve_path`] via symlink-canonicalizing prefix
+/// comparison, so a directory entry (e.g. `~/.ssh`) covers everything beneath
+/// it and a leaf file (e.g. `~/.netrc`) covers exactly that file.
+///
+/// The credential breadth here mirrors OpenSquilla's `sensitive_paths.py`
+/// (SSH/cloud/registry/secret stores) layered onto Aleph's stronger checker.
 pub fn get_denied_paths() -> Vec<String> {
     let mut denied_paths = vec![
-        // Unix sensitive directories
+        // SSH / PGP / AWS — the original Unix credential directories.
         "~/.ssh".to_string(),
         "~/.gnupg".to_string(),
         "~/.aws".to_string(),
+        // Cloud-provider credential stores.
+        "~/.config/gcloud".to_string(),
+        "~/.kube".to_string(),
+        "~/.azure".to_string(),
+        // Container-registry + package-registry credentials.
+        "~/.docker/config.json".to_string(),
+        "~/.npmrc".to_string(),
+        "~/.pypirc".to_string(),
+        // Generic secret stores and credential leaf files.
+        "~/.password-store".to_string(),
+        "~/.netrc".to_string(),
+        "~/.git-credentials".to_string(),
     ];
 
     // Add specific Aleph config files (not the entire directory)
