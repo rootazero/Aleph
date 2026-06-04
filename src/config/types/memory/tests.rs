@@ -77,8 +77,12 @@ mod tests {
         assert!(!c.force_fallback);
         assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
         assert!(!c.assembly_log.enabled);
-        // Mirrored retrieval refinements default to inactive → legacy ranking.
-        assert!(!c.retrieval_scoring.is_active());
+        // Hot-surfacing + time-decay ranking are active by default ("自动冒泡");
+        // MMR and the external reranker stay opt-in.
+        assert!(c.retrieval_scoring.is_active());
+        assert!(c.retrieval_scoring.recency_enabled);
+        assert!(c.retrieval_scoring.reinforcement_enabled);
+        assert!(!c.retrieval_scoring.mmr_enabled);
         assert!(!c.rerank.enabled);
     }
 
@@ -104,11 +108,15 @@ mod tests {
     }
 
     #[test]
-    fn assembler_config_default_is_legacy_inactive() {
-        // Unconfigured deployment: the folded assembler config must stay
-        // byte-for-byte legacy (no recency/reinforcement/MMR/rerank).
+    fn assembler_config_default_folds_hot_surfacing() {
+        // Unconfigured deployment: the folded assembler config carries the
+        // default-on hot-surfacing + time-decay refinements; MMR and the
+        // external reranker remain off.
         let assembler = MemoryConfig::default().assembler_config();
-        assert!(!assembler.retrieval_scoring.is_active());
+        assert!(assembler.retrieval_scoring.is_active());
+        assert!(assembler.retrieval_scoring.recency_enabled);
+        assert!(assembler.retrieval_scoring.reinforcement_enabled);
+        assert!(!assembler.retrieval_scoring.mmr_enabled);
         assert!(!assembler.rerank.enabled);
     }
 

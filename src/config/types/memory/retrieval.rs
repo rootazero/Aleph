@@ -2,14 +2,28 @@
 //!
 //! These knobs refine ranking *after* RRF fusion and any cross-encoder rerank,
 //! mirroring what reference memory systems (hermes-agent, openclaw) apply at
-//! recall time. Every field defaults to "off" / identity so an unconfigured
-//! deployment behaves byte-for-byte like the pre-feature retrieval path.
+//! recall time.
+//!
+//! `recency` and `reinforcement` default **on**: they realise the advertised
+//! "热门记忆浮顶 / 冷门自然沉底 / 时间衰减" behaviour, which must work out of
+//! the box (the feature is "自动冒泡"). Both read data already present
+//! (`updated_at`, `recall_signals` hit counts) — no extra LLM/embedding calls —
+//! and use sub-linear, conservatively-weighted blends so they nudge ordering
+//! without ever dominating raw relevance. `mmr` (diversity de-dup) stays
+//! opt-out because dropping near-duplicates can surprise callers that expect
+//! every match returned. Setting a field to `false` restores the legacy path.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 fn default_recency_half_life_days() -> f32 {
     90.0
+}
+
+/// Default-on switch for `recency_enabled` / `reinforcement_enabled` so the
+/// hot-surfacing + time-decay ranking is active without explicit config.
+fn default_scoring_enabled() -> bool {
+    true
 }
 
 fn default_recency_weight() -> f32 {
@@ -29,8 +43,9 @@ fn default_reinforcement_weight() -> f32 {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct RetrievalScoringConfig {
     /// Re-weight relevance scores by an exponential recency multiplier so fresh
-    /// notes outrank equally-relevant stale ones. Default `false` (no change).
-    #[serde(default)]
+    /// notes outrank equally-relevant stale ones. Default `true` ("时间衰减" —
+    /// stale memories fade in ranking). Set `false` for the legacy path.
+    #[serde(default = "default_scoring_enabled")]
     pub recency_enabled: bool,
 
     /// Half-life (in days) for the recency multiplier `0.5^(age / half_life)`.
@@ -54,9 +69,10 @@ pub struct RetrievalScoringConfig {
     /// Boost notes by how often they have been recalled (reinforcement salience),
     /// so a frequently-retrieved note outranks an equally-relevant never-touched
     /// one. Reads the already-recorded `recall_signals` counts — no extra LLM
-    /// calls. Default `false` (no change). Inspired by memU's
+    /// calls. Default `true` ("热门记忆浮顶" — frequently-recalled notes bubble
+    /// up, cold ones sink). Set `false` for the legacy path. Inspired by memU's
     /// `sim × log(reinforcement+1)` salience.
-    #[serde(default)]
+    #[serde(default = "default_scoring_enabled")]
     pub reinforcement_enabled: bool,
 
     /// Blend strength of reinforcement in `[0,1]`: `score * (1 + w * ln(1+hits))`.
@@ -78,12 +94,12 @@ impl RetrievalScoringConfig {
 impl Default for RetrievalScoringConfig {
     fn default() -> Self {
         Self {
-            recency_enabled: false,
+            recency_enabled: default_scoring_enabled(),
             recency_half_life_days: default_recency_half_life_days(),
             recency_weight: default_recency_weight(),
             mmr_enabled: false,
             mmr_lambda: default_mmr_lambda(),
-            reinforcement_enabled: false,
+            reinforcement_enabled: default_scoring_enabled(),
             reinforcement_weight: default_reinforcement_weight(),
         }
     }
@@ -94,24 +110,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_inactive() {
-        assert!(!RetrievalScoringConfig::default().is_active());
+    fn default_enables_recency_and_reinforcement() {
+        // Hot-surfacing + time-decay must be active out of the box; MMR stays
+        // opt-out.
+        let cfg = RetrievalScoringConfig::default();
+        assert!(cfg.is_active());
+        assert!(cfg.recency_enabled);
+        assert!(cfg.reinforcement_enabled);
+        assert!(!cfg.mmr_enabled);
+    }
+
+    #[test]
+    fn fully_disabled_is_inactive() {
+        let cfg = RetrievalScoringConfig {
+            recency_enabled: false,
+            reinforcement_enabled: false,
+            mmr_enabled: false,
+            ..Default::default()
+        };
+        assert!(!cfg.is_active());
     }
 
     #[test]
     fn active_when_any_enabled() {
         let cfg = RetrievalScoringConfig {
-            recency_enabled: true,
-            ..Default::default()
-        };
-        assert!(cfg.is_active());
-        let cfg = RetrievalScoringConfig {
             mmr_enabled: true,
-            ..Default::default()
-        };
-        assert!(cfg.is_active());
-        let cfg = RetrievalScoringConfig {
-            reinforcement_enabled: true,
             ..Default::default()
         };
         assert!(cfg.is_active());
