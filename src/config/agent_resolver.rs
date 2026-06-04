@@ -287,19 +287,41 @@ impl AgentDefinitionResolver {
                     agent_id = %agent.id,
                     "Migrating sessions/ from workspace to agent state directory"
                 );
-                // Copy files from old to new (rename may fail across filesystems)
-                if let Ok(entries) = fs::read_dir(&old_sessions) {
-                    for entry in entries.flatten() {
-                        let dest = new_sessions.join(entry.file_name());
-                        if !dest.exists() {
-                            let _ = fs::copy(entry.path(), &dest);
+                // Copy files from old to new (rename may fail across filesystems).
+                // The originals are deleted ONLY if every entry copied successfully —
+                // a missing destination dir or an un-copyable entry (e.g. a nested
+                // subdirectory, which fs::copy cannot handle) must never lead to
+                // deleting the source before its contents are safely relocated.
+                let mut all_copied = fs::create_dir_all(&new_sessions).is_ok();
+                if all_copied {
+                    match fs::read_dir(&old_sessions) {
+                        Ok(entries) => {
+                            for entry in entries.flatten() {
+                                let dest = new_sessions.join(entry.file_name());
+                                if dest.exists() {
+                                    continue;
+                                }
+                                let is_file =
+                                    entry.file_type().map(|t| t.is_file()).unwrap_or(false);
+                                if !is_file || fs::copy(entry.path(), &dest).is_err() {
+                                    all_copied = false;
+                                }
+                            }
                         }
+                        Err(_) => all_copied = false,
                     }
                 }
-                // Remove old sessions dir after successful migration
-                let _ = fs::remove_dir_all(&old_sessions);
-                // Mark migration as complete to prevent re-processing
-                let _ = fs::write(agent_dir.join("sessions").join(".migrated"), "");
+                if all_copied {
+                    // Remove old sessions dir only after a fully successful migration
+                    let _ = fs::remove_dir_all(&old_sessions);
+                    // Mark migration as complete to prevent re-processing
+                    let _ = fs::write(new_sessions.join(".migrated"), "");
+                } else {
+                    tracing::warn!(
+                        agent_id = %agent.id,
+                        "Session migration incomplete; leaving original sessions/ in place to avoid data loss"
+                    );
+                }
             }
         }
 

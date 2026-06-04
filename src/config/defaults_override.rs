@@ -141,6 +141,11 @@ impl DefaultsOverride {
         self.memory.as_ref()?.retention_days
     }
 
+    /// Get the memory max-context-items override, if set.
+    pub fn memory_max_context_items(&self) -> Option<u32> {
+        self.memory.as_ref()?.max_context_items
+    }
+
     /// Get the generation timeout override, if set.
     pub fn generation_timeout_seconds(&self) -> Option<u64> {
         self.generation.as_ref()?.timeout_seconds
@@ -186,6 +191,7 @@ max_context_items = 20
         // Accessors
         assert_eq!(parsed.memory_similarity_threshold(), Some(0.75));
         assert_eq!(parsed.memory_retention_days(), Some(90));
+        assert_eq!(parsed.memory_max_context_items(), Some(20));
     }
 
     #[test]

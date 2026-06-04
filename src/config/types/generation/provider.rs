@@ -104,7 +104,9 @@ fn default_color() -> String {
 }
 
 fn default_timeout_seconds() -> u64 {
-    120 // 2 minutes
+    crate::config::defaults_override::get_defaults_override()
+        .generation_timeout_seconds()
+        .unwrap_or(120) // 2 minutes
 }
 
 impl Default for GenerationProviderConfig {

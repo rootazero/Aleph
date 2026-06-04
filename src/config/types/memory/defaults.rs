@@ -3,11 +3,15 @@ pub fn default_enabled() -> bool {
 }
 
 pub fn default_max_context_items() -> u32 {
-    5
+    crate::config::defaults_override::get_defaults_override()
+        .memory_max_context_items()
+        .unwrap_or(5)
 }
 
 pub fn default_retention_days() -> u32 {
-    90
+    crate::config::defaults_override::get_defaults_override()
+        .memory_retention_days()
+        .unwrap_or(90)
 }
 
 pub fn default_vector_db() -> String {
@@ -15,7 +19,9 @@ pub fn default_vector_db() -> String {
 }
 
 pub fn default_similarity_threshold() -> f32 {
-    0.3
+    crate::config::defaults_override::get_defaults_override()
+        .memory_similarity_threshold()
+        .unwrap_or(0.3)
 }
 
 pub fn default_compression_enabled() -> bool {
