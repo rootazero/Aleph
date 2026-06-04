@@ -519,7 +519,6 @@ where
                     ExecutionError::AgentBusy(_) => "AGENT_BUSY",
                     ExecutionError::RunNotFound(_) => "RUN_NOT_FOUND",
                     ExecutionError::RunNotActive(_) => "RUN_NOT_ACTIVE",
-                    ExecutionError::Escalated { .. } => "ESCALATED",
                     ExecutionError::Fallthrough { .. } => "FALLTHROUGH",
                     ExecutionError::Orchestrator(_) => "ORCHESTRATOR",
                 };

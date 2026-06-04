@@ -38,8 +38,6 @@ use alephcore::gateway::{
 use alephcore::ProviderRegistry;
 
 use crate::server_init::{handle_chat_send_with_engine, handle_run_with_engine};
-use alephcore::providers::adapter::RequestPayload;
-use alephcore::providers::message::UnifiedMessage;
 
 /// Result from registering agent handlers — includes optional execution support
 /// for use by InboundMessageRouter.
@@ -709,69 +707,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let tool_registry = Arc::new(tool_registry);
         let tool_registry_for_heartbeat = tool_registry.clone();
 
-        // Build task router from config
-        let task_router: Option<Arc<dyn alephcore::routing::TaskRouter>> = if app_config
-            .task_routing
-            .enabled
-        {
-            let rules =
-                alephcore::routing::RoutingRules::from_config(&app_config.task_routing.patterns);
-            let mut router = alephcore::routing::CompositeRouter::new(
-                rules,
-                app_config.task_routing.enable_llm_fallback,
-                app_config.task_routing.escalation_step_threshold,
-            );
-            // Wire LLM classify function using the default provider
-            if app_config.task_routing.enable_llm_fallback {
-                let classify_provider = provider_registry.default_provider();
-                let classify_fn: alephcore::routing::composite_router::LlmClassifyFn = Arc::new(
-                    move |msg: &str| {
-                        let provider = classify_provider.clone();
-                        let prompt = alephcore::routing::llm_classifier::build_classify_prompt(msg);
-                        Box::pin(async move {
-                            let __msgs = [UnifiedMessage::user(&prompt)];
-                            match provider.process(RequestPayload::new(&__msgs)).await {
-                                Ok(response) => {
-                                    alephcore::routing::llm_classifier::parse_classify_response(
-                                        &response.text_content(),
-                                    )
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        subsystem = "task_router",
-                                        error = %e,
-                                        "LLM classification provider call failed, defaulting to simple"
-                                    );
-                                    Ok(alephcore::routing::TaskRoute::Simple)
-                                }
-                            }
-                        })
-                    },
-                );
-                router = router.with_llm_classify_fn(classify_fn);
-                tracing::info!(
-                    subsystem = "task_router",
-                    event = "llm_classify_wired",
-                    "LLM classify function wired to default provider"
-                );
-            }
-            tracing::info!(
-                subsystem = "task_router",
-                event = "initialized",
-                llm_fallback = app_config.task_routing.enable_llm_fallback,
-                escalation_threshold = app_config.task_routing.escalation_step_threshold,
-                "Task router initialized"
-            );
-            Some(Arc::new(router))
-        } else {
-            tracing::info!(
-                subsystem = "task_router",
-                event = "disabled",
-                "Task routing disabled by config"
-            );
-            None
-        };
-
         // Capture default provider before provider_registry is moved into engine
         default_prov = Some(provider_registry.default_provider());
 
@@ -831,9 +766,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             engine = engine.with_channel_registry_cell(cell.clone());
         }
         state_db_out = resilience_db.clone();
-        if let Some(router) = task_router {
-            engine = engine.with_task_router(router);
-        }
         if let Some(ref wm) = workspace_manager {
             engine = engine.with_workspace_manager(wm.clone());
         }
