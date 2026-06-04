@@ -4,6 +4,7 @@ pub mod messages;
 pub mod project_menu;
 pub mod reasoning;
 pub mod state;
+pub mod timeline;
 pub mod view;
 pub mod voice_playback;
 

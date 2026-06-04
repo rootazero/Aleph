@@ -189,6 +189,13 @@ pub fn ChatSidebar() -> impl IntoView {
                         .into_iter()
                         .enumerate()
                         .map(|(i, m)| crate::views::chat::state::ChatMessage {
+                            // Hydrate the wire timestamp the backend already
+                            // ships (previously dropped here) so reloaded
+                            // history shows day separators + clocks too.
+                            timestamp: m
+                                .timestamp
+                                .as_deref()
+                                .and_then(crate::views::chat::timeline::parse_wire_timestamp),
                             id: m.run_id.unwrap_or_else(|| format!("hist-{i}")),
                             role: m.role,
                             content: m.content,

@@ -187,6 +187,8 @@
     "hero_title": "Where shall we start?",
     "hero_subtitle": "Type a message, or use / to invoke commands and skills.",
     "new_messages": "New messages",
+    "today": "Today",
+    "yesterday": "Yesterday",
     "dismiss": "Dismiss",
     "inspect_in_workspace": "Inspect in workspace",
     "copy_message": "Copy message",
