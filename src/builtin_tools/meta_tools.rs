@@ -6,14 +6,17 @@
 //! # Tools
 //!
 //! - [`ListToolsTool`] - List available tools by category
+//! - [`SearchToolsTool`] - Search tools by free-text keyword/intent
 //! - [`GetToolSchemaTool`] - Get full schema for a specific tool
 //!
 //! # Usage Pattern
 //!
 //! 1. LLM receives a compact tool index with basic info (name + summary)
-//! 2. If LLM needs a tool not in its full-schema set, it calls `get_tool_schema`
-//! 3. System returns the full JSON Schema
-//! 4. LLM can then call the tool with correct parameters
+//! 2. To find a tool by intent, it calls `search_tools(query)`; to browse a
+//!    category it calls `list_tools(category)`
+//! 3. If LLM needs a tool not in its full-schema set, it calls `get_tool_schema`
+//! 4. System returns the full JSON Schema
+//! 5. LLM can then call the tool with correct parameters
 
 use crate::sync_primitives::Arc;
 use async_trait::async_trait;
@@ -315,6 +318,191 @@ impl AlephTool for GetToolSchemaTool {
 }
 
 // ============================================================================
+// SearchToolsTool
+// ============================================================================
+
+/// Arguments for search_tools
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct SearchToolsArgs {
+    /// Free-text query describing the capability you need (e.g. "screenshot",
+    /// "create pull request", "send email"). Matched against tool names and
+    /// descriptions; typos are tolerated.
+    pub query: String,
+    /// Maximum number of matches to return (default 10, capped at 25).
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// A single ranked hit from search_tools.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchToolHit {
+    /// Canonical tool name to pass to `get_tool_schema` / invoke directly.
+    pub name: String,
+    /// Short description of what the tool does.
+    pub description: String,
+    /// Source category (builtin, mcp, skill, custom, plugin).
+    pub category: String,
+    /// Whether the tool requires explicit user confirmation before running.
+    pub requires_confirmation: bool,
+}
+
+/// Output from search_tools.
+#[derive(Debug, Clone, Serialize)]
+pub struct SearchToolsOutput {
+    /// The query that was searched.
+    pub query: String,
+    /// Number of matches returned (after the limit is applied).
+    pub count: usize,
+    /// Ranked matches (substring hits first, then typo-tolerant fuzzy hits).
+    pub results: Vec<SearchToolHit>,
+}
+
+/// Default and ceiling for the result limit.
+const SEARCH_TOOLS_DEFAULT_LIMIT: usize = 10;
+const SEARCH_TOOLS_MAX_LIMIT: usize = 25;
+
+/// Meta tool for searching the unified tool catalog by intent.
+///
+/// Complements [`ListToolsTool`] (browse by category) and
+/// [`GetToolSchemaTool`] (fetch one schema): when the catalog is large
+/// (many MCP servers / skills / plugins), the LLM can search by free-text
+/// keyword to find the right tool, then call `get_tool_schema` for the
+/// full parameter schema.
+///
+/// Ranking: exact/substring matches on name+description first (delegated to
+/// [`ToolCatalog::search`]), falling back to Levenshtein typo tolerance only
+/// when the substring pass finds nothing — so `"screenshto"` still resolves
+/// to `screenshot`.
+///
+/// # Example Response
+///
+/// ```json
+/// {
+///   "query": "pull request",
+///   "count": 2,
+///   "results": [
+///     {"name": "github:pr_create", "description": "Create a pull request", "category": "MCP", "requires_confirmation": true},
+///     {"name": "github:pr_list", "description": "List pull requests", "category": "MCP", "requires_confirmation": false}
+///   ]
+/// }
+/// ```
+pub struct SearchToolsTool {
+    registry: Arc<RwLock<ToolCatalog>>,
+}
+
+impl SearchToolsTool {
+    /// Tool identifier
+    pub const NAME: &'static str = "search_tools";
+
+    /// Tool description for AI prompt
+    pub const DESCRIPTION: &'static str = "Search the available tools by a free-text keyword/intent (e.g. \"screenshot\", \"create pull request\"). Use this to find the right tool when you don't know its exact name, then call get_tool_schema for its parameters.";
+
+    /// Create a new SearchToolsTool with registry reference
+    pub fn new(registry: Arc<RwLock<ToolCatalog>>) -> Self {
+        Self { registry }
+    }
+
+    /// Execute the search (internal implementation)
+    async fn call_impl(
+        &self,
+        args: SearchToolsArgs,
+    ) -> std::result::Result<SearchToolsOutput, ToolError> {
+        use super::{notify_tool_result, notify_tool_start};
+
+        let query = args.query.trim().to_string();
+        let limit = args
+            .limit
+            .unwrap_or(SEARCH_TOOLS_DEFAULT_LIMIT)
+            .clamp(1, SEARCH_TOOLS_MAX_LIMIT);
+
+        notify_tool_start(Self::NAME, &format!("搜索工具: {}", query));
+
+        if query.is_empty() {
+            notify_tool_result(Self::NAME, "空查询", false);
+            return Ok(SearchToolsOutput {
+                query,
+                count: 0,
+                results: vec![],
+            });
+        }
+
+        let registry = self.registry.read().await;
+
+        // Primary pass: reuse the catalog's substring search (name+description,
+        // active-only, name-matches-first). This activates the previously
+        // dormant `ToolCatalog::search` as a first-class LLM consumer.
+        let mut hits = registry.search(&query).await;
+
+        // Fallback: if the substring pass found nothing, try a typo-tolerant
+        // Levenshtein scan over the full active catalog — mirrors the
+        // not-found suggestion path in `GetToolSchemaTool`. This is what lets
+        // a misspelled query still resolve, surpassing a pure substring match.
+        if hits.is_empty() {
+            let needle = query.to_lowercase();
+            let threshold = if needle.len() <= 6 { 2 } else { 3 };
+            let mut scored: Vec<(usize, UnifiedTool)> = registry
+                .list_all()
+                .await
+                .into_iter()
+                .filter_map(|t| {
+                    let name_l = t.name.to_lowercase();
+                    let d = levenshtein_distance(&name_l, &needle);
+                    (d <= threshold).then_some((d, t))
+                })
+                .collect();
+            scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.name.cmp(&b.1.name)));
+            hits = scored.into_iter().map(|(_, t)| t).collect();
+        }
+
+        let count_total = hits.len();
+        let results: Vec<SearchToolHit> = hits
+            .into_iter()
+            .take(limit)
+            .map(|t| SearchToolHit {
+                name: t.name,
+                description: t.description,
+                category: t.source.label().to_string(),
+                requires_confirmation: t.requires_confirmation,
+            })
+            .collect();
+
+        notify_tool_result(
+            Self::NAME,
+            &format!("匹配 {} 个工具 (返回 {})", count_total, results.len()),
+            true,
+        );
+
+        Ok(SearchToolsOutput {
+            query,
+            count: results.len(),
+            results,
+        })
+    }
+}
+
+impl Clone for SearchToolsTool {
+    fn clone(&self) -> Self {
+        Self {
+            registry: Arc::clone(&self.registry),
+        }
+    }
+}
+
+/// Implementation of AlephTool trait for SearchToolsTool
+#[async_trait]
+impl AlephTool for SearchToolsTool {
+    const NAME: &'static str = "search_tools";
+    const DESCRIPTION: &'static str = "Search the available tools by a free-text keyword/intent (e.g. \"screenshot\", \"create pull request\"). Use this to find the right tool when you don't know its exact name, then call get_tool_schema for its parameters.";
+
+    type Args = SearchToolsArgs;
+    type Output = SearchToolsOutput;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        self.call_impl(args).await.map_err(Into::into)
+    }
+}
+
+// ============================================================================
 // Helper Functions
 // ============================================================================
 
@@ -386,6 +574,122 @@ mod tests {
         let args: GetToolSchemaArgs =
             serde_json::from_str(r#"{"tool_name": "github:pr_list"}"#).unwrap();
         assert_eq!(args.tool_name, "github:pr_list");
+    }
+
+    #[test]
+    fn test_search_tools_args_defaults() {
+        let args: SearchToolsArgs = serde_json::from_str(r#"{"query": "screenshot"}"#).unwrap();
+        assert_eq!(args.query, "screenshot");
+        assert!(args.limit.is_none());
+    }
+
+    #[test]
+    fn test_search_tools_args_with_limit() {
+        let args: SearchToolsArgs = serde_json::from_str(r#"{"query": "pr", "limit": 5}"#).unwrap();
+        assert_eq!(args.limit, Some(5));
+    }
+
+    #[tokio::test]
+    async fn test_search_tools_substring_hit() {
+        use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
+
+        let catalog = ToolCatalog::new();
+        catalog
+            .register_with_conflict_resolution(UnifiedTool::new(
+                "screenshot",
+                "screenshot",
+                "Capture a screenshot of the screen",
+                ToolSource::Builtin,
+            ))
+            .await;
+        catalog
+            .register_with_conflict_resolution(UnifiedTool::new(
+                "send_email",
+                "send_email",
+                "Send an email message",
+                ToolSource::Builtin,
+            ))
+            .await;
+
+        let tool = SearchToolsTool::new(Arc::new(RwLock::new(catalog)));
+        let out = tool
+            .call_impl(SearchToolsArgs {
+                query: "screenshot".to_string(),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.count, 1);
+        assert_eq!(out.results[0].name, "screenshot");
+    }
+
+    #[tokio::test]
+    async fn test_search_tools_fuzzy_fallback_on_typo() {
+        use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
+
+        let catalog = ToolCatalog::new();
+        catalog
+            .register_with_conflict_resolution(UnifiedTool::new(
+                "screenshot",
+                "screenshot",
+                "Capture a screenshot",
+                ToolSource::Builtin,
+            ))
+            .await;
+
+        let tool = SearchToolsTool::new(Arc::new(RwLock::new(catalog)));
+        // "screenshto" is a typo: no substring match, fuzzy fallback resolves it.
+        let out = tool
+            .call_impl(SearchToolsArgs {
+                query: "screenshto".to_string(),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.count, 1);
+        assert_eq!(out.results[0].name, "screenshot");
+    }
+
+    #[tokio::test]
+    async fn test_search_tools_empty_query() {
+        use crate::tool_metadata::ToolCatalog;
+
+        let tool = SearchToolsTool::new(Arc::new(RwLock::new(ToolCatalog::new())));
+        let out = tool
+            .call_impl(SearchToolsArgs {
+                query: "   ".to_string(),
+                limit: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.count, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_tools_limit_clamped() {
+        use crate::tool_metadata::{ToolCatalog, ToolSource, UnifiedTool};
+
+        let catalog = ToolCatalog::new();
+        for i in 0..30 {
+            catalog
+                .register_with_conflict_resolution(UnifiedTool::new(
+                    format!("search_tool_{i}"),
+                    format!("search_tool_{i}"),
+                    "a searchable tool",
+                    ToolSource::Builtin,
+                ))
+                .await;
+        }
+        let tool = SearchToolsTool::new(Arc::new(RwLock::new(catalog)));
+        // Request 1000 → clamped to SEARCH_TOOLS_MAX_LIMIT (25).
+        let out = tool
+            .call_impl(SearchToolsArgs {
+                query: "searchable".to_string(),
+                limit: Some(1000),
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.count, SEARCH_TOOLS_MAX_LIMIT);
     }
 
     #[test]

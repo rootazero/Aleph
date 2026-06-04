@@ -23,6 +23,7 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     ("skill_status", 3_000),
     ("skill_reader", 5_000),
     ("list_tools", 2_000),
+    ("search_tools", 2_000),
     ("get_tool_schema", 2_000),
     ("note_orient", 3_000),
     ("note_schema", 3_000),

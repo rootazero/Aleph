@@ -62,6 +62,7 @@ pub const IDEMPOTENT_BUILTIN_TOOLS: &[&str] = &[
     "skill_reader",
     // Tool introspection — pure reads
     "list_tools",
+    "search_tools",
     "get_tool_schema",
     // Web — GET-only path via safe_fetch
     "web_fetch",

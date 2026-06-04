@@ -181,7 +181,7 @@ pub use memory_search::{MemorySearchArgs, MemorySearchOutput, MemorySearchTool, 
 pub use memory_timeline::{MemoryTimelineArgs, MemoryTimelineOutput, MemoryTimelineTool};
 pub use meta_tools::{
     GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,
-    ListToolsTool,
+    ListToolsTool, SearchToolHit, SearchToolsArgs, SearchToolsOutput, SearchToolsTool,
 };
 pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};
 pub use permission_tool::{PermissionArgs, PermissionOutput, PermissionTool};

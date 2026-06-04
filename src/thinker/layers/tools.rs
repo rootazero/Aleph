@@ -63,7 +63,7 @@ impl PromptLayer for ToolsLayer {
                     "The following tools are available but not shown with full parameters.\n",
                 );
                 output.push_str(
-                    "Call `get_tool_schema(tool_name)` to get the complete parameter schema before using.\n\n",
+                    "Call `search_tools(query)` to find one by keyword, then `get_tool_schema(tool_name)` to get the complete parameter schema before using.\n\n",
                 );
                 output.push_str(index);
                 output.push('\n');
