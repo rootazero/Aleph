@@ -160,9 +160,12 @@ aleph plugin marketplace remove <name>             # 移除
 aleph plugin install <plugin-name>                 # 从 marketplace 安装
 aleph plugin install <git-url>                     # 直接 URL 安装
 aleph plugin list                                  # 列出已安装
+aleph plugin update [name] [--force] [--scope ...] # 升级已装插件（省略 name 升级全部）
 aleph plugin uninstall <name>                      # 卸载
 aleph plugin enable/disable <name>                 # 启用/禁用
 ```
+
+> **`plugin update` 语义**：以 marketplace 缓存为准，原子换装已安装插件目录（暂存→备份旧→换入新→删备份，失败回滚，绝不损坏现有安装）。仅当版本发生变化时才换装——两端均为 semver 时不降级，CalVer / git SHA / `local` 等非 semver 版本以"不相等即变更"判定（对齐 codex `IfVersionChanged`）；`--force` 强制重装。插件持久化数据目录 `~/.aleph/plugins/data/<id>/` 位于安装树之外，不受换装影响。
 
 ### 目录结构
 
@@ -337,6 +340,7 @@ aleph plugin list
 | `plugin.list` / `plugins.list` | 列出已安装插件 |
 | `plugin.install` / `plugins.install` | 安装插件（URL） |
 | `plugin.uninstall` / `plugins.uninstall` | 卸载插件 |
+| `plugin.update` | 升级已装插件（原子换装 + 版本比对，`force` 强制）|
 | `plugin.enable` / `plugins.enable` | 启用插件 |
 | `plugin.disable` / `plugins.disable` | 禁用插件 |
 | `plugin.marketplace.list` | 列出 marketplace |

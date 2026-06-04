@@ -274,6 +274,112 @@ pub async fn handle_plugin_install(
     Ok(())
 }
 
+/// Build a [`MarketplaceManager`] from the marketplace entries in `config.toml`.
+fn build_marketplace_manager(
+) -> Result<alephcore::extension::marketplace::MarketplaceManager, Box<dyn std::error::Error>> {
+    use alephcore::extension::marketplace::types::{MarketplaceConfig, MarketplaceSourceType};
+    use alephcore::extension::marketplace::MarketplaceManager;
+    use alephcore::Config;
+
+    let config = Config::load()?;
+    let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = config
+        .plugin_marketplaces
+        .iter()
+        .map(|(name, entry): (&String, &alephcore::PluginMarketplaceEntry)| {
+            let source_type = match entry.source_type.as_str() {
+                "local" => MarketplaceSourceType::Local,
+                _ => MarketplaceSourceType::Github,
+            };
+            (
+                name.clone(),
+                MarketplaceConfig {
+                    source: entry.source.clone(),
+                    source_type,
+                },
+            )
+        })
+        .collect();
+    Ok(MarketplaceManager::new(marketplace_configs, None))
+}
+
+/// Update an installed plugin (or all installed plugins) to the latest
+/// marketplace version. Skips plugins whose version is already current unless
+/// `force` is set.
+pub async fn handle_plugin_update(
+    name: Option<String>,
+    force: bool,
+    scope: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use alephcore::extension::marketplace::UpdateOutcome;
+    use alephcore::extension::scope::{parse_scope, scope_install_dir};
+
+    alephcore::cli::policy::run_no_lock(|| Ok::<(), anyhow::Error>(()))?;
+
+    let manager = build_marketplace_manager()?;
+    let plugin_scope = parse_scope(scope)?;
+
+    // Resolve the set of plugin names to update.
+    let names: Vec<String> = match name {
+        Some(n) => vec![n],
+        None => {
+            let dir = scope_install_dir(plugin_scope, None)?;
+            let mut found = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    if let Some(n) = entry.file_name().to_str() {
+                        // Skip staging/backup scratch dirs.
+                        if n.starts_with('.') {
+                            continue;
+                        }
+                        found.push(n.to_string());
+                    }
+                }
+            }
+            if found.is_empty() {
+                println!("No installed plugins to update in scope '{}'.", scope);
+                return Ok(());
+            }
+            found.sort();
+            found
+        }
+    };
+
+    let mut updated = 0usize;
+    let mut unchanged = 0usize;
+    let mut failed = 0usize;
+    for plugin_name in &names {
+        match manager.update_to_scope(plugin_name, None, plugin_scope, None, force) {
+            Ok(UpdateOutcome::Updated { from, to }) => {
+                let from = from.unwrap_or_else(|| "-".to_string());
+                let to = to.unwrap_or_else(|| "-".to_string());
+                println!("Updated '{}': {} → {}", plugin_name, from, to);
+                updated += 1;
+            }
+            Ok(UpdateOutcome::AlreadyLatest { version }) => {
+                let version = version.unwrap_or_else(|| "-".to_string());
+                println!("'{}' already up to date ({}).", plugin_name, version);
+                unchanged += 1;
+            }
+            Err(e) => {
+                eprintln!("Failed to update '{}': {}", plugin_name, e);
+                failed += 1;
+            }
+        }
+    }
+
+    println!(
+        "\nDone: {} updated, {} unchanged, {} failed.",
+        updated, unchanged, failed
+    );
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
 /// Handle marketplace subcommands
 pub async fn handle_marketplace_command(
     action: MarketplaceAction,
