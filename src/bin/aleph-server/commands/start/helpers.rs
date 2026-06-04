@@ -247,10 +247,11 @@ pub(super) fn build_sqlite_session_service(
 
 /// Initialize the ExtensionManager for the plugin system.
 pub(super) async fn initialize_extension_manager(daemon: bool) {
-    // Migrate old single-dir layout and update official skills
-    let aleph_home = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(".aleph");
+    // Migrate old single-dir layout and update official skills. Resolve via the
+    // authoritative resolver (ALEPH_HOME / $HOME) so bundled content is
+    // extracted into the SAME ~/.aleph as the rest of the daemon's state.
+    let aleph_home = alephcore::utils::paths::get_config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph"));
     alephcore::bundled::extract_bundled_content(&aleph_home);
 
     match alephcore::extension::ExtensionManager::with_defaults().await {

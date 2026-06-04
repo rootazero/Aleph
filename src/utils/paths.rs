@@ -63,6 +63,16 @@ pub fn get_home_dir() -> Result<PathBuf> {
 /// # Errors
 /// Returns error if home directory cannot be determined
 pub fn get_config_dir() -> Result<PathBuf> {
+    // Explicit override: `ALEPH_HOME` points directly at the `.aleph` data
+    // directory (same convention as canvas_io / cron carryover). This is the
+    // single authoritative knob for relocating *all* Aleph state — honoured
+    // here so config, data, vault and lock resolution stay consistent (e.g.
+    // test harnesses can fully isolate from the real ~/.aleph). When unset,
+    // behaviour is byte-identical to before.
+    if let Some(dir) = std::env::var_os("ALEPH_HOME") {
+        return Ok(PathBuf::from(dir));
+    }
+
     // Use unified path ~/.aleph/ across all platforms
     let home_dir = get_home_dir()?;
     Ok(home_dir.join(".aleph"))

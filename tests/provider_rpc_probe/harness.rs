@@ -89,6 +89,23 @@ enabled = true
         let config_dir = TempDir::new().expect("Failed to create temp dir");
         Self::write_config(config_dir.path(), extra_toml);
 
+        // HARD ISOLATION GUARD. The spawned server resolves ALL state — config,
+        // data, vault, singleton lock, logs — from `ALEPH_HOME` (see
+        // alephcore::utils::paths::get_config_dir). We point it at this per-test
+        // TempDir. Refuse to run if that is somehow NOT under the system temp
+        // dir: a regression that let this resolve to the real ~/.aleph once
+        // ran `clean_providers()` against a user's live config and deleted it.
+        let aleph_home = config_dir.path().to_path_buf();
+        let tmp_root = std::env::temp_dir();
+        let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        assert!(
+            canon(&aleph_home).starts_with(canon(&tmp_root)),
+            "REFUSING to start probe server: ALEPH_HOME={:?} is not under the \
+             system temp dir {:?}. Aborting to avoid mutating real user data.",
+            aleph_home,
+            tmp_root,
+        );
+
         let port = Self::find_free_port();
         let config_path = config_dir.path().join("config.toml");
 
@@ -107,12 +124,14 @@ enabled = true
 
         // Spawn the pre-built binary directly (no cargo overhead).
         //
-        // Isolate HOME to the per-test TempDir so each spawned server gets its
-        // own `<HOME>/.aleph/data/aleph.lock`. The OS-level singleton flock is
-        // keyed on that path; without isolation all probe servers would contend
-        // for the global `~/.aleph/data/aleph.lock` and only one could run at a
-        // time, failing the rest under parallel `cargo test`.
+        // Isolate via `ALEPH_HOME` (= the per-test TempDir, treated as the
+        // `.aleph` data dir). This is the single authoritative knob: config,
+        // data, vault, singleton lock and logs all resolve under it, so each
+        // probe server is fully self-contained and CANNOT touch the real
+        // ~/.aleph. `HOME` is set too as a belt-and-suspenders fallback for any
+        // path that still consults it.
         let child = Command::new(&binary_path)
+            .env("ALEPH_HOME", config_dir.path())
             .env("HOME", config_dir.path())
             .args([
                 "--config",

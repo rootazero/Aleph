@@ -120,9 +120,24 @@ fn setup_logging(
     Ok(guard)
 }
 
-/// Get the log directory path: `~/.aleph/logs/`
+/// Get the log directory path: `<.aleph>/logs/`.
+///
+/// Resolution priority (mirrors `alephcore::utils::paths::get_config_dir`,
+/// re-implemented here because this crate must stay free of an alephcore
+/// dependency):
+/// 1. `ALEPH_HOME` — points directly at the `.aleph` data directory.
+/// 2. `$HOME` — the Unix standard; honoured here so logs follow the same
+///    relocation as config/data (`dirs::home_dir()` ignores `$HOME` on macOS,
+///    which split an isolated test server's logs into the real ~/.aleph).
+/// 3. `dirs::home_dir()` — last-resort platform lookup.
 pub fn get_log_directory() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
+    if let Some(dir) = std::env::var_os("ALEPH_HOME") {
+        return Ok(PathBuf::from(dir).join("logs"));
+    }
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+        .ok_or("Cannot determine home directory")?;
     Ok(home.join(".aleph").join("logs"))
 }
 

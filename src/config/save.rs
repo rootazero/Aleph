@@ -56,6 +56,30 @@ impl Config {
             }
         }
 
+        // Guard: detect chat-provider loss before writing. Symmetric to the
+        // embedding-provider guard above. Replacing a populated [providers.*]
+        // table on disk with an empty in-memory map is never a legitimate save
+        // — it is the signature of a mis-isolated test or a load that silently
+        // dropped providers. Fail closed and capture a backtrace.
+        if path.exists() && self.providers.is_empty() {
+            if let Ok(existing) = fs::read_to_string(path) {
+                if existing.contains("[providers.") {
+                    error!(
+                        path = %path.display(),
+                        backtrace = %std::backtrace::Backtrace::force_capture(),
+                        "GUARD: save_to_file would ERASE all chat providers! \
+                         On-disk config has providers but in-memory has 0. \
+                         Aborting save to prevent data loss."
+                    );
+                    return Err(AlephError::invalid_config(
+                        "Refusing to save: would erase existing providers. \
+                         This is likely a bug — please report."
+                            .to_string(),
+                    ));
+                }
+            }
+        }
+
         debug!(
             path = %path.display(),
             providers_count = self.providers.len(),
@@ -263,6 +287,28 @@ impl Config {
                 sections = ?sections,
                 "Performing incremental config save"
             );
+        }
+
+        // Guard: refuse to overwrite a populated [providers] table with empty.
+        // save_incremental replaces the WHOLE [providers] section from the
+        // in-memory map (not a per-entry merge), so an empty map here wipes
+        // every configured provider on disk. Symmetric to the embedding guard.
+        if sections.contains(&"providers") && self.providers.is_empty() {
+            if let Ok(existing) = fs::read_to_string(path) {
+                if existing.contains("[providers.") {
+                    error!(
+                        sections = ?sections,
+                        backtrace = %std::backtrace::Backtrace::force_capture(),
+                        "GUARD: save_incremental would ERASE all chat providers! \
+                         On-disk has providers, in-memory has 0. Aborting save."
+                    );
+                    return Err(AlephError::invalid_config(
+                        "Refusing to save providers section: would erase existing \
+                         providers. This is likely a bug."
+                            .to_string(),
+                    ));
+                }
+            }
         }
 
         // Read existing file

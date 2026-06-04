@@ -86,12 +86,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut _instance_lock = match args.command {
         Some(Command::Start) | None => {
             use std::path::PathBuf;
-            let data_dir = dirs::home_dir()
-                .unwrap_or_else(|| {
-                    eprintln!("Warning: cannot determine home directory; using /tmp/.aleph/data");
-                    PathBuf::from("/tmp")
-                })
-                .join(".aleph/data");
+            // Resolve the data dir through the single authoritative resolver
+            // (honours ALEPH_HOME / $HOME) so the singleton lock lands in the
+            // SAME ~/.aleph/data as config, vault and logs. Using dirs::home_dir()
+            // here previously diverged on macOS (it ignores $HOME), letting an
+            // isolated test server lock the real ~/.aleph.
+            let data_dir = alephcore::utils::paths::get_data_dir().unwrap_or_else(|_| {
+                eprintln!("Warning: cannot determine home directory; using /tmp/.aleph/data");
+                PathBuf::from("/tmp/.aleph/data")
+            });
             match alephcore::utils::instance_lock::try_acquire(&data_dir)? {
                 alephcore::utils::instance_lock::AcquireOutcome::Acquired(lock) => Some(lock),
                 alephcore::utils::instance_lock::AcquireOutcome::HeldByLive { pid, lock_path } => {

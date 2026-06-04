@@ -126,10 +126,12 @@ pub(in crate::commands::start) fn initialize_auth(
         }
     };
 
-    // Vault file path
-    let data_dir = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-        .join(".aleph/data");
+    // Vault file path — resolve through the authoritative resolver (honours
+    // ALEPH_HOME / $HOME) so the vault shares the SAME ~/.aleph/data as config
+    // and the singleton lock. dirs::home_dir() ignored $HOME on macOS, which is
+    // how an isolated test server ended up writing the real secrets vault.
+    let data_dir = alephcore::utils::paths::get_data_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/.aleph/data"));
     let vault_path = data_dir.join("secrets.vault");
     let shared_token_mgr = Arc::new(alephcore::gateway::security::SharedTokenManager::new(
         security_store.clone(),
@@ -499,9 +501,8 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Start external bridge plugins via LinkManager
     {
         use alephcore::gateway::link::LinkManager;
-        let base_dir = dirs::home_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join(".aleph");
+        let base_dir = alephcore::utils::paths::get_config_dir()
+            .unwrap_or_else(|_| PathBuf::from(".aleph"));
         let link_manager = LinkManager::new(base_dir);
         if let Err(e) = link_manager.start().await {
             tracing::warn!("LinkManager startup encountered errors: {}", e);

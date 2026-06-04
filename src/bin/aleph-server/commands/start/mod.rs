@@ -669,14 +669,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
 
-    // Create agent manager (shared between tool config and RPC handlers)
+    // Create agent manager (shared between tool config and RPC handlers).
+    // Resolve the data root through the authoritative resolver (ALEPH_HOME /
+    // $HOME) so agent workspaces/trash share the same ~/.aleph as everything
+    // else — and so an isolated test server never reaches the real one.
+    let aleph_dir = alephcore::utils::paths::get_config_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from(".aleph"));
     let agent_manager = Arc::new(alephcore::AgentManager::new(
         alephcore::Config::default_path(),
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".aleph/workspaces"),
-        dirs::home_dir().unwrap_or_default().join(".aleph/agents"),
-        dirs::home_dir().unwrap_or_default().join(".aleph/trash"),
+        aleph_dir.join("workspaces"),
+        aleph_dir.join("agents"),
+        aleph_dir.join("trash"),
     ));
 
     // Initialize CronService from app config (before agent handlers so tool gets registered)

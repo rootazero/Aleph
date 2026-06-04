@@ -69,8 +69,10 @@ fn open_token_manager() -> Result<SharedTokenManager, Box<dyn Error>> {
             .map_err(|e| format!("Failed to open security store: {}", e))?,
     );
 
-    let home = dirs::home_dir().ok_or("Cannot determine home directory")?;
-    let data_dir = home.join(".aleph/data");
+    // Resolve via the authoritative resolver (honours ALEPH_HOME / $HOME) so
+    // the CLI `secret` command and the running daemon agree on the SAME vault.
+    let data_dir = alephcore::utils::paths::get_data_dir()
+        .map_err(|e| format!("Cannot determine data directory: {e}"))?;
     let vault_path = data_dir.join("secrets.vault");
 
     let manager = SharedTokenManager::new(security_store, vault_path);
