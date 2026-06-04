@@ -15,7 +15,7 @@ pub mod handoff;
 pub mod runner;
 pub mod schedule;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use tokio::sync::{Mutex, Notify, Semaphore};
@@ -52,6 +52,19 @@ pub struct DispatcherConfig {
     /// is generous (2 hours) — set lower for short-task workloads, but never
     /// below `task_timeout_secs` or healthy long-running tasks get clobbered.
     pub zombie_ttl_secs: u64,
+    /// Maximum concurrent tasks a *single owner* (agent / ACP member) may hold
+    /// at once. `0` disables the hard cap.
+    ///
+    /// Independent of [`Self::max_concurrent`], which bounds the **process**.
+    /// This bounds each **agent** so one owner cannot monopolise the whole
+    /// concurrency pool and starve other team members — the multi-agent
+    /// fairness guarantee. Maps to openclaw's per-lane `maxConcurrent` and
+    /// hermes' per-source limit, where each owner is a lane.
+    ///
+    /// Note: even with the hard cap disabled (`0`), the scheduler still applies
+    /// **load-balanced round-robin** across owners so freed slots prefer the
+    /// least-busy agent — see [`select_schedulable`](super::schedule::select_schedulable).
+    pub max_per_owner: usize,
 }
 
 impl Default for DispatcherConfig {
@@ -62,6 +75,9 @@ impl Default for DispatcherConfig {
             task_timeout_secs: 600,
             fallback_tick_secs: 60,
             zombie_ttl_secs: 7200, // 2 hours — same threshold ClawTeam uses
+            // 0 = no hard per-owner cap; load-balanced round-robin still
+            // spreads slots across owners regardless of this value.
+            max_per_owner: 0,
         }
     }
 }
@@ -76,7 +92,12 @@ pub struct TeamDispatcher {
     pub(crate) config: DispatcherConfig,
     pub(crate) signal: Arc<Notify>,
     pub(crate) semaphore: Arc<Semaphore>,
-    pub(crate) running: Arc<Mutex<HashSet<CoordTaskId>>>,
+    /// Tasks this process is actively running, mapped to their **owner**
+    /// (agent / ACP member id). The owner value powers in-flight-aware
+    /// per-owner fair scheduling in [`select_schedulable`](schedule::select_schedulable);
+    /// the keys alone preserve the original "don't re-claim a running task"
+    /// semantics for reclamation.
+    pub(crate) running: Arc<Mutex<HashMap<CoordTaskId, String>>>,
     /// Cooperative shutdown signal. Fires from `Self::shutdown()` and breaks
     /// the `spawn_loop` `tokio::select!` so the loop exits cleanly on
     /// graceful shutdown / signal handling. Without this the dispatcher
@@ -107,7 +128,7 @@ impl TeamDispatcher {
             config,
             signal,
             semaphore,
-            running: Arc::new(Mutex::new(HashSet::new())),
+            running: Arc::new(Mutex::new(HashMap::new())),
             shutdown_token: tokio_util::sync::CancellationToken::new(),
         }
     }

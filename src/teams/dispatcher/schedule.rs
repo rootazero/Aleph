@@ -5,7 +5,7 @@
 //! reasoning** — task decomposition and routing are the leader LLM's job
 //! (done via `task_create`); this only drives the DAG mechanically.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use tokio::sync::OwnedSemaphorePermit;
 
@@ -71,37 +71,96 @@ pub fn is_zombie(
     now_epoch.saturating_sub(started) > zombie_ttl_secs
 }
 
-/// Pure scheduling filter: from `tasks`, pick those ready to run right now.
+/// Pure scheduling filter: from `tasks`, pick those ready to run right now,
+/// fairly distributed across owners.
 ///
 /// A task is schedulable when it is dispatcher-managed, has a derived status
 /// of `Pending` (all dependencies satisfied), has an owner, is unlocked, and
-/// is not already running in this process. Results are ordered by priority
-/// (descending) then creation time (ascending), capped at `available_slots`.
+/// is not already running in this process. The candidate pool is ordered by
+/// priority (descending) then creation time (ascending) — preserving the
+/// leader-set priority intent — and then filled with **load-balanced
+/// round-robin across owners**: each slot goes to the eligible task whose
+/// owner is currently least busy (counting both this-process in-flight tasks,
+/// supplied via `running`, and earlier picks in this same pass), with the
+/// priority/FIFO order as the tiebreaker.
+///
+/// This is the multi-agent fairness guarantee — one greedy owner can no longer
+/// monopolise the whole concurrency pool while other team members have ready
+/// work, mirroring openclaw's per-lane `maxConcurrent` and hermes' per-source
+/// limit. `max_per_owner` (`0` = disabled) additionally enforces a hard cap on
+/// how many concurrent tasks any single owner may hold.
+///
+/// Backward-compatible: when only one owner has ready work, or when every
+/// candidate fits in `available_slots`, the result is the same set the old
+/// strict-priority `take(available_slots)` produced (single-owner picks fall
+/// through to pure priority/FIFO order).
 pub fn select_schedulable(
     tasks: &[CoordTask],
-    running: &HashSet<String>,
+    running: &HashMap<String, String>,
     available_slots: usize,
+    max_per_owner: usize,
 ) -> Vec<CoordTask> {
+    if available_slots == 0 {
+        return Vec::new();
+    }
+
     let mut candidates: Vec<&CoordTask> = tasks
         .iter()
         .filter(|t| t.status == CoordTaskStatus::Pending)
         .filter(|t| is_dispatcher_managed(t))
         .filter(|t| t.owner.is_some())
         .filter(|t| t.locked_by.is_none())
-        .filter(|t| !running.contains(&t.id))
+        .filter(|t| !running.contains_key(&t.id))
         .collect();
 
+    // Base order: leader-set priority first, then FIFO. Within one owner this
+    // is the exact consumption order; across owners it is the tiebreaker.
     candidates.sort_by(|a, b| {
         b.priority
             .cmp(&a.priority)
             .then(a.created_at.cmp(&b.created_at))
     });
 
-    candidates
-        .into_iter()
-        .take(available_slots)
-        .cloned()
-        .collect()
+    // Per-owner concurrency load, seeded from tasks already in flight in this
+    // process. Owned `String` keys keep the fill free of borrow gymnastics —
+    // owner ids are short and the candidate set per tick is small.
+    let mut load: HashMap<String, usize> = HashMap::new();
+    for owner in running.values() {
+        *load.entry(owner.clone()).or_insert(0) += 1;
+    }
+
+    let mut picked: Vec<CoordTask> = Vec::with_capacity(available_slots);
+    let mut consumed = vec![false; candidates.len()];
+
+    while picked.len() < available_slots {
+        // Pick the eligible candidate whose owner is least loaded; ties resolve
+        // to the earliest in priority/FIFO order (first un-consumed wins).
+        let mut best: Option<usize> = None;
+        let mut best_load = usize::MAX;
+        for (i, task) in candidates.iter().enumerate() {
+            if consumed[i] {
+                continue;
+            }
+            let owner = task.owner.as_deref().unwrap_or("");
+            let owner_load = *load.get(owner).unwrap_or(&0);
+            if max_per_owner > 0 && owner_load >= max_per_owner {
+                continue; // hard per-owner cap reached
+            }
+            if owner_load < best_load {
+                best_load = owner_load;
+                best = Some(i);
+            }
+        }
+        let Some(i) = best else {
+            break; // nothing left that is both un-consumed and under cap
+        };
+        consumed[i] = true;
+        let owner = candidates[i].owner.clone().unwrap_or_default();
+        *load.entry(owner).or_insert(0) += 1;
+        picked.push(candidates[i].clone());
+    }
+
+    picked
 }
 
 impl TeamDispatcher {
@@ -146,8 +205,13 @@ impl TeamDispatcher {
             }
         };
 
-        let running_snapshot: HashSet<String> = self.running.lock().await.clone();
-        let selected = select_schedulable(&pending, &running_snapshot, available);
+        let running_snapshot: HashMap<String, String> = self.running.lock().await.clone();
+        let selected = select_schedulable(
+            &pending,
+            &running_snapshot,
+            available,
+            self.config.max_per_owner,
+        );
 
         // 4. Claim + launch each selected task.
         for task in selected {
@@ -195,7 +259,10 @@ impl TeamDispatcher {
                 continue;
             }
 
-            self.running.lock().await.insert(task.id.clone());
+            self.running
+                .lock()
+                .await
+                .insert(task.id.clone(), owner.clone());
             let dispatcher = Arc::clone(self);
             tokio::spawn(async move {
                 dispatcher
@@ -287,14 +354,14 @@ impl TeamDispatcher {
             Ok(t) => t,
             Err(_) => return,
         };
-        let running: HashSet<String> = self.running.lock().await.clone();
+        let running: HashMap<String, String> = self.running.lock().await.clone();
         let now = Self::now_epoch();
 
         for task in in_progress {
             if !is_dispatcher_managed(&task) {
                 continue;
             }
-            if running.contains(&task.id) {
+            if running.contains_key(&task.id) {
                 continue; // owned by this process — let normal flow handle it
             }
             let Some(started) = task.started_at else {
@@ -341,13 +408,13 @@ impl TeamDispatcher {
             Ok(t) => t,
             Err(_) => return,
         };
-        let running: HashSet<String> = self.running.lock().await.clone();
+        let running: HashMap<String, String> = self.running.lock().await.clone();
 
         for task in in_progress {
             if !is_dispatcher_managed(&task) {
                 continue; // leave team_delegate-owned tasks alone
             }
-            if running.contains(&task.id) {
+            if running.contains_key(&task.id) {
                 continue; // this process is actively running it
             }
             tracing::info!(task_id = %task.id, "dispatcher: reclaiming orphaned task");
@@ -548,7 +615,7 @@ mod tests {
 
     #[test]
     fn selects_only_pending_managed_owned_unlocked() {
-        let running = HashSet::new();
+        let running = HashMap::new();
         let tasks = vec![
             task(
                 "ok",
@@ -583,15 +650,15 @@ mod tests {
                 4,
             ),
         ];
-        let picked = select_schedulable(&tasks, &running, 10);
+        let picked = select_schedulable(&tasks, &running, 10, 0);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].id, "ok");
     }
 
     #[test]
     fn skips_locked_and_running_tasks() {
-        let mut running = HashSet::new();
-        running.insert("running-task".to_string());
+        let mut running = HashMap::new();
+        running.insert("running-task".to_string(), "a".to_string());
         let mut locked = task(
             "locked",
             CoordTaskStatus::Pending,
@@ -620,14 +687,14 @@ mod tests {
                 3,
             ),
         ];
-        let picked = select_schedulable(&tasks, &running, 10);
+        let picked = select_schedulable(&tasks, &running, 10, 0);
         assert_eq!(picked.len(), 1);
         assert_eq!(picked[0].id, "free");
     }
 
     #[test]
     fn orders_by_priority_then_creation() {
-        let running = HashSet::new();
+        let running = HashMap::new();
         let tasks = vec![
             task(
                 "low-old",
@@ -662,14 +729,14 @@ mod tests {
                 5,
             ),
         ];
-        let picked = select_schedulable(&tasks, &running, 10);
+        let picked = select_schedulable(&tasks, &running, 10, 0);
         let order: Vec<&str> = picked.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(order, vec!["crit-new", "norm-old", "norm-new", "low-old"]);
     }
 
     #[test]
     fn respects_available_slots_cap() {
-        let running = HashSet::new();
+        let running = HashMap::new();
         let tasks: Vec<CoordTask> = (0..10)
             .map(|i| {
                 task(
@@ -682,8 +749,169 @@ mod tests {
                 )
             })
             .collect();
-        let picked = select_schedulable(&tasks, &running, 3);
+        let picked = select_schedulable(&tasks, &running, 3, 0);
         assert_eq!(picked.len(), 3);
+    }
+
+    // ---- Multi-agent fairness ---------------------------------------------
+
+    #[test]
+    fn spreads_slots_across_owners_round_robin() {
+        // Three owners each with two ready tasks; only three slots free. A
+        // strict-priority `take(3)` could hand all slots to one owner; the
+        // fair scheduler must give one slot to each distinct owner.
+        let running = HashMap::new();
+        let tasks = vec![
+            task(
+                "a1",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                1,
+            ),
+            task(
+                "b1",
+                CoordTaskStatus::Pending,
+                Some("b"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+            task(
+                "c1",
+                CoordTaskStatus::Pending,
+                Some("c"),
+                true,
+                Priority::Normal,
+                3,
+            ),
+            task(
+                "a2",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                4,
+            ),
+            task(
+                "b2",
+                CoordTaskStatus::Pending,
+                Some("b"),
+                true,
+                Priority::Normal,
+                5,
+            ),
+            task(
+                "c2",
+                CoordTaskStatus::Pending,
+                Some("c"),
+                true,
+                Priority::Normal,
+                6,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 3, 0);
+        assert_eq!(picked.len(), 3);
+        let owners: HashSet<&str> = picked.iter().filter_map(|t| t.owner.as_deref()).collect();
+        assert_eq!(owners.len(), 3, "each owner should get exactly one slot");
+        // Within the fair fill, the priority/FIFO tiebreaker still picks each
+        // owner's first task.
+        let ids: HashSet<&str> = picked.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, HashSet::from(["a1", "b1", "c1"]));
+    }
+
+    #[test]
+    fn inflight_load_defers_busy_owner() {
+        // Owner "a" is already running one task; with a single free slot the
+        // idle owner "b" wins it even though "a"'s task is earlier in FIFO.
+        let mut running = HashMap::new();
+        running.insert("a-running".to_string(), "a".to_string());
+        let tasks = vec![
+            task(
+                "a1",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                1,
+            ),
+            task(
+                "b1",
+                CoordTaskStatus::Pending,
+                Some("b"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 1, 0);
+        assert_eq!(picked.len(), 1);
+        assert_eq!(
+            picked[0].id, "b1",
+            "freed slot should go to the least-busy owner"
+        );
+    }
+
+    #[test]
+    fn max_per_owner_caps_single_owner() {
+        // A single owner with five ready tasks and four free slots is capped
+        // at two concurrent tasks by `max_per_owner = 2`.
+        let running = HashMap::new();
+        let tasks: Vec<CoordTask> = (0..5)
+            .map(|i| {
+                task(
+                    &format!("t{i}"),
+                    CoordTaskStatus::Pending,
+                    Some("a"),
+                    true,
+                    Priority::Normal,
+                    i,
+                )
+            })
+            .collect();
+        let picked = select_schedulable(&tasks, &running, 4, 2);
+        assert_eq!(
+            picked.len(),
+            2,
+            "hard per-owner cap bounds one owner below the slot count"
+        );
+    }
+
+    #[test]
+    fn fair_fill_is_byte_identical_for_single_owner() {
+        // The fairness path must not perturb the single-owner case: same set,
+        // same priority/FIFO order as the old strict-priority `take`.
+        let running = HashMap::new();
+        let tasks = vec![
+            task(
+                "low",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Low,
+                3,
+            ),
+            task(
+                "crit",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Critical,
+                1,
+            ),
+            task(
+                "norm",
+                CoordTaskStatus::Pending,
+                Some("a"),
+                true,
+                Priority::Normal,
+                2,
+            ),
+        ];
+        let picked = select_schedulable(&tasks, &running, 2, 0);
+        let order: Vec<&str> = picked.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(order, vec!["crit", "norm"]);
     }
 
     // ---- Zombie reclamation ------------------------------------------------
