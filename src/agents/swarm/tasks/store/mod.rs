@@ -445,7 +445,12 @@ impl CoordTaskStore for SqliteCoordTaskStore {
                 let dead: i64 = row.get(15)?;
                 let dep_csv: Option<String> = row.get(16)?;
                 task.dependencies = dep_csv
-                    .map(|s| s.split(',').map(|x| x.to_string()).collect())
+                    .map(|s| {
+                        s.split(',')
+                            .filter(|x| !x.is_empty())
+                            .map(|x| x.to_string())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 task.status = if task.status == CoordTaskStatus::Pending && unresolved > 0 {
                     // A terminally-failed dependency makes the task permanently

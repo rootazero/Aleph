@@ -172,6 +172,17 @@ pub(super) fn parse_args(input: &Value) -> Result<SubagentAction, String> {
         return Err("team_name requires 'name' to be set (agent must be addressable)".to_string());
     }
 
+    // Validate: a single `name`/`team_name` cannot address a batch of N agents.
+    // The batch dispatch path skips teammate registration entirely, so allowing
+    // this combination silently produces an unaddressable "teammate".
+    if has_batch && (name.is_some() || team_name.is_some()) {
+        return Err(
+            "'name'/'team_name' cannot be combined with 'batch_tasks' (a single name \
+             cannot address multiple agents); spawn named teammates individually"
+                .to_string(),
+        );
+    }
+
     // Named teammates always run in background — override explicitly at parse time
     let run_in_background = if name.is_some() {
         if !run_in_background {

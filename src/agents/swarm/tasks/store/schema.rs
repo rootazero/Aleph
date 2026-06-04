@@ -55,7 +55,17 @@ pub(super) fn migrate(conn: &Connection) -> crate::error::Result<()> {
                 started_at INTEGER,
                 completed_at INTEGER
             );
-            INSERT INTO coord_tasks_new SELECT * FROM coord_tasks;
+            -- Explicit column list: a positional `SELECT *` breaks if the source
+            -- table picked up extra columns (e.g. the locked_by/locked_at locking
+            -- ALTERs) before this rebuild ran, supplying more values than the
+            -- 12-column target accepts.
+            INSERT INTO coord_tasks_new
+                (id, team_id, subject, description, status, owner, priority,
+                 result, metadata, created_at, started_at, completed_at)
+            SELECT
+                id, team_id, subject, description, status, owner, priority,
+                result, metadata, created_at, started_at, completed_at
+            FROM coord_tasks;
             DROP TABLE coord_tasks;
             ALTER TABLE coord_tasks_new RENAME TO coord_tasks;
 
