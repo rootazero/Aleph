@@ -63,7 +63,10 @@ pub struct ManifestConfig {
 }
 
 fn default_server() -> String {
-    "ws://127.0.0.1:18789".to_string()
+    // Single source of truth: the canonical gateway WS endpoint. The literal
+    // `18789` (sans `/ws`) was a stale leftover from the 18789→18790 port
+    // migration and silently broke the default connection.
+    crate::DEFAULT_GATEWAY_URL.to_string()
 }
 
 fn default_device_id() -> String {

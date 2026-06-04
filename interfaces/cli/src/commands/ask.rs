@@ -6,6 +6,8 @@
 //! - `--last`: pick the session with the latest `last_active_at`
 //! - `--json` (top-level): emit raw [`StreamEvent`]s as JSONL to stdout
 //! - `--output-last-message <FILE>` (`-o`): write the final agent text to FILE
+//! - stdin piping: `echo "prompt" | aleph ask` (and `git diff | aleph ask "review"`),
+//!   resolved by [`merge_prompt`] + [`read_piped_stdin`] before [`run`].
 
 use aleph_protocol::{AgentTraceEvent, StreamEvent};
 use serde::Serialize;
@@ -213,4 +215,78 @@ async fn resolve_last_session(client: &AlephClient) -> CliResult<String> {
     best_key
         .map(|s| s.to_string())
         .ok_or_else(|| CliError::Other("--last: no sessions available to resume".to_string()))
+}
+
+/// Read piped stdin, returning `Some` only when stdin is NOT a TTY and the
+/// piped text is non-empty. Interactive invocations (TTY stdin) return `None`
+/// so the CLI never blocks waiting for keyboard input.
+pub fn read_piped_stdin() -> Option<String> {
+    use std::io::{IsTerminal, Read};
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return None;
+    }
+    let mut buf = String::new();
+    match stdin.lock().read_to_string(&mut buf) {
+        Ok(_) if !buf.trim().is_empty() => Some(buf),
+        _ => None,
+    }
+}
+
+/// Fold an explicit `message` argument together with piped stdin into the
+/// effective prompt. Pure string transform (no I/O) so it is host-testable.
+///
+/// - both present → message, then the piped text appended as context
+/// - exactly one present → that one (trimmed)
+/// - neither → `None` (the caller surfaces a "no message" error)
+pub fn merge_prompt(message: Option<&str>, piped: Option<&str>) -> Option<String> {
+    let msg = message.map(str::trim).filter(|s| !s.is_empty());
+    let pipe = piped.map(str::trim).filter(|s| !s.is_empty());
+    match (msg, pipe) {
+        (Some(m), Some(p)) => Some(format!("{m}\n\n{p}")),
+        (Some(m), None) => Some(m.to_string()),
+        (None, Some(p)) => Some(p.to_string()),
+        (None, None) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_prompt;
+
+    #[test]
+    fn message_only() {
+        assert_eq!(merge_prompt(Some("hello"), None).as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn stdin_only() {
+        assert_eq!(
+            merge_prompt(None, Some("piped text")).as_deref(),
+            Some("piped text")
+        );
+    }
+
+    #[test]
+    fn message_appends_stdin_as_context() {
+        assert_eq!(
+            merge_prompt(Some("review this"), Some("diff --git a b")).as_deref(),
+            Some("review this\n\ndiff --git a b")
+        );
+    }
+
+    #[test]
+    fn blank_inputs_are_ignored() {
+        assert_eq!(merge_prompt(Some("   "), Some("\n\n")), None);
+        assert_eq!(merge_prompt(Some(""), None), None);
+        assert_eq!(merge_prompt(None, None), None);
+    }
+
+    #[test]
+    fn whitespace_is_trimmed() {
+        assert_eq!(
+            merge_prompt(Some("  hi  "), None).as_deref(),
+            Some("hi")
+        );
+    }
 }

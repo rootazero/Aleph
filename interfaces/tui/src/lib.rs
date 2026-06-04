@@ -12,7 +12,7 @@ pub use aleph_client::{AlephClient, CliConfig, CliResult};
 /// This is the main entry point when using the TUI as a library (e.g. from `aleph chat`).
 ///
 /// # Arguments
-/// * `server_url` — WebSocket URL of the Aleph Gateway (e.g. `ws://127.0.0.1:18789`)
+/// * `server_url` — WebSocket URL of the Aleph Gateway (e.g. `ws://127.0.0.1:18790/ws`)
 /// * `agent` — Optional agent name to bind this session to (reserved for future use)
 /// * `session` — Optional session key; a new one is generated if `None`
 /// * `config` — CLI configuration (auth token, default session, etc.)

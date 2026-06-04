@@ -26,9 +26,13 @@ pub(crate) enum Commands {
     },
 
     /// Send a single message and get response
+    ///
+    /// The message may be omitted when text is piped on stdin
+    /// (`echo "prompt" | aleph ask`). When both are given, the piped text is
+    /// appended below the message as context (`git diff | aleph ask "review"`).
     Ask {
-        /// The message to send
-        message: String,
+        /// The message to send (optional when piping text on stdin)
+        message: Option<String>,
 
         /// Session key
         #[arg(short, long, conflicts_with = "last")]
