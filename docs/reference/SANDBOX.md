@@ -482,7 +482,13 @@ that bwrap launches inside its mount namespace:
   `NetworkPolicy`:
   - `Unrestricted` (`AllowAll`, raw `AllowHosts`) — no socket-family
     filtering; seccomp cannot filter by IP.
-  - `UnixOnly` (`None`) — allow only `AF_UNIX`, deny `connect`.
+  - `UnixOnly` (`None`) — allow only `AF_UNIX`, deny `connect`, and deny
+    the rest of the socket-operation surface
+    (`accept`/`accept4`/`bind`/`listen`/`getpeername`/`getsockname`/
+    `shutdown`/`sendto`/`sendmmsg`/`recvmmsg`/`getsockopt`/`setsockopt`)
+    so a retained/`AF_UNIX` fd cannot stand up an unexpected endpoint.
+    `recvfrom` stays allowed (`cargo clippy` socketpair pattern). Pinned by
+    `seccomp_socket_control_denylist_is_frozen`. Mirrors codex's Restricted arm.
   - `ProxyRouted` (loopback-collapsed `AllowHosts` behind the
     netns→UDS→loopback bridge) — allow only `AF_INET`/`AF_INET6` to
     reach the local bridge, deny `AF_UNIX` socketpairs so the target
