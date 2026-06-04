@@ -67,6 +67,18 @@ pub struct ProfileConfig {
     /// Driver mode: managed (launch dedicated browser) or existing-session (attach to user's Chrome).
     #[serde(default)]
     pub driver: BrowserDriver,
+
+    /// Max concurrently-open tabs for this profile before the least-recently-used
+    /// are reclaimed on the next sweep. Only enforced for `Managed` profiles
+    /// (Aleph-owned browsers); `ExistingSession` tabs belong to the user and are
+    /// never reaped. (openclaw per-session cap parity.)
+    #[serde(default = "default_max_tabs")]
+    pub max_tabs_per_profile: usize,
+
+    /// Seconds a tab may sit idle before it is reclaimed. Shorter than
+    /// `idle_timeout_secs` — an unused tab is cheap to reopen. `Managed` only.
+    #[serde(default = "default_tab_idle_timeout")]
+    pub tab_idle_timeout_secs: u64,
 }
 
 fn default_cdp_port() -> u16 {
@@ -75,6 +87,14 @@ fn default_cdp_port() -> u16 {
 
 fn default_idle_timeout() -> u64 {
     1800
+}
+
+fn default_max_tabs() -> usize {
+    super::tab_registry::DEFAULT_MAX_TABS_PER_PROFILE
+}
+
+fn default_tab_idle_timeout() -> u64 {
+    super::tab_registry::DEFAULT_TAB_IDLE_TIMEOUT_SECS
 }
 
 impl Default for ProfileConfig {
@@ -89,6 +109,8 @@ impl Default for ProfileConfig {
             extra_args: Vec::new(),
             idle_timeout_secs: default_idle_timeout(),
             driver: BrowserDriver::default(),
+            max_tabs_per_profile: default_max_tabs(),
+            tab_idle_timeout_secs: default_tab_idle_timeout(),
         }
     }
 }

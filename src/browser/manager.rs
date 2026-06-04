@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::sync_primitives::{AtomicBool, Ordering, RwLock};
 
@@ -16,6 +17,7 @@ use super::playwright_cli_backend::PlaywrightCliBackend;
 use super::profile::{
     BrowserDriver, BrowserSystemConfig, BrowserType, ProfileConfig, ProfileState,
 };
+use super::tab_registry::{parse_tab_ids, TabRegistry};
 
 /// Manages the lifecycle of browser profiles.
 pub struct ProfileManager {
@@ -25,6 +27,8 @@ pub struct ProfileManager {
     chrome_mcp_driver: Arc<ChromeMcpDriver>,
     playwright_cli_driver: Arc<PlaywrightCliDriver>,
     idle_reaper_started: AtomicBool,
+    /// Per-tab lifecycle tracking for Managed profiles (idle reclamation + cap).
+    tab_registry: TabRegistry,
 }
 
 struct ManagedProfile {
@@ -105,6 +109,7 @@ impl ProfileManager {
             chrome_mcp_driver,
             playwright_cli_driver,
             idle_reaper_started: AtomicBool::new(false),
+            tab_registry: TabRegistry::new(),
         }
     }
 
@@ -128,6 +133,10 @@ impl ProfileManager {
                 let reaped = mgr.reap_idle().await;
                 if reaped > 0 {
                     tracing::info!("Browser idle reaper swept {reaped} profile(s)");
+                }
+                let tabs = mgr.reap_idle_tabs().await;
+                if tabs > 0 {
+                    tracing::info!("Browser idle reaper closed {tabs} idle/over-cap tab(s)");
                 }
             }
         });
@@ -203,6 +212,70 @@ impl ProfileManager {
         count
     }
 
+    /// Record activity on a specific tab so its idle timer resets. No-op for
+    /// non-`Managed` profiles — the user's `ExistingSession` tabs are never
+    /// tracked or reaped (R5: 不打扰用户).
+    pub fn touch_tab(&self, profile_name: &str, tab_id: &str) {
+        if let Some(BrowserDriver::Managed) = self.get_driver(profile_name) {
+            self.tab_registry.touch(profile_name, tab_id);
+        }
+    }
+
+    /// Sweep idle / over-cap tabs for every Managed profile with tracked tabs.
+    ///
+    /// Reconciles the registry against each profile's live `list_tabs` output,
+    /// then closes the selected victims (idle beyond `tab_idle_timeout_secs`, or
+    /// LRU overflow beyond `max_tabs_per_profile`). The active (most-recently-
+    /// used) tab is always protected. Best-effort: any backend error skips that
+    /// profile. Returns the number of tabs closed.
+    pub async fn reap_idle_tabs(&self) -> usize {
+        // Candidates: Managed profiles whose browser was actually used.
+        let candidates: Vec<String> = {
+            let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
+            profiles
+                .iter()
+                .filter(|(name, p)| {
+                    p.config.driver == BrowserDriver::Managed && self.tab_registry.has_tabs(name)
+                })
+                .map(|(name, _)| name.clone())
+                .collect()
+        };
+
+        let mut closed = 0;
+        for profile in candidates {
+            let (max_tabs, idle_secs) = match self.get_config(&profile) {
+                Some(c) => (c.max_tabs_per_profile, c.tab_idle_timeout_secs),
+                None => continue,
+            };
+            let backend = match self.get_backend(&profile) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let tabs_text = match backend.list_tabs().await {
+                Ok(t) => t,
+                Err(_) => {
+                    // Browser gone — stop re-probing this profile every sweep.
+                    self.tab_registry.clear_profile(&profile);
+                    continue;
+                }
+            };
+            let live_ids = parse_tab_ids(&tabs_text);
+            let victims = self.tab_registry.select_victims(
+                &profile,
+                &live_ids,
+                max_tabs,
+                Duration::from_secs(idle_secs),
+            );
+            for victim in victims {
+                if backend.close_tab(&victim).await.is_ok() {
+                    self.tab_registry.forget(&profile, &victim);
+                    closed += 1;
+                }
+            }
+        }
+        closed
+    }
+
     /// Get the driver mode for a named profile.
     pub fn get_driver(&self, name: &str) -> Option<BrowserDriver> {
         let profiles = self.profiles.read().unwrap_or_else(|e| e.into_inner());
@@ -271,6 +344,12 @@ impl ProfileManager {
         if let Some(profile) = profiles.get_mut(profile_name) {
             profile.state = state;
         }
+    }
+
+    /// Test-only: whether any tabs are tracked for a profile.
+    #[cfg(test)]
+    pub(crate) fn has_tracked_tabs(&self, profile: &str) -> bool {
+        self.tab_registry.has_tabs(profile)
     }
 
     /// Returns profiles that have been idle longer than their configured timeout.
@@ -437,6 +516,31 @@ mod tests {
         let manager = ProfileManager::new(config);
         let backend = manager.get_backend("user");
         assert!(backend.is_ok());
+    }
+
+    #[test]
+    fn test_touch_tab_tracks_managed_only() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+
+        // "default" is Managed → tracked.
+        manager.touch_tab("default", "1");
+        assert!(manager.has_tracked_tabs("default"));
+
+        // "user" is ExistingSession (user's real Chrome) → never tracked.
+        manager.touch_tab("user", "1");
+        assert!(!manager.has_tracked_tabs("user"));
+    }
+
+    #[tokio::test]
+    async fn test_reap_idle_tabs_no_browser_is_noop() {
+        let config = BrowserSystemConfig::default();
+        let manager = ProfileManager::new(config);
+        // Track a tab but no browser is running → list_tabs fails, profile is
+        // cleared, nothing is closed.
+        manager.touch_tab("default", "1");
+        assert_eq!(manager.reap_idle_tabs().await, 0);
+        assert!(!manager.has_tracked_tabs("default"));
     }
 
     #[test]

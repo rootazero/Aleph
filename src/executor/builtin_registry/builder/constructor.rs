@@ -179,7 +179,7 @@ impl BuiltinToolRegistry {
 
         let desktop_tool = DesktopTool::new()
             .with_platform(Arc::clone(&desktop_platform))
-            .with_vision_bridge(vision_bridge)
+            .with_vision_bridge(Arc::clone(&vision_bridge))
             .with_approval_policy(Arc::clone(&approval_policy));
 
         // AX query tools (macOS only; tools degrade gracefully on other platforms).
@@ -220,8 +220,12 @@ impl BuiltinToolRegistry {
         let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager));
         let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager));
         let browser_type_tool = BrowserTypeTool::new(Arc::clone(&browser_profile_manager));
+        // Share the same TTL-cached vision bridge as the desktop screenshot tool
+        // so `browser_screenshot {describe:true}` yields an OCR/scene-description
+        // layer for text-only models (connect-first — no second pipeline).
         let browser_screenshot_tool =
-            BrowserScreenshotTool::new(Arc::clone(&browser_profile_manager));
+            BrowserScreenshotTool::new(Arc::clone(&browser_profile_manager))
+                .with_vision_bridge(Arc::clone(&vision_bridge));
         let browser_snapshot_tool = BrowserSnapshotTool::new(Arc::clone(&browser_profile_manager));
         let browser_navigate_tool = BrowserNavigateTool::new(Arc::clone(&browser_profile_manager));
         let browser_tabs_tool = BrowserTabsTool::new(Arc::clone(&browser_profile_manager));
