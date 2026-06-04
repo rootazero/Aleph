@@ -23,13 +23,13 @@ description: "Aleph self-management mode — configure LLM providers, generation
 | `vault_store` | Store/delete/list API keys |
 | `self_config` | Read/write identity files and config.toml with validation + preview |
 | `agent_create` / `agent_delete` / `agent_list` / `agent_info` | Agent lifecycle management |
-| `channel_pairing` | Generate/list pairing codes for Telegram/Discord |
+| `channel_pairing` | Generate/list pairing codes (Telegram) |
 | `remember` | Add/replace/remove entries in MEMORY.md (curated memory) |
 | `read_config_guide` | Load detailed guide for a domain |
 | `bash` | Raw file read, python3 edits, system commands |
 | `web_fetch` / `search` | External docs for plugin/skill installs only |
 
-**Never use**: `file_ops` (denied_paths), `image_generate`, `generate_video`.
+**Never use**: `file_ops` (denied_paths), `image_generate`, `video_generate`.
 
 ---
 
@@ -56,8 +56,8 @@ Structured access to identity files and config.toml with built-in validation and
 ### Actions
 
 > **Action values are snake_case** — the `action` field accepts `list_files`,
-> `read_file`, `write_file`, `read_config`, `update_config`. PascalCase
-> spellings (e.g. `ListFiles`) fail deserialization.
+> `read_file`, `write_file`, `read_config`, `update_config`, `route_status`.
+> PascalCase spellings (e.g. `ListFiles`) fail deserialization.
 
 #### list_files
 List all identity files and their status (exists, size).
@@ -136,6 +136,15 @@ When `dry_run=true`, the response includes a `preview_message` in Chinese:
 }
 ```
 
+#### route_status
+Show the current local/cloud route decision (`mode` + `allow_cloud_escalation`).
+Read-only view; to *change* the route, patch `config_path="route"`.
+```
+self_config(action="route_status")
+self_config(action="update_config", config_path="route", config_value={"mode": "always_local"}, dry_run=false)
+```
+A `route` patch hot-applies to the live failover chain on the next prompt — no restart needed.
+
 ### Recommended Workflow
 
 ```
@@ -172,6 +181,7 @@ When `dry_run=true`, the response includes a `preview_message` in Chinese:
 | `agents` | Agent definitions and global defaults |
 | `agent` (alias `cowork`) | Agent task orchestration settings |
 | `bindings` | Channel → Agent routing bindings |
+| `route` | Local-vs-cloud routing mode (`mode`, `allow_cloud_escalation`). Prefer the `route_status` action to view; patch this path to change. |
 
 ---
 
@@ -201,7 +211,8 @@ channel_pairing(action="generate", channel_id="telegram")
 channel_pairing(action="list")                        # List active codes
 ```
 
-Use when the user wants to link a Telegram/Discord account to Aleph.
+Use when the user wants to link a Telegram account to Aleph. (Pairing-code
+resolution currently targets Telegram channels only.)
 
 ---
 
@@ -223,21 +234,22 @@ All top-level sections available in `config.toml`:
 | `unified_tools` | Unified tool facade | `enabled`, `registry_path` (takes precedence over legacy `[tools]` + `[mcp]`) |
 | `tool_service` | Tool service runtime | `default_timeout`, `max_concurrent` |
 | `sandbox` | Execution sandbox | `workspace_root`, `timeout_seconds`, `output_cap_bytes` |
-| `smart_flow` | Conversation flow | `enabled`, `context_window_target` |
-| `smart_matching` | Semantic detection | `enabled`, `threshold` |
-| `dispatcher` | Tool routing | `enabled`, `fallback_policy` |
+| `smart_flow` | ⚠️ Legacy — parsed but inert (no runtime consumer) | `enabled`, `context_window_target` |
+| `smart_matching` | ⚠️ Legacy — parsed but inert (no runtime consumer) | `enabled`, `threshold` |
+| `dispatcher` | ⚠️ Legacy — dissolved in the Dispatcher-dissolution refactor (R7); parsed but inert | `enabled`, `fallback_policy` |
 | `agent` (alias `cowork`) | Agent task orchestration | `enabled`, `max_subagents`, `default_timeout` |
 | `policies` | Behavioral policies | `tool_safety`, `retry`, `intent`, `memory.compression` |
 | `generation` | Media generation | `providers`, `image_providers`, `video_providers`, `speech_providers`, `audio_providers` |
 | `orchestrator` | Three-Layer Orchestrator | `guards.max_rounds`, `guards.max_tool_calls`, `guards.max_tokens` |
-| `subagent` | Sub-agent sync | `enabled`, `max_depth`, `inherit_context` |
-| `task_routing` | Task routing | `enabled`, `default_queue`, `strategies` |
+| `subagent` | ⚠️ Legacy — parsed but inert (no runtime consumer) | `enabled`, `max_depth`, `inherit_context` |
+| `task_routing` | ⚠️ Legacy — parsed but inert (no runtime consumer) | `enabled`, `default_queue`, `strategies` |
+| `route` | Local-vs-cloud failover routing (LIVE — shapes the failover chain by endpoint tier) | `mode` (`auto`/`always_local`/`always_cloud`), `allow_cloud_escalation`, `local_provider`, `cloud_provider` |
 | `group_chat` | Multi-agent chat | `enabled`, `personas`, `rotation_strategy` |
 | `cron` | Scheduler runtime (jobs themselves are DB-backed, managed via the `cron_manage` tool) | `enabled`, `db_path`, `check_interval_secs`, `max_concurrent_jobs`, `job_timeout_secs` |
 | `heartbeat` | Health monitoring | `enabled`, `interval_seconds`, `endpoints` |
 | `personas` | Preset persona definitions | `name`, `system_prompt`, `model` |
-| `evolution` | Skill evolution | `enabled`, `auto_generate`, `threshold` |
-| `media` | Media pipeline | `enabled`, `providers`, `cache_ttl` |
+| `evolution` | ⚠️ Legacy — parsed but inert (no runtime consumer) | `enabled`, `auto_generate`, `threshold` |
+| `media` | ⚠️ Legacy — parsed but inert (no runtime consumer) | `enabled`, `providers`, `cache_ttl` |
 | `privacy` | PII filtering | `enabled`, `redaction_level`, `allowed_entities` |
 | `security` | Shell security | `shell.enable_custom_patterns`, `shell.custom_blocked` |
 | `ssrf` | SSRF protection | `enabled`, `allowed_hosts`, `blocked_hosts` |
@@ -272,7 +284,7 @@ All top-level sections available in `config.toml`:
 
 ### For Secret/API Key Changes
 
-1. Store secret: `vault_store(action="store", key="provider:openai", secret="sk-...")`
+1. Store secret: `vault_store(action="store", key="ai:openai", secret="sk-...")`
 2. Read config: `self_config(action="read_config", config_path="providers.openai")`
 3. Preview: `self_config(action="update_config", config_path="providers.openai", config_value={...}, dry_run=true)`
 4. Apply: `self_config(action="update_config", ..., dry_run=false)`
