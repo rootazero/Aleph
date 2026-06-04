@@ -14,7 +14,7 @@ use futures::StreamExt;
 
 use crate::a2a::domain::security::Credentials;
 use crate::a2a::domain::{AgentCard, UpdateEvent};
-use crate::a2a::port::authenticator::A2AAuthContext;
+use crate::a2a::port::authenticator::{A2AAuthContext, A2AAuthPrincipal};
 
 use super::request_processor::{
     A2ARequestProcessor, A2AServerState, JsonRpcRequest, JsonRpcResponse,
@@ -74,9 +74,15 @@ async fn a2a_handler(
     (StatusCode::OK, Json(resp))
 }
 
-/// POST /a2a/stream — streaming JSON-RPC via SSE
+/// POST /a2a/stream — streaming JSON-RPC via Server-Sent Events.
 ///
-/// Only supports the `message/send` method. Other methods return a JSON error.
+/// Dispatches the two A2A methods that produce an event stream:
+/// - `message/send` — run a new turn and stream its task updates
+/// - `tasks/resubscribe` — re-attach to the live event stream of a task that
+///   is already running (e.g. after a dropped SSE connection)
+///
+/// Any other method is rejected with a JSON-RPC MethodNotFound error, since the
+/// synchronous `/a2a` endpoint is the correct target for it.
 async fn a2a_stream_handler(
     State(state): State<Arc<A2AServerState>>,
     headers: HeaderMap,
@@ -90,7 +96,7 @@ async fn a2a_stream_handler(
         credentials,
     };
 
-    // Authenticate
+    // Authenticate once; per-method authorization happens in each branch.
     let principal = match state.authenticator.authenticate(&auth_context).await {
         Ok(p) => p,
         Err(e) => {
@@ -98,28 +104,26 @@ async fn a2a_stream_handler(
         }
     };
 
-    // Only message/send supports streaming
-    if request.method != "message/send" {
-        return sse_error(JsonRpcResponse::error(
+    match request.method.as_str() {
+        "message/send" => stream_message_send(state, principal, request).await,
+        "tasks/resubscribe" => stream_resubscribe(state, principal, request).await,
+        other => sse_error(JsonRpcResponse::error(
             request.id.clone(),
             -32601,
-            "Only message/send supports streaming",
-        ));
+            &format!("Method does not support streaming: {other}"),
+        )),
     }
+}
 
-    // Authorize
+/// `message/send` over SSE — execute a new turn and stream its task updates.
+async fn stream_message_send(
+    state: Arc<A2AServerState>,
+    principal: A2AAuthPrincipal,
+    request: JsonRpcRequest,
+) -> axum::response::Response {
     let action = crate::a2a::port::authenticator::A2AAction::SendMessage;
-    match state.authenticator.authorize(&principal, &action).await {
-        Ok(true) => {}
-        Ok(false) => {
-            return sse_error(JsonRpcResponse::from_a2a_error(
-                request.id.clone(),
-                &crate::a2a::domain::A2AError::Forbidden,
-            ));
-        }
-        Err(e) => {
-            return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
-        }
+    if let Err(resp) = authorize_stream(&state, &principal, &action, &request).await {
+        return resp;
     }
 
     // Extract message params
@@ -165,41 +169,122 @@ async fn a2a_stream_handler(
         }
     };
 
-    // Convert UpdateEvent stream to SSE events
-    let request_id = request.id.clone();
-    let sse_stream = update_stream.map(move |event_result| match event_result {
-        Ok(event) => {
-            let (event_type, data) = match &event {
-                UpdateEvent::StatusUpdate(_) => (
-                    "status-update",
-                    serde_json::to_string(&JsonRpcResponse::success(
-                        request_id.clone(),
-                        serde_json::to_value(&event).unwrap_or_default(),
-                    ))
-                    .unwrap_or_default(),
-                ),
-                UpdateEvent::ArtifactUpdate(_) => (
-                    "artifact-update",
-                    serde_json::to_string(&JsonRpcResponse::success(
-                        request_id.clone(),
-                        serde_json::to_value(&event).unwrap_or_default(),
-                    ))
-                    .unwrap_or_default(),
-                ),
-            };
-            Ok::<_, Infallible>(Event::default().event(event_type).data(data))
-        }
-        Err(e) => {
-            let json =
-                serde_json::to_string(&JsonRpcResponse::from_a2a_error(request_id.clone(), &e))
-                    .unwrap_or_default();
-            Ok(Event::default().event("error").data(json))
-        }
-    });
+    sse_from_update_stream(request.id, update_stream)
+}
 
+/// `tasks/resubscribe` over SSE — re-attach to a running task's event stream.
+///
+/// Connects the caller to the shared broadcast hub for the task so it can
+/// resume receiving status/artifact updates after a dropped connection. The
+/// hub channel exists only while the task is in flight; resubscribing to an
+/// already-finished (and cleaned-up) task yields an idle stream that the client
+/// closes itself. Mirrors the A2A `tasks/resubscribe` method (params `{ id }`).
+async fn stream_resubscribe(
+    state: Arc<A2AServerState>,
+    principal: A2AAuthPrincipal,
+    request: JsonRpcRequest,
+) -> axum::response::Response {
+    let action = crate::a2a::port::authenticator::A2AAction::Subscribe;
+    if let Err(resp) = authorize_stream(&state, &principal, &action, &request).await {
+        return resp;
+    }
+
+    let task_id = match request.params.get("id").and_then(|v| v.as_str()) {
+        Some(id) => id.to_string(),
+        None => {
+            return sse_error(JsonRpcResponse::error(
+                request.id.clone(),
+                -32602,
+                "Invalid params: missing 'id'",
+            ));
+        }
+    };
+
+    let update_stream = match state.streaming.subscribe_all(&task_id).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            return sse_error(JsonRpcResponse::from_a2a_error(request.id.clone(), &e));
+        }
+    };
+
+    sse_from_update_stream(request.id, update_stream)
+}
+
+/// Authorize a streaming request, returning an SSE error response on denial.
+async fn authorize_stream(
+    state: &Arc<A2AServerState>,
+    principal: &A2AAuthPrincipal,
+    action: &crate::a2a::port::authenticator::A2AAction,
+    request: &JsonRpcRequest,
+) -> Result<(), axum::response::Response> {
+    match state.authenticator.authorize(principal, action).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(sse_error(JsonRpcResponse::from_a2a_error(
+            request.id.clone(),
+            &crate::a2a::domain::A2AError::Forbidden,
+        ))),
+        Err(e) => Err(sse_error(JsonRpcResponse::from_a2a_error(
+            request.id.clone(),
+            &e,
+        ))),
+    }
+}
+
+/// Wrap an `UpdateEvent` stream as an SSE response with the standard framing.
+fn sse_from_update_stream(
+    request_id: Option<serde_json::Value>,
+    update_stream: std::pin::Pin<
+        Box<
+            dyn futures::Stream<Item = crate::a2a::port::task_manager::A2AResult<UpdateEvent>>
+                + Send,
+        >,
+    >,
+) -> axum::response::Response {
+    let sse_stream = update_stream.map(move |event_result| {
+        Ok::<_, Infallible>(update_event_to_sse(&request_id, event_result))
+    });
     Sse::new(sse_stream)
         .keep_alive(KeepAlive::new())
         .into_response()
+}
+
+/// Build the `(sse-event-name, json-rpc-payload)` frame for one update event.
+///
+/// Extracted so every streaming method emits identical wire framing for
+/// `status-update` / `artifact-update` / `error` events.
+fn update_event_frame(
+    request_id: &Option<serde_json::Value>,
+    event_result: crate::a2a::port::task_manager::A2AResult<UpdateEvent>,
+) -> (&'static str, String) {
+    match event_result {
+        Ok(event) => {
+            let event_type = match &event {
+                UpdateEvent::StatusUpdate(_) => "status-update",
+                UpdateEvent::ArtifactUpdate(_) => "artifact-update",
+            };
+            let data = serde_json::to_string(&JsonRpcResponse::success(
+                request_id.clone(),
+                serde_json::to_value(&event).unwrap_or_default(),
+            ))
+            .unwrap_or_default();
+            (event_type, data)
+        }
+        Err(e) => {
+            let data =
+                serde_json::to_string(&JsonRpcResponse::from_a2a_error(request_id.clone(), &e))
+                    .unwrap_or_default();
+            ("error", data)
+        }
+    }
+}
+
+/// Map a single update event (or stream error) onto a JSON-RPC-wrapped SSE event.
+fn update_event_to_sse(
+    request_id: &Option<serde_json::Value>,
+    event_result: crate::a2a::port::task_manager::A2AResult<UpdateEvent>,
+) -> Event {
+    let (event_type, data) = update_event_frame(request_id, event_result);
+    Event::default().event(event_type).data(data)
 }
 
 /// Build an SSE error response from a JsonRpcResponse
@@ -363,5 +448,84 @@ mod tests {
         let addr = fallback_addr();
         assert!(addr.ip().is_loopback());
         assert_eq!(addr.port(), 0);
+    }
+
+    // --- SSE framing (shared by message/send and tasks/resubscribe) ---
+
+    use crate::a2a::domain::message::Artifact;
+    use crate::a2a::domain::task::{TaskState, TaskStatus};
+    use crate::a2a::domain::{A2AError, Part, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+
+    fn status_update(task_id: &str, state: TaskState) -> UpdateEvent {
+        UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            task_id: task_id.to_string(),
+            context_id: "ctx-1".to_string(),
+            status: TaskStatus {
+                state,
+                message: None,
+                timestamp: chrono::Utc::now(),
+            },
+            is_final: false,
+            metadata: None,
+        })
+    }
+
+    fn artifact_update(task_id: &str) -> UpdateEvent {
+        UpdateEvent::ArtifactUpdate(TaskArtifactUpdateEvent {
+            task_id: task_id.to_string(),
+            context_id: "ctx-1".to_string(),
+            artifact: Artifact {
+                artifact_id: "art-1".to_string(),
+                kind: "text".to_string(),
+                parts: vec![Part::Text {
+                    text: "hi".to_string(),
+                    metadata: None,
+                }],
+                metadata: None,
+            },
+            append: false,
+            last_chunk: true,
+            metadata: None,
+        })
+    }
+
+    #[test]
+    fn frame_status_update_is_status_event_with_result() {
+        let id = Some(serde_json::Value::Number(1.into()));
+        let (event_type, data) =
+            update_event_frame(&id, Ok(status_update("t1", TaskState::Working)));
+        assert_eq!(event_type, "status-update");
+        let json: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert_eq!(json["jsonrpc"], "2.0");
+        assert_eq!(json["id"], 1);
+        // success frames carry `result`, never `error`
+        assert!(json.get("result").is_some());
+        assert!(json.get("error").is_none());
+        assert_eq!(json["result"]["taskId"], "t1");
+    }
+
+    #[test]
+    fn frame_artifact_update_is_artifact_event() {
+        let id = Some(serde_json::Value::String("req-7".to_string()));
+        let (event_type, data) = update_event_frame(&id, Ok(artifact_update("t2")));
+        assert_eq!(event_type, "artifact-update");
+        let json: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert!(json.get("result").is_some());
+        assert_eq!(json["result"]["artifact"]["artifactId"], "art-1");
+    }
+
+    #[test]
+    fn frame_error_is_error_event_with_code() {
+        let id = Some(serde_json::Value::Number(9.into()));
+        let (event_type, data) =
+            update_event_frame(&id, Err(A2AError::TaskNotFound("missing".to_string())));
+        assert_eq!(event_type, "error");
+        let json: serde_json::Value = serde_json::from_str(&data).unwrap();
+        assert!(json.get("result").is_none());
+        assert_eq!(json["error"]["code"], -32001);
+        assert!(json["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("missing"));
     }
 }
