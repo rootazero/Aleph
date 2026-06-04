@@ -12,9 +12,26 @@ pub struct Knowledge {
     /// Source of this knowledge (tool name or user input)
     pub source: String,
     /// Confidence level (0.0 - 1.0)
+    #[serde(deserialize_with = "deserialize_clamped_confidence")]
     pub confidence: f32,
     /// Timestamp when acquired
     pub acquired_at: i64,
+}
+
+/// Clamp confidence to the documented `[0.0, 1.0]` range on the deserialization
+/// boundary. Tool-extracted knowledge can arrive as untrusted JSON, so the
+/// invariant `with_confidence` enforces must also hold here; non-finite values
+/// (NaN/Inf) collapse to `0.0`.
+fn deserialize_clamped_confidence<'de, D>(deserializer: D) -> Result<f32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw = f32::deserialize(deserializer)?;
+    Ok(if raw.is_finite() {
+        raw.clamp(0.0, 1.0)
+    } else {
+        0.0
+    })
 }
 
 impl Knowledge {

@@ -1,35 +1,11 @@
-//! Core event handler components for the agentic loop.
+//! Shared component types for the agentic loop.
 //!
-//! This module provides the 6 core components:
-//! - `IntentAnalyzer`: Input analysis and complexity detection
-//! - `TaskPlanner`: LLM-based task decomposition
-//! - `ToolExecutor`: Tool execution with retry logic
-//! - `LoopController`: Agentic loop control with protection mechanisms
-//! - `SessionRecorder`: State persistence to SQLite
-//! - `SessionCompactor`: Token management and session compaction
-//!
-//! Note: CallbackBridge (FFI event forwarding) has been removed.
-//! Events are now sent via Gateway WebSocket instead.
+//! Note: the legacy `EventHandler`-based component chain (IntentAnalyzer,
+//! TaskPlanner, ToolExecutor, LoopController, SessionRecorder, SessionCompactor)
+//! has been removed — it was superseded by the `src/harness/` Think→Act loop and
+//! had no production consumers. Only the shared domain types remain; they are
+//! consumed by `agents/rig` (`Knowledge`) and the `event` system (part types).
 
-// callback_bridge removed - FFI replaced by WebSocket Gateway
-mod intent_analyzer;
-mod loop_controller;
-mod session_compactor;
-mod session_recorder;
-mod task_planner;
-mod tool_executor;
 mod types;
 
-#[cfg(test)]
-mod integration_test;
-
-pub use intent_analyzer::IntentAnalyzer;
-pub use loop_controller::{LoopConfig, LoopController};
-pub use session_compactor::{
-    compaction_prompt, CompactionConfig, EnhancedTokenUsage, LlmCallback, ModelLimit, PruneInfo,
-    SessionCompactor, TokenTracker,
-};
-pub use session_recorder::{RecorderError, SessionRecord, SessionRecorder};
-pub use task_planner::TaskPlanner;
-pub use tool_executor::{ToolExecutor, ToolRetryPolicy};
 pub use types::*;
