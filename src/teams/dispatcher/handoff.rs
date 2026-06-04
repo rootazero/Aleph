@@ -5,7 +5,7 @@
 //! context" pattern: instead of a background sensing loop, everything the
 //! member needs is gathered once, at launch, from the task DAG and team state.
 
-use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskStore};
+use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskStore, TaskRunStatus};
 use crate::sync_primitives::Arc;
 use crate::teams::context::InboxContextProvider;
 use crate::teams::store::TeamStore;
@@ -19,6 +19,12 @@ const MAX_SECTION_BYTES: usize = 4096;
 /// member's context window.
 const MAX_PROTOCOL_BYTES: usize = 8192;
 
+/// How many of the most-recent prior attempts to surface in the recovery
+/// section. Bounded so a task that has been retried many times cannot flood
+/// the resuming member's context: the exit journal carries the durable
+/// hand-off, the run log only needs to show the latest failure reasons.
+const MAX_RECOVERY_RUNS: usize = 3;
+
 /// Truncate `s` to at most `max` bytes on a UTF-8 char boundary.
 fn truncate_utf8(s: &str, max: usize) -> String {
     if s.len() <= max {
@@ -31,13 +37,122 @@ fn truncate_utf8(s: &str, max: usize) -> String {
     format!("{}… (truncated)", &s[..end])
 }
 
+/// Build the **recovery** section for a re-dispatched task.
+///
+/// Returns an empty string for a task's first attempt (no prior run records).
+/// On a retry — after a zombie/orphan reclaim or a leader-driven
+/// `Failed`/`Cancelled` → `Pending` reset — it surfaces the durable hand-off
+/// that earlier attempts produced but which, until now, only the panel ever
+/// read: the per-attempt run log (`coord_task_runs`) and the structured exit
+/// journal (`coord_task_journals`, written by the `task_exit_journal` tool).
+///
+/// This closes the write→read loop on ClawTeam's context-recovery pattern: the
+/// resuming agent reads what its previous self learned instead of cold-starting.
+/// Pure context assembly — the dumb loop performs no recovery *decision* (that
+/// stays the leader's, per R7/R10); it only hands the member what already exists.
+async fn build_recovery_section(coord_store: &Arc<dyn CoordTaskStore>, task: &CoordTask) -> String {
+    // `build_handoff_context` runs before `start_task_run`, so every row here
+    // belongs to an *earlier* attempt — the current claim is not yet recorded.
+    let runs = coord_store.list_task_runs(&task.id).await.unwrap_or_default();
+    if runs.is_empty() {
+        return String::new();
+    }
+
+    let attempt = runs.len() + 1;
+    let mut out = format!(
+        "\n## Recovery Context\nThis is attempt {attempt}. {} previous attempt(s) did not \
+         complete — resume from where they left off; reuse work already done and do not \
+         restart from scratch.\n",
+        runs.len()
+    );
+
+    // Most-recent prior attempts first, capped. Each line names the terminal
+    // status and the failure reason / final note so the member sees *why* it
+    // is being re-run.
+    out.push_str("\n### Previous attempts\n");
+    for run in runs.iter().rev().take(MAX_RECOVERY_RUNS) {
+        let detail = match (&run.error, &run.summary) {
+            (Some(err), _) if !err.is_empty() => truncate_utf8(err, MAX_SECTION_BYTES),
+            (_, Some(sum)) if !sum.is_empty() => truncate_utf8(sum, MAX_SECTION_BYTES),
+            _ => match run.status {
+                // A run still marked Running here never reached `finish_task_run`
+                // — the process died mid-task and was reclaimed.
+                TaskRunStatus::Running => "interrupted before a clean exit".to_string(),
+                _ => "(no detail recorded)".to_string(),
+            },
+        };
+        out.push_str(&format!("- {}: {detail}\n", run.status.as_str()));
+    }
+
+    // Structured exit journal (the prior self's deliberate hand-off). One per
+    // task, last-write-wins, so this is the freshest post-mortem available.
+    if let Ok(Some(j)) = coord_store.get_task_journal(&task.id).await {
+        out.push_str(&format!(
+            "\n### Exit journal from a previous attempt (by `{}`)\n",
+            j.agent_id
+        ));
+        out.push_str(&truncate_utf8(j.summary.trim(), MAX_SECTION_BYTES));
+        out.push('\n');
+        if !j.decisions.is_empty() {
+            out.push_str("\nDecisions made:\n");
+            for d in &j.decisions {
+                out.push_str(&format!("- {}\n", truncate_utf8(d, MAX_SECTION_BYTES)));
+            }
+        }
+        if !j.artifacts_ref.is_empty() {
+            out.push_str("\nArtifacts / anchors to reuse:\n");
+            for a in &j.artifacts_ref {
+                out.push_str(&format!("- {}\n", truncate_utf8(a, MAX_SECTION_BYTES)));
+            }
+        }
+        if !j.next_steps.is_empty() {
+            out.push_str("\nRecommended next steps:\n");
+            for n in &j.next_steps {
+                out.push_str(&format!("- {}\n", truncate_utf8(n, MAX_SECTION_BYTES)));
+            }
+        }
+        if let Some(c) = j.confidence {
+            out.push_str(&format!("\nPrevious self-rated confidence: {c}/100\n"));
+        }
+    }
+
+    out
+}
+
+/// Build the **notes** section from the task's comment thread.
+///
+/// `coord_task_comments` (written by the `task_comment` tool) carries leader /
+/// teammate annotations on a task — clarifications, scope changes, review
+/// feedback. Until now only the panel rendered them; the agent that actually
+/// executes the task never saw them. Returns an empty string when the task has
+/// no comments, so first-pass tasks are unaffected.
+async fn build_notes_section(coord_store: &Arc<dyn CoordTaskStore>, task: &CoordTask) -> String {
+    let comments = coord_store
+        .list_task_comments(&task.id)
+        .await
+        .unwrap_or_default();
+    if comments.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n## Notes\nLeader / teammate notes on this task:\n");
+    for c in &comments {
+        out.push_str(&format!(
+            "- **{}**: {}\n",
+            c.author,
+            truncate_utf8(c.body.trim(), MAX_SECTION_BYTES)
+        ));
+    }
+    out
+}
+
 /// Build the handoff context block for `task`.
 ///
 /// Sections (each individually byte-capped): the task instruction, the team's
-/// operating protocol (if the leader authored one), results of any completed
-/// dependencies (the DAG fan-in channel), the team roster, and an unread-inbox
-/// summary. The returned string is the complete `input` handed to the member
-/// agent.
+/// operating protocol (if the leader authored one), a recovery block when this
+/// is a retry (prior run log + exit journal), leader/teammate notes, results of
+/// any completed dependencies (the DAG fan-in channel), the team roster, and an
+/// unread-inbox summary. The returned string is the complete `input` handed to
+/// the member agent.
 pub async fn build_handoff_context(
     coord_store: &Arc<dyn CoordTaskStore>,
     team_store: &Arc<dyn TeamStore>,
@@ -71,6 +186,14 @@ pub async fn build_handoff_context(
             }
         }
     }
+
+    // --- Recovery context (retry-only: prior run log + exit journal) ---
+    // Placed before dependency results so a resuming member first learns that
+    // it is resuming, and why, before re-reading upstream outputs.
+    out.push_str(&build_recovery_section(coord_store, task).await);
+
+    // --- Leader / teammate notes (task comment thread) ---
+    out.push_str(&build_notes_section(coord_store, task).await);
 
     // --- Dependency results (fan-in from completed upstream tasks) ---
     let mut dep_section = String::new();
@@ -145,7 +268,9 @@ pub async fn build_handoff_context(
 mod tests {
     use super::*;
     use crate::agents::swarm::tasks::store::SqliteCoordTaskStore;
-    use crate::agents::swarm::tasks::{CoordTaskUpdate, NewCoordTask, Priority};
+    use crate::agents::swarm::tasks::{
+        CoordTaskUpdate, NewCoordTask, NewTaskExitJournal, Priority,
+    };
     use crate::teams::store::SqliteTeamStore;
     use crate::teams::types::{NewTeam, NewTeamMember};
     use rusqlite::Connection;
@@ -160,6 +285,86 @@ mod tests {
         let store = SqliteTeamStore::new(Connection::open_in_memory().unwrap());
         store.migrate().await.unwrap();
         Arc::new(store)
+    }
+
+    fn plain_task(subject: &str) -> NewCoordTask {
+        NewCoordTask {
+            team_id: None,
+            subject: subject.into(),
+            description: String::new(),
+            owner: Some("worker".into()),
+            priority: Priority::Normal,
+            blocked_by: vec![],
+            metadata: serde_json::json!({}),
+        }
+    }
+
+    #[tokio::test]
+    async fn no_recovery_or_notes_on_first_attempt() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let task = cs.create_task(plain_task("Fresh task")).await.unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        // A first-pass task with no run history / comments is byte-identical to
+        // the legacy envelope — neither additive section appears.
+        assert!(!ctx.contains("## Recovery Context"));
+        assert!(!ctx.contains("## Notes"));
+    }
+
+    #[tokio::test]
+    async fn recovery_section_surfaces_prior_runs_and_journal() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let task = cs.create_task(plain_task("Migrate the parser")).await.unwrap();
+
+        // Simulate a failed first attempt: a finished run + an exit journal the
+        // prior self wrote via the task_exit_journal tool.
+        let run_id = cs.start_task_run(&task.id, "worker").await.unwrap();
+        cs.finish_task_run(
+            &run_id,
+            TaskRunStatus::Failed,
+            None,
+            Some("panic: index out of bounds in lexer".into()),
+        )
+        .await
+        .unwrap();
+        cs.upsert_task_journal(NewTaskExitJournal {
+            task_id: task.id.clone(),
+            agent_id: "worker".into(),
+            summary: "Rewrote the tokenizer; the AST visitor still needs porting.".into(),
+            decisions: vec!["Kept the old token enum for compatibility".into()],
+            artifacts_ref: vec!["src/parser/lexer.rs".into()],
+            next_steps: vec!["Port visit_expr in ast/visitor.rs".into()],
+            confidence: Some(60),
+        })
+        .await
+        .unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        assert!(ctx.contains("## Recovery Context"));
+        assert!(ctx.contains("This is attempt 2"));
+        assert!(ctx.contains("panic: index out of bounds"));
+        assert!(ctx.contains("Rewrote the tokenizer"));
+        assert!(ctx.contains("src/parser/lexer.rs"));
+        assert!(ctx.contains("Port visit_expr"));
+        assert!(ctx.contains("60/100"));
+    }
+
+    #[tokio::test]
+    async fn notes_section_injects_task_comments() {
+        let cs = coord_store().await;
+        let ts = team_store().await;
+        let task = cs.create_task(plain_task("Build the report")).await.unwrap();
+
+        cs.add_task_comment(&task.id, "lead", "Use the Q2 numbers, not Q1.")
+            .await
+            .unwrap();
+
+        let ctx = build_handoff_context(&cs, &ts, None, &task).await;
+        assert!(ctx.contains("## Notes"));
+        assert!(ctx.contains("**lead**"));
+        assert!(ctx.contains("Use the Q2 numbers, not Q1."));
     }
 
     #[tokio::test]
