@@ -5,11 +5,13 @@
 //! [`HealthCheck`](super::HealthCheck) here and registering it in
 //! [`super::DiagnosticEngine::default_registry`] (OCP — no engine changes).
 
+pub mod browser_runtime;
 pub mod config_parse;
 pub mod data_dir;
 pub mod hooks_consent;
 pub mod stale_lock;
 
+pub use browser_runtime::BrowserRuntimeCheck;
 pub use config_parse::ConfigParseCheck;
 pub use data_dir::DataDirCheck;
 pub use hooks_consent::HooksConsentCheck;
