@@ -291,9 +291,13 @@ pub fn split_frontmatter(content: &str) -> Result<(String, String), SkillParseEr
         .ok_or(SkillParseError::NoFrontmatter)?;
 
     let yaml_str = &rest[..closing_pos];
-    let after_closing = &rest[closing_pos + 3..]; // skip past `---`
-                                                  // Skip optional newline after closing ---
-    let body = after_closing.strip_prefix('\n').unwrap_or(after_closing);
+    // The closing line may carry leading whitespace (matched via `line.trim()`),
+    // so skip to the end of the whole delimiter line rather than a fixed `+3`.
+    let closing_line = &rest[closing_pos..];
+    let body = match closing_line.find('\n') {
+        Some(nl) => &closing_line[nl + 1..],
+        None => "", // closing `---` is the final line; no body follows
+    };
 
     let yaml_normalized = yaml_str.replace("\r\n", "\n").replace('\r', "\n");
     let body_normalized = body.replace("\r\n", "\n").replace('\r', "\n");
