@@ -14,8 +14,12 @@ impl SessionCompactor {
     /// `hooks` is the per-run extension `HookExecutor` snapshot. When history
     /// is actually compacted (summaries replace raw turns), `BeforeCompaction`
     /// fires just before the summaries are assembled and `AfterCompaction`
-    /// fires once the compacted history is ready — both as observers. Turns
-    /// that fall through without compaction (compaction disabled, short
+    /// fires once the compacted history is ready. `AfterCompaction` is
+    /// observer-only; `BeforeCompaction` fires observers (fire-and-forget,
+    /// back-compat) *and* Interceptor-kind hooks, whose `context:` lines are
+    /// pinned into the compacted history so operator-defined facts survive
+    /// every compaction (mirrors opencode's `experimental.session.compacting`).
+    /// Turns that fall through without compaction (compaction disabled, short
     /// history, summary-fetch failure) fire nothing.
     pub async fn prepare_history(
         &self,
@@ -80,9 +84,10 @@ impl SessionCompactor {
 
         // Compaction is now committed: raw history exceeds the fresh tail and
         // the summaries are in hand. Announce it before assembling the result.
-        fire_compaction_hook(
+        // Interceptor-kind `BeforeCompaction` hooks may pin steering context
+        // that must survive this (and every future) compaction.
+        let pinned_contexts = fire_before_compaction(
             hooks,
-            HookEvent::BeforeCompaction,
             &session_id,
             vec![
                 ("COMPACTION_RAW_MESSAGES", raw_messages.len().to_string()),
@@ -118,6 +123,18 @@ impl SessionCompactor {
         let ratio = self.config.token_estimate_ratio;
         let budget = token_budget as usize;
         let mut used_tokens: usize = 0;
+
+        // Operator-pinned context from `BeforeCompaction` interceptor hooks
+        // leads the compacted history (ahead of the depth-ranked summaries) so
+        // persistent facts — deployment targets, user preferences, project
+        // invariants — survive every compaction. Counted against the same
+        // budget so a verbose hook can't blow it out; the summary loop below
+        // sees the reduced `used_tokens`.
+        for ctx_text in &pinned_contexts {
+            let xml = format!("<session_context depth=\"hook\">\n{ctx_text}\n</session_context>");
+            used_tokens += super::context_window::estimate_tokens(&xml, ratio);
+            result.push(UnifiedMessage::user(xml));
+        }
 
         let tail_tokens: usize = fresh_tail
             .iter()
@@ -204,6 +221,52 @@ async fn fire_compaction_hook(
     executor.execute_observers(event, &ctx).await;
 }
 
+/// Fire `BeforeCompaction` hooks and harvest any context they pin into the
+/// compacted history.
+///
+/// Dual-dispatch mirrors the tool-call seam in `tools::scoped::dispatch`:
+/// Observer-kind hooks run in parallel, fire-and-forget (unchanged
+/// back-compat behaviour — observers can never steer compaction); then
+/// Interceptor-kind hooks run sequentially in priority order and their
+/// `context:` lines / `additionalContext` JSON are returned so the caller can
+/// pin them ahead of the summaries. This is the Rust analogue of opencode's
+/// `experimental.session.compacting` (`context: string[]`).
+///
+/// A no-op returning an empty `Vec` when no executor is wired or it carries no
+/// hooks. Interceptor failures degrade to no pinned context (compaction still
+/// proceeds) rather than aborting the turn.
+async fn fire_before_compaction(
+    hooks: Option<&HookExecutor>,
+    session_id: &str,
+    stats: Vec<(&'static str, String)>,
+) -> Vec<String> {
+    let Some(executor) = hooks else {
+        return Vec::new();
+    };
+    if executor.hook_count() == 0 {
+        return Vec::new();
+    }
+    let mut ctx = HookContext::new(session_id);
+    for (key, value) in stats {
+        ctx = ctx.with_env(key, value);
+    }
+    // Observers: unchanged fire-and-forget behaviour (back-compat).
+    executor
+        .execute_observers(HookEvent::BeforeCompaction, &ctx)
+        .await;
+    // Interceptors: new — harvest pinned context for the compacted history.
+    match executor
+        .execute_interceptors(HookEvent::BeforeCompaction, ctx)
+        .await
+    {
+        Ok((_ctx, hook_result)) => hook_result.additional_contexts,
+        Err(e) => {
+            warn!(error = %e, "BeforeCompaction interceptor hooks failed; no context pinned");
+            Vec::new()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,5 +325,63 @@ mod tests {
         )
         .await;
         assert!(sentinel.exists(), "AfterCompaction observer must run");
+    }
+
+    /// An Interceptor-kind `BeforeCompaction` hook pins its `context` into the
+    /// compacted history (opencode `experimental.session.compacting` parity).
+    /// A `Prompt` action's resolved text lands in `additional_contexts` — the
+    /// same harvest the production seam injects ahead of the summaries.
+    #[tokio::test]
+    async fn before_compaction_interceptor_pins_context() {
+        let hook = HookConfig {
+            event: HookEvent::BeforeCompaction,
+            kind: HookKind::Interceptor,
+            priority: HookPriority::default(),
+            matcher: None,
+            actions: vec![HookAction::Prompt {
+                prompt: "remember: deploy target is AWS us-east-1".to_string(),
+            }],
+            plugin_name: "compaction-pin".to_string(),
+            plugin_root: std::env::temp_dir(),
+            handler: None,
+            timeout_secs: None,
+        };
+        let executor = HookExecutor::new(vec![hook]);
+        let pinned = fire_before_compaction(Some(&executor), "s", vec![]).await;
+        assert_eq!(
+            pinned,
+            vec!["remember: deploy target is AWS us-east-1".to_string()]
+        );
+    }
+
+    /// Back-compat: an Observer-kind `BeforeCompaction` hook still fires
+    /// (fire-and-forget) but pins NOTHING — observers can never steer
+    /// compaction, so the compacted history stays byte-identical.
+    #[tokio::test]
+    async fn before_compaction_observer_only_pins_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sentinel = dir.path().join("before.flag");
+        let executor = HookExecutor::new(vec![observer_touch_hook(
+            HookEvent::BeforeCompaction,
+            &sentinel,
+        )]);
+
+        let pinned = fire_before_compaction(Some(&executor), "s", vec![]).await;
+
+        assert!(pinned.is_empty(), "observer hooks must not pin context");
+        assert!(sentinel.exists(), "BeforeCompaction observer must still run");
+    }
+
+    #[tokio::test]
+    async fn fire_before_compaction_no_executor_is_noop() {
+        assert!(fire_before_compaction(None, "s", vec![]).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fire_before_compaction_empty_executor_is_noop() {
+        let executor = HookExecutor::new(vec![]);
+        assert!(fire_before_compaction(Some(&executor), "s", vec![])
+            .await
+            .is_empty());
     }
 }
