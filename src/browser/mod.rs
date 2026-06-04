@@ -11,6 +11,7 @@ pub use playwright_cli::{CliOutput, PageMeta, PlaywrightCliDriver};
 pub mod playwright_cli_backend;
 pub use playwright_cli_backend::PlaywrightCliBackend;
 pub mod profile;
+pub mod tab_registry;
 pub mod types;
 
 pub use backend::BrowserBackend;
