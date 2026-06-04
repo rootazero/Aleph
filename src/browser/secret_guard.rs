@@ -13,21 +13,32 @@
 //! PII rules ([`crate::pii::rules`]) are the single source of truth, so a new
 //! credential pattern added there is automatically enforced at navigation time.
 
+use std::borrow::Cow;
+
 use percent_encoding::percent_decode_str;
 
-use crate::pii::{rules::build_rules, PiiRule, PiiSeverity};
+use crate::pii::{rules::build_rules, PiiMatch, PiiRule, PiiSeverity};
+
+/// Build the set of `Critical`-severity credential rules (API keys, bearer
+/// tokens, PEM/SSH private keys, bank/ID numbers). Single source of truth shared
+/// by both halves of the browser secret-egress boundary —
+/// [`scan_url_for_secrets`] (navigation target) and [`redact_secrets`]
+/// (page-content output). Lower-severity PII (emails, phone numbers, IP
+/// addresses) is deliberately excluded: it is not a credential and must never
+/// block a navigation or be scrubbed from the page content the agent works on.
+fn critical_rules() -> Vec<Box<dyn PiiRule>> {
+    build_rules(&[])
+        .into_iter()
+        .filter(|r| r.severity() == PiiSeverity::Critical)
+        .collect()
+}
 
 /// Scan a navigation URL (raw + percent-decoded) for an embedded secret.
 ///
 /// Returns the matched rule name (e.g. `"api_key"`) on the first hit, or
-/// `None` when the URL carries no detectable secret. Only `Critical`-severity
-/// rules participate — lower-severity PII (emails, phone numbers, IP addresses)
-/// is not a credential and must never block a legitimate navigation.
+/// `None` when the URL carries no detectable secret.
 pub(crate) fn scan_url_for_secrets(url: &str) -> Option<String> {
-    let secret_rules: Vec<Box<dyn PiiRule>> = build_rules(&[])
-        .into_iter()
-        .filter(|r| r.severity() == PiiSeverity::Critical)
-        .collect();
+    let secret_rules = critical_rules();
 
     // Raw form catches the common unencoded case (`sk-…` is unreserved and is
     // rarely percent-encoded); the decoded form defeats percent-encoding
@@ -41,6 +52,54 @@ pub(crate) fn scan_url_for_secrets(url: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Redact every `Critical`-severity credential span in page-derived `text`,
+/// replacing each with a `[REDACTED:<rule>]` placeholder.
+///
+/// This is the OUT half of the secret-egress boundary, symmetric to
+/// [`scan_url_for_secrets`] (the IN half): page content (accessibility
+/// snapshots, console output, network logs, JS-eval results) can contain
+/// credentials — an API key printed to the console, a bearer token rendered on
+/// a settings page — which would otherwise flow verbatim into the model
+/// context, long-term memory, and provider requests. Scrubbing them at the
+/// tool-output boundary closes that exfiltration path while leaving the page's
+/// structure (element refs, labels, ordinary text) intact.
+///
+/// Returns `Cow::Borrowed` unchanged when no secret is present (the common
+/// case — zero allocation). Matches are spliced by byte offset; the offsets
+/// come from regex matches against this exact `text`, so they fall on char
+/// boundaries (re-checked defensively before slicing).
+pub(crate) fn redact_secrets(text: &str) -> Cow<'_, str> {
+    let rules = critical_rules();
+    let mut matches: Vec<PiiMatch> = Vec::new();
+    for rule in &rules {
+        matches.extend(rule.detect(text));
+    }
+    if matches.is_empty() {
+        return Cow::Borrowed(text);
+    }
+
+    // Sort by start, then longest-first so an enclosing span wins over a nested
+    // one; skip any span that overlaps one already emitted.
+    matches.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0usize;
+    for m in &matches {
+        if m.start < cursor || m.start > m.end || m.end > text.len() {
+            continue;
+        }
+        if !text.is_char_boundary(m.start) || !text.is_char_boundary(m.end) {
+            continue;
+        }
+        out.push_str(&text[cursor..m.start]);
+        out.push_str("[REDACTED:");
+        out.push_str(&m.rule_name);
+        out.push(']');
+        cursor = m.end;
+    }
+    out.push_str(&text[cursor..]);
+    Cow::Owned(out)
 }
 
 #[cfg(test)]
@@ -80,5 +139,46 @@ mod tests {
     fn lower_severity_pii_does_not_block() {
         // An email address is PII but not a credential — navigation must proceed.
         assert!(scan_url_for_secrets("https://example.com/u?email=alice@example.com").is_none());
+    }
+
+    #[test]
+    fn redact_clean_text_borrows_unchanged() {
+        let text = "- button \"Sign in\" [ref=e3]\n- heading \"Welcome\"";
+        let out = redact_secrets(text);
+        assert!(matches!(out, Cow::Borrowed(_)), "no secret → zero-copy");
+        assert_eq!(out, text);
+    }
+
+    #[test]
+    fn redact_scrubs_api_key_in_console_text() {
+        let text = "config loaded; token=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 ok";
+        let out = redact_secrets(text);
+        assert!(matches!(out, Cow::Owned(_)));
+        assert!(!out.contains("sk-ant-api03"), "raw key must be gone: {out}");
+        assert!(out.contains("[REDACTED:api_key]"));
+        // Surrounding structure is preserved.
+        assert!(out.starts_with("config loaded; token="));
+        assert!(out.ends_with(" ok"));
+    }
+
+    #[test]
+    fn redact_scrubs_multiple_secrets() {
+        let text =
+            "a=AKIAIOSFODNN7EXAMPLE b=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 end";
+        let out = redact_secrets(text);
+        assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!out.contains("sk-ant-api03"));
+        assert_eq!(out.matches("[REDACTED:").count(), 2);
+        assert!(out.ends_with(" end"));
+    }
+
+    #[test]
+    fn redact_preserves_multibyte_text() {
+        // A non-ASCII prefix shifts byte offsets; redaction must not corrupt it.
+        let text = "登录令牌 token=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 完成";
+        let out = redact_secrets(text);
+        assert!(out.starts_with("登录令牌 token="));
+        assert!(out.ends_with(" 完成"));
+        assert!(out.contains("[REDACTED:api_key]"));
     }
 }

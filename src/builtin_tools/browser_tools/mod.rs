@@ -34,6 +34,7 @@ use crate::browser::error::BrowserError;
 use crate::browser::manager::ProfileManager;
 use crate::browser::playwright_cli_backend::PlaywrightCliBackend;
 use crate::browser::profile::BrowserDriver;
+use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 
 /// Parse one `list_tabs` line into `(id, url)`.
 ///
@@ -156,6 +157,27 @@ pub(crate) async fn make_backend_and_tab_guarded(
         )));
     }
     Ok((backend, tab_id))
+}
+
+/// Single egress chokepoint for browser page content flowing back to the LLM.
+///
+/// Composes the two content-boundary transforms that every page-derived text
+/// read must pass through, in order:
+///
+/// 1. **Secret redaction** (`ProfileManager::redact_content`) — the OUT half of
+///    the secret-egress boundary: scrubs embedded credentials so they cannot
+///    leak into the model context, memory, or provider requests. Symmetric to
+///    the navigation-time `check_navigation` guard (the IN half).
+/// 2. **Prompt-injection wrapping** (`wrap_external_content`) — fences the
+///    untrusted page content so chat-template markers injected by a hostile page
+///    cannot escape the boundary.
+///
+/// Used by `browser_snapshot` / `browser_console` / `browser_network` /
+/// `browser_evaluate`. Routing every content read through one function keeps the
+/// ordering correct and guarantees future content tools inherit both guards.
+pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
+    let redacted = manager.redact_content(text);
+    wrap_external_content(&redacted, ContentSource::BrowserContent)
 }
 
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};

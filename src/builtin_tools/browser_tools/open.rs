@@ -136,6 +136,7 @@ mod tests {
                 blocked_domains: vec!["*.evil.com".to_string(), "malware.org".to_string()],
                 allowed_domains: vec![],
                 block_secrets_in_url: false,
+                redact_secrets_in_content: false,
             },
             ..Default::default()
         };
@@ -188,6 +189,7 @@ mod tests {
                 blocked_domains: vec![],
                 allowed_domains: vec!["*.allowed.com".to_string()],
                 block_secrets_in_url: false,
+                redact_secrets_in_content: false,
             },
             ..Default::default()
         };

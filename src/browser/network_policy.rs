@@ -1,6 +1,7 @@
 // SSRF (Server-Side Request Forgery) protection for browser navigation.
 // Thin wrapper over the core SSRF engine (`crate::security::ssrf`).
 
+use std::borrow::Cow;
 use std::fmt;
 
 use schemars::JsonSchema;
@@ -29,6 +30,18 @@ pub struct SsrfConfig {
     /// URL's content. Enforced only on agent-initiated navigation targets.
     #[serde(default = "default_true")]
     pub block_secrets_in_url: bool,
+
+    /// Redact embedded credentials (API keys, bearer tokens, private keys,
+    /// bank/ID numbers) from page-derived text — accessibility snapshots,
+    /// console output, network logs, JS-eval results — before it is returned to
+    /// the LLM (default: true). Symmetric to [`Self::block_secrets_in_url`]:
+    /// that guards the navigation *target* (secrets going OUT via the URL);
+    /// this guards page-content *egress* (secrets coming back from the page into
+    /// the model context, long-term memory, and provider requests). Set to
+    /// `false` for trusted self-hosted pages where the agent legitimately needs
+    /// to read credential-shaped values verbatim.
+    #[serde(default = "default_true")]
+    pub redact_secrets_in_content: bool,
 }
 
 fn default_true() -> bool {
@@ -42,6 +55,7 @@ impl Default for SsrfConfig {
             blocked_domains: Vec::new(),
             allowed_domains: Vec::new(),
             block_secrets_in_url: true,
+            redact_secrets_in_content: true,
         }
     }
 }
@@ -206,6 +220,20 @@ impl BrowserSsrfGuard {
         }
         Ok(())
     }
+
+    /// Redact embedded credentials from page-derived `text` before it is handed
+    /// back to the LLM, when `redact_secrets_in_content` is set. This is the OUT
+    /// half of the secret-egress boundary (page content → model); the navigation
+    /// guards above are the IN half (model context → navigation URL). Returns
+    /// the input unchanged (zero-copy) when redaction is disabled or no secret
+    /// is present.
+    pub fn redact_content<'a>(&self, text: &'a str) -> Cow<'a, str> {
+        if self.config.redact_secrets_in_content {
+            super::secret_guard::redact_secrets(text)
+        } else {
+            Cow::Borrowed(text)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -272,6 +300,7 @@ mod tests {
             blocked_domains: vec!["*.malware.com".to_string(), "evil.org".to_string()],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            redact_secrets_in_content: false,
         });
 
         // Subdomain match
@@ -300,6 +329,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec!["*.trusted.com".to_string(), "api.example.org".to_string()],
             block_secrets_in_url: false,
+            redact_secrets_in_content: false,
         });
 
         // Allowed
@@ -320,6 +350,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            redact_secrets_in_content: false,
         });
 
         assert!(policy.check_url("http://localhost/").is_ok());
@@ -348,6 +379,7 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            redact_secrets_in_content: false,
         });
         for url in [
             "gopher://internal-host:6379/_data",
@@ -408,8 +440,37 @@ mod tests {
             blocked_domains: vec![],
             allowed_domains: vec![],
             block_secrets_in_url: false,
+            redact_secrets_in_content: false,
         });
         let url = "https://public.example/?leak=sk-ant-api03-0123456789abcdefghijklmnop";
         assert!(policy.check_navigation(url).is_ok());
+    }
+
+    #[test]
+    fn redact_content_scrubs_secrets_by_default() {
+        // Default guard has redact_secrets_in_content = true.
+        let policy = BrowserSsrfGuard::default();
+        let page = "API token: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 shown";
+        let out = policy.redact_content(page);
+        assert!(!out.contains("sk-ant-api03"));
+        assert!(out.contains("[REDACTED:"));
+        // Clean page content is returned untouched (zero-copy).
+        let clean = "- button \"Submit\" [ref=e1]";
+        assert!(matches!(policy.redact_content(clean), Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn redact_content_noop_when_disabled() {
+        let policy = BrowserSsrfGuard::new(SsrfConfig {
+            block_private: true,
+            blocked_domains: vec![],
+            allowed_domains: vec![],
+            block_secrets_in_url: true,
+            redact_secrets_in_content: false,
+        });
+        let page = "API token: sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 shown";
+        let out = policy.redact_content(page);
+        assert_eq!(out, page);
+        assert!(matches!(out, Cow::Borrowed(_)));
     }
 }
