@@ -39,12 +39,16 @@ const MAX_REF_DEPTH: usize = 64;
 /// Clean a JSON Schema in-place for Gemini compatibility.
 ///
 /// 1. Resolves `$ref` pointers against local `$defs`/`definitions`
-///    (cycle-safe — bounded by [`MAX_REF_DEPTH`])
+///    (cycle-safe — bounded by [`MAX_REF_DEPTH`]; sibling
+///    `description`/`default` annotations on the `$ref` node are preserved)
 /// 2. Strips unsupported keywords recursively
 /// 3. Flattens `anyOf`/`oneOf` unions and merges `allOf` members
 /// 4. Rewrites `const` to a single-element `enum` and a type array
 ///    (e.g. `["string","null"]`) to a scalar `type` plus `nullable`
-/// 5. Ensures top-level `type: "object"` if missing
+/// 5. Drops `enum` on integer/number/boolean fields whose values aren't all
+///    strings (Gemini only accepts string enums), and reconciles `required`
+///    against the surviving `properties` (drops dangling / empty entries)
+/// 6. Ensures top-level `type: "object"` if missing
 pub(crate) fn clean_schema_for_gemini(schema: &mut Value) {
     // Step 1: Resolve $ref before anything else (needs $defs intact)
     resolve_refs(schema);
@@ -100,6 +104,23 @@ fn resolve_refs_recursive(node: &mut Value, defs: &Value, depth: usize) {
                         }
                         let mut resolved = resolved.clone();
                         resolve_refs_recursive(&mut resolved, defs, depth + 1);
+                        // A `$ref` node may carry sibling annotation keywords
+                        // (a call-site `description`/`default` that augments the
+                        // shared definition). JSON Schema 2020-12 merges them;
+                        // preserve them here so inlining doesn't silently drop
+                        // the call-site annotation. The definition wins on
+                        // conflict (`or_insert`). Mirrors openclaw's
+                        // copySchemaMeta. (`title` is carried too even though a
+                        // later pass strips it — keeps this step self-consistent.)
+                        if let Some(resolved_obj) = resolved.as_object_mut() {
+                            for meta in ["description", "default", "title"] {
+                                if let Some(sibling) = map.get(meta) {
+                                    resolved_obj
+                                        .entry(meta.to_string())
+                                        .or_insert_with(|| sibling.clone());
+                                }
+                            }
+                        }
                         *node = resolved;
                         return;
                     }
@@ -182,6 +203,32 @@ fn clean_recursive(node: &mut Value) {
         }
     }
 
+    // Gemini's `enum` is only valid for string-typed fields. An
+    // integer/number/boolean field carrying non-string enum entries makes
+    // Gemini reject the whole request (HTTP 400), so drop the enum — the
+    // `type` (plus server-side tool validation) still constrains the value.
+    // Mirrors hermes-agent's gemini_schema enum rule.
+    let drop_enum = match obj.get("enum") {
+        Some(Value::Array(values)) => {
+            let is_numeric_or_bool = matches!(
+                obj.get("type").and_then(|t| t.as_str()),
+                Some("integer") | Some("number") | Some("boolean")
+            );
+            is_numeric_or_bool && values.iter().any(|v| !v.is_string())
+        }
+        _ => false,
+    };
+    if drop_enum {
+        obj.remove("enum");
+    }
+
+    // Reconcile `required` against the final `properties` keyset (which is now
+    // settled — anyOf flattening and allOf merging above can leave `required`
+    // naming a property that no longer exists, or an empty array). Gemini —
+    // and Cloud Code Assist especially — returns a 400 for either case.
+    // Mirrors openclaw's sanitizeRequiredFields.
+    reconcile_required(obj);
+
     // Recurse into properties
     if let Some(props) = obj.get_mut("properties") {
         if let Some(props_map) = props.as_object_mut() {
@@ -194,6 +241,48 @@ fn clean_recursive(node: &mut Value) {
     // Recurse into items (array schemas)
     if let Some(items) = obj.get_mut("items") {
         clean_recursive(items);
+    }
+}
+
+/// Prune `required` entries that don't name a key in `properties`, and drop the
+/// `required` keyword entirely when nothing valid remains.
+///
+/// Gemini returns HTTP 400 for a `required` array that references an unknown
+/// property or that is empty. Union flattening (`anyOf`/`oneOf`) and `allOf`
+/// merging can both leave such dangling entries behind, so this runs after the
+/// `properties` keyset has settled. A `required` value that isn't an array at
+/// all is treated as malformed and dropped.
+fn reconcile_required(obj: &mut serde_json::Map<String, Value>) {
+    if !obj.contains_key("required") {
+        return;
+    }
+
+    // Valid property names. Absent / malformed `properties` ⇒ empty set, so
+    // every `required` entry is dangling and gets pruned.
+    let prop_names: std::collections::HashSet<&str> = obj
+        .get("properties")
+        .and_then(|p| p.as_object())
+        .map(|m| m.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+
+    let kept: Option<Vec<Value>> = obj.get("required").and_then(|r| r.as_array()).map(|arr| {
+        arr.iter()
+            .filter(|item| {
+                item.as_str()
+                    .is_some_and(|name| prop_names.contains(name))
+            })
+            .cloned()
+            .collect()
+    });
+
+    match kept {
+        Some(kept) if !kept.is_empty() => {
+            obj.insert("required".into(), Value::Array(kept));
+        }
+        // Empty after pruning, or `required` wasn't an array → remove it.
+        _ => {
+            obj.remove("required");
+        }
     }
 }
 
@@ -613,5 +702,222 @@ mod tests {
         let value = &schema["properties"]["value"];
         assert_eq!(value["type"], "string");
         assert_eq!(value["nullable"], true);
+    }
+
+    #[test]
+    fn test_prunes_dangling_required() {
+        // `required` names a field that isn't in `properties` → Gemini 400.
+        let mut schema = json!({
+            "type": "object",
+            "properties": { "a": { "type": "string" } },
+            "required": ["a", "ghost"]
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        let required = schema["required"].as_array().unwrap();
+        assert_eq!(required, &[json!("a")]);
+    }
+
+    #[test]
+    fn test_drops_required_when_all_dangling() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": { "a": { "type": "string" } },
+            "required": ["ghost"]
+        });
+
+        clean_schema_for_gemini(&mut schema);
+        assert!(schema.get("required").is_none());
+    }
+
+    #[test]
+    fn test_drops_empty_required_array() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": { "a": { "type": "string" } },
+            "required": []
+        });
+
+        clean_schema_for_gemini(&mut schema);
+        assert!(schema.get("required").is_none());
+    }
+
+    #[test]
+    fn test_drops_required_when_no_properties() {
+        let mut schema = json!({
+            "type": "object",
+            "required": ["a"]
+        });
+
+        clean_schema_for_gemini(&mut schema);
+        assert!(schema.get("required").is_none());
+    }
+
+    #[test]
+    fn test_keeps_valid_required_unchanged() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": { "a": { "type": "string" }, "b": { "type": "string" } },
+            "required": ["a", "b"]
+        });
+
+        clean_schema_for_gemini(&mut schema);
+        let required = schema["required"].as_array().unwrap();
+        assert_eq!(required, &[json!("a"), json!("b")]);
+    }
+
+    #[test]
+    fn test_required_reconciled_at_nested_level() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "nested": {
+                    "type": "object",
+                    "properties": { "x": { "type": "string" } },
+                    "required": ["x", "missing"]
+                }
+            },
+            "required": ["nested"]
+        });
+
+        clean_schema_for_gemini(&mut schema);
+        let nested_required = schema["properties"]["nested"]["required"]
+            .as_array()
+            .unwrap();
+        assert_eq!(nested_required, &[json!("x")]);
+    }
+
+    #[test]
+    fn test_drops_integer_enum_with_numeric_values() {
+        // Gemini rejects non-string enum entries on a numeric field.
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "count": { "type": "integer", "enum": [1, 2, 3] }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        let count = &schema["properties"]["count"];
+        assert!(count.get("enum").is_none());
+        assert_eq!(count["type"], "integer");
+    }
+
+    #[test]
+    fn test_drops_boolean_enum_with_bool_values() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "flag": { "type": "boolean", "enum": [true, false] }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+        assert!(schema["properties"]["flag"].get("enum").is_none());
+    }
+
+    #[test]
+    fn test_keeps_string_enum() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "color": { "type": "string", "enum": ["red", "blue"] }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        let enums = schema["properties"]["color"]["enum"].as_array().unwrap();
+        assert_eq!(enums, &[json!("red"), json!("blue")]);
+    }
+
+    #[test]
+    fn test_keeps_numeric_enum_when_values_are_strings() {
+        // Some schemas type a field as integer but list string enum values.
+        // Those are valid for Gemini, so they must survive.
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "level": { "type": "integer", "enum": ["1", "2"] }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+        let enums = schema["properties"]["level"]["enum"].as_array().unwrap();
+        assert_eq!(enums, &[json!("1"), json!("2")]);
+    }
+
+    #[test]
+    fn test_ref_preserves_sibling_description() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "addr": {
+                    "$ref": "#/$defs/Address",
+                    "description": "shipping address"
+                }
+            },
+            "$defs": {
+                "Address": {
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } }
+                }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        let addr = &schema["properties"]["addr"];
+        assert_eq!(addr["type"], "object");
+        assert_eq!(addr["description"], "shipping address");
+    }
+
+    #[test]
+    fn test_ref_definition_description_wins_over_sibling() {
+        let mut schema = json!({
+            "type": "object",
+            "properties": {
+                "addr": {
+                    "$ref": "#/$defs/Address",
+                    "description": "call-site description"
+                }
+            },
+            "$defs": {
+                "Address": {
+                    "type": "object",
+                    "description": "definition description",
+                    "properties": { "city": { "type": "string" } }
+                }
+            }
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        // The definition already carries a description, so it wins (or_insert).
+        assert_eq!(
+            schema["properties"]["addr"]["description"],
+            "definition description"
+        );
+    }
+
+    #[test]
+    fn test_allof_required_survives_reconciliation() {
+        // Regression: allOf merges both properties and required; reconciliation
+        // must keep entries that the merge made valid.
+        let mut schema = json!({
+            "type": "object",
+            "allOf": [
+                { "properties": { "a": { "type": "string" } }, "required": ["a"] },
+                { "properties": { "b": { "type": "string" } }, "required": ["b"] }
+            ]
+        });
+
+        clean_schema_for_gemini(&mut schema);
+
+        let required = schema["required"].as_array().unwrap();
+        assert!(required.contains(&json!("a")));
+        assert!(required.contains(&json!("b")));
     }
 }
