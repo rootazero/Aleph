@@ -67,6 +67,10 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub team_store: Option<Arc<dyn alephcore::teams::TeamStore>>,
     /// Coord task store for team RPC handlers (unified task system)
     pub coord_task_store: Option<Arc<dyn alephcore::agents::swarm::tasks::CoordTaskStore>>,
+    /// Wake handle for the autonomous team dispatcher, shared with the inbound
+    /// router so a reply to a paused workflow `clarify` step can complete its
+    /// durable task and wake the dispatcher to unblock dependents.
+    pub dispatch_signal: Option<Arc<tokio::sync::Notify>>,
     /// Snapshot store for `teams.snapshot.*` RPC handlers. Shares the coord
     /// connection — None if coord init failed.
     pub snapshot_store: Option<Arc<alephcore::teams::SqliteSnapshotStore>>,
@@ -373,6 +377,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         std::sync::Arc::new(reg)
     };
 
+    // Shared wake handle for the autonomous team dispatcher. `task_create`
+    // notifies it; the dispatcher (constructed later, once GatewayContext
+    // exists) waits on it. Declared at function scope so it can be surfaced on
+    // AgentHandlersResult — the inbound router needs it to wake the dispatcher
+    // when a reply resolves a paused workflow `clarify` step.
+    let dispatch_signal = std::sync::Arc::new(tokio::sync::Notify::new());
+
     if let Some(provider_registry) = provider_registry {
         // Create embedding provider from app config for memory tools
         let embedder: Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> = {
@@ -464,11 +475,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     >
             })
         };
-
-        // Shared wake handle for the autonomous team dispatcher. `task_create`
-        // notifies it; the dispatcher (constructed later, once GatewayContext
-        // exists) waits on it.
-        let dispatch_signal = std::sync::Arc::new(tokio::sync::Notify::new());
 
         // Build tool config with memory backend, embedder, search API key, and agent management deps
         let tool_config = alephcore::executor::BuiltinToolConfig {
@@ -2032,6 +2038,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         tool_registry: tool_reg_out,
         team_store,
         coord_task_store: coord_store,
+        dispatch_signal: Some(dispatch_signal),
         snapshot_store,
         state_db: state_db_out,
         event_store: event_store.clone(),
