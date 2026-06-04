@@ -169,6 +169,67 @@ fn build_request_xhigh_on_4_6_downgrades_to_max_in_effort() {
     );
 }
 
+// ── explicit thinking-disable on adaptive models (pi parity) ────────────────
+
+#[test]
+fn build_request_disables_thinking_on_adaptive_when_off() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    // Adaptive models think by default — explicit Off must emit a disabled
+    // block, not omit the field (which would leave thinking ON).
+    let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
+    let mut config = ProviderConfig::test_config("claude-opus-4-7");
+    config.api_key = Some("sk-ant-api-test".to_string());
+
+    let body = build_body(&payload, &config);
+    assert_eq!(
+        body["thinking"]["type"], "disabled",
+        "Off on an adaptive model must send thinking:{{type:disabled}}"
+    );
+    // No effort when thinking is off.
+    assert!(body.get("output_config").is_none());
+}
+
+#[test]
+fn build_request_disabled_thinking_keeps_temperature_on_4_6() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    // Disabled thinking does NOT conflict with sampling, so temperature must
+    // survive on 4.6 (4.7 forbids sampling unconditionally and is excluded).
+    let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
+    let mut config = ProviderConfig::test_config("claude-opus-4-6");
+    config.api_key = Some("sk-ant-api-test".to_string());
+    config.temperature = Some(0.7);
+
+    let body = build_body(&payload, &config);
+    assert_eq!(body["thinking"]["type"], "disabled");
+    assert_eq!(
+        body["temperature"], 0.7,
+        "disabled thinking must not strip sampling params"
+    );
+}
+
+#[test]
+fn build_request_omits_thinking_on_legacy_model_when_off() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    // Pre-adaptive models default to no-thinking, so Off omits the field
+    // entirely (byte-identical to prior behavior — no disabled block needed).
+    let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
+    let mut config = ProviderConfig::test_config("claude-3-5-sonnet");
+    config.api_key = Some("sk-ant-api-test".to_string());
+
+    let body = build_body(&payload, &config);
+    assert!(
+        body.get("thinking").is_none(),
+        "legacy model + Off → thinking field omitted, got {:?}",
+        body.get("thinking")
+    );
+}
+
 // ── max_tokens vs legacy thinking budget guard (Gap B) ──────────────────────
 
 #[test]
