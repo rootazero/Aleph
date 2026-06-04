@@ -6,9 +6,13 @@
 //! the Orchestrator bridge down to the harness, so user-visible delta
 //! streaming survives the legacy AgentLoop → AgentHarness swap.
 //!
-//! Today the LLM layer is non-streaming at this seam, so [`HarnessCallback::on_delta`]
-//! fires once per assistant turn with the complete text. The trait shape is
-//! ready for chunked streaming once `AiProvider::process_stream` is wired.
+//! When the active provider exposes an HTTP delta seam and no output guardrail
+//! is wired, the harness streams live: [`HarnessCallback::on_delta`] /
+//! [`HarnessCallback::on_reasoning`] fire incrementally as tokens arrive (see
+//! `AgentHarness::stream_llm_call`). For non-HTTP providers (mocks, non-streaming
+//! backends) and guardrailed turns — where the output guardrail must sanitise
+//! the final text before any emission — `on_delta` instead fires once per turn
+//! with the complete text. Consumers must therefore tolerate either cadence.
 
 use std::fmt;
 

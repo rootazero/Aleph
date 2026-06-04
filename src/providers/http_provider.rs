@@ -92,8 +92,20 @@ impl HttpProvider {
         Ok(filtered_messages)
     }
 
-    /// Execute a request (non-streaming)
-    async fn execute(&self, payload: RequestPayload<'_>) -> Result<ProviderResponse> {
+    /// Execute a request, collecting the SSE delta stream into a complete
+    /// [`ProviderResponse`].
+    ///
+    /// When `sink` is `Some`, each [`ProviderDelta`] is also forwarded to the
+    /// observer as it arrives — this is the seam the harness uses to surface
+    /// live token deltas without bypassing any of the post-collection pipeline
+    /// (cost-metering hooks, provider-error promotion, truncation diagnostics,
+    /// `validate`, inbound secret-leak detection) that the non-streaming path
+    /// relies on. With `sink = None` the behaviour is byte-identical to before.
+    async fn execute(
+        &self,
+        payload: RequestPayload<'_>,
+        sink: Option<&dyn crate::providers::DeltaSink>,
+    ) -> Result<ProviderResponse> {
         let filtered_messages = match self.apply_outbound_safety(payload.messages) {
             Ok(msgs) => msgs,
             Err(reason) => {
@@ -158,6 +170,11 @@ impl HttpProvider {
             let delta = delta?;
             if let crate::providers::ProviderDelta::Error(msg) = &delta {
                 provider_error.get_or_insert_with(|| msg.clone());
+            }
+            // Live observer (harness streaming): forward the delta before it is
+            // folded into the collector. Cheap no-op when no sink is wired.
+            if let Some(observer) = sink {
+                observer.on_delta(&delta).await;
             }
             collector.push(delta);
         }
@@ -234,6 +251,24 @@ impl HttpProvider {
         }
 
         Ok(provider_response)
+    }
+
+    /// Streaming variant of the non-streaming `process()` path: runs the exact
+    /// same full pipeline as [`HttpProvider::execute`] (so cost metering,
+    /// provider-error promotion, truncation handling, validation and inbound
+    /// secret-leak detection all still apply to the assembled response) while
+    /// forwarding each [`ProviderDelta`] to `sink` as it streams in.
+    ///
+    /// NOTE: the live deltas reach `sink` BEFORE the post-collection inbound
+    /// leak scan runs, so a consumer that renders the live preview must treat
+    /// the assembled `ProviderResponse` (or an `Err` from this call) as the
+    /// authoritative, leak-checked result — same contract as `stream_raw`.
+    pub async fn execute_streaming(
+        &self,
+        payload: RequestPayload<'_>,
+        sink: &dyn crate::providers::DeltaSink,
+    ) -> Result<ProviderResponse> {
+        self.execute(payload, Some(sink)).await
     }
 
     /// Expose raw delta stream with outbound safety checks applied.
@@ -387,7 +422,7 @@ impl AiProvider for HttpProvider {
         &'a self,
         payload: RequestPayload<'a>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
-        Box::pin(async move { self.execute(payload).await })
+        Box::pin(async move { self.execute(payload, None).await })
     }
 
     fn supports_native_tools(&self) -> bool {
