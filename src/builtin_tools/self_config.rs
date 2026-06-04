@@ -366,21 +366,48 @@ impl SelfConfigTool {
                     }
                 }
 
+                // Classify when this change actually takes effect so the agent
+                // gets a deterministic "what happens next" signal instead of
+                // having to recall the prose rules scattered through the /self
+                // SKILL.md. (route is the one Live section — its hot-apply above
+                // is exactly what makes the Live verdict true.)
+                let impact = crate::config::ReloadImpact::classify(config_path);
+
                 let mode = if dry_run { "dry-run" } else { "applied" };
                 let preview_message = if dry_run && !result.diff.is_empty() {
-                    Some(generate_preview_message(config_path, &result.diff))
+                    Some(format!(
+                        "{}\n\n{}",
+                        generate_preview_message(config_path, &result.diff),
+                        impact.user_hint_zh()
+                    ))
                 } else {
                     None
                 };
+
+                // Surface reload impact inside the structured `data` object so
+                // the field rides along without churning every other
+                // SelfConfigOutput construction site.
+                let mut data = serde_json::to_value(&result).unwrap_or_default();
+                if let Some(obj) = data.as_object_mut() {
+                    obj.insert(
+                        "reload_impact".to_string(),
+                        serde_json::json!({
+                            "kind": impact,
+                            "hint": impact.agent_hint(),
+                        }),
+                    );
+                }
+
                 Ok(SelfConfigOutput {
                     success: result.success,
                     message: format!(
-                        "Config patch {} at '{}' ({} changes)",
+                        "Config patch {} at '{}' ({} changes). {}",
                         mode,
                         config_path,
-                        result.diff.len()
+                        result.diff.len(),
+                        impact.agent_hint()
                     ),
-                    data: Some(serde_json::to_value(&result).unwrap_or_default()),
+                    data: Some(data),
                     preview_message,
                 })
             }
