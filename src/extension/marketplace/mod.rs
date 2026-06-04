@@ -230,6 +230,19 @@ impl MarketplaceManager {
                     &result.plugin_path,
                     result.plugin.sha256.as_deref(),
                 )?;
+                // Gate on manifest soundness before copying into place: a plugin
+                // whose manifest fails to parse, has duplicate tools, or declares
+                // a malformed `config_schema` cannot load anyway, so reject it
+                // here with the concrete reasons rather than after install.
+                let validation =
+                    crate::extension::validation::validate_plugin(&result.plugin_path);
+                if !validation.is_valid() {
+                    return Err(format!(
+                        "Plugin '{}' failed validation and was not installed:\n  - {}",
+                        plugin_name,
+                        validation.errors.join("\n  - ")
+                    ));
+                }
                 let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
                 installer::install_plugin_from_cache(&result.plugin_path, &install_dir, plugin_name)
             }

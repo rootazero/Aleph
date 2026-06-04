@@ -10,6 +10,7 @@ pub mod adapter;
 pub mod adapters;
 pub mod cc_plugin_json;
 pub mod cc_plugin_toml;
+pub mod config_validation;
 pub mod parsers;
 pub mod toml_types;
 mod types;
@@ -30,6 +31,13 @@ pub use toml_types::{
 pub use types::{
     AlephExtensions, AlephRuntime, AuthorInfo, ConfigUiHint, FilesystemAccess, PluginManifest,
     PluginPermission,
+};
+
+// Re-export config-schema validation helpers (activates the manifest's
+// `config_schema` / `config_ui_hints` fields).
+pub use config_validation::{
+    summarize_ui_hints, validate_config_against_schema, validate_config_schema_declaration,
+    UiHintReport,
 };
 
 // Re-export legacy types for backward compatibility with loader
