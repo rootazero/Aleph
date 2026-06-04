@@ -313,6 +313,12 @@ impl ToolCatalog {
         self.query.resolve_command(input).await
     }
 
+    /// Suggest up to `max` command names closest to an unknown `needle` for
+    /// "did you mean?" replies (scores canonical names + aliases).
+    pub async fn suggest_commands(&self, needle: &str, max: usize) -> Vec<String> {
+        self.query.suggest_commands(needle, max).await
+    }
+
     /// Check if a name is a namespace (has active tools with that prefix)
     pub async fn is_namespace(&self, name: &str) -> bool {
         self.query.is_namespace(name).await

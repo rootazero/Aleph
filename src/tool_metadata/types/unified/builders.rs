@@ -18,6 +18,28 @@ impl UnifiedTool {
         self
     }
 
+    /// Builder method: set alternative invocation names (aliases).
+    ///
+    /// Replaces any existing aliases. Empty/whitespace-only entries are dropped
+    /// and duplicates of the canonical name are ignored so resolution stays
+    /// unambiguous.
+    pub fn with_aliases<I, S>(mut self, aliases: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let canonical = self.name.to_lowercase();
+        self.aliases = aliases
+            .into_iter()
+            .map(|a| a.into())
+            .filter(|a| {
+                let t = a.trim();
+                !t.is_empty() && t.to_lowercase() != canonical
+            })
+            .collect();
+        self
+    }
+
     /// Builder method: set description
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = description.into();

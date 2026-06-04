@@ -184,21 +184,87 @@ impl ToolQuery {
     }
 
     /// Find the best matching active tool by name (case-insensitive).
-    /// When multiple tools share the same name, picks highest source priority.
+    ///
+    /// Resolution precedence:
+    /// 1. **Canonical name** — a tool whose `name` equals `name`.
+    /// 2. **Alias** — a tool that lists `name` in its `aliases`.
+    ///
+    /// A canonical-name hit always wins over an alias hit (so a real command
+    /// can never be shadowed by another command's alias). Within each tier,
+    /// ties break by source priority, then id, mirroring the original ordering.
     fn find_best_match(
         tools: &std::collections::HashMap<String, UnifiedTool>,
         name: &str,
     ) -> Option<UnifiedTool> {
-        tools
-            .values()
-            .filter(|t| t.is_active && t.name.to_lowercase() == name)
-            .max_by(|a, b| {
-                a.source
-                    .priority()
-                    .cmp(&b.source.priority())
-                    .then_with(|| b.id.cmp(&a.id))
-            })
-            .cloned()
+        let pick = |matches: &dyn Fn(&UnifiedTool) -> bool| {
+            tools
+                .values()
+                .filter(|t| t.is_active && matches(t))
+                .max_by(|a, b| {
+                    a.source
+                        .priority()
+                        .cmp(&b.source.priority())
+                        .then_with(|| b.id.cmp(&a.id))
+                })
+                .cloned()
+        };
+
+        // Tier 1: canonical name.
+        pick(&|t| t.name.to_lowercase() == name)
+            // Tier 2: alias fallback.
+            .or_else(|| pick(&|t| t.aliases.iter().any(|a| a.to_lowercase() == name)))
+    }
+
+    /// Suggest up to `max` active command names closest to `needle` — an
+    /// unknown command name (with or without a leading `/`) — by edit distance.
+    ///
+    /// Both the canonical `name` and every alias are scored; the tool's best
+    /// (lowest) distance wins. Returns canonical names (no leading `/`),
+    /// nearest first. Powers the "did you mean?" reply on both the channel
+    /// router (`try_send_unknown_command_help`) and the panel `command.execute`
+    /// RPC path, replacing per-call-site inline scoring.
+    pub async fn suggest_commands(&self, needle: &str, max: usize) -> Vec<String> {
+        use crate::builtin_tools::meta_tools::levenshtein_distance;
+
+        let needle = needle.trim().trim_start_matches('/').to_lowercase();
+        if needle.is_empty() || max == 0 {
+            return Vec::new();
+        }
+
+        let tools = self.tools.read().await;
+        let mut scored: Vec<(usize, String)> = Vec::new();
+
+        'tool: for t in tools.values() {
+            if !t.is_active {
+                continue;
+            }
+            // Best (lowest) effective distance across canonical name + aliases.
+            // Threshold is tuned for short identifiers: at most 2 edits for
+            // ≤6-char candidates, 3 otherwise, plus a substring fast-path.
+            let mut best: Option<usize> = None;
+            for cand in std::iter::once(&t.name).chain(t.aliases.iter()) {
+                let cand = cand.to_lowercase();
+                if cand == needle {
+                    // Exact hit — the caller should have resolved this already;
+                    // skip the whole tool so we never suggest what matches.
+                    continue 'tool;
+                }
+                let dist = levenshtein_distance(&cand, &needle);
+                let threshold = if cand.len().max(needle.len()) <= 6 { 2 } else { 3 };
+                let substring_hit = cand.contains(&needle) || needle.contains(&cand);
+                if dist <= threshold || substring_hit {
+                    let effective = if substring_hit { dist.min(2) } else { dist };
+                    best = Some(best.map_or(effective, |b| b.min(effective)));
+                }
+            }
+            if let Some(d) = best {
+                scored.push((d, t.name.clone()));
+            }
+        }
+
+        scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        scored.truncate(max);
+        scored.into_iter().map(|(_, n)| n).collect()
     }
 
     /// Check if a name is a namespace (has active tools with that prefix)

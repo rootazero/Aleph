@@ -136,6 +136,25 @@ fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
     let mut namespaces: BTreeMap<String, Vec<UnifiedTool>> = BTreeMap::new();
     let mut standalone: Vec<UnifiedTool> = Vec::new();
 
+    // Surface aliases as standalone command entries so shortcuts like `/new`
+    // (an alias of `session_new`) remain discoverable in completion menus even
+    // though they are no longer backed by a separate phantom tool. Collected up
+    // front because the grouping loop below consumes `tools`.
+    let alias_nodes: Vec<CommandTreeNode> = tools
+        .iter()
+        .flat_map(|tool| {
+            tool.aliases.iter().map(move |alias| CommandTreeNode {
+                name: alias.clone(),
+                is_namespace: false,
+                hint: tool.description.clone(),
+                param_hint: tool.param_hint.clone(),
+                source_type: Some(tool.source.label().to_lowercase()),
+                internal_id: Some(tool.id.clone()),
+                children: Vec::new(),
+            })
+        })
+        .collect();
+
     for tool in tools {
         let ns = TOOL_NAMESPACES.iter().find(|&&ns| {
             tool.name.starts_with(ns) && tool.name.get(ns.len()..ns.len() + 1) == Some("_")
@@ -196,6 +215,9 @@ fn build_command_tree(tools: Vec<UnifiedTool>) -> Vec<CommandTreeNode> {
             children: Vec::new(),
         });
     }
+
+    // Append alias shortcuts after their canonical commands.
+    result.extend(alias_nodes);
 
     result
 }
@@ -498,12 +520,22 @@ pub async fn handle_execute(
                     )
                 }
             } else {
-                // Completely unknown command
+                // Completely unknown command — offer near-matches ("did you
+                // mean?") via the shared registry suggester so the panel RPC
+                // path matches the channel router's behavior instead of dead-
+                // ending. `suggestions` may be an empty array.
+                let suggestions: Vec<String> = tool_registry
+                    .suggest_commands(&first_word, 3)
+                    .await
+                    .into_iter()
+                    .map(|n| format!("/{}", n))
+                    .collect();
                 JsonRpcResponse::success(
                     request.id,
                     json!({
                         "resolved": false,
                         "error": format!("Unknown command: {}", slash_input),
+                        "suggestions": suggestions,
                     }),
                 )
             }
@@ -758,6 +790,34 @@ mod tests {
             .contains("Unknown command"));
         // No needs_interaction for completely unknown
         assert!(result.get("needs_interaction").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_execute_unknown_command_offers_suggestions() {
+        use crate::config::RoutingRuleConfig;
+
+        let registry = Arc::new(ToolCatalog::new());
+        let rules = vec![RoutingRuleConfig {
+            regex: "^/search".to_string(),
+            provider: Some("openai".to_string()),
+            system_prompt: Some("Web search".to_string()),
+            ..Default::default()
+        }];
+        registry.register_custom_commands(&rules).await;
+
+        let parser = Arc::new(CommandParser::new(registry.clone()));
+        let request = JsonRpcRequest::with_id(
+            "command.execute",
+            Some(json!({"input": "/serch"})),
+            json!(1),
+        );
+        let response = handle_execute(request, parser, registry).await;
+
+        assert!(response.is_success());
+        let result = response.result.unwrap();
+        assert_eq!(result["resolved"], false);
+        let suggestions = result["suggestions"].as_array().unwrap();
+        assert!(suggestions.iter().any(|s| s == "/search"));
     }
 
     #[tokio::test]

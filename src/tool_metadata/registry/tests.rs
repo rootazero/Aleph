@@ -15,12 +15,12 @@ async fn test_register_builtin_tools() {
     let registry = ToolCatalog::new();
     registry.register_builtin_tools().await;
 
-    // Should register 11 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new + new + cron + voice)
-    assert_eq!(registry.count().await, 11);
+    // Should register 10 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new [alias: new] + cron + voice)
+    assert_eq!(registry.count().await, 10);
 
     // Builtins should include generation tools
     let builtins = registry.list_builtin_tools().await;
-    assert_eq!(builtins.len(), 11);
+    assert_eq!(builtins.len(), 10);
 
     // Verify tool names
     let names: Vec<_> = builtins.iter().map(|t| t.name.as_str()).collect();
@@ -45,8 +45,8 @@ async fn test_list_root_commands() {
     registry.register_custom_commands(&rules).await;
 
     let roots = registry.list_root_commands().await;
-    // 11 builtin tools + 1 custom = 12
-    assert_eq!(roots.len(), 12);
+    // 10 builtin tools + 1 custom = 11 (aliases are not separate tools)
+    assert_eq!(roots.len(), 11);
 
     // First should be builtins (sorted by priority)
     assert!(roots.iter().any(|t| t.name == "generate_image"));
@@ -140,7 +140,7 @@ async fn test_list_by_source_type() {
     registry.register_skills(&skills).await;
 
     let builtin = registry.list_by_source_type("Builtin").await;
-    assert_eq!(builtin.len(), 11); // 11 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new + new + cron + voice)
+    assert_eq!(builtin.len(), 10); // 10 builtin tools (2 generation + 2 skill + snapshot + switch + groupchat + session_new [alias: new] + cron + voice)
 
     let skill = registry.list_by_source_type("Skill").await;
     assert_eq!(skill.len(), 1);
@@ -833,13 +833,65 @@ async fn test_resolve_command_flat_with_args() {
 
 #[tokio::test]
 async fn test_resolve_command_new_alias() {
+    // `/new` is now a first-class alias of `session_new` (no phantom tool).
     let registry = ToolCatalog::new();
-    register_tool(&registry, "builtin:new", "new").await;
+    let tool = UnifiedTool::new(
+        "builtin:session_new",
+        "session_new",
+        "Start a new session",
+        ToolSource::Builtin,
+    )
+    .with_aliases(["new"]);
+    registry.register_with_conflict_resolution(tool).await;
 
-    // "/new" → resolves to the "new" alias tool
-    let resolved = registry.resolve_command("/new").await;
+    // "/new topic" → resolves to canonical session_new via alias, args preserved.
+    let resolved = registry.resolve_command("/new my topic").await;
     assert!(resolved.is_some());
-    assert_eq!(resolved.unwrap().tool.name, "new");
+    let r = resolved.unwrap();
+    assert_eq!(r.tool.name, "session_new");
+    assert_eq!(r.arguments, Some("my topic".to_string()));
+}
+
+#[tokio::test]
+async fn test_resolve_alias_never_shadows_canonical_name() {
+    // A canonical-name hit must always beat another tool's alias hit.
+    let registry = ToolCatalog::new();
+    // Tool A aliases "go".
+    let a = UnifiedTool::new("custom:goto", "goto", "Go somewhere", ToolSource::Builtin)
+        .with_aliases(["go"]);
+    // Tool B is literally named "go".
+    let b = UnifiedTool::new("custom:go", "go", "The real go", ToolSource::Builtin);
+    registry.register_with_conflict_resolution(a).await;
+    registry.register_with_conflict_resolution(b).await;
+
+    let resolved = registry.resolve_command("/go").await.unwrap();
+    assert_eq!(resolved.tool.name, "go", "canonical name must win over alias");
+}
+
+#[tokio::test]
+async fn test_suggest_commands_scores_name_and_alias() {
+    let registry = ToolCatalog::new();
+    let tool = UnifiedTool::new(
+        "builtin:session_new",
+        "session_new",
+        "Start a new session",
+        ToolSource::Builtin,
+    )
+    .with_aliases(["new"]);
+    registry.register_with_conflict_resolution(tool).await;
+    register_tool(&registry, "custom:search", "search").await;
+
+    // Typo of the alias "new" surfaces the canonical command.
+    let by_alias = registry.suggest_commands("/nwe", 3).await;
+    assert!(by_alias.contains(&"session_new".to_string()));
+
+    // Typo of a canonical name surfaces it too.
+    let by_name = registry.suggest_commands("serch", 3).await;
+    assert_eq!(by_name.first().map(String::as_str), Some("search"));
+
+    // An exact match is never suggested (caller already resolves it).
+    let exact = registry.suggest_commands("search", 3).await;
+    assert!(!exact.contains(&"search".to_string()));
 }
 
 #[tokio::test]

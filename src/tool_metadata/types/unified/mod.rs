@@ -50,6 +50,15 @@ pub struct UnifiedTool {
     /// This is the name used in slash commands or LLM tool calls.
     pub name: String,
 
+    /// Alternative invocation names (aliases) for this command.
+    ///
+    /// e.g. `["new"]` for `session_new`, so `/new` resolves to the same tool.
+    /// Aliases are matched at slash-command resolution with **lower precedence**
+    /// than the canonical `name` (a canonical-name hit always wins over an
+    /// alias hit), and are also scored for "did you mean?" suggestions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+
     /// Human-readable display name
     /// May include formatting for UI presentation.
     pub display_name: String,
@@ -214,6 +223,7 @@ impl UnifiedTool {
         Self {
             id: id.into(),
             name,
+            aliases: Vec::new(),
             display_name,
             description: description.into(),
             source,

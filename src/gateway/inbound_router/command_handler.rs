@@ -129,51 +129,25 @@ impl InboundMessageRouter {
         msg: &InboundMessage,
         unknown_cmd: &str,
     ) -> bool {
-        use crate::builtin_tools::meta_tools::levenshtein_distance;
-
         let parser = match self.command_parser.as_ref() {
             Some(p) => p,
             None => return false,
         };
-        let needle = unknown_cmd.to_lowercase();
-        if needle.is_empty() {
-            return false;
-        }
 
-        let all_tools = parser.tool_registry().list_all().await;
-        // Score every tool name + alias against the needle. Threshold tuned
-        // for short identifiers: at most 2 edits for ≤6-char names, 3 for
-        // longer ones, plus substring fast-path.
-        let mut scored: Vec<(usize, String)> = all_tools
-            .iter()
-            .filter_map(|t| {
-                let name = t.name.to_lowercase();
-                if name == needle {
-                    return None; // exact match — caller should have resolved
-                }
-                let dist = levenshtein_distance(&name, &needle);
-                let threshold = if name.len().max(needle.len()) <= 6 {
-                    2
-                } else {
-                    3
-                };
-                let substring_hit = name.contains(&needle) || needle.contains(&name);
-                if dist <= threshold || substring_hit {
-                    let effective = if substring_hit { dist.min(2) } else { dist };
-                    Some((effective, t.name.clone()))
-                } else {
-                    None
-                }
-            })
+        // Delegate scoring (canonical name + aliases, edit-distance + substring
+        // fast-path) to the registry's shared suggester so the channel router
+        // and the panel `command.execute` RPC path stay in lockstep.
+        let suggestions: Vec<String> = parser
+            .tool_registry()
+            .suggest_commands(unknown_cmd, 3)
+            .await
+            .into_iter()
+            .map(|n| format!("/{}", n))
             .collect();
 
-        if scored.is_empty() {
+        if suggestions.is_empty() {
             return false;
         }
-
-        scored.sort_by_key(|(d, name)| (*d, name.clone()));
-        scored.truncate(3);
-        let suggestions: Vec<String> = scored.into_iter().map(|(_, n)| format!("/{}", n)).collect();
 
         let text = format!(
             "Unknown command `/{}`. Did you mean: {}?",

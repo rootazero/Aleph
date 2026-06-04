@@ -161,34 +161,23 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(groupchat_cmd)
             .await;
 
-        // New session command (aligned with CLI: `aleph session new`)
+        // New session command (aligned with CLI: `aleph session new`).
+        // `/new` is exposed as a first-class alias (the most common shortcut in
+        // bots) instead of a separate phantom tool — both names resolve to this
+        // single registration via the unified alias mechanism.
         let new_cmd = UnifiedTool::new(
             "builtin:session_new",
             "session_new",
             "Start a new conversation session",
             ToolSource::Builtin,
         )
+        .with_aliases(["new"])
         .with_usage("/session new")
         .with_param_hint("[topic]")
         .with_sort_order(82);
 
         conflict_resolver
             .register_with_conflict_resolution(new_cmd)
-            .await;
-
-        // /new shortcut — alias for /session new (most common command in bot)
-        let new_alias = UnifiedTool::new(
-            "builtin:new",
-            "new",
-            "Start a new conversation session (shortcut for /session new)",
-            ToolSource::Builtin,
-        )
-        .with_usage("/new")
-        .with_param_hint("[topic]")
-        .with_sort_order(82);
-
-        conflict_resolver
-            .register_with_conflict_resolution(new_alias)
             .await;
 
         // Cron management command
@@ -221,7 +210,7 @@ impl ToolRegistrar {
             .register_with_conflict_resolution(voice_cmd)
             .await;
 
-        info!("Registered builtin tools (generate_* + skill_* + snapshot_capture + switch + groupchat + session_new + new + cron_manage + voice)");
+        info!("Registered builtin tools (generate_* + skill_* + snapshot_capture + switch + groupchat + session_new [alias: new] + cron_manage + voice)");
     }
 
     /// Register skills from SkillInfo list (Flat Namespace Mode)
