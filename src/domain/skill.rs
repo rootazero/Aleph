@@ -160,11 +160,20 @@ impl ValueObject for SkillSource {}
 // ---------------------------------------------------------------------------
 
 /// Operating system discriminator for platform-specific skills.
+///
+/// Deserialization accepts the same aliases as [`Os::from_str`] (`macos` for
+/// `darwin`, `win` for `windows`) so that a hand-authored `EligibilitySpec` /
+/// `InstallSpec` deserialized directly via serde behaves identically to the
+/// markdown-manifest path, which parses OS strings through `FromStr`.
+/// Serialization always emits the canonical lowercase name (`darwin` / `linux`
+/// / `windows`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Os {
+    #[serde(alias = "macos")]
     Darwin,
     Linux,
+    #[serde(alias = "win")]
     Windows,
 }
 
@@ -830,6 +839,26 @@ mod tests {
         assert_eq!("windows".parse::<Os>().unwrap(), Os::Windows);
         assert_eq!("win".parse::<Os>().unwrap(), Os::Windows);
         assert!("bsd".parse::<Os>().is_err());
+    }
+
+    #[test]
+    fn test_os_serde_accepts_fromstr_aliases() {
+        // Deserialization must accept the same lowercase aliases as FromStr,
+        // so a hand-authored EligibilitySpec round-trips consistently.
+        assert_eq!(serde_json::from_str::<Os>("\"darwin\"").unwrap(), Os::Darwin);
+        assert_eq!(serde_json::from_str::<Os>("\"macos\"").unwrap(), Os::Darwin);
+        assert_eq!(serde_json::from_str::<Os>("\"linux\"").unwrap(), Os::Linux);
+        assert_eq!(
+            serde_json::from_str::<Os>("\"windows\"").unwrap(),
+            Os::Windows
+        );
+        assert_eq!(serde_json::from_str::<Os>("\"win\"").unwrap(), Os::Windows);
+        assert!(serde_json::from_str::<Os>("\"bsd\"").is_err());
+
+        // Serialization still emits the canonical lowercase name (aliases are
+        // deserialize-only).
+        assert_eq!(serde_json::to_string(&Os::Darwin).unwrap(), "\"darwin\"");
+        assert_eq!(serde_json::to_string(&Os::Windows).unwrap(), "\"windows\"");
     }
 
     // === Task 3 tests ===
