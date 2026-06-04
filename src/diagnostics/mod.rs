@@ -52,6 +52,7 @@ impl DiagnosticEngine {
             Arc::new(checks::StaleLockCheck::new(data_dir)),
             Arc::new(checks::ConfigParseCheck::new(config_path)),
             Arc::new(checks::HooksConsentCheck::from_default_path()),
+            Arc::new(checks::BrowserRuntimeCheck::new()),
         ];
         Ok(Self::new(checks))
     }
