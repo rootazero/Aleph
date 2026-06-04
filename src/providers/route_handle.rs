@@ -25,13 +25,18 @@ use std::sync::OnceLock;
 
 use arc_swap::ArcSwap;
 
-use crate::config::types::{ModelRouteConfig, RouteMode};
+use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::providers::route_policy::RouteTargets;
 use crate::sync_primitives::Arc;
 
 const MODE_AUTO: u8 = 0;
 const MODE_ALWAYS_LOCAL: u8 = 1;
 const MODE_ALWAYS_CLOUD: u8 = 2;
+
+const LB_ORDERED: u8 = 0;
+const LB_ROUND_ROBIN: u8 = 1;
+const LB_LEAST_BUSY: u8 = 2;
+const LB_LATENCY_AWARE: u8 = 3;
 
 fn mode_to_u8(mode: RouteMode) -> u8 {
     match mode {
@@ -50,6 +55,25 @@ fn u8_to_mode(raw: u8) -> RouteMode {
     }
 }
 
+fn lb_to_u8(s: LoadBalanceStrategy) -> u8 {
+    match s {
+        LoadBalanceStrategy::Ordered => LB_ORDERED,
+        LoadBalanceStrategy::RoundRobin => LB_ROUND_ROBIN,
+        LoadBalanceStrategy::LeastBusy => LB_LEAST_BUSY,
+        LoadBalanceStrategy::LatencyAware => LB_LATENCY_AWARE,
+    }
+}
+
+fn u8_to_lb(raw: u8) -> LoadBalanceStrategy {
+    match raw {
+        LB_ROUND_ROBIN => LoadBalanceStrategy::RoundRobin,
+        LB_LEAST_BUSY => LoadBalanceStrategy::LeastBusy,
+        LB_LATENCY_AWARE => LoadBalanceStrategy::LatencyAware,
+        // LB_ORDERED and any out-of-range value fall back to the safe no-op.
+        _ => LoadBalanceStrategy::Ordered,
+    }
+}
+
 /// Live local/cloud route preference shared between the failover walk (reader)
 /// and the config-write path (writer).
 ///
@@ -61,6 +85,9 @@ fn u8_to_mode(raw: u8) -> RouteMode {
 pub struct RouteHandle {
     mode: AtomicU8,
     allow_escalation: AtomicBool,
+    /// Load-balancing strategy for the same-tier fallback pool. A third hard
+    /// scalar signal alongside `mode` — same relaxed-atomic, hot-swap contract.
+    load_balance: AtomicU8,
     targets: ArcSwap<RouteTargets>,
 }
 
@@ -70,6 +97,7 @@ impl RouteHandle {
         Self {
             mode: AtomicU8::new(mode_to_u8(cfg.mode)),
             allow_escalation: AtomicBool::new(cfg.allow_cloud_escalation),
+            load_balance: AtomicU8::new(lb_to_u8(cfg.load_balance)),
             targets: ArcSwap::from_pointee(RouteTargets::from_config(cfg)),
         }
     }
@@ -81,6 +109,8 @@ impl RouteHandle {
         self.mode.store(mode_to_u8(cfg.mode), Ordering::Relaxed);
         self.allow_escalation
             .store(cfg.allow_cloud_escalation, Ordering::Relaxed);
+        self.load_balance
+            .store(lb_to_u8(cfg.load_balance), Ordering::Relaxed);
         self.targets.store(Arc::new(RouteTargets::from_config(cfg)));
     }
 
@@ -91,6 +121,11 @@ impl RouteHandle {
             u8_to_mode(self.mode.load(Ordering::Relaxed)),
             self.allow_escalation.load(Ordering::Relaxed),
         )
+    }
+
+    /// Read the current load-balancing strategy. One relaxed load; no lock.
+    pub fn load_balance(&self) -> LoadBalanceStrategy {
+        u8_to_lb(self.load_balance.load(Ordering::Relaxed))
     }
 
     /// Read the current provider pins. Lock-free RCU load; the returned `Arc` is
@@ -189,5 +224,29 @@ mod tests {
     #[test]
     fn unknown_raw_mode_decodes_to_auto() {
         assert_eq!(u8_to_mode(99), RouteMode::Auto);
+    }
+
+    #[test]
+    fn unknown_raw_lb_decodes_to_ordered() {
+        assert_eq!(u8_to_lb(99), LoadBalanceStrategy::Ordered);
+    }
+
+    #[test]
+    fn load_balance_defaults_and_hot_applies() {
+        let h = RouteHandle::from_config(&ModelRouteConfig::default());
+        assert_eq!(h.load_balance(), LoadBalanceStrategy::Ordered);
+
+        for s in [
+            LoadBalanceStrategy::RoundRobin,
+            LoadBalanceStrategy::LeastBusy,
+            LoadBalanceStrategy::LatencyAware,
+            LoadBalanceStrategy::Ordered,
+        ] {
+            h.store(&ModelRouteConfig {
+                load_balance: s,
+                ..Default::default()
+            });
+            assert_eq!(h.load_balance(), s);
+        }
     }
 }

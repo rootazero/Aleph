@@ -13,8 +13,21 @@
 //! in original order, so the policy is a no-op (byte-identical to pre-route
 //! failover).
 
-use crate::config::types::{ModelRouteConfig, RouteMode};
+use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
 use crate::providers::model_catalog::EndpointKind;
+
+/// Prompt-blind runtime signals about one candidate provider, consumed by the
+/// load-balancing strategies. Produced by
+/// [`LoadStats`](crate::providers::load_stats::LoadStats); kept here (not in
+/// `load_stats`) so the ordering logic owns its own input type and stays
+/// decoupled from the concurrent registry that fills it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LoadMetric {
+    /// Requests currently in flight against this provider (lower is freer).
+    pub in_flight: usize,
+    /// Observed EWMA latency in microseconds; `0` = unsampled (tried first).
+    pub latency_us: u64,
+}
 
 /// Operator's explicit per-tier provider preference — "use *this* local /
 /// *this* cloud provider", chosen by name from the already-configured
@@ -159,6 +172,53 @@ where
     FT: Fn(&T) -> EndpointTier,
     FN: Fn(&T) -> &str,
 {
+    // The default ordering is the load-balanced ordering under the no-op
+    // `Ordered` strategy — keeping a single code path. `Ordered` never touches
+    // the metric closure, so the byte-identical pre-balance order is preserved.
+    order_candidates_balanced(
+        candidates,
+        mode,
+        allow_cloud_escalation,
+        targets,
+        tier_of,
+        name_of,
+        LoadBalanceStrategy::Ordered,
+        0,
+        |_| LoadMetric::default(),
+    )
+}
+
+/// Order and gate candidates exactly like [`order_candidates`], then apply a
+/// load-balancing `strategy` *within* the non-pinned same-tier `Allow` group.
+///
+/// Layering is deliberate and order-preserving at every step:
+/// 1. tier gating drops `Skip`, defers `CrossTier` crossings to the end;
+/// 2. operator pins ([`RouteTargets`]) are promoted to the front and are
+///    **never** reordered by the balancer (an explicit pin is a hard signal);
+/// 3. the remaining same-tier `Allow` candidates are reordered by `strategy`
+///    using the prompt-blind [`LoadMetric`] from `metric_of` (and `rr_base`
+///    for [`RoundRobin`](LoadBalanceStrategy::RoundRobin) rotation);
+/// 4. cross-tier crossings are appended last, unchanged.
+///
+/// Under [`LoadBalanceStrategy::Ordered`] step 3 is a no-op, so the result is
+/// byte-identical to the pre-balance failover ordering.
+#[allow(clippy::too_many_arguments)]
+pub fn order_candidates_balanced<T, FT, FN, FM>(
+    candidates: Vec<T>,
+    mode: RouteMode,
+    allow_cloud_escalation: bool,
+    targets: &RouteTargets,
+    tier_of: FT,
+    name_of: FN,
+    strategy: LoadBalanceStrategy,
+    rr_base: u64,
+    metric_of: FM,
+) -> Vec<(T, CandidateAction)>
+where
+    FT: Fn(&T) -> EndpointTier,
+    FN: Fn(&T) -> &str,
+    FM: Fn(&str) -> LoadMetric,
+{
     let mut same_tier: Vec<(T, CandidateAction)> = Vec::new();
     let mut crossings: Vec<(T, CandidateAction)> = Vec::new();
 
@@ -172,18 +232,81 @@ where
     }
 
     // Promote pinned providers to the front of the active tier (stable —
-    // `Vec::partition` preserves relative order within each side). Skipped
-    // entirely when no pin is set, keeping the no-pin path allocation-light.
-    if !targets.is_empty() {
+    // `Vec::partition` preserves relative order within each side). The pinned
+    // group is exempt from balancing; only the unpinned remainder is balanced.
+    let mut out: Vec<(T, CandidateAction)> = if targets.is_empty() {
+        balance_group(same_tier, strategy, rr_base, &metric_of, &name_of)
+    } else {
         let (pinned, rest): (Vec<_>, Vec<_>) = same_tier
             .into_iter()
             .partition(|(c, _)| targets.is_pinned(name_of(c)));
-        same_tier = pinned;
-        same_tier.extend(rest);
-    }
+        let mut merged = pinned;
+        merged.extend(balance_group(rest, strategy, rr_base, &metric_of, &name_of));
+        merged
+    };
 
-    same_tier.extend(crossings);
-    same_tier
+    out.extend(crossings);
+    out
+}
+
+/// Reorder one same-tier `Allow` group by `strategy`. Stable for the sort-based
+/// strategies (ties keep configured order); a pure rotation for round-robin.
+fn balance_group<T, FN, FM>(
+    group: Vec<(T, CandidateAction)>,
+    strategy: LoadBalanceStrategy,
+    rr_base: u64,
+    metric_of: &FM,
+    name_of: &FN,
+) -> Vec<(T, CandidateAction)>
+where
+    FN: Fn(&T) -> &str,
+    FM: Fn(&str) -> LoadMetric,
+{
+    if group.len() <= 1 {
+        return group;
+    }
+    match strategy {
+        LoadBalanceStrategy::Ordered => group,
+        LoadBalanceStrategy::RoundRobin => {
+            let mut g = group;
+            let k = (rr_base % g.len() as u64) as usize;
+            g.rotate_left(k);
+            g
+        }
+        LoadBalanceStrategy::LeastBusy => sort_by_metric(group, metric_of, name_of, |m| {
+            m.in_flight as u64
+        }),
+        // `0` (unsampled) sorts first, so a fresh endpoint is tried before
+        // already-measured ones and gains a latency reading.
+        LoadBalanceStrategy::LatencyAware => {
+            sort_by_metric(group, metric_of, name_of, |m| m.latency_us)
+        }
+    }
+}
+
+/// Stable-sort a candidate group by an integer key derived from each
+/// candidate's [`LoadMetric`]. The key is computed once per candidate (not per
+/// comparison) so `metric_of` is called exactly `len` times.
+fn sort_by_metric<T, FN, FM, K>(
+    group: Vec<(T, CandidateAction)>,
+    metric_of: &FM,
+    name_of: &FN,
+    key: K,
+) -> Vec<(T, CandidateAction)>
+where
+    FN: Fn(&T) -> &str,
+    FM: Fn(&str) -> LoadMetric,
+    K: Fn(LoadMetric) -> u64,
+{
+    let mut keyed: Vec<(u64, (T, CandidateAction))> = group
+        .into_iter()
+        .map(|c| {
+            let k = key(metric_of(name_of(&c.0)));
+            (k, c)
+        })
+        .collect();
+    keyed.sort_by_key(|(k, _)| *k); // stable: equal keys keep configured order
+    keyed.into_iter().map(|(_, c)| c).collect()
 }
 
 #[cfg(test)]
@@ -376,5 +499,141 @@ mod tests {
         );
         let names: Vec<&str> = pinned.iter().map(|((n, _), _)| *n).collect();
         assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    // --- load-balance strategy tests --------------------------------------
+
+    /// Helper: order three same-tier locals under `strategy`, with `metrics`
+    /// mapping name → (in_flight, latency_us), and return the resulting order.
+    fn balanced_names(
+        strategy: LoadBalanceStrategy,
+        rr_base: u64,
+        metrics: &[(&str, usize, u64)],
+    ) -> Vec<&'static str> {
+        let cands = vec![
+            ("a", EndpointTier::Local),
+            ("b", EndpointTier::Local),
+            ("c", EndpointTier::Local),
+        ];
+        let lookup = metrics.to_vec();
+        let out = order_candidates_balanced(
+            cands,
+            RouteMode::Auto,
+            false,
+            &RouteTargets::default(),
+            |(_, t)| *t,
+            |(n, _)| *n,
+            strategy,
+            rr_base,
+            |name| {
+                lookup
+                    .iter()
+                    .find(|(n, _, _)| *n == name)
+                    .map(|(_, f, l)| LoadMetric {
+                        in_flight: *f,
+                        latency_us: *l,
+                    })
+                    .unwrap_or_default()
+            },
+        );
+        out.iter().map(|((n, _), _)| *n).collect()
+    }
+
+    #[test]
+    fn ordered_strategy_is_identity() {
+        let names = balanced_names(LoadBalanceStrategy::Ordered, 7, &[]);
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn least_busy_prefers_fewest_in_flight() {
+        // b has 0 in-flight, a has 5, c has 2 → order b, c, a.
+        let names = balanced_names(
+            LoadBalanceStrategy::LeastBusy,
+            0,
+            &[("a", 5, 0), ("b", 0, 0), ("c", 2, 0)],
+        );
+        assert_eq!(names, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn least_busy_ties_keep_configured_order() {
+        // All equal → stable sort preserves a, b, c.
+        let names = balanced_names(
+            LoadBalanceStrategy::LeastBusy,
+            0,
+            &[("a", 3, 0), ("b", 3, 0), ("c", 3, 0)],
+        );
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn latency_aware_prefers_lowest_and_samples_unknown_first() {
+        // a=900us, b=unsampled(0), c=300us → b (unknown, tried first), c, a.
+        let names = balanced_names(
+            LoadBalanceStrategy::LatencyAware,
+            0,
+            &[("a", 0, 900), ("b", 0, 0), ("c", 0, 300)],
+        );
+        assert_eq!(names, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn round_robin_rotates_first_choice_by_counter() {
+        assert_eq!(
+            balanced_names(LoadBalanceStrategy::RoundRobin, 0, &[]),
+            vec!["a", "b", "c"]
+        );
+        assert_eq!(
+            balanced_names(LoadBalanceStrategy::RoundRobin, 1, &[]),
+            vec!["b", "c", "a"]
+        );
+        assert_eq!(
+            balanced_names(LoadBalanceStrategy::RoundRobin, 2, &[]),
+            vec!["c", "a", "b"]
+        );
+        // Wraps modulo the group length.
+        assert_eq!(
+            balanced_names(LoadBalanceStrategy::RoundRobin, 3, &[]),
+            vec!["a", "b", "c"]
+        );
+    }
+
+    #[test]
+    fn balancing_never_reorders_pins() {
+        // Pin "c" → it leads regardless of load; the unpinned remainder (a, b)
+        // is then least-busy ordered (b before a).
+        let cands = vec![
+            ("a", EndpointTier::Local),
+            ("b", EndpointTier::Local),
+            ("c", EndpointTier::Local),
+        ];
+        let targets = RouteTargets {
+            local_provider: Some("c".to_string()),
+            cloud_provider: None,
+        };
+        let out = order_candidates_balanced(
+            cands,
+            RouteMode::Auto,
+            false,
+            &targets,
+            |(_, t)| *t,
+            |(n, _)| *n,
+            LoadBalanceStrategy::LeastBusy,
+            0,
+            |name| match name {
+                "a" => LoadMetric {
+                    in_flight: 9,
+                    latency_us: 0,
+                },
+                "b" => LoadMetric {
+                    in_flight: 1,
+                    latency_us: 0,
+                },
+                _ => LoadMetric::default(),
+            },
+        );
+        let names: Vec<&str> = out.iter().map(|((n, _), _)| *n).collect();
+        assert_eq!(names, vec!["c", "b", "a"]);
     }
 }

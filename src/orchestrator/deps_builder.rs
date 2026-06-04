@@ -17,7 +17,7 @@ use crate::providers::model_catalog::endpoint_kind_for_base_url;
 use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
-    FailoverNode, FailoverProvider, StaticDefault,
+    FailoverNode, FailoverProvider, LoadStats, StaticDefault,
 };
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 
@@ -116,6 +116,12 @@ pub fn build_failover_chain(
     // override see the same provider-outage picture.
     let health = FailoverHealth::default();
 
+    // Shared runtime load registry: in-flight counts and observed latencies are
+    // visible to every chain that might dial a given endpoint, so the
+    // load-balancing strategy sees one consistent picture (scoped exactly like
+    // `health` — one registry per boot-time chain assembly).
+    let load = Arc::new(LoadStats::new());
+
     // Build every non-primary provider once, reused by both the fallback
     // chain and the per-hint override registry (no double construction).
     let mut built: HashMap<String, Arc<dyn AiProvider>> = HashMap::new();
@@ -182,7 +188,8 @@ pub fn build_failover_chain(
         health.clone(),
         FailoverConfig::default(),
     )
-    .with_route(route_mode, allow_escalation, escalation_approval.clone());
+    .with_route(route_mode, allow_escalation, escalation_approval.clone())
+    .with_load_stats(load.clone());
     // A live handle (production) makes mode switches hot-apply; its absence
     // (tests) keeps the boot snapshot above — byte-identical to before.
     let global_provider = match route_handle.clone() {
@@ -222,7 +229,8 @@ pub fn build_failover_chain(
                 FailoverConfig::default(),
             )
             .with_route(route_mode, allow_escalation, escalation_approval.clone())
-            .with_primary_tier(pin_tier);
+            .with_primary_tier(pin_tier)
+            .with_load_stats(load.clone());
             let pinned = match route_handle.clone() {
                 Some(h) => pinned.with_route_live(h),
                 None => pinned,
