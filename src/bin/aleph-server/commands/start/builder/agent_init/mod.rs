@@ -1475,6 +1475,60 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             tool_catalog.register_with_conflict_resolution(tool).await;
         }
 
+        // ── Capability health probes (hermes-style runtime gating) ──────────
+        // Attach probes to the catalog's shared `ToolHealthCache` so the LLM
+        // tool list — and the `<tool_runtime_state>` hints — reflect live
+        // capability, not just boot-time registration. This cache is the same
+        // one `ScopedToolService` consults via `is_healthy`, and probes are
+        // refreshed off the registered-probe set (`trigger_health_refresh`),
+        // so a probe keyed by the executor's LLM-facing tool name fires even
+        // when the catalog stores a different slash-command name.
+        {
+            use alephcore::generation::GenerationType;
+            use alephcore::tools::probes::browser::BrowserRuntimeProbe;
+            use alephcore::tools::probes::generation::GenerationProbe;
+
+            // Browser: one shared probe (reuses `find_chromium`, with an `npx`
+            // fallback for the Playwright-managed backend) gates the whole
+            // `browser_*` family. Without any browser runtime the LLM no
+            // longer sees ~24 unusable browser tools.
+            let browser_probe = Arc::new(BrowserRuntimeProbe::new());
+            for def in BUILTIN_TOOL_DEFINITIONS {
+                if def.name.starts_with("browser_") {
+                    tool_catalog.register_health_probe(def.name, browser_probe.clone());
+                }
+            }
+
+            // Generation: gate each media tool on a live provider for its
+            // type. Only register a probe when a provider exists at boot —
+            // mirroring the static registration gate in `optional_tools`, so a
+            // never-configured capability stays silent while a provider removed
+            // mid-session is still caught at runtime by the probe.
+            for (tool_name, gen_type) in [
+                ("image_generate", GenerationType::Image),
+                ("speech_generate", GenerationType::Speech),
+                ("audio_generate", GenerationType::Audio),
+                ("video_generate", GenerationType::Video),
+            ] {
+                let has_provider = {
+                    let reg = generation_registry
+                        .read()
+                        .unwrap_or_else(|e| e.into_inner());
+                    !reg.providers_for_type(gen_type).is_empty()
+                };
+                if has_provider {
+                    tool_catalog.register_health_probe(
+                        tool_name,
+                        Arc::new(GenerationProbe::new(generation_registry.clone(), gen_type)),
+                    );
+                }
+            }
+
+            if !daemon {
+                println!("  Capability probes: browser + generation wired to health cache");
+            }
+        }
+
         // Register custom commands from config routing rules
         if !app_config.rules.is_empty() {
             tool_catalog

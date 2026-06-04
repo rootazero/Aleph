@@ -77,3 +77,28 @@ async fn compute_runtime_state_blocks_surfaces_unhealthy_probes() {
         }
     }
 }
+
+#[tokio::test]
+async fn compute_runtime_state_blocks_coalesces_shared_reason() {
+    // A single downed dependency that gates many tools (an MCP server with N
+    // tools, or the whole `browser_*` family) must collapse to ONE hint
+    // instead of one line per tool.
+    let registry = Arc::new(crate::tool_metadata::ToolCatalog::new());
+    let cache = registry.health();
+    let probe: Arc<dyn ToolHealthProbe> = Arc::new(DeadProbe("no browser runtime"));
+    for name in ["browser_open", "browser_click", "browser_screenshot"] {
+        cache.register_probe(name, probe.clone());
+        let _ = cache.refresh(name).await;
+    }
+
+    let blocks = compute_runtime_state_blocks(Some(&registry));
+    assert_eq!(blocks.len(), 1, "shared-reason tools should coalesce");
+    let block = &blocks[0];
+    // Lexicographically smallest name leads; the rest are summarised.
+    assert!(block.tool_name.starts_with("browser_click"));
+    assert!(block.tool_name.contains("+2 more"));
+    match &block.status {
+        ToolStatus::Unavailable { reason } => assert_eq!(reason, "no browser runtime"),
+        ToolStatus::Available => panic!("expected Unavailable"),
+    }
+}

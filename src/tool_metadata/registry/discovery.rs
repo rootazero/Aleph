@@ -123,20 +123,27 @@ impl ToolDiscovery {
         (full_schema_tools, index.to_prompt())
     }
 
-    /// Trigger detached background refreshes for every active tool whose
-    /// probe entry is missing or expired. Callers typically run this
+    /// Trigger detached background refreshes for every **registered probe**
+    /// whose cache entry is missing or expired. Callers typically run this
     /// just before a prompt assembly so the *next* turn sees fresh
     /// results; the current turn still uses whatever the snapshot held.
+    ///
+    /// Iterates the cache's registered probes rather than the catalog's tool
+    /// list: a probe is the only thing that produces a gating decision, so
+    /// every registered probe must be evaluated regardless of whether a
+    /// same-named tool happens to live in *this* catalog. This matters for
+    /// probes keyed by the executor's LLM-facing tool name (e.g.
+    /// `image_generate`, `speech_generate`) which differs from the catalog's
+    /// slash-command name (`generate_image`) — the previous catalog-driven
+    /// scan silently skipped them and they never gated.
     ///
     /// This is intentionally fire-and-forget: a slow probe never blocks
     /// prompt construction. The `tokio::spawn` is detached because the
     /// cache itself owns the result via `ArcSwap`.
     pub async fn trigger_health_refresh(&self, cache: &Arc<ToolHealthCache>) {
-        let tools = self.tools.read().await;
-        for tool in tools.values().filter(|t| t.is_active) {
-            if cache.needs_refresh(&tool.name) {
+        for name in cache.probe_names() {
+            if cache.needs_refresh(&name) {
                 let cache = Arc::clone(cache);
-                let name = tool.name.clone();
                 tokio::spawn(async move {
                     cache.refresh(&name).await;
                 });
