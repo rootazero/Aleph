@@ -46,24 +46,40 @@ impl ApprovalBridge {
         }
     }
 
-    /// Build inline keyboard for approval request
+    /// Build inline keyboard for an approval request, rendering only the
+    /// decisions the request permits.
     ///
-    /// Creates a keyboard with:
-    /// - Row 1: [Allow Once] [Allow Always]
-    /// - Row 2: [Deny]
-    pub fn build_approval_keyboard(approval_id: &str) -> InlineKeyboard {
-        InlineKeyboard::new()
-            .row(vec![
-                InlineButton {
-                    text: "✅ Allow Once".into(),
-                    callback_data: format!("approve:{}:once", approval_id),
-                },
-                InlineButton {
-                    text: "✅ Allow Always".into(),
-                    callback_data: format!("approve:{}:always", approval_id),
-                },
-            ])
-            .button("❌ Deny", format!("approve:{}:deny", approval_id))
+    /// `allowed` is the request's permitted decision set (see
+    /// [`crate::exec::allowed_decisions`]). A low-risk command yields
+    /// `[Allow Once] [Allow Always]` / `[Deny]`; a destructive command omits
+    /// the `Allow Always` button so it cannot be permanently allowlisted in one
+    /// tap; a blocked command offers only `Deny`.
+    pub fn build_approval_keyboard(
+        approval_id: &str,
+        allowed: &[ApprovalDecisionType],
+    ) -> InlineKeyboard {
+        let mut allow_row = Vec::new();
+        if allowed.contains(&ApprovalDecisionType::AllowOnce) {
+            allow_row.push(InlineButton {
+                text: "✅ Allow Once".into(),
+                callback_data: format!("approve:{}:once", approval_id),
+            });
+        }
+        if allowed.contains(&ApprovalDecisionType::AllowAlways) {
+            allow_row.push(InlineButton {
+                text: "✅ Allow Always".into(),
+                callback_data: format!("approve:{}:always", approval_id),
+            });
+        }
+
+        let mut keyboard = InlineKeyboard::new();
+        if !allow_row.is_empty() {
+            keyboard = keyboard.row(allow_row);
+        }
+        if allowed.contains(&ApprovalDecisionType::Deny) {
+            keyboard = keyboard.button("❌ Deny", format!("approve:{}:deny", approval_id));
+        }
+        keyboard
     }
 
     /// Parse callback data into (approval_id, decision)
@@ -189,7 +205,10 @@ mod tests {
 
     #[test]
     fn test_build_approval_keyboard() {
-        let keyboard = ApprovalBridge::build_approval_keyboard("test123");
+        let keyboard = ApprovalBridge::build_approval_keyboard(
+            "test123",
+            &crate::exec::allowed_decisions::full_set(),
+        );
         assert_eq!(keyboard.rows.len(), 2);
         assert_eq!(keyboard.rows[0].len(), 2); // Allow Once, Allow Always
         assert_eq!(keyboard.rows[1].len(), 1); // Deny
@@ -197,6 +216,33 @@ mod tests {
         assert!(keyboard.rows[0][0].callback_data.contains("once"));
         assert!(keyboard.rows[0][1].callback_data.contains("always"));
         assert!(keyboard.rows[1][0].callback_data.contains("deny"));
+    }
+
+    #[test]
+    fn test_build_approval_keyboard_danger_omits_always() {
+        // Danger commands offer only Once + Deny — no "Allow Always" button.
+        let allowed = vec![ApprovalDecisionType::AllowOnce, ApprovalDecisionType::Deny];
+        let keyboard = ApprovalBridge::build_approval_keyboard("danger1", &allowed);
+        assert_eq!(keyboard.rows.len(), 2);
+        assert_eq!(keyboard.rows[0].len(), 1); // Allow Once only
+        assert!(keyboard.rows[0][0].callback_data.contains("once"));
+        assert_eq!(keyboard.rows[1].len(), 1); // Deny
+        assert!(keyboard.rows[1][0].callback_data.contains("deny"));
+        // No button anywhere offers permanent allowlisting.
+        assert!(!keyboard
+            .rows
+            .iter()
+            .flatten()
+            .any(|b| b.callback_data.contains("always")));
+    }
+
+    #[test]
+    fn test_build_approval_keyboard_blocked_only_deny() {
+        let keyboard =
+            ApprovalBridge::build_approval_keyboard("blk1", &[ApprovalDecisionType::Deny]);
+        assert_eq!(keyboard.rows.len(), 1);
+        assert_eq!(keyboard.rows[0].len(), 1);
+        assert!(keyboard.rows[0][0].callback_data.contains("deny"));
     }
 
     #[test]

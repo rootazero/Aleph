@@ -113,8 +113,25 @@ impl ExecApprovalForwarder {
         true
     }
 
-    /// Format an approval request message
+    /// Format an approval request message.
+    ///
+    /// The offered decisions are derived from the command's assessed risk via
+    /// [`crate::exec::allowed_decisions`], so a destructive command never
+    /// advertises an `allow-always` reply — only single-shot consent or denial.
     pub fn format_request(&self, record: &ExecApprovalRecord) -> ApprovalMessage {
+        let allowed = crate::exec::allowed_decisions::assess_command_decisions(&record.command);
+
+        let mut reply_hints = Vec::new();
+        if allowed.contains(&ApprovalDecisionType::AllowOnce) {
+            reply_hints.push(format!("/approve {} allow-once", record.id));
+        }
+        if allowed.contains(&ApprovalDecisionType::AllowAlways) {
+            reply_hints.push(format!("/approve {} allow-always", record.id));
+        }
+        if allowed.contains(&ApprovalDecisionType::Deny) {
+            reply_hints.push(format!("/approve {} deny", record.id));
+        }
+
         let template = self.config.request_template.as_deref().unwrap_or(
             "🔒 **Exec approval required**\n\n\
              **ID:** `{id}`\n\
@@ -122,10 +139,7 @@ impl ExecApprovalForwarder {
              **CWD:** `{cwd}`\n\
              **Agent:** `{agent_id}`\n\
              **Expires in:** {remaining}s\n\n\
-             Reply with:\n\
-             `/approve {id} allow-once`\n\
-             `/approve {id} allow-always`\n\
-             `/approve {id} deny`",
+             Reply with:\n{reply_hints}",
         );
 
         let remaining = record.expires_at_ms.saturating_sub(
@@ -134,6 +148,13 @@ impl ExecApprovalForwarder {
                 .unwrap_or_default()
                 .as_millis() as u64,
         ) / 1000;
+
+        // Render the reply block from the permitted decisions only.
+        let reply_block = reply_hints
+            .iter()
+            .map(|h| format!("`{}`", h))
+            .collect::<Vec<_>>()
+            .join("\n");
 
         let text = template
             .replace("{id}", &record.id)
@@ -146,17 +167,14 @@ impl ExecApprovalForwarder {
                 "{resolved_path}",
                 record.resolved_path.as_deref().unwrap_or("-"),
             )
-            .replace("{remaining}", &remaining.to_string());
+            .replace("{remaining}", &remaining.to_string())
+            .replace("{reply_hints}", &reply_block);
 
         ApprovalMessage {
             text,
             approval_id: record.id.clone(),
             is_request: true,
-            reply_hints: vec![
-                format!("/approve {} allow-once", record.id),
-                format!("/approve {} allow-always", record.id),
-                format!("/approve {} deny", record.id),
-            ],
+            reply_hints,
         }
     }
 
@@ -340,7 +358,35 @@ mod tests {
         assert!(message.text.contains("test-123"));
         assert!(message.text.contains("npm install"));
         assert!(message.is_request);
+        // `npm install` assesses Caution → full decision set.
         assert_eq!(message.reply_hints.len(), 3);
+        assert!(message
+            .reply_hints
+            .iter()
+            .any(|h| h.contains("allow-always")));
+    }
+
+    #[test]
+    fn test_format_request_danger_drops_allow_always() {
+        let forwarder = ExecApprovalForwarder::new(
+            ForwarderConfig::default(),
+            Arc::new(ExecApprovalManager::new()),
+        );
+
+        let mut record = mock_record();
+        record.command = "rm -rf ./build".to_string();
+        let message = forwarder.format_request(&record);
+
+        // Destructive command: single-shot consent or denial only.
+        assert_eq!(message.reply_hints.len(), 2);
+        assert!(!message
+            .reply_hints
+            .iter()
+            .any(|h| h.contains("allow-always")));
+        assert!(message.reply_hints.iter().any(|h| h.contains("allow-once")));
+        assert!(message.reply_hints.iter().any(|h| h.contains("deny")));
+        // The rendered text must not advertise a permanent-allow reply either.
+        assert!(!message.text.contains("allow-always"));
     }
 
     #[test]
