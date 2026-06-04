@@ -1,6 +1,9 @@
-//! Plugin validation — checks manifest, entry point, and registration uniqueness.
+//! Plugin validation — checks manifest, entry point, registration uniqueness,
+//! and configuration-schema soundness.
 //!
-//! Used by `aleph plugin validate` CLI command and internal pre-load checks.
+//! Used as the pre-install gate in
+//! [`crate::extension::marketplace::MarketplaceManager::install_to_scope`] and
+//! exposed for direct validation of a plugin directory.
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -118,7 +121,56 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
         }
     }
 
-    // 8. Summary
+    // 8. Configuration schema soundness (activates manifest `config_schema` /
+    //    `config_ui_hints`). A declared schema that does not compile would
+    //    silently reject every user config at runtime, so it is an error. When
+    //    a sample config file ships alongside the plugin, validate it too.
+    if let Some(ref schema) = manifest.config_schema {
+        match super::manifest::validate_config_schema_declaration(schema) {
+            Ok(()) => {
+                result.info.push("Config schema is valid".to_string());
+
+                // Validate a shipped sample config, if present. Authors keep one
+                // so users have a starting point — catch drift between the
+                // schema and its own example before publishing.
+                for sample in ["config.json", "config.default.json"] {
+                    let sample_path = plugin_dir.join(sample);
+                    if !sample_path.exists() {
+                        continue;
+                    }
+                    match std::fs::read_to_string(&sample_path)
+                        .ok()
+                        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+                    {
+                        Some(value) => {
+                            for err in
+                                super::manifest::validate_config_against_schema(schema, &value)
+                            {
+                                result
+                                    .errors
+                                    .push(format!("{sample}: {err}"));
+                            }
+                        }
+                        None => result
+                            .warnings
+                            .push(format!("Could not parse sample config '{sample}' as JSON")),
+                    }
+                }
+            }
+            Err(e) => result.errors.push(e),
+        }
+    }
+
+    // 9. Surface UI-hint metadata (read consumer for `config_ui_hints`).
+    if !manifest.config_ui_hints.is_empty() {
+        let report = super::manifest::summarize_ui_hints(&manifest.config_ui_hints);
+        result.info.push(format!(
+            "Config UI hints: {} field(s), {} sensitive, {} advanced",
+            report.total, report.sensitive, report.advanced
+        ));
+    }
+
+    // 10. Summary
     let tool_count = manifest.tools_v2.as_ref().map_or(0, |t| t.len());
     let hook_count = manifest.hooks_v2.as_ref().map_or(0, |h| h.len());
     if result.errors.is_empty() {
