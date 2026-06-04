@@ -5,7 +5,7 @@
 //! JSON responses using expressions like `$.data.choices[0].message.content`.
 
 use crate::error::{AlephError, Result};
-use jsonpath_rust::JsonPathQuery;
+use jsonpath_rust::JsonPath;
 use serde_json::Value;
 
 /// Extract a value from JSON using a JSONPath expression
@@ -50,45 +50,24 @@ use serde_json::Value;
 /// assert_eq!(result, "Hello, world!");
 /// ```
 pub fn extract_value(json: &Value, path: &str) -> Result<String> {
-    // Execute the JSONPath query
+    // Execute the JSONPath query (jsonpath-rust 1.0 `JsonPath::query` returns the
+    // matched values in document order, borrowing from the input JSON).
     let results = json
-        .clone()
-        .path(path)
+        .query(path)
         .map_err(|e| AlephError::provider(format!("JSONPath query failed: {}", e)))?;
 
-    // The path() method returns a Value which could be an array of matches or a single value
-    // For our use case, we want to extract the first match
-    let first_match = match &results {
-        Value::Array(arr) if !arr.is_empty() => &arr[0],
-        Value::Array(_) => {
-            return Err(AlephError::provider(format!(
-                "No value found at JSONPath '{}' in response",
-                path
-            )));
-        }
-        other => other, // Single value result
-    };
-
-    // Check if we got a null result because the path doesn't exist
-    // jsonpath-rust returns Value::Null for nonexistent paths
-    // We need to distinguish between:
-    // 1. Path doesn't exist -> Error
-    // 2. Path exists but has null value -> Return "null" string
-    //
-    // To detect nonexistent paths, we check if the result is Null AND
-    // if we can manually verify the path structure exists in the JSON
-    if first_match.is_null() {
-        // Try to verify if this null is because the path doesn't exist
-        // We'll do a simple heuristic: if the path points to a field that
-        // doesn't exist in the JSON structure, return an error
-        if !path_exists_in_json(json, path) {
+    // RFC 9535 semantics make path existence unambiguous: an empty result set
+    // means the path matched nothing, while a present `Value::Null` means the
+    // path exists and holds a JSON null. We extract the first match.
+    let first_match = match results.first() {
+        Some(&value) => value,
+        None => {
             return Err(AlephError::provider(format!(
                 "No value found at JSONPath '{}' in response (path does not exist)",
                 path
             )));
         }
-        // Otherwise, it's an actual null value, so we'll return "null" below
-    }
+    };
 
     // Convert the Value to String based on type
     let value_str = match first_match {
@@ -105,52 +84,6 @@ pub fn extract_value(json: &Value, path: &str) -> Result<String> {
     };
 
     Ok(value_str)
-}
-
-/// Helper function to check if a JSONPath actually exists in the JSON structure
-///
-/// This is a heuristic check to distinguish between:
-/// - A path that doesn't exist (should error)
-/// - A path that exists but has null value (should return "null")
-///
-/// For simple paths like "$.field" or "$.a.b.c", we manually traverse the JSON.
-/// For complex paths with arrays/wildcards, we rely on jsonpath behavior.
-fn path_exists_in_json(json: &Value, path: &str) -> bool {
-    // Remove the root $ and split by dots
-    let path_clean = path
-        .strip_prefix("$.")
-        .unwrap_or(path.strip_prefix("$").unwrap_or(path));
-
-    // If path is empty or just "$", it exists
-    if path_clean.is_empty() {
-        return true;
-    }
-
-    // For simple dot-separated paths without array indices, we can manually traverse
-    // This handles cases like "$.field" or "$.a.b.c"
-    if !path_clean.contains('[') {
-        let parts: Vec<&str> = path_clean.split('.').collect();
-        let mut current = json;
-
-        for part in parts {
-            match current {
-                Value::Object(map) => {
-                    if let Some(next) = map.get(part) {
-                        current = next;
-                    } else {
-                        return false; // Field doesn't exist
-                    }
-                }
-                _ => return false, // Can't traverse further
-            }
-        }
-        return true; // Successfully traversed the entire path
-    }
-
-    // For complex paths with array indices, if we got here with a null result,
-    // we assume the path might exist but has a null value
-    // This is a conservative approach - if unsure, we allow the null
-    true
 }
 
 #[cfg(test)]
