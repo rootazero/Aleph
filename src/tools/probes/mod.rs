@@ -6,4 +6,6 @@
 //! Each probe is registered with the tool catalog's `ToolHealthCache` at the
 //! same lifecycle point where the corresponding tool is registered.
 
+pub mod browser;
+pub mod generation;
 pub mod mcp;

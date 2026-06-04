@@ -753,13 +753,28 @@ pub fn compute_runtime_state_blocks(
         return Vec::new();
     };
     let snapshot = registry.health().snapshot();
-    snapshot
-        .unhealthy_iter()
-        .map(|(name, reason)| {
-            crate::tools::runtime_state::RuntimeStateFragment::unavailable(
-                name,
-                reason.short_label(),
-            )
+    // Coalesce unhealthy tools by reason: a single downed dependency — an MCP
+    // server exposing many tools, or the whole `browser_*` family when no
+    // browser runtime exists — collapses to ONE hint instead of flooding the
+    // prompt with a near-identical line per tool. Groups are keyed by the
+    // reason's short label (server-id-qualified for MCP, capability-specific
+    // for generation, so genuinely distinct dependencies stay separate) and
+    // sorted for deterministic output. A single-tool group keeps its exact
+    // name, so existing one-tool-per-reason behaviour is byte-identical.
+    let mut by_reason: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for (name, reason) in snapshot.unhealthy_iter() {
+        by_reason.entry(reason.short_label()).or_default().push(name);
+    }
+    by_reason
+        .into_iter()
+        .map(|(reason, mut tools)| {
+            tools.sort_unstable();
+            let label = match tools.as_slice() {
+                [single] => (*single).to_string(),
+                many => format!("{} (+{} more)", many[0], many.len() - 1),
+            };
+            crate::tools::runtime_state::RuntimeStateFragment::unavailable(label, reason)
         })
         .collect()
 }

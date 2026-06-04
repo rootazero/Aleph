@@ -160,6 +160,14 @@ impl ToolHealthCache {
         }
     }
 
+    /// Names of every currently-registered probe. Used by the discovery
+    /// registry to drive background refreshes off the probe set itself
+    /// (rather than a catalog tool list), so a probe keyed by an
+    /// executor-only name still gets evaluated.
+    pub fn probe_names(&self) -> Vec<String> {
+        self.probes.load().keys().cloned().collect()
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
     }
