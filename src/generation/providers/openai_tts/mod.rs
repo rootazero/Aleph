@@ -227,7 +227,9 @@ impl OpenAiTtsProvider {
     fn content_type_for_format(format: Option<&str>) -> &'static str {
         match format {
             Some("mp3") => "audio/mpeg",
-            Some("opus") => "audio/opus",
+            // OpenAI returns Ogg-encapsulated Opus for the "opus" format, so the
+            // correct container MIME is audio/ogg (matching Deepgram/Azure TTS).
+            Some("opus") => "audio/ogg",
             Some("aac") => "audio/aac",
             Some("flac") => "audio/flac",
             None => "audio/mpeg", // Default

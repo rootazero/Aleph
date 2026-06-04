@@ -45,12 +45,3 @@ pub struct DeepgramError {
     #[serde(default)]
     pub message: Option<String>,
 }
-
-impl DeepgramError {
-    pub fn best_message(&self) -> String {
-        self.err_msg
-            .clone()
-            .or_else(|| self.message.clone())
-            .unwrap_or_else(|| "Deepgram returned an error without a message".to_string())
-    }
-}

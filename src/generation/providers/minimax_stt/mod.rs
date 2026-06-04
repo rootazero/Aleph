@@ -107,7 +107,7 @@ impl MinimaxSttProvider {
                     1000..=1999 => GenerationError::invalid_parameters(msg, None),
                     _ => GenerationError::provider(
                         msg,
-                        Some(parsed.base_resp.status_code as u16),
+                        u16::try_from(parsed.base_resp.status_code).ok(),
                         "minimax-stt",
                     ),
                 };

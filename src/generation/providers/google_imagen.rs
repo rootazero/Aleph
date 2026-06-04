@@ -260,14 +260,18 @@ impl GoogleImagenProvider {
                 .unwrap_or_else(|| "Unknown error".to_string());
             let code = error_response.error.code;
 
-            // Check for specific error types
-            if message.to_lowercase().contains("safety") || message.contains("blocked") {
+            // Check for specific error types. Match case-insensitively: Google
+            // commonly returns capitalized messages ("Quota exceeded",
+            // "Invalid argument", "Blocked"), which a case-sensitive match on the
+            // raw message would miss and mis-route to a generic provider error.
+            let message_lower = message.to_lowercase();
+            if message_lower.contains("safety") || message_lower.contains("blocked") {
                 return GenerationError::content_filtered(message, Some("safety".to_string()));
             }
-            if message.contains("quota") || message.contains("limit") {
+            if message_lower.contains("quota") || message_lower.contains("limit") {
                 return GenerationError::quota_exceeded(message, None);
             }
-            if message.contains("invalid") {
+            if message_lower.contains("invalid") {
                 return GenerationError::invalid_parameters(message, None);
             }
 

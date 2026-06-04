@@ -227,7 +227,10 @@ impl GoogleVeoProvider {
             if duration < 0.0 {
                 return DEFAULT_DURATION_SECS;
             }
-            let dur = duration as u32;
+            // Round to nearest second before bucketing so fractional requests
+            // (e.g. 5.7s) map to the nearest valid duration instead of being
+            // floored downward (5.7 -> 5 -> bucket 4 was the old, wrong result).
+            let dur = duration.round() as u32;
             if self.is_veo3() {
                 // Veo 3: must be 4, 6, or 8
                 if VEO3_DURATIONS.contains(&dur) {

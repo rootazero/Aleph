@@ -96,9 +96,14 @@ impl DeepgramSttProvider {
     }
 
     fn parse_error(&self, status: reqwest::StatusCode, body: &str) -> GenerationError {
+        // DeepgramError has all-optional fields, so `from_str` succeeds even on
+        // an unrelated JSON object. Only use the parsed text when a message field
+        // is actually present; otherwise fall back to the raw body so the real
+        // error detail is not replaced by a useless generic string.
         let message = serde_json::from_str::<types::DeepgramError>(body)
-            .map(|e| e.best_message())
-            .unwrap_or_else(|_| body.to_string());
+            .ok()
+            .and_then(|e| e.err_msg.or(e.message))
+            .unwrap_or_else(|| body.to_string());
         match status.as_u16() {
             401 | 403 => GenerationError::authentication(message, "deepgram-stt"),
             429 => GenerationError::rate_limit(message, None),

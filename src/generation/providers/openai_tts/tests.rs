@@ -245,7 +245,7 @@ mod tests {
         );
         assert_eq!(
             OpenAiTtsProvider::content_type_for_format(Some("opus")),
-            "audio/opus"
+            "audio/ogg"
         );
         assert_eq!(
             OpenAiTtsProvider::content_type_for_format(Some("aac")),

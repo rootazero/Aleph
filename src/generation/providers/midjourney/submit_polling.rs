@@ -95,7 +95,7 @@ impl SubmitPolling for MidjourneyProvider {
                 submit_response
                     .description
                     .unwrap_or_else(|| "Submit failed".to_string()),
-                Some(submit_response.code as u16),
+                u16::try_from(submit_response.code).ok(),
                 PROVIDER_NAME,
             ));
         }
