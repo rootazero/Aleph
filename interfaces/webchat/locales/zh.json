@@ -1799,7 +1799,9 @@
   "model_picker": {
     "loading_catalog": "正在加载模型目录…",
     "no_providers": "尚未配置任何 Provider。请在 设置 → Providers 中添加密钥。",
-    "pick_model_title": "为本轮选择模型"
+    "pick_model_title": "为本轮选择模型",
+    "filter_placeholder": "过滤 Provider 与模型…",
+    "no_match": "没有匹配的模型"
   },
   "session_tabs": {
     "close_tab": "关闭标签页 (⌘W)"
