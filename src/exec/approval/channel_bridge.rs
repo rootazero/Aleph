@@ -467,12 +467,16 @@ impl ChannelApprovalBridge {
         }
 
         match approval_manager.wait_for_decision(record).await {
-            // "Allow once" approves this invocation; "allow always" additionally
-            // carries the session-scoped grant so the dispatch gate can remember
-            // it and stop re-prompting the same tool this session. Previously
-            // both collapsed to `Approved`, silently discarding the user's
-            // "always" intent (the `AllowAlways` variant was dead end-to-end).
+            // "Allow once" approves this single invocation. Both "allow session"
+            // and "allow always" carry the session-scoped grant so the dispatch
+            // gate remembers it and stops re-prompting the same tool this
+            // session: this confirm-gated tool path has no on-disk allowlist of
+            // its own (persistent allowlisting lives in the shell-exec / gateway
+            // path), so the strongest grant it can honor is session scope.
+            // `AllowSession` is the explicit decision for that; `AllowAlways`
+            // degrades to it here rather than being silently dropped.
             Some(ApprovalDecisionType::AllowOnce) => ApprovalOutcome::Approved,
+            Some(ApprovalDecisionType::AllowSession) => ApprovalOutcome::ApprovedForSession,
             Some(ApprovalDecisionType::AllowAlways) => ApprovalOutcome::ApprovedForSession,
             Some(ApprovalDecisionType::Deny) => ApprovalOutcome::Denied,
             None => {

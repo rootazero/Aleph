@@ -21,11 +21,14 @@ use super::kernel::SecurityKernel;
 use super::risk::RiskLevel;
 use super::socket::ApprovalDecisionType;
 
-/// The full decision set offered for low-risk commands.
+/// The legacy three-decision set (`Once` / `Always` / `Deny`).
 ///
 /// Doubles as the serde default for [`super::socket::ApprovalRequestPayload`],
-/// so payloads serialized before this field existed deserialize to the
-/// historical (unconstrained) behavior.
+/// so payloads serialized before the `allowed_decisions` field existed
+/// deserialize to the historical (unconstrained) behavior. Kept byte-stable on
+/// purpose: it backfills *old* payloads, so it must NOT gain the newer
+/// `AllowSession` tier — live requests get their set from [`decisions_for_risk`]
+/// instead.
 pub fn full_set() -> Vec<ApprovalDecisionType> {
     vec![
         ApprovalDecisionType::AllowOnce,
@@ -36,16 +39,32 @@ pub fn full_set() -> Vec<ApprovalDecisionType> {
 
 /// The decisions permitted for a given assessed [`RiskLevel`].
 ///
-/// - `Safe` / `Caution`: full set — remembering is fine.
-/// - `Danger`: single-shot consent or denial only — never persist a
-///   destructive command to the allowlist in one gesture.
+/// Three independent reference agents converge on a *session* consent tier that
+/// sits between single-shot and permanent: codex's `ApprovedForSession`, hermes'
+/// `session` choice. Aleph already owns the machinery
+/// ([`crate::sandbox::exec_approval::session_memory`] +
+/// `ApprovalOutcome::ApprovedForSession`); this is where that tier is offered.
+///
+/// - `Safe` / `Caution`: every tier — once, session, persist, or deny.
+/// - `Danger`: once **or session** or deny — a destructive command may be
+///   trusted for the rest of the session (so a build loop isn't re-prompted)
+///   but is still never written to the on-disk allowlist in one gesture.
 /// - `Blocked`: deny only — defense in depth. A blocked command should be
 ///   hard-denied upstream and never reach an approval prompt; if one slips
 ///   through, the surface offers no path to run it.
 pub fn decisions_for_risk(risk: RiskLevel) -> Vec<ApprovalDecisionType> {
     match risk {
-        RiskLevel::Safe | RiskLevel::Caution => full_set(),
-        RiskLevel::Danger => vec![ApprovalDecisionType::AllowOnce, ApprovalDecisionType::Deny],
+        RiskLevel::Safe | RiskLevel::Caution => vec![
+            ApprovalDecisionType::AllowOnce,
+            ApprovalDecisionType::AllowSession,
+            ApprovalDecisionType::AllowAlways,
+            ApprovalDecisionType::Deny,
+        ],
+        RiskLevel::Danger => vec![
+            ApprovalDecisionType::AllowOnce,
+            ApprovalDecisionType::AllowSession,
+            ApprovalDecisionType::Deny,
+        ],
         RiskLevel::Blocked => vec![ApprovalDecisionType::Deny],
     }
 }
@@ -66,25 +85,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn full_set_has_three_decisions() {
+    fn full_set_stays_three_for_serde_backfill() {
+        // `full_set` is the on-the-wire backfill default for pre-`allowed_decisions`
+        // payloads and must remain the historical three tiers — adding the newer
+        // `AllowSession` here would silently rewrite old payloads.
         let set = full_set();
         assert_eq!(set.len(), 3);
         assert!(set.contains(&ApprovalDecisionType::AllowOnce));
         assert!(set.contains(&ApprovalDecisionType::AllowAlways));
         assert!(set.contains(&ApprovalDecisionType::Deny));
+        assert!(!set.contains(&ApprovalDecisionType::AllowSession));
     }
 
     #[test]
-    fn safe_and_caution_get_full_set() {
-        assert_eq!(decisions_for_risk(RiskLevel::Safe), full_set());
-        assert_eq!(decisions_for_risk(RiskLevel::Caution), full_set());
+    fn safe_and_caution_offer_session_tier() {
+        let expected = vec![
+            ApprovalDecisionType::AllowOnce,
+            ApprovalDecisionType::AllowSession,
+            ApprovalDecisionType::AllowAlways,
+            ApprovalDecisionType::Deny,
+        ];
+        assert_eq!(decisions_for_risk(RiskLevel::Safe), expected);
+        assert_eq!(decisions_for_risk(RiskLevel::Caution), expected);
     }
 
     #[test]
-    fn danger_drops_allow_always() {
+    fn danger_offers_session_but_not_always() {
         let set = decisions_for_risk(RiskLevel::Danger);
         assert!(set.contains(&ApprovalDecisionType::AllowOnce));
         assert!(set.contains(&ApprovalDecisionType::Deny));
+        assert!(
+            set.contains(&ApprovalDecisionType::AllowSession),
+            "a destructive command may still be trusted for the rest of the session"
+        );
         assert!(
             !set.contains(&ApprovalDecisionType::AllowAlways),
             "a destructive command must not be permanently allowlistable in one click"
@@ -98,16 +131,20 @@ mod tests {
     }
 
     #[test]
-    fn assess_safe_command_full_set() {
-        // `ls -la` classifies Safe → remembering allowed.
-        assert_eq!(assess_command_decisions("ls -la"), full_set());
+    fn assess_safe_command_offers_session_tier() {
+        // `ls -la` classifies Safe → every tier including session.
+        assert_eq!(
+            assess_command_decisions("ls -la"),
+            decisions_for_risk(RiskLevel::Safe)
+        );
     }
 
     #[test]
-    fn assess_danger_command_no_remember() {
-        // `rm -rf ./build` classifies Danger → no allow-always offered.
+    fn assess_danger_command_session_not_remember() {
+        // `rm -rf ./build` classifies Danger → session ok, allow-always not.
         let set = assess_command_decisions("rm -rf ./build");
         assert!(!set.contains(&ApprovalDecisionType::AllowAlways));
+        assert!(set.contains(&ApprovalDecisionType::AllowSession));
         assert!(set.contains(&ApprovalDecisionType::AllowOnce));
         assert!(set.contains(&ApprovalDecisionType::Deny));
     }

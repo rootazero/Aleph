@@ -65,6 +65,12 @@ impl ApprovalBridge {
                 callback_data: format!("approve:{}:once", approval_id),
             });
         }
+        if allowed.contains(&ApprovalDecisionType::AllowSession) {
+            allow_row.push(InlineButton {
+                text: "✅ Allow Session".into(),
+                callback_data: format!("approve:{}:session", approval_id),
+            });
+        }
         if allowed.contains(&ApprovalDecisionType::AllowAlways) {
             allow_row.push(InlineButton {
                 text: "✅ Allow Always".into(),
@@ -85,7 +91,7 @@ impl ApprovalBridge {
     /// Parse callback data into (approval_id, decision)
     ///
     /// Expected format: "approve:{id}:{decision}"
-    /// where decision is "once", "always", or "deny"
+    /// where decision is "once", "session", "always", or "deny"
     pub fn parse_callback(data: &str) -> Option<(String, ApprovalDecisionType)> {
         // Use split_once to be robust against IDs that might contain colons
         let (prefix, rest) = data.split_once(':')?;
@@ -100,6 +106,7 @@ impl ApprovalBridge {
         let approval_id = id.to_string();
         let decision = match decision_str {
             "once" => ApprovalDecisionType::AllowOnce,
+            "session" => ApprovalDecisionType::AllowSession,
             "always" => ApprovalDecisionType::AllowAlways,
             "deny" => ApprovalDecisionType::Deny,
             _ => return None,
@@ -112,6 +119,7 @@ impl ApprovalBridge {
     pub fn decision_response_text(decision: &ApprovalDecisionType) -> &'static str {
         match decision {
             ApprovalDecisionType::AllowOnce => "✅ Allowed (once)",
+            ApprovalDecisionType::AllowSession => "✅ Allowed (session)",
             ApprovalDecisionType::AllowAlways => "✅ Allowed (always)",
             ApprovalDecisionType::Deny => "❌ Denied",
         }
@@ -122,6 +130,9 @@ impl ApprovalBridge {
         match decision {
             ApprovalDecisionType::AllowOnce => {
                 format!("\n\n✅ **Allowed** (once) by {}", resolved_by)
+            }
+            ApprovalDecisionType::AllowSession => {
+                format!("\n\n✅ **Allowed** (session) by {}", resolved_by)
             }
             ApprovalDecisionType::AllowAlways => {
                 format!("\n\n✅ **Allowed** (always) by {}", resolved_by)
@@ -179,12 +190,41 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_callback_allow_session() {
+        let result = ApprovalBridge::parse_callback("approve:sess42:session");
+        assert!(result.is_some());
+        let (id, decision) = result.unwrap();
+        assert_eq!(id, "sess42");
+        assert!(matches!(decision, ApprovalDecisionType::AllowSession));
+    }
+
+    #[test]
     fn test_parse_callback_allow_always() {
         let result = ApprovalBridge::parse_callback("approve:xyz789:always");
         assert!(result.is_some());
         let (id, decision) = result.unwrap();
         assert_eq!(id, "xyz789");
         assert!(matches!(decision, ApprovalDecisionType::AllowAlways));
+    }
+
+    #[test]
+    fn test_build_keyboard_renders_session_button() {
+        let allowed = vec![
+            ApprovalDecisionType::AllowOnce,
+            ApprovalDecisionType::AllowSession,
+            ApprovalDecisionType::Deny,
+        ];
+        let kb = ApprovalBridge::build_approval_keyboard("req-1", &allowed);
+        // The session callback must be present and round-trip through parse.
+        let json = serde_json::to_string(&kb).unwrap();
+        assert!(
+            json.contains("approve:req-1:session"),
+            "session button missing: {json}"
+        );
+        assert!(
+            !json.contains("approve:req-1:always"),
+            "danger keyboard must not offer allow-always"
+        );
     }
 
     #[test]

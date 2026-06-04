@@ -90,6 +90,12 @@ pub struct SegmentInfo {
 pub enum ApprovalDecisionType {
     /// Allow this execution only
     AllowOnce,
+    /// Allow for the remainder of this session — remembered in the in-memory
+    /// session approval store so the same command/tool is not re-prompted, but
+    /// never persisted to the on-disk allowlist. Sits between `AllowOnce`
+    /// (no memory) and `AllowAlways` (forever, on disk); mirrors codex
+    /// `ApprovedForSession` and hermes' `session` consent tier.
+    AllowSession,
     /// Allow and add to allowlist
     AllowAlways,
     /// Deny execution
@@ -244,6 +250,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ApprovalDecisionType::AllowOnce).unwrap(),
             r#""allow-once""#
+        );
+        assert_eq!(
+            serde_json::to_string(&ApprovalDecisionType::AllowSession).unwrap(),
+            r#""allow-session""#
         );
         assert_eq!(
             serde_json::to_string(&ApprovalDecisionType::AllowAlways).unwrap(),
