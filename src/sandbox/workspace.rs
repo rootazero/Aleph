@@ -408,6 +408,22 @@ impl Sandbox for WorkspaceSandbox {
             output_blocked.extend(stderr_scrub.blocked);
             out.stdout = stdout_scrub.bytes.into_owned();
             out.stderr = stderr_scrub.bytes.into_owned();
+
+            // Neutralize invisible / bidirectional Unicode control characters
+            // (zero-width injection, RLO/isolate overrides) before the output
+            // reaches the model — the redline-safe, deterministic half of
+            // prompt-injection defense (OpenSquilla's "invisible character"
+            // class), distinct from the secret scrub above.
+            let (stdout_clean, n_out) = crate::sandbox::scrub::strip_unsafe_invisible(&out.stdout);
+            let (stderr_clean, n_err) = crate::sandbox::scrub::strip_unsafe_invisible(&out.stderr);
+            if n_out + n_err > 0 {
+                tracing::warn!(
+                    removed = n_out + n_err,
+                    "sandbox neutralized invisible/bidi control chars in command output"
+                );
+            }
+            out.stdout = stdout_clean.into_owned();
+            out.stderr = stderr_clean.into_owned();
         }
 
         // Block-class secret floor: a catastrophic secret (e.g. a PEM private

@@ -79,6 +79,72 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
     }
 }
 
+/// Invisible / bidirectional Unicode control characters that have no place in
+/// command output and are classic prompt- and terminal-spoofing vectors:
+/// zero-width injection (text the human never sees but the model does) and
+/// right-to-left / isolate overrides (visually reordering text to disguise its
+/// real content). Each entry is the exact UTF-8 encoding of one code point.
+///
+/// This is the redline-safe half of prompt-injection defense — a deterministic
+/// hard filter on a fixed set of control characters, like stripping ANSI
+/// escapes. It maps OpenSquilla's `injection_guard` "invisible character" class
+/// onto Aleph WITHOUT porting its semantic regex classifier (prompt-override /
+/// role-hijack / exfiltration heuristics), which would be content scoring and
+/// violate the no-content-review redline (R7 / R10).
+const UNSAFE_INVISIBLE_SEQUENCES: &[&[u8]] = &[
+    &[0xE2, 0x80, 0x8B], // U+200B ZERO WIDTH SPACE
+    &[0xE2, 0x80, 0x8C], // U+200C ZERO WIDTH NON-JOINER
+    &[0xE2, 0x80, 0x8D], // U+200D ZERO WIDTH JOINER
+    &[0xE2, 0x80, 0xAA], // U+202A LEFT-TO-RIGHT EMBEDDING
+    &[0xE2, 0x80, 0xAB], // U+202B RIGHT-TO-LEFT EMBEDDING
+    &[0xE2, 0x80, 0xAC], // U+202C POP DIRECTIONAL FORMATTING
+    &[0xE2, 0x80, 0xAD], // U+202D LEFT-TO-RIGHT OVERRIDE
+    &[0xE2, 0x80, 0xAE], // U+202E RIGHT-TO-LEFT OVERRIDE
+    &[0xE2, 0x81, 0xA6], // U+2066 LEFT-TO-RIGHT ISOLATE
+    &[0xE2, 0x81, 0xA7], // U+2067 RIGHT-TO-LEFT ISOLATE
+    &[0xE2, 0x81, 0xA8], // U+2068 FIRST STRONG ISOLATE
+    &[0xE2, 0x81, 0xA9], // U+2069 POP DIRECTIONAL ISOLATE
+    &[0xEF, 0xBB, 0xBF], // U+FEFF ZERO WIDTH NO-BREAK SPACE (BOM)
+];
+
+/// Strip every [`UNSAFE_INVISIBLE_SEQUENCES`] occurrence from `bytes`,
+/// returning the cleaned bytes (borrowed when none present) and the number of
+/// sequences removed.
+///
+/// Operating on raw bytes is safe even amid non-UTF-8 data: UTF-8 is
+/// self-synchronizing, so each three-byte target sequence can only appear as
+/// the complete encoding of its code point — never spanning a character
+/// boundary — because its lead byte (`0xE2` / `0xEF`) always starts a fresh
+/// character and its trailing bytes are continuation bytes that never start one.
+pub fn strip_unsafe_invisible(bytes: &[u8]) -> (Cow<'_, [u8]>, usize) {
+    // Every target shares one of two lead bytes — cheap reject for clean output.
+    if !bytes.iter().any(|&b| b == 0xE2 || b == 0xEF) {
+        return (Cow::Borrowed(bytes), 0);
+    }
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut removed = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let rest = &bytes[i..];
+        if let Some(seq) = UNSAFE_INVISIBLE_SEQUENCES
+            .iter()
+            .find(|seq| rest.starts_with(seq))
+        {
+            removed += 1;
+            i += seq.len();
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    if removed == 0 {
+        // Lead byte present but no full target matched: nothing changed, so
+        // hand back the borrow and drop the scratch buffer.
+        return (Cow::Borrowed(bytes), 0);
+    }
+    (Cow::Owned(out), removed)
+}
+
 fn is_whitelisted(slice: &[u8], injected: &[InjectedSecret]) -> bool {
     if injected.is_empty() {
         return false;
@@ -196,6 +262,36 @@ mod tests {
         let out = scrub_secrets_bytes(b"all good here\n", &[]);
         assert!(out.hits.is_empty());
         assert!(out.blocked.is_empty());
+    }
+
+    #[test]
+    fn invisible_strip_passthrough_when_clean() {
+        let (out, n) = strip_unsafe_invisible(b"normal output\n");
+        assert_eq!(n, 0);
+        assert!(matches!(out, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn invisible_strip_removes_zero_width_and_bidi() {
+        // "ad\u{202E}min" (RLO) + a zero-width space + a BOM.
+        let mut input = "ad".as_bytes().to_vec();
+        input.extend_from_slice(&[0xE2, 0x80, 0xAE]); // U+202E RLO
+        input.extend_from_slice("min".as_bytes());
+        input.extend_from_slice(&[0xE2, 0x80, 0x8B]); // U+200B ZWSP
+        input.extend_from_slice(&[0xEF, 0xBB, 0xBF]); // U+FEFF BOM
+        let (out, n) = strip_unsafe_invisible(&input);
+        assert_eq!(n, 3, "three control sequences removed");
+        assert_eq!(out.as_ref(), b"admin", "visible text preserved, controls gone");
+    }
+
+    #[test]
+    fn invisible_strip_preserves_legit_e2_led_chars() {
+        // U+20AC EURO SIGN is E2 82 AC — shares the 0xE2 lead byte but is NOT a
+        // target; it must survive untouched.
+        let euro = "€100".as_bytes().to_vec();
+        let (out, n) = strip_unsafe_invisible(&euro);
+        assert_eq!(n, 0);
+        assert_eq!(out.as_ref(), euro.as_slice());
     }
 
     #[test]
