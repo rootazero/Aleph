@@ -157,6 +157,88 @@ fn stream_was_truncated(saw_terminal: bool, tail_terminal: bool) -> bool {
     !saw_terminal && !tail_terminal
 }
 
+/// Parse Anthropic's error envelope `{"type":"error","error":{"type","message"}}`.
+/// Returns `(error_type, message)`; either is `None` when the body is not that
+/// shape (e.g. an HTML 502 from an upstream proxy, or an empty body).
+fn parse_anthropic_error_envelope(body: &str) -> (Option<String>, Option<String>) {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(body) else {
+        return (None, None);
+    };
+    let err = v.get("error");
+    let etype = err
+        .and_then(|e| e.get("type"))
+        .and_then(|t| t.as_str())
+        .map(str::to_string);
+    let emsg = err
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .map(str::to_string);
+    (etype, emsg)
+}
+
+/// Map an Anthropic non-2xx HTTP response to a typed [`AlephError`] carrying the
+/// correct retry semantics (cf. [`crate::providers::retry`]).
+///
+/// Mirrors hermes-agent / pi typed error handling, mapped onto Rust's error
+/// enum so classification is total and compiler-checked rather than ad-hoc
+/// string sniffing:
+/// - `401` / `403` (or `authentication_error` / `permission_error`) → auth, fatal
+/// - `429` (or `rate_limit_error`) → distinct rate-limit, fatal (retry amplifies)
+/// - `529` (or `overloaded_error`) → transient, **retryable**
+/// - `400` / `422` (or `invalid_request_error`) → client error, fatal
+/// - `5xx` / `api_error` → keeps the numeric status so the retry policy's
+///   status-code list (`500/502/503/504`) decides
+///
+/// The previous inline logic only special-cased `429` and otherwise emitted a
+/// bare `provider("... ({status}): {body}")`, which left `529` (not in the
+/// default retryable status list) classified as fatal and surfaced raw JSON
+/// bodies to the user.
+fn classify_anthropic_error_response(
+    status: u16,
+    retry_after: Option<&str>,
+    body: &str,
+) -> AlephError {
+    let (etype, emsg) = parse_anthropic_error_envelope(body);
+    let detail = emsg.unwrap_or_else(|| {
+        if body.trim().is_empty() {
+            "(no response body)".to_string()
+        } else {
+            body.to_string()
+        }
+    });
+    let overloaded = status == 529 || etype.as_deref() == Some("overloaded_error");
+    match status {
+        401 | 403 => AlephError::authentication(
+            "anthropic",
+            format!("Anthropic authentication failed ({status}): {detail}"),
+        ),
+        429 => {
+            let suggestion = retry_after
+                .map(|ra| format!("Rate limited. Retry after {ra} seconds."))
+                .unwrap_or_else(|| {
+                    "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
+                });
+            AlephError::RateLimitError {
+                message: format!("Anthropic API rate limited (429): {detail}"),
+                suggestion: Some(suggestion),
+            }
+        }
+        // Overloaded is transient. Keep the literal "overloaded" token in the
+        // message so `retry::is_overloaded_message` classifies it retryable —
+        // 529 is deliberately absent from the default retryable status list.
+        _ if overloaded => {
+            AlephError::provider(format!("Anthropic API overloaded ({status}): {detail}"))
+        }
+        // Client errors: the request is malformed; retrying just re-fails.
+        400 | 422 => {
+            AlephError::provider(format!("Anthropic invalid request ({status}): {detail}"))
+        }
+        // Everything else (incl. 500/502/503/504) keeps the numeric status in
+        // the message so the retry policy's status-code match decides.
+        _ => AlephError::provider(format!("Anthropic API error ({status}): {detail}")),
+    }
+}
+
 #[async_trait]
 impl ProtocolAdapter for AnthropicProtocol {
     fn build_request(
@@ -218,6 +300,21 @@ impl ProtocolAdapter for AnthropicProtocol {
         let adaptive = Self::supports_adaptive_thinking(actual_model);
         let (thinking, adaptive_effort): (Option<ThinkingBlock>, Option<&'static str>) =
             match payload.think_level.as_ref() {
+                // Explicit `Off` on an adaptive (4.6/4.7) model: these models
+                // think by DEFAULT, so omitting the `thinking` field leaves it
+                // enabled — the caller's "off" would be silently ignored. Emit
+                // `{type:"disabled"}` to actually turn it off (pi parity:
+                // `thinkingEnabled === false → thinking:{type:"disabled"}`).
+                // Older/non-adaptive models default to no-thinking, so the
+                // generic arms below disable them by omission as before.
+                Some(crate::agents::thinking::ThinkLevel::Off) if adaptive => (
+                    Some(ThinkingBlock {
+                        thinking_type: "disabled".to_string(),
+                        budget_tokens: None,
+                        display: None,
+                    }),
+                    None,
+                ),
                 Some(level) if adaptive => {
                     match Self::map_think_level_to_adaptive_effort(level, actual_model) {
                         Some(eff) => (
@@ -354,7 +451,15 @@ impl ProtocolAdapter for AnthropicProtocol {
         //
         // Claude 4.7+ additionally 400s on sampling params even without thinking;
         // gate them off whenever `forbids_sampling_params(model)` is true.
-        let strip_sampling = thinking.is_some() || Self::forbids_sampling_params(actual_model);
+        //
+        // Only *enabled*/*adaptive* thinking conflicts with sampling — an
+        // explicit `{type:"disabled"}` block leaves sampling perfectly legal, so
+        // don't strip temperature just because a (disabled) thinking block is
+        // present.
+        let thinking_active = thinking
+            .as_ref()
+            .is_some_and(|t| t.thinking_type != "disabled");
+        let strip_sampling = thinking_active || Self::forbids_sampling_params(actual_model);
         let (temperature, top_p, top_k) = if strip_sampling {
             (None, None, None)
         } else {
@@ -530,22 +635,11 @@ impl ProtocolAdapter for AnthropicProtocol {
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
             let error_text = response.text().await.unwrap_or_default();
-            if status.as_u16() == 429 {
-                let suggestion = retry_after
-                    .as_ref()
-                    .map(|ra| format!("Rate limited. Retry after {ra} seconds."))
-                    .unwrap_or_else(|| {
-                        "Rate limited. Wait before retrying or upgrade your API plan.".to_string()
-                    });
-                return Err(AlephError::RateLimitError {
-                    message: format!("Anthropic API rate limited (429): {}", error_text),
-                    suggestion: Some(suggestion),
-                });
-            }
-            return Err(AlephError::provider(format!(
-                "Anthropic API error ({}): {}",
-                status, error_text
-            )));
+            return Err(classify_anthropic_error_response(
+                status.as_u16(),
+                retry_after.as_deref(),
+                &error_text,
+            ));
         }
 
         let byte_stream = response
@@ -902,5 +996,100 @@ mod truncation_guard_tests {
             r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
         ];
         assert!(!would_flag_truncation(&events));
+    }
+}
+
+/// Tests for typed HTTP error-response classification (hermes-agent / pi typed
+/// error parity). Confirms each Anthropic error maps to the right `AlephError`
+/// variant AND the right retry verdict via `providers::retry`.
+#[cfg(test)]
+mod error_classification_tests {
+    use super::{classify_anthropic_error_response, parse_anthropic_error_envelope};
+    use crate::error::AlephError;
+    use crate::providers::retry::retryable_reason;
+
+    fn is_retryable(e: &AlephError) -> bool {
+        retryable_reason(e).is_some()
+    }
+
+    #[test]
+    fn parses_error_envelope() {
+        let (t, m) = parse_anthropic_error_envelope(
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        );
+        assert_eq!(t.as_deref(), Some("overloaded_error"));
+        assert_eq!(m.as_deref(), Some("Overloaded"));
+    }
+
+    #[test]
+    fn non_json_body_yields_no_envelope_fields() {
+        let (t, m) = parse_anthropic_error_envelope("<html>502 Bad Gateway</html>");
+        assert!(t.is_none() && m.is_none());
+    }
+
+    #[test]
+    fn auth_errors_are_typed_and_fatal() {
+        for status in [401u16, 403] {
+            let e = classify_anthropic_error_response(status, None, "");
+            assert!(matches!(e, AlephError::AuthenticationError { .. }));
+            assert!(!is_retryable(&e), "auth must not retry");
+        }
+    }
+
+    #[test]
+    fn rate_limit_is_typed_with_retry_after_and_not_retryable() {
+        let e = classify_anthropic_error_response(
+            429,
+            Some("12"),
+            r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#,
+        );
+        match &e {
+            AlephError::RateLimitError { suggestion, .. } => {
+                assert!(suggestion.as_ref().unwrap().contains("12"));
+            }
+            other => panic!("expected RateLimitError, got {other:?}"),
+        }
+        assert!(!is_retryable(&e), "rate limit retry amplifies — must be fatal");
+    }
+
+    #[test]
+    fn overloaded_529_is_retryable_even_with_empty_body() {
+        // The core gap: 529 is NOT in the default retryable status list, so the
+        // old bare provider("... (529): ") was classified fatal. The classifier
+        // injects the "overloaded" token so retry treats it transient.
+        let e = classify_anthropic_error_response(529, None, "");
+        assert!(matches!(e, AlephError::ProviderError { .. }));
+        assert!(is_retryable(&e), "529 overloaded must be retryable");
+    }
+
+    #[test]
+    fn overloaded_by_envelope_type_on_500_is_retryable() {
+        let e = classify_anthropic_error_response(
+            500,
+            None,
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        );
+        assert!(is_retryable(&e));
+    }
+
+    #[test]
+    fn invalid_request_400_is_fatal() {
+        let e = classify_anthropic_error_response(
+            400,
+            None,
+            r#"{"type":"error","error":{"type":"invalid_request_error","message":"bad tool schema"}}"#,
+        );
+        assert!(matches!(e, AlephError::ProviderError { .. }));
+        assert!(!is_retryable(&e), "400 client error must not retry");
+        // The clean envelope message is surfaced, not raw JSON.
+        assert!(format!("{e}").contains("bad tool schema"));
+    }
+
+    #[test]
+    fn server_5xx_remains_retryable_via_status_list() {
+        for status in [500u16, 502, 503, 504] {
+            let e = classify_anthropic_error_response(status, None, "upstream down");
+            assert!(is_retryable(&e), "{status} should retry");
+        }
     }
 }
