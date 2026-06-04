@@ -198,6 +198,29 @@ Write entry points on `NoteIndexer`:
 - `append_to_note(agent_id, "category/filename", &facts, &links)` — reads the existing file (or synthesizes an empty `KnowledgeNote`), extends `facts`, deduplicates `links`, bumps `updated_at`, writes, and re-indexes.
 - `rename_note(agent_id, old_title, new_title)` — renames the file, scans every category dir for `[[old_title]]` references, calls `rewrite_wikilinks` on each match, and re-indexes every changed file.
 
+#### Write-time semantic dedup (mem0-style) / 写入期语义去重
+
+The compound ingestor (`DefaultCompoundIngestor::dedup_redirect_creates`) runs an
+optional admission gate between planning and apply. For each planned
+`PageOp::Create`, it embeds the candidate note's text and compares it — by
+**exact cosine** (metric-independent of the store's vec0 distance) — against the
+stored embeddings of the already-gathered related pages. When the nearest related
+page meets `dedup_similarity_threshold`, the `Create` is rewritten into an
+`Append` onto that page, so the genuinely-new facts merge into the existing note
+instead of spawning a near-duplicate. The probe reuses the related set already
+fetched for the planner (no extra search) and batch-embeds all candidates in a
+single round-trip; it is purely additive and adds no LLM call (R7/R10-safe).
+
+This mirrors mem0's additive-dedup strategy but **surpasses** it: mem0 drops the
+duplicate, whereas Aleph absorbs its facts into the keeper and still layers the
+richer offline dream-consolidation (`note_consolidate`) on top. Controlled by
+`memory.compound_ingest.dedup_enabled` (default **false** → byte-identical
+ingest) and `dedup_similarity_threshold` (default `0.92`); both are threaded
+into `RelatedBudget`. Disabled, missing embeddings, or an empty related set all
+degrade gracefully to the legacy create-everything behaviour (P7).
+
+写入期语义去重：在规划与落盘之间增设可选准入闸门。对每个待建 `Create`，将候选笔记文本嵌入后与已召回的相关页面存量向量做**精确余弦**比较；当最近邻超过阈值时，把 `Create` 改写为对该页的 `Append`，让新事实并入既有笔记而非新建近似重复页。复用规划阶段已取的相关集、单次批量嵌入、零额外 LLM 调用。默认关闭（字节级一致），由 `dedup_enabled` / `dedup_similarity_threshold` 控制。相比 mem0 仅丢弃重复，Aleph 吸收其事实并叠加离线 dream 整合，能力更强。
+
 ### 6.2 Compression Scheduler
 
 `CompressionScheduler` in `src/memory/compression/scheduler.rs` decides when to promote raw memories into notes. It tracks `pending_turns: AtomicU32` and `last_activity: Mutex<Instant>`, and `should_trigger_compression()` returns a `CompressionTrigger` enum variant (`None` | `IdleTimeout` | `TurnThreshold` | `SessionEnd` | `ManualRequest` | `BackgroundSchedule`). Turn-threshold trigger has priority over idle-timeout; idle trigger fires only when `pending_turns > 0`. Defaults: `idle_timeout_seconds = 300`, `turn_threshold = 20`, `background_interval_seconds = 3600`. When the scheduler fires, `CompressionService` (`src/memory/compression/service.rs`) consumes a batch from `raw_memories` (see `RAW_MEMORY.md` §7.1), extracts `NoteUpdate`s via the LLM extractor, and dispatches them into `NoteIndexer::write_note` (for `NoteAction::Create`) or `NoteIndexer::append_to_note` (for `Append` / `Update`). The scheduler implements `PostCompactCleanup` to reset its turn counter when compaction completes.

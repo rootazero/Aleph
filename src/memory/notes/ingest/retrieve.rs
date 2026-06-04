@@ -12,6 +12,14 @@ pub struct RelatedBudget {
     pub max_related_pages: usize,
     pub preview_char_cap: usize,
     pub total_byte_cap: usize,
+    /// Write-time semantic dedup gate (mem0-style). When `true`, planned
+    /// `Create` ops whose embedding exceeds `dedup_similarity_threshold`
+    /// cosine of an existing related note are redirected into an `Append`.
+    /// `false` keeps the pre-dedup behaviour (byte-identical ingest).
+    pub dedup_enabled: bool,
+    /// Cosine threshold for the dedup gate; ignored when `dedup_enabled` is
+    /// `false`. Clamped to `[0.0, 1.0]` at decision time.
+    pub dedup_similarity_threshold: f32,
 }
 
 impl Default for RelatedBudget {
@@ -20,6 +28,8 @@ impl Default for RelatedBudget {
             max_related_pages: 15,
             preview_char_cap: 800,
             total_byte_cap: 12 * 1024,
+            dedup_enabled: false,
+            dedup_similarity_threshold: 0.92,
         }
     }
 }

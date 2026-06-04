@@ -265,6 +265,20 @@ pub fn default_related_total_byte_cap() -> usize {
     12 * 1024
 }
 
+/// Write-time semantic dedup gate (mem0-style). Disabled by default so the
+/// ingest pipeline stays byte-identical unless an operator opts in.
+pub fn default_dedup_enabled() -> bool {
+    false
+}
+
+/// Cosine-similarity threshold above which a freshly-planned `Create` is
+/// redirected into an `Append` onto the nearest existing note. `0.92` is
+/// deliberately conservative: only near-identical notes collapse, leaving
+/// genuinely distinct facts to spawn their own page.
+pub fn default_dedup_similarity_threshold() -> f32 {
+    0.92
+}
+
 pub fn default_replan_on_hash_conflict() -> u32 {
     1
 }

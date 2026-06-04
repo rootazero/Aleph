@@ -236,6 +236,14 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             return Ok(ApplyReport::default());
         }
 
+        // Write-time semantic dedup (mem0-style): redirect near-duplicate
+        // `Create` ops into `Append`s onto the matching existing note. No-op
+        // unless `budget.dedup_enabled`. Runs before the gate so a redirected
+        // Append (which targets an already-admitted note) bypasses re-gating.
+        plan.ops = self
+            .dedup_redirect_creates(agent_id, plan.ops, &related)
+            .await;
+
         // Governance gate: scoped to PageOp::Create in this commit. Other
         // PageOp variants (Append/Update/Contradict/Link/Supersede) pass
         // through unchanged and will be gated in a follow-up commit. When
@@ -263,6 +271,9 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                 if plan2.ops.is_empty() {
                     return Ok(ApplyReport::default());
                 }
+                plan2.ops = self
+                    .dedup_redirect_creates(agent_id, plan2.ops, &related)
+                    .await;
                 if self.gate.is_some() {
                     plan2.ops = self.filter_ops_through_gate(agent_id, plan2.ops).await?;
                     if plan2.ops.is_empty() {
@@ -369,6 +380,132 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
             tx.stage(op).await?;
         }
         tx.commit().await
+    }
+
+    /// mem0-style write-time semantic dedup. For each planned `PageOp::Create`,
+    /// embed the candidate note's text and compare it (exact cosine, so the
+    /// decision is independent of the store's vec0 distance metric) against the
+    /// stored embeddings of the already-gathered related pages. When the
+    /// nearest related page meets `dedup_similarity_threshold`, the `Create` is
+    /// rewritten into an `Append` onto that page — the genuinely-new facts
+    /// merge into the existing note (Append dedups facts intra-note) instead of
+    /// spawning a near-duplicate page.
+    ///
+    /// This stops obvious duplicates at the door cheaply and synchronously
+    /// (no extra LLM call → R7/R10-safe), while Aleph keeps its richer offline
+    /// dream-consolidation on top — surpassing mem0, which only drops the dup.
+    ///
+    /// Returns `ops` unchanged when dedup is disabled, the related set is
+    /// empty, or embeddings are unavailable (graceful degradation, P7).
+    async fn dedup_redirect_creates(
+        &self,
+        agent_id: &str,
+        ops: Vec<PageOp>,
+        related: &[RelatedPage],
+    ) -> Vec<PageOp> {
+        if !self.budget.dedup_enabled || related.is_empty() {
+            return ops;
+        }
+        let threshold = self.budget.dedup_similarity_threshold.clamp(0.0, 1.0);
+        let dim = self.embedder.dimensions() as u32;
+
+        // Stored vectors for the related pages. Pages without a vector at this
+        // dim (e.g. link-expanded pages not yet embedded) are simply skipped.
+        let mut related_vecs: Vec<(&str, Vec<f32>)> = Vec::with_capacity(related.len());
+        for rp in related {
+            if let Ok(Some(v)) = self.store.get_embedding(&rp.path, agent_id, dim).await {
+                if !v.is_empty() {
+                    related_vecs.push((rp.path.as_str(), v));
+                }
+            }
+        }
+        if related_vecs.is_empty() {
+            return ops;
+        }
+
+        // Batch-embed every Create candidate in a single round-trip.
+        let mut create_idx: Vec<usize> = Vec::new();
+        let mut create_texts: Vec<String> = Vec::new();
+        for (i, op) in ops.iter().enumerate() {
+            if let PageOp::Create {
+                title,
+                summary,
+                facts,
+                ..
+            } = op
+            {
+                create_idx.push(i);
+                create_texts.push(candidate_dedup_text(title, summary, facts));
+            }
+        }
+        if create_idx.is_empty() {
+            return ops;
+        }
+        let text_refs: Vec<&str> = create_texts.iter().map(String::as_str).collect();
+        let cand_vecs = match self.embedder.embed_batch(&text_refs).await {
+            Ok(v) if v.len() == create_idx.len() => v,
+            // Degrade: embedding endpoint down or size mismatch → keep Creates.
+            _ => return ops,
+        };
+
+        // For each Create, find the best related page above threshold (never
+        // self-redirecting onto the Create's own path).
+        use std::collections::HashMap;
+        let mut redirect: HashMap<usize, String> = HashMap::new();
+        for (slot, &op_i) in create_idx.iter().enumerate() {
+            let PageOp::Create { note_path, .. } = &ops[op_i] else {
+                continue;
+            };
+            let cand = &cand_vecs[slot];
+            let mut best: Option<(&str, f32)> = None;
+            for (path, vec) in &related_vecs {
+                if *path == note_path.as_str() {
+                    continue;
+                }
+                let sim = cosine_similarity(cand, vec);
+                if best.map_or(true, |(_, b)| sim > b) {
+                    best = Some((*path, sim));
+                }
+            }
+            if let Some((path, sim)) = best {
+                if sim >= threshold {
+                    redirect.insert(op_i, path.to_string());
+                }
+            }
+        }
+        if redirect.is_empty() {
+            return ops;
+        }
+
+        // Rewrite redirected Creates → Append onto the matched existing note.
+        // The existing page owns its own title/summary, so only the candidate's
+        // facts and links carry over.
+        ops.into_iter()
+            .enumerate()
+            .map(|(i, op)| match (redirect.remove(&i), op) {
+                (
+                    Some(target),
+                    PageOp::Create {
+                        note_path,
+                        facts,
+                        links,
+                        ..
+                    },
+                ) => {
+                    info!(
+                        from = %note_path,
+                        into = %target,
+                        "ingest dedup: redirecting near-duplicate Create into Append"
+                    );
+                    PageOp::Append {
+                        note_path: target,
+                        new_facts: facts,
+                        new_links: links,
+                    }
+                }
+                (_, op) => op,
+            })
+            .collect()
     }
 
     /// Run each `PageOp::Create` through `self.gate` and drop ops whose
@@ -545,6 +682,47 @@ fn valid_op(op: &PageOp) -> bool {
             old_path.contains('/') && new_path.contains('/') && old_path != new_path
         }
     }
+}
+
+/// Build the probe text for a `Create` candidate in the write-time dedup gate.
+/// Mirrors the salient content of a note (human title, summary, facts) so the
+/// candidate's embedding is comparable to a stored note's vector.
+fn candidate_dedup_text(title: &str, summary: &str, facts: &[String]) -> String {
+    let mut s = String::new();
+    if !title.is_empty() {
+        s.push_str(title);
+        s.push('\n');
+    }
+    if !summary.is_empty() {
+        s.push_str(summary);
+        s.push('\n');
+    }
+    for f in facts {
+        s.push_str(f);
+        s.push('\n');
+    }
+    s
+}
+
+/// Cosine similarity in `[-1, 1]`. Returns `0.0` for mismatched-length,
+/// empty, or zero-norm vectors so such pairs are treated as "not similar"
+/// and never trigger a dedup redirect.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let mut dot = 0.0f32;
+    let mut na = 0.0f32;
+    let mut nb = 0.0f32;
+    for (x, y) in a.iter().zip(b.iter()) {
+        dot += x * y;
+        na += x * x;
+        nb += y * y;
+    }
+    if na == 0.0 || nb == 0.0 {
+        return 0.0;
+    }
+    dot / (na.sqrt() * nb.sqrt())
 }
 
 #[async_trait]
@@ -1093,5 +1271,202 @@ mod plan_tests {
                 .unwrap();
         assert!(body.contains("Futures are lazy"));
         assert!(body.contains("tokio is the runtime"));
+    }
+
+    // ---- Write-time semantic dedup (mem0-style) ----
+
+    #[test]
+    fn cosine_similarity_identical_is_one() {
+        let v = vec![0.1f32; 8];
+        assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn cosine_similarity_orthogonal_is_zero() {
+        let a = vec![1.0f32, 0.0];
+        let b = vec![0.0f32, 1.0];
+        assert!(cosine_similarity(&a, &b).abs() < 1e-5);
+    }
+
+    #[test]
+    fn cosine_similarity_guards_mismatch_and_zero_norm() {
+        assert_eq!(cosine_similarity(&[1.0, 2.0], &[1.0]), 0.0);
+        assert_eq!(cosine_similarity(&[], &[]), 0.0);
+        assert_eq!(cosine_similarity(&[0.0, 0.0], &[0.0, 0.0]), 0.0);
+    }
+
+    #[test]
+    fn candidate_dedup_text_skips_empty_fields() {
+        let t = candidate_dedup_text("Tokio", "", &["event loop".into(), "tasks".into()]);
+        assert!(t.contains("Tokio"));
+        assert!(t.contains("event loop"));
+        assert!(t.contains("tasks"));
+        // empty summary contributes no blank line of its own
+        assert!(!t.contains("\n\n"));
+    }
+
+    /// With dedup enabled and a near-identical existing note (the mock embedder
+    /// returns a constant vector → cosine 1.0), a planned `Create` is rewritten
+    /// into an `Append` onto the existing page, carrying its facts and links.
+    #[tokio::test]
+    async fn dedup_redirects_near_duplicate_create_to_append() {
+        let (dir, backend, indexer) = mk().await;
+        // Seed the existing note's embedding so get_embedding returns Some.
+        backend
+            .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024)
+            .await
+            .unwrap();
+
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget {
+                dedup_enabled: true,
+                ..RelatedBudget::default()
+            },
+            embedding_manager: None,
+            gate: None,
+        };
+
+        let related = vec![RelatedPage {
+            path: "learning/tokio".into(),
+            title: "tokio".into(),
+            summary: String::new(),
+            content_preview: String::new(),
+            tags: vec![],
+            content_hash: "h".into(),
+            score: 1.0,
+        }];
+        let ops = vec![PageOp::Create {
+            note_path: "learning/tokio-runtime".into(),
+            title: "Tokio runtime".into(),
+            summary: "async".into(),
+            facts: vec!["event loop".into()],
+            links: vec!["learning/rust".into()],
+            tags: vec![],
+        }];
+        let out = ing
+            .dedup_redirect_creates("default", ops, &related)
+            .await;
+        assert_eq!(out.len(), 1);
+        match &out[0] {
+            PageOp::Append {
+                note_path,
+                new_facts,
+                new_links,
+            } => {
+                assert_eq!(note_path, "learning/tokio");
+                assert!(new_facts.iter().any(|f| f.contains("event loop")));
+                assert_eq!(new_links, &vec!["learning/rust".to_string()]);
+            }
+            other => panic!("expected Append redirect, got {other:?}"),
+        }
+    }
+
+    /// Dedup is off by default → the planned `Create` passes through unchanged
+    /// even when an identical existing note is present (byte-identical ingest).
+    #[tokio::test]
+    async fn dedup_disabled_keeps_create_unchanged() {
+        let (dir, backend, indexer) = mk().await;
+        backend
+            .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024)
+            .await
+            .unwrap();
+
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget::default(), // dedup_enabled = false
+            embedding_manager: None,
+            gate: None,
+        };
+
+        let related = vec![RelatedPage {
+            path: "learning/tokio".into(),
+            title: "tokio".into(),
+            summary: String::new(),
+            content_preview: String::new(),
+            tags: vec![],
+            content_hash: "h".into(),
+            score: 1.0,
+        }];
+        let ops = vec![PageOp::Create {
+            note_path: "learning/tokio-runtime".into(),
+            title: "Tokio runtime".into(),
+            summary: "async".into(),
+            facts: vec!["event loop".into()],
+            links: vec!["learning/rust".into()],
+            tags: vec![],
+        }];
+        let out = ing
+            .dedup_redirect_creates("default", ops, &related)
+            .await;
+        assert!(
+            matches!(out[0], PageOp::Create { .. }),
+            "dedup disabled must leave Create unchanged"
+        );
+    }
+
+    /// A `Create` whose own path matches the only related page must NOT
+    /// self-redirect (that would turn a legitimate overwrite into a no-op
+    /// append against itself).
+    #[tokio::test]
+    async fn dedup_never_self_redirects() {
+        let (dir, backend, indexer) = mk().await;
+        backend
+            .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024)
+            .await
+            .unwrap();
+
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget {
+                dedup_enabled: true,
+                ..RelatedBudget::default()
+            },
+            embedding_manager: None,
+            gate: None,
+        };
+
+        let related = vec![RelatedPage {
+            path: "learning/tokio".into(),
+            title: "tokio".into(),
+            summary: String::new(),
+            content_preview: String::new(),
+            tags: vec![],
+            content_hash: "h".into(),
+            score: 1.0,
+        }];
+        let ops = vec![PageOp::Create {
+            note_path: "learning/tokio".into(),
+            title: "Tokio".into(),
+            summary: "async".into(),
+            facts: vec!["event loop".into()],
+            links: vec!["learning/rust".into()],
+            tags: vec![],
+        }];
+        let out = ing
+            .dedup_redirect_creates("default", ops, &related)
+            .await;
+        assert!(
+            matches!(out[0], PageOp::Create { .. }),
+            "must not redirect a Create onto its own path"
+        );
     }
 }
