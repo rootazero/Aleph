@@ -88,7 +88,7 @@ model_behavior = "anthropic"            # Use a specific behavior file in ~/.ale
 # Reliability & caching (all optional)
 stream_idle_timeout_secs = 60           # Anthropic only: per-SSE-event idle watchdog, secs (0 = disabled, default 60)
 cache_retention = "short"               # Anthropic only: "off" | "short" (default) | "long"
-service_tier = "auto"                   # Anthropic only: "auto" | "default"
+service_tier = "auto"                   # Shared: Anthropic "auto"|"standard_only"; OpenAI "auto"|"default"|"flex"|"priority"
 metadata_user_id = "user-123"           # Anthropic only: end-user id sent in metadata.user_id
 effort = "medium"                       # Anthropic only: thinking budget — "low" | "medium" | "high" | numeric string
 
