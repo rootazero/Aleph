@@ -58,11 +58,17 @@ pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
 ];
 
 /// Produce bytes-flavored regexes matching the same patterns as
-/// `SECRET_PATTERN_SOURCES`. Used by `sandbox::scrub` to redact raw
-/// stdout/stderr before any UTF-8 conversion.
+/// `SECRET_PATTERN_SOURCES`, plus the shared high-confidence vendor catalog in
+/// [`super::vendor_patterns::VENDOR_SECRET_PATTERNS`]. Used by `sandbox::scrub`
+/// to redact raw stdout/stderr before any UTF-8 conversion.
+///
+/// The legacy `SECRET_PATTERN_SOURCES` entries run first so their named
+/// redaction tags win for inputs they already matched (byte-identical scrub for
+/// pre-existing patterns); the vendor catalog only widens coverage.
 pub fn default_patterns_bytes() -> Vec<(&'static str, regex::bytes::Regex)> {
     SECRET_PATTERN_SOURCES
         .iter()
+        .chain(super::vendor_patterns::VENDOR_SECRET_PATTERNS.iter())
         .map(|(name, src)| {
             (
                 *name,
@@ -73,8 +79,14 @@ pub fn default_patterns_bytes() -> Vec<(&'static str, regex::bytes::Regex)> {
 }
 
 /// Known secret format patterns.
+///
+/// The legacy high-confidence entries below run first; the shared vendor
+/// catalog ([`super::vendor_patterns::VENDOR_SECRET_PATTERNS`]) is appended so
+/// the network egress guard blocks the same distinctive vendor credentials the
+/// byte-level sandbox scrubber redacts. Inputs the legacy entries already
+/// matched keep byte-identical labels (first match wins the redaction tag).
 static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
-    vec![
+    let mut patterns = vec![
         (
             "Anthropic API Key",
             Regex::new(r"sk-ant-[a-zA-Z0-9\-]{20,}").expect("static Anthropic pattern compiles"),
@@ -105,7 +117,16 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
             Regex::new(r"-----BEGIN [A-Z ]+ PRIVATE KEY-----")
                 .expect("static private key pattern compiles"),
         ),
-    ]
+    ];
+    patterns.extend(super::vendor_patterns::VENDOR_SECRET_PATTERNS.iter().map(
+        |(label, src)| {
+            (
+                *label,
+                Regex::new(src).expect("static vendor pattern compiles"),
+            )
+        },
+    ));
+    patterns
 });
 
 /// Compiled custom leak pattern for runtime use.
@@ -413,6 +434,56 @@ mod tests {
 
         let decision = detector.scan_inbound("Key: svc-ABCDEF");
         assert!(decision.is_blocked());
+    }
+
+    #[test]
+    fn test_outbound_blocks_vendor_slack_token() {
+        let detector = LeakDetector::new();
+        let decision = detector.scan_outbound("SLACK_TOKEN=xoxb-1234567890-abcdefghijklmnop");
+        assert!(decision.is_blocked(), "slack bot token should block on egress");
+        if let LeakDecision::Block { reason, .. } = decision {
+            assert!(reason.contains("Slack Token"));
+        }
+    }
+
+    #[test]
+    fn test_outbound_blocks_vendor_huggingface_token() {
+        let detector = LeakDetector::new();
+        let decision =
+            detector.scan_outbound("export HF=hf_abcdefghijklmnopqrstuvwxyz0123456789");
+        assert!(decision.is_blocked(), "hugging face token should block on egress");
+    }
+
+    #[test]
+    fn test_outbound_blocks_vendor_stripe_key() {
+        let detector = LeakDetector::new();
+        let decision =
+            detector.scan_outbound("key: sk_live_abcdefghijklmnopqrstuvwx1234");
+        assert!(decision.is_blocked(), "stripe secret key should block on egress");
+    }
+
+    #[test]
+    fn test_vendor_patterns_redact_in_byte_scrubber() {
+        // The shared vendor catalog must also feed the byte-level scrubber so
+        // sandbox stdout is scrubbed of the same secrets the egress guard blocks.
+        let patterns = default_patterns_bytes();
+        let has_groq = patterns.iter().any(|(name, _)| *name == "Groq API Key");
+        assert!(has_groq, "vendor catalog should be wired into byte scrubber");
+        let groq = patterns
+            .iter()
+            .find(|(name, _)| *name == "Groq API Key")
+            .map(|(_, re)| re)
+            .unwrap();
+        assert!(groq.is_match(b"gsk_abcdefghijklmnopqrstuvwxyz0123456789ABCD"));
+    }
+
+    #[test]
+    fn test_outbound_allows_non_vendor_prefixed_text() {
+        // Distinctive prefixes must not over-block ordinary prose / identifiers.
+        let detector = LeakDetector::new();
+        let decision =
+            detector.scan_outbound("The sky was clear and the report listed 42 findings.");
+        assert!(!decision.is_blocked());
     }
 
     #[test]
