@@ -199,7 +199,7 @@ impl EventEmitter for ReplyEmitter {
                                     );
                                     if let Some(msg_id) = ctrl.message_id() {
                                         let msg_id = msg_id.clone();
-                                        if self
+                                        match self
                                             .channel_registry
                                             .edit(
                                                 &self.route.channel_id,
@@ -208,9 +208,22 @@ impl EventEmitter for ReplyEmitter {
                                                 &text_with_cursor,
                                             )
                                             .await
-                                            .is_ok()
                                         {
-                                            ctrl.record_edit();
+                                            Ok(()) => ctrl.record_edit(),
+                                            // Flood control: feed the channel's
+                                            // retry hint into the controller so it
+                                            // widens its debounce (and falls back to
+                                            // a final-only flush after repeated
+                                            // strikes) instead of hammering the
+                                            // throttled endpoint on the next chunk.
+                                            Err(
+                                                crate::gateway::channel::ChannelError::RateLimited {
+                                                    retry_after_secs,
+                                                },
+                                            ) => ctrl.record_edit_throttled(Some(
+                                                std::time::Duration::from_secs(retry_after_secs),
+                                            )),
+                                            Err(_) => {}
                                         }
                                     }
                                 }

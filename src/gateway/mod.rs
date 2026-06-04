@@ -36,7 +36,6 @@ pub mod formatter;
 pub mod handlers;
 pub mod mdns_broadcaster;
 pub mod memory_monitor;
-pub mod message_dedup;
 pub mod middleware;
 pub mod model_override;
 pub mod origin_policy;
@@ -48,7 +47,6 @@ pub mod security;
 pub mod server;
 pub mod session;
 pub mod shutdown_forensics;
-pub mod stream_buffer;
 pub mod tool_display;
 
 // ControlPlane: Embedded web UI
@@ -121,11 +119,9 @@ pub use event_emitter::{
     DynEventEmitter, EventEmitter, GatewayEventEmitter, NoOpEventEmitter, OutputMode, StreamEvent,
 };
 pub use mdns_broadcaster::MdnsBroadcaster;
-pub use message_dedup::{is_text_duplicate, normalize_text, SentMessageTracker, SentRecord};
 pub use protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 pub use router::AgentRouter;
 pub use server::GatewayServer;
-pub use stream_buffer::StreamBuffer;
 pub use tool_display::{
     format_tool_meta, format_tool_summary, get_tool_display, group_paths, ToolDisplay,
 };

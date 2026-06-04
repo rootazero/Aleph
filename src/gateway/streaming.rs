@@ -2,10 +2,27 @@
 //!
 //! `StreamingController` manages buffer accumulation, threshold detection,
 //! and debounce timing for real-time message streaming across any channel.
+//!
+//! ## Flood-control backoff
+//!
+//! Chat platforms (Telegram, Discord, …) rate-limit message *edits*. When an
+//! edit is rejected the controller widens its debounce interval — honoring the
+//! channel's `retry_after` hint when present, otherwise doubling — and after a
+//! few consecutive rejections suppresses mid-stream edits entirely, falling
+//! back to a single final flush. This prevents a throttled endpoint from being
+//! hammered by the next chunk (which would otherwise see the debounce already
+//! elapsed and retry immediately).
 
 use std::time::{Duration, Instant};
 
 use crate::gateway::channel::MessageId;
+
+/// Hard ceiling for the adaptive edit-debounce interval under flood control.
+const MAX_BACKOFF_INTERVAL: Duration = Duration::from_secs(10);
+
+/// Consecutive edit rejections before mid-stream edits are suppressed and the
+/// controller falls back to a single final flush.
+const MAX_FLOOD_STRIKES: u32 = 3;
 
 /// Configuration for streaming behavior.
 #[derive(Debug, Clone)]
@@ -58,17 +75,29 @@ pub struct StreamingController {
     pub(crate) last_edit_at: Instant,
     last_edit_len: usize,
     config: StreamingConfig,
+    /// Current debounce interval, widened by flood-control backoff. Starts at
+    /// `config.debounce_interval` and recovers to it on a successful edit.
+    effective_debounce: Duration,
+    /// Consecutive edit rejections since the last successful edit.
+    flood_strikes: u32,
+    /// Once set, mid-stream edits are suppressed (final flush still happens via
+    /// `finalize()`). Latched for the remainder of the stream to avoid thrashing.
+    suppressed: bool,
 }
 
 impl StreamingController {
     /// Create a new controller with the given config.
     pub fn new(config: StreamingConfig) -> Self {
+        let effective_debounce = config.debounce_interval;
         Self {
             buffer: String::new(),
             sent_message_id: None,
             last_edit_at: Instant::now(),
             last_edit_len: 0,
             config,
+            effective_debounce,
+            flood_strikes: 0,
+            suppressed: false,
         }
     }
 
@@ -82,12 +111,50 @@ impl StreamingController {
         self.sent_message_id = Some(msg_id);
         self.last_edit_at = Instant::now();
         self.last_edit_len = self.buffer.len();
+        self.reset_backoff();
     }
 
     /// Record that a successful edit was performed.
+    ///
+    /// A clean edit clears any accumulated flood backoff so the stream recovers
+    /// its normal cadence once a platform stops throttling.
     pub fn record_edit(&mut self) {
         self.last_edit_at = Instant::now();
         self.last_edit_len = self.buffer.len();
+        self.reset_backoff();
+    }
+
+    /// Record that an edit was rejected by the channel's rate limiter.
+    ///
+    /// Widens the debounce interval — honoring `retry_after` when the channel
+    /// supplied one, otherwise doubling — capped at [`MAX_BACKOFF_INTERVAL`].
+    /// The rejected attempt counts as the most recent edit so the next poll
+    /// waits the full (now wider) interval instead of retrying immediately.
+    /// After [`MAX_FLOOD_STRIKES`] consecutive rejections, mid-stream edits are
+    /// suppressed and the controller falls back to a single final flush.
+    pub fn record_edit_throttled(&mut self, retry_after: Option<Duration>) {
+        self.flood_strikes = self.flood_strikes.saturating_add(1);
+        let widened = match retry_after {
+            Some(hint) => hint.max(self.effective_debounce),
+            None => self.effective_debounce.saturating_mul(2),
+        };
+        self.effective_debounce = widened.min(MAX_BACKOFF_INTERVAL);
+        self.last_edit_at = Instant::now();
+        if self.flood_strikes >= MAX_FLOOD_STRIKES {
+            self.suppressed = true;
+        }
+    }
+
+    /// Whether mid-stream edits are currently suppressed (flood fallback mode).
+    pub fn is_suppressed(&self) -> bool {
+        self.suppressed
+    }
+
+    /// Clear flood-control backoff state back to the configured baseline.
+    fn reset_backoff(&mut self) {
+        self.flood_strikes = 0;
+        self.effective_debounce = self.config.debounce_interval;
+        self.suppressed = false;
     }
 
     /// Returns the message ID of the sent message, if any.
@@ -115,7 +182,11 @@ impl StreamingController {
             } else {
                 StreamAction::Wait
             }
-        } else if self.last_edit_at.elapsed() >= self.config.debounce_interval
+        } else if self.suppressed {
+            // Flood fallback: hold all mid-stream edits; `finalize()` still
+            // flushes the complete text once the stream ends.
+            StreamAction::Wait
+        } else if self.last_edit_at.elapsed() >= self.effective_debounce
             && self.buffer.len() > self.last_edit_len
         {
             StreamAction::Edit(self.buffer.clone())
@@ -132,6 +203,7 @@ impl StreamingController {
         self.sent_message_id = None;
         self.last_edit_at = Instant::now();
         self.last_edit_len = 0;
+        self.reset_backoff();
     }
 
     /// Finalize the stream — returns the appropriate action for any
@@ -245,5 +317,95 @@ mod tests {
         ctrl.record_sent(MessageId::new("1"));
         // No new content since record_sent
         assert!(matches!(ctrl.finalize(), StreamAction::Done));
+    }
+
+    /// A flood rejection without a hint doubles the effective debounce, so an
+    /// edit that would otherwise fire immediately is held.
+    #[test]
+    fn test_throttle_doubles_debounce_no_hint() {
+        let mut ctrl = make_controller(true);
+        ctrl.push_chunk(&"x".repeat(35));
+        let _ = ctrl.poll_action();
+        ctrl.record_sent(MessageId::new("1"));
+        ctrl.push_chunk("more");
+        // Edit rejected, no hint → debounce 300ms doubles to 600ms.
+        ctrl.record_edit_throttled(None);
+        // 400ms would have been enough for the base 300ms interval...
+        ctrl.last_edit_at = Instant::now() - Duration::from_millis(400);
+        assert!(matches!(ctrl.poll_action(), StreamAction::Wait));
+        // ...but 700ms clears the widened 600ms interval.
+        ctrl.last_edit_at = Instant::now() - Duration::from_millis(700);
+        assert!(matches!(ctrl.poll_action(), StreamAction::Edit(_)));
+    }
+
+    /// A `retry_after` hint is honored verbatim (clamped to the cap) when it
+    /// exceeds the current interval.
+    #[test]
+    fn test_throttle_honors_retry_after_hint() {
+        let mut ctrl = make_controller(true);
+        ctrl.push_chunk(&"x".repeat(35));
+        let _ = ctrl.poll_action();
+        ctrl.record_sent(MessageId::new("1"));
+        ctrl.push_chunk("more");
+        ctrl.record_edit_throttled(Some(Duration::from_secs(2)));
+        // 1s elapsed < 2s hint → still waiting.
+        ctrl.last_edit_at = Instant::now() - Duration::from_millis(1000);
+        assert!(matches!(ctrl.poll_action(), StreamAction::Wait));
+        // 2.1s elapsed → edit fires.
+        ctrl.last_edit_at = Instant::now() - Duration::from_millis(2100);
+        assert!(matches!(ctrl.poll_action(), StreamAction::Edit(_)));
+    }
+
+    /// Backoff never exceeds the hard ceiling, even with a huge hint.
+    #[test]
+    fn test_throttle_caps_at_max_backoff() {
+        let mut ctrl = make_controller(true);
+        ctrl.push_chunk(&"x".repeat(35));
+        let _ = ctrl.poll_action();
+        ctrl.record_sent(MessageId::new("1"));
+        ctrl.push_chunk("more");
+        ctrl.record_edit_throttled(Some(Duration::from_secs(3600)));
+        ctrl.last_edit_at = Instant::now() - (MAX_BACKOFF_INTERVAL + Duration::from_millis(100));
+        assert!(matches!(ctrl.poll_action(), StreamAction::Edit(_)));
+    }
+
+    /// After MAX_FLOOD_STRIKES rejections, mid-stream edits are suppressed but
+    /// the final flush still happens.
+    #[test]
+    fn test_throttle_falls_back_after_strikes() {
+        let mut ctrl = make_controller(true);
+        ctrl.push_chunk(&"x".repeat(35));
+        let _ = ctrl.poll_action();
+        ctrl.record_sent(MessageId::new("1"));
+        ctrl.push_chunk("more");
+        for _ in 0..MAX_FLOOD_STRIKES {
+            ctrl.record_edit_throttled(None);
+        }
+        assert!(ctrl.is_suppressed());
+        // Even with a long-elapsed interval, no mid-stream edit fires.
+        ctrl.last_edit_at = Instant::now() - Duration::from_secs(60);
+        assert!(matches!(ctrl.poll_action(), StreamAction::Wait));
+        // The final flush is unaffected by suppression.
+        match ctrl.finalize() {
+            StreamAction::EditFinal(text) => assert!(text.ends_with("more")),
+            other => panic!("Expected EditFinal, got {:?}", other),
+        }
+    }
+
+    /// A successful edit clears accumulated backoff (recovery).
+    #[test]
+    fn test_successful_edit_recovers_from_backoff() {
+        let mut ctrl = make_controller(true);
+        ctrl.push_chunk(&"x".repeat(35));
+        let _ = ctrl.poll_action();
+        ctrl.record_sent(MessageId::new("1"));
+        ctrl.push_chunk("more");
+        ctrl.record_edit_throttled(None); // widen to 600ms, 1 strike
+        ctrl.record_edit(); // success → recover
+        assert!(!ctrl.is_suppressed());
+        ctrl.push_chunk("again");
+        // Base 300ms interval is back in force.
+        ctrl.last_edit_at = Instant::now() - Duration::from_millis(400);
+        assert!(matches!(ctrl.poll_action(), StreamAction::Edit(_)));
     }
 }
