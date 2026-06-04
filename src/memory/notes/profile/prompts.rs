@@ -81,9 +81,14 @@ Merge rules:
 /// signal in `<SessionSignal>` tags with `<reason>`, `<digest>`, and
 /// `<recent_turns>` sub-elements.
 pub fn build_merge_user_prompt(profile: &UserProfile, signal: &SessionSignal) -> String {
-    // Truncate digest to 2000 chars
+    // Truncate digest to 2000 bytes, snapping to a UTF-8 char boundary so a
+    // multibyte (CJK / emoji) codepoint straddling the limit can't panic.
     let digest = if signal.digest_text.len() > 2000 {
-        &signal.digest_text[..2000]
+        let mut end = 2000;
+        while end > 0 && !signal.digest_text.is_char_boundary(end) {
+            end -= 1;
+        }
+        &signal.digest_text[..end]
     } else {
         signal.digest_text.as_str()
     };
@@ -95,7 +100,9 @@ pub fn build_merge_user_prompt(profile: &UserProfile, signal: &SessionSignal) ->
         .take(6)
         .map(|t| {
             if t.len() > 500 {
-                t[..500].to_string()
+                // Snap to a UTF-8 char boundary so a multibyte codepoint at the
+                // 500-byte cut can't panic on slice.
+                t.chars().take(500).collect()
             } else {
                 t.clone()
             }

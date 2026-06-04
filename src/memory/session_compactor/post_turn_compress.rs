@@ -82,7 +82,9 @@ impl SessionCompactor {
             return Ok(CompressResult::default());
         }
 
-        let existing_d0 = self.count_valid_facts_at_depth(&session_id, 0).await?;
+        let existing_d0 = self
+            .count_valid_facts_at_depth(&session_id, &agent_id, 0)
+            .await?;
         let mut next_seq = existing_d0.min(u32::MAX as usize) as u32;
         let mut d0_created = 0u32;
 
@@ -226,7 +228,9 @@ impl SessionCompactor {
         );
 
         let mut d1_created = 0u32;
-        let total_d0 = self.count_valid_facts_at_depth(&session_id, 0).await?;
+        let total_d0 = self
+            .count_valid_facts_at_depth(&session_id, &agent_id, 0)
+            .await?;
         if total_d0 >= self.config.d1_min_fanout {
             d1_created = self
                 .try_condense(&session_id, &agent_id, 0, 1, self.config.d1_min_fanout)
@@ -240,7 +244,9 @@ impl SessionCompactor {
 
         let mut d2_created = 0u32;
         if self.config.max_summary_depth >= 2 {
-            let total_d1 = self.count_valid_facts_at_depth(&session_id, 1).await?;
+            let total_d1 = self
+                .count_valid_facts_at_depth(&session_id, &agent_id, 1)
+                .await?;
             if total_d1 >= self.config.d2_min_fanout {
                 d2_created = self
                     .try_condense(&session_id, &agent_id, 1, 2, self.config.d2_min_fanout)

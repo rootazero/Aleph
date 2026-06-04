@@ -115,8 +115,10 @@ pub fn parse_user_md(raw: &str) -> Result<UserProfile, AlephError> {
                     confidence = v.trim().trim_matches('"').to_string();
                 }
             }
-            // skip past closing `---\n`
-            body_start = end_idx + "\n---".len();
+            // skip past closing `---`. `end_idx` is an offset into `rest`
+            // (which already has the opening `---\n` stripped), so re-add that
+            // prefix length to land in `raw`'s coordinate space.
+            body_start = "---\n".len() + end_idx + "\n---".len();
         } else {
             body_start = 0;
         }

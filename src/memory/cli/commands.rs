@@ -4,6 +4,7 @@
 //! knowledge notes.  Migrated from MemoryFact (MemoryStore) to NoteStore CRUD.
 
 use crate::error::AlephError;
+use crate::memory::notes::store::note_md_filename;
 use crate::memory::notes::store::NoteIndexEntry;
 use crate::memory::notes::store::NoteStore;
 use crate::memory::store::MemoryBackend;
@@ -322,7 +323,7 @@ impl MemoryCommands {
                 .memory_dir
                 .join(&self.agent_id)
                 .join(&entry_.category)
-                .join(format!("{}.md", entry_.filename));
+                .join(note_md_filename(&entry_.filename));
             let _ = tokio::fs::remove_file(&file_path).await;
         } else {
             // Entry was already removed from index — try to infer the file path
@@ -332,7 +333,7 @@ impl MemoryCommands {
                     .memory_dir
                     .join(&self.agent_id)
                     .join(category)
-                    .join(format!("{filename}.md"));
+                    .join(note_md_filename(filename));
                 let _ = tokio::fs::remove_file(&file_path).await;
             }
         }
@@ -361,7 +362,7 @@ impl MemoryCommands {
             .memory_dir
             .join(&self.agent_id)
             .join(&entry.category)
-            .join(format!("{}.md", entry.filename));
+            .join(note_md_filename(&entry.filename));
         tokio::fs::read_to_string(&file_path).await.ok()
     }
 

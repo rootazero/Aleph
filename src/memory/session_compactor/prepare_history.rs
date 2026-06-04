@@ -47,7 +47,15 @@ impl SessionCompactor {
         }
 
         let session_id = session_key.to_key_string();
-        let agent_id = agent.id().to_string();
+        // Resolve the storage agent id the same way `post_turn_compress` does
+        // when it writes the d0/d1/d2 summaries. Reading under the unscoped base
+        // id while writes are project-scoped (or vice versa) would match nothing
+        // and silently skip every prior summary.
+        let agent_id = crate::memory::project_scope::scoped_or_base(
+            agent.id(),
+            self.project_scoped,
+            crate::projects::current_project_root().as_deref(),
+        );
         let path_prefix = format!("aleph://session/{}/", session_id);
 
         let mut summaries = match self

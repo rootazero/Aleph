@@ -110,15 +110,23 @@ impl SessionCompactor {
     }
 
     /// Count raw memories at a given depth for a session.
+    ///
+    /// `agent_id` must be the same resolved id under which `post_turn_compress`
+    /// and `try_condense` write the d0/d1/d2 summaries. Reading under a fixed
+    /// placeholder (e.g. "default") while writes use the real agent id would
+    /// always return 0, resetting the per-depth seq counter to 0 every turn and
+    /// colliding on the `(agent_id, path)` unique index — silently dropping
+    /// summaries and never triggering condensation.
     pub(crate) async fn count_valid_facts_at_depth(
         &self,
         session_id: &str,
+        agent_id: &str,
         depth: u32,
     ) -> Result<usize, AlephError> {
         let path_prefix = format!("aleph://session/{}/d{}/", session_id, depth);
         let raws = self
             .database
-            .get_raw_by_path_prefix(&path_prefix, "default", 500)
+            .get_raw_by_path_prefix(&path_prefix, agent_id, 500)
             .await?;
         Ok(raws.len())
     }
@@ -159,14 +167,18 @@ impl SessionCompactor {
     }
 
     /// Fetch all raw memories at a given depth for a session.
+    ///
+    /// `agent_id` must match the id used by the writers (see
+    /// [`Self::count_valid_facts_at_depth`]).
     pub(crate) async fn fetch_valid_facts_at_depth(
         &self,
         session_id: &str,
+        agent_id: &str,
         depth: u32,
     ) -> Result<Vec<crate::memory::store::raw_memory::RawMemory>, AlephError> {
         let path_prefix = format!("aleph://session/{}/d{}/", session_id, depth);
         self.database
-            .get_raw_by_path_prefix(&path_prefix, "default", 500)
+            .get_raw_by_path_prefix(&path_prefix, agent_id, 500)
             .await
     }
 
@@ -182,7 +194,7 @@ impl SessionCompactor {
         tracing::info!(target: "session_compactor", source_depth, target_depth, "condense");
 
         let source_facts = self
-            .fetch_valid_facts_at_depth(session_id, source_depth)
+            .fetch_valid_facts_at_depth(session_id, agent_id, source_depth)
             .await?;
 
         if source_facts.is_empty() {
@@ -197,7 +209,7 @@ impl SessionCompactor {
         let summary_text = self.generate_summary(&messages, target_depth, None).await;
 
         let existing_target = self
-            .count_valid_facts_at_depth(session_id, target_depth)
+            .count_valid_facts_at_depth(session_id, agent_id, target_depth)
             .await?;
         let seq = existing_target.min(u32::MAX as usize) as u32;
 
