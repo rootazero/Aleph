@@ -77,6 +77,39 @@ mod tests {
         assert!(!c.force_fallback);
         assert_eq!(c.fallback_skeleton.relevant_notes_tokens, 5000);
         assert!(!c.assembly_log.enabled);
+        // Mirrored retrieval refinements default to inactive → legacy ranking.
+        assert!(!c.retrieval_scoring.is_active());
+        assert!(!c.rerank.enabled);
+    }
+
+    #[test]
+    fn assembler_config_mirrors_top_level_retrieval_tuning() {
+        // The proactive memory-context path reads `retrieval_scoring`/`rerank`
+        // off the assembler config, so `assembler_config()` must fold the
+        // top-level toggles in (mirroring the `project_scoped` convention).
+        let mut cfg = MemoryConfig::default();
+        cfg.retrieval_scoring.recency_enabled = true;
+        cfg.retrieval_scoring.reinforcement_enabled = true;
+        cfg.retrieval_scoring.mmr_enabled = true;
+        cfg.rerank.enabled = true;
+        cfg.project_scoped = true;
+
+        let assembler = cfg.assembler_config();
+        assert!(assembler.retrieval_scoring.is_active());
+        assert!(assembler.retrieval_scoring.recency_enabled);
+        assert!(assembler.retrieval_scoring.reinforcement_enabled);
+        assert!(assembler.retrieval_scoring.mmr_enabled);
+        assert!(assembler.rerank.enabled);
+        assert!(assembler.project_scoped);
+    }
+
+    #[test]
+    fn assembler_config_default_is_legacy_inactive() {
+        // Unconfigured deployment: the folded assembler config must stay
+        // byte-for-byte legacy (no recency/reinforcement/MMR/rerank).
+        let assembler = MemoryConfig::default().assembler_config();
+        assert!(!assembler.retrieval_scoring.is_active());
+        assert!(!assembler.rerank.enabled);
     }
 
     #[test]

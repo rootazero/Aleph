@@ -137,6 +137,13 @@ impl MemoryConfig {
     pub fn assembler_config(&self) -> AssemblerConfig {
         let mut cfg = self.assembler.clone();
         cfg.project_scoped = self.project_scoped;
+        // Fold the top-level retrieval refinements in so the proactive
+        // memory-context path applies the same recency / reinforcement / MMR
+        // and cross-encoder rerank as the on-demand `memory_search` tool. The
+        // user sets `memory.retrieval_scoring` / `memory.rerank`, not the
+        // nested assembler copies.
+        cfg.retrieval_scoring = self.retrieval_scoring.clone();
+        cfg.rerank = self.rerank.clone();
         cfg
     }
 }

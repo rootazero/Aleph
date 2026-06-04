@@ -81,6 +81,7 @@ pub fn MemoryView() -> impl IntoView {
                                 <BasicSettings config=config />
                                 <CompressionSettings config=config />
                                 <RetrievalPipelineSettings config=config />
+                                <SalienceScoringSettings config=config />
                                 <FactDecaySettings config=config />
                                 <GraphDecaySettings config=config />
                                 <DreamingSettings config=config />
@@ -778,6 +779,155 @@ fn RetrievalPipelineSettings(config: RwSignal<Option<MemoryConfig>>) -> impl Int
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
                     <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.bm25_bonus_weight_hint)}</p>
+                </div>
+            </div>
+        </div>
+    }
+}
+
+// ============================================================================
+// Section B: Retrieval Salience Scoring (recency / reinforcement / MMR)
+// ============================================================================
+
+#[component]
+fn SalienceScoringSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
+    let i18n = use_i18n();
+    view! {
+        <div class="bg-surface-raised p-6 rounded-lg border border-border">
+            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.salience)}</h2>
+            <p class="text-sm text-text-tertiary mb-4">
+                {t!(i18n, settings.memory.salience_desc)}
+            </p>
+
+            <div class="space-y-4">
+                // Recency decay
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.retrieval_scoring.recency_enabled).unwrap_or(false)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.retrieval_scoring.recency_enabled = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">{t!(i18n, settings.memory.recency_enabled)}</label>
+                </div>
+
+                <div class="grid grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.recency_half_life_days)}</label>
+                        <input
+                            type="number"
+                            step="1"
+                            min="1"
+                            prop:value=move || config.get().map(|c| c.retrieval_scoring.recency_half_life_days).unwrap_or(90.0)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.retrieval_scoring.recency_half_life_days = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.recency_weight)}</label>
+                        <input
+                            type="number"
+                            step="0.05"
+                            min="0"
+                            max="1"
+                            prop:value=move || config.get().map(|c| c.retrieval_scoring.recency_weight).unwrap_or(0.3)
+                            on:input=move |ev| {
+                                if let Some(mut cfg) = config.get() {
+                                    if let Ok(val) = event_target_value(&ev).parse() {
+                                        cfg.retrieval_scoring.recency_weight = val;
+                                        config.set(Some(cfg));
+                                    }
+                                }
+                            }
+                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                        />
+                    </div>
+                </div>
+
+                // Reinforcement salience
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.retrieval_scoring.reinforcement_enabled).unwrap_or(false)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.retrieval_scoring.reinforcement_enabled = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">{t!(i18n, settings.memory.reinforcement_enabled)}</label>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.reinforcement_weight)}</label>
+                    <input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        prop:value=move || config.get().map(|c| c.retrieval_scoring.reinforcement_weight).unwrap_or(0.3)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.retrieval_scoring.reinforcement_weight = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                </div>
+
+                // MMR diversity
+                <div class="flex items-center">
+                    <input
+                        type="checkbox"
+                        prop:checked=move || config.get().map(|c| c.retrieval_scoring.mmr_enabled).unwrap_or(false)
+                        on:change=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                cfg.retrieval_scoring.mmr_enabled = event_target_checked(&ev);
+                                config.set(Some(cfg));
+                            }
+                        }
+                        class="mr-2"
+                    />
+                    <label class="font-medium">{t!(i18n, settings.memory.mmr_enabled)}</label>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.mmr_lambda)}</label>
+                    <input
+                        type="number"
+                        step="0.05"
+                        min="0"
+                        max="1"
+                        prop:value=move || config.get().map(|c| c.retrieval_scoring.mmr_lambda).unwrap_or(0.7)
+                        on:input=move |ev| {
+                            if let Some(mut cfg) = config.get() {
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.retrieval_scoring.mmr_lambda = val;
+                                    config.set(Some(cfg));
+                                }
+                            }
+                        }
+                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.mmr_lambda_hint)}</p>
                 </div>
             </div>
         </div>

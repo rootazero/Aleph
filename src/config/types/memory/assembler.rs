@@ -28,6 +28,20 @@ pub struct AssemblerConfig {
     /// profile/feedback floors stay global). Default `false`.
     #[serde(default)]
     pub project_scoped: bool,
+
+    /// Mirror of `MemoryConfig.retrieval_scoring`, populated by the server
+    /// builder so the *proactive* memory-context path applies the same
+    /// recency-decay / reinforcement / MMR refinements the on-demand
+    /// `memory_search` tool already does. Default-inactive → byte-for-byte
+    /// legacy ranking when unconfigured.
+    #[serde(default)]
+    pub retrieval_scoring: super::RetrievalScoringConfig,
+
+    /// Mirror of `MemoryConfig.rerank`, populated by the server builder so the
+    /// proactive path can attach the same cross-encoder reranker as the
+    /// on-demand tool. Disabled by default → no behaviour change.
+    #[serde(default)]
+    pub rerank: crate::memory::rerank::RerankConfig,
 }
 
 impl Default for AssemblerConfig {
@@ -43,6 +57,8 @@ impl Default for AssemblerConfig {
             fallback_skeleton: FallbackSkeleton::default(),
             assembly_log: AssemblyLogConfig::default(),
             project_scoped: false,
+            retrieval_scoring: super::RetrievalScoringConfig::default(),
+            rerank: crate::memory::rerank::RerankConfig::default(),
         }
     }
 }
