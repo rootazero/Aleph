@@ -425,6 +425,17 @@ pub struct SeatbeltOptions {
     /// reach privileged daemons (e.g. `docker.sock` → root). Prefer the
     /// allowlist. Default `false`.
     pub dangerously_allow_all_unix_sockets: bool,
+
+    /// Permit the sandboxed process to bind and listen on loopback sockets
+    /// even under a restricted (or `None`) network policy. The
+    /// restricted-network floor otherwise denies `network-bind` /
+    /// `network-inbound`, so dev/test workloads that spin up a local server
+    /// (`python -m http.server`, a Vite/webpack dev server, a test harness
+    /// binding `127.0.0.1:0`, a TCP language server) cannot listen. Grants
+    /// loopback binding only — no route to the public internet is opened.
+    /// Mirrors codex's `network.allow_local_binding`. Default `false`
+    /// preserves the default-deny floor (boot unchanged).
+    pub allow_local_binding: bool,
 }
 
 /// Driver for macOS seatbelt sandboxing.
@@ -539,6 +550,15 @@ impl SeatbeltDriver {
         // open), so skip there.
         if !matches!(policy.network, NetworkPolicy::AllowAll) {
             self.add_unix_socket_policy(&mut profile);
+        }
+
+        // Loopback server binding (codex parity). Like the unix-socket
+        // re-allow above, this re-grants loopback bind/listen access that the
+        // network denies would otherwise sweep up, so emit it after them
+        // (SBPL last-match-wins). Redundant under `AllowAll` (network* already
+        // open) and gated off by default, so skip in both cases.
+        if self.options.allow_local_binding && !matches!(policy.network, NetworkPolicy::AllowAll) {
+            self.add_local_binding_policy(&mut profile);
         }
 
         // Process policy
@@ -737,6 +757,19 @@ impl SeatbeltDriver {
                 "(allow network-outbound (remote unix-socket (subpath \"{escaped}\")))\n"
             ));
         }
+    }
+
+    /// Re-allow loopback `network-bind` / `network-inbound` so a sandboxed
+    /// process can run a local server under a restricted network floor.
+    /// Mirrors codex's `allow_local_binding` block: binding is permitted on
+    /// any local address but inbound/outbound traffic is gated to loopback,
+    /// so the public internet stays denied. Emitted only by `generate_profile`
+    /// after the network denies (SBPL last-match-wins reinstates loopback).
+    fn add_local_binding_policy(&self, profile: &mut String) {
+        profile.push_str("; loopback server binding (local-binding capability)\n");
+        profile.push_str("(allow network-bind (local ip \"*:*\"))\n");
+        profile.push_str("(allow network-inbound (local ip \"localhost:*\"))\n");
+        profile.push_str("(allow network-outbound (remote ip \"localhost:*\"))\n");
     }
 
     fn add_network_policy(
@@ -1186,6 +1219,91 @@ mod tests {
             .find(r#"(local unix-socket (subpath "/var/run/db.sock"))"#)
             .expect("unix re-allow present");
         assert!(deny_idx < allow_idx);
+    }
+
+    #[test]
+    fn no_local_binding_emits_no_bind_rules() {
+        // Default options → default-deny floor preserved, byte-identical to
+        // before this capability existed.
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy::default(); // network: None
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+        assert!(!profile.contains("local-binding capability"));
+        assert!(!profile.contains("(allow network-bind (local ip"));
+        assert!(!profile.contains("(allow network-inbound"));
+    }
+
+    #[test]
+    fn local_binding_reallows_loopback_after_network_deny() {
+        // Under the strict `None` policy the floor is `(deny network*)`; the
+        // loopback bind/listen re-allow must follow it (last-match-wins) and
+        // must not open any non-loopback outbound route.
+        let driver = SeatbeltDriver::with_options(SeatbeltOptions {
+            allow_local_binding: true,
+            ..Default::default()
+        });
+        let policy = SandboxPolicy::default();
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        let bind = r#"(allow network-bind (local ip "*:*"))"#;
+        let inbound = r#"(allow network-inbound (local ip "localhost:*"))"#;
+        let outbound = r#"(allow network-outbound (remote ip "localhost:*"))"#;
+        assert!(profile.contains(bind), "missing loopback bind allow");
+        assert!(profile.contains(inbound), "missing loopback inbound allow");
+        assert!(profile.contains(outbound), "missing loopback outbound allow");
+
+        let deny_idx = profile
+            .find("(deny network*)")
+            .expect("network deny present");
+        let bind_idx = profile.find(bind).unwrap();
+        assert!(
+            deny_idx < bind_idx,
+            "local-binding re-allow must follow network deny"
+        );
+    }
+
+    #[test]
+    fn local_binding_reallowed_under_restricted_hosts() {
+        // AllowHosts emits a deny floor + per-host allow; loopback binding
+        // must still be reinstated after it.
+        let driver = SeatbeltDriver::with_options(SeatbeltOptions {
+            allow_local_binding: true,
+            ..Default::default()
+        });
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowHosts(vec!["10.0.0.1".into()]),
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+
+        let deny_idx = profile
+            .find("(deny network*)")
+            .expect("restricted deny present");
+        let bind_idx = profile
+            .find(r#"(allow network-bind (local ip "*:*"))"#)
+            .expect("loopback bind re-allow present");
+        assert!(deny_idx < bind_idx);
+    }
+
+    #[test]
+    fn local_binding_skipped_under_allow_all_network() {
+        // Under AllowAll, `(allow network*)` already covers binding — no
+        // redundant loopback block is emitted.
+        let driver = SeatbeltDriver::with_options(SeatbeltOptions {
+            allow_local_binding: true,
+            ..Default::default()
+        });
+        let policy = SandboxPolicy {
+            network: NetworkPolicy::AllowAll,
+            ..Default::default()
+        };
+        let cwd = Path::new("/tmp/ws");
+        let profile = driver.generate_profile(&policy, cwd).unwrap();
+        assert!(profile.contains("(allow network*)"));
+        assert!(!profile.contains("local-binding capability"));
     }
 
     #[test]

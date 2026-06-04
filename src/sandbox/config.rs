@@ -382,6 +382,17 @@ pub struct SandboxConfig {
     #[serde(default)]
     pub dangerously_allow_all_unix_sockets: bool,
 
+    /// Permit sandboxed commands to bind and listen on loopback sockets even
+    /// under a restricted (or `None`) network policy. Dev/test workloads that
+    /// spin up a local server (`python -m http.server`, a Vite/webpack dev
+    /// server, a test harness binding `127.0.0.1:0`, a TCP language server)
+    /// otherwise fail because the restricted-network floor denies
+    /// `network-bind`. Grants loopback binding only — no route to the public
+    /// internet is opened. macOS-seatbelt only today; mirrors codex's
+    /// `network.allow_local_binding`. Default `false` (boot unchanged).
+    #[serde(default)]
+    pub allow_local_binding: bool,
+
     #[serde(default)]
     pub linux: LinuxSandboxConfig,
 
@@ -436,6 +447,7 @@ impl Default for SandboxConfig {
             deny_read_globs: Vec::new(),
             allow_unix_sockets: Vec::new(),
             dangerously_allow_all_unix_sockets: false,
+            allow_local_binding: false,
             linux: LinuxSandboxConfig::default(),
             windows: WindowsSandboxConfig::default(),
             rate_limit: SandboxRateLimitConfigSchema {
@@ -539,6 +551,19 @@ mod tests {
             ]
         );
         assert!(cfg.dangerously_allow_all_unix_sockets);
+    }
+
+    #[test]
+    fn allow_local_binding_default_false_and_parses() {
+        // Back-compat: absent key → false (default-deny floor preserved).
+        let cfg = SandboxConfig::default();
+        assert!(!cfg.allow_local_binding);
+
+        let toml = r#"
+            allow_local_binding = true
+        "#;
+        let cfg: SandboxConfig = toml::from_str(toml).expect("parses");
+        assert!(cfg.allow_local_binding);
     }
 
     #[test]
