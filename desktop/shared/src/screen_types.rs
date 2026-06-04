@@ -20,6 +20,12 @@ pub struct ScreenRecordConfig {
 impl ScreenRecordConfig {
     /// Apply parameter constraints.
     pub fn clamped(mut self) -> Self {
+        // A NaN `duration_secs` survives `clamp` (it only normalizes against
+        // non-NaN bounds) and would panic in `Duration::from_secs_f64` on the
+        // recording path. Coerce non-finite values to the default first.
+        if !self.duration_secs.is_finite() {
+            self.duration_secs = 5.0;
+        }
         self.duration_secs = self.duration_secs.clamp(0.25, 60.0);
         self.fps = self.fps.clamp(1, 60);
         self

@@ -191,11 +191,14 @@ pub fn key_button(keys: &[String], action: crate::PressAction) -> Result<()> {
 /// - [`DesktopError::InputFailed`] if the direction is invalid, enigo cannot
 ///   be created, or the scroll operation fails.
 pub fn scroll(direction: &str, amount: i32) -> Result<()> {
+    // `amount` arrives from untrusted IPC; negating `i32::MIN` would overflow
+    // (panic in debug). `saturating_neg` is identical for all valid positive
+    // inputs and keeps the helper panic-free at the boundary (P7).
     let (axis, length) = match direction {
         "down" => (Axis::Vertical, amount),
-        "up" => (Axis::Vertical, -amount),
+        "up" => (Axis::Vertical, amount.saturating_neg()),
         "right" => (Axis::Horizontal, amount),
-        "left" => (Axis::Horizontal, -amount),
+        "left" => (Axis::Horizontal, amount.saturating_neg()),
         other => {
             return Err(DesktopError::InputFailed(format!(
                 "Unknown scroll direction: '{}'. Expected up, down, left, or right",
