@@ -178,7 +178,7 @@ async fn dispatch(
         Commands::ChatControl { action } => {
             dispatch_chat_control(server_url, action, config, json).await
         }
-        Commands::Doctor => commands::doctor::run(server_url, json).await,
+        Commands::Doctor { fix } => commands::doctor::run(server_url, json, fix, config).await,
         Commands::Completion { shell } => {
             commands::completion::run(shell);
             Ok(())

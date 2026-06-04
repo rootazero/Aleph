@@ -209,8 +209,18 @@ pub(crate) enum Commands {
         action: SandboxAction,
     },
 
-    /// Diagnose installation, config, gateway, providers, MCP and sandbox
-    Doctor,
+    /// Diagnose installation, config, gateway, providers, MCP and sandbox.
+    ///
+    /// When checks fail and stdout is a TTY, `doctor` offers to launch an
+    /// AI-assisted repair (press `f`): the failing checks are forwarded to
+    /// the daemon agent, which fixes what it can via its own tools. Pass
+    /// `--fix` to launch that repair without the interactive prompt.
+    Doctor {
+        /// Skip the interactive `[f]` prompt and launch AI-assisted repair
+        /// directly whenever any check fails.
+        #[arg(long)]
+        fix: bool,
+    },
 
     /// Generate shell completion script
     Completion {
