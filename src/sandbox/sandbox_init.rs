@@ -159,6 +159,50 @@ pub const SECCOMP_DENYLIST_SIMPLE: &[&str] = &[
     "syslog",
     "reboot",
     "setns",
+    // Filesystem-handle escape primitives. Aleph confines the filesystem with
+    // Landlock, which is **path-based**: every rule is a `PathBeneath` over a
+    // permitted directory hierarchy. `open_by_handle_at(2)` opens a file from
+    // an opaque `file_handle` (obtained via `name_to_handle_at(2)`) WITHOUT a
+    // pathname, so the kernel's path-walk — and therefore the Landlock
+    // hierarchy check — is bypassed entirely: a handle to an inode outside the
+    // permitted roots reopens it. Denying both closes that seam between the
+    // Landlock (path) and seccomp (syscall) confinement layers. Neither is used
+    // by ordinary tooling (`open_by_handle_at` needs `CAP_DAC_READ_SEARCH` and
+    // appears only in NFS servers / backup daemons), so EPERM is non-disruptive.
+    "open_by_handle_at",
+    "name_to_handle_at",
+];
+
+/// Frozen socket-control denylist applied in [`SeccompNetworkMode::UnixOnly`]
+/// (i.e. `NetworkPolicy::None`, network fully disabled). bwrap's
+/// `--unshare-net` already strips every interface, and the socket-family gate
+/// below already limits `socket(2)`/`socketpair(2)` to `AF_UNIX` and denies
+/// `connect(2)`. These syscalls close the remaining socket *operation* surface:
+/// a sandboxed process that retains or inherits a socket fd (e.g. an `AF_UNIX`
+/// fd it is allowed to open) can otherwise still `bind`/`listen`/`accept` to
+/// stand up an unexpected IPC endpoint, or `sendto`/`recvmmsg`/`setsockopt` on
+/// an existing fd. Denying them unconditionally turns each into early `EPERM`
+/// with a clear audit trail. Mirrors codex
+/// `install_network_seccomp_filter_on_current_thread` (Restricted arm).
+///
+/// `recvfrom` is **deliberately excluded**: tools like `cargo clippy` rely on a
+/// `socketpair` + child-process pattern that needs `recvfrom` on the local
+/// `AF_UNIX` pair. Denying it would break otherwise-benign offline tooling,
+/// exactly as codex documents. The pinning test `seccomp_socket_control_denylist_is_frozen`
+/// guards this list against silent edits.
+pub const SECCOMP_SOCKET_CONTROL_DENYLIST: &[&str] = &[
+    "accept",
+    "accept4",
+    "bind",
+    "listen",
+    "getpeername",
+    "getsockname",
+    "shutdown",
+    "sendto",
+    "sendmmsg",
+    "recvmmsg",
+    "getsockopt",
+    "setsockopt",
 ];
 
 /// Build a `LinuxInitPolicy` from caller-side `SandboxCapabilities`
@@ -824,6 +868,16 @@ fn apply_socket_gate(
             if let Some(nr) = syscall_nr("connect") {
                 rules.insert(nr, vec![]);
             }
+            // Close the remaining socket-operation surface (bind/listen/accept/
+            // sendto/…). Each missing-on-this-arch entry resolves to `None` and
+            // is skipped, matching the `SECCOMP_DENYLIST_SIMPLE` loop. See
+            // `SECCOMP_SOCKET_CONTROL_DENYLIST` for the rationale and the
+            // deliberate `recvfrom` exclusion.
+            for name in SECCOMP_SOCKET_CONTROL_DENYLIST {
+                if let Some(nr) = syscall_nr(name) {
+                    rules.insert(nr, vec![]);
+                }
+            }
         }
         SeccompNetworkMode::ProxyRouted => {
             // Allow only AF_INET / AF_INET6 (to reach the loopback TCP
@@ -908,11 +962,30 @@ fn syscall_nr(name: &str) -> Option<i64> {
         "syslog" => libc::SYS_syslog,
         "reboot" => libc::SYS_reboot,
         "setns" => libc::SYS_setns,
+        // Filesystem-handle escape primitives (bypass path-based Landlock).
+        "open_by_handle_at" => libc::SYS_open_by_handle_at,
+        "name_to_handle_at" => libc::SYS_name_to_handle_at,
         "clone" => libc::SYS_clone,
         "unshare" => libc::SYS_unshare,
         "socket" => libc::SYS_socket,
         "socketpair" => libc::SYS_socketpair,
         "connect" => libc::SYS_connect,
+        // Socket-control surface denied in UnixOnly mode (network disabled).
+        // All present on x86_64/aarch64 — the only arches `apply_seccomp`
+        // accepts — so none of these `return None` in practice, but the
+        // fallthrough below keeps the contract (unknown name → skip) intact.
+        "accept" => libc::SYS_accept,
+        "accept4" => libc::SYS_accept4,
+        "bind" => libc::SYS_bind,
+        "listen" => libc::SYS_listen,
+        "getpeername" => libc::SYS_getpeername,
+        "getsockname" => libc::SYS_getsockname,
+        "shutdown" => libc::SYS_shutdown,
+        "sendto" => libc::SYS_sendto,
+        "sendmmsg" => libc::SYS_sendmmsg,
+        "recvmmsg" => libc::SYS_recvmmsg,
+        "getsockopt" => libc::SYS_getsockopt,
+        "setsockopt" => libc::SYS_setsockopt,
         _ => return None,
     };
     Some(nr)
@@ -1089,11 +1162,16 @@ mod tests {
                         init_module,finit_module,delete_module,bpf,perf_event_open,ptrace,\
                         process_vm_readv,process_vm_writev,keyctl,add_key,request_key,\
                         userfaultfd,io_uring_setup,io_uring_register,io_uring_enter,mknod,\
-                        mknodat,swapon,swapoff,nfsservctl,syslog,reboot,setns";
+                        mknodat,swapon,swapoff,nfsservctl,syslog,reboot,setns,\
+                        open_by_handle_at,name_to_handle_at";
         assert_eq!(
             joined, expected,
             "seccomp denylist changed — update SP-2 spec"
         );
+        // The FS-handle escape primitives must stay denied: they reopen inodes
+        // from opaque handles, bypassing path-based Landlock confinement.
+        assert!(SECCOMP_DENYLIST_SIMPLE.contains(&"open_by_handle_at"));
+        assert!(SECCOMP_DENYLIST_SIMPLE.contains(&"name_to_handle_at"));
     }
 
     /// Pins the pseudo-device grant sets. These compensate for the
@@ -1202,5 +1280,72 @@ mod tests {
     fn rewrite_proxy_env_value_rejects_garbage() {
         assert_eq!(rewrite_proxy_env_value("", 40000), None);
         assert_eq!(rewrite_proxy_env_value("http://", 40000), None);
+    }
+
+    /// Pins the UnixOnly socket-control denylist (codex Restricted parity).
+    /// Shrinking it silently re-opens the socket-operation surface in the
+    /// network-disabled tier; growing it without intent risks breaking benign
+    /// offline tooling. Acts as a tripwire alongside `seccomp_denylist_is_frozen`.
+    #[test]
+    fn seccomp_socket_control_denylist_is_frozen() {
+        let joined = SECCOMP_SOCKET_CONTROL_DENYLIST.join(",");
+        let expected = "accept,accept4,bind,listen,getpeername,getsockname,shutdown,\
+                        sendto,sendmmsg,recvmmsg,getsockopt,setsockopt";
+        assert_eq!(
+            joined, expected,
+            "UnixOnly socket-control denylist changed — confirm codex parity intent"
+        );
+        // `recvfrom` is deliberately allowed (cargo clippy socketpair pattern).
+        assert!(
+            !SECCOMP_SOCKET_CONTROL_DENYLIST.contains(&"recvfrom"),
+            "recvfrom must stay allowed — denying it breaks socketpair-based tooling"
+        );
+        // The control surface is disjoint from the always-on danger denylist;
+        // duplicates would mean a control syscall is denied even in AllowAll.
+        for name in SECCOMP_SOCKET_CONTROL_DENYLIST {
+            assert!(
+                !SECCOMP_DENYLIST_SIMPLE.contains(name),
+                "{name} appears in both the always-on and UnixOnly-only denylists"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn socket_gate_unix_only_denies_full_control_surface() {
+        use std::collections::BTreeMap;
+
+        // UnixOnly: every socket-control syscall is an unconditional deny.
+        let mut rules: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
+        apply_socket_gate(&mut rules, SeccompNetworkMode::UnixOnly).unwrap();
+        for name in SECCOMP_SOCKET_CONTROL_DENYLIST {
+            let nr = syscall_nr(name).expect("control syscall must resolve on x86_64/aarch64");
+            let rule = rules
+                .get(&nr)
+                .unwrap_or_else(|| panic!("{name} must be denied in UnixOnly mode"));
+            assert!(
+                rule.is_empty(),
+                "{name} must be an unconditional (empty-condition) deny"
+            );
+        }
+        // connect is denied; socket/socketpair carry the AF_UNIX conditional rule.
+        assert!(rules.contains_key(&libc::SYS_connect));
+
+        // ProxyRouted and Unrestricted must NOT pull in the control surface —
+        // those tiers legitimately reach the loopback bridge / open networking.
+        for mode in [
+            SeccompNetworkMode::ProxyRouted,
+            SeccompNetworkMode::Unrestricted,
+        ] {
+            let mut other: BTreeMap<i64, Vec<seccompiler::SeccompRule>> = BTreeMap::new();
+            apply_socket_gate(&mut other, mode).unwrap();
+            for name in SECCOMP_SOCKET_CONTROL_DENYLIST {
+                let nr = syscall_nr(name).unwrap();
+                assert!(
+                    !other.contains_key(&nr),
+                    "{name} must not be denied in {mode:?} mode"
+                );
+            }
+        }
     }
 }
