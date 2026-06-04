@@ -324,53 +324,114 @@ impl ContentBlock {
 
 /// Pre-process messages before sending to any provider.
 ///
-/// 1. Repairs orphaned tool calls (Assistant ToolCall without matching ToolResult)
+/// 1. Normalizes the tool-call/tool-result pairing invariant (see
+///    [`normalize_tool_pairs`]) — the wire-level safety net that every provider
+///    call passes through (`providers::bridge`).
 /// 2. Normalizes cross-model content (no-op for now, reserved for thinking signatures)
 pub fn transform_messages(
     messages: &[UnifiedMessage],
     _target_provider: Option<&str>,
 ) -> Vec<UnifiedMessage> {
     let mut result = messages.to_vec();
-    repair_orphaned_tool_calls(&mut result);
+    normalize_tool_pairs(&mut result);
     // normalize_cross_model is a no-op for now
     result
 }
 
-/// Scan for Assistant ToolCall blocks without matching ToolResult.
-/// Insert synthetic error ToolResult for each orphan.
-fn repair_orphaned_tool_calls(messages: &mut Vec<UnifiedMessage>) {
-    // Collect all tool_call_ids that have a matching ToolResult
-    let answered_ids: std::collections::HashSet<&str> = messages
+/// Enforce the tool-call/tool-result pairing invariant that every provider
+/// (Anthropic, OpenAI, …) requires: an assistant `ToolCall` must be answered by
+/// a `ToolResult`, and a `ToolResult` must reference a `ToolCall` that exists in
+/// the history. Histories that violate either side are rejected by the provider
+/// API. Compaction, truncation, session-splits, and interrupted turns can all
+/// leave the history half-paired, so this runs at the single wire choke-point as
+/// the last line of defence.
+///
+/// Two directions, mapping codex's `context_manager/normalize.rs`:
+/// 1. [`remove_orphan_tool_results`] — drop results whose call is gone.
+/// 2. [`ensure_tool_results_present`] — synthesize an error result for each
+///    unanswered call, inserted *immediately after* its assistant message so the
+///    call→result adjacency the API mandates is preserved.
+///
+/// Orphan-result removal runs first so a synthesized result is never itself
+/// treated as a stray to delete on a re-run (the operation is idempotent).
+pub fn normalize_tool_pairs(messages: &mut Vec<UnifiedMessage>) {
+    remove_orphan_tool_results(messages);
+    ensure_tool_results_present(messages);
+}
+
+/// Collect every tool-call id produced by an assistant `ToolCall` block.
+fn collect_call_ids(messages: &[UnifiedMessage]) -> std::collections::HashSet<String> {
+    messages
         .iter()
         .filter_map(|m| match m {
-            UnifiedMessage::ToolResult { tool_call_id, .. } => Some(tool_call_id.as_str()),
+            UnifiedMessage::Assistant { content } => Some(content),
+            _ => None,
+        })
+        .flat_map(|content| content.iter())
+        .filter_map(|b| match b {
+            ContentBlock::ToolCall { id, .. } => Some(id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Remove any `ToolResult` whose `tool_call_id` has no matching `ToolCall` in the
+/// history. Such a result is an orphan (its call was compacted/dropped) and the
+/// provider rejects it (`tool_result` without a preceding `tool_use`).
+fn remove_orphan_tool_results(messages: &mut Vec<UnifiedMessage>) {
+    let call_ids = collect_call_ids(messages);
+    messages.retain(|m| match m {
+        UnifiedMessage::ToolResult { tool_call_id, .. } => call_ids.contains(tool_call_id),
+        _ => true,
+    });
+}
+
+/// Synthesize a placeholder error `ToolResult` for every assistant `ToolCall`
+/// that lacks one, inserting it directly after the assistant message that owns
+/// the call so the call→result adjacency required by the provider API holds.
+fn ensure_tool_results_present(messages: &mut Vec<UnifiedMessage>) {
+    let answered: std::collections::HashSet<String> = messages
+        .iter()
+        .filter_map(|m| match m {
+            UnifiedMessage::ToolResult { tool_call_id, .. } => Some(tool_call_id.clone()),
             _ => None,
         })
         .collect();
 
-    // Find orphaned tool calls (in Assistant messages, no matching ToolResult)
-    let mut orphans: Vec<(String, String)> = Vec::new();
-    for msg in messages.iter() {
-        if let UnifiedMessage::Assistant { content } = msg {
-            for block in content {
-                if let ContentBlock::ToolCall { id, name, .. } = block {
-                    if !answered_ids.contains(id.as_str()) {
-                        orphans.push((id.clone(), name.clone()));
-                    }
-                }
-            }
-        }
+    // Cheap exit: if every call is already answered, the history is untouched.
+    let has_unanswered = messages.iter().any(|m| match m {
+        UnifiedMessage::Assistant { content } => content
+            .iter()
+            .any(|b| matches!(b, ContentBlock::ToolCall { id, .. } if !answered.contains(id))),
+        _ => false,
+    });
+    if !has_unanswered {
+        return;
     }
 
-    // Insert synthetic error ToolResult for each orphan
-    for (id, name) in orphans {
-        messages.push(UnifiedMessage::tool_result(
-            id,
-            name,
-            "No result provided — tool call was interrupted",
-            true,
-        ));
+    let mut out: Vec<UnifiedMessage> = Vec::with_capacity(messages.len() + 1);
+    for msg in messages.drain(..) {
+        let synthetic: Vec<UnifiedMessage> = match &msg {
+            UnifiedMessage::Assistant { content } => content
+                .iter()
+                .filter_map(|b| match b {
+                    ContentBlock::ToolCall { id, name, .. } if !answered.contains(id) => {
+                        Some(UnifiedMessage::tool_result(
+                            id.clone(),
+                            name.clone(),
+                            "No result provided — tool call was interrupted",
+                            true,
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        out.push(msg);
+        out.extend(synthetic);
     }
+    *messages = out;
 }
 
 // === Tests ===
@@ -505,7 +566,7 @@ mod tests {
     }
 
     #[test]
-    fn test_repair_orphaned_tool_calls_no_orphans() {
+    fn test_normalize_tool_pairs_no_orphans() {
         let messages = vec![
             UnifiedMessage::user("search for rust"),
             UnifiedMessage::Assistant {
@@ -523,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn test_repair_orphaned_tool_calls_with_orphan() {
+    fn test_normalize_tool_pairs_adds_missing_result() {
         let messages = vec![
             UnifiedMessage::user("search for rust"),
             UnifiedMessage::Assistant {
@@ -549,6 +610,77 @@ mod tests {
             }
             _ => panic!("expected synthetic ToolResult"),
         }
+    }
+
+    #[test]
+    fn test_synthetic_result_inserted_adjacent_not_appended() {
+        // An orphan call that is NOT the last message: the synthetic result must
+        // land immediately after the assistant message (preserving call→result
+        // adjacency), not at the tail after the trailing user turn. The old
+        // append-to-end behaviour produced a ToolResult after a User message,
+        // which providers reject.
+        let messages = vec![
+            UnifiedMessage::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    thought_signature: None,
+                    id: "c1".into(),
+                    name: "search".into(),
+                    arguments: json!({}),
+                }],
+            },
+            // No result for c1, then the user keeps talking.
+            UnifiedMessage::user("never mind, do something else"),
+        ];
+        let result = transform_messages(&messages, None);
+        assert_eq!(result.len(), 3);
+        // result[1] must be the synthetic result, directly after the call.
+        match &result[1] {
+            UnifiedMessage::ToolResult { tool_call_id, .. } => assert_eq!(tool_call_id, "c1"),
+            other => panic!("expected synthetic ToolResult adjacent to call, got {other:?}"),
+        }
+        // result[2] is the original user message, now last.
+        assert!(matches!(&result[2], UnifiedMessage::User { .. }));
+    }
+
+    #[test]
+    fn test_orphan_tool_result_is_removed() {
+        // A ToolResult whose call was compacted away (e.g. the assistant turn was
+        // summarized) must be dropped — Anthropic rejects a tool_result with no
+        // preceding tool_use. The old repair only added missing results; it never
+        // removed orphan results, so this history reached the provider broken.
+        let messages = vec![
+            UnifiedMessage::user("[Context Summary] ... earlier search happened"),
+            UnifiedMessage::tool_result("gone", "search", "stale result", false),
+            UnifiedMessage::user("continue"),
+        ];
+        let result = transform_messages(&messages, None);
+        assert_eq!(result.len(), 2, "orphan ToolResult must be removed");
+        assert!(result
+            .iter()
+            .all(|m| !matches!(m, UnifiedMessage::ToolResult { .. })));
+    }
+
+    #[test]
+    fn test_normalize_tool_pairs_idempotent() {
+        // Running the normalizer twice must be a no-op the second time: a
+        // synthesized result from pass 1 must not be seen as an orphan to delete
+        // (its call exists) nor double-answered.
+        let mut messages = vec![UnifiedMessage::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                thought_signature: None,
+                id: "c1".into(),
+                name: "search".into(),
+                arguments: json!({}),
+            }],
+        }];
+        normalize_tool_pairs(&mut messages);
+        let after_first = messages.clone();
+        normalize_tool_pairs(&mut messages);
+        assert_eq!(
+            messages.len(),
+            after_first.len(),
+            "second pass must not add or remove anything"
+        );
     }
 
     #[test]

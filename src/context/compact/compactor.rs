@@ -163,7 +163,12 @@ impl ContextCompactor {
             });
         }
 
-        let cut_end = messages.len() - effective_tail;
+        // Snap the tail boundary forward past any tool-result run so the kept
+        // fresh tail never *starts* with a `ToolResult` whose `ToolCall` we are
+        // about to drain into the summary. Without this the boundary can land
+        // mid-pair, orphaning the result and getting the next provider call
+        // rejected (Anthropic: `tool_result` without a preceding `tool_use`).
+        let cut_end = snap_boundary_forward(messages.as_slice(), messages.len() - effective_tail);
         if cut_end <= 1 {
             return Ok(CompactResult {
                 tokens_before: 0,
@@ -187,8 +192,15 @@ impl ContextCompactor {
             }
         }
 
-        // Step 3: limit window and serialize
-        let window_start = cut_end.saturating_sub(self.config.max_window);
+        // Step 3: limit window and serialize. Snap the head boundary forward too:
+        // the summary is inserted at `window_start`, so if that index sits on a
+        // `ToolResult` whose `ToolCall` stays in the kept head, draining the
+        // result would orphan the call. Advancing past the result keeps the pair
+        // intact in the head.
+        let window_start = snap_boundary_forward(
+            messages.as_slice(),
+            cut_end.saturating_sub(self.config.max_window),
+        );
 
         // Guard: a zero-width window means there is nothing to compress.
         if window_start >= cut_end {
@@ -406,6 +418,24 @@ impl ContextCompactor {
 
 // === Helper functions ===
 
+/// Advance a proposed cut index forward past any contiguous run of `ToolResult`
+/// messages so the cut never falls *between* a `ToolCall` and the result that
+/// answers it. Tool results immediately follow their call, so the only mid-pair
+/// position is one where `messages[idx]` is a `ToolResult`; skipping the whole
+/// run lands the boundary on a clean message (or at `messages.len()`).
+///
+/// Used for both compaction boundaries (`window_start`, `cut_end`) so the
+/// compactor preserves the call/result pairing invariant at the source, rather
+/// than relying solely on the wire-level repair in
+/// [`crate::providers::message::normalize_tool_pairs`].
+fn snap_boundary_forward(messages: &[UnifiedMessage], idx: usize) -> usize {
+    let mut i = idx;
+    while i < messages.len() && matches!(messages[i], UnifiedMessage::ToolResult { .. }) {
+        i += 1;
+    }
+    i
+}
+
 /// Extract the text content of the first content block in a message (if Text).
 fn first_message_text(msg: &UnifiedMessage) -> Option<&str> {
     msg.content_blocks().first().and_then(|b| b.as_text())
@@ -522,6 +552,7 @@ impl CompactionStrategy for ContextCompactor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::message::ContentBlock;
     use crate::providers::mock::MockProvider;
     use crate::providers::MockError;
 
@@ -679,5 +710,90 @@ mod tests {
             "seed must not be empty after analysis-only output"
         );
         assert!(seed.contains("User message 0"));
+    }
+
+    #[test]
+    fn snap_boundary_forward_skips_tool_result_run() {
+        // A boundary landing on a tool-result run must advance past the whole run
+        // so it never separates a call from the result(s) that answer it.
+        let messages = vec![
+            UnifiedMessage::user("ask"),
+            UnifiedMessage::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    thought_signature: None,
+                    id: "c1".into(),
+                    name: "search".into(),
+                    arguments: serde_json::json!({}),
+                }],
+            },
+            UnifiedMessage::tool_result("c1", "search", "r1", false),
+            UnifiedMessage::tool_result("c2", "search", "r2", false),
+            UnifiedMessage::user("next"),
+        ];
+        // Index 2 sits on the first result → snap to 4 (past both results).
+        assert_eq!(snap_boundary_forward(&messages, 2), 4);
+        // A clean index is returned unchanged.
+        assert_eq!(snap_boundary_forward(&messages, 1), 1);
+        assert_eq!(snap_boundary_forward(&messages, 4), 4);
+        // Out-of-range / end index is preserved.
+        assert_eq!(snap_boundary_forward(&messages, 5), 5);
+    }
+
+    #[tokio::test]
+    async fn compaction_does_not_orphan_a_tool_pair_at_the_tail_boundary() {
+        // Build a history where the default fresh-tail boundary would split a
+        // tool call (kept-side) from its result (tail-side). After compaction the
+        // kept tail must NOT begin with an orphan ToolResult.
+        let provider = Arc::new(MockProvider::new(
+            "<summary>\n## Primary Request\nstuff\n</summary>",
+        ));
+        let config = CompactorConfig {
+            fresh_tail: 2,
+            max_window: 8,
+            ..CompactorConfig::default()
+        };
+        let compactor = ContextCompactor::new(provider, config);
+
+        // 10 messages; with fresh_tail=2 the naive cut_end = 8. Place a ToolCall
+        // at index 7 and its ToolResult at index 8 (straddling the boundary).
+        let mut messages = vec![UnifiedMessage::user("start")];
+        for i in 0..6 {
+            messages.push(UnifiedMessage::assistant(format!("turn {i}")));
+        }
+        messages.push(UnifiedMessage::Assistant {
+            content: vec![ContentBlock::ToolCall {
+                thought_signature: None,
+                id: "pair".into(),
+                name: "search".into(),
+                arguments: serde_json::json!({}),
+            }],
+        }); // index 7
+        messages.push(UnifiedMessage::tool_result("pair", "search", "answer", false)); // index 8
+        messages.push(UnifiedMessage::user("end")); // index 9
+
+        compactor.compact(&mut messages, 2, None).await.unwrap();
+
+        // Whatever the boundary, no ToolResult may exist without its ToolCall.
+        let call_ids: std::collections::HashSet<String> = messages
+            .iter()
+            .flat_map(|m| match m {
+                UnifiedMessage::Assistant { content } => content
+                    .iter()
+                    .filter_map(|b| match b {
+                        ContentBlock::ToolCall { id, .. } => Some(id.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            })
+            .collect();
+        for m in &messages {
+            if let UnifiedMessage::ToolResult { tool_call_id, .. } = m {
+                assert!(
+                    call_ids.contains(tool_call_id),
+                    "compaction left an orphan ToolResult ({tool_call_id}) — boundary split a pair"
+                );
+            }
+        }
     }
 }
