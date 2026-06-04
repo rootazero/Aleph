@@ -175,7 +175,16 @@ impl MemoryContextProvider {
                 .join("note")
         });
         let indexer = Arc::new(NoteIndexer::new(memory_dir.clone(), memory_db.clone()));
-        let retrieval = Arc::new(NoteFactRetrieval::new(indexer, embedder));
+        // Wire the same retrieval-time refinements as the on-demand
+        // `memory_search` tool: cross-encoder rerank + recency/reinforcement/MMR
+        // scoring. Both builders no-op when their config is disabled/inactive
+        // (the default), so the legacy ranking is preserved byte-for-byte until
+        // the user opts in via `memory.rerank` / `memory.retrieval_scoring`.
+        let retrieval = Arc::new(
+            NoteFactRetrieval::new(indexer, embedder)
+                .with_rerank_config(&assembler_config.rerank)
+                .with_scoring_config(&assembler_config.retrieval_scoring),
+        );
         // Snapshots live under ~/.aleph/data/sessions by convention; we pass
         // whatever the `session_resume` defaults produce, falling back to the
         // memory_dir/sessions subdir if the home dir resolution fails.

@@ -60,6 +60,10 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub rerank: RerankConfig,
 
+    // Retrieval salience scoring (recency decay / reinforcement / MMR)
+    #[serde(default)]
+    pub retrieval_scoring: RetrievalScoringConfig,
+
     // Reflection
     #[serde(default)]
     pub reflection: ReflectionConfig,
@@ -408,6 +412,57 @@ fn default_memory_access_boost() -> f32 {
 }
 fn default_memory_min_strength() -> f32 {
     0.1
+}
+
+/// Retrieval-time salience scoring (recency decay + reinforcement + MMR).
+///
+/// Mirrors the server-side `RetrievalScoringConfig`. Every field defaults to
+/// "off"/identity so an unconfigured deployment ranks byte-for-byte like the
+/// legacy path. When enabled, these refinements apply to both the on-demand
+/// `memory_search` tool and the proactively-injected memory context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievalScoringConfig {
+    #[serde(default)]
+    pub recency_enabled: bool,
+    #[serde(default = "default_recency_half_life_days")]
+    pub recency_half_life_days: f32,
+    #[serde(default = "default_recency_weight")]
+    pub recency_weight: f32,
+    #[serde(default)]
+    pub mmr_enabled: bool,
+    #[serde(default = "default_mmr_lambda")]
+    pub mmr_lambda: f32,
+    #[serde(default)]
+    pub reinforcement_enabled: bool,
+    #[serde(default = "default_reinforcement_weight")]
+    pub reinforcement_weight: f32,
+}
+
+fn default_recency_half_life_days() -> f32 {
+    90.0
+}
+fn default_recency_weight() -> f32 {
+    0.3
+}
+fn default_mmr_lambda() -> f32 {
+    0.7
+}
+fn default_reinforcement_weight() -> f32 {
+    0.3
+}
+
+impl Default for RetrievalScoringConfig {
+    fn default() -> Self {
+        Self {
+            recency_enabled: false,
+            recency_half_life_days: default_recency_half_life_days(),
+            recency_weight: default_recency_weight(),
+            mmr_enabled: false,
+            mmr_lambda: default_mmr_lambda(),
+            reinforcement_enabled: false,
+            reinforcement_weight: default_reinforcement_weight(),
+        }
+    }
 }
 
 // ============================================================================
