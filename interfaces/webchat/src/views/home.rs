@@ -92,14 +92,20 @@ fn summarize_event(topic: &str, data: &serde_json::Value) -> String {
         "pairing.requested" => "device pairing requested".to_string(),
         "pairing.completed" => "device pairing completed".to_string(),
         "presence.joined" => pick(&["conn_id"])
-            .map(|s| format!("client joined ({})", &s[..s.len().min(8)]))
+            .map(|s| format!("client joined ({})", short_id(&s)))
             .unwrap_or_else(|| "client joined".to_string()),
         "presence.left" => pick(&["conn_id"])
-            .map(|s| format!("client left ({})", &s[..s.len().min(8)]))
+            .map(|s| format!("client left ({})", short_id(&s)))
             .unwrap_or_else(|| "client left".to_string()),
         "acp.sessions.changed" => "ACP sessions updated".to_string(),
         _ => pick(&["message", "name", "title", "summary"]).unwrap_or_else(|| topic.to_string()),
     }
+}
+
+/// Truncate an identifier to its first 8 characters. UTF-8 safe — counts
+/// characters, never byte offsets, so a multi-byte `conn_id` can't panic.
+fn short_id(s: &str) -> String {
+    s.chars().take(8).collect()
 }
 
 /// Format a wall-clock millisecond timestamp into a `HH:MM:SS` label

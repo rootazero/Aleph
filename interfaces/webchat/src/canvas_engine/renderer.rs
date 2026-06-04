@@ -336,8 +336,12 @@ fn draw_edges_for_node(
             if e.from_idx >= e.to_idx {
                 continue;
             }
-            // Only draw edges that involve this node.
-            if e.from_idx != n_idx && e.to_idx != n_idx {
+            // Own each edge from exactly one iterated endpoint so it is drawn
+            // once. The centre (idx 0) is never iterated, so ownership goes to
+            // the higher-indexed (always non-centre, always iterated) endpoint.
+            // Keying on `to_idx` (the max, since from_idx < to_idx) prevents the
+            // double-composite that darkened edges between two non-centre nodes.
+            if e.to_idx != n_idx {
                 continue;
             }
 

@@ -43,10 +43,13 @@ fn render_markdown(content: &str) -> String {
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
                 let highlighted = highlight_code(&code_content, &code_lang);
+                // Escape the fence info-string: it is raw user/remote content
+                // interpolated into inner_html below, so an info-string with no
+                // whitespace (e.g. `<script>…`) would otherwise inject markup.
                 let lang_label = if code_lang.is_empty() {
-                    "code"
+                    "code".to_string()
                 } else {
-                    &code_lang
+                    html_escape(&code_lang)
                 };
 
                 html_output.push_str(&format!(
@@ -114,10 +117,12 @@ fn render_streaming(content: &str) -> String {
             } else {
                 // Open fence
                 fence_lang = line.trim_start_matches('`').trim().to_string();
+                // Escape: the fence info-string is raw content interpolated
+                // into inner_html below (see render_markdown for the same fix).
                 let lang_label = if fence_lang.is_empty() {
-                    "code"
+                    "code".to_string()
                 } else {
-                    &fence_lang
+                    html_escape(&fence_lang)
                 };
                 html.push_str(&format!(
                     r#"<div class="code-block-wrapper relative group my-3"><div class="flex items-center justify-between px-3 py-1.5 bg-surface-sunken/50 rounded-t-lg border border-b-0 border-border text-xs text-text-tertiary"><span>{lang_label}</span></div><pre class="rounded-b-lg border border-border bg-surface-sunken overflow-x-auto p-3 text-sm leading-relaxed"><code>"#,
