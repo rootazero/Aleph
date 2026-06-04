@@ -254,15 +254,31 @@ impl McpServerConnection {
                 ))
             })?;
 
-        // Convert to our McpTool format
+        // Convert to our McpTool format. External tool metadata is untrusted:
+        // normalize the input schema so strict providers do not reject malformed
+        // schemas, and flag descriptions that look like prompt injection.
         let tools: Vec<McpTool> = tools_result
             .tools
             .into_iter()
-            .map(|t| McpTool {
-                name: format!("{}:{}", self.name, t.name), // Namespace with server name
-                description: t.description.unwrap_or_default(),
-                input_schema: t.input_schema.unwrap_or(json!({"type": "object"})),
-                requires_confirmation: false, // External tools default to no confirmation
+            .map(|t| {
+                let description = t.description.unwrap_or_default();
+                if let Some(marker) = crate::mcp::scan_description_for_injection(&description) {
+                    tracing::warn!(
+                        server = %self.name,
+                        tool = %t.name,
+                        marker,
+                        "MCP tool description matches a prompt-injection heuristic; \
+                         tool is still surfaced but flagged for review"
+                    );
+                }
+                McpTool {
+                    name: format!("{}:{}", self.name, t.name), // Namespace with server name
+                    description,
+                    input_schema: crate::mcp::normalize_tool_schema(
+                        t.input_schema.unwrap_or_else(|| json!({"type": "object"})),
+                    ),
+                    requires_confirmation: false, // External tools default to no confirmation
+                }
             })
             .collect();
 
