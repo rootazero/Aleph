@@ -357,6 +357,7 @@ impl Sandbox for WorkspaceSandbox {
         // Whitelist is fed via SecurityContext.injected_secrets when threaded; for
         // direct sandbox callers (no security context) this scrubs with an empty
         // whitelist, which is the safe default.
+        let mut output_blocked: Vec<&'static str> = Vec::new();
         if let Ok(ref mut out) = output {
             let injected: &[crate::secrets::injection::InjectedSecret] = &[];
             let stdout_scrub = crate::sandbox::scrub_secrets_bytes(&out.stdout, injected);
@@ -368,8 +369,31 @@ impl Sandbox for WorkspaceSandbox {
                     "sandbox bytes-scrub redacted secrets in command output"
                 );
             }
+            output_blocked.extend(stdout_scrub.blocked);
+            output_blocked.extend(stderr_scrub.blocked);
             out.stdout = stdout_scrub.bytes.into_owned();
             out.stderr = stderr_scrub.bytes.into_owned();
+        }
+
+        // Block-class secret floor: a catastrophic secret (e.g. a PEM private
+        // key) in command output is never legitimate — fail closed rather than
+        // return the already-redacted output to the model. Shell-output analogue
+        // of clawshell's `DlpAction::Block`, mirroring the always-on hard-filter
+        // posture of risk.rs `BLOCKED_PATTERNS` and the default command policy.
+        if !output_blocked.is_empty() {
+            output_blocked.sort_unstable();
+            output_blocked.dedup();
+            tracing::warn!(
+                target: "shell_security",
+                session_id = ?cmd.session_id,
+                program = %cmd.program,
+                blocked = ?output_blocked,
+                "command output blocked: catastrophic secret material detected"
+            );
+            output = Err(SandboxError::Other(format!(
+                "command output blocked: catastrophic secret material detected ({})",
+                output_blocked.join(", ")
+            )));
         }
 
         let outcome = match &output {
