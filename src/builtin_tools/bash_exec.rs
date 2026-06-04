@@ -119,6 +119,10 @@ On timeout we kill the process, drain stdout/stderr for up to 2s, and return
 printed before the kill preserved in `stdout` and `stderr` — so even a
 runaway script tells you what it accomplished.
 
+ANSI colour codes and stray binary control bytes are stripped from the
+returned `stdout`/`stderr` automatically — no need for `--color=never`
+or piping through `cat`.
+
 Capability escalations (`allow_network`, `allow_subprocess`, `extra_writable_paths`)
 trigger an approval prompt the first time per session; subsequent same-or-
 narrower requests reuse the grant.

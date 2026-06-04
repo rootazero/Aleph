@@ -34,6 +34,7 @@ use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::{current_session, Sandbox};
 use crate::tool_metadata::DEFAULT_CODE_EXEC_TIMEOUT;
+use crate::tool_output::sanitize::sanitize_command_output;
 use crate::tools::AlephTool;
 
 use super::command_canonicalize::canonicalize_shell_cmd;
@@ -201,7 +202,9 @@ partial output preserved so you can see what the script accomplished.
 
 Output is capped per stream; the response carries
 `stdout_truncated_bytes` / `stderr_truncated_bytes` when bytes were
-dropped, so you know exactly how much you lost.
+dropped, so you know exactly how much you lost. ANSI colour codes and
+stray binary control bytes are stripped automatically — no need for
+`--color=never` or piping through `cat`.
 
 Capability escalations (`allow_network`, `allow_subprocess`,
 `extra_writable_paths`) require approval the first time per session.
@@ -423,8 +426,11 @@ fn sandbox_result_to_output(
 ) -> CodeExecOutput {
     match result {
         Ok(out) => {
-            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            // Strip ANSI/VT100 escapes + stray binary control bytes before the
+            // text enters the agent envelope (pi/openclaw parity; clean output
+            // stays byte-identical via the borrow fast-path).
+            let stdout = sanitize_command_output(&String::from_utf8_lossy(&out.stdout)).into_owned();
+            let stderr = sanitize_command_output(&String::from_utf8_lossy(&out.stderr)).into_owned();
             let exit_code = out.exit_code.unwrap_or(-1);
 
             debug!(
@@ -460,8 +466,11 @@ fn sandbox_result_to_output(
                 partial_stderr_bytes = partial_stderr.len(),
                 "Sandbox code execution timed out — surfacing partial output"
             );
-            let stdout = String::from_utf8_lossy(&partial_stdout).to_string();
-            let partial_stderr_text = String::from_utf8_lossy(&partial_stderr).to_string();
+            // Same sanitization as the natural-exit path — partial output is
+            // just as agent-facing.
+            let stdout = sanitize_command_output(&String::from_utf8_lossy(&partial_stdout)).into_owned();
+            let partial_stderr_text =
+                sanitize_command_output(&String::from_utf8_lossy(&partial_stderr)).into_owned();
             // Frame the human-readable banner so the model can see _that_
             // it timed out, and inline the captured partial stderr (if
             // any) so it knows _what the script printed_ on its way out.
@@ -959,6 +968,49 @@ mod tests {
             "drain-empty banner missing: {}",
             out.stderr
         );
+    }
+
+    #[tokio::test]
+    async fn ansi_and_binary_are_stripped_from_command_output() {
+        // A colourised, control-byte-laden build line must reach the model
+        // clean — pi/openclaw parity. Stage runs through the real sandbox
+        // result mapping, not just the pure helper.
+        struct NoisySandbox;
+        #[async_trait::async_trait]
+        impl Sandbox for NoisySandbox {
+            async fn execute(
+                &self,
+                _cmd: SandboxCommand,
+            ) -> std::result::Result<SandboxOutput, SandboxError> {
+                Ok(SandboxOutput {
+                    stdout: "\u{1b}[32mPASS\u{1b}[0m\u{0} 12 tests\n".as_bytes().to_vec(),
+                    stderr: "\u{1b}[31mwarn\u{1b}[0m\u{7}\n".as_bytes().to_vec(),
+                    exit_code: Some(0),
+                    duration_ms: 3,
+                    ..Default::default()
+                })
+            }
+        }
+
+        let sandbox: Arc<dyn Sandbox> = Arc::new(NoisySandbox);
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+        let out = SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "cargo test".to_string(),
+                    working_dir: None,
+                    timeout: Some(5),
+                    allow_network: false,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+        assert_eq!(out.stdout, "PASS 12 tests\n", "ANSI + NUL stripped");
+        assert_eq!(out.stderr, "warn\n", "ANSI + bell stripped");
     }
 
     #[tokio::test]
