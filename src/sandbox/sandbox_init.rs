@@ -719,8 +719,16 @@ fn apply_seccomp(policy: &LinuxInitPolicy) -> Result<(), String> {
 
     let mut rules: BTreeMap<i64, Vec<SeccompRule>> = BTreeMap::new();
     for name in SECCOMP_DENYLIST_SIMPLE {
-        let nr =
-            syscall_nr(name).ok_or_else(|| format!("unknown syscall name in denylist: {name}"))?;
+        // `syscall_nr` returns `None` for denylist entries that do not exist
+        // on the current architecture (e.g. `umount`, `mknod`, `nfsservctl`
+        // are absent on arm64 / modern kernels). The denylist is an
+        // intentional superset, so a missing syscall is a no-op — there is
+        // nothing to deny — not a fatal error. Skip it rather than aborting
+        // the whole filter (which would `exit(65)` and kill every sandboxed
+        // process on those arches).
+        let Some(nr) = syscall_nr(name) else {
+            continue;
+        };
         // Empty rule vec = unconditional match for this syscall.
         rules.insert(nr, vec![]);
     }
