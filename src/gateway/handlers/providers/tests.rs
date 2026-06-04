@@ -280,6 +280,53 @@ async fn catalog_configured_view_returns_verified_enabled_entry() {
 }
 
 #[tokio::test]
+async fn catalog_configured_view_includes_custom_non_preset_provider() {
+    // A user-defined provider whose name is NOT a built-in chat preset (e.g.
+    // an OpenAI-compatible relay added via `providers.create`). It must still
+    // surface in the model picker once enabled + verified — regression guard
+    // for the preset-only catalog that hid such providers entirely.
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("claude-sonnet-4-6");
+    cfg.enabled = true;
+    cfg.verified = true;
+    config.providers.insert("302ai".to_string(), cfg);
+    let config = Arc::new(RwLock::new(config));
+    let vault = test_vault();
+
+    let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
+    let items = items_array(&response);
+    let entry = items
+        .iter()
+        .find(|e| e["id"] == "302ai")
+        .expect("custom provider must appear in the configured catalog");
+    assert_eq!(entry["verified"], true);
+    assert_eq!(entry["enabled"], true);
+    assert_eq!(entry["default_model"], "claude-sonnet-4-6");
+    let mods = entry["modalities"].as_array().unwrap();
+    assert!(mods.iter().any(|m| m.as_str() == Some("chat")));
+}
+
+#[tokio::test]
+async fn catalog_configured_view_hides_unverified_custom_provider() {
+    // Same custom provider but unverified → excluded from the "configured"
+    // view, mirroring preset behaviour.
+    let mut config = Config::default();
+    let mut cfg = ProviderConfig::test_config("claude-sonnet-4-6");
+    cfg.enabled = true;
+    cfg.verified = false;
+    config.providers.insert("302ai".to_string(), cfg);
+    let config = Arc::new(RwLock::new(config));
+    let vault = test_vault();
+
+    let response = handle_catalog(catalog_request(Some("configured")), config, vault).await;
+    let items = items_array(&response);
+    assert!(
+        !items.iter().any(|e| e["id"] == "302ai"),
+        "unverified custom provider must not appear in the configured view"
+    );
+}
+
+#[tokio::test]
 async fn catalog_entries_carry_modalities_default_model() {
     let config = Arc::new(RwLock::new(Config::default()));
     let vault = test_vault();

@@ -779,7 +779,7 @@ pub async fn handle_catalog(
     let entries = catalog::presets_for_modality(Modality::Chat);
     let view = params.view.as_deref().unwrap_or("configured");
 
-    let items: Vec<CatalogEntryView> = entries
+    let mut items: Vec<CatalogEntryView> = entries
         .into_iter()
         .filter_map(|entry| {
             // Built-in template (always present for chat entries returned by
@@ -838,12 +838,59 @@ pub async fn handle_catalog(
                 cost,
             })
         })
-        .filter(|item| match view {
-            "configured" => item.verified && item.enabled,
-            "available" => item.has_api_key,
-            _ => true, // "all" or unrecognised — return everything chat-capable
+        .collect();
+
+    // Custom providers: user-defined entries in `config.providers` with no
+    // matching built-in chat preset (e.g. an OpenAI-compatible relay added via
+    // `providers.create`). The catalog above is preset-driven, so without this
+    // a fully configured custom provider stays invisible to the model picker.
+    let preset_ids: std::collections::HashSet<&str> =
+        items.iter().map(|i| i.id.as_str()).collect();
+    let mut custom: Vec<CatalogEntryView> = config_guard
+        .providers
+        .iter()
+        .filter(|(name, _)| !preset_ids.contains(name.as_str()))
+        .map(|(name, cfg)| {
+            let api_key = resolve_api_key(name, &vault);
+            let has_api_key = api_key.is_some() || cfg.api_key.is_some();
+            let default_model = cfg.models.first().cloned().unwrap_or_default();
+            let capabilities = crate::providers::capabilities_for(&default_model);
+            let cost = crate::pricing::rate_card(name, &default_model);
+            CatalogEntryView {
+                id: name.clone(),
+                display_name: name.clone(),
+                default_model,
+                base_url: cfg.base_url.clone().unwrap_or_default(),
+                protocol: cfg
+                    .protocol
+                    .clone()
+                    .unwrap_or_else(|| "openai".to_string()),
+                color: cfg.color.clone(),
+                homepage: None,
+                notes: None,
+                signup_url: None,
+                fallback_models: Vec::new(),
+                default_aux_model: None,
+                aliases: Vec::new(),
+                modalities: vec![Modality::Chat.as_str().to_string()],
+                models: cfg.models.clone(),
+                has_api_key,
+                verified: cfg.verified,
+                enabled: cfg.enabled,
+                is_default: default_provider.as_deref() == Some(name.as_str()),
+                capabilities,
+                cost,
+            }
         })
         .collect();
+    items.append(&mut custom);
+
+    // Apply the requested credential view filter to the merged catalog.
+    items.retain(|item| match view {
+        "configured" => item.verified && item.enabled,
+        "available" => item.has_api_key,
+        _ => true, // "all" or unrecognised — return everything chat-capable
+    });
 
     JsonRpcResponse::success(request.id, json!({ "items": items }))
 }
