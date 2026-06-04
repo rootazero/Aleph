@@ -1,9 +1,15 @@
 //! `aleph doctor` — top-level installation / runtime health diagnostic.
 //!
-//! Inspired by `codex doctor`, but tailored to Aleph's layout: this command
-//! is intentionally read-only and never mutates user state, so it is safe
-//! to run before filing a support issue or while diagnosing a broken
-//! installation.
+//! Inspired by `codex doctor`, but tailored to Aleph's layout. Diagnosis
+//! itself is read-only, so the bare command is safe to run before filing a
+//! support issue or while diagnosing a broken installation.
+//!
+//! Beyond the reference doctors (codex / openclaw / hermes all stop at
+//! mechanical repair + human-readable hints), this command can hand the
+//! failing checks to the daemon agent for an AI-assisted repair: press `f`
+//! when prompted (or pass `--fix`). That path forwards a brief over
+//! `agent.run`; all reasoning and any state mutation happen in Core, never
+//! in this thin I/O shell (R4).
 //!
 //! Checks are grouped into four categories:
 //!
@@ -29,7 +35,8 @@ use std::time::Duration;
 use serde::Serialize;
 use serde_json::Value;
 
-use aleph_client::{AlephClient, CliResult};
+use aleph_client::{AlephClient, CliConfig, CliResult};
+use aleph_protocol::{AgentTraceEvent, StreamEvent};
 
 use super::daemon::find_server_binary;
 
@@ -83,7 +90,13 @@ impl DoctorCheck {
 }
 
 /// Top-level entry. `server_url` is forwarded from the global `--server` flag.
-pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
+///
+/// `fix` (and the interactive `[f]` keypress) launch an AI-assisted repair:
+/// the failing checks are folded into a brief and forwarded to the daemon
+/// agent over `agent.run`, which fixes what it can via its own tools. This
+/// is the capability the reference doctors (codex / openclaw / hermes) lack —
+/// they stop at mechanical repair plus human-readable hints.
+pub async fn run(server_url: &str, json: bool, fix: bool, config: &CliConfig) -> CliResult<()> {
     let mut checks: Vec<DoctorCheck> = vec![
         // 1. System
         check_cli_binary(),
@@ -109,19 +122,190 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
     // 4. Sandbox (independent of daemon — uses sibling binary directly)
     checks.push(check_sandbox_summary());
 
+    // JSON / CI path: non-interactive and byte-identical to the original —
+    // emit the report and gate the exit code. Repair is never offered here so
+    // machine consumers stay deterministic.
     if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&checks).unwrap_or_default()
         );
-    } else {
-        render_human(&checks);
+        if checks.iter().any(|c| !c.passed && c.required) {
+            std::process::exit(2);
+        }
+        return Ok(());
     }
 
-    let required_failed = checks.iter().filter(|c| !c.passed && c.required).count();
+    render_human(&checks);
+
+    // Human path: collect the actionable problems (any failed check), then
+    // decide whether to launch the AI-assisted repair.
+    let failing: Vec<&DoctorCheck> = checks.iter().filter(|c| !c.passed).collect();
+    if failing.is_empty() {
+        return Ok(());
+    }
+    let required_failed = failing.iter().filter(|c| c.required).count();
+
+    let launch = fix || prompt_for_repair(failing.len());
+    if launch {
+        let brief = build_repair_brief(&failing);
+        match launch_llm_repair(server_url, &brief, config).await {
+            Ok(()) => {
+                // The agent attempted repairs; runtime state may have changed,
+                // so don't force a non-zero exit — invite a re-run to verify.
+                eprintln!();
+                eprintln!("Repair attempt finished. Re-run `aleph doctor` to verify.");
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("AI-assisted repair could not run: {e}");
+                // Fall through to the standard exit gate below.
+            }
+        }
+    }
+
     if required_failed > 0 {
         std::process::exit(2);
     }
+    Ok(())
+}
+
+// ── AI-assisted repair (the [f] path) ──────────────────────────────────────
+
+/// Offer the interactive AI-repair affordance. Returns `true` only when the
+/// session is fully interactive (both stdin and stdout are TTYs) and the user
+/// answers with `f`/`F`. Non-interactive sessions (piped stdin, redirected
+/// output, CI) always return `false`, preserving deterministic behaviour.
+fn prompt_for_repair(failing: usize) -> bool {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
+        return false;
+    }
+    print!(
+        "\n{failing} problem(s) detected. Press [f] then Enter to launch \
+         AI-assisted repair, or Enter to skip: "
+    );
+    let _ = std::io::stdout().flush();
+    let mut line = String::new();
+    if std::io::stdin().read_line(&mut line).is_err() {
+        return false;
+    }
+    matches!(line.trim(), "f" | "F")
+}
+
+/// Fold the failing checks into an LLM repair brief. Pure string transform:
+/// the intelligence lives in the prompt (R9) — the agent does all reasoning
+/// and repair via its own tools. Host-testable.
+fn build_repair_brief(failing: &[&DoctorCheck]) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "`aleph doctor` found problems with this Aleph installation. Diagnose \
+         and repair what you can safely fix using your available tools (for \
+         example `doctor` with fix=true for mechanical repairs, `self_config` \
+         / `self_manage` for configuration, and filesystem tools). Do not \
+         touch anything that is already healthy. When done, report concisely \
+         what you changed and what still needs the user.\n\n",
+    );
+    out.push_str("Failing checks:\n");
+    for c in failing {
+        let sev = if c.required { "ERROR" } else { "WARN" };
+        out.push_str(&format!("- [{sev}] {}/{}: {}\n", c.category, c.name, c.message));
+    }
+    out
+}
+
+/// Forward the repair brief to the daemon agent over `agent.run` and stream
+/// its work back. Mirrors the rendering of `aleph ask` (R4: pure I/O — the CLI
+/// formats the detected problems into a request and renders the reply; all
+/// reasoning and repair happen in Core).
+async fn launch_llm_repair(server_url: &str, brief: &str, config: &CliConfig) -> CliResult<()> {
+    use crate::output::exec_echo;
+
+    eprintln!();
+    eprintln!("Launching AI-assisted repair…");
+
+    let (client, mut events) = AlephClient::connect(server_url).await?;
+    client.authenticate(config).await?;
+
+    let session_key = config
+        .default_session
+        .clone()
+        .unwrap_or_else(|| "default".to_string());
+
+    #[derive(Serialize)]
+    struct RunParams {
+        session_key: Option<String>,
+        input: String,
+    }
+    let params = RunParams {
+        session_key: Some(session_key),
+        input: brief.to_string(),
+    };
+    let _: Value = client.call("agent.run", Some(params)).await?;
+
+    let mut response_text = String::new();
+    let mut agent_trace_seen = false;
+    let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
+
+    while let Some(event) = events.recv().await {
+        match event {
+            // Rich path: hierarchical agent-loop trace (tool args + duration).
+            StreamEvent::AgentTrace { event, .. } => {
+                agent_trace_seen = true;
+                match event {
+                    AgentTraceEvent::ToolCallStarted { call, .. } => {
+                        eprintln!(
+                            "{}",
+                            exec_echo::render_tool_start(&call.tool_name, &call.input)
+                        );
+                    }
+                    AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
+                        if let Some(line) = exec_echo::render_tool_end(
+                            &call.tool_name,
+                            &result,
+                            call.duration_ms,
+                            verbose,
+                        ) {
+                            eprintln!("{line}");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Fallback path: coarse tool events for minimal emitters.
+            StreamEvent::ToolStart {
+                tool_name, params, ..
+            } => {
+                if !agent_trace_seen {
+                    eprintln!("{}", exec_echo::render_tool_start(&tool_name, &params));
+                }
+            }
+            StreamEvent::ResponseChunk {
+                content, is_final, ..
+            } => {
+                response_text.push_str(&content);
+                if is_final {
+                    break;
+                }
+            }
+            StreamEvent::RunComplete { summary, .. } => {
+                eprintln!();
+                eprintln!("{}", exec_echo::render_summary_footer(&summary));
+                break;
+            }
+            StreamEvent::RunError { error, .. } => {
+                eprintln!("Repair run error: {error}");
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    if !response_text.is_empty() {
+        println!("{}", crate::output::markdown::render(&response_text));
+    }
+
+    client.close().await?;
     Ok(())
 }
 
@@ -638,5 +822,32 @@ mod tests {
         let check = provider_row_to_check(&row);
         assert!(check.passed);
         assert!(check.message.contains("disabled"));
+    }
+
+    #[test]
+    fn repair_brief_lists_failing_checks_with_severity() {
+        let required =
+            DoctorCheck::fail("config", "config.toml", "Aleph config", true, "parse error");
+        let optional =
+            DoctorCheck::fail("runtime", "vault", "Secret vault", false, "vault.status failed");
+        let failing = vec![&required, &optional];
+
+        let brief = build_repair_brief(&failing);
+
+        // The brief instructs the agent to use its own repair tools (R9).
+        assert!(brief.contains("doctor"));
+        assert!(brief.contains("self_config"));
+        // Required failures are ERROR; optional are WARN.
+        assert!(brief.contains("[ERROR] config/config.toml: parse error"));
+        assert!(brief.contains("[WARN] runtime/vault: vault.status failed"));
+    }
+
+    #[test]
+    fn repair_brief_renders_each_failing_check() {
+        let a = DoctorCheck::fail("system", "aleph-home", "home", true, "missing");
+        let failing = vec![&a];
+        let brief = build_repair_brief(&failing);
+        assert_eq!(brief.matches("- [").count(), 1);
+        assert!(brief.contains("aleph-home"));
     }
 }
