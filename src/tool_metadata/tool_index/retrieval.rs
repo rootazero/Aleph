@@ -186,9 +186,17 @@ impl ToolRetrieval {
             .into_iter()
             .filter(|r| r.category == TOOL_CATEGORY)
             .map(|r| {
-                // RRF scores from hybrid_search_notes are already small positive values.
-                // Convert with the same formula for consistency with threshold comparisons.
-                let similarity = 1.0 / (1.0 + r.score.max(0.0));
+                // RRF fusion scores from hybrid_search_notes are "higher = more
+                // relevant" — the opposite of the L2 distance returned by the pure
+                // vector path. Applying the 1/(1+d) distance formula here would
+                // invert the ranking, so instead normalise by the maximum
+                // achievable RRF score (a top-ranked hit in both the vector and FTS
+                // lists scores 2/(k+1), with k=60 matching hybrid_search_notes).
+                // This is an increasing map into [0, 1] that preserves ranking and
+                // keeps the threshold semantics shared with `retrieve`.
+                const RRF_K: f32 = 60.0;
+                let max_rrf = 2.0 / (RRF_K + 1.0);
+                let similarity = (r.score.max(0.0) / max_rrf).min(1.0);
                 let mut nsr = r;
                 nsr.score = similarity;
                 let scored = nsr.to_scored_fact(TOOL_AGENT_ID);
@@ -198,6 +206,7 @@ impl ToolRetrieval {
                 fact.id = format!("tool:{}", fact.id.trim_start_matches("tool/"));
                 HydratedTool::from_fact(fact, &self.config)
             })
+            .filter(|t| t.score >= self.config.hard_threshold)
             .collect();
 
         tools.sort_by(|a, b| {

@@ -1,13 +1,12 @@
 //! Conversion and utility methods for UnifiedTool
 //!
-//! Includes conversions from ToolDefinition, tool index generation,
-//! safety level inference, and prompt line formatting.
+//! Includes tool index generation, safety level inference, and prompt line
+//! formatting.
 
 use super::UnifiedTool;
 use crate::config::ToolSafetyPolicy;
 use crate::tool_metadata::types::category::ToolCategory;
 use crate::tool_metadata::types::conflict::ToolSource;
-use crate::tool_metadata::types::definition::ToolDefinition;
 use crate::tool_metadata::types::index::{truncate_string, ToolIndexCategory, ToolIndexEntry};
 use crate::tool_metadata::types::safety::ToolSafetyLevel;
 
@@ -59,111 +58,6 @@ impl UnifiedTool {
             keywords,
             is_core,
         }
-    }
-
-    // =========================================================================
-    // Conversion from AgentTool Types
-    // =========================================================================
-
-    /// Create UnifiedTool from ToolDefinition (AgentTool interface)
-    ///
-    /// Converts `AgentTool` definitions to `UnifiedTool` for unified
-    /// registry management. The source is automatically determined from
-    /// the tool's category:
-    /// - `ToolCategory::Builtin` → `ToolSource::Builtin`
-    /// - `ToolCategory::Mcp` → `ToolSource::Mcp { server: service_name }`
-    /// - `ToolCategory::Skills` → `ToolSource::Skill { id: tool_name }`
-    /// - `ToolCategory::Custom` → `ToolSource::Custom { rule_index: 0 }`
-    ///
-    /// # Arguments
-    ///
-    /// * `def` - The tool definition from an AgentTool implementation
-    /// * `service_name` - Optional service grouping name. For MCP tools, this
-    ///   should be the actual MCP server name (e.g., "github", "filesystem").
-    ///   For native tools, this is a grouping name (e.g., "filesystem", "git").
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// // Native tool
-    /// let tool = FileReadTool::new(ctx);
-    /// let unified = UnifiedTool::from_tool_definition(tool.definition(), Some("filesystem"));
-    ///
-    /// // MCP tool
-    /// let mcp_bridge = McpToolBridge::new(tool_def, client, "github".to_string());
-    /// let unified = UnifiedTool::from_tool_definition(mcp_bridge.definition(), Some("github"));
-    /// ```
-    pub fn from_tool_definition(def: ToolDefinition, service_name: Option<&str>) -> Self {
-        // Determine ToolSource from ToolCategory
-        let (source, id) = match def.category {
-            ToolCategory::Builtin => {
-                let id = format!("builtin:{}", def.name);
-                (ToolSource::Builtin, id)
-            }
-            ToolCategory::Mcp => {
-                let server = service_name.unwrap_or("unknown").to_string();
-                let id = format!("mcp:{}:{}", server, def.name);
-                (ToolSource::Mcp { server }, id)
-            }
-            ToolCategory::Skills => {
-                let skill_id = service_name.unwrap_or(&def.name).to_string();
-                let id = format!("skill:{}", skill_id);
-                (
-                    ToolSource::Skill {
-                        id: skill_id.clone(),
-                    },
-                    id,
-                )
-            }
-            ToolCategory::Custom => {
-                let source = ToolSource::Custom { rule_index: 0 };
-                let id = source.format_tool_id(&def.name);
-                (source, id)
-            }
-            ToolCategory::GeneratedSkill => {
-                let source = ToolSource::Custom { rule_index: 0 };
-                let id = source.format_tool_id(&def.name);
-                (source, id)
-            }
-        };
-
-        let icon = Self::icon_for_category(def.category);
-        // Use default policy for safety level inference (policy can be injected via Config)
-        let safety_level = Self::infer_safety_level(&def.name, def.category, None);
-
-        // Determine intent type based on source
-        let intent_type = match &source {
-            ToolSource::Builtin => format!("builtin:{}", def.name),
-            ToolSource::Native => format!("native:{}", def.name),
-            ToolSource::Mcp { server } => format!("mcp:{}:{}", server, def.name),
-            ToolSource::Skill { id } => format!("skill:{}", id),
-            ToolSource::Custom { .. } => format!("custom:{}", def.name),
-            ToolSource::Plugin { plugin_id } => format!("plugin:{}:{}", plugin_id, def.name),
-        };
-
-        let mut tool = Self::new(&id, &def.name, &def.description, source)
-            .with_display_name(&def.name)
-            .with_parameters_schema(def.parameters.clone())
-            .with_requires_confirmation(def.requires_confirmation)
-            .with_safety_level(safety_level)
-            .with_icon(icon)
-            .with_usage(format!("/{} [args]", def.name))
-            // Generate routing regex for flat namespace
-            .with_routing_regex(format!(r"^/{}\s*", regex::escape(&def.name)))
-            .with_routing_intent_type(intent_type)
-            .with_routing_strip_prefix(true);
-
-        if let Some(svc) = service_name {
-            tool = tool.with_service_name(svc);
-        }
-
-        tool
-    }
-
-    /// Get icon for a tool category
-    fn icon_for_category(category: ToolCategory) -> &'static str {
-        // Delegate to ToolCategory's built-in icon method
-        category.icon()
     }
 
     /// Infer safety level from tool name and category
