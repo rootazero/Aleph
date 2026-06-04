@@ -157,17 +157,34 @@ fn build_summary_event(summary: String) -> SessionEvent {
 /// Events that do not map to a conversational turn (lifecycle markers, tool
 /// calls, etc.) are silently skipped — the summary captures only the dialogue
 /// content visible to the user.
+///
+/// The summary is anchored to the live task: the most recent user request in
+/// the verbatim fresh tail (`events[tail_start..]`) is passed as focus so the
+/// pre-tail summary preserves detail relevant to the work the child session
+/// resumes on. This is the heavy-compaction path where the task thread is most
+/// at risk of being abstracted away.
 async fn summarize_pretail(
     compactor: &ContextCompactor,
     events: &[SessionEventRecord],
     tail_start: usize,
 ) -> anyhow::Result<String> {
-    let pretail = &events[..tail_start.min(events.len())];
+    let tail_start = tail_start.min(events.len());
+    let pretail = &events[..tail_start];
     let messages: Vec<UnifiedMessage> = pretail
         .iter()
         .filter_map(|r| event_to_message(&r.event))
         .collect();
-    compactor.summarize_slice(&messages).await
+
+    // Live-task anchor: scan the kept tail back-to-front for the latest user
+    // turn. Mapped through the same `event_to_message` filter so non-dialogue
+    // events are skipped consistently with the summarized body.
+    let tail_messages: Vec<UnifiedMessage> = events[tail_start..]
+        .iter()
+        .filter_map(|r| event_to_message(&r.event))
+        .collect();
+    let focus = super::summary_utils::latest_user_task(&tail_messages);
+
+    compactor.summarize_slice(&messages, focus.as_deref()).await
 }
 
 /// Convert a single `SessionEvent` to a `UnifiedMessage` for summarization.
@@ -531,10 +548,9 @@ mod tests {
         // markers — never a copied UserMessage.
         let emitted = session.emitted().await;
         assert!(
-            !emitted.iter().any(|(_, e)| matches!(
-                e,
-                SessionEvent::UserMessage { .. }
-            )),
+            !emitted
+                .iter()
+                .any(|(_, e)| matches!(e, SessionEvent::UserMessage { .. })),
             "no fresh-tail UserMessage should be copied when tail_start is clamped",
         );
     }
