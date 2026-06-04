@@ -95,6 +95,7 @@ mod tests {
         let registry = BuiltinToolRegistry::new().await;
 
         assert!(registry.get_tool("list_tools").is_none());
+        assert!(registry.get_tool("search_tools").is_none());
         assert!(registry.get_tool("get_tool_schema").is_none());
     }
 
@@ -109,6 +110,7 @@ mod tests {
         let registry = BuiltinToolRegistry::with_config(config).await;
 
         assert!(registry.get_tool("list_tools").is_some());
+        assert!(registry.get_tool("search_tools").is_some());
         assert!(registry.get_tool("get_tool_schema").is_some());
     }
 

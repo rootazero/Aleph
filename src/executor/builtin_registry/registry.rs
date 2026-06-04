@@ -7,7 +7,7 @@ use std::pin::Pin;
 use serde_json::Value;
 use tracing::{debug, error, info};
 
-use crate::builtin_tools::meta_tools::{GetToolSchemaTool, ListToolsTool};
+use crate::builtin_tools::meta_tools::{GetToolSchemaTool, ListToolsTool, SearchToolsTool};
 use crate::builtin_tools::sessions::{SessionsListTool, SessionsSendTool};
 use crate::error::{AlephError, Result};
 use crate::gateway::channel_registry::ChannelRegistry;
@@ -661,6 +661,13 @@ impl ToolRegistry for BuiltinToolRegistry {
                     AlephError::tool("get_tool_schema not available: no tool catalog configured")
                 })?;
                 let tool = GetToolSchemaTool::new(Arc::clone(registry));
+                tool.call_json(arguments).await
+            }),
+            "search_tools" => Box::pin(async move {
+                let registry = self.tool_catalog.as_ref().ok_or_else(|| {
+                    AlephError::tool("search_tools not available: no tool catalog configured")
+                })?;
+                let tool = SearchToolsTool::new(Arc::clone(registry));
                 tool.call_json(arguments).await
             }),
 
