@@ -266,7 +266,51 @@ pub(in crate::commands::start) async fn initialize_channels(
 
     register_channel_plugins();
 
-    let channel_registry = Arc::new(ChannelRegistry::new());
+    // Durable outbound delivery queue (opt-in persistence): when an outbound
+    // send fails transiently (channel reconnecting, channel not yet up after a
+    // restart, or an exhausted rate-limit) the message is persisted to
+    // <data_dir>/delivery.db and replayed by a background drain task — so a
+    // Daemon push / agent reply survives a brief channel outage or a daemon
+    // restart (redline R5: AI comes to you). On open failure we fall back to
+    // the historic in-memory-only behavior.
+    let delivery_store: Option<std::sync::Arc<alephcore::gateway::delivery_queue::DeliveryStore>> = {
+        use alephcore::gateway::delivery_queue::{DeliveryQueueConfig, DeliveryStore};
+        use alephcore::utils::paths::get_data_dir;
+
+        match get_data_dir() {
+            Ok(dir) => {
+                let db_path = dir.join("delivery.db");
+                match DeliveryStore::open(&db_path, DeliveryQueueConfig::default()) {
+                    Ok(store) => Some(std::sync::Arc::new(store)),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "Failed to open delivery.db; durable outbound retry disabled"
+                        );
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to resolve data directory; durable outbound retry disabled"
+                );
+                None
+            }
+        }
+    };
+
+    let channel_registry = match &delivery_store {
+        Some(store) => Arc::new(ChannelRegistry::new().with_delivery_store(store.clone())),
+        None => Arc::new(ChannelRegistry::new()),
+    };
+
+    // Replay any deliveries persisted before this start, and keep draining new
+    // transient failures, for as long as the daemon runs.
+    if let Some(store) = delivery_store {
+        alephcore::gateway::delivery_queue::spawn_drain(channel_registry.clone(), store);
+    }
 
     // Open state database for channel-level persistence (offset tracking, pairing).
     // Shared across all channels that need it; None on failure (non-fatal).

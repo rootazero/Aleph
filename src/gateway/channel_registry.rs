@@ -87,6 +87,12 @@ pub struct ChannelRegistry {
     voice_states: RwLock<HashMap<String, VoiceState>>,
     /// Bounded retry-after policy for rate-limited outbound sends.
     send_retry: SendRetryPolicy,
+    /// Optional durable outbound delivery queue. When attached, an outbound
+    /// send that fails with a *definitely-not-delivered* error is persisted and
+    /// retried by a background drain task instead of being dropped. `None`
+    /// preserves the historic in-memory-only behavior byte-for-byte. See
+    /// [`super::delivery_queue`].
+    delivery_store: Option<std::sync::Arc<super::delivery_queue::DeliveryStore>>,
 }
 
 impl ChannelRegistry {
@@ -101,7 +107,22 @@ impl ChannelRegistry {
             inbound_rx: Arc::new(Mutex::new(Some(inbound_rx))),
             voice_states: RwLock::new(HashMap::new()),
             send_retry: SendRetryPolicy::default(),
+            delivery_store: None,
         }
+    }
+
+    /// Attach a durable outbound delivery queue (builder-style).
+    ///
+    /// Once attached, [`send`](Self::send) persists transient send failures to
+    /// the store for background retry. Pair this with
+    /// [`super::delivery_queue::spawn_drain`] to start the drain task. Without
+    /// it, `send` behaves exactly as before (`None`).
+    pub fn with_delivery_store(
+        mut self,
+        store: std::sync::Arc<super::delivery_queue::DeliveryStore>,
+    ) -> Self {
+        self.delivery_store = Some(store);
+        self
     }
 
     /// Override the outbound send retry policy (builder-style).
@@ -284,8 +305,70 @@ impl ChannelRegistry {
         results
     }
 
-    /// Send a message through a specific channel
+    /// Send a message through a specific channel.
+    ///
+    /// On a *definitely-not-delivered* failure (channel down / not yet
+    /// connected, or an exhausted rate-limit) the message is persisted to the
+    /// attached [`delivery_store`](Self::with_delivery_store), if any, for
+    /// background retry — then the original error is still returned so callers
+    /// observe unchanged semantics. When no store is attached this is a
+    /// zero-overhead passthrough to [`send_attempt`](Self::send_attempt).
     pub async fn send(
+        &self,
+        channel_id: &ChannelId,
+        message: OutboundMessage,
+    ) -> ChannelResult<SendResult> {
+        // Fast path: without a durable queue, behave exactly as before (no
+        // extra clone, byte-identical to the historic implementation).
+        if self.delivery_store.is_none() {
+            return self.send_attempt(channel_id, message).await;
+        }
+
+        match self.send_attempt(channel_id, message.clone()).await {
+            Ok(sent) => Ok(sent),
+            Err(e) => {
+                self.maybe_enqueue(channel_id, &message, &e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Persist a transient outbound failure for durable retry, if a store is
+    /// attached and the error is duplicate-safe to retry. Best-effort: a
+    /// persistence failure is logged and swallowed (the original send error is
+    /// what the caller sees).
+    fn maybe_enqueue(
+        &self,
+        channel_id: &ChannelId,
+        message: &OutboundMessage,
+        err: &ChannelError,
+    ) {
+        let Some(store) = &self.delivery_store else {
+            return;
+        };
+        if !super::delivery_queue::should_enqueue(err) {
+            return;
+        }
+        let next = super::delivery_queue::now_secs()
+            + store.config().initial_backoff.as_secs() as i64;
+        match store.enqueue(channel_id.as_str(), message, &format!("{:?}", err), next) {
+            Ok(_) => info!(
+                channel = %channel_id,
+                "outbound send failed transiently; queued for durable retry"
+            ),
+            Err(e) => warn!(
+                channel = %channel_id,
+                error = %e,
+                "failed to persist outbound delivery for retry"
+            ),
+        }
+    }
+
+    /// Attempt to deliver a message through a specific channel, with the
+    /// bounded in-memory rate-limit retry. This is the enqueue-free send path;
+    /// the durable drain task calls it directly so a retry never re-enqueues
+    /// the record it is currently draining.
+    pub(crate) async fn send_attempt(
         &self,
         channel_id: &ChannelId,
         message: OutboundMessage,

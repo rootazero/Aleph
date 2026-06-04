@@ -70,6 +70,7 @@ pub mod channel_health_monitor;
 pub mod channel_policy;
 pub mod channel_registry;
 pub mod coalescer;
+pub mod delivery_queue;
 pub mod device_store;
 pub mod hot_reload;
 pub mod http_server;
