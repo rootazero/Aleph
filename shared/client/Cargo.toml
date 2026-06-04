@@ -19,4 +19,4 @@ thiserror = "2.0"
 anyhow = "1.0"
 tracing = "0.1"
 uuid = { version = "1.7", features = ["v4"] }
-dirs = "5.0"
+dirs = "6.0"

@@ -57,7 +57,7 @@ rpassword = "7"
 # Utilities
 uuid = { version = "1.7", features = ["v4"] }
 chrono = "0.4"
-dirs = "5.0"
+dirs = "6.0"
 
 # Markdown → ANSI rendering for human-facing assistant output
 pulldown-cmark = { version = "0.12", default-features = false }
