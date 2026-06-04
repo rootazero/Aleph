@@ -16,6 +16,36 @@ use crate::verification::{
     hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
 
+/// Bridges a borrowed [`HarnessCallback`] into the provider layer's
+/// [`crate::providers::DeltaSink`] observer, so live token deltas reach the
+/// callback as the provider streams them.
+///
+/// The callback method is `&mut self` while the sink method is `&self`, so the
+/// borrow is held behind a `std::sync::Mutex` for interior mutability. The lock
+/// is effectively uncontended: the provider drives one delta at a time on a
+/// single task. Only text and thinking deltas are forwarded for live preview —
+/// tool-call and bookkeeping deltas are folded by the provider's
+/// `DeltaCollector` and surface through the assembled `ProviderResponse`.
+struct CallbackSink<'c> {
+    callback: std::sync::Mutex<&'c mut dyn HarnessCallback>,
+}
+
+#[async_trait::async_trait]
+impl crate::providers::DeltaSink for CallbackSink<'_> {
+    async fn on_delta(&self, delta: &crate::providers::ProviderDelta) {
+        // Poison-safe (P7): recover the guard rather than panicking — a delta
+        // preview is never worth aborting the turn.
+        let mut cb = self.callback.lock().unwrap_or_else(|e| e.into_inner());
+        match delta {
+            crate::providers::ProviderDelta::TextDelta(t) if !t.is_empty() => cb.on_delta(t),
+            crate::providers::ProviderDelta::ThinkingDelta(t) if !t.is_empty() => {
+                cb.on_reasoning(t)
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Ephemeral nudge appended on the grace turn when the budget hits
 /// critical — the single tool-less LLM call given when
 /// `LoopDirective::FinalReply` fires and the prior assistant turn ended
@@ -601,10 +631,23 @@ impl AgentHarness {
             tools_ref,
             session_id,
         );
-        let mut response = match self
-            .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
-            .await?
-        {
+        // Streaming gate: live token deltas require an HTTP provider seam and
+        // no output guardrail. The output guardrail (Stage 5a below) sanitises
+        // the FINAL assembled text, which cannot be applied retroactively to an
+        // already-emitted incremental stream — so guardrailed turns keep the
+        // one-shot emit. Mock/non-HTTP providers also fall through. When the
+        // gate is open, `stream_llm_call` forwards text/thinking deltas live
+        // and we suppress the once-per-turn `on_delta` further down.
+        let provider_streams =
+            self.deps.guardrails.is_none() && self.deps.llm.as_http_provider().is_some();
+        let primary_call = if provider_streams {
+            self.stream_llm_call(payload, callback, parent_cancel, started)
+                .await?
+        } else {
+            self.race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+                .await?
+        };
+        let mut response = match primary_call {
             Ok(r) => r,
             Err(primary_err) => {
                 // Reactive-compaction rescue (Phase A): when the classifier
@@ -855,9 +898,17 @@ impl AgentHarness {
         };
 
         if !text.is_empty() {
-            // Non-streaming LLM layer emits one chunk per turn; the callback
-            // shape permits finer chunking once `process_stream` is wired.
-            callback.on_delta(&text);
+            // For streamed turns the incremental text deltas were already
+            // forwarded live during the LLM call (`stream_llm_call`), so a
+            // second full-text `on_delta` here would double the content in
+            // append-only consumers (BroadcastCallback → FlowStreamEvent::Delta).
+            // Non-streaming turns (mock/non-HTTP providers, or guardrailed turns
+            // where streaming is suppressed so the output guardrail can sanitise
+            // the final text first) keep the one-shot emit. Either way the
+            // authoritative AssistantMessage is persisted just below.
+            if !provider_streams {
+                callback.on_delta(&text);
+            }
             self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {
                 iteration: iterations,
                 stream: crate::harness::trace::LoopTraceTextKind::Final,
@@ -1254,6 +1305,45 @@ impl AgentHarness {
         }
     }
 
+    /// Primary LLM call with live token streaming.
+    ///
+    /// When the provider exposes an HTTP delta seam
+    /// ([`AiProvider::as_http_provider`]), this drives
+    /// [`HttpProvider::execute_streaming`] so each text/thinking delta is
+    /// forwarded to `callback` (via [`CallbackSink`]) as it arrives, while the
+    /// assembled `ProviderResponse` still runs the full non-streaming pipeline
+    /// (cost metering, error promotion, validation, inbound leak scan).
+    /// Providers without an HTTP seam (mock providers in tests, non-HTTP
+    /// backends) fall back to the one-shot `process()` path — no live deltas,
+    /// byte-identical to before.
+    ///
+    /// Raced against cancel + turn-timeout exactly like [`Self::race_llm_call`].
+    /// Caller gates this behind `provider_streams` (HTTP seam present AND no
+    /// output guardrail wired) and must suppress the once-per-turn `on_delta`
+    /// for streamed turns to avoid double-emitting into append-only consumers.
+    ///
+    /// [`AiProvider::as_http_provider`]: crate::providers::AiProvider::as_http_provider
+    /// [`HttpProvider::execute_streaming`]: crate::providers::http_provider::HttpProvider::execute_streaming
+    pub(crate) async fn stream_llm_call(
+        &self,
+        payload: RequestPayload<'_>,
+        callback: &mut dyn HarnessCallback,
+        parent_cancel: &CancellationToken,
+        started: std::time::Instant,
+    ) -> Result<Result<ProviderResponse, crate::error::AlephError>, HarnessError> {
+        let Some(http) = self.deps.llm.as_http_provider() else {
+            // No HTTP delta seam — keep the existing one-shot path.
+            return self
+                .race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
+                .await;
+        };
+        let sink = CallbackSink {
+            callback: std::sync::Mutex::new(callback),
+        };
+        self.race_llm_call(http.execute_streaming(payload, &sink), parent_cancel, started)
+            .await
+    }
+
     /// Fire one tool-less LLM call so the user gets a terminal text
     /// response on a forced termination (budget critical or diminishing
     /// returns). The nudge text is selected by `reason`; the call path is
@@ -1535,5 +1625,49 @@ mod tests {
         );
         assert_ne!(GRACE_NUDGE_FAILURE_CAP, GRACE_NUDGE_VERIFIER_VETO);
         assert!(GRACE_NUDGE_FAILURE_CAP.contains("user"));
+    }
+
+    /// `CallbackSink` must forward text deltas to `on_delta`, thinking deltas
+    /// to `on_reasoning`, drop empty deltas, and ignore bookkeeping deltas
+    /// (tool-call starts etc. are folded by the provider's collector).
+    #[tokio::test]
+    async fn callback_sink_forwards_text_and_thinking_deltas() {
+        use crate::providers::{DeltaSink, ProviderDelta};
+
+        #[derive(Default)]
+        struct RecordingCb {
+            text: Vec<String>,
+            reasoning: Vec<String>,
+        }
+        impl crate::harness::callback::HarnessCallback for RecordingCb {
+            fn on_delta(&mut self, text: &str) {
+                self.text.push(text.to_string());
+            }
+            fn on_reasoning(&mut self, text: &str) {
+                self.reasoning.push(text.to_string());
+            }
+        }
+
+        let mut cb = RecordingCb::default();
+        {
+            let sink = CallbackSink {
+                callback: std::sync::Mutex::new(&mut cb),
+            };
+            sink.on_delta(&ProviderDelta::TextDelta("Hello ".into())).await;
+            sink.on_delta(&ProviderDelta::ThinkingDelta("hmm".into()))
+                .await;
+            sink.on_delta(&ProviderDelta::TextDelta("world".into())).await;
+            // Empty text delta is dropped.
+            sink.on_delta(&ProviderDelta::TextDelta(String::new())).await;
+            // Bookkeeping delta is ignored by the live preview.
+            sink.on_delta(&ProviderDelta::ToolCallStart {
+                id: "t1".into(),
+                name: "read".into(),
+                signature: None,
+            })
+            .await;
+        }
+        assert_eq!(cb.text, vec!["Hello ".to_string(), "world".to_string()]);
+        assert_eq!(cb.reasoning, vec!["hmm".to_string()]);
     }
 }
