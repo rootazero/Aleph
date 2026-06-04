@@ -227,7 +227,7 @@ impl AlephClient {
 
         debug!("Sending response to Server: {}", json);
         let mut write_guard = write.lock().await;
-        if let Err(e) = write_guard.send(Message::Text(json)).await {
+        if let Err(e) = write_guard.send(Message::Text(json.into())).await {
             error!("Failed to send response: {}", e);
         }
     }
@@ -287,7 +287,7 @@ impl AlephClient {
 
         {
             let mut write = self.write.lock().await;
-            if let Err(e) = write.send(Message::Text(json)).await {
+            if let Err(e) = write.send(Message::Text(json.into())).await {
                 // Send failed after the pending entry was registered: drop it so
                 // the pending map doesn't leak across repeated failures, and mark
                 // the connection dead so subsequent calls fail fast.
