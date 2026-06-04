@@ -37,7 +37,7 @@ If the section name doesn't match any of these, add an explicit `type = "..."` f
 ## Common Operations
 
 ### Add a Telegram bot
-1. Store token: `vault_store(action="store", key="channel:telegram:mybot", secret="<bot_token>")`
+1. Store token: `vault_store(action="store", key="channel:telegram:bot_token", secret="<bot_token>")`
 2. Add config:
 ```toml
 [channels.telegram]
