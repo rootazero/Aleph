@@ -314,10 +314,17 @@ vault_store(action="list")
 
 | Type | Key Convention | Example |
 |------|---------------|---------|
-| LLM providers | `provider:{name}` | `provider:openai` |
+| LLM providers | `ai:{name}` | `ai:openai` |
 | Generation providers | `gen:{name}` | `gen:stability` |
 | Channels | `channel:{instance_id}:{secret_field}` | `channel:telegram:bot_token` |
-| Embedding | `embedding:{name}` | `embedding:openai` |
+| Embedding | `embed:{id}` | `embed:openai` |
+| Rerank | `rerank:{provider}` | `rerank:cohere` |
+| Search backends | `search:{name}` | `search:brave` |
+
+> **Vault prefix is `ai:` not `provider:`** — the runtime reads LLM provider keys
+> only from `ai:{name}`. A key stored under `provider:openai` is never read and
+> provider auth fails silently. Embeddings likewise read `embed:{id}`, not
+> `embedding:{name}`.
 
 ---
 

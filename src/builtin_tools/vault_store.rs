@@ -18,9 +18,9 @@ pub struct VaultStoreArgs {
         description = "Action: 'store' to save a secret, 'delete' to remove one, 'list' to see all key names"
     )]
     pub action: VaultAction,
-    /// Secret key name (e.g., "provider:openai", "gen:stability"). Required for store/delete.
+    /// Secret key name (e.g., "ai:openai", "gen:stability"). Required for store/delete.
     #[schemars(
-        description = "Key name for the secret. Convention: provider:{name}, gen:{name}, channel:{type}:{id}"
+        description = "Key name for the secret. Convention (exact prefixes the runtime reads): ai:{name} for LLM providers, gen:{name} for generation providers, embed:{id} for embeddings, channel:{instance_id}:{field} for channels"
     )]
     pub key: Option<String>,
     /// Secret value. Required for 'store' action only.
