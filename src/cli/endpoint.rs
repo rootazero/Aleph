@@ -52,26 +52,33 @@ pub fn write_endpoint(data_dir: &Path, endpoint: &IpcEndpoint) -> std::io::Resul
 const MAX_ENDPOINT_FILE_SIZE: u64 = 1_048_576;
 
 pub fn read_endpoint(data_dir: &Path) -> std::io::Result<Option<IpcEndpoint>> {
+    use std::io::Read;
+
     let path = endpoint_path(data_dir);
-    match std::fs::read(&path) {
-        Ok(bytes) => {
-            if bytes.len() > MAX_ENDPOINT_FILE_SIZE as usize {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        ".ipc-endpoint.json exceeds size limit ({} > {} bytes)",
-                        bytes.len(),
-                        MAX_ENDPOINT_FILE_SIZE
-                    ),
-                ));
-            }
-            let ep: IpcEndpoint = serde_json::from_slice(&bytes)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-            Ok(Some(ep))
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+
+    // Bound the read to MAX+1 bytes so a corrupt or oversized file cannot
+    // force an unbounded allocation BEFORE the size check fires. (The
+    // previous `std::fs::read` loaded the whole file into memory first,
+    // making the limit decorative.) Reading one byte past the limit lets us
+    // detect "too big" without trusting metadata, which is racy against a
+    // concurrent writer.
+    let mut bytes = Vec::new();
+    file.take(MAX_ENDPOINT_FILE_SIZE + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_ENDPOINT_FILE_SIZE {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(".ipc-endpoint.json exceeds size limit (> {MAX_ENDPOINT_FILE_SIZE} bytes)"),
+        ));
     }
+    let ep: IpcEndpoint = serde_json::from_slice(&bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    Ok(Some(ep))
 }
 
 pub fn remove_endpoint(data_dir: &Path) {
