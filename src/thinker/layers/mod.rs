@@ -34,6 +34,10 @@ mod tool_usage_grammar;
 mod tools;
 pub use tool_runtime_state::ToolRuntimeStateLayer;
 
+// --- Execution-plan layer (active scratchpad checklist, re-surfaced per turn) ---
+mod execution_plan;
+pub use execution_plan::ExecutionPlanLayer;
+
 // --- Context layers ---
 mod chain_context;
 mod environment;

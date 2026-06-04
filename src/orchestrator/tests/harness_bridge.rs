@@ -3,7 +3,9 @@
 
 use std::sync::Arc;
 
-use crate::orchestrator::harness_bridge::{compute_runtime_state_blocks, AgentHarnessRunner};
+use crate::orchestrator::harness_bridge::{
+    active_execution_plan, compute_runtime_state_blocks, AgentHarnessRunner,
+};
 use crate::tool_metadata::{HealthReason, ProbeResult, ToolHealthProbe};
 use crate::tools::runtime_state::ToolStatus;
 
@@ -16,6 +18,21 @@ fn agent_harness_runner_is_send_sync() {
 #[test]
 fn compute_runtime_state_blocks_empty_when_no_tool_catalog() {
     assert!(compute_runtime_state_blocks(None).is_empty());
+}
+
+#[tokio::test]
+async fn active_execution_plan_none_for_empty_session_key() {
+    // Empty key short-circuits in `scratchpad_registry::active` → no plan.
+    assert!(active_execution_plan("").await.is_none());
+}
+
+#[tokio::test]
+async fn active_execution_plan_none_for_unbound_session() {
+    // A session that never touched the scratchpad has no registry binding,
+    // so prompt assembly stays byte-identical (the layer renders nothing).
+    assert!(active_execution_plan("unbound-session-key-no-scratchpad")
+        .await
+        .is_none());
 }
 
 #[test]
