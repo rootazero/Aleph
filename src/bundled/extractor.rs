@@ -150,6 +150,23 @@ fn extract_skills(bundled: &Dir, skills_dir: &Path, manifest: &mut InstallRegist
                 debug!(skill = %name, "Extracted bundled skill");
             }
             Err(e) => {
+                // Record the skill as Official even though extraction failed.
+                // Otherwise the partially-written directory is left untracked,
+                // and the next reconcile() reclassifies it as a user-owned
+                // Local skill — which extract_skills then permanently skips,
+                // leaving a half-extracted skill that never self-heals and is
+                // mislabeled as a user skill. version=None marks it incomplete;
+                // since bundled_version is not bumped on failure, the next
+                // startup re-extracts and repairs it.
+                manifest.skills.insert(
+                    name.clone(),
+                    SkillEntry {
+                        source: SkillOrigin::Official,
+                        version: None,
+                        url: None,
+                        installed_at: None,
+                    },
+                );
                 warn!(skill = %name, error = %e, "Failed to extract skill");
                 all_ok = false;
             }
