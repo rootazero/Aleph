@@ -221,10 +221,6 @@ pub fn default_bm25_bonus() -> f32 {
     0.15
 }
 
-pub fn default_dedup_similarity_threshold() -> f32 {
-    0.95
-}
-
 pub fn default_backup_enabled() -> bool {
     true
 }
