@@ -17,6 +17,11 @@ pub struct CuratedMemoryStore {
     pub file_path: PathBuf,
     pub char_limit: usize,
     state: Mutex<StoreState>,
+    /// In-process async serialization for `with_lock`. Ensures only one task
+    /// per process contends for the blocking fs2 advisory lock at a time, so
+    /// the `flock` syscall stays uncontended (returns immediately) instead of
+    /// blocking a tokio worker thread and starving the lock holder.
+    io_gate: tokio::sync::Mutex<()>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -79,6 +84,7 @@ impl CuratedMemoryStore {
             file_path,
             char_limit,
             state: Mutex::new(StoreState { entries, legacy }),
+            io_gate: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -241,6 +247,10 @@ impl CuratedMemoryStore {
     where
         F: FnOnce(&mut StoreState) -> Result<(), CuratedError>,
     {
+        // Serialize in-process callers first: with only one task per process
+        // reaching the blocking `flock` below, the syscall is uncontended and
+        // returns immediately rather than parking a tokio worker thread.
+        let _gate = self.io_gate.lock().await;
         let lock_path = lock_sidecar(&self.file_path);
         if let Some(parent) = lock_path.parent() {
             std::fs::create_dir_all(parent)
