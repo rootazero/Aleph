@@ -788,11 +788,22 @@ impl AgentHarness {
         // exactly this prompt, so feeding back the real `prompt_tokens_total`
         // converges the estimate to this conversation's true tokenizer ratio.
         // R10-safe: pure accuracy feedback, no new decision category.
-        if let (Some(budget), Some(usage)) =
-            (self.deps.context_budget.as_ref(), response.usage.as_ref())
-        {
-            let observed = usage.prompt_tokens_total() as usize;
-            budget.lock().await.observe_actual_usage(observed);
+        //
+        // Skipped when the `max_output_tokens` recovery loop ran: that path
+        // appends the partial assistant text + resume nudge to `messages`
+        // AFTER `before_turn` snapshotted `last_pressure`, so the surviving
+        // response's `prompt_tokens_total` no longer measures the same prompt
+        // the estimate was taken on. Feeding that mismatched ratio into the
+        // EWMA would inject a spurious inflationary correction. (Empty-response
+        // retries re-issue the identical `messages`, so they stay valid samples
+        // and are intentionally NOT excluded here.)
+        if max_tokens_retries == 0 {
+            if let (Some(budget), Some(usage)) =
+                (self.deps.context_budget.as_ref(), response.usage.as_ref())
+            {
+                let observed = usage.prompt_tokens_total() as usize;
+                budget.lock().await.observe_actual_usage(observed);
+            }
         }
 
         // 4. Emit AssistantMessage preserving any tool_use intent in `blocks`.
