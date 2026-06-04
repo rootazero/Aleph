@@ -58,6 +58,57 @@ fn test_test_result_serialize() {
 }
 
 #[tokio::test]
+async fn test_healthcheck_empty_providers() {
+    let config = Arc::new(RwLock::new(Config::default()));
+    let vault = test_vault();
+    let request = JsonRpcRequest::with_id("providers.healthcheck", None, json!(1));
+    let response = handle_healthcheck(request, config, vault).await;
+    let result = response.result.unwrap();
+    let providers = result["providers"].as_array().unwrap();
+    assert!(providers.is_empty(), "no providers configured → empty sweep");
+}
+
+#[tokio::test]
+async fn test_healthcheck_skips_disabled_without_probing() {
+    // A disabled provider must be reported as skipped and must NOT trigger a
+    // network probe — this keeps the test hermetic (no outbound I/O).
+    let mut config = config_with_provider("openai");
+    config.providers.get_mut("openai").unwrap().enabled = false;
+    let config = Arc::new(RwLock::new(config));
+    let vault = test_vault();
+
+    let request = JsonRpcRequest::with_id("providers.healthcheck", None, json!(1));
+    let response = handle_healthcheck(request, config, vault).await;
+    let result = response.result.unwrap();
+    let providers = result["providers"].as_array().unwrap();
+
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0]["name"], "openai");
+    assert_eq!(providers[0]["enabled"], false);
+    assert_eq!(providers[0]["skipped"], true);
+    assert_eq!(providers[0]["ok"], false);
+    assert!(providers[0].get("latency_ms").is_none());
+}
+
+#[test]
+fn test_provider_health_row_serialize() {
+    let row = ProviderHealthRow {
+        name: "openai".to_string(),
+        enabled: true,
+        ok: true,
+        skipped: false,
+        latency_ms: Some(120),
+        error: None,
+    };
+    let json = serde_json::to_value(&row).unwrap();
+    assert_eq!(json["name"], "openai");
+    assert_eq!(json["ok"], true);
+    assert_eq!(json["latency_ms"], 120);
+    // error omitted when None
+    assert!(json.get("error").is_none());
+}
+
+#[tokio::test]
 async fn test_needs_setup_empty_providers() {
     let config = Arc::new(RwLock::new(Config::default()));
     let request = JsonRpcRequest::with_id("providers.needsSetup", None, serde_json::json!(1));

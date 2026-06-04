@@ -37,6 +37,26 @@ pub struct TestResult {
     pub latency_ms: Option<u64>,
 }
 
+/// One row in the concurrent `providers.healthcheck` result.
+///
+/// Unlike `providers.test` (one provider, mutates `verified`), this is a
+/// read-only liveness probe over *every* configured provider, run
+/// concurrently. Disabled providers are reported as `skipped` rather than
+/// probed.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderHealthRow {
+    pub name: String,
+    pub enabled: bool,
+    /// True when a ping round-tripped successfully.
+    pub ok: bool,
+    /// True when the provider was not probed because it is disabled.
+    pub skipped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 /// Parameters for providers.get
 #[derive(Debug, Deserialize)]
 pub struct GetParams {
