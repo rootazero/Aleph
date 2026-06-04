@@ -34,8 +34,6 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) workspace_manager: Option<Arc<AgentEnvStore>>,
     /// Memory backend for auto-memorization of conversations
     pub(super) memory_backend: Option<crate::memory::store::MemoryBackend>,
-    /// Optional task router for pre-classification and escalation handling
-    pub(super) task_router: Option<Arc<dyn crate::routing::TaskRouter>>,
     /// Compression service for turn-based fact extraction
     pub(super) compression_service: Option<Arc<crate::memory::compression::CompressionService>>,
     /// Memory context provider for SQLite-backed prompt augmentation
@@ -86,7 +84,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             tools: Arc::new(tools),
             workspace_manager: None,
             memory_backend,
-            task_router: None,
             compression_service: None,
             memory_context_provider: None,
             global_tool_permissions: Default::default(),
@@ -121,12 +118,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         &self,
     ) -> Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>> {
         self.orchestrator.clone()
-    }
-
-    /// Set a task router for pre-classification of incoming requests.
-    pub fn with_task_router(mut self, router: Arc<dyn crate::routing::TaskRouter>) -> Self {
-        self.task_router = Some(router);
-        self
     }
 
     /// Set a compression service for automatic turn-based compression.

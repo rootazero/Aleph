@@ -231,14 +231,6 @@ pub enum ExecutionError {
     #[error("Command requires LLM processing: {reason}")]
     Fallthrough { reason: String },
 
-    #[error("Escalated to {route_label} after {completed_steps} steps")]
-    Escalated {
-        route_label: String,
-        route: crate::routing::TaskRoute,
-        context: crate::routing::EscalationSnapshot,
-        completed_steps: usize,
-    },
-
     #[error("orchestrator: {0}")]
     Orchestrator(String),
 }

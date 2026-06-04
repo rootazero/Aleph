@@ -1,6 +1,11 @@
-//! Task routing decision layer — core types and trait.
+//! Task classification value types.
+//!
+//! Consumed by the `gateway_route` builtin tool (via the
+//! [`super::rules::RoutingRules`] regex classifier) to report how a message
+//! would be classified. The orchestration trait that once drove
+//! single-vs-multi-agent dispatch was removed when the Dispatcher dissolved
+//! (R7/R10) — only the classification value types survive.
 
-use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Routing decision for a task.
@@ -53,38 +58,4 @@ pub enum CollabStrategy {
     Parallel,
     Adversarial,
     GroupChat,
-}
-
-/// Context provided to the router for classification.
-pub struct RouterContext {
-    pub session_history_len: usize,
-    pub available_tools: Vec<String>,
-    pub user_preferences: Option<String>,
-}
-
-/// Context for evaluating whether a running task should be escalated.
-pub struct EscalationContext {
-    pub step_count: usize,
-    pub tools_invoked: Vec<String>,
-    pub has_failures: bool,
-    pub original_message: String,
-}
-
-/// Snapshot of task state at escalation time.
-#[derive(Debug, Clone)]
-pub struct EscalationSnapshot {
-    pub original_message: String,
-    pub completed_steps: usize,
-    pub tools_invoked: Vec<String>,
-    pub partial_result: Option<String>,
-}
-
-/// Trait for task routing implementations.
-#[async_trait]
-pub trait TaskRouter: Send + Sync {
-    /// Classify an incoming message into a task route.
-    async fn classify(&self, message: &str, context: &RouterContext) -> TaskRoute;
-
-    /// Check whether a running task should be escalated to a higher route.
-    async fn should_escalate(&self, state: &EscalationContext) -> Option<TaskRoute>;
 }
