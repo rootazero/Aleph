@@ -9,8 +9,9 @@
 //!
 //! - **system**:   binary location, version, sibling `aleph-server` presence
 //! - **config**:   `~/.aleph/config.toml` exists + parses
-//! - **runtime**:  Gateway daemon reachable, providers/MCP servers OK,
-//!   vault present
+//! - **runtime**:  Gateway daemon reachable, client/daemon version match,
+//!   per-provider live connectivity (concurrent server-side probe), MCP
+//!   servers, vault present
 //! - **sandbox**:  active sandbox profile can be summarised
 //!
 //! The plugin-specific `aleph plugin doctor` checks remain separate; this
@@ -99,7 +100,8 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
     checks.push(gateway_check);
 
     if gateway_reachable {
-        checks.push(check_providers(server_url).await);
+        checks.push(check_daemon_version(server_url).await);
+        checks.extend(check_providers(server_url).await);
         checks.push(check_mcp_servers(server_url).await);
         checks.push(check_vault(server_url).await);
     }
@@ -365,25 +367,119 @@ async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
     }
 }
 
-async fn check_providers(server_url: &str) -> DoctorCheck {
-    match call_rpc(server_url, "providers.list").await {
+/// Compare the CLI's own version with the version reported by the running
+/// daemon. A mismatch is the classic "upgraded the binary but never restarted
+/// the daemon" footgun (the supervisor keeps the old process alive). The
+/// workspace pins one version across both crates, so equality is meaningful.
+async fn check_daemon_version(server_url: &str) -> DoctorCheck {
+    let cli = env!("CARGO_PKG_VERSION");
+    match call_rpc(server_url, "gateway.identity.get").await {
         Ok(value) => {
-            let count = count_array_or_obj_array(&value, "providers");
-            DoctorCheck::ok(
+            let daemon = value.get("version").and_then(|v| v.as_str()).unwrap_or("");
+            if daemon.is_empty() {
+                DoctorCheck::ok(
+                    "runtime",
+                    "version",
+                    "Client/daemon version match",
+                    false,
+                    format!("CLI v{cli}; daemon did not report a version"),
+                )
+            } else if daemon == cli {
+                DoctorCheck::ok(
+                    "runtime",
+                    "version",
+                    "Client/daemon version match",
+                    false,
+                    format!("CLI and daemon both v{cli}"),
+                )
+            } else {
+                DoctorCheck::fail(
+                    "runtime",
+                    "version",
+                    "Client/daemon version match",
+                    false,
+                    format!(
+                        "CLI v{cli} but the running daemon is v{daemon} — restart it to pick up the upgrade (`aleph daemon restart`)"
+                    ),
+                )
+            }
+        }
+        // Older daemons may not expose identity.get — treat as informational
+        // rather than a failure so doctor stays useful against any version.
+        Err(_) => DoctorCheck::ok(
+            "runtime",
+            "version",
+            "Client/daemon version match",
+            false,
+            format!("CLI v{cli}; daemon version unavailable"),
+        ),
+    }
+}
+
+/// Live provider connectivity. Calls the concurrent server-side
+/// `providers.healthcheck` sweep and emits one row per provider with latency or
+/// error. Falls back to a plain count via `providers.list` when the daemon
+/// predates the healthcheck endpoint (backward compatible).
+async fn check_providers(server_url: &str) -> Vec<DoctorCheck> {
+    match call_rpc(server_url, "providers.healthcheck").await {
+        Ok(value) => match value.get("providers").and_then(|v| v.as_array()) {
+            Some(rows) if !rows.is_empty() => rows.iter().map(provider_row_to_check).collect(),
+            Some(_) => vec![DoctorCheck::ok(
                 "runtime",
                 "providers",
                 "Configured LLM providers",
                 false,
-                format!("{} configured", count),
-            )
+                "no providers configured (add one via the panel or setup)",
+            )],
+            None => check_providers_count(server_url).await,
+        },
+        Err(_) => check_providers_count(server_url).await,
+    }
+}
+
+/// Map a single `providers.healthcheck` row onto a doctor check.
+fn provider_row_to_check(row: &Value) -> DoctorCheck {
+    let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("?");
+    let row_name = format!("provider:{name}");
+    let latency = row.get("latency_ms").and_then(|v| v.as_u64());
+    let lat = latency.map(|m| format!(" ({m}ms)")).unwrap_or_default();
+    let skipped = row.get("skipped").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ok = row.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let desc = "LLM provider connectivity";
+
+    if skipped {
+        DoctorCheck::ok("runtime", &row_name, desc, false, "disabled (not probed)")
+    } else if ok {
+        DoctorCheck::ok("runtime", &row_name, desc, false, format!("reachable{lat}"))
+    } else {
+        let err = row
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown error");
+        DoctorCheck::fail("runtime", &row_name, desc, false, format!("unreachable: {err}{lat}"))
+    }
+}
+
+/// Count-only fallback for daemons without `providers.healthcheck`.
+async fn check_providers_count(server_url: &str) -> Vec<DoctorCheck> {
+    match call_rpc(server_url, "providers.list").await {
+        Ok(value) => {
+            let count = count_array_or_obj_array(&value, "providers");
+            vec![DoctorCheck::ok(
+                "runtime",
+                "providers",
+                "Configured LLM providers",
+                false,
+                format!("{count} configured (connectivity probe unavailable)"),
+            )]
         }
-        Err(e) => DoctorCheck::fail(
+        Err(e) => vec![DoctorCheck::fail(
             "runtime",
             "providers",
             "Configured LLM providers",
             false,
-            format!("providers.list failed: {}", e),
-        ),
+            format!("providers.list failed: {e}"),
+        )],
     }
 }
 
@@ -509,4 +605,38 @@ fn count_array_or_obj_array(value: &Value, key: &str) -> usize {
         .and_then(|v| v.as_array())
         .map(|a| a.len())
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn provider_row_reachable_passes_with_latency() {
+        let row = json!({ "name": "openai", "enabled": true, "ok": true, "skipped": false, "latency_ms": 120 });
+        let check = provider_row_to_check(&row);
+        assert!(check.passed);
+        assert_eq!(check.name, "provider:openai");
+        assert!(check.message.contains("reachable"));
+        assert!(check.message.contains("120ms"));
+    }
+
+    #[test]
+    fn provider_row_unreachable_fails_with_error() {
+        let row = json!({ "name": "ollama", "enabled": true, "ok": false, "skipped": false, "error": "connection refused", "latency_ms": 30 });
+        let check = provider_row_to_check(&row);
+        assert!(!check.passed);
+        assert!(!check.required, "provider connectivity is a warning, not fatal");
+        assert!(check.message.contains("unreachable"));
+        assert!(check.message.contains("connection refused"));
+    }
+
+    #[test]
+    fn provider_row_disabled_is_skipped_ok() {
+        let row = json!({ "name": "gemini", "enabled": false, "ok": false, "skipped": true });
+        let check = provider_row_to_check(&row);
+        assert!(check.passed);
+        assert!(check.message.contains("disabled"));
+    }
 }

@@ -431,68 +431,120 @@ async fn handle_test_inner(
         effort: None,
     };
 
-    // Create provider instance
-    let provider = match crate::providers::create_provider("test", provider_config) {
+    // Probe connectivity (shared with the bulk `providers.healthcheck` probe).
+    let result = probe_provider("test", provider_config).await;
+
+    // On success, persist verified=true and reset health. Only `providers.test`
+    // mutates state; the bulk healthcheck is read-only.
+    if result.success {
+        if let Some(ref name) = provider_name {
+            let mut cfg = config_store.write().await;
+            if let Some(p) = cfg.providers.get_mut(name) {
+                p.verified = true;
+                if let Err(e) = save_config(&cfg, &["providers"]) {
+                    error!(error = %e, "Failed to save config after test");
+                }
+            }
+            // Reset health to Healthy after successful connection test
+            if let Some(registry) = multi_registry {
+                use crate::thinker::ProviderRegistry;
+                registry.reset_health(name);
+            }
+        }
+    }
+
+    JsonRpcResponse::success(request.id, json!(result))
+}
+
+/// Probe a single provider with a lightweight `ping` round-trip and measure
+/// latency. Takes a fully-resolved [`ProviderConfig`] (api_key already injected
+/// from vault) and returns a [`TestResult`]. Shared by `providers.test` and the
+/// concurrent `providers.healthcheck` so the probe logic has one source of truth.
+pub(crate) async fn probe_provider(label: &str, provider_config: ProviderConfig) -> TestResult {
+    let provider = match crate::providers::create_provider(label, provider_config) {
         Ok(p) => p,
         Err(e) => {
-            return JsonRpcResponse::success(
-                request.id,
-                json!(TestResult {
-                    success: false,
-                    error: Some(format!("Failed to create provider: {}", e)),
-                    latency_ms: None,
-                }),
-            );
+            return TestResult {
+                success: false,
+                error: Some(format!("Failed to create provider: {}", e)),
+                latency_ms: None,
+            };
         }
     };
 
-    // Test the connection with a simple ping
     let start = std::time::Instant::now();
     let ping_msgs = [UnifiedMessage::user("ping")];
     match provider
         .process(RequestPayload::new(&ping_msgs).with_system(Some("Reply with 'pong'")))
         .await
     {
-        Ok(_) => {
-            let latency_ms = start.elapsed().as_millis() as u64;
-
-            // Persist verified=true if provider name was given
-            if let Some(ref name) = provider_name {
-                let mut cfg = config_store.write().await;
-                if let Some(p) = cfg.providers.get_mut(name) {
-                    p.verified = true;
-                    if let Err(e) = save_config(&cfg, &["providers"]) {
-                        error!(error = %e, "Failed to save config after test");
-                    }
-                }
-                // Reset health to Healthy after successful connection test
-                if let Some(registry) = multi_registry {
-                    use crate::thinker::ProviderRegistry;
-                    registry.reset_health(name);
-                }
-            }
-
-            JsonRpcResponse::success(
-                request.id,
-                json!(TestResult {
-                    success: true,
-                    error: None,
-                    latency_ms: Some(latency_ms),
-                }),
-            )
-        }
-        Err(e) => {
-            let latency_ms = start.elapsed().as_millis() as u64;
-            JsonRpcResponse::success(
-                request.id,
-                json!(TestResult {
-                    success: false,
-                    error: Some(format!("{}", e)),
-                    latency_ms: Some(latency_ms),
-                }),
-            )
-        }
+        Ok(_) => TestResult {
+            success: true,
+            error: None,
+            latency_ms: Some(start.elapsed().as_millis() as u64),
+        },
+        Err(e) => TestResult {
+            success: false,
+            error: Some(format!("{}", e)),
+            latency_ms: Some(start.elapsed().as_millis() as u64),
+        },
     }
+}
+
+/// `providers.healthcheck` — concurrently probe every configured provider.
+///
+/// Read-only liveness sweep: snapshots each provider's config (injecting its
+/// vault key), then pings them all concurrently via [`futures::future::join_all`]
+/// — superior to the reference's serial per-provider checks. Disabled providers
+/// are reported as `skipped` without a network call. Returns
+/// `{ "providers": [ProviderHealthRow, ...] }` sorted by name.
+pub async fn handle_healthcheck(
+    request: JsonRpcRequest,
+    config: Arc<RwLock<Config>>,
+    vault: Arc<SharedTokenManager>,
+) -> JsonRpcResponse {
+    // Snapshot configs + resolve keys under the read lock, then release it
+    // before any network I/O so probes never hold the config lock.
+    let probes: Vec<(String, bool, ProviderConfig)> = {
+        let cfg = config.read().await;
+        cfg.providers
+            .iter()
+            .map(|(name, pc)| {
+                let mut runtime = pc.clone();
+                runtime.api_key = resolve_api_key(name, &vault);
+                (name.clone(), pc.enabled, runtime)
+            })
+            .collect()
+    };
+
+    let probe_futures = probes
+        .into_iter()
+        .map(|(name, enabled, runtime)| async move {
+            if !enabled {
+                return ProviderHealthRow {
+                    name,
+                    enabled,
+                    ok: false,
+                    skipped: true,
+                    latency_ms: None,
+                    error: None,
+                };
+            }
+            let result = probe_provider(&name, runtime).await;
+            ProviderHealthRow {
+                name,
+                enabled,
+                ok: result.success,
+                skipped: false,
+                latency_ms: result.latency_ms,
+                error: result.error,
+            }
+        });
+
+    let mut rows = futures::future::join_all(probe_futures).await;
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+
+    JsonRpcResponse::success(request.id, json!({ "providers": rows }))
 }
 
 // ============================================================================

@@ -322,6 +322,15 @@ pub(in crate::commands::start) fn register_config_handlers(
         config,
         shared_token_mgr
     );
+    // Concurrent liveness sweep over all configured providers (read-only —
+    // consumed by `aleph doctor`). Reuses the single-provider probe.
+    register_handler!(
+        server,
+        "providers.healthcheck",
+        providers::handle_healthcheck,
+        config,
+        shared_token_mgr
+    );
 
     // Routing rules
     register_handler!(
