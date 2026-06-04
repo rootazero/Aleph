@@ -46,6 +46,13 @@ pub fn expand_path(path: &str) -> PathBuf {
 /// `false` if the process does not exist (ESRCH).
 #[cfg(unix)]
 pub fn is_process_running(pid: i32) -> bool {
+    // A non-positive PID is never a real target: `kill(0, ..)` signals the
+    // caller's whole process group and `kill(-1, ..)` signals every process the
+    // user may signal. Treat it as "not running" so callers never escalate to
+    // a broadcast SIGTERM/SIGKILL off a corrupted PID file.
+    if pid <= 0 {
+        return false;
+    }
     // SAFETY: kill(pid, 0) performs error checking without sending a signal.
     // It is async-signal-safe and the only way to check process existence on Unix.
     match unsafe { libc::kill(pid, 0) } {
@@ -68,7 +75,11 @@ pub fn read_pid_file(pid_file: &str) -> Option<i32> {
     let path = expand_path(pid_file);
     std::fs::read_to_string(&path)
         .ok()
-        .and_then(|s| s.trim().parse().ok())
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        // Reject 0 / negatives at the boundary so every downstream consumer
+        // (handle_stop, handle_status, daemonize) is protected: a corrupted PID
+        // file must never become a `kill(0/-1, SIG…)` broadcast.
+        .filter(|&pid| pid > 0)
 }
 
 /// Write PID to file

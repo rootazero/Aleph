@@ -18,8 +18,13 @@ use crate::tasks::heartbeat::config::DedupConfig;
 
 /// Compute cosine similarity between two equal-length float vectors.
 ///
-/// Returns 0.0 if either vector is a zero vector.
+/// Returns 0.0 if either vector is a zero vector, or if the vectors have
+/// mismatched lengths (not comparable — `zip` would otherwise silently
+/// truncate to the shorter one and could spuriously suppress a real alert).
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() {
+        return 0.0;
+    }
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
     let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();

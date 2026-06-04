@@ -241,7 +241,7 @@ impl DreamStage for NoteDecayStage {
                 Err(_) => continue,
             };
 
-            let mut note = match KnowledgeNote::from_markdown(&filename, &content) {
+            let note = match KnowledgeNote::from_markdown(&filename, &content) {
                 Ok(n) => n,
                 Err(e) => {
                     tracing::debug!(path = %note_path, error = %e, "NoteDecay: parse failed, skipping");
@@ -258,14 +258,26 @@ impl DreamStage for NoteDecayStage {
                 continue;
             }
 
-            note.confidence = new_conf;
+            // Patch ONLY the `confidence:` frontmatter scalar and write the file
+            // back verbatim. `write_note` rebuilds from `to_markdown`, which is
+            // lossy (drops prose / headings / code blocks — see indexer.rs), so
+            // rewriting a whole note just to nudge one scalar would silently
+            // erase the note body (and any `## Superseded` marker NoteDrift added
+            // earlier in the same cycle). `write_note_raw` is byte-preserving.
+            let patched = match patch_confidence_frontmatter(&content, new_conf) {
+                Some(p) => p,
+                None => {
+                    tracing::debug!(path = %note_path, "NoteDecay: no frontmatter block, skipping confidence rewrite");
+                    continue;
+                }
+            };
 
             if let Err(e) = ctx
                 .indexer
-                .write_note(&ctx.agent_id, &category, &note)
+                .write_note_raw(&ctx.agent_id, &category, &filename, &patched)
                 .await
             {
-                tracing::warn!(path = %note_path, error = %e, "NoteDecay: write_note failed");
+                tracing::warn!(path = %note_path, error = %e, "NoteDecay: write_note_raw failed");
                 continue;
             }
 
@@ -292,6 +304,40 @@ impl DreamStage for NoteDecayStage {
 // ---------------------------------------------------------------------------
 // Scoring helpers (extracted for testability)
 // ---------------------------------------------------------------------------
+
+/// Patch (or insert) the `confidence:` scalar inside a note's YAML frontmatter,
+/// leaving the body (prose, headings, code, supersession markers) byte-for-byte
+/// intact. Mirrors `to_markdown`'s `confidence: {:.4}` formatting so the SQLite
+/// reparse stays consistent.
+///
+/// Returns `None` if `content` has no leading `---`-delimited frontmatter block.
+pub(crate) fn patch_confidence_frontmatter(content: &str, new_conf: f32) -> Option<String> {
+    // Frontmatter must open on the very first line.
+    let rest = content.strip_prefix("---\n")?;
+    // Closing delimiter is the next line that is exactly `---` — locate the
+    // newline that precedes it so the body (everything from that `\n---`) is
+    // preserved verbatim.
+    let close_rel = rest.find("\n---")?;
+    let fm = &rest[..close_rel];
+    let after = &rest[close_rel..];
+
+    let new_line = format!("confidence: {new_conf:.4}");
+    let mut lines: Vec<String> = fm.lines().map(str::to_string).collect();
+    let mut replaced = false;
+    for line in lines.iter_mut() {
+        if line.trim_start().starts_with("confidence:") {
+            *line = new_line.clone();
+            replaced = true;
+            break;
+        }
+    }
+    if !replaced {
+        // Legacy note with no `confidence:` line — append it as the last
+        // frontmatter entry (before the closing `---`).
+        lines.push(new_line);
+    }
+    Some(format!("---\n{}{}", lines.join("\n"), after))
+}
 
 /// Compute the activity score for a note.
 ///

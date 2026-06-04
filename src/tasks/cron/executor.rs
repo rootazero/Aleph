@@ -280,7 +280,7 @@ async fn execute_cron_job(
             ExecutionResult {
                 started_at,
                 ended_at,
-                duration_ms: ended_at - started_at,
+                duration_ms: ended_at.saturating_sub(started_at),
                 status: RunStatus::Ok,
                 output: final_response,
                 error: None,
@@ -297,7 +297,7 @@ async fn execute_cron_job(
             ExecutionResult {
                 started_at,
                 ended_at,
-                duration_ms: ended_at - started_at,
+                duration_ms: ended_at.saturating_sub(started_at),
                 status: RunStatus::Timeout,
                 output: None,
                 error: Some("job execution timed out".to_string()),
@@ -318,7 +318,7 @@ async fn execute_cron_job(
             ExecutionResult {
                 started_at,
                 ended_at,
-                duration_ms: ended_at - started_at,
+                duration_ms: ended_at.saturating_sub(started_at),
                 status: RunStatus::Skipped,
                 output: None,
                 error: Some(format!("agent busy: {msg}")),
@@ -546,7 +546,7 @@ fn make_error_result(
     ExecutionResult {
         started_at,
         ended_at,
-        duration_ms: ended_at - started_at,
+        duration_ms: ended_at.saturating_sub(started_at),
         status: RunStatus::Error,
         output: None,
         error: Some(error),

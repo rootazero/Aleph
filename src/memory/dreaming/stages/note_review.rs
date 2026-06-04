@@ -56,10 +56,12 @@ impl DreamStage for NoteReviewStage {
             let candidate: CandidateNote = match serde_json::from_str(&row.candidate_json) {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::warn!(error = %e, queue_id = %row.id, "candidate json parse failed");
-                    if row.retry_count + 1 >= self.max_retries {
-                        let _ = store.archive_review(&row.id, "timeout").await;
-                    }
+                    // A parse failure is deterministic — re-reading the same
+                    // bytes next cycle fails identically, and nothing on this
+                    // path increments `retry_count`, so a retry-gated archive
+                    // would reprocess the row forever. Archive immediately.
+                    tracing::warn!(error = %e, queue_id = %row.id, "candidate json parse failed; archiving unparseable row");
+                    let _ = store.archive_review(&row.id, "timeout").await;
                     continue;
                 }
             };

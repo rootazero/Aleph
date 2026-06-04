@@ -417,7 +417,7 @@ async fn writeback_one(
         let had_error =
             tick_result.error.is_some() || tick_result.l2_status.as_deref() == Some("Error");
         if had_error {
-            task.state.consecutive_errors += 1;
+            task.state.consecutive_errors = task.state.consecutive_errors.saturating_add(1);
             task.state.last_error = tick_result.error.clone();
         } else {
             task.state.consecutive_errors = 0;
