@@ -93,6 +93,19 @@ impl Node {
     }
 }
 
+impl NodeCommon {
+    /// Geometric centre of the node's bounding box in canvas coordinates.
+    ///
+    /// Per the JSON Canvas spec, `x`/`y` are the box's **top-left** corner and
+    /// `width`/`height` extend right/down (+y is down).
+    pub fn center(&self) -> (f64, f64) {
+        (
+            self.x as f64 + self.width as f64 / 2.0,
+            self.y as f64 + self.height as f64 / 2.0,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum BackgroundStyle {
@@ -133,6 +146,45 @@ pub enum Side {
     Right,
     Bottom,
     Left,
+}
+
+impl Side {
+    /// The cardinal opposite — the side that faces back across a node.
+    pub fn opposite(self) -> Side {
+        match self {
+            Side::Top => Side::Bottom,
+            Side::Bottom => Side::Top,
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        }
+    }
+}
+
+/// Pick the `(from_side, to_side)` pair for an edge between two node centres.
+///
+/// The source emits toward the target along the chord's **dominant axis**
+/// (the larger of |Δx|, |Δy|), and the target receives on the facing side.
+/// This matches Obsidian's own auto-anchoring when an edge is dragged between
+/// two nodes, and is the single source of truth shared by every JSON Canvas
+/// producer in the workspace (core team-canvas export + panel graph export).
+///
+/// Canvas convention: +y is down. Exact 45° ties prefer the horizontal axis
+/// (`|Δx| >= |Δy|`), so a target down-and-right anchors `Right → Left`.
+pub fn facing_sides(from_center: (f64, f64), to_center: (f64, f64)) -> (Side, Side) {
+    let dx = to_center.0 - from_center.0;
+    let dy = to_center.1 - from_center.1;
+    let from_side = if dx.abs() >= dy.abs() {
+        if dx >= 0.0 {
+            Side::Right
+        } else {
+            Side::Left
+        }
+    } else if dy >= 0.0 {
+        Side::Bottom
+    } else {
+        Side::Top
+    };
+    (from_side, from_side.opposite())
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
@@ -254,6 +306,56 @@ mod tests {
         let doc = Document::default();
         let s = serde_json::to_string(&doc).unwrap();
         assert_eq!(s, "{}");
+    }
+
+    #[test]
+    fn node_common_center_is_box_midpoint() {
+        let c = NodeCommon {
+            id: "n".into(),
+            x: 10,
+            y: 20,
+            width: 200,
+            height: 100,
+            color: None,
+        };
+        // top-left (10,20) + half-extent (100,50) → (110, 70)
+        assert_eq!(c.center(), (110.0, 70.0));
+    }
+
+    #[test]
+    fn side_opposite_inverts_cardinals() {
+        assert_eq!(Side::Top.opposite(), Side::Bottom);
+        assert_eq!(Side::Bottom.opposite(), Side::Top);
+        assert_eq!(Side::Left.opposite(), Side::Right);
+        assert_eq!(Side::Right.opposite(), Side::Left);
+    }
+
+    #[test]
+    fn facing_sides_picks_dominant_axis_and_faces_back() {
+        // target right + slightly down → horizontal dominates → Right/Left
+        assert_eq!(
+            facing_sides((0.0, 0.0), (100.0, 30.0)),
+            (Side::Right, Side::Left)
+        );
+        // target below + slightly right → vertical dominates → Bottom/Top
+        assert_eq!(
+            facing_sides((0.0, 0.0), (30.0, 100.0)),
+            (Side::Bottom, Side::Top)
+        );
+        // target up-left → Left wins on the tie-break path only if |dx|>=|dy|
+        assert_eq!(
+            facing_sides((0.0, 0.0), (-100.0, -10.0)),
+            (Side::Left, Side::Right)
+        );
+        assert_eq!(
+            facing_sides((0.0, 0.0), (-10.0, -100.0)),
+            (Side::Top, Side::Bottom)
+        );
+        // exact 45° tie → horizontal preferred (|dx| >= |dy|)
+        assert_eq!(
+            facing_sides((0.0, 0.0), (50.0, 50.0)),
+            (Side::Right, Side::Left)
+        );
     }
 
     #[test]
