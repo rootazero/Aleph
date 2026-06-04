@@ -128,26 +128,39 @@ impl AgentHarness {
                 .await;
         }
 
+        // Offered-tool snapshot for tool-name repair, taken once per batch (the
+        // dispatchable set is stable across a single `act()` call). Used by the
+        // unified resolver below; the parallel fast path naturally routes any
+        // unrepaired/typo'd name back here (an unknown name yields a
+        // conservative `Global` concurrency claim → non-parallelizable → serial).
+        let offered_defs = self.deps.tools.list().await;
+        let offered_names: Vec<&str> = offered_defs.iter().map(|d| d.name.as_str()).collect();
+
         for mut call in tool_calls {
-            // G3 (opencode-inspired): mechanical tool-name auto-repair. Models
-            // occasionally emit `Read` when the tool is registered as `read`
-            // (case drift) — without this, the call would be dispatched as
-            // unknown and bounce through ToolError before the model self-
-            // corrects. Pure string handling: lowercase only, and only when
-            // the original is absent AND a lowercase variant exists. Anything
-            // ambiguous falls through to the normal unknown-tool path.
-            // R10-safe: no intent inference, no fuzzy matching.
-            if !call.name.is_empty() && call.name.chars().any(|c| c.is_ascii_uppercase()) {
-                let lower = call.name.to_ascii_lowercase();
-                if self.deps.tools.describe(&call.name).await.is_none()
-                    && self.deps.tools.describe(&lower).await.is_some()
+            // G3 (opencode-inspired): mechanical tool-name auto-repair via the
+            // unified resolver (`tools::name_repair`). Models emit names that
+            // miss the offered set by case (`Read`→`read`), separator
+            // (`web.search`↔`web_search`), or a single-edit typo (`web_serch`→
+            // `web_search`); without repair the call bounces through ToolError
+            // before the model self-corrects. The resolver is conservative —
+            // exact match is a no-op, and every loose tier abstains on
+            // ambiguity — so it never mis-routes between two similar tools.
+            // R10-safe: mechanical identifier repair against a fixed offered
+            // set, not intent inference; downstream guardrails/approval still
+            // gate the resolved call.
+            if let Some(repair) =
+                crate::tools::name_repair::repair_tool_name(&call.name, &offered_names)
+            {
+                if repair.tier != crate::tools::name_repair::RepairTier::Exact
+                    && repair.name != call.name
                 {
                     tracing::debug!(
                         original = %call.name,
-                        repaired = %lower,
-                        "tool name auto-repaired (case mismatch)",
+                        repaired = %repair.name,
+                        tier = ?repair.tier,
+                        "tool name auto-repaired",
                     );
-                    call.name = lower;
+                    call.name = repair.name;
                 }
             }
             callback.on_tool_call(&call.name);

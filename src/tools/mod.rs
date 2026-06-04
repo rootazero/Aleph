@@ -41,6 +41,7 @@ pub mod execution_context;
 pub mod fallback_registry;
 pub mod in_flight;
 pub mod info;
+pub mod name_repair;
 pub mod no_progress;
 pub mod refresh;
 pub mod result_processing;
