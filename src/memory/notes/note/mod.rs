@@ -19,6 +19,17 @@ pub use types::{FactProvenance, ProvenanceOrigin, Severity};
 use helpers::{sha256_hex, yaml_inline_array};
 use parsing::{extract_facts, extract_provenance_markers, parse_date_to_unix, split_frontmatter};
 
+/// Whether any tag marks a note as permanent core knowledge. Recognises
+/// `permanent` and `pinned` (case-insensitive). Shared SSOT used by both
+/// [`KnowledgeNote::is_permanent`] and the dream decay stage, which inspects
+/// the lightweight index `tags` without loading note bodies.
+pub fn tags_mark_permanent(tags: &[String]) -> bool {
+    tags.iter().any(|t| {
+        let t = t.trim();
+        t.eq_ignore_ascii_case("permanent") || t.eq_ignore_ascii_case("pinned")
+    })
+}
+
 /// A knowledge note — the primary memory unit.
 ///
 /// Parsed from (and serializable back to) a markdown file with YAML frontmatter.
@@ -62,6 +73,11 @@ pub struct KnowledgeNote {
     /// for legacy notes that lack inline `\u003c!-- src: ..., origin: ..., inferred: ... --\u003e`
     /// markers; otherwise populated by `extract_provenance_markers`.
     pub fact_provenance: Vec<FactProvenance>,
+    /// Permanent core-knowledge marker. When `true`, the note is exempt from
+    /// time-decay confidence erosion and low-activity archival (mirrors the
+    /// `pinned` skill idiom in `skill_lifecycle`). `false` for legacy notes —
+    /// see [`KnowledgeNote::is_permanent`] for the tag-based fallback.
+    pub permanent: bool,
 }
 
 impl Default for KnowledgeNote {
@@ -82,6 +98,7 @@ impl Default for KnowledgeNote {
             supersedes: Vec::new(),
             superseded_by: Vec::new(),
             fact_provenance: Vec::new(),
+            permanent: false,
         }
     }
 }
@@ -119,7 +136,17 @@ impl KnowledgeNote {
             supersedes: frontmatter.supersedes,
             superseded_by: frontmatter.superseded_by,
             fact_provenance,
+            permanent: frontmatter.permanent,
         })
+    }
+
+    /// Whether this note is permanent core knowledge, exempt from decay and
+    /// archival. True when the explicit `permanent: true` frontmatter flag is
+    /// set, or — for notes authored before the flag existed — when the note
+    /// carries a `permanent` / `pinned` tag. The tag fallback lets existing
+    /// memory become permanent with zero migration.
+    pub fn is_permanent(&self) -> bool {
+        self.permanent || tags_mark_permanent(&self.tags)
     }
 
     /// Serialize this note back to markdown with YAML frontmatter.
@@ -163,6 +190,11 @@ impl KnowledgeNote {
             "superseded_by: {}\n",
             yaml_inline_array(&self.superseded_by)
         ));
+        // Only emit `permanent:` when set, so non-permanent notes serialize
+        // byte-for-byte as before this field existed.
+        if self.permanent {
+            out.push_str("permanent: true\n");
+        }
         out.push_str("---\n\n");
 
         for fact in &self.facts {

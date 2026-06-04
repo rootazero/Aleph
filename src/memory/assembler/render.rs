@@ -1,6 +1,7 @@
 //! Pure envelope renderer. No I/O, deterministic.
 
 use super::envelope::{EnvelopeItem, EnvelopeSlot, ItemSource, MemoryEnvelope, SlotKind};
+use crate::memory::context::CognitiveLayer;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -46,7 +47,7 @@ fn render_markdown_v1(env: &MemoryEnvelope) -> String {
             if i > 0 {
                 out.push_str("\n---\n\n");
             }
-            render_item_markdown(&mut out, item);
+            render_item_markdown(&mut out, item, slot.kind);
         }
         out.push_str("\n</");
         out.push_str(tag);
@@ -54,6 +55,47 @@ fn render_markdown_v1(env: &MemoryEnvelope) -> String {
     }
     out.push_str("</memory>\n");
     out
+}
+
+/// Classify a rendered memory item into its human-memory [`CognitiveLayer`]
+/// (working → episodic → semantic → raw). Pure view over the item's storage
+/// tier (`ItemSource`) and the slot it landed in — nothing persisted.
+///
+/// - `Raw` source → `Raw` (verbatim audit substrate), unless it is live
+///   session context (`SessionRecent`), which is the current-task `Working` set.
+/// - `Summary` source → `Episodic` (session summaries are lived experiences).
+/// - `Note` source → `Episodic` for time/episode-bound categories (transcripts,
+///   sub-agent runs), else `Semantic` (distilled facts, rules, preferences).
+pub(crate) fn cognitive_layer(slot: SlotKind, source: &ItemSource) -> CognitiveLayer {
+    match source {
+        ItemSource::Raw { .. } => match slot {
+            SlotKind::SessionRecent => CognitiveLayer::Working,
+            _ => CognitiveLayer::Raw,
+        },
+        ItemSource::Summary { .. } => CognitiveLayer::Episodic,
+        ItemSource::Note { category, .. } => {
+            if is_episodic_category(category) {
+                CognitiveLayer::Episodic
+            } else {
+                CognitiveLayer::Semantic
+            }
+        }
+    }
+}
+
+/// Note categories that are time/episode-bound (lived experience) rather than
+/// distilled knowledge. Matches the `subagent-*` / `transcript` note-type dirs.
+fn is_episodic_category(category: &str) -> bool {
+    matches!(
+        category,
+        "transcript"
+            | "events"
+            | "cases"
+            | "subagent-run"
+            | "subagent-session"
+            | "subagent-checkpoint"
+            | "subagent-transcript"
+    )
 }
 
 fn slot_tag(kind: SlotKind) -> &'static str {
@@ -85,24 +127,31 @@ fn slot_directive(kind: SlotKind) -> Option<&'static str> {
     }
 }
 
-fn render_item_markdown(out: &mut String, item: &EnvelopeItem) {
+fn render_item_markdown(out: &mut String, item: &EnvelopeItem, slot: SlotKind) {
+    let layer = cognitive_layer(slot, &item.source).as_str();
     let header = match &item.source {
         ItemSource::Note { path: _, .. } => {
             format!(
-                "## [{}] (updated {})",
+                "## [{}] ({} · updated {})",
                 item.id,
+                layer,
                 format_date(item.updated_at)
             )
         }
         ItemSource::Raw { session_id, .. } => format!(
-            "## [raw @ session {}, t={}]",
+            "## [raw @ session {}, {} · t={}]",
             session_id,
+            layer,
             format_date(item.updated_at)
         ),
-        ItemSource::Summary { layer, session_id } => format!(
-            "## [{} @ session {}, t={}]",
-            layer,
+        ItemSource::Summary {
+            layer: summary_layer,
             session_id,
+        } => format!(
+            "## [{} @ session {}, {} · t={}]",
+            summary_layer,
+            session_id,
+            layer,
             format_date(item.updated_at)
         ),
     };
@@ -140,8 +189,9 @@ fn render_xml(env: &MemoryEnvelope) -> String {
         }
         for item in &slot.items {
             out.push_str(&format!(
-                "    <item id=\"{}\"><title>{}</title><content>{}</content></item>\n",
+                "    <item id=\"{}\" layer=\"{}\"><title>{}</title><content>{}</content></item>\n",
                 xml_escape(&item.id),
+                cognitive_layer(slot.kind, &item.source).as_str(),
                 xml_escape(&item.title),
                 xml_escape(&item.content),
             ));
@@ -379,6 +429,98 @@ mod tests {
         let env = empty();
         let out = render_with(&env, RenderStyle::Json);
         let _: serde_json::Value = serde_json::from_str(&out).expect("json render must be valid");
+    }
+
+    // --- Cognitive-layer classification + labelling ---
+
+    #[test]
+    fn cognitive_layer_classifies_each_source() {
+        // Semantic: a distilled reference note.
+        assert_eq!(
+            cognitive_layer(
+                SlotKind::RelevantNotes,
+                &ItemSource::Note {
+                    path: "reference/x".into(),
+                    category: "reference".into()
+                }
+            ),
+            CognitiveLayer::Semantic
+        );
+        // Episodic: a sub-agent transcript note.
+        assert_eq!(
+            cognitive_layer(
+                SlotKind::RelevantNotes,
+                &ItemSource::Note {
+                    path: "subagent-run/x".into(),
+                    category: "subagent-run".into()
+                }
+            ),
+            CognitiveLayer::Episodic
+        );
+        // Episodic: a session summary.
+        assert_eq!(
+            cognitive_layer(
+                SlotKind::SessionRecent,
+                &ItemSource::Summary {
+                    layer: "d1".into(),
+                    session_id: "s".into()
+                }
+            ),
+            CognitiveLayer::Episodic
+        );
+        // Working: live session raw context.
+        assert_eq!(
+            cognitive_layer(
+                SlotKind::SessionRecent,
+                &ItemSource::Raw {
+                    raw_id: "r".into(),
+                    session_id: "s".into(),
+                    path: None
+                }
+            ),
+            CognitiveLayer::Working
+        );
+        // Raw: audit fragment outside the live-session slot.
+        assert_eq!(
+            cognitive_layer(
+                SlotKind::RawFragments,
+                &ItemSource::Raw {
+                    raw_id: "r".into(),
+                    session_id: "s".into(),
+                    path: None
+                }
+            ),
+            CognitiveLayer::Raw
+        );
+    }
+
+    #[test]
+    fn markdown_and_xml_carry_cognitive_layer_label() {
+        let mut env = empty();
+        env.slots.push(EnvelopeSlot {
+            kind: SlotKind::RelevantNotes,
+            items: vec![item(
+                "note://reference/rust",
+                "Rust",
+                "body",
+                ItemSource::Note {
+                    path: "reference/rust".into(),
+                    category: "reference".into(),
+                },
+            )],
+            tokens_used: 1,
+            tokens_budget: 100,
+        });
+        let md = render_envelope(&env);
+        assert!(
+            md.contains("semantic"),
+            "markdown header must carry the cognitive-layer label: {md}"
+        );
+        let xml = render_with(&env, RenderStyle::Xml);
+        assert!(
+            xml.contains("layer=\"semantic\""),
+            "xml item must carry the layer attribute: {xml}"
+        );
     }
 
     #[test]

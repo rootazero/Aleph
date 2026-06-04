@@ -74,6 +74,10 @@ pub(super) struct Frontmatter {
     pub(super) supersedes: Vec<String>,
     #[serde(default)]
     pub(super) superseded_by: Vec<String>,
+    /// When `true`, the note is exempt from time decay and archival (the
+    /// "permanent" core-knowledge tier). Absent in legacy notes → `false`.
+    #[serde(default)]
+    pub(super) permanent: bool,
 }
 
 /// Accept a YAML date field as either a quoted string, a native YAML date

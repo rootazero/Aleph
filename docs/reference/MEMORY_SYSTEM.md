@@ -42,6 +42,23 @@ Gateway / Agent Loop
 
 Gateway writes conversation turns to `raw_memories` through `RawMemoryStore`. `CompressionService` periodically drains unprocessed rows, asks an LLM to extract durable facts, and writes them back as markdown notes under `~/.aleph/memory/note/{agent}/{category}/`. `NoteIndexer` keeps the SQLite side (index, wikilinks, FTS5, per-dimension vec0 tables) in sync on every write. Offline, the Dream Daemon consolidates clusters, resolves drift, synthesizes insights, lints schemas, decays weak notes, and emits digests. Queries flow through `NoteFactRetrieval` and return `ScoredFact<MemoryFact>` — see [RETRIEVAL.md](memory/RETRIEVAL.md).
 
+### 3.1 Cognitive-layer view (working → episodic → semantic → raw)
+
+The two physical tiers above *realise* a human-memory-style four-layer model; [`CognitiveLayer`](../../src/memory/context/enums.rs) is the canonical labelling, derived (not stored) at render time by `assembler::render::cognitive_layer`:
+
+| Cognitive layer | Realised by | Decay |
+|---|---|---|
+| **Working** (current task) | live session / scratchpad + raw items in the `session_recent` slot | n/a (ephemeral) |
+| **Episodic** (experiences, causal chains) | session summaries, `transcript` / `subagent-*` notes | retrieval recency + dream decay |
+| **Semantic** (facts & rules) | distilled `preference` / `learning` / `skill` / `reference` notes | severity-floored confidence decay |
+| **Raw** (audit / 回溯 base) | `raw_memories` rows behind every distillation | retention sweep only |
+
+Retrieved items are stamped with their layer in the assembled memory context (markdown header + XML `layer="…"` attribute) so the model perceives the structure. Notes flagged `permanent: true` (or tagged `permanent` / `pinned`), and categories in `memory.memory_decay.protected_types`, are exempt from decay/archival — the "永久核心知识不受影响" guarantee (see [DREAM_DAEMON.md](memory/DREAM_DAEMON.md) §5.5).
+
+**Hot-surfacing & time-decay at recall** default **on** (`memory.retrieval_scoring`): frequently-recalled notes bubble up (`reinforcement`, from `recall_signals` counts), stale ones fade (`recency`); both read existing data with no extra model calls. See [RETRIEVAL.md](memory/RETRIEVAL.md).
+
+**Embeddings** are pluggable via the `EmbeddingProvider` trait (OpenAI / SiliconFlow / Ollama through the OpenAI-compatible `RemoteEmbeddingProvider`); the **data-stays-local** requirement is met today by pointing it at a local **Ollama**. A *bundled* in-binary ONNX backend is intentionally **not** added — it would pull a heavy single-purpose native dependency into core (violates redline R3 核心轻量化) for a privacy goal the local-Ollama path already satisfies. It remains a clean future addition behind the same trait if the trade-off changes.
+
 ## 4. Storage Traits
 
 | Trait | File | Purpose | Primary caller |

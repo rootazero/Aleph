@@ -171,7 +171,9 @@ STALE         — Note B contains outdated information that Note A has supersede
 
 `src/memory/dreaming/stages/note_decay.rs`. Archives low-activity notes. Never deletes.
 
-**Protection rules** (score not computed, `notes_protected` increments): (1) `now - note.created_at < 7 * 86400`; (2) `incoming_count >= 3`.
+**Protection rules** (score not computed, `notes_protected` increments): (0) **permanent / protected-type core knowledge** — a note whose frontmatter sets `permanent: true`, or carries a `permanent` / `pinned` tag (`KnowledgeNote::is_permanent` / `tags_mark_permanent`), or whose `category` is listed in `memory.memory_decay.protected_types` (default `["personal"]`). These are exempt from **both** archival and confidence decay — this is the "标记为永久的核心知识不受影响" guarantee. The tag check runs on the index in the first pass; the frontmatter flag is honoured by a cheap file read on archival candidates only; (1) `now - note.created_at < 7 * 86400`; (2) `incoming_count >= 3`.
+
+**Decay policy wiring.** `NoteDecayStage` is parameterised by `memory.memory_decay` (`half_life_days`, `min_strength`, `protected_types`), threaded in via `DreamPipeline::from_strategy`. The confidence half-life defaults to 90 days (`exp(-days_since_recall / half_life_days)`), and the effective floor is `max(severity_floor(severity), min_strength)`. Before this wiring the policy was inert and the half-life was a hard-coded constant.
 
 **Activity score.** For unprotected notes, `compute_score` returns:
 

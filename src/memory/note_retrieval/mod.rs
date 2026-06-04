@@ -608,10 +608,23 @@ mod tests {
         f
     }
 
+    /// All-off scoring config. The production default now enables recency +
+    /// reinforcement ("自动冒泡"), so focused unit tests that isolate one knob
+    /// (or assert the legacy no-op path) start from this explicit baseline.
+    fn inactive_scoring() -> RetrievalScoringConfig {
+        RetrievalScoringConfig {
+            recency_enabled: false,
+            reinforcement_enabled: false,
+            mmr_enabled: false,
+            ..RetrievalScoringConfig::default()
+        }
+    }
+
     #[tokio::test]
     async fn apply_scoring_inactive_is_noop() {
         let (retrieval, _dir) = create_retrieval().await;
-        // Default scoring config is inactive → order preserved, scores untouched.
+        // Explicitly-disabled scoring → order preserved, scores untouched.
+        let retrieval = retrieval.with_scoring_config(&inactive_scoring());
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
         let out = retrieval.apply_scoring(facts, 1_000_000, &HashMap::new());
         let order: Vec<&str> = out.iter().map(|f| f.fact.id.as_str()).collect();
@@ -626,7 +639,7 @@ mod tests {
             recency_enabled: true,
             recency_half_life_days: 90.0,
             recency_weight: 1.0,
-            ..RetrievalScoringConfig::default()
+            ..inactive_scoring()
         };
         let retrieval = retrieval.with_scoring_config(&cfg);
 
@@ -652,7 +665,7 @@ mod tests {
         let cfg = RetrievalScoringConfig {
             mmr_enabled: true,
             mmr_lambda: 0.5,
-            ..RetrievalScoringConfig::default()
+            ..inactive_scoring()
         };
         let retrieval = retrieval.with_scoring_config(&cfg);
 
@@ -672,7 +685,7 @@ mod tests {
         let cfg = RetrievalScoringConfig {
             reinforcement_enabled: true,
             reinforcement_weight: 0.5,
-            ..RetrievalScoringConfig::default()
+            ..inactive_scoring()
         };
         let retrieval = retrieval.with_scoring_config(&cfg);
 
@@ -696,7 +709,8 @@ mod tests {
     #[tokio::test]
     async fn apply_scoring_reinforcement_disabled_ignores_counts() {
         let (retrieval, _dir) = create_retrieval().await;
-        // Default config inactive → counts are ignored, order untouched.
+        // Reinforcement explicitly disabled → counts are ignored, order untouched.
+        let retrieval = retrieval.with_scoring_config(&inactive_scoring());
         let facts = vec![scored("p/a", "alpha", 0.9), scored("p/b", "beta", 0.5)];
         let mut counts = HashMap::new();
         counts.insert("p/b".to_string(), 999_i64);

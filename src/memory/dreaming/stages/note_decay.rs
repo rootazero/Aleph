@@ -29,7 +29,7 @@ use async_trait::async_trait;
 use crate::error::AlephError;
 use crate::memory::dreaming::DreamContext;
 use crate::memory::notes::store::NoteStore;
-use crate::memory::notes::{KnowledgeNote, Severity};
+use crate::memory::notes::{tags_mark_permanent, KnowledgeNote, Severity};
 
 use super::DreamStage;
 
@@ -49,10 +49,6 @@ fn severity_floor(sev: Severity) -> f32 {
 /// `severity_floor` is the only thing keeping the note's confidence positive.
 const NEVER_RECALLED_DAYS: f32 = 3650.0;
 
-/// Decay half-life parameter. After 90 days of no recall a note's confidence
-/// multiplier is `exp(-1) ≈ 0.368`.
-const DECAY_TAU_DAYS: f32 = 90.0;
-
 /// Minimum delta required before we rewrite a note to disk. Avoids churn for
 /// rounding-noise updates (e.g. 0.99 → 0.989).
 const DECAY_WRITE_EPSILON: f32 = 0.02;
@@ -61,7 +57,43 @@ const DECAY_WRITE_EPSILON: f32 = 0.02;
 // Stage struct
 // ---------------------------------------------------------------------------
 
-pub struct NoteDecayStage;
+/// NoteDecay stage, parameterised by the runtime [`MemoryDecayPolicy`] so the
+/// previously-dead `memory.memory_decay.*` config finally drives behaviour.
+///
+/// `half_life_days` replaces the old hard-coded `DECAY_TAU_DAYS = 90`,
+/// `min_strength` is a global confidence floor combined with the per-severity
+/// floor, and `protected_types` plus per-note permanence exempt core knowledge
+/// from both archival and decay.
+pub struct NoteDecayStage {
+    /// Confidence half-life: `exp(-days_since_recall / half_life_days)`.
+    pub half_life_days: f32,
+    /// Global minimum confidence; the effective floor is
+    /// `max(severity_floor, min_strength)`.
+    pub min_strength: f32,
+    /// Note categories never decayed or archived (e.g. `"personal"`).
+    pub protected_types: Vec<String>,
+}
+
+impl Default for NoteDecayStage {
+    /// Defaults mirror the pre-wiring constants (90-day half-life) with the
+    /// configured protected-type / min-strength defaults, so tests and any
+    /// caller that omits config keep the historical behaviour.
+    fn default() -> Self {
+        Self {
+            half_life_days: 90.0,
+            min_strength: 0.0,
+            protected_types: Vec::new(),
+        }
+    }
+}
+
+impl NoteDecayStage {
+    /// Whether a note in this category is protected from decay/archival by the
+    /// `protected_types` policy.
+    fn category_protected(&self, category: &str) -> bool {
+        self.protected_types.iter().any(|t| t == category)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // DreamStage impl
@@ -82,6 +114,16 @@ impl DreamStage for NoteDecayStage {
         let mut low_score_notes: Vec<(String, f64, String, String)> = Vec::new();
 
         for note in &ctx.notes {
+            // --- Protection rule 0: permanent / protected-type core knowledge ---
+            // Permanent notes (frontmatter `permanent: true` or a
+            // `permanent`/`pinned` tag) and notes in a `protected_types`
+            // category are exempt from archival entirely. The index `tags` are
+            // already loaded here, so no file read is needed.
+            if tags_mark_permanent(&note.tags) || self.category_protected(&note.category) {
+                notes_protected += 1;
+                continue;
+            }
+
             // --- Protection rule 1: too new (< 7 days) ---
             if now - note.created_at < 7 * 86400 {
                 notes_protected += 1;
@@ -147,6 +189,20 @@ impl DreamStage for NoteDecayStage {
                 continue;
             }
 
+            // Honour the per-note `permanent: true` frontmatter flag, which the
+            // lightweight index `tags` (checked in the first loop) cannot see.
+            // Only archival candidates are read here, so this stays cheap.
+            if let Ok(content) = tokio::fs::read_to_string(&source_path).await {
+                if KnowledgeNote::from_markdown(filename, &content)
+                    .map(|n| n.is_permanent())
+                    .unwrap_or(false)
+                {
+                    notes_protected += 1;
+                    tracing::debug!(path, "NoteDecay: permanent note exempt from archival");
+                    continue;
+                }
+            }
+
             let archive_dir = ctx
                 .indexer
                 .memory_dir()
@@ -192,11 +248,14 @@ impl DreamStage for NoteDecayStage {
         // For every note still in the index, look up the most recent
         // recall hit and compute:
         //
-        //     decayed   = old_confidence * exp(-days_since_hit / 90)
-        //     new_conf  = max(decayed, severity_floor(severity))
+        //     decayed   = old_confidence * exp(-days_since_hit / half_life_days)
+        //     new_conf  = max(decayed, severity_floor(severity), min_strength)
         //
         // If `(new_conf - old_conf).abs() > DECAY_WRITE_EPSILON`, rewrite
         // the note to disk with the updated `confidence` frontmatter.
+        //
+        // Permanent notes (frontmatter / tag) and `protected_types` categories
+        // are skipped so core knowledge never erodes.
         // ---------------------------------------------------------------
         let archived_paths: std::collections::HashSet<&str> = low_score_notes
             .iter()
@@ -208,10 +267,13 @@ impl DreamStage for NoteDecayStage {
 
         // Snapshot the candidate (path, category, filename) tuples up front so
         // we don't borrow `ctx.notes` while later calling `&mut ctx.indexer`.
+        // Protected-type categories are dropped here (cheap, no file read); the
+        // per-note permanent flag is checked after parsing below.
         let candidates: Vec<(String, String, String)> = ctx
             .notes
             .iter()
             .filter(|n| !archived_paths.contains(n.path.as_str()))
+            .filter(|n| !self.category_protected(&n.category))
             .filter_map(|n| {
                 let (cat, fname) = n.path.split_once('/')?;
                 Some((n.path.clone(), cat.to_string(), fname.to_string()))
@@ -249,9 +311,14 @@ impl DreamStage for NoteDecayStage {
                 }
             };
 
+            // Permanent core knowledge never decays.
+            if note.is_permanent() {
+                continue;
+            }
+
             let old_conf = note.confidence;
-            let decayed = old_conf * (-days / DECAY_TAU_DAYS).exp();
-            let floor = severity_floor(note.severity);
+            let decayed = old_conf * (-days / self.half_life_days).exp();
+            let floor = severity_floor(note.severity).max(self.min_strength);
             let new_conf = decayed.max(floor);
 
             if (new_conf - old_conf).abs() <= DECAY_WRITE_EPSILON {
@@ -458,7 +525,7 @@ mod tests {
 
     #[test]
     fn stage_name_is_note_decay() {
-        assert_eq!(NoteDecayStage.name(), "note_decay");
+        assert_eq!(NoteDecayStage::default().name(), "note_decay");
     }
 
     // --- C2.7 recall-driven confidence decay (pure formula) ---
@@ -474,9 +541,10 @@ mod tests {
     #[test]
     fn decay_formula_cold_low_severity_decays() {
         // 365 days cold, severity Low (floor 0.0), starting confidence 1.0.
+        let tau = NoteDecayStage::default().half_life_days;
         let days: f32 = 365.0;
         let old_conf: f32 = 1.0;
-        let decayed = old_conf * (-days / DECAY_TAU_DAYS).exp();
+        let decayed = old_conf * (-days / tau).exp();
         let floor = severity_floor(Severity::Low);
         let new_conf = decayed.max(floor);
         assert!(new_conf < 0.1, "expected decayed < 0.1, got {new_conf}");
@@ -485,9 +553,10 @@ mod tests {
     #[test]
     fn decay_formula_high_severity_holds_floor() {
         // 365 days cold, severity High (floor 0.7), starting confidence 1.0.
+        let tau = NoteDecayStage::default().half_life_days;
         let days: f32 = 365.0;
         let old_conf: f32 = 1.0;
-        let decayed = old_conf * (-days / DECAY_TAU_DAYS).exp();
+        let decayed = old_conf * (-days / tau).exp();
         let floor = severity_floor(Severity::High);
         let new_conf = decayed.max(floor);
         assert!(
@@ -499,14 +568,57 @@ mod tests {
     #[test]
     fn epsilon_avoids_micro_writes() {
         // 1 day cold, confidence 0.99: tiny decay shouldn't trigger a write.
+        let tau = NoteDecayStage::default().half_life_days;
         let days: f32 = 1.0;
         let old_conf: f32 = 0.99;
-        let decayed = old_conf * (-days / DECAY_TAU_DAYS).exp();
+        let decayed = old_conf * (-days / tau).exp();
         let new_conf = decayed.max(0.0);
         assert!(
             (new_conf - old_conf).abs() <= DECAY_WRITE_EPSILON,
             "delta should be within epsilon, got {}",
             (new_conf - old_conf).abs()
+        );
+    }
+
+    // --- Permanent / protected-type exemption (the "永久不受影响" promise) ---
+
+    #[test]
+    fn category_protected_matches_configured_types() {
+        let stage = NoteDecayStage {
+            half_life_days: 90.0,
+            min_strength: 0.1,
+            protected_types: vec!["personal".to_string(), "preference".to_string()],
+        };
+        assert!(stage.category_protected("personal"));
+        assert!(stage.category_protected("preference"));
+        assert!(!stage.category_protected("learning"));
+    }
+
+    #[test]
+    fn default_stage_protects_nothing_and_keeps_legacy_tau() {
+        // The unit-struct replacement must preserve historical behaviour for
+        // callers that don't thread config: 90-day half-life, no protections,
+        // zero global floor.
+        let stage = NoteDecayStage::default();
+        assert_eq!(stage.half_life_days, 90.0);
+        assert_eq!(stage.min_strength, 0.0);
+        assert!(stage.protected_types.is_empty());
+        assert!(!stage.category_protected("personal"));
+    }
+
+    #[test]
+    fn min_strength_lifts_low_severity_floor() {
+        // With a configured global floor, even a fully-decayed Low note keeps
+        // `min_strength` confidence instead of collapsing to 0.
+        let tau = 90.0_f32;
+        let days = 3650.0_f32; // a decade cold
+        let old_conf = 1.0_f32;
+        let decayed = old_conf * (-days / tau).exp();
+        let floor = severity_floor(Severity::Low).max(0.1);
+        let new_conf = decayed.max(floor);
+        assert!(
+            (new_conf - 0.1).abs() < 1e-6,
+            "expected min_strength floor 0.1, got {new_conf}"
         );
     }
 }

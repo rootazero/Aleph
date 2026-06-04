@@ -16,6 +16,7 @@ pub mod stages;
 pub mod strategy;
 pub mod validation;
 
+use crate::config::types::memory::MemoryDecayPolicy;
 use crate::config::{DreamingConfig as ConfigDreamingConfig, MemoryConfig};
 use crate::error::AlephError;
 use crate::memory::embedding_provider::EmbeddingProvider;
@@ -151,7 +152,13 @@ impl DreamPipeline {
     pub fn from_strategy(
         strategy: DreamStrategy,
         dreaming_cfg: &crate::config::types::memory::DreamingConfig,
+        decay_policy: &MemoryDecayPolicy,
     ) -> Self {
+        let note_decay = || stages::NoteDecayStage {
+            half_life_days: decay_policy.half_life_days,
+            min_strength: decay_policy.min_strength,
+            protected_types: decay_policy.protected_types.clone(),
+        };
         let stage_list: Vec<Box<dyn DreamStage>> = match strategy {
             DreamStrategy::Consolidate => vec![
                 Box::new(stages::NoteLintStage),
@@ -170,7 +177,7 @@ impl DreamPipeline {
                 }),
                 Box::new(stages::NoteDriftStage),
                 Box::new(stages::IndexRefresherStage),
-                Box::new(stages::NoteDecayStage),
+                Box::new(note_decay()),
                 // System-level skill aging (rule-based Active→Stale at
                 // `skill_stale_after_days`). The Stale→Archived / merge
                 // decisions live in a future LLM-driven curator stage —
@@ -444,6 +451,9 @@ impl DreamRunStatus {
 pub struct DreamDaemon {
     database: MemoryBackend,
     config: ConfigDreamingConfig,
+    /// Time-decay / archival policy (`memory.memory_decay`), threaded into
+    /// `NoteDecayStage` so the previously-dead config drives behaviour.
+    decay_policy: MemoryDecayPolicy,
     window_start: NaiveTime,
     window_end: NaiveTime,
     is_running: AtomicBool,
@@ -478,6 +488,7 @@ impl DreamDaemon {
         Ok(Self {
             database,
             config: config.dreaming.clone(),
+            decay_policy: config.memory_decay.clone(),
             window_start,
             window_end,
             is_running: AtomicBool::new(false),
@@ -846,7 +857,7 @@ impl DreamDaemon {
         info!(strategy = %strategy, rationale = %selection.rationale, "Dream strategy selected");
 
         // --- Phase 4: Build and run the consolidation pipeline ---
-        let pipeline = DreamPipeline::from_strategy(strategy, &self.config);
+        let pipeline = DreamPipeline::from_strategy(strategy, &self.config, &self.decay_policy);
         let (report, run_status) = match (self.provider.clone(), self.embedder.clone()) {
             (Some(provider), Some(embedder)) => {
                 let mut indexer = NoteIndexer::new(memory_dir.clone(), self.database.clone());
@@ -896,8 +907,12 @@ impl DreamDaemon {
                         DEFAULT_AGENT_ID,
                     );
                     if !scoped.is_empty() {
-                        let project_pipeline = DreamPipeline::from_strategy(strategy, &self.config)
-                            .retain_project_stages();
+                        let project_pipeline = DreamPipeline::from_strategy(
+                            strategy,
+                            &self.config,
+                            &self.decay_policy,
+                        )
+                        .retain_project_stages();
                         for ns in &scoped {
                             let ns_index = self.database.list_notes(ns).await.unwrap_or_default();
                             let ns_notes: Vec<NoteEntry> =
@@ -1114,7 +1129,8 @@ mod tests {
     #[test]
     fn pipeline_from_strategy_consolidate() {
         let cfg = crate::config::types::memory::DreamingConfig::default();
-        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Consolidate, &cfg);
+        let decay = MemoryDecayPolicy::default();
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Consolidate, &cfg, &decay);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
@@ -1134,7 +1150,8 @@ mod tests {
     #[test]
     fn pipeline_from_strategy_synthesize() {
         let cfg = crate::config::types::memory::DreamingConfig::default();
-        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg);
+        let decay = MemoryDecayPolicy::default();
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg, &decay);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         assert_eq!(
             names,
@@ -1155,8 +1172,9 @@ mod tests {
         let cfg = crate::config::types::memory::DreamingConfig::default();
         // Synthesize is the richest pipeline — it contains all three
         // global-only stages plus the note-maintenance subset.
-        let project =
-            DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg).retain_project_stages();
+        let decay = MemoryDecayPolicy::default();
+        let project = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg, &decay)
+            .retain_project_stages();
         let names: Vec<&str> = project.stages.iter().map(|s| s.name()).collect();
         // The three global-only stages must be gone...
         for global in DreamPipeline::GLOBAL_ONLY_STAGES {
@@ -1183,7 +1201,8 @@ mod tests {
         // Phase 3: ensure FeedbackDistill is scheduled directly after
         // SkillDistill so a single dream cycle can pick up both.
         let cfg = crate::config::types::memory::DreamingConfig::default();
-        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg);
+        let decay = MemoryDecayPolicy::default();
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Synthesize, &cfg, &decay);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         let skill_pos = names.iter().position(|n| *n == "skill_distill").unwrap();
         let feedback_pos = names.iter().position(|n| *n == "feedback_distill").unwrap();
@@ -1193,7 +1212,8 @@ mod tests {
     #[test]
     fn pipeline_from_strategy_conserve() {
         let cfg = crate::config::types::memory::DreamingConfig::default();
-        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve, &cfg);
+        let decay = MemoryDecayPolicy::default();
+        let pipeline = DreamPipeline::from_strategy(DreamStrategy::Conserve, &cfg, &decay);
         let names: Vec<&str> = pipeline.stages.iter().map(|s| s.name()).collect();
         assert_eq!(names, vec!["note_lint", "note_review", "index_refresher"]);
     }

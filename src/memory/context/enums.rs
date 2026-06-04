@@ -299,6 +299,50 @@ impl std::fmt::Display for MemoryLayer {
 }
 
 // ============================================================================
+// CognitiveLayer
+// ============================================================================
+
+/// Human-memory-inspired cognitive layer of a recalled memory item, mirroring
+/// the reference model's working → episodic → semantic → raw hierarchy.
+///
+/// This is a *view* over Aleph's existing storage tiers, not a new store: it is
+/// derived at render time from an item's `ItemSource` / slot (see
+/// `assembler::render::cognitive_layer`) and surfaced as a label so the model
+/// perceives the layered structure ("像人脑认知系统一样分层运作"). Nothing is
+/// persisted — the classification is deterministic and free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CognitiveLayer {
+    /// Current-task context (live session / scratchpad-equivalent).
+    Working,
+    /// Lived experiences and causal chains — session summaries, transcripts,
+    /// sub-agent runs. Time/episode-bound.
+    Episodic,
+    /// Distilled facts, rules, preferences and skills — the durable knowledge.
+    Semantic,
+    /// Audit/回溯 substrate — verbatim raw fragments behind the distillations.
+    Raw,
+}
+
+impl CognitiveLayer {
+    /// Stable machine tag (also the serde representation).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Working => "working",
+            Self::Episodic => "episodic",
+            Self::Semantic => "semantic",
+            Self::Raw => "raw",
+        }
+    }
+}
+
+impl std::fmt::Display for CognitiveLayer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+// ============================================================================
 // MemoryCategory
 // ============================================================================
 
