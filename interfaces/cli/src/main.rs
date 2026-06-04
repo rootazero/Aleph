@@ -38,10 +38,10 @@ use commands::cli_args::{
 /// Aleph CLI - Personal AI Assistant Client
 #[derive(Parser)]
 #[command(name = "aleph")]
-#[command(author, version, about, long_about = None)]
+#[command(author, version = env!("ALEPH_VERSION"), about, long_about = None)]
 pub(crate) struct Cli {
     /// Gateway server URL
-    #[arg(short, long, default_value = "ws://127.0.0.1:18789")]
+    #[arg(short, long, default_value = aleph_client::DEFAULT_GATEWAY_URL)]
     server: String,
 
     /// Enable verbose logging
@@ -81,7 +81,7 @@ async fn main() -> CliResult<()> {
     let server_url = cli.server.clone();
     let json = cli.json;
 
-    info!("Aleph CLI v{}", env!("CARGO_PKG_VERSION"));
+    info!("Aleph CLI v{}", env!("ALEPH_VERSION"));
 
     match cli.command {
         Some(cmd) => dispatch(cmd, &server_url, &config, json, cli.verbose).await?,
@@ -119,9 +119,21 @@ async fn dispatch(
             last,
             output_last_message,
         } => {
+            // Headless parity with `echo x | aleph ask`: when stdin is piped,
+            // fold it into the effective prompt (appended as context when an
+            // explicit message is also given). Pure I/O — the merged string is
+            // forwarded to the same `agent.run` path (R4).
+            let piped = commands::ask::read_piped_stdin();
+            let effective = commands::ask::merge_prompt(message.as_deref(), piped.as_deref())
+                .ok_or_else(|| {
+                    aleph_client::CliError::Other(
+                        "no message provided — pass a message argument or pipe text on stdin"
+                            .to_string(),
+                    )
+                })?;
             commands::ask::run(
                 server_url,
-                &message,
+                &effective,
                 session.as_deref(),
                 last,
                 json,

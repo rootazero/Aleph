@@ -128,7 +128,7 @@ pub async fn run(server_url: &str, json: bool) -> CliResult<()> {
 // ── Rendering ────────────────────────────────────────────────────────────
 
 fn render_human(checks: &[DoctorCheck]) {
-    println!("Aleph Doctor (v{})", env!("CARGO_PKG_VERSION"));
+    println!("Aleph Doctor (v{})", env!("ALEPH_VERSION"));
     println!();
 
     let mut current_category = "";
@@ -181,7 +181,7 @@ fn check_cli_binary() -> DoctorCheck {
             "aleph-cli",
             "Path of the running aleph binary",
             true,
-            format!("{} (v{})", exe.display(), env!("CARGO_PKG_VERSION")),
+            format!("{} (v{})", exe.display(), env!("ALEPH_VERSION")),
         ),
         Err(e) => DoctorCheck::fail(
             "system",
