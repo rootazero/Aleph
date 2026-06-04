@@ -156,9 +156,16 @@ pub fn check_and_resolve_path(
 
         // Use Path::starts_with for proper directory-prefix matching.
         // String starts_with would falsely match "/foo-bar" when "/foo" is denied.
+        //
+        // Canonicalize the denied path the SAME way as the input (resolving
+        // symlinks) before comparing. Otherwise a symlinked ancestor defeats the
+        // check: on macOS `/etc` -> `/private/etc`, so a denied literal
+        // "/etc/passwd" never prefix-matches the canonical "/private/etc/passwd",
+        // silently allowing access.
         let canonical_path = Path::new(&*path_str);
-        let denied_path = Path::new(&denied_expanded);
-        if canonical_path.starts_with(denied_path) {
+        let denied_norm = safe_normalize(Path::new(&denied_expanded))
+            .unwrap_or_else(|_| PathBuf::from(&denied_expanded));
+        if canonical_path.starts_with(&denied_norm) {
             info!(
                 path_str = %path_str,
                 denied = %denied,

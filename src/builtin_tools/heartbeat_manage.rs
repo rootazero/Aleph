@@ -164,6 +164,16 @@ impl AlephTool for HeartbeatCreateTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Floor the interval (consistent with cron's Every guard). A sub-second
+        // interval makes the probe — and any L2 agent run it triggers — fire on
+        // every tick, a resource hazard.
+        if args.interval_ms < 1000 {
+            return Err(crate::error::AlephError::tool(format!(
+                "Interval too short: interval_ms={} is below the 1000ms minimum.",
+                args.interval_ms
+            )));
+        }
+
         let trigger_condition = args
             .probe_trigger_condition
             .map(TriggerCondition::from)
@@ -459,6 +469,15 @@ impl AlephTool for HeartbeatReportTool {
             HeartbeatReportAction::Silent => ("silent".to_string(), String::new()),
             HeartbeatReportAction::Notify => {
                 let msg = args.message.unwrap_or_default();
+                // The executor (classify_l2_outcome) treats a blank notify
+                // message as Silent and sends nothing. Returning acknowledged
+                // here would tell the agent it alerted the user when no
+                // notification was ever delivered — reject so it can retry.
+                if msg.trim().is_empty() {
+                    return Err(crate::error::AlephError::tool(
+                        "heartbeat_report(action=\"notify\") requires a non-empty message.",
+                    ));
+                }
                 ("notify".to_string(), msg)
             }
         };

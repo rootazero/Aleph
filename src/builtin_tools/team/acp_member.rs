@@ -72,11 +72,34 @@ pub enum TeamAcpMemberOutput {
 #[derive(Clone)]
 pub struct TeamAcpMemberTool {
     store: Arc<dyn TeamStore>,
+    current_agent_id: String,
 }
 
 impl TeamAcpMemberTool {
-    pub fn new(store: Arc<dyn TeamStore>) -> Self {
-        Self { store }
+    pub fn new(store: Arc<dyn TeamStore>, current_agent_id: String) -> Self {
+        Self {
+            store,
+            current_agent_id,
+        }
+    }
+
+    /// Verify the caller is the team's leader — the same gate `team_member_add`
+    /// / `team_member_remove` enforce. Without it any agent could attach or
+    /// detach ACP members, an authorization inconsistency with the sibling
+    /// membership tools.
+    async fn ensure_leader(&self, team_id: &str) -> Result<()> {
+        let team = self
+            .store
+            .get_team(team_id)
+            .await?
+            .ok_or_else(|| AlephError::tool(format!("team not found: {team_id}")))?;
+        if team.leader_id != self.current_agent_id {
+            return Err(AlephError::tool(format!(
+                "only the team leader ('{}') can manage ACP members",
+                team.leader_id
+            )));
+        }
+        Ok(())
     }
 }
 
@@ -117,6 +140,7 @@ impl AlephTool for TeamAcpMemberTool {
                     cwd = %cwd,
                     "team_acp_member: add"
                 );
+                self.ensure_leader(&team_id).await?;
                 let member = self
                     .store
                     .add_member(NewTeamMember::for_acp_session(
@@ -131,6 +155,7 @@ impl AlephTool for TeamAcpMemberTool {
             }
             TeamAcpMemberArgs::Remove { team_id, agent_id } => {
                 debug!(team_id = %team_id, agent_id = %agent_id, "team_acp_member: remove");
+                self.ensure_leader(&team_id).await?;
                 // Refuse to remove non-ACP rows via this tool so the LLM
                 // doesn't accidentally drop an in-process agent.
                 let members = self.store.get_members(&team_id).await?;
@@ -202,7 +227,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = TeamAcpMemberTool::new(Arc::clone(&store));
+        let tool = TeamAcpMemberTool::new(Arc::clone(&store), "leader".to_string());
         tool.call(TeamAcpMemberArgs::Add {
             team_id: team_id.clone(),
             harness_id: "claude_code".into(),
@@ -241,7 +266,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tool = TeamAcpMemberTool::new(store);
+        let tool = TeamAcpMemberTool::new(store, "leader".to_string());
         let err = tool
             .call(TeamAcpMemberArgs::Remove {
                 team_id,

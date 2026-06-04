@@ -320,16 +320,18 @@ impl MemorySearchTool {
             if session_key.is_empty() {
                 Vec::new()
             } else {
-                // Resolve agent_id the same way long-term retrieval does below.
-                let agent_id = match &workspace_filter {
-                    crate::gateway::agent_env::AgentEnvFilter::Single(ws) => ws.clone(),
-                    _ => workspace_label.clone(),
-                };
+                // Session-local raw chunks are always written under the fixed
+                // agent_id "default" (see session_compactor::store_raw_chunk and
+                // recall_context). The workspace handle is never populated at
+                // runtime (only the session_key handle is), so deriving agent_id
+                // from workspace_filter here would query "main" and miss every
+                // row stored under "default" — silently returning nothing.
+                let agent_id = "default";
                 let path_prefix = format!("aleph://session/{}/", *session_key);
                 let fetch_limit = args.max_results * 2;
                 let raws = self
                     .database
-                    .get_raw_by_path_prefix(&path_prefix, &agent_id, fetch_limit)
+                    .get_raw_by_path_prefix(&path_prefix, agent_id, fetch_limit)
                     .await
                     .unwrap_or_default();
 

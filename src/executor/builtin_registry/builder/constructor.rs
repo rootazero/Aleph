@@ -900,7 +900,7 @@ impl BuiltinToolRegistry {
         // run time.
         let team_acp_member_tool = if let Some(ref team_store) = config.team_store {
             use crate::builtin_tools::team::TeamAcpMemberTool;
-            let tool = TeamAcpMemberTool::new(Arc::clone(team_store));
+            let tool = TeamAcpMemberTool::new(Arc::clone(team_store), current_agent_id.clone());
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();

@@ -103,18 +103,28 @@ impl AlephTool for TaskUpdateTool {
 
         // Publish events based on status transitions
         match task.status {
-            CoordTaskStatus::Completed => {
-                let agent_id = task.owner.clone().unwrap_or_else(|| "unknown".to_string());
+            // Completed and Skipped both SATISFY downstream dependencies (see
+            // CoordTaskStatus::Skipped docs and get_newly_unblocked's
+            // `NOT IN ('completed','skipped')` predicate). They must therefore
+            // share the unblock + team-completion signalling. Skipped is a
+            // "satisfied but not run" terminal state, so it emits no
+            // TaskCompleted event. Without this, skipping a task left its
+            // dependents stalled until the dispatcher's fallback tick and never
+            // woke task_wait subscribers.
+            CoordTaskStatus::Completed | CoordTaskStatus::Skipped => {
+                if matches!(task.status, CoordTaskStatus::Completed) {
+                    let agent_id = task.owner.clone().unwrap_or_else(|| "unknown".to_string());
 
-                // Publish TaskCompleted
-                let _ = self
-                    .event_bus
-                    .publish(AgentEvent::Important(ImportantEvent::TaskCompleted {
-                        task_id: task.id.clone(),
-                        agent_id: agent_id.clone(),
-                        timestamp: now_secs(),
-                    }))
-                    .await;
+                    // Publish TaskCompleted
+                    let _ = self
+                        .event_bus
+                        .publish(AgentEvent::Important(ImportantEvent::TaskCompleted {
+                            task_id: task.id.clone(),
+                            agent_id: agent_id.clone(),
+                            timestamp: now_secs(),
+                        }))
+                        .await;
+                }
 
                 // Find and notify newly unblocked tasks
                 if let Ok(unblocked) = self.store.get_newly_unblocked(&task.id).await {
@@ -147,6 +157,7 @@ impl AlephTool for TaskUpdateTool {
                                 CoordTaskStatus::Completed
                                     | CoordTaskStatus::Cancelled
                                     | CoordTaskStatus::Failed
+                                    | CoordTaskStatus::Skipped
                             )
                         });
                         if all_done && !tasks.is_empty() {

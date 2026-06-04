@@ -127,12 +127,15 @@ Examples:
                     )));
                 }
 
-                // Try format_hint first, then extract extension from URL
+                // Try format_hint first, then extract extension from URL.
+                // Strip any ?query / #fragment before reading the extension,
+                // otherwise "photo.png?v=2" yields ext "png?v=2" and is rejected.
                 let ext_str = args.format_hint.as_deref().or_else(|| {
                     url.rsplit('/')
                         .next()
+                        .map(|name| name.split(['?', '#']).next().unwrap_or(name))
                         .and_then(|name| name.rsplit('.').next())
-                        .filter(|ext| !ext.contains('?') && ext.len() < 10)
+                        .filter(|ext| !ext.is_empty() && ext.len() < 10)
                 });
                 let mt = match ext_str {
                     Some(ext) => detect_by_extension(ext).unwrap_or(MediaType::Unknown),

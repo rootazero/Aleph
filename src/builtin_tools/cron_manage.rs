@@ -108,7 +108,20 @@ fn validate_schedule(schedule: &ScheduleInput) -> Result<()> {
                 )));
             }
         }
-        ScheduleInput::Cron { .. } => {}
+        ScheduleInput::Cron { expr, timezone } => {
+            // Validate the expression (and timezone) up front. Without this, a
+            // malformed expr is accepted, persisted, and reported as created —
+            // but compute_next_run_for_job collapses the parse error to None,
+            // so the job has no next_run and silently never fires.
+            crate::tasks::shared::schedule::compute_next_cron(
+                expr,
+                timezone.as_deref(),
+                chrono::Utc::now(),
+            )
+            .map_err(|e| {
+                crate::error::AlephError::tool(format!("Invalid cron schedule: {e}"))
+            })?;
+        }
     }
     Ok(())
 }

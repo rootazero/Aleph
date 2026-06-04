@@ -365,6 +365,20 @@ make several coordinated edits at once."#;
             }
         }
 
+        // If every hunk was a context-less pure addition it was skipped above,
+        // leaving nothing applied. Reporting success here would tell the model
+        // its additions landed when the file is unchanged — fail explicitly so
+        // it re-emits the hunk with surrounding context or an EOF anchor.
+        if hunks_applied == 0 && !hunks.is_empty() {
+            return fail(
+                "update",
+                path,
+                "no hunks applied: context-less additions are not supported — \
+                 include surrounding context lines or an EOF-anchored hunk"
+                    .to_string(),
+            );
+        }
+
         // Atomic write-back: a crash mid-write must never truncate the file.
         if let Err(e) = crate::utils::atomic_write::atomic_write_file(&resolved, &content).await {
             return fail("update", path, format!("write-back failed: {}", e));

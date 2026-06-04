@@ -92,6 +92,20 @@ impl AlephTool for SessionNewTool {
             ))
         })?;
 
+        // Compute the next-epoch key first. `with_next_epoch` only advances the
+        // epoch for Main and DirectMessage sessions; for Group / Task / Subagent
+        // / Ephemeral sessions it returns an identical key. Closing then
+        // re-opening the same key would be a destructive no-op reported as a
+        // fresh conversation, so detect that and bail out honestly instead.
+        let new_routing_key = routing_key.with_next_epoch();
+        let new_key_str = new_routing_key.to_key_string();
+        if new_key_str == *session_key_str {
+            return Err(crate::error::AlephError::tool(
+                "session_new: starting a new conversation is not supported for this session \
+                 type (only direct/main sessions can be rolled over).",
+            ));
+        }
+
         // Close old session
         let legacy_key = LegacySessionKey::from_key_string(session_key_str);
         if let Some(ref lk) = legacy_key {
@@ -104,9 +118,7 @@ impl AlephTool for SessionNewTool {
             }
         }
 
-        // Create new session with next epoch
-        let new_routing_key = routing_key.with_next_epoch();
-        let new_key_str = new_routing_key.to_key_string();
+        // Create the new session.
         if let Err(e) = self.session_store.get_or_create(&new_routing_key).await {
             warn!("session_new: failed to create new session: {}", e);
         }

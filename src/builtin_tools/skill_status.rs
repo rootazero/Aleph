@@ -54,10 +54,15 @@ impl AlephTool for SkillStatusTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let filter = match args.filter.as_str() {
+            "all" => SkillStatusFilter::All,
             "ready" => SkillStatusFilter::Ready,
             "needs_setup" => SkillStatusFilter::NeedsSetup,
             "disabled" => SkillStatusFilter::Disabled,
-            _ => SkillStatusFilter::All,
+            other => {
+                return Err(crate::error::AlephError::tool(format!(
+                    "Invalid filter '{other}'. Expected one of: all, ready, needs_setup, disabled."
+                )));
+            }
         };
 
         let all_entries = self.system.full_status().await;

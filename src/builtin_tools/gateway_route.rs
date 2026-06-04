@@ -102,17 +102,29 @@ impl AlephTool for GatewayRouteTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         info!(tool = "gateway_route", channel = %args.channel, "querying routing engine");
 
-        let peer = args.peer_id.as_ref().map(|id| {
-            let kind = match args.peer_kind.as_deref() {
-                Some("group") => RoutePeerKind::Group,
-                Some("channel") => RoutePeerKind::Channel,
-                _ => RoutePeerKind::Dm,
-            };
-            RoutePeer {
-                kind,
-                id: id.clone(),
+        let peer = match args.peer_id.as_ref() {
+            Some(id) => {
+                // Only treat an absent peer_kind as the DM default. An
+                // unrecognised value must be rejected, not silently coerced to
+                // DM — otherwise a typo ("groupp") yields a DM session key and a
+                // different route than the caller intended.
+                let kind = match args.peer_kind.as_deref() {
+                    None | Some("dm") => RoutePeerKind::Dm,
+                    Some("group") => RoutePeerKind::Group,
+                    Some("channel") => RoutePeerKind::Channel,
+                    Some(other) => {
+                        return Err(crate::error::AlephError::tool(format!(
+                            "Invalid peer_kind '{other}'. Expected one of: dm, group, channel."
+                        )));
+                    }
+                };
+                Some(RoutePeer {
+                    kind,
+                    id: id.clone(),
+                })
             }
-        });
+            None => None,
+        };
 
         let input = RouteInput {
             channel: args.channel.clone(),

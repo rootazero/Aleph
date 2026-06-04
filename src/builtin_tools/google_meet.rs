@@ -304,6 +304,20 @@ impl GoogleMeetTool {
             });
         }
 
+        // A non-2xx HTTP status with no JSON-RPC `error` envelope is still a
+        // failure. Inferring success purely from the absence of `error` would
+        // turn a 5xx (or an HTML-ish error body) into a false-positive "ok".
+        if !status.is_success() {
+            warn!(action = ?args.action, %status, "Google Meet bridge returned non-success HTTP status");
+            return Ok(GoogleMeetOutput {
+                ok: false,
+                action: args.action,
+                status: "bridge_error".to_string(),
+                detail: format!("bridge returned HTTP {status}"),
+                meeting_url: None,
+            });
+        }
+
         let result = body
             .get("result")
             .cloned()

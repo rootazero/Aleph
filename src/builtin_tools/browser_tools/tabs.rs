@@ -84,10 +84,9 @@ impl AlephTool for BrowserTabsTool {
             TabAction::List => match backend.list_tabs().await {
                 Ok(tabs_text) => {
                     // Parse "N: URL [selected]" or "Tab N: URL" lines into TabInfo structs.
-                    let tab_infos: Vec<TabInfo> = tabs_text
+                    let mut tab_infos: Vec<TabInfo> = tabs_text
                         .lines()
-                        .enumerate()
-                        .filter_map(|(i, line)| {
+                        .filter_map(|line| {
                             let line = line.trim();
                             // Chrome DevTools MCP: "N: URL [selected]"
                             if let Some(colon_pos) = line.find(": ") {
@@ -104,7 +103,7 @@ impl AlephTool for BrowserTabsTool {
                                         id: id_str.to_string(),
                                         title: String::new(),
                                         url: url.to_string(),
-                                        active: i == 0,
+                                        active: false,
                                     });
                                 }
                             }
@@ -117,13 +116,21 @@ impl AlephTool for BrowserTabsTool {
                                         id: id_str.to_string(),
                                         title: String::new(),
                                         url: url.to_string(),
-                                        active: i == 0,
+                                        active: false,
                                     });
                                 }
                             }
                             None
                         })
                         .collect();
+                    // The active/most-recent tab is the LAST entry — the
+                    // convention every other tool here relies on (mod.rs
+                    // parse_active_tab_id uses .next_back(); chrome_mcp_backend
+                    // treats the newest tab as last). Marking i==0 active would
+                    // report a different tab than click/type/snapshot operate on.
+                    if let Some(last) = tab_infos.last_mut() {
+                        last.active = true;
+                    }
                     Ok(BrowserTabsOutput {
                         success: true,
                         tabs: Some(tab_infos),

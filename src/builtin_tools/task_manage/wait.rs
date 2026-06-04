@@ -62,9 +62,25 @@ fn all_terminal(tasks: &[CoordTask]) -> bool {
     tasks.iter().all(|t| {
         matches!(
             t.status,
-            CoordTaskStatus::Completed | CoordTaskStatus::Failed | CoordTaskStatus::Cancelled
+            CoordTaskStatus::Completed
+                | CoordTaskStatus::Failed
+                | CoordTaskStatus::Cancelled
+                | CoordTaskStatus::Skipped
         )
     })
+}
+
+/// Requested task IDs that do not exist in the store. A non-existent task will
+/// never appear, so the waiter must not treat its absence as "resolved" — it is
+/// reported explicitly instead.
+fn missing_ids(requested: &Option<Vec<String>>, found: &[CoordTask]) -> Vec<String> {
+    let Some(ids) = requested else {
+        return Vec::new();
+    };
+    ids.iter()
+        .filter(|id| !found.iter().any(|t| &t.id == *id))
+        .cloned()
+        .collect()
 }
 
 fn build_summary(tasks: &[CoordTask], timed_out: bool) -> TaskWaitOutput {
@@ -158,8 +174,9 @@ impl AlephTool for TaskWaitTool {
         loop {
             // Check current state
             let tasks = fetch_tasks(self.store.as_ref(), &args.task_ids, &args.team_id).await?;
+            let missing = missing_ids(&args.task_ids, &tasks);
 
-            if tasks.is_empty() {
+            if tasks.is_empty() && missing.is_empty() {
                 return Ok(TaskWaitOutput {
                     completed: vec![],
                     failed: vec![],
@@ -169,8 +186,21 @@ impl AlephTool for TaskWaitTool {
                 });
             }
 
+            // Missing IDs never resolve, so only the existing tasks need to be
+            // terminal. Surface the missing ones instead of silently claiming
+            // the whole set resolved.
             if all_terminal(&tasks) {
-                return Ok(build_summary(&tasks, false));
+                let mut out = build_summary(&tasks, false);
+                if !missing.is_empty() {
+                    out.pending.extend(missing.iter().cloned());
+                    out.summary = format!(
+                        "{} {} requested task(s) not found: {}.",
+                        out.summary,
+                        missing.len(),
+                        missing.join(", ")
+                    );
+                }
+                return Ok(out);
             }
 
             // Wait for an event or timeout

@@ -298,10 +298,11 @@ fn interpret(
     result: std::result::Result<SandboxOutput, SandboxError>,
     plan: Plan,
 ) -> CodeCheckOutput {
-    let (stdout, stderr) = match result {
+    let (stdout, stderr, exit_code) = match result {
         Ok(out) => (
             String::from_utf8_lossy(&out.stdout).to_string(),
             String::from_utf8_lossy(&out.stderr).to_string(),
+            out.exit_code,
         ),
         Err(SandboxError::Timeout {
             partial_stdout,
@@ -310,6 +311,7 @@ fn interpret(
         }) => (
             String::from_utf8_lossy(&partial_stdout).to_string(),
             String::from_utf8_lossy(&partial_stderr).to_string(),
+            None,
         ),
         Err(SandboxError::CapabilityDenied { reason }) => {
             return error_output("(denied)", format!("Capability denied: {reason}"))
@@ -353,8 +355,17 @@ fn interpret(
     let error_count = diags.iter().filter(|d| d.severity == "error").count();
     let warning_count = diags.iter().filter(|d| d.severity == "warning").count();
 
+    // A non-zero process exit with no parsed diagnostics means the checker
+    // failed in a way our parser didn't recognise (e.g. cargo link-stage
+    // failure, py_compile SyntaxError, a custom command's error format).
+    // Reporting ok:true there would tell the model the code compiles when it
+    // does not — the exact failure mode this tool exists to catch. Warnings
+    // that merely make a linter exit non-zero are still ok (they produce
+    // parsed diagnostics, so total > 0).
+    let exit_failed = exit_code.map_or(false, |c| c != 0);
+
     CodeCheckOutput {
-        ok: error_count == 0,
+        ok: error_count == 0 && !(exit_failed && total == 0),
         command,
         error_count,
         warning_count,

@@ -69,6 +69,15 @@ pub async fn generate(
         }
     };
 
+    // Ensure the output directory exists before handing the path to
+    // playwright-cli, which (unlike the native engine) does not create it and
+    // would otherwise fail to write the PDF.
+    if let Some(parent) = output_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .map_err(|e| ToolError::Execution(format!("create output dir: {e}")))?;
+    }
+
     let tmp = NamedTempFile::with_suffix(".html")
         .map_err(|e| ToolError::Execution(format!("tempfile: {e}")))?;
     tokio::fs::write(tmp.path(), html_doc.as_bytes())
