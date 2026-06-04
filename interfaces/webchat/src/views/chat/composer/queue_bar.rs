@@ -45,6 +45,16 @@ pub(super) fn QueuedPromptBar(queue: RwSignal<Vec<QueuedPrompt>>) -> impl IntoVi
         });
     };
 
+    // Hoist the enumerated collection out of the `view!` macro: a turbofish
+    // (`::<Vec<_>>`) inside a `view!` attribute trips the rstml tag parser,
+    // which reads the `<`/`>` as HTML tags. Keeping the angle brackets in plain
+    // Rust here avoids that.
+    let enumerated = move || {
+        let items: Vec<(usize, QueuedPrompt)> =
+            queue.get().into_iter().enumerate().collect();
+        items
+    };
+
     view! {
         <Show when=move || !queue.get().is_empty()>
             <div class="flex flex-wrap items-center gap-2 mb-2">
@@ -54,7 +64,7 @@ pub(super) fn QueuedPromptBar(queue: RwSignal<Vec<QueuedPrompt>>) -> impl IntoVi
                     {move || queue.get().len().to_string()}
                 </span>
                 <For
-                    each=move || queue.get().into_iter().enumerate().collect::<Vec<_>>()
+                    each=enumerated
                     key=|(idx, e)| format!("{}:{}", idx, e.text)
                     children=move |(idx, entry)| {
                         let label = queue_label(&entry);
