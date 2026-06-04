@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use super::super::adapter::{GraphNeighborsResponse, NoteLinkDto, NoteNodeDto};
 use super::super::edge_curve::DIRECTIONAL_KINDS;
 use super::super::types::Vec2;
-use super::spec::{Document, EndShape, Node, NodeCommon, Side};
+use super::spec::{facing_sides, Document, EndShape, Node, NodeCommon, Side};
 
 /// Tunables for `graph_to_canvas`.
 #[derive(Debug, Clone)]
@@ -138,36 +138,10 @@ fn anchor_sides(
         Some(p) => *p,
         None => return (None, None),
     };
-    let from_side = closest_side(from, to);
-    let to_side = opposite_side(from_side);
+    // Delegate to the shared single source of truth in `canvas_format` — the
+    // same anchoring the core team-canvas export uses.
+    let (from_side, to_side) = facing_sides((from.x, from.y), (to.x, to.y));
     (Some(from_side), Some(to_side))
-}
-
-/// The cardinal direction (up/down/left/right) on the source node pointing
-/// toward the target. Canvas convention: +y is down.
-fn closest_side(from: Vec2, to: Vec2) -> Side {
-    let dx = to.x - from.x;
-    let dy = to.y - from.y;
-    if dx.abs() >= dy.abs() {
-        if dx >= 0.0 {
-            Side::Right
-        } else {
-            Side::Left
-        }
-    } else if dy >= 0.0 {
-        Side::Bottom
-    } else {
-        Side::Top
-    }
-}
-
-fn opposite_side(side: Side) -> Side {
-    match side {
-        Side::Top => Side::Bottom,
-        Side::Bottom => Side::Top,
-        Side::Left => Side::Right,
-        Side::Right => Side::Left,
-    }
 }
 
 /// Result of importing a JSON Canvas `Document`.
@@ -420,30 +394,23 @@ mod tests {
     }
 
     #[test]
-    fn anchor_sides_picks_dominant_axis() {
-        // Target is to the right and slightly down — right is dominant.
+    fn anchor_sides_uses_shared_facing_sides() {
+        // The cardinal/opposite math now lives in `canvas_format::facing_sides`
+        // (covered by its own tests); here we verify convert.rs wires it through
+        // the positions map and returns facing sides.
+        let positions: HashMap<String, Vec2> = [
+            ("a".to_string(), Vec2::new(0.0, 0.0)),
+            ("b".to_string(), Vec2::new(100.0, 30.0)),
+        ]
+        .into_iter()
+        .collect();
+        // b is right-and-slightly-down of a → Right/Left.
         assert_eq!(
-            closest_side(Vec2::new(0.0, 0.0), Vec2::new(100.0, 30.0)),
-            Side::Right
+            anchor_sides("a", "b", &positions),
+            (Some(Side::Right), Some(Side::Left))
         );
-        // Target is below and slightly right — bottom is dominant.
-        assert_eq!(
-            closest_side(Vec2::new(0.0, 0.0), Vec2::new(30.0, 100.0)),
-            Side::Bottom
-        );
-        // Diagonal exact 45° ties → prefers horizontal (`dx.abs() >= dy.abs()`).
-        assert_eq!(
-            closest_side(Vec2::new(0.0, 0.0), Vec2::new(50.0, 50.0)),
-            Side::Right
-        );
-    }
-
-    #[test]
-    fn opposite_side_inverts_cardinals() {
-        assert_eq!(opposite_side(Side::Top), Side::Bottom);
-        assert_eq!(opposite_side(Side::Bottom), Side::Top);
-        assert_eq!(opposite_side(Side::Left), Side::Right);
-        assert_eq!(opposite_side(Side::Right), Side::Left);
+        // A missing endpoint degrades to (None, None) rather than guessing.
+        assert_eq!(anchor_sides("a", "missing", &positions), (None, None));
     }
 
     #[test]

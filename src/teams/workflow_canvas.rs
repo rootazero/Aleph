@@ -27,7 +27,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use aleph_protocol::canvas_format::{Document, Edge, EndShape, Node, NodeCommon};
+use aleph_protocol::canvas_format::{facing_sides, Document, Edge, EndShape, Node, NodeCommon};
 use serde_json::Value;
 
 use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, NewCoordTask, Priority};
@@ -63,6 +63,10 @@ pub fn tasks_to_canvas(tasks: &[CoordTask]) -> Document {
     let layers = compute_layers(tasks, &id_to_idx);
 
     let mut nodes: Vec<Node> = Vec::with_capacity(tasks.len());
+    // Node centres, keyed by task id — used to anchor edges to the facing sides
+    // of each card so the exported `.canvas` renders cleanly (no centre-crossing
+    // strokes) in Obsidian and the panel.
+    let mut centers: HashMap<&str, (f64, f64)> = HashMap::with_capacity(tasks.len());
     for task in tasks {
         let (layer, row) = layers
             .get(task.id.as_str())
@@ -76,6 +80,7 @@ pub fn tasks_to_canvas(tasks: &[CoordTask]) -> Document {
             height: NODE_HEIGHT,
             color: status_color(task.status).map(str::to_string),
         };
+        centers.insert(task.id.as_str(), common.center());
         nodes.push(Node::Text {
             common,
             text: render_task_body(task),
@@ -83,7 +88,9 @@ pub fn tasks_to_canvas(tasks: &[CoordTask]) -> Document {
     }
 
     // Edges: one canvas edge per `(dep, task)` immutable dependency. We use a
-    // stable derived ID so re-renders are deterministic.
+    // stable derived ID so re-renders are deterministic. Sides are anchored to
+    // the facing cardinals of the two cards (dep → task, left-to-right by
+    // layer) via the shared `facing_sides` single source of truth.
     let mut edges: Vec<Edge> = Vec::new();
     for task in tasks {
         for dep in &task.dependencies {
@@ -92,13 +99,22 @@ pub fn tasks_to_canvas(tasks: &[CoordTask]) -> Document {
                 // self-contained.
                 continue;
             }
+            let dep_center = centers.get(dep.as_str());
+            let task_center = centers.get(task.id.as_str());
+            let (from_side, to_side) = match (dep_center, task_center) {
+                (Some(&from_c), Some(&to_c)) => {
+                    let (fs, ts) = facing_sides(from_c, to_c);
+                    (Some(fs), Some(ts))
+                }
+                _ => (None, None),
+            };
             edges.push(Edge {
                 id: format!("e:{}:{}", dep, task.id),
                 from_node: dep.clone(),
-                from_side: None,
+                from_side,
                 from_end: None,
                 to_node: task.id.clone(),
-                to_side: None,
+                to_side,
                 to_end: Some(EndShape::Arrow),
                 color: None,
                 label: None,
@@ -345,6 +361,21 @@ mod tests {
         // Arrow head only on the destination side.
         assert!(matches!(doc.edges[0].to_end, Some(EndShape::Arrow)));
         assert!(doc.edges[0].from_end.is_none());
+    }
+
+    #[test]
+    fn export_anchors_edge_sides_left_to_right() {
+        use aleph_protocol::canvas_format::Side;
+        // a (layer 0) → b (layer 1): b sits to the right of a, so the edge
+        // should leave a's Right and enter b's Left.
+        let tasks = vec![
+            mk_task("a", vec![], CoordTaskStatus::Pending),
+            mk_task("b", vec!["a"], CoordTaskStatus::Pending),
+        ];
+        let doc = tasks_to_canvas(&tasks);
+        assert_eq!(doc.edges.len(), 1);
+        assert_eq!(doc.edges[0].from_side, Some(Side::Right));
+        assert_eq!(doc.edges[0].to_side, Some(Side::Left));
     }
 
     #[test]
