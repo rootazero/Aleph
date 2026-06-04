@@ -333,6 +333,31 @@ pub fn render_summary_footer(summary: &RunSummary) -> String {
     lines.join("\n")
 }
 
+/// Reconcile the streamed assistant text with the authoritative
+/// `RunSummary.final_response` that `RunComplete` carries.
+///
+/// The gateway channel emitter already does this — `reply_emitter` falls back
+/// to `summary.final_response` when its streamed buffer is empty
+/// (`reply_emitter/emitter/streaming.rs`). The CLI's `ask` path streamed
+/// `ResponseChunk`s into a local buffer but never consulted the summary
+/// fallback, so a run that emitted only reasoning + tool calls (no
+/// `ResponseChunk`) printed an empty body and wrote an empty
+/// `--output-last-message` file even though the final answer was on the wire.
+///
+/// Mirrors codex `final_message_from_turn_items` (late final-message
+/// extraction) plus its dedup rule: streamed text wins when present (it was
+/// already shown inline), and the summary fallback is consulted only when
+/// nothing streamed. Pure, zero-alloc, host-testable.
+pub fn resolve_final_text<'a>(streamed: &'a str, fallback: Option<&'a str>) -> &'a str {
+    if !streamed.trim().is_empty() {
+        return streamed;
+    }
+    match fallback {
+        Some(f) if !f.trim().is_empty() => f,
+        _ => streamed,
+    }
+}
+
 /// Map a `TerminateReason` static tag to (glyph, human label, style).
 fn terminate_badge(reason: &str) -> (&'static str, &'static str, Style) {
     match reason {
@@ -595,5 +620,34 @@ mod tests {
     fn reasoning_skips_empty() {
         assert!(render_reasoning("   ").is_none());
         assert!(render_reasoning("thinking...").is_some());
+    }
+
+    #[test]
+    fn final_text_prefers_streamed_when_present() {
+        // Streamed text wins even when a fallback exists (it was shown inline).
+        assert_eq!(
+            resolve_final_text("streamed answer", Some("summary answer")),
+            "streamed answer"
+        );
+        assert_eq!(resolve_final_text("streamed answer", None), "streamed answer");
+    }
+
+    #[test]
+    fn final_text_falls_back_when_stream_empty() {
+        // The black-hole case: nothing streamed, but the summary carries the
+        // authoritative final answer.
+        assert_eq!(resolve_final_text("", Some("summary answer")), "summary answer");
+        assert_eq!(
+            resolve_final_text("   \n ", Some("summary answer")),
+            "summary answer"
+        );
+    }
+
+    #[test]
+    fn final_text_empty_when_nothing_available() {
+        // No stream, no fallback → preserve the (empty) streamed value rather
+        // than inventing content.
+        assert_eq!(resolve_final_text("", None), "");
+        assert_eq!(resolve_final_text("", Some("  ")), "");
     }
 }
