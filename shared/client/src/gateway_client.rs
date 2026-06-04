@@ -80,7 +80,7 @@ impl GatewayClient {
 
         // Send request
         write
-            .send(Message::Text(request.to_string()))
+            .send(Message::Text(request.to_string().into()))
             .await
             .map_err(|e| CliError::Connection(e.to_string()))?;
 
