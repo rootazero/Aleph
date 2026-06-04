@@ -214,6 +214,17 @@ pub struct ResolvedContext {
     /// keeps the sandbox section absent (e.g. mock sandboxes in tests).
     #[serde(skip, default)]
     pub sandbox_summary: Option<crate::sandbox::SandboxSummary>,
+    /// Compact progress snapshot of the session's active scratchpad
+    /// execution list (objective + checklist + current step), rendered by
+    /// `ExecutionPlanLayer` (priority 1755) as `<execution_plan>`. Populated
+    /// by the orchestrator from `scratchpad_registry::active` before prompt
+    /// assembly so the live plan stays in context across long tool-only
+    /// stretches where the model never re-calls the `scratchpad` tool —
+    /// codex `update_plan` / opencode `todowrite` / Claude Code TodoWrite
+    /// persistent-visibility parity. `None` when no active plan with pending
+    /// work, so the layer emits nothing and the prompt is byte-identical.
+    #[serde(skip, default)]
+    pub execution_plan: Option<String>,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -287,6 +298,7 @@ impl ContextAggregator {
             runtime_context: None,
             runtime_state_blocks: Vec::new(),
             sandbox_summary: None,
+            execution_plan: None,
         }
     }
 

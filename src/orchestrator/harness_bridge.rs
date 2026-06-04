@@ -715,6 +715,30 @@ impl HarnessRunner for AgentHarnessRunner {
     }
 }
 
+/// Look up the session's active scratchpad execution list and render a
+/// compact, judgment-free progress snapshot for `ExecutionPlanLayer` to
+/// inject into the per-turn system prompt. Returns `None` (→ the layer
+/// emits nothing) when the session has no bound scratchpad, the file is
+/// missing/unreadable, or every plan item is already done — the same
+/// `has_pending_work()` gate the stop-verifier uses, so an empty or
+/// finished plan never adds noise.
+///
+/// Free async function so it can be unit-tested without a full
+/// `AgentHarnessRunner`, mirroring `compute_runtime_state_blocks`.
+/// Fail-soft on any I/O error: a transient scratchpad read must never
+/// wedge prompt assembly.
+pub async fn active_execution_plan(session_key: &str) -> Option<String> {
+    let project_id = crate::builtin_tools::scratchpad_registry::active(session_key)?;
+    let manager = crate::memory::scratchpad::ScratchpadManager::new(&project_id, "harness");
+    if !manager.exists() {
+        return None;
+    }
+    let snapshot = manager.snapshot().await.ok()?;
+    snapshot
+        .has_pending_work()
+        .then(|| snapshot.render_progress())
+}
+
 /// Snapshot the tool catalog's `ToolHealthCache` and convert every
 /// currently-cached `Unhealthy` entry into a `RuntimeStateFragment` for
 /// `ToolRuntimeStateLayer` to render. Returns `vec![]` when
@@ -963,6 +987,14 @@ impl AgentHarnessRunner {
         // in tests leave this absent and the SecurityLayer skips the
         // sandbox bullet block.
         resolved_context.sandbox_summary = sandbox.summary();
+        // Re-surface the session's active scratchpad execution list so the
+        // live plan stays in context across long tool-only stretches where
+        // the model never re-calls the `scratchpad` tool. Reuses the same
+        // `scratchpad_registry` binding the tool / steering / stop-verifier
+        // already key off — a mechanical lookup, no reasoning. `None` (no
+        // active plan with pending work) leaves the prompt byte-identical;
+        // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
+        resolved_context.execution_plan = active_execution_plan(&session_key_str).await;
         builder = builder.with_resolved_context(resolved_context);
         // Phase 3: thread the provider's wire-protocol family so
         // `ProviderGuidanceLayer` can pick the right per-family
