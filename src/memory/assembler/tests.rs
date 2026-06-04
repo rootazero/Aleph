@@ -101,6 +101,8 @@ fn default_cfg() -> AssemblerConfig {
         fallback_skeleton: FallbackSkeleton::default(),
         assembly_log: AssemblyLogConfig::default(),
         project_scoped: false,
+        retrieval_scoring: Default::default(),
+        rerank: Default::default(),
     }
 }
 

@@ -465,7 +465,7 @@ async fn handle_connection(
     let mut last_activity_at = Instant::now();
     // Last observed cumulative event-overflow count. The bus->buffer forwarder
     // accounts global-hop drops here; the ping tick below acts on any growth.
-    let mut last_overflow: u64 = 0;
+    let last_overflow: u64 = 0;
 
     loop {
         tokio::select! {
@@ -1233,7 +1233,6 @@ async fn handle_connection(
                 let overflow_now = buffer_metrics.overflow();
                 if overflow_now > last_overflow {
                     let dropped = overflow_now - last_overflow;
-                    last_overflow = overflow_now;
                     warn!(
                         "Event bus overflow for {} ({} dropped, total {}); closing for reconnect",
                         conn_id, dropped, overflow_now

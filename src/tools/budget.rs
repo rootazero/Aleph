@@ -77,11 +77,11 @@ mod tests {
 
     #[test]
     fn table_size_matches_expected_count() {
-        // Locked at 18 entries (13 fast + 3 slow + 2 exec). Bumping this
+        // Locked at 19 entries (14 fast + 3 slow + 2 exec). Bumping this
         // requires updating the table AND adjusting this constant in the
         // same commit — the assertion is a code-review signal, not a
         // value check.
-        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 18);
+        assert_eq!(BUILTIN_TOOL_BUDGETS_MS.len(), 19);
     }
 
     #[test]

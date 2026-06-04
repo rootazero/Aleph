@@ -449,6 +449,8 @@ impl TestEnv {
             fallback_skeleton: Default::default(),
             assembly_log: Default::default(),
             project_scoped: false,
+            retrieval_scoring: Default::default(),
+            rerank: Default::default(),
         };
         let assembler: Arc<dyn WorkingMemoryAssembler> = Arc::new(HybridAssembler::new(
             retrieval,

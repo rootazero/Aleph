@@ -80,15 +80,6 @@ impl ReloadImpact {
         }
     }
 
-    /// Short machine label (matches the serde representation).
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Live => "live",
-            Self::Restart => "restart",
-            Self::Inert => "inert",
-        }
-    }
-
     /// Actionable, model-facing guidance the agent can relay to the user.
     pub fn agent_hint(&self) -> &'static str {
         match self {
@@ -190,13 +181,20 @@ mod tests {
     }
 
     #[test]
-    fn label_matches_serde() {
-        assert_eq!(ReloadImpact::Live.label(), "live");
-        assert_eq!(ReloadImpact::Restart.label(), "restart");
-        assert_eq!(ReloadImpact::Inert.label(), "inert");
-        // serde rename_all = "snake_case" agrees with label()
-        let v = serde_json::to_value(ReloadImpact::Restart).unwrap();
-        assert_eq!(v, serde_json::json!("restart"));
+    fn serde_uses_snake_case_labels() {
+        // The `kind` field emitted to the agent relies on this representation.
+        assert_eq!(
+            serde_json::to_value(ReloadImpact::Live).unwrap(),
+            serde_json::json!("live")
+        );
+        assert_eq!(
+            serde_json::to_value(ReloadImpact::Restart).unwrap(),
+            serde_json::json!("restart")
+        );
+        assert_eq!(
+            serde_json::to_value(ReloadImpact::Inert).unwrap(),
+            serde_json::json!("inert")
+        );
     }
 
     #[test]

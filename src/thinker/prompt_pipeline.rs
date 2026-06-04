@@ -479,8 +479,9 @@ mod tests {
         // 38 after ToolRuntimeStateLayer was added (Phase 5, 2026-05-21).
         // Previous counts: 36 → 37 (SessionBudgetLayer, Phase 4, 2026-05-20)
         // → 38 (ToolRuntimeStateLayer) → 37 (McpToolIndexLayer removed as dead
-        // code, 2026-05-31). See `default_layers` for the full layer table.
-        assert_eq!(pipeline.layer_count(), 37);
+        // code, 2026-05-31) → 38 (ExecutionPlanLayer re-surfaces the active
+        // scratchpad plan per turn). See `default_layers` for the full table.
+        assert_eq!(pipeline.layer_count(), 38);
     }
 
     #[test]
@@ -845,10 +846,12 @@ mod stability_tests {
         // Phase 2 (2026-05-20): ChainContextLayer rendered subagent
         // delegation depth per request — naturally dynamic.
         assert!(dynamic_names.contains(&"chain_context"));
+        // ExecutionPlanLayer re-surfaces the active scratchpad plan per turn.
+        assert!(dynamic_names.contains(&"execution_plan"));
         assert_eq!(
             dynamic_names.len(),
-            11,
-            "Exactly 11 dynamic layers expected"
+            12,
+            "Exactly 12 dynamic layers expected"
         );
     }
 

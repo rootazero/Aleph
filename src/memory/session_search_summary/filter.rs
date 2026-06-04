@@ -132,6 +132,8 @@ mod integration_tests {
             fallback_skeleton: Default::default(),
             assembly_log: Default::default(),
             project_scoped: false,
+            retrieval_scoring: Default::default(),
+            rerank: Default::default(),
         };
         HybridAssembler::new(
             retrieval,

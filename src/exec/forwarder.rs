@@ -364,12 +364,17 @@ mod tests {
         assert!(message.text.contains("test-123"));
         assert!(message.text.contains("npm install"));
         assert!(message.is_request);
-        // `npm install` assesses Caution → full decision set.
-        assert_eq!(message.reply_hints.len(), 3);
+        // `npm install` assesses Caution → full decision set
+        // (allow-once / allow-session / allow-always / deny).
+        assert_eq!(message.reply_hints.len(), 4);
         assert!(message
             .reply_hints
             .iter()
             .any(|h| h.contains("allow-always")));
+        assert!(message
+            .reply_hints
+            .iter()
+            .any(|h| h.contains("allow-session")));
     }
 
     #[test]
@@ -383,13 +388,18 @@ mod tests {
         record.command = "rm -rf ./build".to_string();
         let message = forwarder.format_request(&record);
 
-        // Destructive command: single-shot consent or denial only.
-        assert_eq!(message.reply_hints.len(), 2);
+        // Destructive command: single-shot / session consent or denial only —
+        // never a one-click permanent allow-always.
+        assert_eq!(message.reply_hints.len(), 3);
         assert!(!message
             .reply_hints
             .iter()
             .any(|h| h.contains("allow-always")));
         assert!(message.reply_hints.iter().any(|h| h.contains("allow-once")));
+        assert!(message
+            .reply_hints
+            .iter()
+            .any(|h| h.contains("allow-session")));
         assert!(message.reply_hints.iter().any(|h| h.contains("deny")));
         // The rendered text must not advertise a permanent-allow reply either.
         assert!(!message.text.contains("allow-always"));
