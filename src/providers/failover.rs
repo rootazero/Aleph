@@ -46,7 +46,7 @@ use crate::providers::capability_gate::{retain_capable_models, RequestRequiremen
 use crate::providers::llm_retry::{classify, classify_exhausted, RetryVerdict};
 use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::{
-    order_candidates, CandidateAction, EndpointTier, RouteTargets,
+    classify_candidate, order_candidates, CandidateAction, EndpointTier, RouteTargets,
 };
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
@@ -298,6 +298,14 @@ pub struct FailoverProvider {
     /// mode switch hot-applies with no rebuild. `None` (tests, `new()`) keeps
     /// the snapshot fields — byte-identical to pre-handle behaviour.
     route_handle: Option<Arc<RouteHandle>>,
+    /// Endpoint tier of the primary slot. `Unknown` (the default) is the
+    /// operator's configured default — always allowed, so route mode only ever
+    /// shapes the *fallbacks* around it. A *pinned* chain (an explicit
+    /// `select_model` / agent `provider_hint` override) sets this to the pinned
+    /// provider's real tier so a hard-guardrail route mode (`AlwaysLocal`) can
+    /// gate or skip an explicit cross-tier pin via the borrow-cloud approval —
+    /// the dynamic pick stops silently overriding the operator's policy.
+    primary_tier: EndpointTier,
 }
 
 impl FailoverProvider {
@@ -326,6 +334,7 @@ impl FailoverProvider {
             allow_cloud_escalation: false,
             approval: None,
             route_handle: None,
+            primary_tier: EndpointTier::Unknown,
         }
     }
 
@@ -357,6 +366,18 @@ impl FailoverProvider {
         self
     }
 
+    /// Tag the primary slot with a concrete endpoint tier so a hard-guardrail
+    /// route mode can gate it. Used by `build_failover_chain` for the per-pin
+    /// override chains (an explicit `select_model` / agent `provider_hint`
+    /// target): the pinned provider's real tier makes `AlwaysLocal` route a
+    /// cloud pin through the borrow-cloud approval instead of silently allowing
+    /// it. The global default chain omits this — its primary stays `Unknown`
+    /// (the operator's configured default is always allowed).
+    pub fn with_primary_tier(mut self, tier: EndpointTier) -> Self {
+        self.primary_tier = tier;
+        self
+    }
+
     /// The route preference to apply *now*: the live handle if attached, else
     /// the boot snapshot.
     fn route_preference(&self) -> (RouteMode, bool) {
@@ -385,8 +406,8 @@ impl FailoverProvider {
         match self.approval.clone() {
             Some(gate) => {
                 let reason = format!(
-                    "Route mode is AlwaysLocal but no local provider succeeded; \
-                     borrow cloud provider '{name}' to complete this request?"
+                    "Route mode is AlwaysLocal; borrow cloud provider '{name}' \
+                     for this request?"
                 );
                 gate.request_approval("__route_escalate_cloud", &reason)
                     .await
@@ -402,14 +423,29 @@ impl FailoverProvider {
         }
     }
 
-    /// Build the ordered candidate list for one request: the live primary
-    /// first, then each fallback whose name differs from the primary's, then
-    /// shaped by the route policy (tier ordering + cross-tier gating).
+    /// Build the ordered candidate list for one request: the primary slot
+    /// first, then each fallback whose name differs from the primary's, shaped
+    /// by the route policy (tier ordering + cross-tier gating).
     ///
-    /// The primary slot is tagged [`EndpointTier::Unknown`] — its `base_url` is
-    /// not resolvable from the live `DefaultProviderHandle`, so the route
-    /// policy always allows it as the operator's configured default. Each pair
-    /// carries the [`CandidateAction`] the walk must enforce.
+    /// The primary slot keeps its position 0 but is **classified in place** by
+    /// the route policy:
+    ///
+    /// * the global default chain tags it [`EndpointTier::Unknown`] — its
+    ///   `base_url` is not resolvable from the live `DefaultProviderHandle` and
+    ///   it is the operator's configured default, so it always classifies to
+    ///   [`Allow`](CandidateAction::Allow) (byte-identical to before);
+    /// * a *pinned* override chain tags it with the pin's real tier (via
+    ///   [`with_primary_tier`](Self::with_primary_tier)), so a hard-guardrail
+    ///   `AlwaysLocal` can turn an explicit cloud pin into a
+    ///   [`CrossTier`](CandidateAction::CrossTier) (borrow-cloud approval) or a
+    ///   [`Skip`](CandidateAction::Skip) (escalation off) — the dynamic pick no
+    ///   longer bypasses the operator's policy.
+    ///
+    /// The primary is never reordered below its own fallbacks (it is the
+    /// operator default or the explicitly-chosen provider); only the *fallback*
+    /// list is run through [`order_candidates`] for local-first ordering, pin
+    /// promotion and tier gating. Each pair carries the [`CandidateAction`] the
+    /// walk must enforce.
     fn candidates(&self) -> Vec<(FailoverNode, CandidateAction)> {
         let primary = self.primary.current();
         let primary_name = primary.name().to_string();
@@ -418,28 +454,40 @@ impl FailoverProvider {
             .get(&primary_name)
             .cloned()
             .unwrap_or_default();
-        let mut out = vec![FailoverNode {
+        let primary_node = FailoverNode {
             name: primary_name.clone(),
             models: primary_models,
             provider: primary,
-            tier: EndpointTier::Unknown,
-        }];
+            tier: self.primary_tier,
+        };
+        let mut fallbacks: Vec<FailoverNode> = Vec::with_capacity(self.fallbacks.len());
         for fb in &self.fallbacks {
             if fb.name == primary_name {
                 continue; // dedup: the primary slot already covers it
             }
-            out.push(fb.clone());
+            fallbacks.push(fb.clone());
         }
         let (mode, allow_escalation) = self.route_preference();
         let targets = self.route_targets();
-        order_candidates(
-            out,
+
+        // Classify the primary in place. A `Skip` (a hard-guardrail mode with
+        // escalation off, on a cross-tier pin) drops it so the chain falls
+        // straight through to the fallbacks; `Allow`/`CrossTier` keep it first.
+        let mut out: Vec<(FailoverNode, CandidateAction)> =
+            Vec::with_capacity(fallbacks.len() + 1);
+        match classify_candidate(mode, primary_node.tier, allow_escalation) {
+            CandidateAction::Skip => {}
+            action => out.push((primary_node, action)),
+        }
+        out.extend(order_candidates(
+            fallbacks,
             mode,
             allow_escalation,
             &targets,
             |n| n.tier,
             |n| n.name.as_str(),
-        )
+        ));
+        out
     }
 
     /// Whether `name` may be tried now. Transitions `Open → HalfOpen` when the
@@ -1294,5 +1342,137 @@ mod tests {
         // Cloud→local degrade is ungated: the approver was never consulted.
         assert_eq!(approver.call_count(), 0);
         assert_eq!(local.call_count(), 1);
+    }
+
+    // --- hard-guardrail: route mode gates an explicit cross-tier pin ---------
+
+    /// Build a chain whose *primary* slot carries an explicit tier — the shape
+    /// of a per-`provider_hint` / `select_model(provider=…)` override.
+    fn build_pinned(
+        primary: Arc<dyn AiProvider>,
+        primary_tier: EndpointTier,
+        fallbacks: Vec<FailoverNode>,
+        mode: RouteMode,
+        allow_escalation: bool,
+        approval: Option<Arc<dyn ApprovalRequester>>,
+    ) -> FailoverProvider {
+        FailoverProvider::new(
+            Arc::new(StaticDefault::new(primary)),
+            fallbacks,
+            HashMap::new(),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        )
+        .with_route(mode, allow_escalation, approval)
+        .with_primary_tier(primary_tier)
+    }
+
+    #[tokio::test]
+    async fn always_local_pinned_cloud_borrows_with_approval() {
+        // An explicit cloud pin (the primary) under AlwaysLocal is no longer
+        // silently allowed: it must pass the borrow-cloud approval. Approved →
+        // the pin is honoured (dialed first), the local fallback untouched.
+        let cloud = ScriptProvider::ok("openai");
+        let local = ScriptProvider::ok("ollama");
+        let approver = MockApprover::new(true);
+        let fp = build_pinned(
+            cloud.clone(),
+            EndpointTier::Cloud,
+            vec![tiered_node("ollama", local.clone(), EndpointTier::Local)],
+            RouteMode::AlwaysLocal,
+            true,
+            Some(approver.clone()),
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "openai");
+        assert_eq!(approver.call_count(), 1);
+        assert_eq!(local.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn always_local_pinned_cloud_denied_falls_to_local() {
+        // Denied borrow-cloud → the cloud pin is skipped and the chain degrades
+        // to the local fallback. The pin never reaches the wire.
+        let cloud = ScriptProvider::ok("openai");
+        let local = ScriptProvider::ok("ollama");
+        let approver = MockApprover::new(false);
+        let fp = build_pinned(
+            cloud.clone(),
+            EndpointTier::Cloud,
+            vec![tiered_node("ollama", local.clone(), EndpointTier::Local)],
+            RouteMode::AlwaysLocal,
+            true,
+            Some(approver.clone()),
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "ollama");
+        assert_eq!(approver.call_count(), 1);
+        assert_eq!(cloud.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn always_local_pinned_cloud_no_escalation_skips_to_local_ungated() {
+        // Escalation off: the cloud pin is dropped (Skip) with no approval
+        // prompt at all — a hard wall, falling straight through to local.
+        let cloud = ScriptProvider::ok("openai");
+        let local = ScriptProvider::ok("ollama");
+        let approver = MockApprover::new(false); // must not be consulted
+        let fp = build_pinned(
+            cloud.clone(),
+            EndpointTier::Cloud,
+            vec![tiered_node("ollama", local.clone(), EndpointTier::Local)],
+            RouteMode::AlwaysLocal,
+            false,
+            Some(approver.clone()),
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "ollama");
+        assert_eq!(approver.call_count(), 0);
+        assert_eq!(cloud.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn auto_mode_pinned_cloud_primary_used_directly() {
+        // The guardrail is scoped to AlwaysLocal: in Auto an explicit cloud pin
+        // is dialed directly, no approval consulted (regression guard).
+        let cloud = ScriptProvider::ok("openai");
+        let local = ScriptProvider::ok("ollama");
+        let approver = MockApprover::new(false);
+        let fp = build_pinned(
+            cloud.clone(),
+            EndpointTier::Cloud,
+            vec![tiered_node("ollama", local.clone(), EndpointTier::Local)],
+            RouteMode::Auto,
+            false,
+            Some(approver.clone()),
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "openai");
+        assert_eq!(approver.call_count(), 0);
+        assert_eq!(local.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn always_local_unknown_primary_served_without_gate() {
+        // The operator's configured default (the global chain, primary tier
+        // Unknown) stays always-allowed under AlwaysLocal — only *pins* carry a
+        // real tier. No approval is consulted for the default.
+        let primary = ScriptProvider::ok("default");
+        let approver = MockApprover::new(false);
+        let fp = build_routed(
+            primary.clone(),
+            vec![],
+            RouteMode::AlwaysLocal,
+            true,
+            Some(approver.clone()),
+        );
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "default");
+        assert_eq!(approver.call_count(), 0);
     }
 }
