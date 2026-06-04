@@ -67,9 +67,9 @@ pub use compression::{
     CompressionTrigger, DetectionResult, SignalDetector, SignalKeywords,
 };
 pub use context::{
-    compute_parent_path, CompressionResult, CompressionSession, ContextAnchor, FactSource,
-    FactSpecificity, FactStats, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer, NoteType,
-    TemporalScope, PRESET_PATHS,
+    compute_parent_path, CognitiveLayer, CompressionResult, CompressionSession, ContextAnchor,
+    FactSource, FactSpecificity, FactStats, MemoryCategory, MemoryEntry, MemoryFact, MemoryLayer,
+    NoteType, TemporalScope, PRESET_PATHS,
 };
 pub use context_comptroller::{
     ArbitratedContext, ComptrollerConfig, ContextComptroller, RetentionMode, TokenBudget,
