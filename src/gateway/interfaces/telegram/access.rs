@@ -141,10 +141,10 @@ impl AccessController {
 
     /// Generate a new 6-character pairing code, cleaning up expired entries.
     pub async fn generate_code(&self) -> String {
-        use rand::Rng;
+        use rand::RngExt;
 
-        let code: String = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
+        let code: String = rand::rng()
+            .sample_iter(&rand::distr::Alphanumeric)
             .take(6)
             .map(char::from)
             .collect::<String>()

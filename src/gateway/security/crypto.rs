@@ -6,12 +6,20 @@
 
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hmac::{Hmac, Mac};
-use rand::rngs::OsRng;
+use rand::rand_core::UnwrapErr;
+use rand::rngs::SysRng;
+use rand::{Rng, RngExt};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use thiserror::Error;
 
 type HmacSha256 = Hmac<Sha256>;
+
+/// OS-backed CSPRNG. Panics only if the operating system entropy source fails,
+/// matching the previous `OsRng` behavior.
+fn os_rng() -> UnwrapErr<SysRng> {
+    UnwrapErr(SysRng)
+}
 
 /// Errors from cryptographic operations
 #[derive(Debug, Error)]
@@ -49,7 +57,12 @@ impl std::fmt::Display for DeviceFingerprint {
 ///
 /// Returns (signing_key_bytes, verifying_key_bytes)
 pub fn generate_keypair() -> ([u8; 32], [u8; 32]) {
-    let signing_key = SigningKey::generate(&mut OsRng);
+    // An Ed25519 signing key is a 32-byte seed; sourcing the seed bytes
+    // directly (instead of `SigningKey::generate`) keeps this code decoupled
+    // from ed25519-dalek's pinned rand_core 0.6 RNG trait version.
+    let mut seed = [0u8; 32];
+    os_rng().fill_bytes(&mut seed);
+    let signing_key = SigningKey::from_bytes(&seed);
     let verifying_key = signing_key.verifying_key();
     (signing_key.to_bytes(), verifying_key.to_bytes())
 }
@@ -105,8 +118,7 @@ pub fn hmac_verify(secret: &[u8], token: &str, signature: &str) -> Result<(), Cr
 /// Generate a random 32-byte secret
 pub fn generate_secret() -> [u8; 32] {
     let mut secret = [0u8; 32];
-    use rand::RngCore;
-    OsRng.fill_bytes(&mut secret);
+    os_rng().fill_bytes(&mut secret);
     secret
 }
 
@@ -116,11 +128,10 @@ pub const PAIRING_CODE_CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 /// Generate an 8-character Base32 pairing code (excluding confusing chars)
 pub fn generate_pairing_code() -> String {
-    use rand::Rng;
-    let mut rng = OsRng;
+    let mut rng = os_rng();
     (0..PAIRING_CODE_LENGTH)
         .map(|_| {
-            let idx = rng.gen_range(0..PAIRING_CODE_CHARSET.len());
+            let idx = rng.random_range(0..PAIRING_CODE_CHARSET.len());
             PAIRING_CODE_CHARSET[idx] as char
         })
         .collect()

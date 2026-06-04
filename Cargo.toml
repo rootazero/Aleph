@@ -144,7 +144,7 @@ percent-encoding = "2.3"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 ipnet = "2"
-rand = "0.8"
+rand = "0.10"
 reqwest = { version = "0.12", features = ["blocking", "json", "multipart", "native-tls", "stream"] }
 serde_json = "1.0"
 toml = "0.8"
@@ -291,7 +291,7 @@ filetime = "0.2"
 serial_test = "3.0"
 aleph-protocol = { path = "shared/protocol" }
 proptest = "1.4"
-rand = "0.8"
+rand = "0.10"
 http-body-util = "0.1"
 wiremock = "0.6"
 insta = "1"

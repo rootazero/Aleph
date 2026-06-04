@@ -62,13 +62,13 @@ impl SecretsCrypto {
     /// Returns an `EncryptedData` containing the ciphertext, nonce, and salt.
     /// Each call generates a fresh random salt and nonce.
     pub fn encrypt(&self, plaintext: &str) -> Result<EncryptedData, SecretError> {
-        use rand::RngCore;
+        use rand::Rng;
 
         // Generate random salt and nonce
         let mut salt = [0u8; 32];
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut salt);
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        rand::rng().fill_bytes(&mut salt);
+        rand::rng().fill_bytes(&mut nonce_bytes);
 
         let key = self.derive_key(&salt)?;
         let cipher = Aes256Gcm::new_from_slice(key.as_slice())

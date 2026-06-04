@@ -312,7 +312,7 @@ async fn h_t3_panic_path_emits_leaked_true_event() {
 #[tokio::test]
 #[serial]
 async fn h_t4_no_leaked_dirs_after_10_random_cancellations() {
-    use rand::Rng;
+    use rand::RngExt;
 
     if !is_git_repo() {
         eprintln!("h_t4_no_leaked_dirs_after_10_random_cancellations: skipped (not a git repo)");
@@ -326,7 +326,7 @@ async fn h_t4_no_leaked_dirs_after_10_random_cancellations() {
             .await
             .expect("create");
         paths.push(h.path().to_path_buf());
-        if rand::thread_rng().gen_bool(0.5) {
+        if rand::rng().random_bool(0.5) {
             h.cleanup().await.expect("explicit cleanup");
         }
         // h dropped here if not explicitly cleaned up — Drop safety-net fires

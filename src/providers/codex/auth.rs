@@ -71,9 +71,9 @@ struct PkceCodes {
 
 /// Generate PKCE codes (code_verifier + S256 code_challenge)
 fn generate_pkce() -> PkceCodes {
-    use rand::RngCore;
+    use rand::Rng;
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     let code_verifier = URL_SAFE_NO_PAD.encode(bytes);
 
     let mut hasher = Sha256::new();
@@ -88,9 +88,9 @@ fn generate_pkce() -> PkceCodes {
 
 /// Generate a random state parameter
 fn generate_state() -> String {
-    use rand::RngCore;
+    use rand::Rng;
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 

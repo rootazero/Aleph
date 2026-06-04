@@ -3,7 +3,7 @@
 //! Wraps untrusted external content with boundary markers before LLM injection.
 //! Follows R8 (LLM Sovereignty) — marks patterns but lets LLM decide trust.
 
-use rand::Rng;
+use rand::RngExt;
 
 /// Source of external content being sanitized.
 ///
@@ -149,7 +149,7 @@ const FORMAT_MARKERS: &[&str] = &[
 
 /// Generate a random 8-byte hex ID.
 fn generate_boundary_id() -> String {
-    let bytes = rand::thread_rng().gen::<[u8; 8]>();
+    let bytes = rand::rng().random::<[u8; 8]>();
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
