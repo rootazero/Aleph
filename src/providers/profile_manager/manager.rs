@@ -187,8 +187,11 @@ impl AuthProfileManager {
             }
         }
 
-        // All profiles are in cooldown
-        if all_in_cooldown {
+        // All profiles are in cooldown. Only treat this as a cooldown condition
+        // when at least one candidate was actually in cooldown — profiles
+        // skipped for being disabled / over-budget / key-unresolvable are not
+        // "in cooldown" and must surface as NoProfilesAvailable instead.
+        if all_in_cooldown && best_cooldown_profile.is_some() {
             // Return the profile with shortest cooldown if available
             if let Some((profile_id, config, remaining_ms)) = best_cooldown_profile {
                 warn!(
