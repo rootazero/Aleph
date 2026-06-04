@@ -1,0 +1,7 @@
+# Pin the build toolchain for the whole workspace.
+#
+# MSRV is 1.95 (sysinfo 0.39 requires it); we pin a concrete stable ≥ MSRV so
+# local builds and CI are reproducible. Bump in lockstep with `rust-version`
+# in Cargo.toml when raising the minimum.
+[toolchain]
+channel = "1.96.0"

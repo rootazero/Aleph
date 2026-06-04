@@ -2,7 +2,7 @@
 
 > 你的个人 AI 助手 —— **原生桌面体验，远程随时可达**。
 
-[![Rust](https://img.shields.io/badge/Rust-1.92%2B-b7410e)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.95%2B-b7410e)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)]()
 
@@ -159,7 +159,7 @@ App 已内置 `aleph-server`。首次启动会拉起守护进程、注册开机�
 
 ## 从源码构建
 
-前置条件：Rust 1.92+、[`just`](https://github.com/casey/just)、Node.js、`wasm-bindgen`、Swift 工具链（仅 macOS）。
+前置条件：Rust 1.95+、[`just`](https://github.com/casey/just)、Node.js、`wasm-bindgen`、Swift 工具链（仅 macOS）。
 
 ```bash
 git clone https://github.com/rootazero/Aleph.git

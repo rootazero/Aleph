@@ -2,7 +2,7 @@
 
 > Your personal AI assistant — **native on your desktop, reachable anywhere**.
 
-[![Rust](https://img.shields.io/badge/Rust-1.92%2B-b7410e)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/Rust-1.95%2B-b7410e)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)]()
 
@@ -159,7 +159,7 @@ Everything lives under `~/.aleph/`:
 
 ## Build from source
 
-Prerequisites: Rust 1.92+, [`just`](https://github.com/casey/just), Node.js, `wasm-bindgen`, Swift toolchain (macOS only).
+Prerequisites: Rust 1.95+, [`just`](https://github.com/casey/just), Node.js, `wasm-bindgen`, Swift toolchain (macOS only).
 
 ```bash
 git clone https://github.com/rootazero/Aleph.git

@@ -163,6 +163,11 @@
 | `just verify-build` | CI 验证三平台 App 能否正常构建（build-only，不打 tag、不发布） |
 | `just release YY.M.D` | **发版**: 更新 VERSION + 提交推送 + 触发 GitHub workflow（需先写 changelog） |
 
+### Rust 工具链
+
+- **MSRV = 1.95**（由 `sysinfo 0.39` 决定），在 `Cargo.toml` 的 `[workspace.package]` 与 `[package]` 两处 `rust-version` 声明。
+- 仓库根的 `rust-toolchain.toml` 钉住具体 stable（当前 `1.96.0`），本地与 CI 自动使用同一工具链——无需 `rustup default` 或 `cargo +<ver>`。抬高 MSRV 时同步更新这两处。
+
 > **分发形态**: Aleph 以三平台原生桌面 App 发布（macOS `.dmg` / Windows `.msi` / Linux `.deb`）。App 通过 Tauri `externalBin` 内置 `aleph-server` 守护进程，首次启动自动拉起并接管旧 daemon；不再提供 bash / PowerShell 脚本安装。
 
 > **⚠️ Panel ↔ Daemon 资源嵌入链**: Panel UI（`interfaces/webchat/dist/*`）通过 `rust_embed`（`src/gateway/control_plane/assets.rs`）在 **`aleph-server` 编译时** 静态嵌入到二进制；运行中的 daemon **不会** 从磁盘读取 dist/*。改完 panel 源码后看不到效果，几乎都是漏了重编 binary 这一步。完整刷新链：
