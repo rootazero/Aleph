@@ -5,7 +5,7 @@
 | File | Format | Hot-reload | Description |
 |------|--------|------------|-------------|
 | `~/.aleph/config.toml` | TOML | Yes (fswatch, 500ms debounce) | Main configuration |
-| `~/.aleph/mcp_config.json` | JSON | No (call mcp_manage after edit) | MCP server definitions |
+| `~/.aleph/mcp_config.json` | JSON | No (restart Aleph after edit) | MCP server definitions |
 | `~/.aleph/agents/{id}/` | Directory | On next agent resolution | Per-agent workspace |
 | `~/.aleph/skills/` | Directories | On next skill discovery | Installed skills |
 | `~/.aleph/user_profile.md` | Markdown | On next session | User preferences |
@@ -16,20 +16,21 @@
 2. **Read**: Read current file content
 3. **Edit**: Make changes, show diff to user, confirm before writing
 4. **Verify**: Read back file, check format is valid
-5. **Reload**: config.toml auto-reloads; MCP needs `mcp_manage`; agents reload on resolution
+5. **Reload**: config.toml auto-reloads; `mcp_config.json` needs an Aleph restart (no hot-reload, no management tool); agents reload on resolution
 
 ## Secret Management
 
 API keys and credentials are stored in an encrypted vault, never in config files.
 
-- **Store**: `vault_store(action="store", key="provider:openai", secret="sk-...")`
-- **Delete**: `vault_store(action="delete", key="provider:openai")`
+- **Store**: `vault_store(action="store", key="ai:openai", secret="sk-...")`
+- **Delete**: `vault_store(action="delete", key="ai:openai")`
 - **List**: `vault_store(action="list")` — returns key names only, never values
 
-Key naming conventions:
-- LLM providers: `provider:{name}` (e.g., `provider:openai`)
+Key naming conventions (these are the exact prefixes the runtime reads):
+- LLM providers: `ai:{name}` (e.g., `ai:openai`)
 - Generation providers: `gen:{name}` (e.g., `gen:stability`)
-- Channels: `channel:{type}:{id}` (e.g., `channel:telegram:bot1`)
+- Embedding providers: `embed:{id}` (e.g., `embed:openai`)
+- Channels: `channel:{instance_id}:{field}` (e.g., `channel:telegram:bot_token`)
 
 ## Config Sections (config.toml)
 

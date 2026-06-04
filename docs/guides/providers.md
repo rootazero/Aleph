@@ -2,11 +2,11 @@
 
 ## File Path
 - Main: `~/.aleph/config.toml` section `[providers.<name>]`
-- API keys: encrypted vault (key: `provider:{name}`)
+- API keys: encrypted vault (key: `ai:{name}`)
 
 ## Operation Rules
 1. Before modification: `cp ~/.aleph/config.toml ~/.aleph/config.toml.bak`
-2. API keys via `vault_store(action="store", key="provider:<name>", secret="<key>")`
+2. API keys via `vault_store(action="store", key="ai:<name>", secret="<key>")`
 3. Never write API keys to config.toml — the `api_key` field is runtime-only
 4. After modification: auto-reloads via fswatch, no restart needed
 

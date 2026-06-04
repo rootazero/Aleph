@@ -53,18 +53,27 @@ default = "allow"              # "allow" | "deny" | "ask"
 
 [policies.retry]
 max_retries = 3
-backoff_ms = 1000
+initial_backoff_ms = 1000      # field is initial_backoff_ms (not backoff_ms)
+backoff_multiplier = 2.0
+max_backoff_ms = 30000
 
 [policies.web_fetch]
-enabled = true
 timeout_seconds = 30
-max_body_bytes = 1048576       # 1MB
+max_content_length = 10000     # max chars of fetched body (there is no `enabled`/`max_body_bytes` field)
 
-[policies.memory]
-auto_save = true
+# [policies.memory] has no scalar fields — it is composed of subsections:
+[policies.memory.compression]
+turn_threshold = 40
+[policies.memory.ai_retrieval]
+timeout_ms = 5000
 ```
 
 ## [dispatcher]
+
+> ⚠️ **Legacy / inert.** The dispatcher was dissolved in the Dispatcher-dissolution
+> refactor (CLAUDE.md R7). This section still parses for backward compatibility but
+> has no runtime consumer — tool routing is now handled by the LLM in the main loop.
+> Setting these fields has no effect.
 
 ```toml
 [dispatcher]

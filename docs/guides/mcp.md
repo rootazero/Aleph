@@ -5,8 +5,8 @@
 
 ## Operation Rules
 1. Before modification: `cp ~/.aleph/mcp_config.json ~/.aleph/mcp_config.json.bak`
-2. After editing: call `mcp_manage` tool to restart affected servers
-3. File is NOT auto-reloaded — mcp_manage triggers process restart
+2. After editing: restart Aleph for changes to take effect (`aleph-server stop` then `start`)
+3. File is NOT auto-reloaded and there is no MCP management tool — a restart is the only way to apply changes
 
 ## Structure
 
@@ -51,10 +51,10 @@
 ## Common Operations
 
 ### Add a new MCP server
-Add entry to `servers` object, then call `mcp_manage` to start it.
+Add entry to `servers` object, then restart Aleph to start it.
 
 ### Remove an MCP server
-Delete entry from `servers` object, then call `mcp_manage` to stop it.
+Delete entry from `servers` object, then restart Aleph to stop it.
 
 ### Disable without removing
 Set `"auto_start": false` — server won't start on boot.
@@ -63,4 +63,4 @@ Set `"auto_start": false` — server won't start on boot.
 - Environment variables use `${VAR}` syntax — unknown vars left as-is
 - For Node.js servers, use `"requires_runtime": "node"`
 - The `version` field must be `1`
-- JSON must be valid — use `read_file` after writing to verify
+- JSON must be valid — use `file_read` (or `bash` cat) after writing to verify

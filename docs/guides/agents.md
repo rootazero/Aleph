@@ -95,7 +95,7 @@ Use the `remember` tool with action=add/replace/remove for entry-level memory ed
 MEMORY.md is managed by the curated memory module, not as a static identity file.
 
 ## Caveats
-- Model resolution: agent.model > defaults.model > profile.model > "claude-opus-4-6"
+- Model resolution: agent.model > defaults.model > profile.model > `""` (empty terminal fallback — signals the provider registry to use its own default model; there is no hardcoded model name)
 - Skills resolution: agent.skills > defaults.skills > ["*"]
 - Use `agent_create` tool for new agents — it handles directory setup + registration
 - SOUL.md supports JSON, TOML, YAML, or Markdown with YAML frontmatter

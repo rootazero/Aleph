@@ -16,7 +16,7 @@ enabled = true               # Master switch for cron system
 db_path = "..."              # SQLite store for jobs (defaults under ~/.aleph/data)
 check_interval_secs = 60     # Scheduler tick interval
 max_concurrent_jobs = 5      # Max jobs running simultaneously
-job_timeout_secs = 300       # Per-job timeout
+job_timeout_secs = 900       # Per-job timeout (default 900)
 ```
 
 ## Job Management
@@ -26,7 +26,7 @@ Individual cron jobs are managed via the `cron_manage` tool, not config files:
 ```
 cron_manage(action="create", name="Morning Report",
   prompt="Generate today's task summary",
-  schedule={"type":"cron","expr":"0 9 * * *","timezone":"Asia/Shanghai"})
+  schedule={"type":"cron","expr":"0 0 9 * * *","timezone":"Asia/Shanghai"})
 
 cron_manage(action="list")
 
@@ -41,9 +41,12 @@ cron_manage(action="disable", job_id="abc-123")
 
 | Type | Description | Example |
 |------|-------------|---------|
-| `cron` | Standard cron expression | `{"type":"cron","expr":"0 9 * * *"}` |
-| `every` | Interval-based | `{"type":"every","interval_ms":3600000}` |
+| `cron` | Standard **6-field** cron (sec min hour dom mon dow) | `{"type":"cron","expr":"0 0 9 * * *"}` (daily at 09:00) |
+| `every` | Interval-based (field is `every_ms`, min 1000) | `{"type":"every","every_ms":3600000}` |
 | `at` | One-shot at specific time | `{"type":"at","at_ms":1711944000000}` |
+
+> **Cron is 6-field, not 5** — the leading field is **seconds**. A 5-field
+> expression (`"0 9 * * *"`) is rejected. Daily-at-09:00 = `"0 0 9 * * *"`.
 
 ## Manual Execution
 

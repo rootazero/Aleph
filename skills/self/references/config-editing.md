@@ -41,9 +41,11 @@ default_hotkey
 [orchestrator]
 [subagent]
 [task_routing]
+[route]                    # local-vs-cloud failover routing
 [group_chat]
 [cron]
 [heartbeat]
+[tasks_reaper]             # alias [task_reaper]
 [personas]
 [evolution]
 [media]
@@ -68,6 +70,7 @@ default_hotkey
 [fallback_provider]
 [context_budget]
 [resume]
+[projects]                 # project-workspace filesystem scope
 ```
 
 ## Process Management (CRITICAL)

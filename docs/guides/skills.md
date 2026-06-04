@@ -46,7 +46,7 @@ Include step-by-step guidance, rules, and examples.
 ## Common Operations
 
 ### Install from ClawHub
-Use the `clawhub` tool: `clawhub(action="install", skill_id="skill-name")`
+Use the `clawhub` tool: `clawhub(action="install", slug="owner/skill-name")`
 
 ### Manual install
 1. Create directory: `mkdir -p ~/.aleph/skills/my-skill`

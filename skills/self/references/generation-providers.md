@@ -1,6 +1,6 @@
 # Generation Provider Configuration
 
-## provider_type Values (EXACT — unknown values cause startup error)
+## provider_type Values (an unknown id is rejected when the provider is first built/used — a `GenerationError`, not a startup failure)
 
 | provider_type | Aliases | Category | Notes |
 |--------------|---------|----------|-------|
@@ -14,7 +14,10 @@
 | `"elevenlabs"` | — | Speech | ElevenLabs TTS |
 | `"google_veo"` | `"veo"` | Video | Google Veo |
 
-Unknown `provider_type` causes startup error with supported values listed.
+Config load only checks `provider_type` is non-empty. An unknown id is caught
+later, when the provider is first built/used, surfacing a `GenerationError` (not
+a startup error). The factory accepts more ids than listed above (e.g. `whisper`,
+`deepgram`, `azure_speech`, `suno`, `bfl`/`flux`, `cartesia`, `fal`).
 
 ## base_url: ResolvedUrl Rules
 
@@ -56,7 +59,7 @@ Custom URLs have no secondary endpoint (no image edit, no STT).
 | `default_speech_provider = "name"` | ~~`default_speech = "..."`~~ |
 | `default_audio_provider = "name"` | ~~`default_audio = "..."`~~ |
 
-`capabilities` values: `"image"`, `"video"`, `"speech"`, `"audio"` (only these 4).
+`capabilities` values: `"image"`, `"video"`, `"speech"`, `"audio"`, `"transcription"`.
 
 ## Complete Template
 

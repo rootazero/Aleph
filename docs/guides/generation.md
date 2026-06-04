@@ -71,9 +71,9 @@ style = "vivid"           # vivid | natural
 2. Delete API key: `vault_store(action="delete", key="gen:<name>")`
 
 ## Caveats
-- `provider_type` is REQUIRED and must be an exact id; `type` / `provider` are silently ignored. Unknown values cause a startup error.
+- `provider_type` is REQUIRED and must be a non-empty exact id; `type` / `provider` are silently ignored. Config load only checks it is non-empty — an unknown id is rejected later, when the provider is first built/used (a `GenerationError`), not at startup.
 - `models` is an array; singular `model` works as an alias but the array is canonical.
-- `capabilities` is an array — only "image", "video", "speech", "audio".
-- Default-selection fields carry the full `_provider` suffix: `default_image_provider`, `default_speech_provider`, `default_video_provider`, `default_audio_provider` (NOT `default_image` etc.).
-- API keys use `gen:{name}` vault convention (not `provider:{name}`).
+- `capabilities` is an array — one or more of `"image"`, `"video"`, `"speech"`, `"audio"`, `"transcription"`.
+- Default-selection fields carry the full `_provider` suffix: `default_image_provider`, `default_speech_provider`, `default_video_provider`, `default_audio_provider`, `default_transcription_provider` (NOT `default_image` etc.).
+- API keys use `gen:{name}` vault convention (not `ai:{name}`).
 - Generation providers need a restart after adding/modifying.
