@@ -7,14 +7,14 @@
 // - User prompts (from config.toml rules)
 // - Skills (from ~/.aleph/skills/)
 //
-// The command tree is exposed via UniFFI for Swift UI rendering.
+// The command tree is exposed to UI clients as `CommandInfo` JSON over
+// JSON-RPC (see `gateway::handlers::commands`).
 
-mod dispatcher;
 mod parser;
 mod types;
 
 pub use parser::{CommandContext, CommandParser, ParsedCommand};
-pub use types::{CommandExecutionResult, CommandNode, CommandTriggers, CommandType};
+pub use types::{CommandNode, CommandType};
 
 #[cfg(test)]
 mod tests {
@@ -44,37 +44,8 @@ mod tests {
     }
 
     #[test]
-    fn test_command_execution_result() {
-        let success = CommandExecutionResult::success("Done".to_string());
-        assert!(success.success);
-        assert_eq!(success.message, "Done");
-
-        let error = CommandExecutionResult::error("Failed".to_string());
-        assert!(!error.success);
-        assert_eq!(error.message, "Failed");
-    }
-
-    #[test]
-    fn test_command_triggers_from_manual() {
-        let triggers = CommandTriggers::from_manual(vec!["test".to_string()]);
-        assert_eq!(triggers.len(), 1);
-        assert!(triggers.has_triggers());
-        assert!(!triggers.is_empty());
-    }
-
-    #[test]
     fn test_command_type_parse_empty() {
         assert_eq!(CommandType::parse(""), None);
         assert_eq!(CommandType::parse("unknown"), None);
-    }
-
-    #[test]
-    fn test_execution_result_error_builder() {
-        let result = CommandExecutionResult::error("Error")
-            .with_path("/test")
-            .with_argument("arg");
-        assert!(!result.success);
-        assert_eq!(result.command_path, Some("/test".to_string()));
-        assert_eq!(result.argument, Some("arg".to_string()));
     }
 }
