@@ -102,6 +102,13 @@ pub struct CodeExecArgs {
     /// presented in the approval prompt so the user can decide.
     #[serde(default)]
     pub extra_writable_paths: Vec<std::path::PathBuf>,
+    /// Optional natural-language reason for *why* an escalation
+    /// (`allow_network` / `allow_subprocess` / `extra_writable_paths`) is
+    /// needed. Surfaced to the human approver alongside the requested
+    /// capabilities so they can make an informed decision. Ignored when the
+    /// call requests no escalation. codex `justification` parity.
+    #[serde(default)]
+    pub justification: Option<String>,
 }
 
 impl CodeExecArgs {
@@ -207,7 +214,10 @@ stray binary control bytes are stripped automatically — no need for
 `--color=never` or piping through `cat`.
 
 Capability escalations (`allow_network`, `allow_subprocess`,
-`extra_writable_paths`) require approval the first time per session.
+`extra_writable_paths`) require approval the first time per session. When you
+escalate, pass `justification` with a one-line reason WHY (e.g. "fetch crates
+from crates.io for cargo build") — it is shown to the human approver so they
+can decide; calls without an escalation can omit it.
 
 Examples:
 - Python: {"language": "python", "code": "print('Hello, World!')"}
@@ -316,7 +326,26 @@ Examples:
             timeout: Some(Duration::from_secs(timeout_secs)),
         };
 
-        let result = sandbox.execute(cmd).await;
+        // Carry the model's escalation justification to the approval prompt via
+        // the EXEC_JUSTIFICATION task-local (read by `WorkspaceSandbox` when it
+        // formats the human approval request). Only scope it when the model
+        // actually supplied a non-blank reason — otherwise the prompt stays
+        // byte-identical to its pre-justification form. Setting it innermost
+        // (right around `execute`) means the background path inherits it too,
+        // since `spawn_background` re-enters this method inside its task.
+        let result = match args
+            .justification
+            .as_deref()
+            .map(str::trim)
+            .filter(|j| !j.is_empty())
+        {
+            Some(why) => {
+                crate::sandbox::context::EXEC_JUSTIFICATION
+                    .scope(why.to_string(), sandbox.execute(cmd))
+                    .await
+            }
+            None => sandbox.execute(cmd).await,
+        };
         Ok(sandbox_result_to_output(
             result,
             language_label,
@@ -608,6 +637,10 @@ mod tests {
             d.contains("stdout_truncated_bytes"),
             "should mention the explicit truncation byte fields"
         );
+        assert!(
+            d.contains("justification"),
+            "should teach passing a justification when escalating"
+        );
     }
 
     #[tokio::test]
@@ -622,6 +655,7 @@ mod tests {
                 allow_network: false,
                 allow_subprocess: false,
                 extra_writable_paths: Vec::new(),
+                justification: None,
             })
             .await
             .expect("tool returns structured failure, not Err");
@@ -647,6 +681,7 @@ mod tests {
                 allow_network: false,
                 allow_subprocess: false,
                 extra_writable_paths: Vec::new(),
+                justification: None,
             })
             .await
             .unwrap();
@@ -675,6 +710,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -715,6 +751,7 @@ mod tests {
                     allow_network: true,
                     allow_subprocess: true,
                     extra_writable_paths: vec!["/tmp/out".into()],
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -750,6 +787,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -782,6 +820,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -818,6 +857,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -852,6 +892,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -900,6 +941,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -956,6 +998,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -1004,6 +1047,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -1050,6 +1094,7 @@ mod tests {
                     allow_network: false,
                     allow_subprocess: false,
                     extra_writable_paths: Vec::new(),
+                    justification: None,
                 })
                 .await
                 .unwrap()
@@ -1058,5 +1103,68 @@ mod tests {
         assert_eq!(out.stdout_truncated_bytes, 4242);
         assert_eq!(out.stderr_truncated_bytes, 7);
         assert_eq!(out.truncated, Some(true));
+    }
+
+    /// A sandbox that records whatever `current_justification()` reports during
+    /// `execute` — proves the tool scopes the EXEC_JUSTIFICATION task-local
+    /// around the sandbox call (the approval-prompt enrichment depends on this).
+    struct JustificationProbe(Arc<std::sync::Mutex<Option<String>>>);
+    #[async_trait::async_trait]
+    impl Sandbox for JustificationProbe {
+        async fn execute(
+            &self,
+            _cmd: SandboxCommand,
+        ) -> std::result::Result<SandboxOutput, SandboxError> {
+            *self.0.lock().unwrap() = crate::sandbox::current_justification();
+            Ok(SandboxOutput {
+                exit_code: Some(0),
+                ..Default::default()
+            })
+        }
+    }
+
+    async fn justification_seen_by_sandbox(justification: Option<String>) -> Option<String> {
+        let seen = Arc::new(std::sync::Mutex::new(None));
+        let sandbox: Arc<dyn Sandbox> = Arc::new(JustificationProbe(seen.clone()));
+        let tool = CodeExecTool::new().with_sandbox(sandbox);
+        SESSION_ID
+            .scope(sid(), async {
+                tool.call(CodeExecArgs {
+                    language: Language::Shell,
+                    code: "curl https://crates.io".to_string(),
+                    working_dir: None,
+                    timeout: Some(5),
+                    allow_network: true,
+                    allow_subprocess: false,
+                    extra_writable_paths: Vec::new(),
+                    justification,
+                })
+                .await
+                .unwrap()
+            })
+            .await;
+        let v = seen.lock().unwrap().clone();
+        v
+    }
+
+    #[tokio::test]
+    async fn justification_is_scoped_around_execute() {
+        let seen = justification_seen_by_sandbox(Some("fetch deps".to_string())).await;
+        assert_eq!(seen.as_deref(), Some("fetch deps"));
+    }
+
+    #[tokio::test]
+    async fn absent_justification_leaves_task_local_unset() {
+        assert_eq!(justification_seen_by_sandbox(None).await, None);
+    }
+
+    #[tokio::test]
+    async fn blank_justification_is_not_scoped() {
+        // Whitespace-only ⇒ filtered out, never scoped — approver falls back to
+        // the capabilities-only prompt.
+        assert_eq!(
+            justification_seen_by_sandbox(Some("   \n  ".to_string())).await,
+            None
+        );
     }
 }

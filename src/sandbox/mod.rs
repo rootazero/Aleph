@@ -40,7 +40,7 @@ pub use capabilities::{NetworkPolicy, SandboxCapabilities};
 pub use command::{SandboxCommand, SandboxError, SandboxOutput};
 pub use command_policy::{CommandPolicy, CommandPolicyHook};
 pub use config::SandboxConfig;
-pub use context::current_session;
+pub use context::{current_justification, current_session};
 pub use driver::{OsSandboxDriverTrait, OsSandboxProfile};
 pub use factory::{build_sandbox, NoopSandbox};
 pub use hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
