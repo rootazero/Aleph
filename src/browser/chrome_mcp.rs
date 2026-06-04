@@ -246,13 +246,21 @@ impl ChromeMcpDriver {
             }
             #[cfg(target_os = "windows")]
             {
+                // `tasklist` exits 0 even when no process matches (it prints an
+                // "INFO: No tasks…" line), so the command's success status says
+                // nothing about whether Chrome is running. Capture stdout and
+                // look for the image name instead.
                 std::process::Command::new("tasklist")
+                    .arg("/NH")
                     .arg("/FI")
                     .arg("IMAGENAME eq chrome.exe")
-                    .stdout(Stdio::null())
                     .stderr(Stdio::null())
-                    .status()
-                    .map(|s| s.success())
+                    .output()
+                    .map(|o| {
+                        String::from_utf8_lossy(&o.stdout)
+                            .to_ascii_lowercase()
+                            .contains("chrome.exe")
+                    })
                     .unwrap_or(false)
             }
             #[cfg(not(any(unix, target_os = "windows")))]
