@@ -282,8 +282,21 @@ impl ReadSkillTool {
         }
 
         // Read file content
-        let content = fs::read_to_string(&file_path)
+        let raw_content = fs::read_to_string(&file_path)
             .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read file: {}", e)))?;
+
+        // Preprocess Markdown instruction files: expand `${ALEPH_SKILL_DIR}` /
+        // `${ALEPH_SESSION_ID}` template variables and, when the skill opts in
+        // via `allow-inline-shell: true`, splice in bounded inline-shell output.
+        // Non-Markdown resources (scripts, data) are returned verbatim so their
+        // bytes are never altered. Content with no template token and no opt-in
+        // is returned unchanged — existing skills render identically.
+        let content = if file_name.to_ascii_lowercase().ends_with(".md") {
+            let ctx = crate::skill::SkillPreprocessContext::new(skill_dir.clone());
+            crate::skill::preprocess_skill_content(&raw_content, &ctx).await
+        } else {
+            raw_content
+        };
 
         // List available files
         let available_files = list_skill_files(&skill_dir);
@@ -362,7 +375,12 @@ Examples:
 - User asks to "summarize this" → skill.read(skill_id="summarize")
 
 You can also read additional resources within a skill by specifying file_name:
-- skill.read(skill_id="code-review", file_name="CHECKLIST.md")"#;
+- skill.read(skill_id="code-review", file_name="CHECKLIST.md")
+
+Markdown instructions are preprocessed on read: `${ALEPH_SKILL_DIR}` expands to
+the skill's directory (use it to reference bundled scripts/resources). Skills
+that declare `allow-inline-shell: true` in their frontmatter may also embed
+live context via inline-shell snippets written as !`command`."#;
 
     type Args = ReadSkillArgs;
     type Output = ReadSkillOutput;

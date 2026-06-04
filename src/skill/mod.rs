@@ -12,6 +12,7 @@ pub mod events;
 pub mod guard;
 pub mod installer;
 pub mod manifest;
+pub mod preprocess;
 pub mod prompt;
 pub mod recaller;
 pub mod registry;
@@ -37,6 +38,7 @@ pub use installer::{
     InstallExecutor, InstallResult,
 };
 pub use manifest::{parse_skill_content, parse_skill_file, SkillParseError};
+pub use preprocess::{preprocess_skill_content, SkillPreprocessContext};
 pub use prompt::build_skills_prompt_xml;
 pub use registry::SkillRegistry;
 pub use shared::shared_skill_system;
