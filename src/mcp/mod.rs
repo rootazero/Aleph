@@ -45,6 +45,7 @@ mod approval;
 pub mod auth;
 mod client;
 mod context_injector;
+pub mod error_class;
 pub mod external;
 pub mod jsonrpc;
 pub mod manager;
@@ -67,6 +68,7 @@ pub use auth::{
 };
 pub use client::{ExternalServerConfig, McpClient, McpClientBuilder, McpStartupReport};
 pub use context_injector::{ContextInjector, InjectedContext, ResourceContext, ToolContext};
+pub use error_class::{classify_mcp_error, McpErrorKind};
 pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
     IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
