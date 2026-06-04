@@ -57,6 +57,29 @@ pub const SECRET_PATTERN_SOURCES: &[(&str, &str)] = &[
     ("private_key", r"-----BEGIN [A-Z ]+ PRIVATE KEY-----"),
 ];
 
+/// Catastrophic ("block-class") secret pattern names — a curated subset of
+/// [`SECRET_PATTERN_SOURCES`] whose appearance in **sandboxed command output**
+/// is treated as fail-closed: the output is refused rather than merely redacted.
+///
+/// This is the shell-output analogue of clawshell's `DlpAction::Block` (versus
+/// the default `Redact`). It is intentionally minimal — limited to categories
+/// that have essentially no legitimate reason to be echoed to the model and a
+/// near-zero false-positive rate. A PEM `PRIVATE KEY` block in command stdout
+/// means a key file is being dumped; redacting the literal bytes still returns
+/// the surrounding context to the model, so the worst class fails closed.
+///
+/// API-token shapes (`sk-…`, `ghp_…`, `AKIA…`) are deliberately **excluded** —
+/// they can legitimately surface in `env`/config inspection and are handled by
+/// redaction so as not to break ordinary workflows. Like risk.rs
+/// `BLOCKED_PATTERNS`, this is a frozen hard-filter floor, not a config knob.
+pub const BLOCK_CLASS_SECRETS: &[&str] = &["private_key"];
+
+/// Whether a named secret pattern (from [`SECRET_PATTERN_SOURCES`]) is
+/// block-class. Cheap linear scan over the tiny frozen [`BLOCK_CLASS_SECRETS`].
+pub fn is_block_class_secret(name: &str) -> bool {
+    BLOCK_CLASS_SECRETS.contains(&name)
+}
+
 /// Produce bytes-flavored regexes matching the same patterns as
 /// `SECRET_PATTERN_SOURCES`, plus the shared high-confidence vendor catalog in
 /// [`super::vendor_patterns::VENDOR_SECRET_PATTERNS`]. Used by `sandbox::scrub`

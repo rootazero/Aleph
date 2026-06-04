@@ -7,7 +7,7 @@
 use std::borrow::Cow;
 
 use crate::secrets::injection::InjectedSecret;
-use crate::secrets::leak_detector::default_patterns_bytes;
+use crate::secrets::leak_detector::{default_patterns_bytes, is_block_class_secret};
 
 /// Outcome of a byte-level scrub.
 #[derive(Debug, Clone)]
@@ -16,6 +16,14 @@ pub struct ScrubResult<'a> {
     pub bytes: Cow<'a, [u8]>,
     /// Pattern names that matched and were redacted.
     pub hits: Vec<&'static str>,
+    /// Distinct block-class pattern names that matched (subset of `hits`).
+    ///
+    /// Non-empty when a catastrophic secret (see
+    /// [`crate::secrets::leak_detector::BLOCK_CLASS_SECRETS`]) appeared in the
+    /// scanned bytes. The bytes are still redacted as usual; this is an
+    /// additional fail-closed signal for callers — the shell-output analogue of
+    /// clawshell's `DlpAction::Block` versus the default `Redact`.
+    pub blocked: Vec<&'static str>,
 }
 
 /// Scan `bytes` for secret patterns; replace matches with `[REDACTED:NAME]`.
@@ -46,14 +54,27 @@ pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> 
         }
     }
 
+    // Distinct block-class hits (catastrophic secrets that callers should fail
+    // closed on, not merely redact). Derived from `hits` so the redaction logic
+    // above stays the single source of truth for what matched.
+    let mut blocked: Vec<&'static str> = hits
+        .iter()
+        .copied()
+        .filter(|name| is_block_class_secret(name))
+        .collect();
+    blocked.sort_unstable();
+    blocked.dedup();
+
     match buf {
         Some(v) => ScrubResult {
             bytes: Cow::Owned(v),
             hits,
+            blocked,
         },
         None => ScrubResult {
             bytes: Cow::Borrowed(bytes),
             hits,
+            blocked,
         },
     }
 }
@@ -146,5 +167,43 @@ mod tests {
             "expected injected key passthrough, got `{s}`"
         );
         assert!(out.hits.is_empty());
+    }
+
+    #[test]
+    fn scrub_flags_private_key_as_block_class() {
+        // A PEM private-key block in command output is catastrophic: redacted
+        // AND flagged for fail-closed handling by the caller.
+        let input = b"-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n".to_vec();
+        let out = scrub_secrets_bytes(&input, &[]);
+        let s = String::from_utf8_lossy(out.bytes.as_ref());
+        assert!(s.contains("[REDACTED:private_key]"), "got `{s}`");
+        assert_eq!(out.blocked, vec!["private_key"]);
+    }
+
+    #[test]
+    fn scrub_does_not_block_redact_class_api_key() {
+        // API-token shapes are redacted but NOT block-class: they can appear in
+        // legitimate `env`/config inspection and must not fail the command.
+        let mut input = b"OPENAI_API_KEY=sk-".to_vec();
+        input.extend(std::iter::repeat_n(b'a', 40));
+        let out = scrub_secrets_bytes(&input, &[]);
+        assert!(!out.hits.is_empty());
+        assert!(out.blocked.is_empty(), "api key must not be block-class");
+    }
+
+    #[test]
+    fn scrub_clean_output_has_no_block_signal() {
+        let out = scrub_secrets_bytes(b"all good here\n", &[]);
+        assert!(out.hits.is_empty());
+        assert!(out.blocked.is_empty());
+    }
+
+    #[test]
+    fn scrub_block_class_deduped_across_occurrences() {
+        let mut input = b"-----BEGIN RSA PRIVATE KEY-----\n".to_vec();
+        input.extend_from_slice(b"-----BEGIN EC PRIVATE KEY-----\n");
+        let out = scrub_secrets_bytes(&input, &[]);
+        // Two PEM headers matched, but the block signal is deduped by name.
+        assert_eq!(out.blocked, vec!["private_key"]);
     }
 }
