@@ -489,6 +489,11 @@ impl McpClient {
     /// * `Ok(())` - If the connection was established successfully
     /// * `Err(AlephError)` - If connection failed
     pub async fn start_remote_server(&self, config: McpRemoteServerConfig) -> Result<()> {
+        // Fail fast if the URL clearly serves a web page rather than an MCP
+        // endpoint, instead of burning the full connect timeout on a doomed
+        // handshake. Lenient: only an unambiguous HTML response is rejected.
+        crate::mcp::preflight_remote_url(&config.url, &config.headers).await?;
+
         let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(300));
 
         let transport: Arc<dyn McpTransport> = match config.transport {
