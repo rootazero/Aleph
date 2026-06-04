@@ -1,3 +1,4 @@
+pub mod denial_ledger;
 pub mod gate;
 pub mod parser;
 pub mod retry;

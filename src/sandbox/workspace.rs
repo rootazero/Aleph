@@ -23,6 +23,7 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::dns;
 use crate::sandbox::driver::OsSandboxDriverTrait;
+use crate::sandbox::exec_approval::denial_ledger;
 use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
 use crate::sandbox::proxy::{self, ProxyHandle};
@@ -249,6 +250,32 @@ impl Sandbox for WorkspaceSandbox {
             };
             if !already_granted {
                 let reason = format_capability_request(&cmd.program, &cmd.capabilities);
+                // Denial ledger: a prior refusal of this exact elevation — or a
+                // session past the denial threshold — auto-denies without
+                // re-prompting (blind-retry guard + circuit breaker). The
+                // fingerprint keys on the deterministic capability-request text
+                // so the *same* elevation maps to the *same* bucket.
+                let led_key = session_key_to_filename(&cmd.session_id);
+                let fingerprint = denial_ledger::action_fingerprint(&cmd.program, &reason);
+                if let Some(reason_kind) =
+                    denial_ledger::global().is_blocked(&led_key, &fingerprint)
+                {
+                    tracing::info!(
+                        program = %cmd.program,
+                        denial = ?reason_kind,
+                        "capability elevation auto-denied by denial ledger: {}",
+                        reason_kind.agent_hint()
+                    );
+                    self.hooks
+                        .run_after(
+                            &SandboxHookContext::new(&cmd.program, &cmd),
+                            Err("denial ledger"),
+                        )
+                        .await;
+                    return Err(SandboxError::CapabilityDenied {
+                        reason: "elevated capability previously denied this session".into(),
+                    });
+                }
                 let outcome = self
                     .approval_gate
                     .request_approval_for_tool(&cmd.program, &reason)
@@ -262,6 +289,14 @@ impl Sandbox for WorkspaceSandbox {
                         ws.granted_elevations.write().await.insert(normalized_caps);
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
+                        // Remember the refusal so the next blind retry of this
+                        // exact elevation is short-circuited above.
+                        let reason_kind = if matches!(outcome, ApprovalOutcome::Timeout) {
+                            denial_ledger::DenialReason::Timeout
+                        } else {
+                            denial_ledger::DenialReason::UserRejected
+                        };
+                        denial_ledger::global().record_denial(&led_key, &fingerprint, reason_kind);
                         let err = SandboxError::CapabilityDenied {
                             reason: "user denied elevated capability request".into(),
                         };

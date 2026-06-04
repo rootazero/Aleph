@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 use crate::extension::hooks::{HookContext, PermissionDecision};
 use crate::extension::HookEvent;
 use crate::sandbox::exec_approval::gate::{ApprovalOutcome, ApprovalRequester};
-use crate::sandbox::exec_approval::session_memory;
+use crate::sandbox::exec_approval::{denial_ledger, session_memory};
 use crate::session::events::ToolOutput;
 use crate::sync_primitives::Arc;
 use crate::tools::runtime::LoopTool;
@@ -265,6 +265,24 @@ impl ScopedToolService {
             }
         }
 
+        // Denial-ledger short-circuit (negative twin of the grant above): a
+        // prior denial of this exact intent — or a session that crossed the
+        // denial threshold — auto-refuses without re-prompting the user. This
+        // is the blind-retry guard: an agent cannot wear the user down by
+        // re-requesting something already refused.
+        let fingerprint = denial_ledger::action_fingerprint(name, reason);
+        if let Some(ref key) = mem_key {
+            if let Some(reason_kind) = denial_ledger::global().is_blocked(key, &fingerprint) {
+                tracing::info!(
+                    tool = %name,
+                    denial = ?reason_kind,
+                    "confirmation auto-denied by denial ledger: {}",
+                    reason_kind.agent_hint()
+                );
+                return Err(ApprovalOutcome::Denied);
+            }
+        }
+
         // Fire PermissionRequest + Notification observers (best-effort,
         // observer-only) so user-facing channels can pop a toast / send an
         // email / etc. without blocking the approval path itself.
@@ -290,6 +308,15 @@ impl ScopedToolService {
 
         let outcome = requester.request_approval(name, reason).await;
         if !outcome.is_approved() {
+            // Record the refusal so a blind retry of this exact intent — or a
+            // session past the threshold — is short-circuited next time.
+            if let Some(ref key) = mem_key {
+                let reason_kind = match outcome {
+                    ApprovalOutcome::Timeout => denial_ledger::DenialReason::Timeout,
+                    _ => denial_ledger::DenialReason::UserRejected,
+                };
+                denial_ledger::global().record_denial(key, &fingerprint, reason_kind);
+            }
             return Err(outcome);
         }
 
