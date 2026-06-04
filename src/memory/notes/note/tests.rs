@@ -541,4 +541,63 @@ tags: []
         assert_eq!(facts.len(), 2);
         assert!(!facts[0].contains("should NOT"));
     }
+
+    // --- Permanent core-knowledge flag ---
+
+    #[test]
+    fn legacy_note_is_not_permanent() {
+        let md = "---\ncategory: learning\ntags: []\n---\n\n- a fact\n";
+        let note = KnowledgeNote::from_markdown("x", md).unwrap();
+        assert!(!note.permanent);
+        assert!(!note.is_permanent());
+    }
+
+    #[test]
+    fn frontmatter_permanent_flag_parsed() {
+        let md = "---\ncategory: personal\ntags: []\npermanent: true\n---\n\n- core fact\n";
+        let note = KnowledgeNote::from_markdown("x", md).unwrap();
+        assert!(note.permanent);
+        assert!(note.is_permanent());
+    }
+
+    #[test]
+    fn permanent_tag_fallback_marks_permanent() {
+        // No explicit flag, but a `pinned` tag → permanent via tag fallback.
+        let md = "---\ncategory: learning\ntags: [pinned]\n---\n\n- fact\n";
+        let note = KnowledgeNote::from_markdown("x", md).unwrap();
+        assert!(!note.permanent, "explicit flag absent");
+        assert!(note.is_permanent(), "tag fallback should mark permanent");
+    }
+
+    #[test]
+    fn tags_mark_permanent_is_case_insensitive() {
+        assert!(tags_mark_permanent(&["Permanent".to_string()]));
+        assert!(tags_mark_permanent(&["PINNED".to_string()]));
+        assert!(!tags_mark_permanent(&["learning".to_string()]));
+        assert!(!tags_mark_permanent(&[]));
+    }
+
+    #[test]
+    fn non_permanent_note_serializes_without_permanent_line() {
+        // Backward-compat: notes without the flag must not emit `permanent:`.
+        let note = KnowledgeNote {
+            category: "learning".to_string(),
+            ..Default::default()
+        };
+        assert!(!note.to_markdown().contains("permanent:"));
+    }
+
+    #[test]
+    fn permanent_note_roundtrips_through_markdown() {
+        let note = KnowledgeNote {
+            category: "personal".to_string(),
+            permanent: true,
+            facts: vec!["core".to_string()],
+            ..Default::default()
+        };
+        let md = note.to_markdown();
+        assert!(md.contains("permanent: true"));
+        let reparsed = KnowledgeNote::from_markdown(&note.title, &md).unwrap();
+        assert!(reparsed.permanent);
+    }
 }

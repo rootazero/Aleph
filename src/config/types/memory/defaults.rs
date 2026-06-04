@@ -144,7 +144,11 @@ pub fn default_feedback_lookback() -> usize {
 }
 
 pub fn default_memory_decay_half_life_days() -> f32 {
-    30.0
+    // Matches the value `NoteDecayStage` used as a hard-coded constant before
+    // this policy was wired in, so activating the config keeps the live decay
+    // curve identical for users who never set it (confidence ×e⁻¹≈0.368 after
+    // 90 days with no recall).
+    90.0
 }
 
 pub fn default_memory_decay_access_boost() -> f32 {
