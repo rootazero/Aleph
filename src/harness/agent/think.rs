@@ -616,6 +616,7 @@ impl AgentHarness {
                     session_id,
                     &mut messages,
                     tools_ref,
+                    budget_tool_tokens,
                     parent_cancel,
                     started,
                 )
@@ -659,6 +660,7 @@ impl AgentHarness {
                         session_id,
                         &mut messages,
                         tools_ref,
+                        budget_tool_tokens,
                         parent_cancel,
                         started,
                     )
@@ -730,6 +732,7 @@ impl AgentHarness {
                         session_id,
                         &mut messages,
                         tools_ref,
+                        budget_tool_tokens,
                         parent_cancel,
                         started,
                     )
@@ -1085,6 +1088,7 @@ impl AgentHarness {
         session_id: &SessionId,
         messages: &mut Vec<UnifiedMessage>,
         tools_ref: Option<&[crate::tool_metadata::ToolDefinition]>,
+        budget_tool_tokens: usize,
         parent_cancel: &CancellationToken,
         started: std::time::Instant,
     ) -> Result<ProviderResponse, HarnessError> {
@@ -1159,6 +1163,23 @@ impl AgentHarness {
                 crate::orchestrator::dispatch::TerminateReason::ReactiveCompactExhausted,
             );
             return Err(HarnessError::Llm(primary_err));
+        }
+
+        // 3a. Refresh the budget's `last_pressure` snapshot to the compacted
+        //     message vec. `before_turn` snapshotted the *pre*-compaction
+        //     prompt; without this refresh the post-retry
+        //     `observe_actual_usage` calibration would divide the surviving
+        //     response's real `prompt_tokens_total` (compacted) by the stale
+        //     uncompacted estimate, injecting a spurious shrink into the EWMA
+        //     and corrupting every later compaction decision this run. Mirrors
+        //     the `CompactAndContinue` path's `note_compaction_effect` call.
+        if let Some(budget) = self.deps.context_budget.as_ref() {
+            let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
+            budget.lock().await.note_compaction_effect(
+                messages,
+                system_prompt,
+                budget_tool_tokens,
+            );
         }
 
         // 4. Retry the LLM call once with the summarised history.
