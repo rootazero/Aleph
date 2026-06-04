@@ -359,6 +359,17 @@ pub enum PluginAction {
         #[arg(long, default_value = "user")]
         scope: String,
     },
+    /// Update an installed plugin to the latest marketplace version
+    Update {
+        /// Plugin name (update all installed plugins if omitted)
+        name: Option<String>,
+        /// Re-install even if the version is unchanged
+        #[arg(long)]
+        force: bool,
+        /// Installation scope (user, project, local)
+        #[arg(long, default_value = "user")]
+        scope: String,
+    },
     /// Uninstall a plugin
     Uninstall {
         /// Plugin name

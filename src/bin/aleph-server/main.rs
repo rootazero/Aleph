@@ -222,6 +222,9 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
                 PluginAction::Install { source, scope } => {
                     commands::handle_plugin_install(&source, &scope).await
                 }
+                PluginAction::Update { name, force, scope } => {
+                    commands::handle_plugin_update(name, force, &scope).await
+                }
                 PluginAction::Uninstall { name } => commands::handle_plugins_uninstall(&name),
                 PluginAction::Enable { name } => commands::handle_plugins_enable(&name),
                 PluginAction::Disable { name } => commands::handle_plugins_disable(&name),

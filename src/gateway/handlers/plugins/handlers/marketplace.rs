@@ -172,3 +172,67 @@ pub async fn handle_marketplace_install(request: JsonRpcRequest) -> JsonRpcRespo
         Err(e) => JsonRpcResponse::error(request.id, -32000, e),
     }
 }
+
+/// Update an installed plugin to the latest marketplace version (in place).
+pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
+    use crate::extension::marketplace::UpdateOutcome;
+
+    let params: crate::gateway::handlers::plugins::types::UpdatePluginParams =
+        match parse_params(&request) {
+            Ok(p) => p,
+            Err(e) => return e,
+        };
+
+    let scope_str = params.scope.as_deref().unwrap_or("user");
+    let scope = match crate::extension::scope::parse_scope(scope_str) {
+        Ok(s) => s,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    };
+
+    let manager = match build_marketplace_manager() {
+        Ok(m) => m,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    };
+
+    let outcome = match manager.update_to_scope(
+        &params.name,
+        params.marketplace.as_deref(),
+        scope,
+        None,
+        params.force,
+    ) {
+        Ok(o) => o,
+        Err(e) => return JsonRpcResponse::error(request.id, -32000, e),
+    };
+
+    // Refresh the live extension set so an updated plugin's new capabilities take
+    // effect without a daemon restart (matches the install handler's behaviour).
+    if matches!(outcome, UpdateOutcome::Updated { .. }) {
+        if let Ok(mgr) =
+            crate::gateway::handlers::plugins::handlers::get_extension_manager()
+        {
+            if let Err(e) = mgr.reload().await {
+                tracing::warn!("Failed to refresh extensions after update: {}", e);
+            }
+        }
+    }
+
+    let result = match outcome {
+        UpdateOutcome::Updated { from, to } => json!({
+            "ok": true,
+            "name": params.name,
+            "scope": scope_str,
+            "updated": true,
+            "from": from,
+            "to": to,
+        }),
+        UpdateOutcome::AlreadyLatest { version } => json!({
+            "ok": true,
+            "name": params.name,
+            "scope": scope_str,
+            "updated": false,
+            "version": version,
+        }),
+    };
+    JsonRpcResponse::success(request.id, result)
+}

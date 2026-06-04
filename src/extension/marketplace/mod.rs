@@ -261,6 +261,104 @@ impl MarketplaceManager {
     }
 
     // -------------------------------------------------------------------------
+    // Update an installed plugin
+    // -------------------------------------------------------------------------
+
+    /// Update an already-installed plugin to the version currently available in
+    /// the marketplace cache.
+    ///
+    /// Mirrors [`install_to_scope`](Self::install_to_scope) but targets an
+    /// existing install: the marketplace cache is the source of truth, and the
+    /// installed copy is atomically swapped for the fresh one only when the
+    /// version actually changed (or `force` is set). Integrity and manifest
+    /// validation run before any swap, exactly as on install.
+    ///
+    /// Returns [`UpdateOutcome::AlreadyLatest`] (a no-op) when the installed
+    /// version already matches — or is newer than — the marketplace version and
+    /// `force` is false. This maps codex's `IfVersionChanged` / `ForceReinstall`
+    /// refresh modes onto Aleph's flat install layout.
+    pub fn update_to_scope(
+        &self,
+        plugin_name: &str,
+        marketplace_name: Option<&str>,
+        scope: crate::extension::types::PluginScope,
+        project_dir: Option<&std::path::Path>,
+        force: bool,
+    ) -> Result<UpdateOutcome, String> {
+        let install_dir = crate::extension::scope::scope_install_dir(scope, project_dir)?;
+        let installed_path = install_dir.join(plugin_name);
+        if !installed_path.exists() {
+            return Err(format!(
+                "Plugin '{plugin_name}' is not installed in scope '{scope}'. Use 'install' first."
+            ));
+        }
+
+        let mut results = self.search_plugin(plugin_name);
+        if let Some(mkt) = marketplace_name {
+            results.retain(|r| r.marketplace_name == mkt);
+        }
+
+        match results.len() {
+            0 => Err(format!(
+                "Plugin '{plugin_name}' not found in any marketplace. Try 'aleph plugin marketplace update' first."
+            )),
+            1 => {
+                let result = &results[0];
+
+                // Read the currently-installed version from its manifest so we can
+                // decide whether anything actually changed.
+                let installed_version = read_installed_plugin_version(&installed_path);
+                let candidate_version = result.plugin.version.clone();
+
+                if !force && !should_update(installed_version.as_deref(), candidate_version.as_deref())
+                {
+                    return Ok(UpdateOutcome::AlreadyLatest {
+                        version: installed_version.or(candidate_version),
+                    });
+                }
+
+                // Same gates as install: integrity hash (when declared) + manifest
+                // soundness, before touching the existing install.
+                installer::verify_plugin_integrity(
+                    &result.plugin_path,
+                    result.plugin.sha256.as_deref(),
+                )?;
+                let validation =
+                    crate::extension::validation::validate_plugin(&result.plugin_path);
+                if !validation.is_valid() {
+                    return Err(format!(
+                        "Plugin '{}' failed validation and was not updated:\n  - {}",
+                        plugin_name,
+                        validation.errors.join("\n  - ")
+                    ));
+                }
+
+                installer::update_plugin_from_cache(
+                    &result.plugin_path,
+                    &install_dir,
+                    plugin_name,
+                )?;
+
+                Ok(UpdateOutcome::Updated {
+                    from: installed_version,
+                    to: candidate_version,
+                })
+            }
+            _ => {
+                let names: Vec<_> = results
+                    .iter()
+                    .map(|r| format!("{}@{}", plugin_name, r.marketplace_name))
+                    .collect();
+                Err(format!(
+                    "Plugin '{}' found in multiple marketplaces: {}. Specify with @marketplace.",
+                    plugin_name,
+                    names.join(", ")
+                ))
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
     // Internal helpers
     // -------------------------------------------------------------------------
 
@@ -278,8 +376,69 @@ impl MarketplaceManager {
 }
 
 // =============================================================================
+// Update outcome
+// =============================================================================
+
+/// Result of an [`update_to_scope`](MarketplaceManager::update_to_scope) call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateOutcome {
+    /// The plugin was swapped to a newer/changed version.
+    Updated {
+        /// Version that was installed before the update (if known).
+        from: Option<String>,
+        /// Version now installed (if the marketplace declared one).
+        to: Option<String>,
+    },
+    /// No change was needed — the installed version is already current.
+    AlreadyLatest {
+        /// The version that remains installed (if known).
+        version: Option<String>,
+    },
+}
+
+// =============================================================================
 // Helpers
 // =============================================================================
+
+/// Read the `version` field from an installed plugin's manifest.
+///
+/// Reuses the same adapter parsing path used at install time, so every manifest
+/// format Aleph understands (`.claude-plugin/plugin.toml`, `plugin.json`,
+/// auto-discovery, legacy) is handled identically.
+fn read_installed_plugin_version(installed_path: &Path) -> Option<String> {
+    use crate::extension::manifest::adapter::AdapterRegistry;
+    AdapterRegistry::with_defaults()
+        .parse_dir(installed_path)
+        .ok()
+        .and_then(|output| output.version)
+}
+
+/// Decide whether the marketplace `candidate` version should replace the
+/// `installed` version.
+///
+/// * `force` is handled by the caller (always updates).
+/// * Equal versions → no update.
+/// * When both parse as semver, never downgrade (only update if strictly newer).
+/// * Otherwise any difference (CalVer, git SHA, `local`, missing-installed) is
+///   treated as "changed" and triggers an update, matching codex's
+///   `IfVersionChanged` semantics.
+fn should_update(installed: Option<&str>, candidate: Option<&str>) -> bool {
+    match (installed, candidate) {
+        (Some(i), Some(c)) => {
+            if i == c {
+                return false;
+            }
+            match (semver::Version::parse(i), semver::Version::parse(c)) {
+                (Ok(iv), Ok(cv)) => cv > iv,
+                _ => true,
+            }
+        }
+        // Installed version unknown but a candidate exists → refresh to be safe.
+        (None, Some(_)) => true,
+        // No candidate version to compare against → nothing to do.
+        (_, None) => false,
+    }
+}
 
 fn builtin_config() -> MarketplaceConfig {
     MarketplaceConfig {
@@ -321,6 +480,31 @@ fn resolve_plugin_path(marketplace_dir: &Path, source: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn should_update_skips_equal_versions() {
+        assert!(!should_update(Some("1.2.3"), Some("1.2.3")));
+        assert!(!should_update(Some("local"), Some("local")));
+    }
+
+    #[test]
+    fn should_update_never_downgrades_semver() {
+        assert!(!should_update(Some("2.0.0"), Some("1.9.9")));
+        assert!(should_update(Some("1.0.0"), Some("1.0.1")));
+        // CalVer is valid semver, so newer date wins.
+        assert!(should_update(Some("26.5.21"), Some("26.6.1")));
+        assert!(!should_update(Some("26.6.1"), Some("26.5.21")));
+    }
+
+    #[test]
+    fn should_update_treats_non_semver_difference_as_changed() {
+        // Git SHAs / arbitrary tags: any difference triggers an update.
+        assert!(should_update(Some("abc123"), Some("def456")));
+        assert!(should_update(None, Some("1.0.0")));
+        // Nothing to compare against on the candidate side → no-op.
+        assert!(!should_update(Some("1.0.0"), None));
+        assert!(!should_update(None, None));
+    }
 
     fn make_github_config(source: &str) -> MarketplaceConfig {
         MarketplaceConfig {

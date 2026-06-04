@@ -56,26 +56,11 @@ pub fn install_plugin_from_cache(
         ));
     }
 
-    // 3. Ensure the install directory exists.
-    std::fs::create_dir_all(install_dir).map_err(|e| {
-        format!(
-            "Failed to create install directory '{}': {e}",
-            install_dir.display()
-        )
-    })?;
-
-    // 4. Stage into a temp dir, then atomically rename into place. A direct
+    // 3. Stage into a temp dir, then atomically rename into place. A direct
     //    recursive copy that fails partway (disk full, permission error, or a
     //    concurrent install) would leave a half-populated directory at `dest`
     //    that both looks installed and blocks reinstall.
-    let staging = install_dir.join(format!(".tmp-install-{plugin_name}"));
-    if staging.exists() {
-        let _ = std::fs::remove_dir_all(&staging);
-    }
-    if let Err(e) = copy_dir_recursive(source_path, &staging) {
-        let _ = std::fs::remove_dir_all(&staging);
-        return Err(e);
-    }
+    let staging = stage_plugin_copy(source_path, install_dir, plugin_name)?;
     if let Err(e) = std::fs::rename(&staging, &dest) {
         let _ = std::fs::remove_dir_all(&staging);
         return Err(format!(
@@ -85,6 +70,115 @@ pub fn install_plugin_from_cache(
     }
 
     Ok(dest)
+}
+
+/// Update an already-installed plugin in place by atomically swapping in a fresh
+/// copy from `source_path` (a marketplace cache directory).
+///
+/// Unlike [`install_plugin_from_cache`], the destination is *expected* to exist.
+/// The swap is crash-safe: the new copy is staged in a temp dir, the existing
+/// install is moved aside to a backup, the new copy is renamed into place, and
+/// only then is the backup removed. If any step fails the previous install is
+/// restored, so a failed update never destroys a working plugin.
+///
+/// The plugin's persistent data directory lives outside the install tree
+/// (`~/.aleph/plugins/data/<id>/`), so it is untouched by the swap.
+///
+/// # Errors
+///
+/// * invalid `plugin_name` (path separators / `..`)
+/// * `source_path` does not exist
+/// * any I/O failure during staging or the swap (previous install restored)
+///
+/// # Returns
+///
+/// The absolute path of the updated plugin directory.
+pub fn update_plugin_from_cache(
+    source_path: &Path,
+    install_dir: &Path,
+    plugin_name: &str,
+) -> Result<PathBuf, String> {
+    if plugin_name.is_empty()
+        || plugin_name.contains('/')
+        || plugin_name.contains('\\')
+        || plugin_name.contains("..")
+    {
+        return Err(format!(
+            "Invalid plugin name '{plugin_name}': must not be empty or contain path separators or '..'."
+        ));
+    }
+
+    if !source_path.exists() {
+        return Err(format!(
+            "Plugin source not found at '{}'. Try running a marketplace update first.",
+            source_path.display()
+        ));
+    }
+
+    let dest = install_dir.join(plugin_name);
+
+    // Stage the new copy first; if this fails the existing install is untouched.
+    let staging = stage_plugin_copy(source_path, install_dir, plugin_name)?;
+
+    // Move the current install aside so we can roll back on failure.
+    let backup = install_dir.join(format!(".bak-{plugin_name}"));
+    if backup.exists() {
+        let _ = std::fs::remove_dir_all(&backup);
+    }
+    let had_existing = dest.exists();
+    if had_existing {
+        if let Err(e) = std::fs::rename(&dest, &backup) {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(format!(
+                "Failed to back up existing plugin '{plugin_name}' before update: {e}"
+            ));
+        }
+    }
+
+    // Swap the staged copy into place. On failure, restore the backup.
+    if let Err(e) = std::fs::rename(&staging, &dest) {
+        let _ = std::fs::remove_dir_all(&staging);
+        if had_existing {
+            let _ = std::fs::rename(&backup, &dest);
+        }
+        return Err(format!(
+            "Failed to finalize update of '{plugin_name}' into '{}': {e}",
+            dest.display()
+        ));
+    }
+
+    // Success — drop the backup.
+    if had_existing {
+        let _ = std::fs::remove_dir_all(&backup);
+    }
+
+    Ok(dest)
+}
+
+/// Copy `source_path` into a staging directory under `install_dir`, returning
+/// the staging path. Shared by [`install_plugin_from_cache`] and
+/// [`update_plugin_from_cache`] so the staging/cleanup logic lives in one place.
+fn stage_plugin_copy(
+    source_path: &Path,
+    install_dir: &Path,
+    plugin_name: &str,
+) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(install_dir).map_err(|e| {
+        format!(
+            "Failed to create install directory '{}': {e}",
+            install_dir.display()
+        )
+    })?;
+
+    let staging = install_dir.join(format!(".tmp-install-{plugin_name}"));
+    if staging.exists() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    if let Err(e) = copy_dir_recursive(source_path, &staging) {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(e);
+    }
+    Ok(staging)
 }
 
 /// Verify the SHA-256 hash of a directory by hashing all files recursively.
@@ -295,6 +389,60 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err();
         assert!(msg.contains("integrity check failed"), "got: {msg}");
+    }
+
+    #[test]
+    fn test_update_plugin_replaces_existing() {
+        let cache = TempDir::new().unwrap();
+        let install_root = TempDir::new().unwrap();
+
+        // Install v1.
+        let source = make_plugin_dir(cache.path());
+        install_plugin_from_cache(&source, install_root.path(), "my-plugin").unwrap();
+
+        // Build a v2 source with changed content + a new file.
+        let v2 = cache.path().join("my-plugin-v2");
+        fs::create_dir_all(&v2).unwrap();
+        fs::write(v2.join("manifest.toml"), "[plugin]\nname = \"my-plugin\"\nversion=\"2\"").unwrap();
+        fs::write(v2.join("NEW.txt"), "added in v2").unwrap();
+
+        let dest = update_plugin_from_cache(&v2, install_root.path(), "my-plugin").unwrap();
+        assert!(dest.join("NEW.txt").exists(), "new file should be present");
+        // Old-only file (src/main.py) should be gone after a full swap.
+        assert!(!dest.join("src/main.py").exists(), "stale file should be removed");
+        // No backup or staging residue.
+        assert!(!install_root.path().join(".bak-my-plugin").exists());
+        assert!(!install_root.path().join(".tmp-install-my-plugin").exists());
+    }
+
+    #[test]
+    fn test_update_plugin_preserves_install_on_bad_source() {
+        let install_root = TempDir::new().unwrap();
+        let cache = TempDir::new().unwrap();
+
+        let source = make_plugin_dir(cache.path());
+        install_plugin_from_cache(&source, install_root.path(), "my-plugin").unwrap();
+
+        // Update from a nonexistent source must fail without harming the install.
+        let result = update_plugin_from_cache(
+            Path::new("/nonexistent/source"),
+            install_root.path(),
+            "my-plugin",
+        );
+        assert!(result.is_err());
+        // Original install still intact.
+        assert!(install_root.path().join("my-plugin/manifest.toml").exists());
+    }
+
+    #[test]
+    fn test_update_plugin_on_fresh_install() {
+        // Updating something not yet installed should just install it.
+        let cache = TempDir::new().unwrap();
+        let install_root = TempDir::new().unwrap();
+        let source = make_plugin_dir(cache.path());
+
+        let dest = update_plugin_from_cache(&source, install_root.path(), "my-plugin").unwrap();
+        assert!(dest.join("manifest.toml").exists());
     }
 
     #[test]

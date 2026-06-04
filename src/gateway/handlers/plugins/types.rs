@@ -162,6 +162,22 @@ pub struct MarketplaceInstallParams {
     pub scope: Option<String>,
 }
 
+/// Parameters for plugin.update — upgrade an installed plugin in place.
+#[derive(Debug, Deserialize)]
+pub struct UpdatePluginParams {
+    /// Plugin name to update
+    pub name: String,
+    /// Specific marketplace (if ambiguous)
+    #[serde(default)]
+    pub marketplace: Option<String>,
+    /// Installation scope: "user" (default), "project", or "local"
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// Re-install even if the version is unchanged
+    #[serde(default)]
+    pub force: bool,
+}
+
 // ============================================================================
 // Execute Command Parameters
 // ============================================================================

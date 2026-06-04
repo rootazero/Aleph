@@ -286,6 +286,7 @@ impl HandlerRegistry {
         registry.register("plugin.install", plugins::handle_install);
         registry.register("plugin.installFromZip", plugins::handle_install_from_zip);
         registry.register("plugin.uninstall", plugins::handle_uninstall);
+        registry.register("plugin.update", plugins::handle_update);
         registry.register("plugin.enable", plugins::handle_enable);
         registry.register("plugin.disable", plugins::handle_disable);
         registry.register("plugin.load", plugins::handle_load);
