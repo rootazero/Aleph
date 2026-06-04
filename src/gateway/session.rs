@@ -57,7 +57,12 @@ impl HttpSessionManager {
             .map_err(|e| SessionError::Storage(e.to_string()))?;
 
         if valid {
-            let _ = self.store.touch_session(session_id);
+            // Best-effort liveness bump; log on failure so a session that later
+            // gets reaped as "idle" because its touch silently failed is
+            // diagnosable.
+            if let Err(e) = self.store.touch_session(session_id) {
+                tracing::warn!(error = %e, "failed to touch session on validate");
+            }
         }
 
         Ok(valid)

@@ -290,7 +290,16 @@ impl ResumeCoordinator {
             outcome: RunOutcome::Abandoned,
             at: now_ms(),
         };
-        let seq = self.next_seq(session_id).await;
+        let seq = match self.next_seq(session_id).await {
+            Ok(seq) => seq,
+            Err(e) => {
+                // Don't fabricate seq 1 on a read error — that would append the
+                // abandon marker at the head and overwrite the genuine first
+                // event. Skip the best-effort marker instead.
+                tracing::warn!(session = ?session_id, error = %e, "resume: abandon seq allocation failed; skipping marker");
+                return;
+            }
+        };
         if let Err(e) = self
             .event_store
             .append(session_id, seq, &ev, now_ms())
@@ -321,12 +330,16 @@ impl ResumeCoordinator {
     }
 
     /// Allocate the next append seq for a session.
-    async fn next_seq(&self, session_id: &SessionId) -> u64 {
-        self.event_store
-            .load_head_seq(session_id)
-            .await
-            .map(|h| h + 1)
-            .unwrap_or(1)
+    ///
+    /// Propagates read errors rather than defaulting to `1`: a transient
+    /// `load_head_seq` failure is indistinguishable from an empty session, and
+    /// guessing `1` for a non-empty session would collide with / overwrite its
+    /// first event.
+    async fn next_seq(
+        &self,
+        session_id: &SessionId,
+    ) -> Result<u64, crate::session::service::SessionError> {
+        Ok(self.event_store.load_head_seq(session_id).await? + 1)
     }
 
     /// Re-trigger an interrupted run. Resolves the agent from the session

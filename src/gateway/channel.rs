@@ -483,11 +483,9 @@ impl ChannelHealth {
     /// Record a failure with optional reason
     pub fn record_failure(&mut self, reason: Option<String>) {
         self.failure_count = self.failure_count.saturating_add(1);
-        if self.failure_count > 0 {
-            self.status = HealthStatus::Degraded;
-            if self.status_reason.is_none() {
-                self.status_reason = reason;
-            }
+        self.status = HealthStatus::Degraded;
+        if self.status_reason.is_none() {
+            self.status_reason = reason;
         }
     }
 

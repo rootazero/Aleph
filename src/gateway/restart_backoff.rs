@@ -108,7 +108,18 @@ impl RestartBackoff {
         let max_ms = self.policy.max.as_millis() as f64;
         let attempt_i32 = attempt.min(i32::MAX as u32) as i32;
         let grown = initial_ms * self.policy.factor.powi(attempt_i32);
-        Duration::from_millis(grown.min(max_ms).min(u64::MAX as f64) as u64)
+        // Clamp to [initial, max]. `BackoffPolicy` fields are pub and
+        // unvalidated; a non-positive `factor` would drive `grown` to 0 (or
+        // negative for odd attempts), which `as u64` saturates to a 0ms tight
+        // reconnect loop. NaN/inf collapse safely to the cap. For a valid
+        // policy (factor >= 1) the floor is a no-op.
+        let floor = initial_ms.min(max_ms);
+        let capped = if grown.is_finite() {
+            grown.clamp(floor, max_ms)
+        } else {
+            max_ms
+        };
+        Duration::from_millis(capped as u64)
     }
 }
 

@@ -359,7 +359,10 @@ async fn drain_once(registry: &ChannelRegistry, store: &DeliveryStore) {
                         "delivery queue: giving up after exhausting retries"
                     );
                 } else {
-                    let next = now + backoff_delay(cfg, attempts).as_secs() as i64;
+                    // Floor at 1s: a sub-second backoff truncates to 0 through
+                    // `as_secs()`, which would reschedule the record as
+                    // immediately-due and hot-retry a still-down channel.
+                    let next = now + backoff_delay(cfg, attempts).as_secs().max(1) as i64;
                     let _ = store.reschedule(rec.id, attempts, next, &format!("{:?}", e));
                 }
             }

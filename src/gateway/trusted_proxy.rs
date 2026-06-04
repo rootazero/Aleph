@@ -84,10 +84,20 @@ impl TrustedProxies {
             return peer;
         };
         for hop in xff.rsplit(',') {
-            if let Ok(ip) = IpAddr::from_str(hop.trim()) {
-                if !self.contains(ip) {
-                    return ip;
-                }
+            let hop = hop.trim();
+            // Tolerate empty segments from a trailing comma / stray whitespace.
+            if hop.is_empty() {
+                continue;
+            }
+            match IpAddr::from_str(hop) {
+                // Our own proxy layer — keep walking left past it.
+                Ok(ip) if self.contains(ip) => continue,
+                // First hop past the trusted chain: the real client.
+                Ok(ip) => return ip,
+                // A non-empty, unparseable hop means the chain is corrupt past
+                // this point. Do NOT skip it and trust whatever an attacker
+                // injected further left — stop and fall back to the peer.
+                Err(_) => return peer,
             }
         }
         peer

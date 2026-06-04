@@ -182,7 +182,7 @@ impl SlackMessageOps {
                                         "Slack {} from {}: {}",
                                         event_type,
                                         resolved_inbound.sender_id.as_str(),
-                                        &resolved_inbound.text[..resolved_inbound.text.len().min(50)]
+                                        resolved_inbound.text.chars().take(50).collect::<String>()
                                     );
                                     let reply_to = resolved_inbound.reply_to.clone();
                                     let thread_ts = reply_to.as_ref().map(|id| id.as_str());

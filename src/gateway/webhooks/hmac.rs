@@ -147,6 +147,28 @@ fn verify_stripe_signature(
         return VerificationResult::Malformed("Missing v1 signature in Stripe header".to_string());
     }
 
+    // Reject stale / replayed events. Stripe's verification spec requires the
+    // `t=` timestamp to be within a tolerance of now (default 300s); the HMAC
+    // over `(t.payload)` is otherwise valid forever, so any captured webhook
+    // could be replayed indefinitely.
+    const TOLERANCE_SECS: i64 = 300;
+    let ts_secs: i64 = match timestamp.parse() {
+        Ok(ts) => ts,
+        Err(_) => {
+            return VerificationResult::Malformed(
+                "Invalid timestamp in Stripe signature".to_string(),
+            )
+        }
+    };
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if (now_secs - ts_secs).abs() > TOLERANCE_SECS {
+        warn!("Stripe signature timestamp outside tolerance — rejecting as replay");
+        return VerificationResult::Invalid;
+    }
+
     // Stripe signs: timestamp + "." + payload
     let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
     let expected = compute_hmac_sha256(secret, signed_payload.as_bytes());

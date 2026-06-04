@@ -347,7 +347,7 @@ impl IrcMessageOps {
                                     tracing::debug!(
                                         "IRC message from {}: {}",
                                         msg.sender_id.as_str(),
-                                        &msg.text[..msg.text.len().min(50)]
+                                        msg.text.chars().take(50).collect::<String>()
                                     );
                                     if inbound_tx.send(msg).is_err() {
                                         tracing::error!("IRC: inbound channel closed");

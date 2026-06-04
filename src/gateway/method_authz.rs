@@ -120,6 +120,22 @@ const OPERATOR_METHODS: &[&str] = &[
     "gateway.credentials",
     // Code/extension installation from remote registries
     "clawhub.install",
+    // Exec approval — resolving or reconfiguring the human-in-the-loop
+    // command-exec gate is a privileged decision. The request/get/pending
+    // reads stay open so a running agent can still raise and surface approvals.
+    "exec.approval.resolve",
+    "exec.approvals.set",
+    "exec.callback.handle",
+    // MCP tool-call approval responses — approving/cancelling a pending tool
+    // call is privileged, mirroring exec.approval.resolve.
+    "mcp.respond_approval",
+    "mcp.cancel_approval",
+    // Destructive team management (teams.get / teams.list / teams.list_tasks /
+    // teams.usage stay open as reads).
+    "teams.delete",
+    "teams.disband",
+    // Destructive session data loss (session.compact / session.usage stay open).
+    "session.truncate",
 ];
 
 /// Classify an RPC method into the privilege required to invoke it.
@@ -162,6 +178,11 @@ mod tests {
             "insights.tools",
             "gateway.credentials",
             "clawhub.install",
+            "exec.approval.resolve",
+            "exec.approvals.set",
+            "mcp.respond_approval",
+            "teams.delete",
+            "session.truncate",
         ] {
             assert_eq!(
                 required_privilege(m),

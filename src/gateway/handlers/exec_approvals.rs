@@ -162,17 +162,20 @@ async fn handle_approval_request(
         Err(e) => return e,
     };
 
+    // Run the real command analyzer so the approval record and UI reflect the
+    // command's actual risk instead of a hardcoded "ok" verdict.
+    let analysis = crate::exec::analyze_shell_command(
+        &params.command,
+        params.cwd.as_deref().map(std::path::Path::new),
+        None,
+    );
+
     // Create approval request
     let approval_request = crate::exec::ApprovalRequest {
         id: uuid::Uuid::new_v4().to_string(),
         command: params.command,
         cwd: params.cwd,
-        analysis: crate::exec::CommandAnalysis {
-            ok: true,
-            reason: None,
-            segments: vec![],
-            chains: None,
-        },
+        analysis,
         agent_id: params.agent_id,
         session_key: params.session_key,
     };

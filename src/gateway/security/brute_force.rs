@@ -54,8 +54,14 @@ impl BruteForceDetector {
 
         let record = entry.value_mut();
 
-        // Reset window if expired
-        if record.first_failure.elapsed() > WINDOW {
+        // Reset the failure window once it expires — but never clear an active
+        // block early. The failure window (5 min) is shorter than the block
+        // (30 min); without this guard an attacker could wait out the window
+        // and have the next failed attempt reset the still-active block.
+        let block_active = record
+            .blocked_until
+            .is_some_and(|until| Instant::now() < until);
+        if !block_active && record.first_failure.elapsed() > WINDOW {
             record.failures = 0;
             record.first_failure = Instant::now();
             record.blocked_until = None;

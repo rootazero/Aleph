@@ -78,7 +78,11 @@ impl ShutdownContext {
             // Truncate to 200 chars to keep the line bounded.
             let mut c = c.replace(' ', "_");
             if c.len() > 200 {
-                c.truncate(200);
+                // Truncate on a char boundary: `parent_command` is lossy-decoded
+                // external (ps) output, so byte index 200 may split a multi-byte
+                // char and panic.
+                let end = (0..=200).rev().find(|&i| c.is_char_boundary(i)).unwrap_or(0);
+                c.truncate(end);
             }
             parts.push(format!("parent={}", c));
         }

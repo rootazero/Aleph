@@ -37,7 +37,33 @@ where
         // The bridge task converts the coarse cancel_rx signal into a token cancellation.
         let cancel_token = CancellationToken::new();
 
-        // Atomically check concurrent run limit and register the run
+        // Reserve the agent's run slot FIRST. The per-agent Idle→Running gate in
+        // `try_start_run` is the single source of truth for concurrency.
+        // Registering the run in `active_runs` before reserving the slot (the
+        // previous order) inserted a transient `Running` row that inflated the
+        // concurrent-run count and could spuriously reject a sibling run.
+        // `simple.rs` already uses this ordering.
+        if !agent.try_start_run(&run_id).await {
+            // Agent busy. Before rejecting, try mid-loop steering: if the busy
+            // run is on THIS session, inject the message into the live event
+            // log so the running loop picks it up at its next turn boundary
+            // (codex parity). The run was never registered, so there is nothing
+            // to undo here.
+            let injected = super::steering::try_inject_steering(
+                self.config.mid_turn_steering,
+                &self.active_runs,
+                self.orchestrator.as_ref(),
+                &request,
+                &run_id,
+            )
+            .await;
+            if injected {
+                return Ok(());
+            }
+            return Err(ExecutionError::AgentBusy(agent.id().to_string()));
+        }
+
+        // Slot held — now enforce the concurrent-run limit and register the run.
         {
             let mut runs = self.active_runs.write().await;
             let agent_runs = runs
@@ -49,6 +75,9 @@ where
                 .count();
 
             if agent_runs >= self.config.max_concurrent_runs {
+                drop(runs);
+                // Release the slot we just reserved before bailing out.
+                agent.set_state(AgentState::Idle).await;
                 return Err(ExecutionError::TooManyRuns(format!(
                     "Agent {} has {} active runs (max: {})",
                     request.session_key.agent_id(),
@@ -71,30 +100,6 @@ where
                     chunk_counter: crate::sync_primitives::AtomicU32::new(0),
                 },
             );
-        }
-
-        // Atomically check Idle and reserve the slot in one critical section
-        // to close the TOCTOU window between an is_idle() probe and the later
-        // set_state(Running).
-        if !agent.try_start_run(&run_id).await {
-            // Agent busy. Before rejecting, try mid-loop steering: if the busy
-            // run is on THIS session, inject the message into the live event
-            // log so the running loop picks it up at its next turn boundary
-            // (codex parity). The just-reserved run is removed either way.
-            let injected = super::steering::try_inject_steering(
-                self.config.mid_turn_steering,
-                &self.active_runs,
-                self.orchestrator.as_ref(),
-                &request,
-                &run_id,
-            )
-            .await;
-            let mut runs = self.active_runs.write().await;
-            runs.remove(&run_id);
-            if injected {
-                return Ok(());
-            }
-            return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
 
         let trace_task_persisted = self

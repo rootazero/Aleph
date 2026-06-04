@@ -106,7 +106,7 @@ pub async fn run_sync_loop(
                         "Matrix message from {} in {}: {}",
                         inbound.sender_id.as_str(),
                         room_id,
-                        &inbound.text[..inbound.text.len().min(50)]
+                        inbound.text.chars().take(50).collect::<String>()
                     );
                     if inbound_tx.send(inbound).is_err() {
                         tracing::error!("Matrix: inbound channel closed");

@@ -162,7 +162,12 @@ impl ReasoningExtractor {
     }
 
     fn find_tag_split(input: &str) -> usize {
-        let start = input.len().saturating_sub(MAX_TAG_LEN);
+        // `MAX_TAG_LEN` is a byte count, so floor the start to a char boundary
+        // before slicing — otherwise a trailing multi-byte char would panic.
+        let mut start = input.len().saturating_sub(MAX_TAG_LEN);
+        while start > 0 && !input.is_char_boundary(start) {
+            start -= 1;
+        }
         if let Some(pos) = input[start..].rfind('<') {
             start + pos
         } else {
@@ -171,7 +176,10 @@ impl ReasoningExtractor {
     }
 
     fn find_close_tag_split(input: &str) -> usize {
-        let start = input.len().saturating_sub(MAX_TAG_LEN);
+        let mut start = input.len().saturating_sub(MAX_TAG_LEN);
+        while start > 0 && !input.is_char_boundary(start) {
+            start -= 1;
+        }
         if let Some(pos) = input[start..].rfind("</") {
             start + pos
         } else {

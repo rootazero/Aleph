@@ -123,9 +123,11 @@ pub(super) fn strip_single_asterisk(text: &str) -> String {
 ///
 /// - **False positives with bracket-paren adjacency**: patterns like `array[0](foo)`
 ///   will be misinterpreted as a Markdown link with link text `0` and URL `foo`.
-/// - **URLs containing parentheses**: URLs with literal `)` (e.g., Wikipedia links
-///   like `https://en.wikipedia.org/wiki/Rust_(programming_language)`) will be
-///   truncated at the first `)` because the parser uses a simple greedy `find(')')`.
+///
+/// URLs containing balanced parentheses (e.g. Wikipedia links like
+/// `https://en.wikipedia.org/wiki/Rust_(programming_language)`) are handled
+/// correctly: the closing `)` is matched by balancing nested `(`/`)` rather
+/// than stopping at the first `)`.
 pub(super) fn replace_links(text: &str, fmt_fn: impl Fn(&str, &str) -> String) -> String {
     let mut result = text.to_string();
 
@@ -133,7 +135,25 @@ pub(super) fn replace_links(text: &str, fmt_fn: impl Fn(&str, &str) -> String) -
         if let Some(bracket_start) = result.find('[') {
             if let Some(rel_bracket_end) = result[bracket_start..].find("](") {
                 let bracket_end = bracket_start + rel_bracket_end;
-                if let Some(rel_paren_end) = result[bracket_end + 2..].find(')') {
+                // Find the URL's closing `)`, balancing nested parens so URLs
+                // that themselves contain `(...)` are not truncated early.
+                let url_region = &result[bracket_end + 2..];
+                let mut depth = 0usize;
+                let mut rel_close = None;
+                for (i, ch) in url_region.char_indices() {
+                    match ch {
+                        '(' => depth += 1,
+                        ')' => {
+                            if depth == 0 {
+                                rel_close = Some(i);
+                                break;
+                            }
+                            depth -= 1;
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some(rel_paren_end) = rel_close {
                     let paren_end = bracket_end + 2 + rel_paren_end;
                     let link_text = &result[bracket_start + 1..bracket_end];
                     let url = &result[bracket_end + 2..paren_end];

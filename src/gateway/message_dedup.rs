@@ -1,6 +1,6 @@
 //! Message deduplication with text normalization
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::time::Instant;
 
 /// Normalize text for duplicate comparison
@@ -39,8 +39,9 @@ const DEFAULT_MAX_TRACKED: usize = 10_000;
 pub struct SentMessageTracker {
     /// Original sent texts
     sent_texts: Vec<String>,
-    /// Normalized texts for fast lookup
-    sent_normalized: HashSet<String>,
+    /// Normalized texts for fast lookup, refcounted because distinct raw texts
+    /// can map to the same normalized form (normalization is many-to-one).
+    sent_normalized: HashMap<String, usize>,
     /// Full records with metadata
     records: Vec<SentRecord>,
     /// Maximum number of messages to track (oldest are evicted)
@@ -51,7 +52,7 @@ impl Default for SentMessageTracker {
     fn default() -> Self {
         Self {
             sent_texts: Vec::new(),
-            sent_normalized: HashSet::new(),
+            sent_normalized: HashMap::new(),
             records: Vec::new(),
             max_tracked: DEFAULT_MAX_TRACKED,
         }
@@ -68,7 +69,7 @@ impl SentMessageTracker {
     pub fn with_capacity(max_tracked: usize) -> Self {
         Self {
             sent_texts: Vec::new(),
-            sent_normalized: HashSet::new(),
+            sent_normalized: HashMap::new(),
             records: Vec::new(),
             max_tracked,
         }
@@ -77,7 +78,7 @@ impl SentMessageTracker {
     /// Check if text would be a duplicate
     pub fn is_duplicate(&self, text: &str) -> bool {
         let normalized = normalize_text(text);
-        self.sent_normalized.contains(&normalized)
+        self.sent_normalized.contains_key(&normalized)
     }
 
     /// Record a sent message
@@ -88,12 +89,20 @@ impl SentMessageTracker {
         if self.sent_texts.len() >= self.max_tracked {
             let evicted = self.sent_texts.remove(0);
             let evicted_norm = normalize_text(&evicted);
-            self.sent_normalized.remove(&evicted_norm);
+            // Refcount: only drop the normalized entry once the last raw text
+            // sharing this form is evicted, otherwise a still-tracked duplicate
+            // would stop being detected.
+            if let Some(count) = self.sent_normalized.get_mut(&evicted_norm) {
+                *count -= 1;
+                if *count == 0 {
+                    self.sent_normalized.remove(&evicted_norm);
+                }
+            }
             self.records.remove(0);
         }
 
         self.sent_texts.push(text.to_string());
-        self.sent_normalized.insert(normalized);
+        *self.sent_normalized.entry(normalized).or_insert(0) += 1;
         self.records.push(SentRecord {
             channel: channel.to_string(),
             user_id: user_id.map(|s| s.to_string()),

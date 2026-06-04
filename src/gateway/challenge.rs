@@ -156,11 +156,16 @@ impl ChallengeManager {
             return Err(ChallengeError::NonceReplay);
         }
 
-        // 2. Pending lookup
-        let (_, pending) = self
+        // 2. Pending lookup — read without consuming. A failed attempt
+        //    (expired window or bad signature) must leave the nonce in
+        //    `pending` so the legitimate client can still retry; consuming on
+        //    failure would let a single wrong-signature attempt destroy an
+        //    outstanding handshake (griefing/DoS).
+        let pending_ts = self
             .pending
-            .remove(nonce)
-            .ok_or(ChallengeError::NonceNotFound)?;
+            .get(nonce)
+            .ok_or(ChallengeError::NonceNotFound)?
+            .timestamp;
 
         // 3. Timestamp window check
         let now_ms = SystemTime::now()
@@ -169,20 +174,22 @@ impl ChallengeManager {
             .as_millis() as u64;
 
         let window_ms = TIMESTAMP_WINDOW_SECS * 1000;
-        let lower = pending.timestamp.saturating_sub(window_ms);
-        let upper = pending.timestamp.saturating_add(window_ms);
+        let lower = pending_ts.saturating_sub(window_ms);
+        let upper = pending_ts.saturating_add(window_ms);
 
         if now_ms < lower || now_ms > upper {
             return Err(ChallengeError::TimestampExpired);
         }
 
         // 4. Signature verification
-        let expected = compute_signature(token, nonce, pending.timestamp, device_id);
+        let expected = compute_signature(token, nonce, pending_ts, device_id);
         if !constant_time_eq(signature.as_bytes(), expected.as_bytes()) {
             return Err(ChallengeError::InvalidSignature);
         }
 
-        // 5. Mark as used (with timestamp for age-based pruning)
+        // 5. Consume the nonce only on success: remove it from `pending` and
+        //    record it in `used` (with timestamp for age-based pruning).
+        self.pending.remove(nonce);
         self.used.insert(nonce.to_owned(), Instant::now());
 
         Ok(())

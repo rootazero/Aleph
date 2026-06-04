@@ -7,12 +7,12 @@ use crate::sync_primitives::Arc;
 pub(super) async fn wait_for_deadline(deadline: Arc<tokio::sync::Mutex<tokio::time::Instant>>) {
     loop {
         let dl = *deadline.lock().await;
-        tokio::time::sleep_until(dl).await;
-        // Re-check: deadline may have been extended while we slept.
-        if tokio::time::Instant::now() >= *deadline.lock().await {
+        if tokio::time::Instant::now() >= dl {
             break;
         }
-        // Guard against theoretical busy-spin if deadline is in the past
-        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        // Sleep precisely to the current deadline. If it was extended while we
+        // slept, the next iteration re-reads the new value and sleeps again —
+        // no fixed-interval poll, no busy-spin.
+        tokio::time::sleep_until(dl).await;
     }
 }

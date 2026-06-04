@@ -537,7 +537,7 @@ impl MattermostMessageOps {
                     tracing::debug!(
                         "Mattermost message from {}: {}",
                         inbound.sender_name.as_deref().unwrap_or("?"),
-                        &inbound.text[..inbound.text.len().min(50)]
+                        inbound.text.chars().take(50).collect::<String>()
                     );
                     if inbound_tx.send(inbound).is_err() {
                         tracing::error!("Mattermost: inbound channel closed");

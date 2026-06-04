@@ -328,8 +328,6 @@ async fn drain_queue(
         let next_task = {
             let mut queues = queues.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(queue) = queues.get_mut(session_key_str) {
-                queue.active_run_id = None;
-
                 // Drop expired tasks with per-item logging (first 3 samples)
                 let mut dropped = 0usize;
                 queue.pending.retain(|t| {
@@ -354,24 +352,41 @@ async fn drain_queue(
                     );
                 }
 
-                let next = queue.pending.pop_front();
-                // Prevent memory leak: remove empty idle queue from the map.
-                if queue.pending.is_empty() && queue.is_idle() {
-                    queues.remove(session_key_str);
+                match queue.pending.pop_front() {
+                    Some(task) => {
+                        // Hand the run slot to the next task atomically: assign
+                        // its run id while still holding the lock that popped it.
+                        // Clearing active_run_id to None first (the previous
+                        // order) exposed an idle window in which a concurrent
+                        // enqueue would observe is_idle() and start a SECOND run
+                        // for the same session, breaking per-session
+                        // serialization.
+                        let run_id = uuid::Uuid::new_v4().to_string();
+                        queue.active_run_id = Some(run_id.clone());
+                        Some((task, run_id))
+                    }
+                    None => {
+                        queue.active_run_id = None;
+                        // Prevent memory leak: remove empty idle queue from the map.
+                        if queue.pending.is_empty() && queue.is_idle() {
+                            queues.remove(session_key_str);
+                        }
+                        None
+                    }
                 }
-                next
             } else {
                 None
             }
         };
 
-        if let Some(task) = next_task {
+        if let Some((task, run_id)) = next_task {
             debug!(
                 session = %session_key_str,
                 "Dequeuing next task for session"
             );
             if execute_next(
                 task.enriched,
+                run_id,
                 session_key_str,
                 Arc::clone(&queues),
                 Arc::clone(&execution_adapter),
@@ -441,6 +456,7 @@ impl EventEmitter for SchedulerEventListener {
 /// execution without holding a reference to `SessionScheduler`.
 async fn execute_next(
     enriched: EnrichedMessage,
+    run_id: String,
     session_key_str: &str,
     queues: Arc<Mutex<HashMap<String, SessionQueue>>>,
     execution_adapter: Arc<dyn ExecutionAdapter>,
@@ -450,16 +466,9 @@ async fn execute_next(
 ) -> bool {
     let ctx = &enriched.merged.primary_context;
     let agent_id = ctx.session_key.agent_id().to_string();
-    let run_id = uuid::Uuid::new_v4().to_string();
-
-    // Set active run id
-    {
-        let mut qs = queues.lock().unwrap_or_else(|e| e.into_inner());
-        let queue = qs
-            .entry(session_key_str.to_string())
-            .or_insert_with(SessionQueue::new);
-        queue.active_run_id = Some(run_id.clone());
-    }
+    // `run_id` and the active-run slot were assigned by the caller
+    // (`drain_queue`) within the same lock scope that popped this task, so there
+    // is no idle window for a concurrent enqueue to start a second run.
 
     // Resolve agent
     let agent = match agent_registry.get(&agent_id).await {
