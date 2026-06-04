@@ -11,6 +11,7 @@ pub mod provider;
 pub mod types;
 pub mod vault;
 pub mod vault_resolver;
+pub mod vendor_patterns;
 pub mod virtual_key_resolver;
 pub mod web3_signer;
 
