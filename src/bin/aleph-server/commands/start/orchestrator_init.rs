@@ -137,9 +137,6 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         Arc::new(move |_session_key: &str| Ok(shared_sandbox.clone()));
     let sandbox_factory = build_sandbox_factory(workspace_builder);
 
-    // PHASE-6: populate named providers from AuthProfileRegistry. Only
-    // `BrainRef::Default` works correctly until then — `Strict` returns
-    // `ProviderUnavailable`.
     // Stage 6a (#10): assemble the per-turn verifier chain from
     // config.toml [[stop_hooks]] (wrapped as StopHookVerifier) plus the
     // always-on ToolLoopVerifier (death-loop watchdog, default threshold
@@ -201,6 +198,17 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         Some(route_handle),
     );
     let default_provider = provider_chain.default.clone();
+    // Wire the per-provider pin chains as the harness `named_providers` so the
+    // dynamic-routing model directive composes with failover, not around it:
+    // `BrainRef::Strict`/`Preferred` and a `select_model(provider=…)` pick now
+    // resolve to the matching pin+fall-through `FailoverProvider` (route-shaped,
+    // circuit-broken) instead of a raw provider — or, when unmatched, fall back
+    // to the global default. Each entry pins one configured provider as primary
+    // then falls through the whole global chain, so a pinned provider's outage
+    // still degrades gracefully. (Realizes the prior "PHASE-6: populate
+    // named_providers" TODO by reusing the chain `build_failover_chain` already
+    // built for subagent routing — no second construction.)
+    let named_providers = provider_chain.agent_overrides.clone();
 
     let (stall_cfg, failure_cap, turn_to) = build_stability_triple(config);
     let harness = Arc::new(AgentHarnessRunner {
@@ -208,7 +216,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         session_service: session_service.clone(),
         tool_service,
         default_provider,
-        named_providers: HashMap::new(),
+        named_providers,
         verifier_chain,
         // H2: opt-in mid-run context compaction. `None` (section absent /
         // disabled) keeps the previous behavior — no compaction.

@@ -231,8 +231,20 @@ impl HarnessRunner for AgentHarnessRunner {
         //      — gives a markdown agent's declared model teeth on main runs,
         //      matching how `subagent_spawner` already stamps it for spawns;
         //   3. otherwise the flow's `BrainRef` preset via `pick_llm`.
-        // (1) and (2) stamp the model onto the chosen provider via the shared
-        // ModelOverrideProvider; (3) is byte-identical to before.
+        //
+        // (1)/(2) resolve a *base provider* then stamp the model onto it via the
+        // shared `ModelOverrideProvider`. The base is, in turn:
+        //   * the named pin chain for `provider_opt` when it names a configured
+        //     provider (`named_providers`, wired from the route-shaped pin +
+        //     fall-through `FailoverProvider`s), so the directive still gets
+        //     failover, circuit-breaking and `[route]`-mode tier gating; else
+        //   * the global default chain.
+        // Either way the base is a `FailoverProvider`, and its primary slot now
+        // honours the stamped model (see `failover.rs` model-list resolution) —
+        // so the explicitly chosen model actually reaches the wire instead of
+        // being shadowed by that provider's static catalog. (3) is byte-identical
+        // to before — directive-less requests send `model: None`, which the
+        // failover primary ignores, walking its catalog as usual.
         let session_pref_key = SessionKey::from_key_string(&session_key)
             .map(|s| s.to_key_string())
             .unwrap_or_else(|| session_key.clone());

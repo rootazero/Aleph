@@ -584,18 +584,37 @@ impl AiProvider for FailoverProvider {
                     continue;
                 }
 
-                // Empty model list → a single attempt with the caller's model
-                // (or the provider's own default when that is `None` too).
-                // Otherwise the C floor drops models that structurally cannot
-                // serve this request (no vision / no tools / over context
-                // window), failing open so the chain is never emptied.
-                let models: Vec<Option<String>> = if cand.models.is_empty() {
-                    vec![req_model.clone()]
-                } else {
-                    retain_capable_models(cand.models.clone(), &reqs)
+                // Model-list resolution, in precedence:
+                //
+                // 1. An *explicitly pinned* request model on the primary/default
+                //    slot (tier `Unknown`). This is the dynamic-routing model
+                //    directive — a `select_model` pick, an agent `model_hint`,
+                //    or a `BrainRef::Strict` model — that `ModelOverrideProvider`
+                //    stamped onto `payload.model`. It targets the operator's
+                //    configured default endpoint, so it overrides that slot's
+                //    static catalog walk (otherwise the catalog silently
+                //    discarded the model the LLM/agent explicitly chose). Still
+                //    passed through the C floor (fail-open) for consistency.
+                //    Fallback slots keep their own catalog — the pinned model
+                //    belongs to the default endpoint, not its cross-provider
+                //    safety net.
+                // 2. Empty catalog → a single attempt with the caller's model
+                //    (or the provider's own default when that is `None` too).
+                // 3. Otherwise the C floor drops models that structurally cannot
+                //    serve this request (no vision / no tools / over context
+                //    window), failing open so the chain is never emptied.
+                let models: Vec<Option<String>> = match (cand.tier, &req_model) {
+                    (EndpointTier::Unknown, Some(pinned)) => {
+                        retain_capable_models(vec![pinned.clone()], &reqs)
+                            .into_iter()
+                            .map(Some)
+                            .collect()
+                    }
+                    _ if cand.models.is_empty() => vec![req_model.clone()],
+                    _ => retain_capable_models(cand.models.clone(), &reqs)
                         .into_iter()
                         .map(Some)
-                        .collect()
+                        .collect(),
                 };
 
                 let mut tripped: Option<FailureKind> = None;
@@ -945,6 +964,55 @@ mod tests {
         let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
         assert_eq!(resp.text_content(), "openai");
         assert_eq!(primary.models(), vec![Some("gpt-4o".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn pinned_request_model_overrides_primary_catalog() {
+        // The dynamic-routing directive (select_model / agent model_hint /
+        // BrainRef::Strict) reaches the failover as a stamped `payload.model`.
+        // On the primary/default slot it must win over the provider's static
+        // catalog — otherwise the model the LLM explicitly chose is silently
+        // discarded (the bug this guards).
+        let primary = ScriptProvider::ok("anthropic");
+        let fp = build(
+            primary.clone(),
+            vec![("anthropic", vec!["opus", "sonnet"])],
+            vec![],
+        );
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let payload = RequestPayload::new(&msgs).with_model(Some("gpt-5".to_string()));
+        let resp = fp.process(payload).await.unwrap();
+        assert_eq!(resp.text_content(), "anthropic");
+        // Dialed with the pinned model only — never the opus/sonnet catalog.
+        assert_eq!(primary.models(), vec![Some("gpt-5".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn pinned_request_model_does_not_leak_into_fallback_catalog() {
+        // The pinned model targets the *default* endpoint, not its cross-provider
+        // safety net: when the primary fails over, the fallback walks its own
+        // catalog, not the pinned model (which may belong to a different vendor).
+        let primary = ScriptProvider::err("anthropic", "HTTP 429 too many requests");
+        let fallback = ScriptProvider::ok("openai");
+        let fp = build(
+            primary.clone(),
+            vec![("anthropic", vec!["opus"])],
+            vec![FailoverNode::with_tier(
+                "openai".to_string(),
+                vec!["gpt-4o".to_string()],
+                fallback.clone(),
+                EndpointTier::Cloud,
+            )],
+        );
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let payload = RequestPayload::new(&msgs).with_model(Some("gpt-5".to_string()));
+        let resp = fp.process(payload).await.unwrap();
+        assert_eq!(resp.text_content(), "openai");
+        // Primary (Unknown slot) honoured the pin; fallback kept its own catalog.
+        assert_eq!(primary.models(), vec![Some("gpt-5".to_string())]);
+        assert_eq!(fallback.models(), vec![Some("gpt-4o".to_string())]);
     }
 
     #[tokio::test]
