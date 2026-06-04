@@ -30,9 +30,16 @@ const MAX_DOWNLOAD_BYTES: usize = 100 * 1024 * 1024;
 
 /// Percent-encode a slug for use in URL path segments.
 /// Encodes everything except alphanumerics, `-`, `_`, `.`, `~`, and `/` (slug separator).
+///
+/// Empty and dot segments (`.` / `..`) are dropped so a crafted slug cannot
+/// climb above the intended `/api/v1/skills/{slug}` prefix: the `url` crate
+/// normalizes dot-segments, so leaving `..` literal would let
+/// `get_skill("../../foo")` resolve to an unrelated endpoint on the registry
+/// host. The consumer's `sanitize_skill_name` only guards the filesystem path,
+/// not the URL path, so this is the URL-side containment.
 fn encode_slug_path(slug: &str) -> String {
     slug.split('/')
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty() && *s != "." && *s != "..")
         .map(|segment| utf8_percent_encode(segment, PATH_SEGMENT_ENCODE_SET).to_string())
         .collect::<Vec<_>>()
         .join("/")
@@ -400,6 +407,18 @@ mod tests {
         assert_eq!(encode_slug_path("owner//skill"), "owner/skill");
         assert_eq!(encode_slug_path("/owner/skill/"), "owner/skill");
         assert_eq!(encode_slug_path("///"), "");
+    }
+
+    #[test]
+    fn test_encode_slug_path_drops_dot_segments() {
+        // `.`/`..` segments are dropped so a crafted slug cannot escape the
+        // `/api/v1/skills/` prefix once the url crate normalizes dot-segments.
+        assert_eq!(encode_slug_path("../../admin"), "admin");
+        assert_eq!(encode_slug_path("owner/../secret"), "owner/secret");
+        assert_eq!(encode_slug_path("./owner/./skill"), "owner/skill");
+        assert_eq!(encode_slug_path(".."), "");
+        // A literal dot inside a legitimate name is preserved (not a segment).
+        assert_eq!(encode_slug_path("owner/node.js-helper"), "owner/node.js-helper");
     }
 
     #[test]
