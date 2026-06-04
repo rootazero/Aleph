@@ -188,9 +188,9 @@ async fn handle_approval_request(
     let decision = manager.wait_for_decision(record).await;
 
     let (approved, timeout) = match decision {
-        Some(ApprovalDecisionType::AllowOnce) | Some(ApprovalDecisionType::AllowAlways) => {
-            (true, false)
-        }
+        Some(ApprovalDecisionType::AllowOnce)
+        | Some(ApprovalDecisionType::AllowSession)
+        | Some(ApprovalDecisionType::AllowAlways) => (true, false),
         Some(ApprovalDecisionType::Deny) => (false, false),
         None => (false, true),
     };

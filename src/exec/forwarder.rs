@@ -125,6 +125,9 @@ impl ExecApprovalForwarder {
         if allowed.contains(&ApprovalDecisionType::AllowOnce) {
             reply_hints.push(format!("/approve {} allow-once", record.id));
         }
+        if allowed.contains(&ApprovalDecisionType::AllowSession) {
+            reply_hints.push(format!("/approve {} allow-session", record.id));
+        }
         if allowed.contains(&ApprovalDecisionType::AllowAlways) {
             reply_hints.push(format!("/approve {} allow-always", record.id));
         }
@@ -194,6 +197,7 @@ impl ExecApprovalForwarder {
 
         let (emoji, decision_str) = match decision {
             ApprovalDecisionType::AllowOnce => ("✅", "allowed (once)"),
+            ApprovalDecisionType::AllowSession => ("✅", "allowed (session)"),
             ApprovalDecisionType::AllowAlways => ("✅", "allowed (always)"),
             ApprovalDecisionType::Deny => ("❌", "denied"),
         };
@@ -217,6 +221,7 @@ impl ExecApprovalForwarder {
     ///
     /// Supports formats:
     /// - `/approve <id> allow-once`
+    /// - `/approve <id> allow-session`
     /// - `/approve <id> allow-always`
     /// - `/approve <id> deny`
     pub fn parse_approve_command(input: &str) -> Option<(String, ApprovalDecisionType)> {
@@ -235,6 +240,7 @@ impl ExecApprovalForwarder {
         let id = parts[1].to_string();
         let decision = match parts[2] {
             "allow-once" | "allow" | "yes" | "y" => ApprovalDecisionType::AllowOnce,
+            "allow-session" | "session" => ApprovalDecisionType::AllowSession,
             "allow-always" | "always" => ApprovalDecisionType::AllowAlways,
             "deny" | "no" | "n" | "reject" => ApprovalDecisionType::Deny,
             _ => return None,
