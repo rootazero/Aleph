@@ -88,6 +88,16 @@ impl ToolService for McpScopedToolService {
         self.parent.is_call_concurrent_safe(name, input).await
     }
 
+    async fn call_concurrency_claim(
+        &self,
+        name: &str,
+        input: &serde_json::Value,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        // Defer to the parent for the same reason as `is_call_concurrent_safe`:
+        // it owns the authoritative bounded scope for every tool it exposes.
+        self.parent.call_concurrency_claim(name, input).await
+    }
+
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
         // For Stage I MVP, compute merged schema from list snapshot.
         // AllowlistToolService above us gates which tools the LLM actually sees,

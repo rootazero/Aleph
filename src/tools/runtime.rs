@@ -89,6 +89,27 @@ pub trait LoopTool: Send + Sync {
         true
     }
 
+    /// Resource-scope-aware concurrency claim for the parallel dispatch path.
+    ///
+    /// Names the *blast radius* of this call so the scheduler can run
+    /// disjoint-scope mutations concurrently while still serializing ones that
+    /// touch the same resource. The default delegates to
+    /// [`is_concurrent_safe`](LoopTool::is_concurrent_safe): `true` →
+    /// `ConcurrencyClaim::Shared`, `false` → `Exclusive { Global }`. Keeping
+    /// the default a pure delegation makes every existing tool byte-identical;
+    /// only tools that touch a *bounded* set of paths (file write/edit/patch,
+    /// `file_ops` mutating operations) override this to return a bounded
+    /// `Exclusive { Paths }` scope so disjoint-path calls can parallelize while
+    /// same-path ones stay serial.
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        if self.is_concurrent_safe(input) {
+            ConcurrencyClaim::Shared
+        } else {
+            ConcurrencyClaim::global()
+        }
+    }
+
     /// Whether running this tool requires explicit user confirmation first.
     ///
     /// Returns `false` by default. Override to `true` on irreversible /
@@ -240,6 +261,18 @@ impl LoopToolRegistry {
     /// (callers should treat unknown as conservative `false`).
     pub fn is_call_concurrent_safe(&self, name: &str, input: &Value) -> Option<bool> {
         self.resolve(name).map(|t| t.is_concurrent_safe(input))
+    }
+
+    /// Resolve the named tool's resource-scope-aware concurrency claim for the
+    /// given input (see [`LoopTool::concurrency_claim`]). Returns `None` if the
+    /// tool is unknown to this registry — callers should treat unknown as the
+    /// conservative whole-world [`crate::tools::concurrency::ConcurrencyClaim::global`].
+    pub fn call_concurrency_claim(
+        &self,
+        name: &str,
+        input: &Value,
+    ) -> Option<crate::tools::concurrency::ConcurrencyClaim> {
+        self.resolve(name).map(|t| t.concurrency_claim(input))
     }
 
     /// Whether the named tool declares that it requires explicit user

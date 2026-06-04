@@ -357,10 +357,13 @@ impl AgentHarness {
 impl AgentHarness {
     /// Whether the current batch is eligible for the parallel fast path.
     ///
-    /// All preconditions are checked in O(n) for batch size n; the
-    /// `is_call_concurrent_safe` query is one trait await per call. Returns
-    /// `false` cheaply when concurrency is disabled or when there are fewer
-    /// than two calls.
+    /// Preconditions are checked in O(n) for batch size n; the
+    /// `call_concurrency_claim` query is one trait await per call, followed by
+    /// an O(n²) pairwise conflict scan over the (tiny) batch. Returns `false`
+    /// cheaply when concurrency is disabled or when there are fewer than two
+    /// calls. Admission is resource-scope-aware (see
+    /// [`crate::tools::concurrency`]): disjoint-path mutations parallelize,
+    /// same-path / whole-world mutations fall back to the serial loop.
     ///
     /// Guardrails no longer force a serial fall-back: the tool-call guardrail
     /// (Block / Sanitize / Pass) is applied sequentially in `act_parallel`'s
@@ -387,18 +390,22 @@ impl AgentHarness {
                 return false;
             }
         }
-        // Every call must self-report concurrent-safe for its concrete input.
+        // Resource-scope-aware admission: collect each call's concurrency
+        // claim (Shared / Exclusive{Global|Paths}) and admit the batch only
+        // when no pair conflicts. This generalizes the old "every call must be
+        // concurrent-safe" check — a batch of disjoint-path file mutations now
+        // parallelizes, while same-path or whole-world mutations still fall
+        // back to the serial loop. See `crate::tools::concurrency`.
+        let mut claims = Vec::with_capacity(tool_calls.len());
         for call in tool_calls {
-            if !self
-                .deps
-                .tools
-                .is_call_concurrent_safe(&call.name, &call.arguments)
-                .await
-            {
-                return false;
-            }
+            claims.push(
+                self.deps
+                    .tools
+                    .call_concurrency_claim(&call.name, &call.arguments)
+                    .await,
+            );
         }
-        true
+        crate::tools::concurrency::batch_parallelizable(&claims)
     }
 
     /// Parallel fast path. Pre-emits `ToolCallRequested` events in input
