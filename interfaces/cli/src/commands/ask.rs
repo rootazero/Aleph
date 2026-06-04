@@ -61,6 +61,7 @@ pub async fn run(
 
     // Collect response.
     let mut response_text = String::new();
+    let mut final_response_fallback: Option<String> = None;
     let mut tool_count = 0usize;
     let mut agent_trace_seen = false;
     let mut footer_rendered = false;
@@ -128,6 +129,10 @@ pub async fn run(
                 }
             }
             StreamEvent::RunComplete { summary, .. } => {
+                // Capture the authoritative final answer the summary carries so
+                // the human/`-o` output can fall back to it when nothing
+                // streamed (channels already do this in reply_emitter).
+                final_response_fallback = summary.final_response.clone();
                 if !json {
                     eprintln!();
                     eprintln!("{}", exec_echo::render_summary_footer(&summary));
@@ -159,11 +164,17 @@ pub async fn run(
         }
     }
 
+    // Reconcile the streamed buffer with the summary's authoritative
+    // `final_response`. Streamed text wins when present (already shown inline);
+    // otherwise fall back to the summary so a reasoning/tool-only run still
+    // prints a body and writes a non-empty `-o` file instead of a black hole.
+    let final_text = exec_echo::resolve_final_text(&response_text, final_response_fallback.as_deref());
+
     // Suppress human output when --json is active so the JSONL stream stays
     // machine-parseable on stdout. Render Markdown to ANSI for the human path;
     // the raw text is still what gets written to --output-last-message below.
     if !json {
-        println!("{}", crate::output::markdown::render(&response_text));
+        println!("{}", crate::output::markdown::render(final_text));
         // The summary footer (rendered on RunComplete) supersedes the legacy
         // "(N tools used)" line; only fall back to the count when no footer
         // arrived (e.g. the stream ended on ResponseChunk is_final).
@@ -174,7 +185,7 @@ pub async fn run(
     }
 
     if let Some(path) = output_last_message {
-        if let Err(e) = std::fs::write(path, &response_text) {
+        if let Err(e) = std::fs::write(path, final_text) {
             eprintln!(
                 "warning: failed to write --output-last-message to {}: {}",
                 path, e
