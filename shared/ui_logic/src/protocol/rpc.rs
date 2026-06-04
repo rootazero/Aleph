@@ -61,9 +61,14 @@ impl RpcClient {
         });
 
         let (tx, rx) = oneshot::channel();
-        self.pending.borrow_mut().insert(id, tx);
+        self.pending.borrow_mut().insert(id.clone(), tx);
 
-        self.connector.borrow_mut().send(request).await?;
+        // If the send fails, drop the pending entry we just registered so the
+        // correlation map doesn't leak its sender across repeated failures.
+        if let Err(e) = self.connector.borrow_mut().send(request).await {
+            self.pending.borrow_mut().remove(&id);
+            return Err(e.into());
+        }
 
         let res = rx.await.map_err(|_| RpcError::ChannelClosed)??;
 
