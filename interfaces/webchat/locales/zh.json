@@ -165,6 +165,8 @@
     "send_placeholder": "发送消息...",
     "attach": "附加文件",
     "stop": "停止",
+    "queue": "排队，本轮结束后发送",
+    "queued": "已排队",
     "remove": "移除",
     "clear": "清空草稿",
     "voice_start": "语音输入",

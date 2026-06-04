@@ -15,6 +15,17 @@ pub struct PendingAttachment {
     pub size: u64,
 }
 
+/// A follow-up prompt the user lined up while a turn was still running.
+///
+/// Mirrors hermes-agent's `QueuedPromptEntry`. Reuses [`PendingAttachment`]
+/// so a queued prompt carries the exact same payload as a live send — the
+/// drain path just replays it through the normal composer pipeline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedPrompt {
+    pub text: String,
+    pub attachments: Vec<PendingAttachment>,
+}
+
 /// Stable, machine-readable code for a chat send / delivery failure.
 ///
 /// Mirrors openhuman's `chatSendError.ts` taxonomy so analytics and tests
@@ -176,6 +187,11 @@ pub struct ChatState {
     /// True while a drag is hovering the chat surface — drives the drop
     /// overlay highlight.
     pub is_dragging_files: RwSignal<bool>,
+    /// Follow-up prompts queued while a run is active. Drained one-at-a-time
+    /// when the turn settles naturally (see
+    /// [`shared_ui_logic::state::should_auto_drain_on_settle`]). Session-scoped
+    /// content, so it rides along in [`SessionSnapshot`] across tab swaps.
+    pub prompt_queue: RwSignal<Vec<QueuedPrompt>>,
     /// Pulse signal that asks the composer to retry the last user message:
     /// each bump increments by 1. Used by MessageBubble's retry button so
     /// the composer (which owns the send pipeline) actually fires the send
@@ -231,6 +247,7 @@ impl ChatState {
             send_error: RwSignal::new(None),
             pending_attachments: RwSignal::new(Vec::new()),
             is_dragging_files: RwSignal::new(false),
+            prompt_queue: RwSignal::new(Vec::new()),
             retry_pulse: RwSignal::new(0),
             active_project_root: RwSignal::new(None),
             active_project_name: RwSignal::new(None),
@@ -238,6 +255,32 @@ impl ChatState {
             voice_run_ids: RwSignal::new(Vec::new()),
             next_msg_id: RwSignal::new(0),
         }
+    }
+
+    /// Append a follow-up prompt to the tail of the queue.
+    pub fn enqueue_prompt(&self, entry: QueuedPrompt) {
+        self.prompt_queue.update(|q| q.push(entry));
+    }
+
+    /// Pop the head of the queue, if any. Returns the prompt to replay.
+    pub fn dequeue_prompt_front(&self) -> Option<QueuedPrompt> {
+        let mut popped = None;
+        self.prompt_queue.update(|q| {
+            if !q.is_empty() {
+                popped = Some(q.remove(0));
+            }
+        });
+        popped
+    }
+
+    /// Remove the queued prompt at `index` (no-op if out of range). Used by
+    /// the per-row ✕ in the queue preview bar.
+    pub fn remove_queued_prompt(&self, index: usize) {
+        self.prompt_queue.update(|q| {
+            if index < q.len() {
+                q.remove(index);
+            }
+        });
     }
 
     /// Register a run whose final assistant reply should be spoken aloud.
@@ -473,6 +516,7 @@ impl ChatState {
         self.reasoning_text.set(String::new());
         self.error_message.set(None);
         self.send_error.set(None);
+        self.prompt_queue.set(Vec::new());
     }
 
     /// Clear session state but keep agent_id (for new chat within same agent).
@@ -484,6 +528,7 @@ impl ChatState {
         self.reasoning_text.set(String::new());
         self.error_message.set(None);
         self.send_error.set(None);
+        self.prompt_queue.set(Vec::new());
         // agent_id is intentionally preserved
     }
 
@@ -506,6 +551,7 @@ impl ChatState {
             error_message: self.error_message.get_untracked(),
             send_error: self.send_error.get_untracked(),
             pending_attachments: self.pending_attachments.get_untracked(),
+            prompt_queue: self.prompt_queue.get_untracked(),
             active_project_root: self.active_project_root.get_untracked(),
             active_project_name: self.active_project_name.get_untracked(),
             selected_model: self.selected_model.get_untracked(),
@@ -525,6 +571,7 @@ impl ChatState {
         self.error_message.set(snap.error_message);
         self.send_error.set(snap.send_error);
         self.pending_attachments.set(snap.pending_attachments);
+        self.prompt_queue.set(snap.prompt_queue);
         self.active_project_root.set(snap.active_project_root);
         self.active_project_name.set(snap.active_project_name);
         self.selected_model.set(snap.selected_model);
@@ -545,6 +592,7 @@ pub struct SessionSnapshot {
     pub error_message: Option<String>,
     pub send_error: Option<ChatSendError>,
     pub pending_attachments: Vec<PendingAttachment>,
+    pub prompt_queue: Vec<QueuedPrompt>,
     pub active_project_root: Option<String>,
     pub active_project_name: Option<String>,
     pub selected_model: Option<crate::api::providers::ModelOverride>,
