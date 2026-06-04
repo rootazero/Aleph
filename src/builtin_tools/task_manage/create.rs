@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use crate::agents::swarm::tasks::acceptance::with_acceptance_criteria;
 use crate::agents::swarm::tasks::{CoordTaskStore, NewCoordTask, Priority};
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -35,6 +36,12 @@ pub struct TaskCreateArgs {
     /// Priority: low, normal, high, critical (default: normal)
     #[serde(default)]
     pub priority: Option<String>,
+    /// Definition of done: a checklist the task must satisfy before it counts as
+    /// complete. Each item is surfaced to the executing agent (so it knows the
+    /// bar up front) and to the reviewer at the approval gate (so the verdict is
+    /// grounded). Optional — omit for tasks with no explicit acceptance bar.
+    #[serde(default)]
+    pub acceptance_criteria: Option<Vec<String>>,
     /// Arbitrary metadata JSON
     #[serde(default)]
     pub metadata: Option<serde_json::Value>,
@@ -101,7 +108,9 @@ impl AlephTool for TaskCreateTool {
         "Create a new coordination task for the agent swarm. Tasks can have \
          dependencies (blocked_by), priority levels, and be assigned to a team \
          or specific agent owner. Once dependencies are met, the team \
-         dispatcher runs the task automatically.";
+         dispatcher runs the task automatically. Supply `acceptance_criteria` \
+         (a checklist) to define when the task is done — the executing agent \
+         sees it as its bar, and the reviewer judges approval against it.";
 
     type Args = TaskCreateArgs;
     type Output = TaskCreateOutput;
@@ -117,6 +126,14 @@ impl AlephTool for TaskCreateTool {
             .and_then(Priority::from_stored)
             .unwrap_or_default();
 
+        // Compose the metadata channel: dispatcher marker first, then fold in
+        // the acceptance-criteria contract (a no-op when none were supplied, so
+        // the row stays byte-identical to the legacy shape).
+        let metadata = with_acceptance_criteria(
+            with_managed_marker(args.metadata),
+            args.acceptance_criteria.unwrap_or_default(),
+        );
+
         let new_task = NewCoordTask {
             team_id: args.team_id,
             subject: args.subject,
@@ -124,7 +141,7 @@ impl AlephTool for TaskCreateTool {
             owner: args.owner,
             priority,
             blocked_by: args.blocked_by.unwrap_or_default(),
-            metadata: with_managed_marker(args.metadata),
+            metadata,
         };
 
         let task = self.store.create_task(new_task).await?;

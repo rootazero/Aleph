@@ -5,6 +5,9 @@
 //! context" pattern: instead of a background sensing loop, everything the
 //! member needs is gathered once, at launch, from the task DAG and team state.
 
+use crate::agents::swarm::tasks::acceptance::{
+    read_acceptance_criteria, render_acceptance_section,
+};
 use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskStore, TaskRunStatus};
 use crate::sync_primitives::Arc;
 use crate::teams::context::InboxContextProvider;
@@ -169,6 +172,14 @@ pub async fn build_handoff_context(
         out.push_str(&truncate_utf8(&task.description, MAX_SECTION_BYTES));
     }
     out.push('\n');
+
+    // --- Acceptance criteria (the task's definition of done) ---
+    // Read straight from the metadata channel and rendered as a checklist so
+    // the member knows the completion bar before starting. Empty for tasks that
+    // declare none, leaving the envelope byte-identical to the legacy one.
+    out.push_str(&render_acceptance_section(&read_acceptance_criteria(
+        &task.metadata,
+    )));
 
     // --- Team protocol (operating agreement injected verbatim) ---
     // Placed right after the task so the member reads the team's rules before
@@ -417,6 +428,30 @@ mod tests {
         assert!(ctx.contains("## Dependency Results"));
         assert!(ctx.contains("Gather data"));
         assert!(ctx.contains("found 42 records"));
+    }
+
+    #[tokio::test]
+    async fn handoff_injects_acceptance_criteria_when_present() {
+        use crate::agents::swarm::tasks::acceptance::with_acceptance_criteria;
+        let cs = coord_store().await;
+        let ts = team_store().await;
+
+        // No criteria -> no Acceptance Criteria heading (byte-identical legacy).
+        let plain = cs.create_task(plain_task("Bare task")).await.unwrap();
+        let before = build_handoff_context(&cs, &ts, None, &plain).await;
+        assert!(!before.contains("## Acceptance Criteria"));
+
+        // A task carrying criteria in its metadata surfaces them as a checklist.
+        let mut spec = plain_task("Ship login");
+        spec.metadata = with_acceptance_criteria(
+            spec.metadata,
+            vec!["tests pass".into(), "no clippy warnings".into()],
+        );
+        let task = cs.create_task(spec).await.unwrap();
+        let after = build_handoff_context(&cs, &ts, None, &task).await;
+        assert!(after.contains("## Acceptance Criteria"));
+        assert!(after.contains("- [ ] tests pass"));
+        assert!(after.contains("- [ ] no clippy warnings"));
     }
 
     #[tokio::test]
