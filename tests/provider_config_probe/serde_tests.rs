@@ -250,7 +250,7 @@ fn rerank_multi_model_roundtrip() {
 fn rerank_default_has_model() {
     let config = RerankConfig::default();
     assert!(!config.models.is_empty());
-    assert_eq!(config.default_model(), "BAAI/bge-reranker-v2-m3");
+    assert_eq!(config.default_model(), "jina-reranker-v2-base-multilingual");
     assert!(!config.enabled);
 }
 

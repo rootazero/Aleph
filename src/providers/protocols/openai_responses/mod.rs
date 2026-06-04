@@ -202,9 +202,12 @@ impl OpenAiResponsesProtocol {
             top_logprobs: if config.logprobs == Some(true)
                 && policy.capabilities.supports_logprobs
             {
-                // Omit when unset (server default) rather than sending a literal
-                // 0, which would mean "zero alternatives" — a different request.
-                config.top_logprobs.map(u32::from)
+                // The Responses API has no `logprobs: bool` toggle — `top_logprobs`
+                // is the only opt-in signal (it is not added to `include`). When the
+                // user opted in (logprobs=true) but gave no count, emit 0 (the chosen
+                // token's logprob, no alternatives) rather than omitting the field,
+                // which would drop the opt-in entirely.
+                Some(config.top_logprobs.map(u32::from).unwrap_or(0))
             } else {
                 None
             },

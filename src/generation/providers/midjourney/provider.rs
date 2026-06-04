@@ -37,7 +37,8 @@ use super::types::{ImagineRequest, MidjourneyMode, PROVIDER_NAME};
 ///
 /// let provider = MidjourneyProvider::builder("your-api-key")
 ///     .mode(MidjourneyMode::Fast)
-///     .build();
+///     .build()
+///     .unwrap();
 ///
 /// assert_eq!(provider.name(), "midjourney");
 /// ```
@@ -83,7 +84,7 @@ impl MidjourneyProvider {
     /// use alephcore::generation::providers::MidjourneyProvider;
     /// use alephcore::GenerationProvider; // Import trait for name() method
     ///
-    /// let provider = MidjourneyProvider::new("your-api-key");
+    /// let provider = MidjourneyProvider::new("your-api-key").unwrap();
     /// assert_eq!(provider.name(), "midjourney");
     /// ```
     pub fn new<S: Into<String>>(api_key: S) -> GenerationResult<Self> {

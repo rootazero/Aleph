@@ -153,9 +153,21 @@ impl SmartRouter {
         if needle.is_empty() {
             return false;
         }
-        haystack
-            .split(|c: char| !c.is_alphanumeric())
-            .any(|word| word == needle)
+        // Word-boundary substring match: `needle` may be multi-word (e.g. a skill
+        // id "code-review" or name "code review"), so a plain token-split equality
+        // check cannot match it. Require `needle` to appear in `haystack` delimited
+        // by non-alphanumeric boundaries on both sides.
+        haystack.match_indices(needle).any(|(start, matched)| {
+            let before_ok = haystack[..start]
+                .chars()
+                .next_back()
+                .map_or(true, |c| !c.is_alphanumeric());
+            let after_ok = haystack[start + matched.len()..]
+                .chars()
+                .next()
+                .map_or(true, |c| !c.is_alphanumeric());
+            before_ok && after_ok
+        })
     }
 }
 

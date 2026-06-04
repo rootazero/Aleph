@@ -102,11 +102,11 @@ max_summary_depth = 2
         let port = Self::find_free_port();
         let config_path = config_dir.path().join("config.toml");
 
-        // Locate the built binary
+        // Locate the built binary. alephcore is the workspace root package, so
+        // CARGO_MANIFEST_DIR is the workspace root and `target/` lives directly
+        // under it (no `.parent()`).
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let workspace_root = std::path::Path::new(manifest_dir)
-            .parent()
-            .expect("Cannot find workspace root");
+        let workspace_root = std::path::Path::new(manifest_dir);
         let binary_path = workspace_root.join("target/debug/aleph-server");
 
         assert!(

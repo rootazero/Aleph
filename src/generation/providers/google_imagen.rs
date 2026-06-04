@@ -92,7 +92,8 @@ pub const PERSON_GENERATION_OPTIONS: &[&str] = &["dont_allow", "allow_adult", "a
 ///     "your-api-key",
 ///     None, // Use default endpoint
 ///     None, // Use default model (imagen-3.0-generate-002)
-/// );
+/// )
+/// .unwrap();
 ///
 /// assert_eq!(provider.name(), "google-imagen");
 /// ```

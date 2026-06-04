@@ -118,6 +118,10 @@ impl EventProjector {
                                 suggestion: None,
                             }
                         })?;
+                    // Seed the access_count accumulator from the migrated
+                    // snapshot; otherwise the final `f.access_count = access_count`
+                    // assignment would reset it to 0.
+                    access_count = migrated.access_count;
                     fact = Some(migrated);
                 }
 

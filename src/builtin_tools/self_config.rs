@@ -191,12 +191,10 @@ impl SelfConfigTool {
     }
 
     fn write_file(&self, file_name: &str, content: &str) -> Result<SelfConfigOutput> {
-        validate_file_name(file_name)?;
-
         // MEMORY.md is owned entirely by the curated-memory module, not by the
-        // identity-file path. It is not one of IDENTITY_FILE_NAMES, so neither
-        // read_file nor write_file can touch it — all edits go through the
-        // `remember` tool.
+        // identity-file path. It is not one of IDENTITY_FILE_NAMES, so this guard
+        // must run BEFORE validate_file_name — otherwise the generic "Invalid
+        // file name" error would shadow this actionable deprecation message.
         if file_name.eq_ignore_ascii_case("MEMORY.md") {
             return Err(ToolError::Execution(
                 "self_config does not manage MEMORY.md. \
@@ -206,6 +204,8 @@ impl SelfConfigTool {
             )
             .into());
         }
+
+        validate_file_name(file_name)?;
 
         if content.len() > MAX_FILE_CONTENT_SIZE {
             return Ok(SelfConfigOutput {

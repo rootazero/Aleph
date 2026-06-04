@@ -38,11 +38,8 @@
 //! # Examples
 //!
 //! ```
-//! use std::path::PathBuf;
-//! use alephcore::thinker::{
-//!     ContextAggregator, InteractionManifest, InteractionParadigm,
-//!     SecurityContext, ResolvedContext,
-//! };
+//! use alephcore::thinker::{ContextAggregator, InteractionManifest, InteractionParadigm};
+//! use alephcore::thinker::security_context::SecurityContext;
 //! use alephcore::tools::info::ToolInfo;
 //!
 //! // Create manifests for WebRich channel with permissive security
@@ -54,8 +51,8 @@
 //!     ToolInfo {
 //!         name: "web_search".to_string(),
 //!         description: "Search the web".to_string(),
-//!         parameters_schema: "{}".to_string(),
-//!         category: Some("search".to_string()),
+//!         parameters_schema: None,
+//!         usage_hint: None,
 //!     },
 //! ];
 //!

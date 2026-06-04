@@ -330,11 +330,18 @@ mod tests {
 
     #[test]
     fn test_prepend_existing_dirs_skips_missing() {
-        // A non-existent dir must be skipped — PATH unchanged.
-        let before = std::env::var_os("PATH").unwrap_or_default();
-        prepend_existing_dirs(vec![PathBuf::from("/definitely/not/a/real/dir/xyz123")]);
-        let after = std::env::var_os("PATH").unwrap_or_default();
-        assert_eq!(before, after, "missing dirs must not alter PATH");
+        // A non-existent dir must be skipped — it must not be prepended to PATH.
+        // We assert the specific dir is absent rather than comparing the whole
+        // PATH before/after: PATH is a process-global env var, so an equality
+        // check would race with other tests mutating it in parallel.
+        let missing = PathBuf::from("/definitely/not/a/real/dir/xyz123");
+        prepend_existing_dirs(vec![missing.clone()]);
+        let after = std::env::var("PATH").unwrap_or_default();
+        let missing_str = missing.to_string_lossy();
+        assert!(
+            !after.split(':').any(|p| p == missing_str),
+            "missing dir must not be added to PATH"
+        );
     }
 
     #[tokio::test]

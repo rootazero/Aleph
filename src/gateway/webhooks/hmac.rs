@@ -305,7 +305,13 @@ mod tests {
 
     #[test]
     fn test_stripe_signature_valid() {
-        let timestamp = 1234567890u64;
+        // Use a current timestamp: verify_stripe_signature enforces a 300s
+        // freshness window (replay protection), so a hardcoded past timestamp
+        // would be rejected as stale.
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(TEST_PAYLOAD));
         let hmac = compute_hmac_sha256(TEST_SECRET, signed_payload.as_bytes());
         let signature = format!("t={},v1={}", timestamp, hex::encode(&hmac));

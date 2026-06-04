@@ -24,7 +24,7 @@
 //!
 //! ```
 //! use std::path::PathBuf;
-//! use alephcore::thinker::{SecurityContext, SandboxLevel, ToolPermission};
+//! use alephcore::thinker::security_context::{SecurityContext, ToolPermission};
 //!
 //! // Create a permissive context for trusted environments
 //! let ctx = SecurityContext::permissive();

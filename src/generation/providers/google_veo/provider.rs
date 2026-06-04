@@ -39,7 +39,8 @@ use tracing::{debug, error, info};
 ///     "your-api-key",
 ///     None, // Use default endpoint
 ///     None, // Use default model (veo-2.0-generate-001)
-/// );
+/// )
+/// .unwrap();
 ///
 /// assert_eq!(provider.name(), "google-veo");
 /// ```

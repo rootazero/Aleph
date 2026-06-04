@@ -205,8 +205,11 @@ fn build_request_disabled_thinking_keeps_temperature_on_4_6() {
 
     let body = build_body(&payload, &config);
     assert_eq!(body["thinking"]["type"], "disabled");
+    // `ProviderConfig::temperature` is `f32`, so the JSON number is the f32
+    // widened to f64 (0.7f32 ≈ 0.699999988). Compare against the same widening.
     assert_eq!(
-        body["temperature"], 0.7,
+        body["temperature"].as_f64().unwrap(),
+        f64::from(0.7f32),
         "disabled thinking must not strip sampling params"
     );
 }

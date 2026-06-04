@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{ConnectInfo, FromRequestParts, State};
+use axum::http::request::Parts;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Json};
@@ -48,10 +49,9 @@ async fn agent_card_handler(State(state): State<Arc<A2AServerState>>) -> Json<Ag
 async fn a2a_handler(
     State(state): State<Arc<A2AServerState>>,
     headers: HeaderMap,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    PeerAddr(remote_addr): PeerAddr,
     Json(request): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
-    let remote_addr = addr;
     let credentials = extract_credentials(&headers);
     let auth_context = A2AAuthContext {
         remote_addr,
@@ -80,10 +80,9 @@ async fn a2a_handler(
 async fn a2a_stream_handler(
     State(state): State<Arc<A2AServerState>>,
     headers: HeaderMap,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    PeerAddr(remote_addr): PeerAddr,
     Json(request): Json<JsonRpcRequest>,
 ) -> impl IntoResponse {
-    let remote_addr = addr;
     let credentials = extract_credentials(&headers);
     let auth_context = A2AAuthContext {
         remote_addr,
@@ -243,9 +242,32 @@ fn headers_to_map(headers: &HeaderMap) -> HashMap<String, String> {
 /// Fallback socket address when ConnectInfo is not available.
 /// WARNING: All remote requests appear as loopback — IP-based access control is ineffective.
 /// ConnectInfo must be wired via `.into_make_service_with_connect_info::<SocketAddr>()`.
-#[cfg(test)]
 fn fallback_addr() -> SocketAddr {
     SocketAddr::from(([127, 0, 0, 1], 0))
+}
+
+/// Peer socket address extractor that never rejects.
+///
+/// Reads the `ConnectInfo<SocketAddr>` injected by
+/// `.into_make_service_with_connect_info::<SocketAddr>()` (always present when
+/// the server is wired that way) and falls back to a loopback address when it
+/// is absent — e.g. a `oneshot` request in tests. This keeps the handlers
+/// infallible instead of returning a 500 when ConnectInfo is missing.
+struct PeerAddr(SocketAddr);
+
+impl<S> FromRequestParts<S> for PeerAddr
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        let addr = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map_or_else(fallback_addr, |ci| ci.0);
+        Ok(PeerAddr(addr))
+    }
 }
 
 #[cfg(test)]

@@ -38,7 +38,8 @@ async fn full_evolution_cycle_consolidate() {
 
     // 4. Build pipeline (verify stages)
     let pipeline = DreamPipeline::from_strategy(selection.strategy, &DreamingConfig::default());
-    assert_eq!(pipeline.stages.len(), 5);
+    // Consolidate: lint, review, consolidate, feedback_distill, drift, index, decay, skill_lifecycle
+    assert_eq!(pipeline.stages.len(), 8);
 
     // 5. Validation (empty notes → passes trivially)
     let l1 = run_l1_validation(&HashMap::new());
@@ -102,10 +103,10 @@ async fn high_growth_selects_synthesize() {
     assert_eq!(selection.strategy, DreamStrategy::Synthesize);
 
     let pipeline = DreamPipeline::from_strategy(selection.strategy, &DreamingConfig::default());
-    // Synthesize pipeline now: lint, consolidate, synthesis, skill_distill, feedback_distill, daily_digest
-    assert_eq!(pipeline.stages.len(), 6);
-    assert_eq!(pipeline.stages[3].name(), "skill_distill");
-    assert_eq!(pipeline.stages[4].name(), "feedback_distill");
+    // Synthesize: lint, review, consolidate, note_synthesis, skill_distill, feedback_distill, daily_digest
+    assert_eq!(pipeline.stages.len(), 7);
+    assert_eq!(pipeline.stages[4].name(), "skill_distill");
+    assert_eq!(pipeline.stages[5].name(), "feedback_distill");
 }
 
 /// Mutation gate forces Conserve on merge cycle.
@@ -136,9 +137,9 @@ async fn merge_cycle_forces_conserve() {
     let selection = selector.select(&snapshot, &gate_decision);
     assert_eq!(selection.strategy, DreamStrategy::Conserve);
 
-    // Conserve pipeline is minimal
+    // Conserve pipeline is minimal: lint, review, index
     let pipeline = DreamPipeline::from_strategy(selection.strategy, &DreamingConfig::default());
-    assert_eq!(pipeline.stages.len(), 2);
+    assert_eq!(pipeline.stages.len(), 3);
 }
 
 /// Personality adaptation across multiple cycles.

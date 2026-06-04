@@ -4,17 +4,16 @@ use alephcore::agents::AgentRegistry;
 
 /// The full set of tools relevant to the `explore` agent, both allowed and denied.
 const EXPLORE_PROBE_TOOLS: &[&str] = &[
-    // Allowed before migration:
-    "glob",
-    "grep",
-    "read_file",
-    "web_fetch",
+    // Allowed (INVESTIGATION named set: file_read/file_ops/search/web_fetch):
+    "file_read",
+    "file_ops",
     "search",
-    // Denied before migration:
-    "write_file",
-    "edit_file",
+    "web_fetch",
+    // Denied via explicit denied_tools:
+    "file_write",
+    "file_edit",
     "bash",
-    // Mode-aware deny (was effectively denied via no-explicit-allow):
+    // Mode-aware deny (SubAgent recursion guard blocks subagent):
     "subagent",
     // Unknown tool (must be denied):
     "totally_unknown_tool",
@@ -28,10 +27,10 @@ fn migrated_explore_agent_keeps_behavior() {
     // After migration, allowed set comes from INVESTIGATION + denied filter +
     // Stage B mode-aware deny. This test asserts the EFFECTIVE behavior
     // matches what was hand-listed before the migration.
-    let expected_allowed = ["glob", "grep", "read_file", "web_fetch", "search"];
+    let expected_allowed = ["file_read", "file_ops", "search", "web_fetch"];
     let expected_denied = [
-        "write_file",
-        "edit_file",
+        "file_write",
+        "file_edit",
         "bash",
         "subagent",
         "totally_unknown_tool",

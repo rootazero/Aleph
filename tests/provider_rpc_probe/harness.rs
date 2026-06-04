@@ -93,10 +93,10 @@ enabled = true
         let config_path = config_dir.path().join("config.toml");
 
         // Locate the built binary (built alongside the test binary)
+        // alephcore is the workspace root package, so CARGO_MANIFEST_DIR is the
+        // workspace root and `target/` lives directly under it (no `.parent()`).
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let workspace_root = std::path::Path::new(manifest_dir)
-            .parent()
-            .expect("Cannot find workspace root");
+        let workspace_root = std::path::Path::new(manifest_dir);
         let binary_path = workspace_root.join("target/debug/aleph-server");
 
         assert!(
@@ -105,8 +105,15 @@ enabled = true
             binary_path
         );
 
-        // Spawn the pre-built binary directly (no cargo overhead)
+        // Spawn the pre-built binary directly (no cargo overhead).
+        //
+        // Isolate HOME to the per-test TempDir so each spawned server gets its
+        // own `<HOME>/.aleph/data/aleph.lock`. The OS-level singleton flock is
+        // keyed on that path; without isolation all probe servers would contend
+        // for the global `~/.aleph/data/aleph.lock` and only one could run at a
+        // time, failing the rest under parallel `cargo test`.
         let child = Command::new(&binary_path)
+            .env("HOME", config_dir.path())
             .args([
                 "--config",
                 config_path.to_str().unwrap(),

@@ -106,7 +106,8 @@ pub const STYLE_PRESETS: &[&str] = &[
 ///     "sk-your-api-key",
 ///     None, // Use default endpoint
 ///     None, // Use default model (stable-diffusion-xl-1024-v1-0)
-/// );
+/// )
+/// .unwrap();
 ///
 /// assert_eq!(provider.name(), "stability-image");
 /// ```

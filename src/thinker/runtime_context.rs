@@ -7,7 +7,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use alephcore::thinker::RuntimeContext;
+//! use alephcore::thinker::runtime_context::RuntimeContext;
 //!
 //! let ctx = RuntimeContext::collect("claude-opus-4-6");
 //! let section = ctx.to_prompt_section();
