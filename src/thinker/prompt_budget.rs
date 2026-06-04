@@ -186,6 +186,64 @@ pub fn enforce_budget(
     (prompt, stats)
 }
 
+/// Render a model-visible truncation notice for the assembled system prompt.
+///
+/// Activates the [`TruncationWarning`] policy (previously declared but never
+/// consumed): `Off` stays silent (`None`); `Once` / `Always` emit a
+/// `<system-reminder>` block so the model knows its per-request context was
+/// trimmed to fit the prompt budget — letting it re-fetch specifics via tools
+/// rather than assume it saw the full picture (openclaw near-limit-warning
+/// parity).
+///
+/// Per-session dedup for `Once` would require session state that this pure
+/// layer does not own, so `Once` and `Always` both render here; the caller is
+/// free to suppress repeats. Returns `None` when nothing was trimmed.
+pub fn render_truncation_notice(mode: TruncationWarning, saved_chars: usize) -> Option<String> {
+    if mode == TruncationWarning::Off || saved_chars == 0 {
+        return None;
+    }
+    Some(format!(
+        "\n\n<system-reminder>\n\
+         Your per-request context was trimmed by ~{saved_chars} characters to fit the \
+         system-prompt budget. Some dynamic context (memory, session, runtime hints) may be \
+         incomplete — re-fetch specifics with tools rather than assuming you saw everything.\n\
+         </system-reminder>"
+    ))
+}
+
+/// Fit the dynamic system-prompt suffix within the total budget, protecting
+/// the stable prefix as a non-negotiable floor.
+///
+/// The stable prefix (persona / tools / security) is never touched: that keeps
+/// the persona+tooling floor intact (hermes parity) and, crucially, preserves
+/// Anthropic's prefix cache — the cache breakpoint sits exactly at the
+/// stable/dynamic boundary, so trimming only the `cache: false` suffix leaves
+/// the cached prefix byte-stable. Only the dynamic suffix (memory, session,
+/// runtime hints) is head/tail truncated via [`truncate_with_head_tail`], with
+/// a model-visible [`render_truncation_notice`] appended when content is cut.
+///
+/// Returns `dynamic` unchanged when the assembled prompt is already within
+/// budget — the overwhelming common case, so this is a no-op (and byte-stable)
+/// for normal-sized prompts.
+pub fn fit_dynamic_suffix(stable_len: usize, dynamic: String, budget: &TokenBudget) -> String {
+    if stable_len + dynamic.len() <= budget.max_total_chars {
+        return dynamic;
+    }
+    // Reserve headroom for the notice so the final string stays near budget.
+    const NOTICE_RESERVE: usize = 400;
+    let avail = budget
+        .max_total_chars
+        .saturating_sub(stable_len)
+        .saturating_sub(NOTICE_RESERVE);
+    let before = dynamic.len();
+    let trimmed = truncate_with_head_tail(&dynamic, avail, 0.6, 0.3);
+    let saved = before.saturating_sub(trimmed.len());
+    match render_truncation_notice(budget.truncation_warning, saved) {
+        Some(notice) => format!("{trimmed}{notice}"),
+        None => trimmed,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -268,5 +326,81 @@ mod tests {
         // Both protected — nothing can be removed
         let (_, stats) = enforce_budget(&sections, 50, &[100, 500]);
         assert!(stats.is_empty());
+    }
+
+    #[test]
+    fn notice_off_is_silent() {
+        assert!(render_truncation_notice(TruncationWarning::Off, 1234).is_none());
+    }
+
+    #[test]
+    fn notice_zero_saved_is_silent() {
+        // Nothing trimmed → no notice even when warnings are enabled.
+        assert!(render_truncation_notice(TruncationWarning::Always, 0).is_none());
+        assert!(render_truncation_notice(TruncationWarning::Once, 0).is_none());
+    }
+
+    #[test]
+    fn notice_reports_saved_chars_in_system_reminder() {
+        let notice = render_truncation_notice(TruncationWarning::Once, 4096)
+            .expect("notice rendered when content trimmed");
+        assert!(notice.contains("<system-reminder>"));
+        assert!(notice.contains("4096"));
+        assert!(notice.contains("trimmed"));
+    }
+
+    #[test]
+    fn fit_dynamic_under_budget_is_byte_identical() {
+        // Common path: assembled prompt within budget → suffix untouched.
+        let budget = TokenBudget::default();
+        let dynamic = "session context".to_string();
+        let out = fit_dynamic_suffix(1000, dynamic.clone(), &budget);
+        assert_eq!(out, dynamic, "under-budget suffix must pass through unchanged");
+    }
+
+    #[test]
+    fn fit_dynamic_over_budget_trims_and_warns() {
+        let budget = TokenBudget {
+            max_total_chars: 2000,
+            ..TokenBudget::default()
+        };
+        // Stable prefix is a protected floor of 500 chars; dynamic is huge.
+        let stable_len = 500;
+        let dynamic = "D".repeat(50_000);
+        let out = fit_dynamic_suffix(stable_len, dynamic, &budget);
+        // Suffix shrank well below its original size...
+        assert!(out.len() < 50_000);
+        // ...and the model is told it happened.
+        assert!(out.contains("<system-reminder>"));
+        assert!(out.contains("trimmed"));
+        // Total (stable + trimmed suffix) stays in the neighbourhood of budget.
+        assert!(stable_len + out.len() <= budget.max_total_chars + 600);
+    }
+
+    #[test]
+    fn fit_dynamic_over_budget_off_warning_trims_silently() {
+        let budget = TokenBudget {
+            max_total_chars: 1500,
+            truncation_warning: TruncationWarning::Off,
+            ..TokenBudget::default()
+        };
+        let out = fit_dynamic_suffix(200, "D".repeat(40_000), &budget);
+        assert!(out.len() < 40_000, "still trims to protect the budget");
+        assert!(
+            !out.contains("<system-reminder>"),
+            "Off policy must not emit a model-visible notice",
+        );
+    }
+
+    #[test]
+    fn fit_dynamic_stable_exceeds_budget_drops_suffix() {
+        // Pathological: stable floor alone exceeds budget → suffix collapses,
+        // stable is still protected (never touched here), model warned.
+        let budget = TokenBudget {
+            max_total_chars: 100,
+            ..TokenBudget::default()
+        };
+        let out = fit_dynamic_suffix(5000, "D".repeat(2000), &budget);
+        assert!(out.contains("<system-reminder>"));
     }
 }

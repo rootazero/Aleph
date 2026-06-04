@@ -52,6 +52,18 @@ impl PromptBuilder {
             .pipeline
             .execute_dynamic_with_mode(AssemblyPath::Cached, &input, mode);
 
+        // Enforce the system-prompt token budget. The stable prefix is a
+        // protected floor (persona / tools / security) and is left untouched so
+        // the Anthropic prefix cache — whose breakpoint sits at the
+        // stable/dynamic boundary — stays valid; only the per-request dynamic
+        // suffix is head/tail trimmed, with a model-visible truncation notice
+        // appended. A no-op (byte-identical) for normal prompts under budget.
+        let dynamic = crate::thinker::prompt_budget::fit_dynamic_suffix(
+            stable.len(),
+            dynamic,
+            &self.config.token_budget,
+        );
+
         vec![
             SystemPromptPart {
                 content: stable,
@@ -105,5 +117,40 @@ mod tests {
         // The stable/dynamic split (prompt-cache breakpoint) is preserved.
         assert_eq!(minimal.len(), 2);
         assert!(minimal[0].cache && !minimal[1].cache);
+    }
+
+    #[test]
+    fn default_budget_leaves_production_prompt_untouched() {
+        // The default 80K-char budget far exceeds an empty-config prompt, so
+        // the production entry must pass through unchanged (no notice, cache
+        // breakpoint intact) — the backward-compatible common path.
+        let builder = PromptBuilder::new(PromptConfig::default());
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+        assert_eq!(parts.len(), 2);
+        assert!(parts[0].cache && !parts[1].cache);
+        assert!(!parts[1].content.contains("<system-reminder>"));
+    }
+
+    #[test]
+    fn tiny_budget_protects_stable_and_warns() {
+        // A pathologically small budget forces the dynamic suffix to be trimmed
+        // while the stable prefix (the protected floor) is preserved verbatim.
+        let baseline = PromptBuilder::new(PromptConfig::default())
+            .build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+        let stable_floor = baseline[0].content.clone();
+
+        let mut cfg = PromptConfig::default();
+        cfg.token_budget.max_total_chars = 64; // below the stable floor
+        let builder = PromptBuilder::new(cfg);
+        let parts = builder.build_system_prompt_cached_with_mode(&[], PromptMode::Full);
+
+        // Stable prefix is never trimmed — cache stays valid.
+        assert_eq!(parts[0].content, stable_floor);
+        assert!(parts[0].cache && !parts[1].cache);
+        // When the baseline had a non-empty dynamic suffix, it must now carry
+        // the truncation notice; an empty baseline suffix stays empty.
+        if !baseline[1].content.is_empty() {
+            assert!(parts[1].content.contains("<system-reminder>"));
+        }
     }
 }
