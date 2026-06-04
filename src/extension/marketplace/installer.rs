@@ -144,6 +144,17 @@ pub(crate) fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
             .file_type()
             .map_err(|e| format!("Failed to get file type for '{}': {e}", src_path.display()))?;
 
+        // Never follow symlinks from an untrusted plugin source: `fs::copy`
+        // dereferences them and would copy arbitrary host files (SSH keys,
+        // /etc/passwd, ...) into the installed plugin directory.
+        if file_type.is_symlink() {
+            tracing::warn!(
+                "Skipping symlink in plugin source: '{}'",
+                src_path.display()
+            );
+            continue;
+        }
+
         if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dst_path)?;
         } else {

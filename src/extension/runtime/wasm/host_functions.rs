@@ -40,9 +40,21 @@ host_fn!(pub host_workspace_read(state: HostState; path: String) -> String {
         return Ok(serde_json::json!({"error": e.to_string()}).to_string());
     }
 
-    // Read file from workspace
+    // Read file from workspace. The capability check above is lexical only and
+    // cannot see symlinks, so canonicalize the resolved path and confine it to
+    // the workspace root — a symlink inside the workspace must not escape the
+    // sandbox.
     let full_path = state.workspace_root.join(&path);
-    match std::fs::read_to_string(&full_path) {
+    let canonical = match std::fs::canonicalize(&full_path) {
+        Ok(p) => p,
+        Err(e) => return Ok(serde_json::json!({"error": e.to_string()}).to_string()),
+    };
+    let root = std::fs::canonicalize(&state.workspace_root)
+        .unwrap_or_else(|_| state.workspace_root.clone());
+    if !canonical.starts_with(&root) {
+        return Ok(serde_json::json!({"error": "path escapes workspace"}).to_string());
+    }
+    match std::fs::read_to_string(&canonical) {
         Ok(content) => Ok(serde_json::json!({"content": content}).to_string()),
         Err(e) => Ok(serde_json::json!({"error": e.to_string()}).to_string()),
     }

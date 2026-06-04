@@ -455,7 +455,7 @@ pub fn convert_permissions(perms: &PermissionsSection) -> Vec<PluginPermission> 
         permissions.push(PluginPermission::Env);
     }
     if perms.shell {
-        permissions.push(PluginPermission::Custom("shell".to_string()));
+        permissions.push(PluginPermission::Shell);
     }
     permissions
 }

@@ -79,8 +79,12 @@ impl WasmCapabilityKernel {
             .as_ref()
             .ok_or_else(|| CapabilityError::NotDeclared("workspace".to_string()))?;
         self.validate_path(path)?;
-        if !ws.allowed_prefixes.is_empty()
-            && !ws.allowed_prefixes.iter().any(|p| path.starts_with(p))
+        // Default-deny: an empty prefix list grants nothing. A declared
+        // workspace capability must enumerate the prefixes it needs, otherwise
+        // an omitted/typo'd prefix list would silently allow reading any
+        // workspace path.
+        if ws.allowed_prefixes.is_empty()
+            || !ws.allowed_prefixes.iter().any(|p| path.starts_with(p))
         {
             return Err(CapabilityError::NotAllowed(format!(
                 "path '{}' not in allowed prefixes",

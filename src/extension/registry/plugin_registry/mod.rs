@@ -149,18 +149,28 @@ impl PluginRegistry {
             }
         }
 
-        // Register under short name for backward compat (first-come wins)
-        if let Some(existing) = self.tools.get(&short_key) {
-            if existing.plugin_id != plugin_id {
+        // Register under short name for backward compat. First-come wins across
+        // *different* plugins, but the owning plugin must be able to refresh its
+        // own short-key entry on re-registration — otherwise the short key would
+        // serve stale metadata/handler while the namespaced key is updated.
+        let short_owner = self
+            .tools
+            .get(&short_key)
+            .map(|existing| existing.plugin_id.clone())
+            .filter(|owner| owner != &plugin_id);
+        match short_owner {
+            Some(owner) => {
                 tracing::warn!(
                     "Tool short name '{}' from plugin '{}' conflicts with existing tool from plugin '{}'",
                     short_key,
                     plugin_id,
-                    existing.plugin_id
+                    owner
                 );
             }
+            None => {
+                self.tools.insert(short_key, tool.clone());
+            }
         }
-        self.tools.entry(short_key).or_insert_with(|| tool.clone());
         // Always register under namespaced key
         self.tools.insert(namespaced_key, tool);
     }
