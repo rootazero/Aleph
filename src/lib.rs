@@ -72,7 +72,6 @@ mod core;
 pub mod diagnostics;
 pub mod discovery;
 pub mod domain;
-pub mod engine;
 mod error;
 pub mod event;
 mod event_handler;
