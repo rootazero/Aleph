@@ -18,6 +18,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::agents::swarm::tasks::acceptance::read_acceptance_criteria;
 use crate::agents::swarm::tasks::{
     CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, ReviewVerdict, ReviewerKind,
 };
@@ -59,6 +60,11 @@ pub enum WorkflowStepReviewArgs {
 pub struct WorkflowStepReviewOutput {
     pub task_id: String,
     pub status: String,
+    /// The task's definition of done, echoed back so the reviewer can confirm
+    /// the verdict was measured against the declared bar. Empty (and omitted
+    /// from the wire) for tasks that declared no acceptance criteria.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acceptance_criteria: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -83,7 +89,9 @@ impl AlephTool for WorkflowStepReviewTool {
         "Approve / reject / retry / skip a single workflow step. The leader \
          agent invokes this to control execution flow when \
          `lead_review_required = true` on a task; downstream dependents \
-         unblock only when an upstream step is Completed or Skipped.";
+         unblock only when an upstream step is Completed or Skipped. When the \
+         task declares acceptance_criteria, judge approval against every item — \
+         the response echoes the checklist for confirmation.";
 
     type Args = WorkflowStepReviewArgs;
     type Output = WorkflowStepReviewOutput;
@@ -98,6 +106,25 @@ impl AlephTool for WorkflowStepReviewTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Read the task's definition of done once, up front, so every verdict
+        // path can echo it back. A missing task / no criteria yields an empty
+        // list (omitted from the wire), keeping the legacy response shape.
+        let criteria = {
+            let task_id = match &args {
+                WorkflowStepReviewArgs::Approve { task_id, .. }
+                | WorkflowStepReviewArgs::Reject { task_id, .. }
+                | WorkflowStepReviewArgs::Retry { task_id }
+                | WorkflowStepReviewArgs::Skip { task_id, .. } => task_id,
+            };
+            self.coord_store
+                .get_task(task_id)
+                .await
+                .ok()
+                .flatten()
+                .map(|t| read_acceptance_criteria(&t.metadata))
+                .unwrap_or_default()
+        };
+
         match args {
             WorkflowStepReviewArgs::Approve { task_id, comment } => {
                 debug!(task_id = %task_id, "workflow_step_review: approve");
@@ -127,6 +154,7 @@ impl AlephTool for WorkflowStepReviewTool {
                 Ok(WorkflowStepReviewOutput {
                     task_id,
                     status: "completed".into(),
+                    acceptance_criteria: criteria,
                 })
             }
             WorkflowStepReviewArgs::Reject { task_id, comment } => {
@@ -158,6 +186,7 @@ impl AlephTool for WorkflowStepReviewTool {
                 Ok(WorkflowStepReviewOutput {
                     task_id,
                     status: "failed".into(),
+                    acceptance_criteria: criteria,
                 })
             }
             WorkflowStepReviewArgs::Retry { task_id } => {
@@ -176,6 +205,7 @@ impl AlephTool for WorkflowStepReviewTool {
                 Ok(WorkflowStepReviewOutput {
                     task_id,
                     status: "pending".into(),
+                    acceptance_criteria: criteria,
                 })
             }
             WorkflowStepReviewArgs::Skip { task_id, comment } => {
@@ -198,6 +228,7 @@ impl AlephTool for WorkflowStepReviewTool {
                 Ok(WorkflowStepReviewOutput {
                     task_id,
                     status: "skipped".into(),
+                    acceptance_criteria: criteria,
                 })
             }
         }
