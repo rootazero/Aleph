@@ -4,12 +4,28 @@
 //!
 //! # Hook Events
 //!
-//! - `BeforeToolCall` / `AfterToolCall` - Tool execution lifecycle
-//! - `BeforeAgentStart` / `AgentEnd` - Agent lifecycle
-//! - `SessionStart` / `SessionEnd` - Session lifecycle
-//! - `MessageReceived` / `MessageSending` / `MessageSent` - Message flow
-//! - `BeforeCompaction` / `AfterCompaction` - Context compaction
-//! - `GatewayStart` / `GatewayStop` - Gateway lifecycle
+//! The canonical, exhaustive list lives on the `HookEvent` enum
+//! (`crate::extension::types::hooks`). Major groups:
+//!
+//! - Tool: `BeforeToolCall` / `AfterToolCall` / `AfterToolCallFailure` / `ToolResultPersist`
+//! - Agent: `BeforeAgentStart` / `AgentEnd` / `UserPromptSubmit`
+//! - Session: `SessionStart` / `SessionEnd`
+//! - Subagent: `SubagentStart` / `SubagentStop`
+//! - Message: `MessageReceived` / `MessageSending` / `MessageSent`
+//! - Compaction: `BeforeCompaction` / `AfterCompaction`
+//! - Provider: `PreApiRequest` / `PostApiRequest`
+//! - Approval: `PermissionRequest` / `Notification`
+//! - Gateway: `GatewayStart` / `GatewayStop`
+//!
+//! # Command-hook output contract
+//!
+//! A `command`-type hook signals decisions via stdout in one of two ways:
+//!
+//! 1. **Line-prefix protocol** (Aleph-native) — see [`parse_command_output`].
+//! 2. **JSON decision object** (Claude-Code / hermes interop) — when the entire
+//!    stdout is a JSON object it is decoded by the `json_output` module and
+//!    mapped onto the same [`HookResult`] fields. Non-JSON output falls back to
+//!    (1), so the two contracts coexist without ambiguity.
 //!
 //! # Usage
 //!
@@ -27,6 +43,7 @@
 
 mod consent;
 mod executor;
+mod json_output;
 mod user_settings;
 
 pub use consent::{ConsentEntry, ConsentStatus, ShellHookConsent};
@@ -226,17 +243,29 @@ impl HookResult {
 
 /// Parse structured output from a command hook.
 ///
-/// Each line is parsed independently using a prefix protocol:
-/// - `block: <reason>` — block the tool call (retryable)
-/// - `deny: <reason>` — deny the tool call (not retryable)
-/// - `allow` — skip SafetyGuard blocked-pattern checks
-/// - `ask: <reason>` — force user confirmation before execution
-/// - `update_input: <json>` — replace tool input arguments
-/// - `update_output: <text>` — replace tool output text
-/// - `context: <text>` — inject additional context for LLM
-/// - `prevent_continuation` — stop the agent loop
-/// - (no prefix) — treat as a message
+/// Two contracts are supported, tried in order:
+///
+/// 1. **JSON decision object** — if the whole (trimmed) output is a JSON
+///    object it is decoded as a Claude-Code / hermes decision and mapped onto
+///    [`HookResult`] (see `json_output`). This makes hooks written for the
+///    wider Claude-Code ecosystem work unchanged.
+/// 2. **Line-prefix protocol** (Aleph-native fallback) — each line parsed
+///    independently:
+///    - `block: <reason>` — block the tool call (retryable)
+///    - `deny: <reason>` — deny the tool call (not retryable)
+///    - `allow` — skip SafetyGuard blocked-pattern checks
+///    - `ask: <reason>` — force user confirmation before execution
+///    - `update_input: <json>` — replace tool input arguments
+///    - `update_output: <text>` — replace tool output text
+///    - `context: <text>` — inject additional context for LLM
+///    - `prevent_continuation` — stop the agent loop
+///    - (no prefix) — treat as a message
 pub fn parse_command_output(output: &str, result: &mut HookResult) {
+    // JSON decision object takes precedence; non-object output falls through.
+    if json_output::apply_json_decision(output, result) {
+        return;
+    }
+
     for line in output.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
