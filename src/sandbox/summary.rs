@@ -15,6 +15,65 @@ use serde::{Deserialize, Serialize};
 
 use crate::sandbox::capabilities::{NetworkPolicy, SandboxCapabilities};
 
+/// The sandbox filesystem/permission posture as an **ordered** type, so code
+/// can reason about "at least as permissive as" instead of matching magic
+/// strings. Maps OpenSquilla's ordered `SecurityLevel` IntEnum onto idiomatic
+/// Rust: the derived `Ord` ranks tiers from least to most permissive, so a
+/// guard like `summary.tier() >= PolicyTier::DangerFullAccess` is meaningful
+/// and total.
+///
+/// This enum is the single source of truth for the tier tag strings —
+/// [`SandboxSummary::policy_tier`] is always set from [`PolicyTier::as_str`],
+/// so the previously-scattered string literals now live in exactly one place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PolicyTier {
+    /// No write access — observe-only.
+    ReadOnly,
+    /// Writes confined to explicit workspace roots.
+    WorkspaceWrite,
+    /// Workspace-tree isolation (a separate git worktree) WITHOUT an OS-level
+    /// process sandbox — a distinct mechanism, ranked just above plain
+    /// workspace-write because it pairs tree writes with open network and no
+    /// seatbelt/bwrap confinement.
+    Isolated,
+    /// Unrestricted: root writable + all-hosts network. The danger posture.
+    DangerFullAccess,
+}
+
+impl PolicyTier {
+    /// Stable one-word tag (kebab-case) used in the prompt summary and shared
+    /// docs. Matches codex's tier names so prompts read consistently.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            PolicyTier::ReadOnly => "read-only",
+            PolicyTier::WorkspaceWrite => "workspace-write",
+            PolicyTier::Isolated => "isolated",
+            PolicyTier::DangerFullAccess => "danger-full-access",
+        }
+    }
+
+    /// Recover the tier from its tag. Total: the field is always written from
+    /// [`as_str`](Self::as_str), so every real value round-trips. An unknown
+    /// tag is treated as [`DangerFullAccess`](Self::DangerFullAccess) — the
+    /// fail-cautious choice that makes the model assume the riskiest posture.
+    pub fn from_tag(tag: &str) -> Self {
+        match tag {
+            "read-only" => PolicyTier::ReadOnly,
+            "workspace-write" => PolicyTier::WorkspaceWrite,
+            "isolated" => PolicyTier::Isolated,
+            _ => PolicyTier::DangerFullAccess,
+        }
+    }
+
+    /// True for the danger posture (root-writable + open network), where the
+    /// model should be maximally cautious about destructive / exfiltration-prone
+    /// actions.
+    pub fn is_danger(self) -> bool {
+        matches!(self, PolicyTier::DangerFullAccess)
+    }
+}
+
 /// Snapshot of the active sandbox posture suitable for prompt injection.
 ///
 /// Construction is platform-agnostic — implementors of the `Sandbox` trait
@@ -77,13 +136,13 @@ impl SandboxSummary {
     /// - non-empty `fs_write`                      → `"workspace-write"`
     /// - `network == AllowAll && fs_write covers /` → `"danger-full-access"`
     pub fn from_baseline(backend: &'static str, caps: &SandboxCapabilities) -> Self {
-        let policy_tier =
+        let tier =
             if covers_root(&caps.fs_write) && matches!(caps.network, NetworkPolicy::AllowAll) {
-                "danger-full-access"
+                PolicyTier::DangerFullAccess
             } else if !caps.fs_write.is_empty() {
-                "workspace-write"
+                PolicyTier::WorkspaceWrite
             } else {
-                "read-only"
+                PolicyTier::ReadOnly
             };
 
         let mut writable_roots: Vec<PathBuf> = caps.fs_write.to_vec();
@@ -92,7 +151,7 @@ impl SandboxSummary {
 
         Self {
             backend,
-            policy_tier,
+            policy_tier: tier.as_str(),
             writable_roots,
             network: NetworkState::from_policy(&caps.network),
             max_memory_mb: caps.max_memory_mb,
@@ -105,11 +164,18 @@ impl SandboxSummary {
     pub fn isolated_worktree(worktree_path: PathBuf) -> Self {
         Self {
             backend: "git/worktree",
-            policy_tier: "isolated",
+            policy_tier: PolicyTier::Isolated.as_str(),
             writable_roots: vec![worktree_path],
             network: NetworkState::AllowAll,
             max_memory_mb: None,
         }
+    }
+
+    /// The active posture as the ordered [`PolicyTier`] enum (parsed from the
+    /// tag the summary was built with). Lets callers compare postures by risk
+    /// rather than string-matching.
+    pub fn tier(&self) -> PolicyTier {
+        PolicyTier::from_tag(self.policy_tier)
     }
 
     /// Render bullet lines for the system prompt. Returns one line per
@@ -118,6 +184,17 @@ impl SandboxSummary {
     pub fn to_prompt_lines(&self) -> Vec<String> {
         let mut lines = Vec::with_capacity(5);
         lines.push(format!("Sandbox: {} ({})", self.backend, self.policy_tier));
+
+        // Surface the danger posture explicitly so the model is maximally
+        // cautious (R9: intelligence in the prompt). Driven by the ordered
+        // tier enum, not a string compare.
+        if self.tier().is_danger() {
+            lines.push(
+                "⚠ Danger posture: full filesystem write + open network — \
+                 double-check destructive or exfiltration-prone actions before running them."
+                    .to_string(),
+            );
+        }
 
         if !self.writable_roots.is_empty() {
             let paths: Vec<String> = self
@@ -250,5 +327,56 @@ mod tests {
         assert!(NetworkState::Denied.is_denied());
         assert!(!NetworkState::AllowAll.is_denied());
         assert!(!NetworkState::AllowHosts { hosts: vec![] }.is_denied());
+    }
+
+    #[test]
+    fn policy_tier_is_ordered_by_permissiveness() {
+        assert!(PolicyTier::ReadOnly < PolicyTier::WorkspaceWrite);
+        assert!(PolicyTier::WorkspaceWrite < PolicyTier::DangerFullAccess);
+        assert!(PolicyTier::Isolated < PolicyTier::DangerFullAccess);
+        assert!(PolicyTier::DangerFullAccess.is_danger());
+        assert!(!PolicyTier::ReadOnly.is_danger());
+    }
+
+    #[test]
+    fn policy_tier_tag_round_trips_and_is_single_source() {
+        for tier in [
+            PolicyTier::ReadOnly,
+            PolicyTier::WorkspaceWrite,
+            PolicyTier::Isolated,
+            PolicyTier::DangerFullAccess,
+        ] {
+            assert_eq!(PolicyTier::from_tag(tier.as_str()), tier);
+        }
+        // Unknown tag fails cautious → danger (model assumes the riskiest env).
+        assert_eq!(PolicyTier::from_tag("???"), PolicyTier::DangerFullAccess);
+    }
+
+    #[test]
+    fn summary_tier_accessor_matches_field() {
+        let caps = SandboxCapabilities {
+            fs_write: vec![PathBuf::from("/ws")],
+            ..Default::default()
+        };
+        let summary = SandboxSummary::from_baseline("linux/bwrap", &caps);
+        assert_eq!(summary.tier(), PolicyTier::WorkspaceWrite);
+        assert_eq!(summary.tier().as_str(), summary.policy_tier);
+    }
+
+    #[test]
+    fn danger_tier_emits_caution_line() {
+        let caps = SandboxCapabilities {
+            fs_write: vec![PathBuf::from("/")],
+            network: NetworkPolicy::AllowAll,
+            ..Default::default()
+        };
+        let lines = SandboxSummary::from_baseline("macos/seatbelt", &caps).to_prompt_lines();
+        assert!(
+            lines.iter().any(|l| l.contains("Danger posture")),
+            "danger tier must warn the model, got {lines:?}"
+        );
+        // A non-danger posture must NOT emit the caution line.
+        let safe = SandboxSummary::from_baseline("linux/bwrap", &SandboxCapabilities::strict());
+        assert!(!safe.to_prompt_lines().iter().any(|l| l.contains("Danger posture")));
     }
 }

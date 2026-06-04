@@ -133,10 +133,18 @@ impl BubblewrapDriver {
         args.push("--die-with-parent".into());
         args.push("--unshare-user".into());
 
+        // Drop every Linux capability unconditionally. A sandboxed command has
+        // no legitimate need for CAP_SYS_ADMIN / CAP_NET_RAW / CAP_DAC_OVERRIDE
+        // etc., and capability dropping is orthogonal to fork policy — matching
+        // OpenSquilla's unconditional `--cap-drop ALL`. Previously this was
+        // gated on `!allow_fork`, so a fork-permitted sandbox silently retained
+        // the full capability set. PID-namespace isolation stays fork-gated
+        // below, where it can affect a forking workload's process visibility.
+        args.push("--cap-drop".into());
+        args.push("ALL".into());
+
         if !policy.process.allow_fork {
             args.push("--unshare-pid".into());
-            args.push("--cap-drop".into());
-            args.push("ALL".into());
         }
 
         match &policy.network {
@@ -936,8 +944,13 @@ mod tests {
         let cwd = Path::new("/tmp/ws");
         let args = driver.generate_args(&policy, cwd).unwrap();
 
+        // Fork is permitted, so the PID namespace is NOT unshared (a forking
+        // workload may need shared process visibility)...
         assert!(!args.contains(&"--unshare-pid".into()));
-        assert!(!args.contains(&"--cap-drop".into()));
+        // ...but capabilities are dropped regardless of fork policy: a
+        // sandboxed command never legitimately needs Linux capabilities.
+        assert!(args.contains(&"--cap-drop".into()));
+        assert!(args.contains(&"ALL".into()));
     }
 
     #[test]

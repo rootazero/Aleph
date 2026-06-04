@@ -154,7 +154,7 @@ mod tests {
 
     #[test]
     fn renders_sandbox_summary_when_attached() {
-        use crate::sandbox::{NetworkState, SandboxSummary};
+        use crate::sandbox::{NetworkState, PolicyTier, SandboxSummary};
         use crate::thinker::context::ContextAggregator;
         use crate::thinker::security_context::SecurityContext;
         use crate::thinker::InteractionManifest;
@@ -167,7 +167,7 @@ mod tests {
         );
         ctx.sandbox_summary = Some(SandboxSummary {
             backend: "macos/seatbelt",
-            policy_tier: "workspace-write",
+            policy_tier: PolicyTier::WorkspaceWrite.as_str(),
             writable_roots: vec![std::path::PathBuf::from("/ws/abc")],
             network: NetworkState::AllowAll,
             max_memory_mb: Some(512),

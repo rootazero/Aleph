@@ -23,6 +23,7 @@ use crate::sandbox::capabilities::SandboxCapabilities;
 use crate::sandbox::command::{SandboxCommand, SandboxError, SandboxOutput};
 use crate::sandbox::dns;
 use crate::sandbox::driver::OsSandboxDriverTrait;
+use crate::sandbox::exec_approval::denial_ledger;
 use crate::sandbox::exec_approval::gate::{ApprovalGate, ApprovalOutcome};
 use crate::sandbox::hooks::{SandboxHookContext, SandboxHookResult, SandboxHooks};
 use crate::sandbox::proxy::{self, ProxyHandle};
@@ -167,7 +168,7 @@ impl Sandbox for WorkspaceSandbox {
         // logs/telemetry, making correlation easy.
         Some(crate::sandbox::summary::SandboxSummary {
             backend: self.os_driver.platform(),
-            policy_tier: "workspace-write",
+            policy_tier: crate::sandbox::summary::PolicyTier::WorkspaceWrite.as_str(),
             writable_roots: vec![self.workspace_root.clone()],
             // Default operational posture allows network; per-call
             // capability checks may tighten this. The summary reflects the
@@ -249,6 +250,32 @@ impl Sandbox for WorkspaceSandbox {
             };
             if !already_granted {
                 let reason = format_capability_request(&cmd.program, &cmd.capabilities);
+                // Denial ledger: a prior refusal of this exact elevation — or a
+                // session past the denial threshold — auto-denies without
+                // re-prompting (blind-retry guard + circuit breaker). The
+                // fingerprint keys on the deterministic capability-request text
+                // so the *same* elevation maps to the *same* bucket.
+                let led_key = session_key_to_filename(&cmd.session_id);
+                let fingerprint = denial_ledger::action_fingerprint(&cmd.program, &reason);
+                if let Some(reason_kind) =
+                    denial_ledger::global().is_blocked(&led_key, &fingerprint)
+                {
+                    tracing::info!(
+                        program = %cmd.program,
+                        denial = ?reason_kind,
+                        "capability elevation auto-denied by denial ledger: {}",
+                        reason_kind.agent_hint()
+                    );
+                    self.hooks
+                        .run_after(
+                            &SandboxHookContext::new(&cmd.program, &cmd),
+                            Err("denial ledger"),
+                        )
+                        .await;
+                    return Err(SandboxError::CapabilityDenied {
+                        reason: "elevated capability previously denied this session".into(),
+                    });
+                }
                 let outcome = self
                     .approval_gate
                     .request_approval_for_tool(&cmd.program, &reason)
@@ -262,6 +289,14 @@ impl Sandbox for WorkspaceSandbox {
                         ws.granted_elevations.write().await.insert(normalized_caps);
                     }
                     ApprovalOutcome::Denied | ApprovalOutcome::Timeout => {
+                        // Remember the refusal so the next blind retry of this
+                        // exact elevation is short-circuited above.
+                        let reason_kind = if matches!(outcome, ApprovalOutcome::Timeout) {
+                            denial_ledger::DenialReason::Timeout
+                        } else {
+                            denial_ledger::DenialReason::UserRejected
+                        };
+                        denial_ledger::global().record_denial(&led_key, &fingerprint, reason_kind);
                         let err = SandboxError::CapabilityDenied {
                             reason: "user denied elevated capability request".into(),
                         };
@@ -373,6 +408,22 @@ impl Sandbox for WorkspaceSandbox {
             output_blocked.extend(stderr_scrub.blocked);
             out.stdout = stdout_scrub.bytes.into_owned();
             out.stderr = stderr_scrub.bytes.into_owned();
+
+            // Neutralize invisible / bidirectional Unicode control characters
+            // (zero-width injection, RLO/isolate overrides) before the output
+            // reaches the model — the redline-safe, deterministic half of
+            // prompt-injection defense (OpenSquilla's "invisible character"
+            // class), distinct from the secret scrub above.
+            let (stdout_clean, n_out) = crate::sandbox::scrub::strip_unsafe_invisible(&out.stdout);
+            let (stderr_clean, n_err) = crate::sandbox::scrub::strip_unsafe_invisible(&out.stderr);
+            if n_out + n_err > 0 {
+                tracing::warn!(
+                    removed = n_out + n_err,
+                    "sandbox neutralized invisible/bidi control chars in command output"
+                );
+            }
+            out.stdout = stdout_clean.into_owned();
+            out.stderr = stderr_clean.into_owned();
         }
 
         // Block-class secret floor: a catastrophic secret (e.g. a PEM private
