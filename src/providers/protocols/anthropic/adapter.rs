@@ -132,6 +132,31 @@ fn strip_anthropic_tool_schema_unions(schema: &mut serde_json::Value) {
     }
 }
 
+/// True if `pending` holds a terminal delta — a `Done` (the model finished or
+/// paused) or an `Error` (the provider reported a fault). Either means the
+/// stream reached a defined end, so the truncation guard must NOT fire.
+fn queue_has_terminal(pending: &VecDeque<Result<ProviderDelta>>) -> bool {
+    pending.iter().any(|d| {
+        matches!(
+            d,
+            Ok(ProviderDelta::Done(_)) | Ok(ProviderDelta::Error(_))
+        )
+    })
+}
+
+/// Decide whether a now-closed Anthropic stream was truncated mid-flight.
+///
+/// `saw_terminal` — a `Done`/`Error` was observed earlier in the stream.
+/// `tail_terminal` — the flushed final (newline-less) line produced one.
+///
+/// Anthropic always emits a terminal `message_delta` (→ `Done`) before closing
+/// a healthy stream, so a close with neither flag set means the body was cut
+/// mid-flight. Pure predicate, lifted out of the `stream_deltas` unfold so the
+/// guard is unit-testable.
+fn stream_was_truncated(saw_terminal: bool, tail_terminal: bool) -> bool {
+    !saw_terminal && !tail_terminal
+}
+
 #[async_trait]
 impl ProtocolAdapter for AnthropicProtocol {
     fn build_request(
@@ -548,6 +573,15 @@ impl ProtocolAdapter for AnthropicProtocol {
             pending: VecDeque<Result<ProviderDelta>>,
             /// Set to true after a terminal event to stop the stream
             done: bool,
+            /// Set to true once any terminal event (`Done` from `message_delta`
+            /// or an `error` SSE frame) has been seen. Distinct from `done`,
+            /// which fires only on `Done`. Used to detect a truncated stream:
+            /// if the HTTP body ends while this is still `false`, the response
+            /// was cut mid-flight and must surface as a retryable error rather
+            /// than collapsing to the collector's default `EndTurn` stop reason
+            /// (a silent partial success). Mirrors pi's
+            /// `sawMessageStart && !sawMessageEnd` guard.
+            saw_terminal: bool,
             /// Sanitized → original tool name map (shared with the protocol).
             name_map: ToolNameMap,
         }
@@ -558,6 +592,7 @@ impl ProtocolAdapter for AnthropicProtocol {
             block_ids: IndexIdTracker::new(),
             pending: VecDeque::new(),
             done: false,
+            saw_terminal: false,
             name_map: self.name_map.clone(),
         };
 
@@ -594,6 +629,12 @@ impl ProtocolAdapter for AnthropicProtocol {
                                 &mut state.pending,
                                 Some(&state.name_map),
                             );
+                            // Track terminals: a `Done`/`Error` here means the
+                            // stream completed (or reported a fault) cleanly, so
+                            // the HTTP-end branch must not flag truncation.
+                            if queue_has_terminal(&state.pending) {
+                                state.saw_terminal = true;
+                            }
                             // If Done was queued, stop after draining pending
                             if state
                                 .pending
@@ -630,6 +671,26 @@ impl ProtocolAdapter for AnthropicProtocol {
                             }
                         }
                         state.done = true;
+                        // Truncation guard: Anthropic always emits a terminal
+                        // `message_delta` (carrying `stop_reason`) before the
+                        // stream closes. If the HTTP body ended without one — and
+                        // the flushed tail produced none either — the response was
+                        // cut mid-flight (connection drop, proxy/idle timeout). Left
+                        // unflagged the `DeltaCollector` defaults to `EndTurn`, so a
+                        // partial answer is silently accepted as a clean finish and
+                        // never retried. Surface a retryable network error instead
+                        // (classified transient by `providers::retry`), mirroring
+                        // pi's `sawMessageStart && !sawMessageEnd` throw.
+                        if stream_was_truncated(
+                            state.saw_terminal,
+                            queue_has_terminal(&state.pending),
+                        ) {
+                            state.pending.push_back(Err(AlephError::network(
+                                "Anthropic stream ended before completion (no \
+                                 message_stop / stop_reason) — response was truncated \
+                                 mid-flight; retrying",
+                            )));
+                        }
                         if let Some(delta) = state.pending.pop_front() {
                             return Some((delta, state));
                         }
@@ -740,5 +801,106 @@ mod normalize_model_id_tests {
         let a = p();
         let got = a.normalize_model_id("kimi-k2-0905-preview");
         assert!(matches!(got, std::borrow::Cow::Borrowed(_)));
+    }
+}
+
+/// Tests for the stream-truncation guard (pi `sawMessageStart && !sawMessageEnd`
+/// parity). Drives raw SSE event sequences through the real parser and the
+/// guard predicates to confirm a healthy stream is left untouched while a
+/// stream cut before its terminal `message_delta` is flagged for retry.
+#[cfg(test)]
+mod truncation_guard_tests {
+    use super::super::sse::parse_anthropic_sse_event;
+    use super::super::ToolNameMap;
+    use super::{queue_has_terminal, stream_was_truncated};
+    use crate::error::Result;
+    use crate::providers::delta::{IndexIdTracker, ProviderDelta};
+    use crate::sync_primitives::{Arc, RwLock};
+    use std::collections::{HashMap, VecDeque};
+
+    /// Replay a sequence of SSE `data` payloads exactly as the `stream_deltas`
+    /// unfold would (accumulating `saw_terminal` and a final-tail check), and
+    /// return whether the truncation guard would fire at stream close.
+    fn would_flag_truncation(events: &[&str]) -> bool {
+        let mut block_ids = IndexIdTracker::new();
+        let name_map: ToolNameMap = Arc::new(RwLock::new(HashMap::new()));
+        let mut saw_terminal = false;
+        let mut last: VecDeque<Result<ProviderDelta>> = VecDeque::new();
+        for data in events {
+            let mut pending = VecDeque::new();
+            parse_anthropic_sse_event(data, &mut block_ids, &mut pending, Some(&name_map));
+            if queue_has_terminal(&pending) {
+                saw_terminal = true;
+            }
+            last = pending;
+        }
+        // `last` stands in for the flushed final line's output at HTTP close.
+        stream_was_truncated(saw_terminal, queue_has_terminal(&last))
+    }
+
+    #[test]
+    fn predicate_truth_table() {
+        assert!(stream_was_truncated(false, false));
+        assert!(!stream_was_truncated(true, false));
+        assert!(!stream_was_truncated(false, true));
+        assert!(!stream_was_truncated(true, true));
+    }
+
+    #[test]
+    fn queue_has_terminal_recognizes_done_and_error_only() {
+        let mut q: VecDeque<Result<ProviderDelta>> = VecDeque::new();
+        q.push_back(Ok(ProviderDelta::TextDelta("hi".into())));
+        assert!(!queue_has_terminal(&q), "text is not terminal");
+        q.push_back(Ok(ProviderDelta::Done(
+            crate::providers::adapter::StopReason::EndTurn,
+        )));
+        assert!(queue_has_terminal(&q), "Done is terminal");
+
+        let mut e: VecDeque<Result<ProviderDelta>> = VecDeque::new();
+        e.push_back(Ok(ProviderDelta::Error("overloaded".into())));
+        assert!(queue_has_terminal(&e), "Error is terminal");
+    }
+
+    #[test]
+    fn complete_text_stream_is_not_flagged() {
+        // Healthy stream: ends with a terminal message_delta carrying stop_reason.
+        let events = [
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#,
+            r#"{"type":"content_block_stop","index":0}"#,
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}"#,
+            r#"{"type":"message_stop"}"#,
+        ];
+        assert!(!would_flag_truncation(&events));
+    }
+
+    #[test]
+    fn text_stream_cut_before_message_delta_is_flagged() {
+        // Connection dropped after some text but before the terminal
+        // message_delta — the real-world truncation this guard catches.
+        let events = [
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0}}}"#,
+            r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Partial answer that never finis"}}"#,
+        ];
+        assert!(would_flag_truncation(&events));
+    }
+
+    #[test]
+    fn empty_stream_is_flagged() {
+        // A 200 response that closes with zero events is abnormal — flag it.
+        assert!(would_flag_truncation(&[]));
+    }
+
+    #[test]
+    fn error_frame_suppresses_truncation_flag() {
+        // The provider reported an explicit error then closed — that is the
+        // terminal signal; the guard must defer to it, not double-report.
+        let events = [
+            r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0}}}"#,
+            r#"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#,
+        ];
+        assert!(!would_flag_truncation(&events));
     }
 }
