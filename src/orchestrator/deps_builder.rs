@@ -197,6 +197,15 @@ pub fn build_failover_chain(
     let agent_overrides: HashMap<String, Arc<dyn AiProvider>> = built
         .into_iter()
         .map(|(name, provider)| {
+            // The pinned provider's real tier, so a hard-guardrail route mode
+            // (`AlwaysLocal`) routes an explicit cloud pin through the
+            // borrow-cloud approval instead of silently allowing it. Unknown
+            // configured tier defaults to Cloud (the conservative, gated side).
+            let pin_tier = config
+                .providers
+                .get(&name)
+                .map(provider_tier)
+                .unwrap_or(EndpointTier::Cloud);
             let pinned = FailoverProvider::new(
                 Arc::new(StaticDefault::new(provider)),
                 vec![FailoverNode {
@@ -212,7 +221,8 @@ pub fn build_failover_chain(
                 health.clone(),
                 FailoverConfig::default(),
             )
-            .with_route(route_mode, allow_escalation, escalation_approval.clone());
+            .with_route(route_mode, allow_escalation, escalation_approval.clone())
+            .with_primary_tier(pin_tier);
             let pinned = match route_handle.clone() {
                 Some(h) => pinned.with_route_live(h),
                 None => pinned,
