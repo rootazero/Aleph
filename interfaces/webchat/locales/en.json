@@ -1799,7 +1799,9 @@
   "model_picker": {
     "loading_catalog": "loading catalog…",
     "no_providers": "no configured providers. Add a key in Settings → Providers.",
-    "pick_model_title": "Pick model for this turn"
+    "pick_model_title": "Pick model for this turn",
+    "filter_placeholder": "Filter providers and models…",
+    "no_match": "no matching models"
   },
   "session_tabs": {
     "close_tab": "Close tab (⌘W)"
