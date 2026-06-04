@@ -62,6 +62,49 @@ pub(crate) const EXCLUSIVE_TOOLS: &[&str] = &[
 pub(crate) const CONFIRMATION_REQUIRED_TOOLS: &[&str] =
     &["vault_store", "agent_delete", "team_disband"];
 
+/// Extract the bounded target path for a path-bearing file mutator that is NOT
+/// on [`EXCLUSIVE_TOOLS`] (`file_write` / `file_edit` / `apply_patch`). Returns
+/// `None` for any other tool (including read-only `file_read`, which keeps the
+/// `Shared` default). Used by [`RegistryToolAdapter::concurrency_claim`] to give
+/// these mutators a same-path-serializing scope.
+fn bounded_file_writer_path(name: &str, input: &Value) -> Option<String> {
+    let candidates: &[&str] = match name {
+        "file_write" | "file_edit" => &["file_path", "path"],
+        "apply_patch" => &["path"],
+        _ => return None,
+    };
+    candidates
+        .iter()
+        .find_map(|field| input.get(*field).and_then(Value::as_str))
+        .map(str::to_string)
+}
+
+/// Resolve the [`crate::tools::concurrency::ConcurrencyClaim`] for a `file_ops`
+/// call from its `operation` discriminant. Read-only operations are `Shared`;
+/// mutating operations bind to their concrete `path` (+ `destination`) so
+/// disjoint-path operations parallelize; an unknown/unparseable operation
+/// falls back to whole-world exclusive.
+fn file_ops_claim(input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+    use crate::tools::concurrency::ConcurrencyClaim;
+    let op = input.get("operation").and_then(Value::as_str).unwrap_or("");
+    match op {
+        "list" | "search" | "stats" => ConcurrencyClaim::Shared,
+        "move" | "copy" | "delete" | "mkdir" | "batch_move" | "organize" => {
+            let mut paths = Vec::with_capacity(2);
+            if let Some(p) = input.get("path").and_then(Value::as_str) {
+                paths.push(p.to_string());
+            }
+            if let Some(d) = input.get("destination").and_then(Value::as_str) {
+                paths.push(d.to_string());
+            }
+            // `ConcurrencyClaim::paths` degrades to whole-world exclusive when
+            // no concrete path could be extracted.
+            ConcurrencyClaim::paths(paths)
+        }
+        _ => ConcurrencyClaim::global(),
+    }
+}
+
 #[async_trait]
 impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
     fn name(&self) -> &str {
@@ -78,6 +121,32 @@ impl<R: ToolRegistry + 'static> LoopTool for RegistryToolAdapter<R> {
 
     fn is_concurrent_safe(&self, _input: &Value) -> bool {
         !EXCLUSIVE_TOOLS.contains(&self.name.as_str())
+    }
+
+    fn concurrency_claim(&self, input: &Value) -> crate::tools::concurrency::ConcurrencyClaim {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        let name = self.name.as_str();
+        // `file_ops` is whole-world-exclusive under the boolean model; refine
+        // it to a bounded path scope for mutating operations and to `Shared`
+        // for read-only ones (list/search/stats) so disjoint or read-only file
+        // operations can parallelize.
+        if name == "file_ops" {
+            return file_ops_claim(input);
+        }
+        // `file_write` / `file_edit` / `apply_patch` are NOT on EXCLUSIVE_TOOLS,
+        // so the boolean model treats them as `Shared` — which races on the
+        // same file. Bind them to their concrete target path so two writes to
+        // the same file serialize while writes to different files parallelize.
+        if let Some(path) = bounded_file_writer_path(name, input) {
+            return ConcurrencyClaim::paths(std::iter::once(path));
+        }
+        // Everything else keeps the boolean-derived claim: EXCLUSIVE_TOOLS map
+        // to whole-world exclusive, the rest to `Shared`.
+        if EXCLUSIVE_TOOLS.contains(&name) {
+            ConcurrencyClaim::global()
+        } else {
+            ConcurrencyClaim::Shared
+        }
     }
 
     fn requires_confirmation(&self) -> bool {
@@ -373,6 +442,82 @@ mod tests {
         let registry = build_registry_from_tools(tool_registry, &write_tools, None);
         let bash = registry.get("bash").unwrap();
         assert!(!bash.is_concurrent_safe(&json!({})));
+    }
+
+    #[tokio::test]
+    async fn test_concurrency_claim_scopes() {
+        use crate::tools::concurrency::{ConcurrencyClaim, ExclusiveScope};
+
+        let tool_registry = Arc::new(MockRegistry {
+            results: HashMap::new(),
+        });
+        let tools = vec![
+            make_unified_tool("file_ops", "File operations"),
+            make_unified_tool("file_write", "Write a file"),
+            make_unified_tool("file_read", "Read a file"),
+            make_unified_tool("bash", "Run commands"),
+            make_unified_tool("search", "Search"),
+        ];
+        let registry = build_registry_from_tools(tool_registry, &tools, None);
+
+        // file_ops read-only operation -> Shared (parallelizable).
+        let claim = registry
+            .get("file_ops")
+            .unwrap()
+            .concurrency_claim(&json!({"operation": "list", "path": "/x"}));
+        assert_eq!(claim, ConcurrencyClaim::Shared);
+
+        // file_ops mutating operation -> bounded Paths scope.
+        let claim = registry
+            .get("file_ops")
+            .unwrap()
+            .concurrency_claim(&json!({"operation": "move", "path": "/a", "destination": "/b"}));
+        match claim {
+            ConcurrencyClaim::Exclusive {
+                scope: ExclusiveScope::Paths(p),
+            } => {
+                assert!(p.contains("/a") && p.contains("/b"));
+            }
+            other => panic!("expected bounded Paths, got {other:?}"),
+        }
+
+        // file_write -> bounded to its file_path (was racy Shared before).
+        let claim = registry
+            .get("file_write")
+            .unwrap()
+            .concurrency_claim(&json!({"file_path": "/src/a.rs", "content": "x"}));
+        assert_eq!(
+            claim,
+            ConcurrencyClaim::paths(["/src/a.rs"]),
+            "file_write must serialize on its target path"
+        );
+
+        // file_read stays Shared.
+        assert_eq!(
+            registry
+                .get("file_read")
+                .unwrap()
+                .concurrency_claim(&json!({"path": "/src/a.rs"})),
+            ConcurrencyClaim::Shared
+        );
+
+        // bash stays whole-world exclusive.
+        assert_eq!(
+            registry
+                .get("bash")
+                .unwrap()
+                .concurrency_claim(&json!({"command": "ls"})),
+            ConcurrencyClaim::global()
+        );
+
+        // plain read-only tool stays Shared.
+        assert_eq!(
+            registry
+                .get("search")
+                .unwrap()
+                .concurrency_claim(&json!({"query": "x"})),
+            ConcurrencyClaim::Shared
+        );
     }
 
     #[tokio::test]

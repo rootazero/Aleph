@@ -95,6 +95,21 @@ impl ToolService for AllowlistToolService {
         }
         self.inner.is_call_concurrent_safe(name, input).await
     }
+
+    async fn call_concurrency_claim(
+        &self,
+        name: &str,
+        input: &Value,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        // Mirror `is_call_concurrent_safe`: disallowed tools are whole-world
+        // exclusive (never parallel); otherwise forward the inner service's
+        // bounded scope so disjoint-path mutations still parallelize for
+        // subagents.
+        if !self.agent_def.is_tool_allowed(name) {
+            return crate::tools::concurrency::ConcurrencyClaim::global();
+        }
+        self.inner.call_concurrency_claim(name, input).await
+    }
 }
 
 #[cfg(test)]

@@ -148,6 +148,32 @@ pub trait ToolService: Send + Sync + 'static {
         false
     }
 
+    /// Resource-scope-aware concurrency claim for the named call, given the
+    /// concrete input the LLM emitted. The harness parallel fast path admits a
+    /// batch only when [`crate::tools::concurrency::batch_parallelizable`]
+    /// returns `true` for the claims of every call — letting disjoint-scope
+    /// mutations (e.g. writes to different files) run concurrently while
+    /// same-path or whole-world mutations fall back to serial.
+    ///
+    /// The default delegates to [`Self::is_call_concurrent_safe`] so every
+    /// existing implementation keeps byte-identical scheduling: `true` →
+    /// `Shared`, `false` → `Exclusive { Global }`. Only implementations with
+    /// real registry visibility (e.g.
+    /// [`crate::tools::scoped::ScopedToolService`]) override this to surface a
+    /// tool's bounded path scope.
+    async fn call_concurrency_claim(
+        &self,
+        name: &str,
+        input: &serde_json::Value,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        if self.is_call_concurrent_safe(name, input).await {
+            ConcurrencyClaim::Shared
+        } else {
+            ConcurrencyClaim::global()
+        }
+    }
+
     /// Execute a tool call with an opencode-parity AbortSignal token.
     ///
     /// The harness Act phase forks a per-call child token from the run's

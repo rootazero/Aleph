@@ -34,6 +34,7 @@
 pub mod adapters;
 pub mod attempt_summary;
 pub mod budget;
+pub mod concurrency;
 pub mod context;
 pub mod error_kind;
 pub mod execution_context;

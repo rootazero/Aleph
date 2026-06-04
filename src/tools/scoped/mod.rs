@@ -262,6 +262,33 @@ impl ToolService for ScopedToolService {
             .unwrap_or(false)
     }
 
+    async fn call_concurrency_claim(
+        &self,
+        name: &str,
+        input: &Value,
+    ) -> crate::tools::concurrency::ConcurrencyClaim {
+        use crate::tools::concurrency::ConcurrencyClaim;
+        // Same gating as `is_call_concurrent_safe`: subagent dispatch,
+        // disallowed tools, and confirmation-gated tools are all whole-world
+        // exclusive (the serial-path equivalent of the old `false`), so they
+        // can never join a parallel batch. Only when none of those fire do we
+        // surface the inner tool's bounded scope.
+        if let Some(ref st) = self.subagent_tool {
+            if st.name() == name {
+                return ConcurrencyClaim::global();
+            }
+        }
+        if !self.is_allowed(name) {
+            return ConcurrencyClaim::global();
+        }
+        if self.confirm_tools.contains(name) || self.inner.requires_confirmation(name) {
+            return ConcurrencyClaim::global();
+        }
+        self.inner
+            .call_concurrency_claim(name, input)
+            .unwrap_or_else(ConcurrencyClaim::global)
+    }
+
     fn metadata_schema(&self) -> Arc<[crate::tool_metadata::ToolDefinition]> {
         use std::sync::atomic::Ordering;
 
