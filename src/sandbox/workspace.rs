@@ -551,6 +551,13 @@ pub(crate) fn sandbox_env_tag(platform: &'static str) -> &'static str {
 
 /// Format a user-facing capability elevation request string. Used as the
 /// `reason` argument to `ApprovalGate::request_approval_for_tool`.
+///
+/// The capability portion is unchanged (WHAT is requested). When the model
+/// supplied a `justification` for this exec call (carried via the
+/// [`EXEC_JUSTIFICATION`](crate::sandbox::context::EXEC_JUSTIFICATION)
+/// task-local), we append a `— justification: …` clause so the human approver
+/// also sees WHY — codex `justification` / hermes reason parity. Absent a
+/// justification the string is byte-identical to its pre-feature form.
 fn format_capability_request(program: &str, caps: &SandboxCapabilities) -> String {
     let mut parts = Vec::new();
     if !caps.fs_read.is_empty() {
@@ -565,10 +572,37 @@ fn format_capability_request(program: &str, caps: &SandboxCapabilities) -> Strin
     if caps.spawn_subprocess {
         parts.push("spawn=true".into());
     }
-    format!(
+    let base = format!(
         "{program} requests elevated capabilities: {}",
         parts.join(", ")
-    )
+    );
+    match crate::sandbox::context::current_justification().and_then(sanitize_justification) {
+        Some(why) => format!("{base}\n— justification: {why}"),
+        None => base,
+    }
+}
+
+/// Longest model justification we surface in an approval prompt. The reason is
+/// a hint for the human, not a contract — a runaway string is clamped.
+const JUSTIFICATION_MAX_CHARS: usize = 240;
+
+/// Clean a model-supplied justification for display in the approval prompt.
+/// The text is untrusted model output, so collapse control characters /
+/// newlines to single spaces (keep the prompt one logical line) and clamp the
+/// length. Returns `None` when nothing meaningful remains, so the caller falls
+/// back to the byte-identical capabilities-only string.
+fn sanitize_justification(raw: String) -> Option<String> {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.is_empty() {
+        return None;
+    }
+    // UTF-8-safe clamp (P7): take whole chars, never split a codepoint.
+    let clamped: String = collapsed.chars().take(JUSTIFICATION_MAX_CHARS).collect();
+    Some(clamped)
 }
 
 #[cfg(test)]
@@ -1534,5 +1568,68 @@ mod scrub_integration_tests {
 
         assert_eq!(output.stdout, stdout, "clean stdout must be unchanged");
         assert_eq!(output.stderr, stderr, "clean stderr must be unchanged");
+    }
+
+    // ── Escalation justification (codex `justification` / hermes reason) ──
+
+    fn escalating_caps() -> SandboxCapabilities {
+        SandboxCapabilities {
+            network: crate::sandbox::capabilities::NetworkPolicy::AllowAll,
+            spawn_subprocess: true,
+            ..SandboxCapabilities::strict()
+        }
+    }
+
+    /// Without a scoped `EXEC_JUSTIFICATION` the approval reason is exactly the
+    /// pre-feature capabilities-only string — no behavioural change for the
+    /// (common) no-justification path.
+    #[test]
+    fn capability_request_is_byte_identical_without_justification() {
+        let reason = format_capability_request("bash", &escalating_caps());
+        assert_eq!(
+            reason,
+            "bash requests elevated capabilities: network=AllowAll, spawn=true"
+        );
+        assert!(!reason.contains("justification"));
+    }
+
+    /// When the model supplied a justification the approver sees WHY appended
+    /// to the (unchanged) WHAT.
+    #[tokio::test]
+    async fn capability_request_appends_scoped_justification() {
+        let reason = crate::sandbox::context::EXEC_JUSTIFICATION
+            .scope(
+                "fetch crates from crates.io for cargo build".to_string(),
+                async { format_capability_request("bash", &escalating_caps()) },
+            )
+            .await;
+        assert!(
+            reason.starts_with("bash requests elevated capabilities: network=AllowAll, spawn=true"),
+            "the WHAT portion must stay byte-identical: {reason}"
+        );
+        assert!(
+            reason.contains("— justification: fetch crates from crates.io for cargo build"),
+            "the WHY must be appended: {reason}"
+        );
+    }
+
+    #[test]
+    fn sanitize_justification_collapses_control_and_whitespace() {
+        // Newlines / tabs / NUL collapse to single spaces; runs of blanks fold.
+        let cleaned = sanitize_justification("line one\n\tline\u{0}  two\r\n".to_string());
+        assert_eq!(cleaned.as_deref(), Some("line one line two"));
+    }
+
+    #[test]
+    fn sanitize_justification_rejects_blank() {
+        assert_eq!(sanitize_justification(String::new()), None);
+        assert_eq!(sanitize_justification("   \n\t  ".to_string()), None);
+    }
+
+    #[test]
+    fn sanitize_justification_clamps_runaway_length() {
+        let huge = "x".repeat(JUSTIFICATION_MAX_CHARS * 4);
+        let cleaned = sanitize_justification(huge).expect("non-empty");
+        assert_eq!(cleaned.chars().count(), JUSTIFICATION_MAX_CHARS);
     }
 }

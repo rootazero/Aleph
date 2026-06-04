@@ -59,6 +59,13 @@ pub struct BashExecArgs {
     /// Target background process id for `process_action` = `poll` | `kill`.
     #[serde(default)]
     pub process_id: Option<u64>,
+    /// Optional natural-language reason for *why* an escalation
+    /// (`allow_network` / `allow_subprocess` / `extra_writable_paths`) is
+    /// needed. Forwarded to the human approver alongside the requested
+    /// capabilities. Ignored for non-escalating calls. codex `justification`
+    /// parity.
+    #[serde(default)]
+    pub justification: Option<String>,
 }
 
 /// Bash execution tool - wraps CodeExecTool for bash/shell commands
@@ -125,7 +132,9 @@ or piping through `cat`.
 
 Capability escalations (`allow_network`, `allow_subprocess`, `extra_writable_paths`)
 trigger an approval prompt the first time per session; subsequent same-or-
-narrower requests reuse the grant.
+narrower requests reuse the grant. When you escalate, pass `justification` with
+a one-line reason WHY (e.g. "clone the repo over https") — it is shown to the
+human approver so they can decide.
 
 BACKGROUND MODE — for commands that outlive the 180s ceiling (builds, installs,
 long test runs). Set `background: true` and the call returns a `process_id`
@@ -180,6 +189,7 @@ Examples:
             allow_network: args.allow_network,
             allow_subprocess: args.allow_subprocess,
             extra_writable_paths: args.extra_writable_paths,
+            justification: args.justification,
         };
 
         if args.background {
@@ -372,6 +382,10 @@ mod tests {
             d.contains("preserved"),
             "should promise partial output on kill"
         );
+        assert!(
+            d.contains("justification"),
+            "should teach passing a justification when escalating"
+        );
     }
 
     #[test]
@@ -408,6 +422,7 @@ mod tests {
             background: false,
             process_action: Some(action.to_string()),
             process_id: id,
+            justification: None,
         }
     }
 
@@ -467,6 +482,7 @@ mod tests {
             background: false,
             process_action: None,
             process_id: None,
+            justification: None,
         })
         .await;
         assert!(!out.success);
@@ -495,6 +511,7 @@ mod tests {
                         background: true,
                         process_action: None,
                         process_id: None,
+                        justification: None,
                     })
                     .await
                     .unwrap();
@@ -515,6 +532,7 @@ mod tests {
                             background: false,
                             process_action: Some("poll".to_string()),
                             process_id: Some(id),
+                            justification: None,
                         })
                         .await
                         .unwrap();
