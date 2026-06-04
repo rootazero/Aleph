@@ -381,6 +381,53 @@ pub(super) async fn ws_upgrade_handler(
     })
 }
 
+/// Build the JSON-RPC `connection.warning` frame announcing dropped events.
+///
+/// Shared by the per-client drain path and the global-bus overflow watchdog so
+/// both surface identical `events_overflow` diagnostics (with `advice:reconnect`)
+/// before the connection is closed with WS code 1008.
+fn overflow_warning_frame(dropped: u64, total_overflow: u64) -> String {
+    serde_json::json!({
+        "method": "event",
+        "params": {
+            "topic": "connection.warning",
+            "data": {
+                "reason": "events_overflow",
+                "dropped": dropped,
+                "total_overflow": total_overflow,
+                "advice": "reconnect"
+            }
+        }
+    })
+    .to_string()
+}
+
+/// Drain the global event bus into a single client's per-client buffer.
+///
+/// A `tokio::broadcast` receiver that falls behind yields `RecvError::Lagged(n)`
+/// but **remains valid** — subsequent `recv()` calls keep working, having skipped
+/// `n` messages. We mirror the per-client drain policy here: account the dropped
+/// events on the buffer's shared overflow metric and keep forwarding. The
+/// connection's idle/ping watchdog observes that metric and closes the socket
+/// with code 1008 so the client reconnects and re-syncs from the hello snapshot.
+///
+/// Only a closed bus terminates this forwarder. (Previously a `while let Ok(..)`
+/// loop treated `Lagged` as fatal, silently killing the task and leaving the
+/// socket open but permanently event-starved.)
+async fn forward_bus_to_client(mut rx: broadcast::Receiver<String>, buffer: PerClientBuffer) {
+    loop {
+        match rx.recv().await {
+            Ok(event) => {
+                let _ = buffer.try_send(event);
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                buffer.metrics().add_overflow(n);
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
 /// Handle a single WebSocket connection
 async fn handle_connection(
     socket: WebSocket,
@@ -392,17 +439,10 @@ async fn handle_connection(
 
     info!("New WebSocket connection: {}", conn_id);
 
-    let event_bus = ctx.event_bus.clone();
-
     let (buffer, mut client_event_rx) = PerClientBuffer::new();
     let buffer_metrics = buffer.metrics().clone();
 
-    tokio::spawn(async move {
-        let mut rx = event_bus.subscribe();
-        while let Ok(event) = rx.recv().await {
-            let _ = buffer.try_send(event);
-        }
-    });
+    tokio::spawn(forward_bus_to_client(ctx.event_bus.subscribe(), buffer));
 
     // Initialize connection state
     {
@@ -423,6 +463,9 @@ async fn handle_connection(
     let mut ping_timer = interval_at(TokioInstant::now() + ping_period, ping_period);
     ping_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
     let mut last_activity_at = Instant::now();
+    // Last observed cumulative event-overflow count. The bus->buffer forwarder
+    // accounts global-hop drops here; the ping tick below acts on any growth.
+    let mut last_overflow: u64 = 0;
 
     loop {
         tokio::select! {
@@ -1162,19 +1205,7 @@ async fn handle_connection(
                         // The panel/notification-bridge can surface the warning
                         // and reconnect, instead of seeing a random drop.
                         // Best-effort: the connection is already in trouble.
-                        let diag = serde_json::json!({
-                            "method": "event",
-                            "params": {
-                                "topic": "connection.warning",
-                                "data": {
-                                    "reason": "events_overflow",
-                                    "dropped": n,
-                                    "total_overflow": buffer_metrics.overflow(),
-                                    "advice": "reconnect"
-                                }
-                            }
-                        })
-                        .to_string();
+                        let diag = overflow_warning_frame(n, buffer_metrics.overflow());
                         let _ = write.send(WsMessage::Text(diag.into())).await;
                         let _ = write
                             .send(WsMessage::Close(Some(CloseFrame {
@@ -1192,6 +1223,32 @@ async fn handle_connection(
             }
             // Server-initiated WS Ping + inbound idle watchdog
             _ = ping_timer.tick() => {
+                // Global-hop overflow watchdog. The bus->buffer forwarder drops
+                // events on transient lag and records them on the shared metric
+                // (without access to this socket). If it grew, apply the same
+                // slow-consumer policy as the per-client drain arm: warn the
+                // client to reconnect, then close 1008 so it re-syncs from the
+                // hello snapshot. Bounded by the ping interval; the client just
+                // misses some events until then, which the resync recovers.
+                let overflow_now = buffer_metrics.overflow();
+                if overflow_now > last_overflow {
+                    let dropped = overflow_now - last_overflow;
+                    last_overflow = overflow_now;
+                    warn!(
+                        "Event bus overflow for {} ({} dropped, total {}); closing for reconnect",
+                        conn_id, dropped, overflow_now
+                    );
+                    let diag = overflow_warning_frame(dropped, overflow_now);
+                    let _ = write.send(WsMessage::Text(diag.into())).await;
+                    let _ = write
+                        .send(WsMessage::Close(Some(CloseFrame {
+                            code: 1008,
+                            reason: "slow consumer".into(),
+                        })))
+                        .await;
+                    break;
+                }
+
                 let idle_for = last_activity_at.elapsed();
                 if idle_for > idle_timeout {
                     warn!(
@@ -1580,5 +1637,65 @@ mod tests {
         let out = maybe_inject_bootstrap_shared_token(text, &req, Some("tok-XYZ"));
         let v: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["params"]["shared_token"].as_str(), Some("tok-XYZ"));
+    }
+
+    #[test]
+    fn overflow_warning_frame_has_reconnect_advice() {
+        let frame = overflow_warning_frame(7, 42);
+        let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(v["method"].as_str(), Some("event"));
+        assert_eq!(v["params"]["topic"].as_str(), Some("connection.warning"));
+        assert_eq!(v["params"]["data"]["reason"].as_str(), Some("events_overflow"));
+        assert_eq!(v["params"]["data"]["dropped"].as_u64(), Some(7));
+        assert_eq!(v["params"]["data"]["total_overflow"].as_u64(), Some(42));
+        assert_eq!(v["params"]["data"]["advice"].as_str(), Some("reconnect"));
+    }
+
+    #[tokio::test]
+    async fn forwarder_survives_lag_and_forwards_post_lag_events() {
+        // Regression: a transient broadcast `Lagged` must NOT kill the forwarder.
+        // Overflow a small bus, then enqueue a post-lag event and close the bus.
+        let (bus_tx, bus_rx) = broadcast::channel::<String>(4);
+        let (buffer, mut client_rx) = PerClientBuffer::with_capacity(256);
+        let metrics = buffer.metrics().clone();
+
+        for i in 0..10 {
+            let _ = bus_tx.send(format!("e{i}"));
+        }
+        let _ = bus_tx.send("after".to_string());
+        drop(bus_tx); // forwarder returns on `Closed` once retained events drain
+
+        // Must terminate (not hang): proves `Lagged` is handled, not fatal.
+        forward_bus_to_client(bus_rx, buffer).await;
+
+        // The global-hop drop was accounted on the shared overflow metric.
+        assert!(metrics.overflow() >= 1, "lag must be counted as overflow");
+
+        // The most recent event (sent AFTER the lag-inducing burst) survived and
+        // was forwarded — the OLD `while let Ok` loop would have broken before it.
+        let mut last = None;
+        while let Ok(s) = client_rx.try_recv() {
+            last = Some(s);
+        }
+        assert_eq!(last.as_deref(), Some("after"));
+    }
+
+    #[tokio::test]
+    async fn forwarder_forwards_all_events_without_lag() {
+        // Healthy path: every event reaches the client buffer in order.
+        let (bus_tx, bus_rx) = broadcast::channel::<String>(64);
+        let (buffer, mut client_rx) = PerClientBuffer::with_capacity(256);
+        let metrics = buffer.metrics().clone();
+
+        for i in 0..5 {
+            let _ = bus_tx.send(format!("m{i}"));
+        }
+        drop(bus_tx);
+        forward_bus_to_client(bus_rx, buffer).await;
+
+        assert_eq!(metrics.overflow(), 0, "no overflow on the healthy path");
+        for i in 0..5 {
+            assert_eq!(client_rx.try_recv().ok().as_deref(), Some(format!("m{i}").as_str()));
+        }
     }
 }
