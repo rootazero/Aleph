@@ -413,6 +413,78 @@ impl BuiltinToolRegistry {
         }
         info!("Registered browser tools (14 tools) in BuiltinToolRegistry");
 
+        // Register parameter schemas for always-available tools that are listed
+        // in BUILTIN_TOOL_DEFINITIONS (so the LLM sees them) and dispatched in
+        // registry.rs, but whose metadata was never inserted into the runtime
+        // `tools` map. `get_tool_schema()` returned None for them, so the agent
+        // loop advertised them with an empty parameter schema — leaving the
+        // model to guess argument shapes (notably apply_patch's V4A patch format
+        // and the desktop AX/SoM/locate targeting args). Source each schema from
+        // the tool's own AlephTool::definition(), exactly like the browser block.
+        {
+            use crate::tools::AlephTool;
+            let gateway_route_meta =
+                crate::builtin_tools::gateway_route::GatewayRouteTool::default();
+            let google_meet_meta = crate::builtin_tools::google_meet::GoogleMeetTool::new(None);
+            let select_model_meta = crate::builtin_tools::SelectModelTool;
+            let doctor_meta = crate::builtin_tools::DoctorTool;
+            let extra_defs = [
+                apply_patch_tool.definition(),
+                desktop_ax_query_focused_tool.definition(),
+                desktop_ax_query_tree_tool.definition(),
+                desktop_ax_query_by_role_tool.definition(),
+                desktop_ax_snapshot_tool.definition(),
+                desktop_som_tool.definition(),
+                desktop_gui_locate_tool.definition(),
+                desktop_browser_operator_tool.definition(),
+                desktop_check_permissions_tool.definition(),
+                gateway_route_meta.definition(),
+                google_meet_meta.definition(),
+                select_model_meta.definition(),
+                doctor_meta.definition(),
+            ];
+            for td in &extra_defs {
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!(
+                "Registered schemas for apply_patch, desktop AX/SoM/locate, gateway_route, \
+                 google_meet, select_model, doctor in BuiltinToolRegistry"
+            );
+        }
+
+        // Media-understanding tools share the same gap: listed + dispatched but
+        // their schema was never registered. They require a MediaPipeline, so
+        // register only when one is configured (matching the dispatch guard).
+        if let Some(ref mp) = config.media_pipeline {
+            use crate::tools::AlephTool;
+            let media_defs = [
+                crate::builtin_tools::media_tools::MediaUnderstandTool::new(Arc::clone(mp))
+                    .definition(),
+                crate::builtin_tools::media_tools::AudioTranscribeTool::new(Arc::clone(mp))
+                    .definition(),
+                crate::builtin_tools::media_tools::DocumentExtractTool::new(Arc::clone(mp))
+                    .definition(),
+            ];
+            for td in &media_defs {
+                let mut ut = UnifiedTool::new(
+                    format!("builtin:{}", td.name),
+                    &td.name,
+                    &td.description,
+                    ToolSource::Builtin,
+                );
+                ut = ut.with_parameters_schema(td.parameters.clone());
+                tools.insert(td.name.clone(), ut);
+            }
+            info!("Registered schemas for media_understand, audio_transcribe, document_extract");
+        }
+
         info!(
             "Registered skill.list, skill.read, and read_config_guide tools in BuiltinToolRegistry"
         );
