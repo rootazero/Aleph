@@ -15,6 +15,8 @@ use tracing::trace;
 use crate::gateway::event_emitter::{
     EventEmitError, EventEmitter, RunSummary, StreamEvent, ToolErrorItem, ToolSummaryItem,
 };
+use crate::memory::assembler::context_block::{MEMORY_CONTEXT_CLOSE, MEMORY_CONTEXT_OPEN};
+use crate::memory::StreamingContextScrubber;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent};
 use aleph_protocol::TokenBreakdownView;
 
@@ -26,13 +28,47 @@ pub(crate) struct PendingTool {
 }
 
 /// Mutable drain state shared across calls for a single run.
-#[derive(Debug, Default)]
+///
+/// Beyond bookkeeping, this owns the live text-stream state that was
+/// previously stranded in the now-retired `StreamingDeltaSink`: a running
+/// `full_text` accumulator, a monotonic `chunk_index`, and a
+/// [`StreamingContextScrubber`] that strips any `<memory-context>` framing the
+/// model echoes back from the injected recalled-memory block before it reaches
+/// the user. The drain task processes events serially on one task, so the
+/// `Mutex<DrainState>` it lives behind is effectively uncontended.
+#[derive(Debug)]
 pub(crate) struct DrainState {
-    /// Set to `true` on the first `Delta` event so callers can detect
+    /// Set to `true` on the first emitted text chunk so callers can detect
     /// "first-delta" transitions if needed in the future.
     pub has_emitted_text: bool,
     /// Pending tool calls keyed by tool-call id.
     pub pending_tools: HashMap<String, PendingTool>,
+    /// Accumulated visible text within the current think iteration. Populates
+    /// the `full_text` field of every `ResponseChunk`; reset at each tool
+    /// boundary so each iteration's running text starts fresh.
+    accumulated: String,
+    /// Monotonic chunk counter across the whole run.
+    chunk_index: u32,
+    /// Strips echoed `<memory-context>` framing from the streamed text. Holds
+    /// back partial-tag tails across deltas; drained at tool / run boundaries.
+    scrubber: StreamingContextScrubber,
+}
+
+impl Default for DrainState {
+    fn default() -> Self {
+        Self {
+            has_emitted_text: false,
+            pending_tools: HashMap::new(),
+            accumulated: String::new(),
+            chunk_index: 0,
+            // The injected fence is `<memory-context>`, not the scrubber's
+            // bare-`<memory>` default — wire the real tags explicitly.
+            scrubber: StreamingContextScrubber::with_tags(
+                MEMORY_CONTEXT_OPEN,
+                MEMORY_CONTEXT_CLOSE,
+            ),
+        }
+    }
 }
 
 /// Map one `FlowStreamEvent` to the appropriate `EventEmitter` call(s).
@@ -49,28 +85,47 @@ pub(crate) async fn emit_flow_event(
 ) -> Result<(), EventEmitError> {
     match event {
         FlowStreamEvent::Delta(text) => {
-            let seq = emitter.next_seq();
-            {
+            // Scrub any echoed `<memory-context>` framing before it lands in
+            // the user-visible stream, accumulate the running iteration text
+            // (populates `full_text`), and stamp a monotonic `chunk_index`.
+            // A partial tag at the chunk tail is held inside the scrubber and
+            // surfaces on the next delta or on the tool/run boundary flush, so
+            // nothing is lost. (Consolidated from the retired StreamingDeltaSink.)
+            let emitted = {
                 let mut s = state.lock().await;
-                s.has_emitted_text = true;
+                let visible = s.scrubber.feed(&text);
+                if visible.is_empty() {
+                    None
+                } else {
+                    s.has_emitted_text = true;
+                    s.accumulated.push_str(&visible);
+                    let full_text = s.accumulated.clone();
+                    let idx = s.chunk_index;
+                    s.chunk_index += 1;
+                    Some((visible, full_text, idx))
+                }
+            };
+            if let Some((visible, full_text, idx)) = emitted {
+                let seq = emitter.next_seq();
+                emitter
+                    .emit(StreamEvent::ResponseChunk {
+                        run_id: run_id.to_string(),
+                        seq,
+                        delta: visible.clone(),
+                        content: visible, // backward-compat alias
+                        full_text,
+                        chunk_index: idx,
+                        is_final: false,
+                        is_intermediate: false,
+                    })
+                    .await?;
             }
-            emitter
-                .emit(StreamEvent::ResponseChunk {
-                    run_id: run_id.to_string(),
-                    seq,
-                    delta: text.clone(),
-                    content: text.clone(), // backward-compat alias
-                    full_text: String::new(),
-                    chunk_index: 0,
-                    is_final: false,
-                    is_intermediate: false,
-                })
-                .await?;
         }
 
         FlowStreamEvent::Reasoning(text) => {
-            // Map to the existing Reasoning stream event.
-            // TODO(task-4c): verify emitter channel forwards Reasoning to clients.
+            // Map to the existing Reasoning stream event. Forwarding to clients
+            // is exercised by the gateway emitter (GatewayEventEmitter →
+            // event bus → WebSocket / channel consumers).
             let seq = emitter.next_seq();
             emitter
                 .emit(StreamEvent::Reasoning {
@@ -83,8 +138,14 @@ pub(crate) async fn emit_flow_event(
         }
 
         FlowStreamEvent::ToolCallStart { id, name, args } => {
+            // Text-iteration boundary: drain any held-back scrubber tail and
+            // reset the running `full_text` so the next iteration starts fresh.
+            // Idempotent across parallel tool calls in one response (the first
+            // resets `accumulated`; later calls see it already empty).
+            flush_text_boundary(emitter, run_id, state).await?;
             {
                 let mut s = state.lock().await;
+                s.accumulated.clear();
                 s.pending_tools
                     .insert(id.clone(), PendingTool { name: name.clone() });
             }
@@ -179,8 +240,54 @@ pub(crate) async fn emit_flow_event(
         }
 
         FlowStreamEvent::Complete(outcome) => {
+            // Drain any partial-tag tail the scrubber held back at end of run
+            // before the terminal summary, so a trailing non-fence fragment
+            // isn't lost.
+            flush_text_boundary(emitter, run_id, state).await?;
             emit_complete(emitter, run_id, &outcome).await?;
         }
+    }
+    Ok(())
+}
+
+/// Drain the scrubber's held-back partial-tag tail at a text-iteration or run
+/// boundary. If the tail turned out not to be a real fence it is emitted as a
+/// trailing chunk; a genuine unterminated span is discarded (never leaked).
+/// [`StreamingContextScrubber::flush`] resets the scrubber either way, so the
+/// next iteration starts clean. No-op when the scrubber holds nothing.
+async fn flush_text_boundary(
+    emitter: &Arc<dyn EventEmitter>,
+    run_id: &str,
+    state: &Arc<Mutex<DrainState>>,
+) -> Result<(), EventEmitError> {
+    let emitted = {
+        let mut s = state.lock().await;
+        let tail = s.scrubber.flush();
+        if tail.is_empty() {
+            None
+        } else {
+            s.has_emitted_text = true;
+            s.accumulated.push_str(&tail);
+            let full_text = s.accumulated.clone();
+            let idx = s.chunk_index;
+            s.chunk_index += 1;
+            Some((tail, full_text, idx))
+        }
+    };
+    if let Some((tail, full_text, idx)) = emitted {
+        let seq = emitter.next_seq();
+        emitter
+            .emit(StreamEvent::ResponseChunk {
+                run_id: run_id.to_string(),
+                seq,
+                delta: tail.clone(),
+                content: tail,
+                full_text,
+                chunk_index: idx,
+                is_final: false,
+                is_intermediate: false,
+            })
+            .await?;
     }
     Ok(())
 }
@@ -365,6 +472,172 @@ mod tests {
             other => panic!("expected ResponseChunk, got {other:?}"),
         }
         assert!(state.lock().await.has_emitted_text, "flag set after delta");
+    }
+
+    /// Concatenate the visible content of every emitted ResponseChunk.
+    fn emitted_text(events: &[StreamEvent]) -> String {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ResponseChunk { content, .. } => Some(content.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// full_text accumulates across deltas within an iteration and chunk_index
+    /// is monotonic — the live path now populates both (previously always
+    /// `""` / `0`).
+    #[tokio::test]
+    async fn full_text_accumulates_and_chunk_index_is_monotonic() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        for t in ["Hello", ", ", "world"] {
+            emit_flow_event(
+                FlowStreamEvent::Delta(t.to_string()),
+                &emitter,
+                "run-acc",
+                &state,
+            )
+            .await
+            .expect("emit ok");
+        }
+
+        let events = inner.events().await;
+        let chunks: Vec<_> = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ResponseChunk {
+                    full_text,
+                    chunk_index,
+                    ..
+                } => Some((full_text.clone(), *chunk_index)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(chunks.len(), 3);
+        assert_eq!(chunks[0], ("Hello".to_string(), 0));
+        assert_eq!(chunks[1], ("Hello, ".to_string(), 1));
+        assert_eq!(chunks[2], ("Hello, world".to_string(), 2));
+    }
+
+    /// A model that echoes the injected `<memory-context>` framing must have
+    /// the fenced span stripped before it reaches the user — the security
+    /// guarantee migrated from the retired StreamingDeltaSink onto the live
+    /// drain path.
+    #[tokio::test]
+    async fn memory_context_echo_is_scrubbed_on_live_path() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        let echo = "Sure. <memory-context>\nSECRET RECALL\n</memory-context> Done.";
+        emit_flow_event(
+            FlowStreamEvent::Delta(echo.to_string()),
+            &emitter,
+            "run-fence",
+            &state,
+        )
+        .await
+        .expect("emit ok");
+        emit_flow_event(
+            FlowStreamEvent::Complete(FlowOutcome::default()),
+            &emitter,
+            "run-fence",
+            &state,
+        )
+        .await
+        .expect("complete ok");
+
+        let text = emitted_text(&inner.events().await);
+        assert!(!text.contains("SECRET RECALL"), "fenced body must not leak: {text:?}");
+        assert!(!text.contains("memory-context"), "fence tag must not leak");
+        assert!(text.contains("Sure."));
+        assert!(text.contains("Done."));
+    }
+
+    /// The fence may be split across deltas (open in one, close in a later one);
+    /// the scrubber's cross-delta state machine must still strip the whole span.
+    #[tokio::test]
+    async fn split_fence_across_deltas_is_scrubbed() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        for t in ["answer <memory-", "context>leaky</memory-", "context> tail"] {
+            emit_flow_event(
+                FlowStreamEvent::Delta(t.to_string()),
+                &emitter,
+                "run-split",
+                &state,
+            )
+            .await
+            .expect("emit ok");
+        }
+        emit_flow_event(
+            FlowStreamEvent::Complete(FlowOutcome::default()),
+            &emitter,
+            "run-split",
+            &state,
+        )
+        .await
+        .expect("complete ok");
+
+        let text = emitted_text(&inner.events().await);
+        assert!(!text.contains("leaky"), "split fence body must not leak: {text:?}");
+        assert!(text.contains("answer"));
+        assert!(text.contains("tail"));
+    }
+
+    /// A tool boundary resets the running `full_text` so the next iteration's
+    /// accumulated text starts fresh (chunk_index stays monotonic run-wide).
+    #[tokio::test]
+    async fn tool_boundary_resets_full_text() {
+        let (inner, emitter) = make_emitter();
+        let state = make_state();
+
+        emit_flow_event(
+            FlowStreamEvent::Delta("First part.".to_string()),
+            &emitter,
+            "run-iter",
+            &state,
+        )
+        .await
+        .expect("emit ok");
+        emit_flow_event(
+            FlowStreamEvent::ToolCallStart {
+                id: "tc-1".to_string(),
+                name: "search".to_string(),
+                args: serde_json::json!({}),
+            },
+            &emitter,
+            "run-iter",
+            &state,
+        )
+        .await
+        .expect("tool start ok");
+        emit_flow_event(
+            FlowStreamEvent::Delta("Second part.".to_string()),
+            &emitter,
+            "run-iter",
+            &state,
+        )
+        .await
+        .expect("emit ok");
+
+        let events = inner.events().await;
+        let last_full = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                StreamEvent::ResponseChunk { full_text, .. } => Some(full_text.clone()),
+                _ => None,
+            })
+            .expect("a response chunk exists");
+        assert_eq!(
+            last_full, "Second part.",
+            "second iteration full_text must not carry the first"
+        );
     }
 
     #[tokio::test]
