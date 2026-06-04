@@ -95,22 +95,15 @@ pub fn promote_plain_text_tool_calls(
     })
 }
 
-/// Resolve a model-emitted tool name to an offered one, tolerating the
-/// dot/underscore confusion LLMs frequently introduce (`file.read` ↔
-/// `file_read`). Returns the canonical offered name. Mirrors
-/// `LoopToolRegistry::resolve`.
+/// Resolve a model-emitted tool name to an offered one. Delegates to the unified
+/// [`crate::tools::name_repair`] resolver — the single source of truth shared
+/// with the native dispatch path — so the plain-text promotion path gets the
+/// same case / separator (`file.read` ↔ `file_read`) / bounded-typo tolerance.
+/// Returns the canonical offered name, or `None` when nothing resolves safely
+/// (which aborts the whole all-or-nothing promotion).
 fn resolve_name(raw: &str, allowed: &HashSet<&str>) -> Option<String> {
-    if allowed.contains(raw) {
-        return Some(raw.to_string());
-    }
-    let alt = if raw.contains('.') {
-        raw.replace('.', "_")
-    } else if raw.contains('_') {
-        raw.replace('_', ".")
-    } else {
-        return None;
-    };
-    allowed.contains(alt.as_str()).then_some(alt)
+    let offered: Vec<&str> = allowed.iter().copied().collect();
+    crate::tools::name_repair::repair_tool_name(raw, &offered).map(|r| r.name)
 }
 
 /// Rebuild the source text with `matches` spans removed, then trim. `matches`
@@ -348,6 +341,16 @@ mod tests {
         // Offered tool is `file_read`; model emitted `file.read`.
         let p = promote_plain_text_tool_calls(text, &allowed(&["file_read"])).unwrap();
         assert_eq!(p.calls[0].name, "file_read");
+    }
+
+    #[test]
+    fn case_and_typo_resolve_via_unified_resolver() {
+        // The plain-text path now shares the unified `name_repair` resolver, so
+        // a case-drifted name (`Get_Weather`) resolves where the old
+        // exact+separator-only logic would have aborted the promotion.
+        let text = r#"<tool_call>{"name":"Get_Weather","arguments":{"city":"Paris"}}</tool_call>"#;
+        let p = promote_plain_text_tool_calls(text, &allowed(&["get_weather"])).unwrap();
+        assert_eq!(p.calls[0].name, "get_weather");
     }
 
     #[test]
