@@ -101,7 +101,15 @@ impl SemanticLlmMatcher {
             return None;
         }
 
-        let conf = confidence.unwrap_or(0.5).clamp(0.0, 1.0);
+        // `parse::<f64>()` accepts "NaN"/"inf", and `NaN.clamp(..)` stays NaN,
+        // which would slip past the `< 0.3` reject (NaN comparisons are false)
+        // and leak a non-finite confidence into the routing decision. Reject
+        // non-finite values outright before the threshold check.
+        let conf = confidence.unwrap_or(0.5);
+        if !conf.is_finite() {
+            return None;
+        }
+        let conf = conf.clamp(0.0, 1.0);
 
         // Only return if confidence is above threshold
         if conf < 0.3 {

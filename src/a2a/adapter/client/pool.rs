@@ -25,11 +25,16 @@ impl A2AClientPool {
     /// Uses read lock for the fast path (client exists) and only
     /// acquires a write lock when creating a new client.
     pub async fn get_or_create(&self, agent: &RegisteredAgent) -> A2AResult<Arc<A2AClient>> {
-        // Fast path: read lock
+        // Fast path: read lock. Only reuse the cached client if its baked-in
+        // endpoint and auth still match the requested agent — otherwise a
+        // rotated token or changed `base_url` would be silently served with
+        // stale credentials.
         {
             let clients = self.clients.read().await;
             if let Some(client) = clients.get(&agent.card.id) {
-                return Ok(Arc::clone(client));
+                if client_matches(client, agent) {
+                    return Ok(Arc::clone(client));
+                }
             }
         }
 
@@ -39,9 +44,12 @@ impl A2AClientPool {
             None => A2AClient::new(&agent.base_url),
         });
         let mut clients = self.clients.write().await;
-        // Double-check: another task may have inserted while we waited
+        // Double-check: another task may have inserted while we waited (but
+        // only reuse it if it, too, matches the requested endpoint/auth).
         if let Some(existing) = clients.get(&agent.card.id) {
-            return Ok(Arc::clone(existing));
+            if client_matches(existing, agent) {
+                return Ok(Arc::clone(existing));
+            }
         }
         clients.insert(agent.card.id.clone(), Arc::clone(&client));
         Ok(client)
@@ -84,6 +92,14 @@ impl Default for A2AClientPool {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Whether a cached client still reflects the requested agent's endpoint and
+/// auth state. `A2AClient` trims trailing slashes off `base_url` at
+/// construction, so compare against the trimmed form.
+fn client_matches(client: &A2AClient, agent: &RegisteredAgent) -> bool {
+    client.base_url() == agent.base_url.trim_end_matches('/')
+        && client.has_auth() == agent.auth_token.is_some()
 }
 
 #[cfg(test)]

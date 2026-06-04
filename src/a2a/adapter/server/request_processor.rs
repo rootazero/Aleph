@@ -151,6 +151,22 @@ impl A2ARequestProcessor {
             }
         };
 
+        // Enforce the A2A spec invariant that a File part carries exactly one
+        // of `bytes`/`uri` at the deserialization boundary — a peer can
+        // otherwise send a part with both or neither and have it flow through
+        // unchecked (the `validate()` method was previously never called).
+        for part in &message.parts {
+            if let Part::File { file, .. } = part {
+                if let Err(e) = file.validate() {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32602,
+                        &format!("Invalid params: {}", e),
+                    );
+                }
+            }
+        }
+
         let task_id = request
             .params
             .get("taskId")

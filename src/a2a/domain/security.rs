@@ -36,6 +36,14 @@ impl TrustLevel {
                 Some(url::Host::Ipv4(ip)) if ip.is_private() || ip.is_link_local() => {
                     TrustLevel::Trusted
                 }
+                // Mirror the IPv4 arm and the `infer_from_addr` path: a private
+                // (ULA fc00::/7) or link-local (fe80::/10) IPv6 host is a LAN
+                // peer, not a public one. Without this arm such hosts fell to
+                // `_ => Public`, over-gating legitimate LAN IPv6 agents and
+                // diverging from `infer_from_addr`.
+                Some(url::Host::Ipv6(ip)) if is_private_ip(&std::net::IpAddr::V6(ip)) => {
+                    TrustLevel::Trusted
+                }
                 Some(url::Host::Domain(host)) if is_private_hostname(host) => TrustLevel::Trusted,
                 _ => TrustLevel::Public,
             }
@@ -210,6 +218,20 @@ mod tests {
         );
         assert_eq!(
             TrustLevel::infer_from_url("http://10.0.0.1:8080"),
+            TrustLevel::Trusted
+        );
+    }
+
+    #[test]
+    fn infer_from_url_lan_ipv6() {
+        // ULA (fc00::/7) and link-local (fe80::/10) IPv6 hosts are LAN peers,
+        // consistent with `infer_from_addr` and the IPv4 URL arm.
+        assert_eq!(
+            TrustLevel::infer_from_url("http://[fc00::1]:8080"),
+            TrustLevel::Trusted
+        );
+        assert_eq!(
+            TrustLevel::infer_from_url("http://[fe80::1]:8080"),
             TrustLevel::Trusted
         );
     }

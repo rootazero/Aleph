@@ -89,6 +89,19 @@ impl A2AClient {
             .await
             .map_err(|e| A2AError::AgentUnreachable(e.to_string()))?;
 
+        // Reject transport-level failures (4xx/5xx) before attempting to parse,
+        // otherwise an HTML error page or proxy interstitial surfaces as a
+        // misleading `ParseError` (and a permissive error body that happens to
+        // deserialize into an all-default `AgentCard` would be accepted as real).
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            let snippet: String = body.chars().take(256).collect();
+            return Err(A2AError::AgentUnreachable(format!(
+                "agent-card endpoint returned HTTP {status} — {snippet}"
+            )));
+        }
+
         let card = response
             .json::<AgentCard>()
             .await
@@ -120,6 +133,25 @@ impl A2AClient {
             }
         })?;
 
+        // JSON-RPC errors are conventionally returned with HTTP 200 (the error
+        // lives in the response envelope), so a non-2xx status is a genuine
+        // transport-level failure — a fronting proxy, an HTTP-layer auth
+        // rejection, etc. Surface it instead of misparsing the body as a
+        // JSON-RPC response (which would degrade to `ParseError` or a bogus
+        // `InternalError("No result in response")`).
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            let snippet: String = body.chars().take(256).collect();
+            return Err(match status.as_u16() {
+                401 => A2AError::Unauthorized,
+                403 => A2AError::Forbidden,
+                _ => A2AError::AgentUnreachable(format!(
+                    "A2A RPC returned HTTP {status} — {snippet}"
+                )),
+            });
+        }
+
         let rpc_response = response
             .json::<JsonRpcResponse>()
             .await
@@ -142,7 +174,9 @@ impl A2AClient {
                 -32005 => A2AError::Forbidden,
                 -32010 => A2AError::AgentUnreachable(error.message),
                 -32011 => A2AError::NoMatchingAgent,
-                -32012 => A2AError::Timeout(std::time::Duration::from_secs(30)),
+                // Report the timeout budget this client actually applied
+                // rather than a magic constant unrelated to the request.
+                -32012 => A2AError::Timeout(self.timeout),
                 _ => A2AError::InternalError(error.message),
             });
         }
