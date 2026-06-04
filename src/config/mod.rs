@@ -23,6 +23,7 @@ mod migration;
 pub mod patcher;
 pub mod presets_override;
 pub mod prompts_override;
+pub mod reload_impact;
 mod save;
 pub mod schema;
 mod structs;
@@ -35,6 +36,9 @@ pub use structs::{ChannelInstanceConfig, Config, FullConfig, PluginMarketplaceEn
 
 // Re-export patcher types
 pub use patcher::ConfigPatcher;
+
+// Re-export reload-impact classifier (self-management SSOT)
+pub use reload_impact::ReloadImpact;
 
 // Re-export schema generation functions
 pub use schema::generate_config_schema_json;

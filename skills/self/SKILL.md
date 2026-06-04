@@ -157,6 +157,24 @@ A `route` patch hot-applies to the live failover chain on the next prompt — no
 4. Apply changes:   self_config(action="update_config", ..., dry_run=false)
 ```
 
+### Reload Impact (when does the change take effect?)
+
+Every `update_config` response (both preview and apply) now carries a
+**`reload_impact`** signal in `data` and in the `message`. Trust it instead of
+guessing — a config patch only refreshes the in-memory config + the file on
+disk; most subsystems captured their config at startup and will not see the
+change until restart.
+
+| `kind` | Meaning | What to tell the user |
+|--------|---------|-----------------------|
+| `live` | Hot-swapped onto the running runtime (only `route` today) | Effective next prompt, no restart |
+| `restart` | Saved, but runtime captured it at startup | **Tell the user to restart aleph-server** |
+| `inert` | Legacy section, no runtime consumer | Saved but changes nothing — confirm intent |
+
+> The old per-section "needs restart" notes below (generation, the reliability
+> sections, etc.) are the same rules this signal encodes — read it off the tool
+> response rather than memorizing them.
+
 ### Config Path Examples
 
 | Path | Meaning |
