@@ -675,12 +675,17 @@ impl McpClient {
                 .collect()
         };
 
-        let mut health = HashMap::new();
-        for (name, connection) in &connections {
-            health.insert(name.clone(), connection.is_running().await);
-        }
+        // Probe every server concurrently: transport-level liveness AND an
+        // active RPC `ping`. The ping is the only real reachability signal for
+        // a stateless HTTP transport (whose is_running is always true) and a
+        // keepalive for long-lived ones. Running the probes concurrently bounds
+        // the whole pass to the slowest single probe instead of their sum.
+        let probes = connections.into_iter().map(|(name, connection)| async move {
+            let healthy = connection.is_running().await && connection.ping().await;
+            (name, healthy)
+        });
 
-        health
+        futures::future::join_all(probes).await.into_iter().collect()
     }
 
     /// Install a notification handler on a specific server's connection.

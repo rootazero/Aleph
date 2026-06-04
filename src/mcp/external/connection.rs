@@ -761,6 +761,21 @@ impl McpServerConnection {
         self.transport.is_alive().await
     }
 
+    /// Active liveness probe: send an MCP `ping` and report whether the server
+    /// is reachable over the wire.
+    ///
+    /// Any JSON-RPC reply — a success *or* a `method not found` error — proves
+    /// the transport round-trips, so a server that does not implement `ping` is
+    /// still counted alive. Only a transport-level failure (timeout, refused,
+    /// broken pipe) reports unreachable. This is the only real signal for a
+    /// stateless HTTP transport, whose [`is_running`](Self::is_running) can do
+    /// no better than always return `true`; it doubles as a keepalive that
+    /// holds long-lived connections open against idle disconnects.
+    pub async fn ping(&self) -> bool {
+        let request = JsonRpcRequest::new(self.id_gen.next(), "ping");
+        self.transport.send_request(&request).await.is_ok()
+    }
+
     /// Install a handler for server-initiated notifications on this
     /// connection's transport (e.g. `notifications/tools/list_changed`).
     ///
