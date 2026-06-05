@@ -75,7 +75,7 @@ pub fn WorkspacePanel() -> impl IntoView {
             <aside class="aleph-workspace-pane flex flex-col h-full
                            border-l border-border bg-surface-base/40
                            min-w-[280px] basis-[66%] shrink overflow-hidden">
-                <div class="flex-1 overflow-y-auto px-4 py-3">
+                <div class="flex-1 overflow-y-auto px-4 pb-3 aleph-content-top">
                     <ActivityTimeline />
                 </div>
                 <FilesDrawer />

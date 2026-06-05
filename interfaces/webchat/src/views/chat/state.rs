@@ -400,7 +400,17 @@ impl ChatState {
             let len = msgs.len();
             if let Some(idx) = msgs.iter().rposition(|m| m.id == target_id) {
                 let has_payload = !msgs[idx].content.is_empty() || !msgs[idx].tool_calls.is_empty();
-                if has_payload {
+                // Only finalize the bubble as a completed intermediate step when
+                // it already belongs to a *different, already-stamped* iteration.
+                // A bubble still tagged `iteration == None` is the un-stamped
+                // placeholder for the step we're just now starting: streamed
+                // `response_chunk` preview text may have raced ahead of this
+                // `turn_started` (the two travel independent async pipelines —
+                // AgentTraceEmitSink spawns a drain task), so its content belongs
+                // to THIS step. Reuse it instead of orphaning the preview into a
+                // duplicate intermediate bubble that `set_step_text` then mirrors.
+                let prior_step = msgs[idx].iteration.is_some_and(|prev| prev != iteration);
+                if has_payload && prior_step {
                     msgs[idx].is_streaming = false;
                     msgs[idx].is_intermediate = true;
                     msgs[idx].id = format!("intermediate-{}-{}", run_id, len);
@@ -682,6 +692,31 @@ mod step_tests {
         assert_eq!(rows[1].0, "assistant-r1");
         assert_eq!(rows[1].1, Some(2));
         assert!(rows[1].2 && !rows[1].3);
+    }
+
+    #[test]
+    fn begin_step_reuses_unstamped_placeholder_with_raced_preview() {
+        // Regression (double-render): `response_chunk` deltas and
+        // `agent_trace.turn_started` travel independent async pipelines
+        // (AgentTraceEmitSink spawns a drain task), so streamed preview text can
+        // land in the placeholder bubble BEFORE the first `turn_started`. The
+        // late `begin_step` must REUSE that un-stamped (iteration == None)
+        // placeholder — its content is THIS step's preview — not orphan it into
+        // a duplicate `intermediate-` bubble that `set_step_text` then mirrors.
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.append_chunk("r1", "你好"); // deltas win the cross-pipeline race
+        chat.begin_step("r1", 1); // turn_started arrives late
+        chat.set_step_text("r1", 1, "你好"); // authoritative text
+
+        let rows = assistant_ids(&chat);
+        assert_eq!(rows.len(), 1, "no duplicate intermediate bubble");
+        assert_eq!(rows[0].0, "assistant-r1");
+        assert_eq!(rows[0].1, Some(1));
+        let content = chat.messages.with(|m| m[0].content.clone());
+        assert_eq!(content, "你好");
     }
 
     #[test]
