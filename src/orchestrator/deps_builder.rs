@@ -408,6 +408,103 @@ fn derive_token_budget(primary: Option<&ProviderConfig>, model: Option<&str>) ->
     }
 }
 
+/// Outcome of [`derive_chain_min_budget`]: the smallest budget on the chain,
+/// plus which provider/model set it (for the one startup observability line).
+struct ChainMinBudget {
+    budget: DerivedBudget,
+    provider: String,
+    model: Option<String>,
+    chain_len: usize,
+}
+
+/// Provider keys participating in the failover chain, **primary first**.
+///
+/// Config-level twin of [`assemble_fallbacks`]'s selection, resolved from
+/// `[providers]` + `[fallback_provider].chain` alone (no built provider Arcs):
+/// explicit chain entries that exist and are enabled (primary excluded), or —
+/// when that yields nothing — every *other* enabled provider (name-sorted).
+/// Mirrors the set the live `FailoverProvider` can migrate into, so the
+/// compaction budget can be sized for the smallest window any in-request model
+/// migration could land on (see [`derive_chain_min_budget`]). A disabled or
+/// undefined provider is dropped here exactly as it would be at chain assembly,
+/// so it can never drag the budget down for a route that can't actually happen.
+fn resolve_chain_provider_keys(config: &Config, primary_provider_key: &str) -> Vec<String> {
+    let enabled = |name: &str| {
+        config
+            .providers
+            .get(name)
+            .map(|p| p.enabled)
+            .unwrap_or(false)
+    };
+    let mut fallbacks: Vec<String> = Vec::new();
+    if let Some(fb) = config.fallback_provider.as_ref() {
+        for name in fb.resolved_chain() {
+            if name.eq_ignore_ascii_case(primary_provider_key) || !enabled(&name) {
+                continue;
+            }
+            if !fallbacks.iter().any(|f| f.eq_ignore_ascii_case(&name)) {
+                fallbacks.push(name);
+            }
+        }
+    }
+    if fallbacks.is_empty() {
+        let mut names: Vec<String> = config
+            .providers
+            .iter()
+            .filter(|(n, p)| p.enabled && !n.eq_ignore_ascii_case(primary_provider_key))
+            .map(|(n, _)| n.clone())
+            .collect();
+        names.sort();
+        fallbacks = names;
+    }
+
+    let mut keys = Vec::with_capacity(fallbacks.len() + 1);
+    keys.push(primary_provider_key.to_string());
+    keys.extend(fallbacks);
+    keys
+}
+
+/// The chain-minimum compaction budget: the smallest [`derive_token_budget`]
+/// `usable` across the primary and every provider failover can migrate into.
+///
+/// Build-time budgeting sizes the window from the *primary* model — already
+/// conservatively safe when the primary is the largest. But an in-request
+/// rate-limit migration (`Decision::RateLimited` → `continue 'model`) can land
+/// on a sibling with a *smaller* window; a budget cut for a 1M primary would
+/// then overflow a 200k sibling. Taking the minimum over the resolved chain
+/// keeps the budget safe for whichever model the request ends up on — without
+/// the per-turn `AiProvider`-boundary invasion a fully dynamic budget would
+/// require. Returns the winning (smallest) provider/model for the startup log.
+fn derive_chain_min_budget(config: &Config, primary_provider_key: &str) -> ChainMinBudget {
+    let keys = resolve_chain_provider_keys(config, primary_provider_key);
+    let mut best: Option<ChainMinBudget> = None;
+    for key in &keys {
+        let provider = config.providers.get(key);
+        let model = provider.and_then(|p| p.models.first().map(String::as_str));
+        let budget = derive_token_budget(provider, model);
+        let is_smaller = best
+            .as_ref()
+            .map(|b| budget.usable < b.budget.usable)
+            .unwrap_or(true);
+        if is_smaller {
+            best = Some(ChainMinBudget {
+                budget,
+                provider: key.clone(),
+                model: model.map(str::to_string),
+                chain_len: keys.len(),
+            });
+        }
+    }
+    // `keys` always holds at least the primary, so `best` is always `Some`;
+    // the fallback keeps the function total without an `unwrap`.
+    best.unwrap_or_else(|| ChainMinBudget {
+        budget: derive_token_budget(None, None),
+        provider: primary_provider_key.to_string(),
+        model: None,
+        chain_len: 0,
+    })
+}
+
 pub fn build_context_budget_config(
     config: &Config,
     primary_provider_key: &str,
@@ -417,23 +514,24 @@ pub fn build_context_budget_config(
         return None;
     }
     // An explicit `token_budget` is an operator override — honored verbatim
-    // (back-compat). Otherwise derive a model-aware budget from the primary
-    // provider's first model.
+    // (back-compat). Otherwise derive a model-aware budget sized for the
+    // *smallest* window on the resolved failover chain, so an in-request model
+    // migration to a narrower sibling can never overflow the compaction budget.
     let token_budget = match cb.token_budget {
         Some(explicit) => explicit,
         None => {
-            let primary = config.providers.get(primary_provider_key);
-            let model = primary.and_then(|p| p.models.first().map(String::as_str));
-            let derived = derive_token_budget(primary, model);
+            let derived = derive_chain_min_budget(config, primary_provider_key);
             tracing::info!(
-                model = model.unwrap_or("<unknown>"),
-                window = derived.window,
-                reserve = derived.reserve,
-                usable = derived.usable,
-                source = derived.source,
-                "context budget derived from model context window"
+                provider = %derived.provider,
+                model = derived.model.as_deref().unwrap_or("<unknown>"),
+                window = derived.budget.window,
+                reserve = derived.budget.reserve,
+                usable = derived.budget.usable,
+                source = derived.budget.source,
+                chain_len = derived.chain_len,
+                "context budget derived from chain-minimum model context window"
             );
-            derived.usable
+            derived.budget.usable
         }
     };
     let warning_threshold = cb.warning_threshold.unwrap_or(0.70);
@@ -662,6 +760,88 @@ mod tests {
         let cfg = cfg_with_primary("c", pc, cb);
         let bc = build_context_budget_config(&cfg, "c").expect("enabled → Some");
         assert_eq!(bc.token_budget, 50_000);
+    }
+
+    // ── min-over-chain budgeting (failover-safe window) ──────────────────
+
+    /// 1M-window primary, a declared `ContextBudgetToml`, and a fallback. Sets
+    /// `context_budget` on top of the `cfg_with_fallback` skeleton.
+    fn cfg_chain_budget(
+        primary: (&str, ProviderConfig),
+        fb: Option<FallbackProviderToml>,
+        others: Vec<(&str, ProviderConfig)>,
+    ) -> Config {
+        let mut providers = vec![primary];
+        providers.extend(others);
+        let mut cfg = cfg_with_fallback(fb, providers);
+        cfg.context_budget = Some(ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        });
+        cfg
+    }
+
+    fn big_primary() -> ProviderConfig {
+        let mut pc = ProviderConfig::test_config("claude-sonnet-4-6");
+        pc.context_window = Some(1_000_000);
+        pc.max_tokens = Some(64_000);
+        pc
+    }
+
+    #[test]
+    fn chain_min_budget_picks_smallest_window_in_explicit_chain() {
+        // A 1M primary that can migrate (rate-limit) to a 200k kimi must budget
+        // for kimi's window, not its own — else the migrated turn overflows.
+        let fb = FallbackProviderToml {
+            chain: vec!["small".to_string()],
+            provider: None,
+            max_retries: None,
+        };
+        let cfg = cfg_chain_budget(
+            ("big", big_primary()),
+            Some(fb),
+            vec![("small", ProviderConfig::test_config("kimi-k2"))],
+        );
+        let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
+        assert_eq!(bc.token_budget, 200_000 - 8_192);
+    }
+
+    #[test]
+    fn chain_min_budget_auto_derive_spans_all_enabled_providers() {
+        // No explicit chain → failover auto-derives from every enabled
+        // provider, so the budget must span them and pick the smallest window.
+        let cfg = cfg_chain_budget(
+            ("big", big_primary()),
+            None,
+            vec![("small", ProviderConfig::test_config("kimi-k2"))],
+        );
+        let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
+        assert_eq!(bc.token_budget, 200_000 - 8_192);
+    }
+
+    #[test]
+    fn chain_min_budget_single_provider_uses_primary_window() {
+        // Only the primary exists → min-over-chain == primary budget (the
+        // build-time-by-primary back-compat path is preserved).
+        let cfg = cfg_chain_budget(("big", big_primary()), None, vec![]);
+        let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
+        assert_eq!(bc.token_budget, 1_000_000 - 64_000);
+    }
+
+    #[test]
+    fn chain_min_budget_ignores_disabled_fallback() {
+        // A disabled sibling can never be migrated into, so it must not drag
+        // the budget down to its (smaller) window.
+        let mut disabled = ProviderConfig::test_config("kimi-k2");
+        disabled.enabled = false;
+        let fb = FallbackProviderToml {
+            chain: vec!["small".to_string()],
+            provider: None,
+            max_retries: None,
+        };
+        let cfg = cfg_chain_budget(("big", big_primary()), Some(fb), vec![("small", disabled)]);
+        let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
+        assert_eq!(bc.token_budget, 1_000_000 - 64_000);
     }
 
     fn cfg_with_fallback(
