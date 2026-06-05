@@ -49,7 +49,6 @@
     "workspace_hint": "Click any tool chip in the chat to inspect its call here. Switch back to single-column with the toggle in the composer.",
     "workspace_files": "Project Files",
     "workspace_files_hint": "Select a file to preview",
-    "workspace_tool_evicted": "Tool call no longer in session memory.",
     "browser_close": "Close",
     "browser_go_up": "Go up",
     "browser_go_up_label": "← Up",

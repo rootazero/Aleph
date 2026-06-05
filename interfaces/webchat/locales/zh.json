@@ -49,7 +49,6 @@
     "workspace_hint": "点击对话中任意工具标签可在此查看调用详情。通过编辑栏中的切换按钮可回到单栏视图。",
     "workspace_files": "项目文件",
     "workspace_files_hint": "选择一个文件预览",
-    "workspace_tool_evicted": "该工具调用已不在会话内存中。",
     "browser_close": "关闭",
     "browser_go_up": "上一级",
     "browser_go_up_label": "← 上一级",

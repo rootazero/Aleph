@@ -283,6 +283,16 @@ fn FilesDrawer() -> impl IntoView {
         });
     });
 
+    // Reset drawer navigation when the active project changes so a session
+    // switch doesn't leave the previous project's listing behind. Reads
+    // active_project_root only; writes cur_path/entries (never reads them)
+    // → cannot self-retrigger. Effect A then reseeds from the new root.
+    Effect::new(move |_| {
+        let _ = chat.active_project_root.get();
+        cur_path.set(None);
+        entries.set(Vec::new());
+    });
+
     view! {
         <div class="border-t border-border bg-surface-base/60">
             <button
