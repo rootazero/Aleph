@@ -96,6 +96,7 @@ pub struct WorkspaceState {
     pub unseen_activity: RwSignal<usize>,
     /// A `tool_id` the user clicked from a chat chip — the timeline scrolls
     /// to / expands it. Cleared once consumed.
+    /// TODO(phase-2): a scroll-into-view effect will read this; currently only set.
     pub focus_tool: RwSignal<Option<String>>,
     /// Whether the bottom files drawer is expanded (Phase 2).
     pub files_drawer_open: RwSignal<bool>,
@@ -213,12 +214,20 @@ impl WorkspaceState {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 fn read_persisted_layout_mode() -> Option<LayoutMode> {
     let storage = web_sys::window()?.local_storage().ok().flatten()?;
     let token = storage.get_item(LAYOUT_MODE_KEY).ok().flatten()?;
     Some(LayoutMode::from_token(&token))
 }
 
+/// Non-wasm (test host): no localStorage, no web_sys (which panics off-wasm).
+#[cfg(not(target_arch = "wasm32"))]
+fn read_persisted_layout_mode() -> Option<LayoutMode> {
+    None
+}
+
+#[cfg(target_arch = "wasm32")]
 fn persist_layout_mode(mode: LayoutMode) {
     let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
         return;
@@ -226,9 +235,25 @@ fn persist_layout_mode(mode: LayoutMode) {
     let _ = storage.set_item(LAYOUT_MODE_KEY, mode.as_token());
 }
 
+/// Non-wasm (test host): no-op — see `read_persisted_layout_mode`.
+#[cfg(not(target_arch = "wasm32"))]
+fn persist_layout_mode(_mode: LayoutMode) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_ws(mode: LayoutMode) -> WorkspaceState {
+        WorkspaceState {
+            mode: RwSignal::new(mode),
+            tool_payloads: RwSignal::new(HashMap::new()),
+            expanded_events: RwSignal::new(HashSet::new()),
+            unseen_activity: RwSignal::new(0),
+            focus_tool: RwSignal::new(None),
+            files_drawer_open: RwSignal::new(false),
+            selected_file: RwSignal::new(None),
+        }
+    }
 
     #[test]
     fn layout_mode_round_trips_through_token() {
@@ -270,15 +295,7 @@ mod tests {
         let owner = Owner::new();
         owner.set();
 
-        let ws = WorkspaceState {
-            mode: RwSignal::new(LayoutMode::Split),
-            tool_payloads: RwSignal::new(HashMap::new()),
-            expanded_events: RwSignal::new(HashSet::new()),
-            unseen_activity: RwSignal::new(0),
-            focus_tool: RwSignal::new(None),
-            files_drawer_open: RwSignal::new(false),
-            selected_file: RwSignal::new(None),
-        };
+        let ws = test_ws(LayoutMode::Split);
         ws.focus_tool_row("run-1", "tool-a");
         ws.record_tool_args("run-1", "tool-a", serde_json::json!({"q": "x"}));
         ws.record_tool_result("run-1", "tool-a", serde_json::json!({"ok": true}));
@@ -298,15 +315,7 @@ mod tests {
     fn toggle_event_flips_membership() {
         let owner = Owner::new();
         owner.set();
-        let ws = WorkspaceState {
-            mode: RwSignal::new(LayoutMode::Split),
-            tool_payloads: RwSignal::new(HashMap::new()),
-            expanded_events: RwSignal::new(HashSet::new()),
-            unseen_activity: RwSignal::new(0),
-            focus_tool: RwSignal::new(None),
-            files_drawer_open: RwSignal::new(false),
-            selected_file: RwSignal::new(None),
-        };
+        let ws = test_ws(LayoutMode::Split);
         assert!(!ws.is_event_expanded("t1"));
         ws.toggle_event("t1");
         assert!(ws.is_event_expanded("t1"));
@@ -318,23 +327,15 @@ mod tests {
     fn note_activity_bumps_badge_only_when_not_split() {
         let owner = Owner::new();
         owner.set();
-        let ws = WorkspaceState {
-            mode: RwSignal::new(LayoutMode::ChatOnly),
-            tool_payloads: RwSignal::new(HashMap::new()),
-            expanded_events: RwSignal::new(HashSet::new()),
-            unseen_activity: RwSignal::new(0),
-            focus_tool: RwSignal::new(None),
-            files_drawer_open: RwSignal::new(false),
-            selected_file: RwSignal::new(None),
-        };
+        let ws = test_ws(LayoutMode::ChatOnly);
         ws.note_activity();
         ws.note_activity();
         assert_eq!(ws.unseen_activity.get_untracked(), 2);
-        // In Split, activity does not accrue. Set the `mode` signal
-        // directly — set_layout() would hit web_sys::window(), which
-        // panics on the non-wasm test host (same reason new() is avoided).
-        ws.mode.set(LayoutMode::Split);
+        // Entering Split clears the badge (now host-safe: persist no-ops off-wasm).
+        ws.set_layout(LayoutMode::Split);
+        assert_eq!(ws.unseen_activity.get_untracked(), 0);
+        // In Split, further activity does not accrue.
         ws.note_activity();
-        assert_eq!(ws.unseen_activity.get_untracked(), 2);
+        assert_eq!(ws.unseen_activity.get_untracked(), 0);
     }
 }

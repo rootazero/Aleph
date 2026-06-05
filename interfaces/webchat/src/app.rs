@@ -283,8 +283,7 @@ fn ChatBandChrome() -> impl IntoView {
                     <span>{move || t_string!(i18n, common.workspace_title).to_string()}</span>
                     <span class="text-text-tertiary/60">
                         {move || {
-                            let n = workspace.unseen_activity.get();
-                            if n > 0 {
+                            if workspace.tool_payloads.with(|m| !m.is_empty()) {
                                 t_string!(i18n, common.workspace_state_tool).to_string()
                             } else {
                                 t_string!(i18n, common.workspace_state_idle).to_string()

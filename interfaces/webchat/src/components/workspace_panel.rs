@@ -109,7 +109,7 @@ fn ActivityRow(run_id: String, tool_id: String, tool_name: String) -> impl IntoV
     // Status + duration are looked up live from ChatState so a "running"
     // row flips to "completed" without re-deriving the whole timeline.
     let status = Memo::new(move |_| {
-        chat.messages.get().iter().flat_map(|m| m.tool_calls.clone()).find_map(|t| {
+        chat.messages.get().iter().flat_map(|m| m.tool_calls.iter()).find_map(|t| {
             if t.tool_id == tid_for_status {
                 Some((t.status.clone(), t.duration_ms))
             } else {
