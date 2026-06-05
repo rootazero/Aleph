@@ -9,15 +9,15 @@
 //! - [`LayoutMode`] — whether the workspace pane is mounted at all
 //!   (`ChatOnly` keeps Aleph's existing single-column UX; `Split` splits
 //!   chat / workspace 1:2). Persists in `localStorage`.
-//! - [`WorkspaceContent`] — what the workspace pane is currently showing.
-//!   Default `Empty` renders a hero placeholder.
+//! - [`WorkspaceState`] — activity-stream state: tool payloads, inline
+//!   expansions, unseen-activity badge, file drawer, and focus target.
 //!
 //! State is provided once at the app root via `provide_context`; readers
 //! `expect_context::<WorkspaceState>()` from anywhere in the tree.
 
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// `localStorage` key for the chat/workspace split toggle.
 const LAYOUT_MODE_KEY: &str = "aleph.panel.layout_mode";
@@ -73,31 +73,34 @@ impl LayoutMode {
     }
 }
 
-/// What the workspace pane is currently displaying.
-///
-/// Variants intentionally enum-shaped (not stringy) so the panel
-/// dispatcher and `ToolRendererRegistry` can pattern-match exhaustively.
+/// A lazily-loaded file preview shown in the files drawer (Phase 2).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
-pub enum WorkspaceContent {
-    /// Default — workspace pane is open but empty (shows hero).
-    #[default]
-    Empty,
-    /// A specific tool call from a chat message is being inspected.
-    /// Lookup happens via `ChatState.messages` for the matching tool_id.
-    ToolDetail { run_id: String, tool_id: String },
+pub struct FilePreview {
+    pub path: String,
+    pub content: String,
+    pub truncated: bool,
 }
-
 
 /// Reactive workspace state. Provided once via context, cloned via `Copy`.
 #[derive(Clone, Copy)]
 pub struct WorkspaceState {
     pub mode: RwSignal<LayoutMode>,
-    pub content: RwSignal<WorkspaceContent>,
     /// Captured tool-call args + results keyed by `(run_id, tool_id)`.
-    /// Populated by `events::subscribe_run_events` so the workspace pane
-    /// can show real payloads without rewriting the existing chunk path.
+    /// Populated by `events::subscribe_run_events`.
     pub tool_payloads: RwSignal<HashMap<(String, String), ToolPayload>>,
+    /// `tool_id`s whose activity-timeline row is expanded inline.
+    pub expanded_events: RwSignal<HashSet<String>>,
+    /// Count of tool activities that started while the pane was not in
+    /// Split — drives the toggle button's unseen-activity dot (R5: we
+    /// surface activity without force-opening the pane).
+    pub unseen_activity: RwSignal<usize>,
+    /// A `tool_id` the user clicked from a chat chip — the timeline scrolls
+    /// to / expands it. Cleared once consumed.
+    pub focus_tool: RwSignal<Option<String>>,
+    /// Whether the bottom files drawer is expanded (Phase 2).
+    pub files_drawer_open: RwSignal<bool>,
+    /// Currently previewed file (Phase 2).
+    pub selected_file: RwSignal<Option<FilePreview>>,
 }
 
 impl Default for WorkspaceState {
@@ -107,66 +110,85 @@ impl Default for WorkspaceState {
 }
 
 impl WorkspaceState {
-    /// Construct with `localStorage`-hydrated layout mode (best-effort —
-    /// silently falls back to `ChatOnly` if web_sys / storage is absent).
+    /// Construct with `localStorage`-hydrated layout mode (best-effort).
     pub fn new() -> Self {
         let hydrated = read_persisted_layout_mode().unwrap_or_default();
         Self {
             mode: RwSignal::new(hydrated),
-            content: RwSignal::new(WorkspaceContent::default()),
             tool_payloads: RwSignal::new(HashMap::new()),
+            expanded_events: RwSignal::new(HashSet::new()),
+            unseen_activity: RwSignal::new(0),
+            focus_tool: RwSignal::new(None),
+            files_drawer_open: RwSignal::new(false),
+            selected_file: RwSignal::new(None),
         }
     }
 
     /// Toggle between `ChatOnly` and `Split`. Persists to `localStorage`.
+    /// Entering Split clears the unseen-activity badge.
     pub fn toggle_layout(&self) {
         let next = self.mode.get_untracked().toggled();
-        self.mode.set(next);
-        persist_layout_mode(next);
+        self.set_layout(next);
     }
 
-    /// Set the layout mode explicitly (used by the toggle button when it
-    /// also needs to seed `WorkspaceContent` — e.g. opening Split for a
-    /// specific tool detail). Persists to `localStorage`.
+    /// Set the layout mode explicitly. Persists to `localStorage`. Entering
+    /// Split is treated as "user has seen the activity" → reset the badge.
     pub fn set_layout(&self, mode: LayoutMode) {
         self.mode.set(mode);
         persist_layout_mode(mode);
+        if mode == LayoutMode::Split {
+            self.unseen_activity.set(0);
+        }
     }
 
-    /// Show a tool detail in the workspace pane, opening Split if needed.
-    pub fn show_tool(&self, run_id: impl Into<String>, tool_id: impl Into<String>) {
-        self.content.set(WorkspaceContent::ToolDetail {
-            run_id: run_id.into(),
-            tool_id: tool_id.into(),
+    /// Toggle inline expansion of one activity-timeline row.
+    pub fn toggle_event(&self, tool_id: &str) {
+        self.expanded_events.update(|set| {
+            if !set.remove(tool_id) {
+                set.insert(tool_id.to_string());
+            }
         });
+    }
+
+    /// True when the given tool row is expanded inline.
+    pub fn is_event_expanded(&self, tool_id: &str) -> bool {
+        self.expanded_events.with(|set| set.contains(tool_id))
+    }
+
+    /// Chat-chip click: focus a tool row in the timeline, expanding it and
+    /// opening Split if needed. Replaces the old `show_tool` single-view.
+    pub fn focus_tool_row(&self, _run_id: impl Into<String>, tool_id: impl Into<String>) {
+        let tool_id = tool_id.into();
+        self.expanded_events.update(|set| {
+            set.insert(tool_id.clone());
+        });
+        self.focus_tool.set(Some(tool_id));
         if self.mode.get_untracked() != LayoutMode::Split {
             self.set_layout(LayoutMode::Split);
         }
     }
 
-    /// Reset content to `Empty` (close-pane semantic without changing mode).
-    pub fn clear_content(&self) {
-        self.content.set(WorkspaceContent::Empty);
+    /// Record that a tool started. Bumps the unseen badge only when the
+    /// pane is not already open (R5 — never force-open).
+    pub fn note_activity(&self) {
+        if self.mode.get_untracked() != LayoutMode::Split {
+            self.unseen_activity.update(|n| *n += 1);
+        }
     }
 
-    /// Reset the pane for a new / switched chat session: drop any open
-    /// tool-detail view back to `Empty` **and** evict every captured tool
-    /// payload. The layout mode (`Split`/`ChatOnly`) is intentionally
-    /// preserved — the user's pane-open preference outlives a single chat.
-    ///
-    /// Without this, [`Self::tool_payloads`] accumulates one entry per tool
-    /// call for the lifetime of the tab and is never reclaimed across
-    /// `new chat` / session switches / deletes — an unbounded leak whose
-    /// stale `(run_id, tool_id)` keys also outlive the messages they
-    /// describe. Wired into the session-reset gestures in `chat_sidebar`.
+    /// Reset the pane for a new / switched chat session. Drops inline
+    /// expansions, focus, badge, drawer selection, and every captured
+    /// payload. Layout mode (the user's pane preference) is preserved.
     pub fn reset(&self) {
-        self.clear_content();
         self.tool_payloads.update(|m| m.clear());
+        self.expanded_events.update(|s| s.clear());
+        self.unseen_activity.set(0);
+        self.focus_tool.set(None);
+        self.files_drawer_open.set(false);
+        self.selected_file.set(None);
     }
 
-    /// Record the input/args of a tool call. Idempotent — repeated calls
-    /// for the same `(run_id, tool_id)` overwrite, matching the events
-    /// stream's append-or-update semantics.
+    /// Record the input/args of a tool call. Idempotent.
     pub fn record_tool_args(&self, run_id: &str, tool_id: &str, args: serde_json::Value) {
         let key = (run_id.to_string(), tool_id.to_string());
         self.tool_payloads.update(|m| {
@@ -184,8 +206,7 @@ impl WorkspaceState {
         });
     }
 
-    /// Lookup the payload for a tool call. Reactive — clones the value so
-    /// the borrow on the RwSignal is released before render.
+    /// Lookup the payload for a tool call.
     pub fn get_tool_payload(&self, run_id: &str, tool_id: &str) -> Option<ToolPayload> {
         let key = (run_id.to_string(), tool_id.to_string());
         self.tool_payloads.with(|m| m.get(&key).cloned())
@@ -244,43 +265,74 @@ mod tests {
         assert!(p1.result.is_none() && p2.result.is_some());
     }
 
-    /// `reset` must evict every captured payload and drop the open tool
-    /// view back to `Empty`, while leaving the layout mode untouched —
-    /// the session-scoped lifecycle fix for the unbounded `tool_payloads`
-    /// growth. Runs inside an explicit `Owner` so the `RwSignal`s have a
-    /// reactive context (the rest of this module is plain-Rust logic).
     #[test]
-    fn reset_evicts_payloads_and_content_but_preserves_layout_mode() {
+    fn reset_evicts_payloads_and_state_but_preserves_layout_mode() {
         let owner = Owner::new();
         owner.set();
 
-        // Build via struct literal rather than `new()` — `new()` reads
-        // localStorage through `web_sys::window()`, which panics on the
-        // non-wasm test target. Seeding `mode = Split` also keeps
-        // `show_tool` off its web_sys-backed `set_layout` branch.
         let ws = WorkspaceState {
             mode: RwSignal::new(LayoutMode::Split),
-            content: RwSignal::new(WorkspaceContent::Empty),
             tool_payloads: RwSignal::new(HashMap::new()),
+            expanded_events: RwSignal::new(HashSet::new()),
+            unseen_activity: RwSignal::new(0),
+            focus_tool: RwSignal::new(None),
+            files_drawer_open: RwSignal::new(false),
+            selected_file: RwSignal::new(None),
         };
-        ws.show_tool("run-1", "tool-a");
+        ws.focus_tool_row("run-1", "tool-a");
         ws.record_tool_args("run-1", "tool-a", serde_json::json!({"q": "x"}));
         ws.record_tool_result("run-1", "tool-a", serde_json::json!({"ok": true}));
 
         assert!(ws.get_tool_payload("run-1", "tool-a").is_some());
-        assert_eq!(
-            ws.content.get_untracked(),
-            WorkspaceContent::ToolDetail {
-                run_id: "run-1".into(),
-                tool_id: "tool-a".into(),
-            }
-        );
+        assert!(ws.is_event_expanded("tool-a"));
 
         ws.reset();
 
         assert!(ws.get_tool_payload("run-1", "tool-a").is_none());
-        assert_eq!(ws.content.get_untracked(), WorkspaceContent::Empty);
-        // Layout mode is the user's pane preference — it survives a reset.
+        assert!(!ws.is_event_expanded("tool-a"));
+        assert_eq!(ws.focus_tool.get_untracked(), None);
         assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
+    }
+
+    #[test]
+    fn toggle_event_flips_membership() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = WorkspaceState {
+            mode: RwSignal::new(LayoutMode::Split),
+            tool_payloads: RwSignal::new(HashMap::new()),
+            expanded_events: RwSignal::new(HashSet::new()),
+            unseen_activity: RwSignal::new(0),
+            focus_tool: RwSignal::new(None),
+            files_drawer_open: RwSignal::new(false),
+            selected_file: RwSignal::new(None),
+        };
+        assert!(!ws.is_event_expanded("t1"));
+        ws.toggle_event("t1");
+        assert!(ws.is_event_expanded("t1"));
+        ws.toggle_event("t1");
+        assert!(!ws.is_event_expanded("t1"));
+    }
+
+    #[test]
+    fn note_activity_bumps_badge_only_when_not_split() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = WorkspaceState {
+            mode: RwSignal::new(LayoutMode::ChatOnly),
+            tool_payloads: RwSignal::new(HashMap::new()),
+            expanded_events: RwSignal::new(HashSet::new()),
+            unseen_activity: RwSignal::new(0),
+            focus_tool: RwSignal::new(None),
+            files_drawer_open: RwSignal::new(false),
+            selected_file: RwSignal::new(None),
+        };
+        ws.note_activity();
+        ws.note_activity();
+        assert_eq!(ws.unseen_activity.get_untracked(), 2);
+        ws.set_layout(LayoutMode::Split);
+        assert_eq!(ws.unseen_activity.get_untracked(), 0);
+        ws.note_activity();
+        assert_eq!(ws.unseen_activity.get_untracked(), 0);
     }
 }
