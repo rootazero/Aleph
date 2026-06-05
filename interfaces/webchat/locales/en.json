@@ -226,7 +226,10 @@
     "edit": "Edit",
     "save": "Save",
     "saving": "Saving…",
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "prev_page": "Previous",
+    "next_page": "Next",
+    "confirm_delete": "Confirm delete?"
   },
   "logs": {
     "title": "Server Logs",

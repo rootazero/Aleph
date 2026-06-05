@@ -4,6 +4,9 @@ use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
 
+/// Fixed number of entries shown per page in both memory tabs.
+const PAGE_SIZE: u32 = 50;
+
 #[component]
 pub fn Memory() -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -16,17 +19,23 @@ pub fn Memory() -> impl IntoView {
     // Active tab: "facts" or "raw"
     let active_tab = RwSignal::new("facts".to_string());
 
-    // Facts data
+    // Facts data + page (0-indexed)
     let facts_list = RwSignal::new(Vec::<CompressedFact>::new());
     let facts_loaded = RwSignal::new(false);
+    let facts_page = RwSignal::new(0u32);
 
-    // Raw memories data
+    // Raw memories data + page (0-indexed)
     let search_query = RwSignal::new(String::new());
+    // `applied_query` is the query actually in effect (set on Enter); browse
+    // mode is `applied_query == ""`. Kept separate from the input buffer so
+    // pagination reloads use the committed query, not every keystroke.
+    let applied_query = RwSignal::new(String::new());
     let raw_memories = RwSignal::new(Vec::<RawMemory>::new());
     let is_searching = RwSignal::new(false);
     let raw_loaded = RwSignal::new(false);
+    let raw_page = RwSignal::new(0u32);
 
-    // Fetch stats + facts + raw memories when connected
+    // Stats fetch — only depends on connection (refreshed after deletes).
     Effect::new(move || {
         if state.is_connected.get() {
             let state = state;
@@ -34,39 +43,65 @@ pub fn Memory() -> impl IntoView {
                 if let Ok(s) = MemoryApi::stats(&state).await {
                     stats.set(Some(s));
                 }
-                if let Ok(facts) = MemoryApi::list_facts(&state, Some(50)).await {
-                    facts_list.set(facts);
-                }
-                facts_loaded.set(true);
-
-                if let Ok(results) = MemoryApi::search(&state, String::new(), Some(20)).await {
-                    raw_memories.set(results);
-                }
-                raw_loaded.set(true);
             });
         } else {
             stats.set(None);
+        }
+    });
+
+    // Facts page loader — reruns when the page changes or connection flips.
+    Effect::new(move || {
+        if state.is_connected.get() {
+            let page = facts_page.get();
+            let state = state;
+            leptos::task::spawn_local(async move {
+                facts_loaded.set(false);
+                let offset = (page * PAGE_SIZE) as usize;
+                if let Ok(facts) =
+                    MemoryApi::list_facts(&state, Some(PAGE_SIZE as usize), offset).await
+                {
+                    facts_list.set(facts);
+                }
+                facts_loaded.set(true);
+            });
+        } else {
             facts_list.set(Vec::new());
-            raw_memories.set(Vec::new());
             facts_loaded.set(false);
+        }
+    });
+
+    // Raw memories page loader — reruns on page change, applied query change,
+    // or connection flip.
+    Effect::new(move || {
+        if state.is_connected.get() {
+            let page = raw_page.get();
+            let query = applied_query.get();
+            let state = state;
+            leptos::task::spawn_local(async move {
+                is_searching.set(true);
+                raw_loaded.set(false);
+                if let Ok(results) =
+                    MemoryApi::search(&state, query, Some(PAGE_SIZE), page * PAGE_SIZE).await
+                {
+                    raw_memories.set(results);
+                }
+                is_searching.set(false);
+                raw_loaded.set(true);
+            });
+        } else {
+            raw_memories.set(Vec::new());
             raw_loaded.set(false);
         }
     });
 
-    // Search handler for raw memories
+    // Search handler — commits the query and jumps back to the first page.
+    // The raw loader Effect reacts to both signals and performs the fetch.
     let do_search = move || {
-        let query = search_query.get();
-        let state = state;
-        leptos::task::spawn_local(async move {
-            is_searching.set(true);
-            if let Ok(results) = MemoryApi::search(&state, query, Some(20)).await {
-                raw_memories.set(results);
-            }
-            is_searching.set(false);
-        });
+        applied_query.set(search_query.get());
+        raw_page.set(0);
     };
 
-    // Delete handler for raw memories
+    // Delete handler for raw memories — refreshes stats + the current page.
     let on_delete = move |memory_id: String| {
         let state = state;
         leptos::task::spawn_local(async move {
@@ -74,12 +109,19 @@ pub fn Memory() -> impl IntoView {
                 if let Ok(s) = MemoryApi::stats(&state).await {
                     stats.set(Some(s));
                 }
-                let q = search_query.get_untracked();
-                if let Ok(results) = MemoryApi::search(&state, q, Some(20)).await {
-                    raw_memories.set(results);
-                }
-                if let Ok(facts) = MemoryApi::list_facts(&state, Some(50)).await {
-                    facts_list.set(facts);
+                let page = raw_page.get_untracked();
+                let query = applied_query.get_untracked();
+                if let Ok(results) =
+                    MemoryApi::search(&state, query, Some(PAGE_SIZE), page * PAGE_SIZE).await
+                {
+                    // Deleting the last row on a non-first page: step back so the
+                    // user doesn't land on an empty page (the loader Effect then
+                    // refetches the previous page).
+                    if results.is_empty() && page > 0 {
+                        raw_page.set(page - 1);
+                    } else {
+                        raw_memories.set(results);
+                    }
                 }
             }
         });
@@ -211,13 +253,104 @@ pub fn Memory() -> impl IntoView {
             // Tab content
             {move || {
                 if active_tab.get() == "facts" {
-                    view! { <FactsTable facts=facts_list loaded=facts_loaded connected=state.is_connected /> }.into_any()
+                    let facts_total = Signal::derive(move || stats.get().map(|s| s.total_facts));
+                    let facts_len = Signal::derive(move || facts_list.get().len());
+                    view! {
+                        <FactsTable facts=facts_list loaded=facts_loaded connected=state.is_connected />
+                        <Pager page=facts_page total=facts_total current_len=facts_len />
+                    }.into_any()
                 } else {
                     let on_delete = on_delete;
-                    view! { <RawMemoriesTable memories=raw_memories loaded=raw_loaded searching=is_searching connected=state.is_connected on_delete=on_delete /> }.into_any()
+                    // In browse mode the total is the stats count; while a search
+                    // query is applied the match count is unknown, so the pager
+                    // falls back to "has a full page" heuristics.
+                    let raw_total = Signal::derive(move || {
+                        if applied_query.get().is_empty() {
+                            stats.get().map(|s| s.total_memories)
+                        } else {
+                            None
+                        }
+                    });
+                    let raw_len = Signal::derive(move || raw_memories.get().len());
+                    view! {
+                        <RawMemoriesTable memories=raw_memories loaded=raw_loaded searching=is_searching connected=state.is_connected on_delete=on_delete />
+                        <Pager page=raw_page total=raw_total current_len=raw_len />
+                    }.into_any()
                 }
             }}
         </div>
+    }
+}
+
+// ─── Pagination ─────────────────────────────────────────────────────────────
+
+/// Prev / page-indicator / Next pager shared by both memory tabs.
+///
+/// `total` is the full item count when known (browse mode); when `None`
+/// (an active search whose match count is unknown) the pager shows only the
+/// current page number and enables "Next" while the current page is full.
+#[component]
+fn Pager(
+    /// 0-indexed current page.
+    page: RwSignal<u32>,
+    /// Total item count, or `None` when unknown.
+    total: Signal<Option<u64>>,
+    /// Number of items rendered on the current page.
+    current_len: Signal<usize>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+
+    let total_pages = Signal::derive(move || {
+        total
+            .get()
+            .map(|t| ((t + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64).max(1) as u32)
+    });
+    let has_prev = Signal::derive(move || page.get() > 0);
+    let has_next = Signal::derive(move || match total_pages.get() {
+        Some(tp) => page.get() + 1 < tp,
+        None => current_len.get() as u32 >= PAGE_SIZE,
+    });
+
+    move || {
+        // Hide the pager entirely when there's only a single page.
+        if !has_prev.get() && !has_next.get() {
+            return view! { <div></div> }.into_any();
+        }
+
+        let indicator = match total_pages.get() {
+            Some(tp) => format!("{} / {}", page.get() + 1, tp),
+            None => format!("{}", page.get() + 1),
+        };
+
+        view! {
+            <div class="flex items-center justify-end gap-2 pt-1">
+                <button
+                    class="px-3 py-1.5 text-sm rounded-lg border border-border bg-surface-raised text-text-secondary hover:text-text-primary hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    prop:disabled=move || !has_prev.get()
+                    on:click=move |_| {
+                        let p = page.get();
+                        if p > 0 {
+                            page.set(p - 1);
+                        }
+                    }
+                >
+                    {t!(i18n, memory.prev_page)}
+                </button>
+                <span class="px-2 text-sm font-mono text-text-secondary tabular-nums">{indicator}</span>
+                <button
+                    class="px-3 py-1.5 text-sm rounded-lg border border-border bg-surface-raised text-text-secondary hover:text-text-primary hover:bg-surface-sunken disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    prop:disabled=move || !has_next.get()
+                    on:click=move |_| {
+                        if has_next.get() {
+                            page.set(page.get() + 1);
+                        }
+                    }
+                >
+                    {t!(i18n, memory.next_page)}
+                </button>
+            </div>
+        }
+        .into_any()
     }
 }
 
@@ -385,8 +518,33 @@ fn MemoryRow(
     content: String,
     agent_id: String,
     date: String,
-    on_delete: impl Fn(()) + 'static,
+    on_delete: impl Fn(()) + Clone + Send + 'static,
 ) -> impl IntoView {
+    let i18n = use_i18n();
+    // Two-step delete confirmation: the first click arms the same button into a
+    // "确认删除？" state; the second click deletes. Mirrors the cron page pattern.
+    let confirm = RwSignal::new(false);
+
+    // Auto-disarm after 4s so a half-pressed row doesn't stay armed (mirrors the
+    // chat sidebar's delete-confirm auto-dismiss).
+    Effect::new(move || {
+        if confirm.get() {
+            leptos::task::spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(4000).await;
+                confirm.set(false);
+            });
+        }
+    });
+
+    let on_click = move |_| {
+        if confirm.get_untracked() {
+            confirm.set(false);
+            on_delete(());
+        } else {
+            confirm.set(true);
+        }
+    };
+
     view! {
         <tr class="group hover:bg-surface-sunken transition-colors">
             <td class="p-4 pl-8">
@@ -407,13 +565,32 @@ fn MemoryRow(
                 </div>
             </td>
             <td class="p-4 pr-8 text-right">
-                <div class="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <Button variant=ButtonVariant::Destructive size=ButtonSize::Sm class="p-1.5 h-auto".to_string() on:click=move |_| on_delete(())>
-                        <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="3 6 5 6 21 6" />
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
-                    </Button>
+                // Confirm mode keeps the button visible (not hover-gated) so the
+                // armed state is always readable; idle mode reveals on row hover.
+                <div class=move || if confirm.get() {
+                    "flex items-center justify-end gap-2 transition-opacity"
+                } else {
+                    "flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                }>
+                    {move || if confirm.get() {
+                        view! {
+                            <button
+                                class="px-2.5 py-1 text-xs font-medium rounded-md bg-danger hover:bg-danger/80 text-white ring-2 ring-danger/50 ring-offset-1 ring-offset-surface animate-pulse transition-colors"
+                                on:click=on_click.clone()
+                            >
+                                {t!(i18n, memory.confirm_delete)}
+                            </button>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <Button variant=ButtonVariant::Destructive size=ButtonSize::Sm class="p-1.5 h-auto".to_string() on:click=on_click.clone()>
+                                <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="3 6 5 6 21 6" />
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                                </svg>
+                            </Button>
+                        }.into_any()
+                    }}
                 </div>
             </td>
         </tr>

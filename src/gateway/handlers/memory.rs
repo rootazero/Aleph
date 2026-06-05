@@ -73,6 +73,9 @@ pub struct SearchParams {
     /// Maximum results (default: 20)
     #[serde(default = "default_limit")]
     pub limit: u32,
+    /// Number of rows to skip for pagination (browse mode only, default: 0)
+    #[serde(default)]
+    pub offset: u32,
 }
 
 fn default_limit() -> u32 {
@@ -86,6 +89,7 @@ impl Default for SearchParams {
             agent_id: None,
             window_title: None,
             limit: default_limit(),
+            offset: 0,
         }
     }
 }
@@ -145,7 +149,11 @@ pub async fn handle_search(request: JsonRpcRequest, db: MemoryBackend) -> JsonRp
         };
     }
 
-    match db.get_raw_memories_dashboard(params.agent_id.as_deref(), params.limit as usize) {
+    match db.get_raw_memories_dashboard(
+        params.agent_id.as_deref(),
+        params.limit as usize,
+        params.offset as usize,
+    ) {
         Ok(memories) => {
             let entries: Vec<MemoryEntry> = memories
                 .into_iter()
@@ -180,27 +188,31 @@ pub struct DeleteParams {
     pub id: String,
 }
 
-/// Delete a single memory entry.
+/// Delete a single raw memory entry (Layer 1 conversation record).
 ///
-/// The notes-based memory model exposes no per-entry delete primitive:
-/// knowledge notes are curated through the `note_manage` tool and aged out by
-/// the dream daemon's decay stage. This handler previously returned a fake
-/// `{ "ok": true }`, silently misleading callers (`aleph memory delete`, the
-/// Panel) into believing a delete happened — it now reports the limitation
-/// honestly so the failure is visible.
-pub async fn handle_delete(request: JsonRpcRequest, _db: MemoryBackend) -> JsonRpcResponse {
-    let _params: DeleteParams = match parse_params(&request) {
+/// Raw memories live in the self-contained `raw_memories` table with no
+/// vector/foreign-key linkage, so a single-row delete is safe. (Layer-2
+/// knowledge notes are a separate model curated via the `note_manage` tool and
+/// are not affected by this handler.)
+pub async fn handle_delete(request: JsonRpcRequest, db: MemoryBackend) -> JsonRpcResponse {
+    let params: DeleteParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    JsonRpcResponse::error(
-        request.id,
-        INTERNAL_ERROR,
-        "Memory entries cannot be deleted individually in the notes-based \
-         memory model; manage knowledge notes via the note_manage tool."
-            .to_string(),
-    )
+    match db.delete_raw_memory(&params.id) {
+        Ok(true) => JsonRpcResponse::success(request.id, json!({ "ok": true })),
+        Ok(false) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("No raw memory found with id '{}'", params.id),
+        ),
+        Err(e) => JsonRpcResponse::error(
+            request.id,
+            INTERNAL_ERROR,
+            format!("Delete raw memory failed: {}", e),
+        ),
+    }
 }
 
 // ============================================================================
@@ -248,6 +260,9 @@ pub struct ListFactsParams {
     /// Maximum results (default: 50)
     #[serde(default = "default_facts_limit")]
     pub limit: usize,
+    /// Number of rows to skip for pagination (default: 0)
+    #[serde(default)]
+    pub offset: usize,
     /// Include invalidated facts (default: false)
     #[serde(default)]
     pub include_invalid: bool,
@@ -291,6 +306,7 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
         Ok(notes) => {
             let entries: Vec<FactEntry> = notes
                 .into_iter()
+                .skip(params.offset)
                 .take(params.limit)
                 .map(|n| FactEntry {
                     id: n.path.clone(),
@@ -597,6 +613,22 @@ mod tests {
         assert!(params.query.is_none());
         assert!(params.agent_id.is_none());
         assert_eq!(params.limit, 20);
+        assert_eq!(params.offset, 0);
+    }
+
+    #[test]
+    fn test_search_params_offset_parsed() {
+        let json = json!({ "limit": 50, "offset": 100 });
+        let params: SearchParams = serde_json::from_value(json).unwrap();
+        assert_eq!(params.limit, 50);
+        assert_eq!(params.offset, 100);
+    }
+
+    #[test]
+    fn test_list_facts_params_offset_default() {
+        let params: ListFactsParams = serde_json::from_value(json!({})).unwrap();
+        assert_eq!(params.limit, 50);
+        assert_eq!(params.offset, 0);
     }
 
     #[test]

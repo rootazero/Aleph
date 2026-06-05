@@ -81,15 +81,20 @@ pub struct MemoryStats {
 pub struct MemoryApi;
 
 impl MemoryApi {
-    /// Search raw memories (Layer 1)
+    /// Search raw memories (Layer 1).
+    ///
+    /// `offset` paginates the browse view (empty query); it is ignored by the
+    /// note full-text search path the backend takes for non-empty queries.
     pub async fn search(
         state: &DashboardState,
         query: String,
         limit: Option<u32>,
+        offset: u32,
     ) -> Result<Vec<RawMemory>, String> {
         let params = serde_json::json!({
             "query": query,
             "limit": limit,
+            "offset": offset,
         });
 
         let result = state.rpc_call("memory.search", params).await?;
@@ -145,9 +150,11 @@ impl MemoryApi {
     pub async fn list_facts(
         state: &DashboardState,
         limit: Option<usize>,
+        offset: usize,
     ) -> Result<Vec<CompressedFact>, String> {
         let params = serde_json::json!({
             "limit": limit.unwrap_or(50),
+            "offset": offset,
         });
 
         let result = state.rpc_call("memory.listFacts", params).await?;

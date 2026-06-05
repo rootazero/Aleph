@@ -361,7 +361,7 @@ pub fn Home() -> impl IntoView {
         let state = state;
         leptos::task::spawn_local(async move {
             web_sys::console::log_1(&"Exporting memory...".into());
-            match MemoryApi::list_facts(&state, Some(1000)).await {
+            match MemoryApi::list_facts(&state, Some(1000), 0).await {
                 Ok(facts) => {
                     let export_data = serde_json::json!({
                         "export_type": "memory_facts",

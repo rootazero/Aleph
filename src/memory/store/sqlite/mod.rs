@@ -111,10 +111,18 @@ impl SqliteMemoryBackend {
     // ---- Dashboard helpers (raw_memories-based) -----------------------------
 
     /// Get raw memory entries (session summaries / conversation records).
+    ///
+    /// `offset` skips the first N rows of the `created_at DESC` ordering,
+    /// enabling stable server-side pagination for the dashboard.
+    ///
+    /// `tool_invocation` rows are per-call telemetry (consumed by the Dream
+    /// cycle / insights aggregator *by source*, see [`RawMemorySource::ToolInvocation`])
+    /// — they are not user-facing memories, so the dashboard excludes them.
     pub fn get_raw_memories_dashboard(
         &self,
         agent_id: Option<&str>,
         limit: usize,
+        offset: usize,
     ) -> Result<Vec<crate::memory::store::raw_memory::RawMemory>, AlephError> {
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
 
@@ -126,13 +134,13 @@ impl SqliteMemoryBackend {
         let sql = if agent_id.is_some() {
             "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
              is_processed, created_at \
-             FROM raw_memories WHERE agent_id = ?1 \
-             ORDER BY created_at DESC LIMIT ?2"
+             FROM raw_memories WHERE agent_id = ?1 AND source != 'tool_invocation' \
+             ORDER BY created_at DESC LIMIT ?2 OFFSET ?3"
         } else {
             "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
              is_processed, created_at \
-             FROM raw_memories \
-             ORDER BY created_at DESC LIMIT ?1"
+             FROM raw_memories WHERE source != 'tool_invocation' \
+             ORDER BY created_at DESC LIMIT ?1 OFFSET ?2"
         };
 
         let mut stmt = conn
@@ -158,9 +166,12 @@ impl SqliteMemoryBackend {
         };
 
         let rows = if let Some(ws) = agent_id {
-            stmt.query_map(rusqlite::params![ws, limit as i64], row_mapper)
+            stmt.query_map(
+                rusqlite::params![ws, limit as i64, offset as i64],
+                row_mapper,
+            )
         } else {
-            stmt.query_map(rusqlite::params![limit as i64], row_mapper)
+            stmt.query_map(rusqlite::params![limit as i64, offset as i64], row_mapper)
         }
         .map_err(|e| AlephError::config(format!("get_raw_memories_dashboard failed: {e}")))?;
 
@@ -173,14 +184,41 @@ impl SqliteMemoryBackend {
         Ok(results)
     }
 
-    /// Count raw memory entries.
+    /// Count user-facing raw memory entries.
+    ///
+    /// Excludes `tool_invocation` telemetry rows so the count matches the
+    /// dashboard list (see [`Self::get_raw_memories_dashboard`]).
     pub fn count_raw_memories(&self) -> Result<i64, AlephError> {
         let conn = self
             .conn
             .lock()
             .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
 
-        conn.query_row("SELECT COUNT(*) FROM raw_memories", [], |row| row.get(0))
-            .map_err(|e| AlephError::config(format!("count_raw_memories failed: {e}")))
+        conn.query_row(
+            "SELECT COUNT(*) FROM raw_memories WHERE source != 'tool_invocation'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|e| AlephError::config(format!("count_raw_memories failed: {e}")))
+    }
+
+    /// Delete a single raw memory entry by id.
+    ///
+    /// Returns `true` when a row was removed, `false` when no entry matched.
+    /// Raw memories live in a self-contained table with no vector/foreign-key
+    /// linkage, so this is a clean single-row delete.
+    pub fn delete_raw_memory(&self, id: &str) -> Result<bool, AlephError> {
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| AlephError::config(format!("Mutex poisoned: {e}")))?;
+
+        let affected = conn
+            .execute(
+                "DELETE FROM raw_memories WHERE id = ?1",
+                rusqlite::params![id],
+            )
+            .map_err(|e| AlephError::config(format!("delete_raw_memory failed: {e}")))?;
+        Ok(affected > 0)
     }
 }

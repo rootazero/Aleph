@@ -598,4 +598,112 @@ mod tests {
         assert_eq!(fetched[0].source, RawMemorySource::ToolOutput);
         assert_eq!(fetched[0].content, "legacy content");
     }
+
+    #[tokio::test]
+    async fn dashboard_offset_paginates_stably() {
+        let backend = make_backend();
+        // Insert 5 rows with increasing created_at so DESC order is deterministic.
+        for i in 0..5 {
+            let mut raw = RawMemory::new(format!("entry-{i}"), RawMemorySource::Transcript)
+                .with_agent("pager");
+            raw.created_at = 1000 + i as i64;
+            backend.insert_raw_memory(&raw).await.unwrap();
+        }
+
+        // Page 1 (offset 0, limit 2): newest two.
+        let p1 = backend
+            .get_raw_memories_dashboard(Some("pager"), 2, 0)
+            .unwrap();
+        assert_eq!(p1.len(), 2);
+        assert_eq!(p1[0].content, "entry-4");
+        assert_eq!(p1[1].content, "entry-3");
+
+        // Page 2 (offset 2): next two, no overlap with page 1.
+        let p2 = backend
+            .get_raw_memories_dashboard(Some("pager"), 2, 2)
+            .unwrap();
+        assert_eq!(p2.len(), 2);
+        assert_eq!(p2[0].content, "entry-2");
+        assert_eq!(p2[1].content, "entry-1");
+
+        // Page 3 (offset 4): final partial page.
+        let p3 = backend
+            .get_raw_memories_dashboard(Some("pager"), 2, 4)
+            .unwrap();
+        assert_eq!(p3.len(), 1);
+        assert_eq!(p3[0].content, "entry-0");
+    }
+
+    #[tokio::test]
+    async fn delete_raw_memory_removes_only_target() {
+        let backend = make_backend();
+        let keep =
+            RawMemory::new("keep me".to_string(), RawMemorySource::Transcript).with_agent("del");
+        let drop =
+            RawMemory::new("drop me".to_string(), RawMemorySource::Transcript).with_agent("del");
+        let drop_id = drop.id.clone();
+        backend.insert_raw_memory(&keep).await.unwrap();
+        backend.insert_raw_memory(&drop).await.unwrap();
+
+        // Deleting an existing id reports success and removes exactly one row.
+        assert!(backend.delete_raw_memory(&drop_id).unwrap());
+        let remaining = backend
+            .get_raw_memories_dashboard(Some("del"), 10, 0)
+            .unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].id, keep.id);
+
+        // Deleting a non-existent id is a no-op reporting `false`.
+        assert!(!backend.delete_raw_memory("ghost").unwrap());
+    }
+
+    #[tokio::test]
+    async fn dashboard_and_count_exclude_tool_invocation_telemetry() {
+        let backend = make_backend();
+
+        // One genuine memory + three per-call tool-telemetry rows.
+        let real = RawMemory::new("real conversation".to_string(), RawMemorySource::Transcript)
+            .with_agent("noise");
+        backend.insert_raw_memory(&real).await.unwrap();
+        for i in 0..3 {
+            let tele = RawMemory::new(
+                format!("tool file_read ok in {i}ms"),
+                RawMemorySource::ToolInvocation {
+                    tool_name: "file_read".to_string(),
+                    success: true,
+                    duration_ms: i,
+                },
+            )
+            .with_agent("noise");
+            backend.insert_raw_memory(&tele).await.unwrap();
+        }
+
+        // Dashboard (both agent-scoped and global) hides telemetry.
+        let scoped = backend
+            .get_raw_memories_dashboard(Some("noise"), 100, 0)
+            .unwrap();
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].content, "real conversation");
+
+        let global = backend.get_raw_memories_dashboard(None, 100, 0).unwrap();
+        assert_eq!(global.len(), 1);
+
+        // The user-facing count matches the dashboard (1, not 4).
+        assert_eq!(backend.count_raw_memories().unwrap(), 1);
+
+        // Telemetry is still retrievable by source for the Dream metrics path.
+        let tele_rows = backend
+            .get_raw_by_source(
+                RawMemorySource::ToolInvocation {
+                    tool_name: "file_read".to_string(),
+                    success: true,
+                    duration_ms: 0,
+                },
+                "noise",
+                100,
+            )
+            .await
+            .unwrap();
+        assert_eq!(tele_rows.len(), 3);
+    }
 }
