@@ -1,13 +1,6 @@
 use crate::memory::notes::orientation::types::OrientationSnapshot;
 use crate::sync_primitives::Arc;
 
-/// Escape `&`, `<`, `>` for XML embedding.
-pub fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
 /// Strip YAML frontmatter (`---\n…\n---\n`) from the start of `raw`.
 /// If no frontmatter is present, returns `raw` unchanged.
 pub fn strip_frontmatter(raw: &str) -> &str {

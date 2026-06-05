@@ -1,6 +1,7 @@
 use super::{helpers, MemoryContextProvider};
 use crate::config::types::memory::MemoryInjectionMode;
 use crate::providers::message::UnifiedMessage;
+use crate::thinker::xml_util::escape_xml;
 
 impl MemoryContextProvider {
     /// Build a user-profile user-message for injection into the prompt.
@@ -31,8 +32,8 @@ impl MemoryContextProvider {
         let xml = format!(
             "<UserProfile>\n<revision>{}</revision>\n<confidence>{}</confidence>\n<body>\n{}\n</body>\n</UserProfile>",
             profile.revision,
-            helpers::xml_escape(&profile.confidence),
-            helpers::xml_escape(&body)
+            escape_xml(&profile.confidence),
+            escape_xml(&body)
         );
         Ok(Some(UnifiedMessage::user(xml)))
     }

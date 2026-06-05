@@ -340,7 +340,23 @@ impl ScopedToolService {
             // Record the refusal so a blind retry of this exact intent — or a
             // session past the threshold — is short-circuited next time.
             if let Some(ref key) = mem_key {
-                denial_ledger::global().record_denial(key, &fingerprint, reason_kind);
+                let just_paused =
+                    denial_ledger::global().record_denial(key, &fingerprint, reason_kind);
+                // Circuit-breaker just tripped: the session crossed the
+                // brute-force denial threshold. Purge the offloaded tool-result
+                // cache so a paused, adversarial session cannot mine results
+                // cached under an earlier, more permissive moment via
+                // `ctx_search` / `read_file` — closing the reference-bypass.
+                if just_paused {
+                    if let Some(store) = self.result_store.as_deref() {
+                        store.purge_all();
+                        tracing::warn!(
+                            session = %key,
+                            "denial circuit-breaker tripped — purged offloaded \
+                             tool-result cache (anti-reference-bypass)"
+                        );
+                    }
+                }
             }
             // Carry the same hint on the *first* live denial too, so the agent
             // is told to change approach immediately rather than looping into

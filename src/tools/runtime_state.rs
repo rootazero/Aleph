@@ -13,6 +13,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::thinker::xml_util::{escape_xml, escape_xml_attr};
+
 /// Tool availability for runtime-state purposes.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -65,44 +67,32 @@ impl RuntimeStateFragment {
             ToolStatus::Available => (String::new(), None),
             ToolStatus::Unavailable { reason } => (
                 " status=\"unavailable\"".to_string(),
-                Some(format!("    <hint>{}</hint>\n", escape_text(reason))),
+                Some(format!("    <hint>{}</hint>\n", escape_xml(reason))),
             ),
         };
 
         if self.hints.is_empty() && unavail_hint.is_none() {
             return format!(
                 "  <tool name=\"{}\"{}/>\n",
-                escape_attr(&self.tool_name),
+                escape_xml_attr(&self.tool_name),
                 status_attr
             );
         }
 
         let mut buf = format!(
             "  <tool name=\"{}\"{}>\n",
-            escape_attr(&self.tool_name),
+            escape_xml_attr(&self.tool_name),
             status_attr
         );
         if let Some(h) = unavail_hint {
             buf.push_str(&h);
         }
         for hint in &self.hints {
-            buf.push_str(&format!("    <hint>{}</hint>\n", escape_text(hint)));
+            buf.push_str(&format!("    <hint>{}</hint>\n", escape_xml(hint)));
         }
         buf.push_str("  </tool>\n");
         buf
     }
-}
-
-fn escape_attr(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-}
-
-fn escape_text(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
 }
 
 /// Opt-in trait for tools that want to surface live state.
@@ -159,5 +149,15 @@ mod tests {
         assert!(xml.contains("&lt;bad&gt;"));
         assert!(xml.contains("&amp;&quot;reason&quot;") || xml.contains("&amp;\"reason\""));
         assert!(xml.contains("&lt;hint &amp;val&gt;"));
+    }
+
+    #[test]
+    fn attr_escaping_covers_gt_and_apostrophe() {
+        // After folding onto the shared SSOT, the `name` attribute uses the
+        // full five-char escaper, so a `>` or `'` in a tool name can no longer
+        // break out of the quoted attribute value.
+        let f = RuntimeStateFragment::available("a>b'c", vec![]);
+        let xml = f.render_xml();
+        assert!(xml.contains("name=\"a&gt;b&apos;c\""), "got: {xml}");
     }
 }

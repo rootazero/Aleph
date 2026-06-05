@@ -278,6 +278,19 @@ impl ContentIndex {
     pub fn is_empty(&self) -> Result<bool, IndexError> {
         Ok(self.len()? == 0)
     }
+
+    /// Drop every indexed chunk from both FTS tables, leaving the schema (and
+    /// the live SQLite connection) intact so the index stays usable afterwards.
+    ///
+    /// Used by the sandbox reference-bypass defense: when a session trips the
+    /// denial circuit-breaker, the offloaded-output index is wiped so the agent
+    /// cannot mine previously-cached results via `ctx_search`. Mirrors the
+    /// per-source `DELETE FROM chunks` already used by [`Self::index_text`].
+    pub fn clear(&self) -> Result<(), IndexError> {
+        let conn = self.lock();
+        conn.execute_batch("DELETE FROM chunks; DELETE FROM chunks_tri;")?;
+        Ok(())
+    }
 }
 
 /// Number of section titles surfaced in the offload marker preview.

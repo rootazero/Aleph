@@ -2,6 +2,7 @@
 
 use super::envelope::{EnvelopeItem, EnvelopeSlot, ItemSource, MemoryEnvelope, SlotKind};
 use crate::memory::context::CognitiveLayer;
+use crate::thinker::xml_util::escape_xml_attr;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -178,22 +179,22 @@ fn render_xml(env: &MemoryEnvelope) -> String {
         "  <schema_version>{}</schema_version>\n",
         env.schema_version
     ));
-    out.push_str(&format!("  <query>{}</query>\n", xml_escape(&env.query)));
+    out.push_str(&format!("  <query>{}</query>\n", escape_xml_attr(&env.query)));
     for slot in env.slots.iter().filter(|s| !s.items.is_empty()) {
         out.push_str(&format!("  <slot kind=\"{}\">\n", slot_tag(slot.kind)));
         if let Some(directive) = slot_directive(slot.kind) {
             out.push_str(&format!(
                 "    <directive>{}</directive>\n",
-                xml_escape(directive)
+                escape_xml_attr(directive)
             ));
         }
         for item in &slot.items {
             out.push_str(&format!(
                 "    <item id=\"{}\" layer=\"{}\"><title>{}</title><content>{}</content></item>\n",
-                xml_escape(&item.id),
+                escape_xml_attr(&item.id),
                 cognitive_layer(slot.kind, &item.source).as_str(),
-                xml_escape(&item.title),
-                xml_escape(&item.content),
+                escape_xml_attr(&item.title),
+                escape_xml_attr(&item.content),
             ));
         }
         out.push_str("  </slot>\n");
@@ -204,14 +205,6 @@ fn render_xml(env: &MemoryEnvelope) -> String {
 
 fn render_json(env: &MemoryEnvelope) -> String {
     serde_json::to_string_pretty(env).unwrap_or_else(|_| String::from("{}"))
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
 }
 
 #[cfg(test)]
