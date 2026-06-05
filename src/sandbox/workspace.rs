@@ -273,7 +273,10 @@ impl Sandbox for WorkspaceSandbox {
                         )
                         .await;
                     return Err(SandboxError::CapabilityDenied {
-                        reason: "elevated capability previously denied this session".into(),
+                        reason: format!(
+                            "elevated capability previously denied this session. {}",
+                            reason_kind.agent_hint()
+                        ),
                     });
                 }
                 let outcome = self
@@ -298,7 +301,10 @@ impl Sandbox for WorkspaceSandbox {
                         };
                         denial_ledger::global().record_denial(&led_key, &fingerprint, reason_kind);
                         let err = SandboxError::CapabilityDenied {
-                            reason: "user denied elevated capability request".into(),
+                            reason: format!(
+                                "user denied elevated capability request. {}",
+                                reason_kind.agent_hint()
+                            ),
                         };
                         self.hooks
                             .run_after(
@@ -1074,7 +1080,60 @@ mod tests {
             })
             .await
             .expect_err("denied approval must surface CapabilityDenied");
-        assert!(matches!(err, SandboxError::CapabilityDenied { .. }));
+        let SandboxError::CapabilityDenied { reason } = err else {
+            panic!("expected CapabilityDenied, got {err:?}");
+        };
+        // The denial ledger's agent hint must reach the model-facing reason —
+        // a generic "denied" lets the agent blind-retry; the hint tells it to
+        // change approach instead.
+        assert!(
+            reason.contains("do not re-request"),
+            "live denial reason must carry the agent hint; got: {reason}"
+        );
+    }
+
+    /// 否决账本 circuit breaker: after the first denial is recorded, an
+    /// identical elevated request is auto-blocked by the denial ledger
+    /// *without* re-prompting, and the model-facing reason must carry the
+    /// `RepeatedSameIntent` hint so the agent stops looping.
+    #[tokio::test]
+    async fn blind_retry_is_auto_blocked_with_ledger_hint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let driver: Arc<dyn OsSandboxDriverTrait> = Arc::new(FakeDriver::new());
+        let sandbox = build_sandbox(
+            &tmp,
+            driver,
+            build_gate_with(ApprovalOutcome::Denied),
+            SandboxHooks::new(),
+        );
+        let elevated = SandboxCapabilities {
+            network: NetworkPolicy::AllowAll,
+            ..SandboxCapabilities::strict()
+        };
+        // Pin one session so both attempts hash to the same ledger key.
+        let session = sid();
+        let mk = || SandboxCommand {
+            session_id: session.clone(),
+            program: "curl".into(),
+            args: vec!["https://example.com".into()],
+            env: HashMap::new(),
+            stdin: None,
+            cwd: None,
+            capabilities: elevated.clone(),
+            timeout: None,
+        };
+        // First attempt: live denial records the refusal in the ledger.
+        let _ = sandbox.execute(mk()).await.expect_err("first denied");
+        // Second attempt: same intent → auto-blocked by the ledger.
+        let err = sandbox.execute(mk()).await.expect_err("blind retry blocked");
+        let SandboxError::CapabilityDenied { reason } = err else {
+            panic!("expected CapabilityDenied, got {err:?}");
+        };
+        assert!(
+            reason.contains("previously denied this session")
+                && reason.contains("auto-refused"),
+            "auto-block reason must carry the RepeatedSameIntent hint; got: {reason}"
+        );
     }
 
     #[tokio::test]
