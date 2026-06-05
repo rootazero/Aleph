@@ -144,6 +144,31 @@ pub fn subscribe_run_events(
                             append_reasoning(chat, summary);
                         }
                     }
+                    "turn_started" => {
+                        let Some(iteration) = trace_event
+                            .get("iteration")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize)
+                        else {
+                            return;
+                        };
+                        chat.begin_step(run_id, iteration);
+                        workspace.set_current_iteration(iteration);
+                    }
+                    "text_emitted" => {
+                        let Some(iteration) = trace_event
+                            .get("iteration")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as usize)
+                        else {
+                            return;
+                        };
+                        let text = trace_event
+                            .get("text")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        chat.set_step_text(run_id, iteration, text);
+                    }
                     _ => {}
                 }
             }
@@ -173,25 +198,25 @@ pub fn subscribe_run_events(
                 chat.update_tool(run_id, tool_id, "", status, duration);
             }
             "response_chunk" => {
-                let is_intermediate = data
-                    .get("is_intermediate")
+                // Live typewriter preview. When trace is active, authoritative
+                // per-step text arrives via `agent_trace.text_emitted` (both
+                // output modes) and overwrites this preview, so the `is_final`
+                // chunk — in instant mode the whole-run buffered dump — is
+                // dropped to avoid duplicating already-set step text. For
+                // non-trace runs no text_emitted arrives, so the `is_final`
+                // chunk is the only text source and must be kept.
+                let is_final = data
+                    .get("is_final")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-
-                // Prefer "delta" field, fall back to "content" for backward compat
+                if is_final && trace_enabled {
+                    return;
+                }
                 let chunk_text = data
                     .get("delta")
                     .or_else(|| data.get("content"))
                     .and_then(|c| c.as_str());
-
-                if is_intermediate {
-                    if let Some(text) = chunk_text {
-                        if !text.is_empty() {
-                            chat.append_chunk(run_id, text);
-                        }
-                    }
-                    chat.finalize_intermediate(run_id);
-                } else if let Some(text) = chunk_text {
+                if let Some(text) = chunk_text {
                     chat.append_chunk(run_id, text);
                 }
             }
