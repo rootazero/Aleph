@@ -4,7 +4,7 @@
 //! logging and dispatch. Every subcommand enum lives here; `main.rs` only
 //! wires them to handler functions.
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 
 use crate::commands::guests::GuestsAction;
 
@@ -841,6 +841,31 @@ pub(crate) enum SessionAction {
         #[arg(short = 'n', long, default_value = "20")]
         keep: usize,
     },
+    /// Export a session's full transcript to a file or stdout.
+    ///
+    /// Reads the complete message log via `chat.history` (no limit) and
+    /// renders it as Markdown (default) or JSON. Pure I/O — no server-side
+    /// state is mutated.
+    Export {
+        /// Session key to export
+        key: String,
+        /// Write the transcript to FILE instead of stdout
+        #[arg(short = 'o', long = "output", value_name = "FILE")]
+        output: Option<String>,
+        /// Output format (markdown or json). The global `--json` flag implies
+        /// json when this is omitted.
+        #[arg(long, value_enum)]
+        format: Option<SessionExportFormat>,
+    },
+}
+
+/// Transcript export rendering format for `session export`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub(crate) enum SessionExportFormat {
+    /// Human-readable Markdown transcript
+    Markdown,
+    /// Machine-readable JSON (`chat.history` envelope)
+    Json,
 }
 
 #[derive(Subcommand)]
