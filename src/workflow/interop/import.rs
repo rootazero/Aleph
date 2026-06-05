@@ -11,6 +11,10 @@
 //!    `label`/`phase`/`model`/`isolation`/`agentType` fields and a JSON `schema`
 //!    are recovered, making the bare path symmetric with `export`'s
 //!    `render_agent_call` (a header-stripped export re-imports its opts intact).
+//!    A `parallel([...])` block is reconstructed into sibling steps of one DAG
+//!    layer (fan-out from the prior step, fan-in to the next), so the
+//!    parallelisation / orchestrator-workers shape round-trips instead of being
+//!    flattened into a sequential chain.
 //!
 //! No JS engine, no full parser (R3). The scan's limits are surfaced via
 //! `dropped`, never hidden.
@@ -100,9 +104,10 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
             dropped.push(label.to_string());
         }
     }
-    if skeleton.contains("parallel(") {
-        dropped.push("parallel(...) grouping approximated as a sequential chain".to_string());
-    }
+    // NOTE: `parallel([...])` is NO LONGER dropped — the scan reconstructs its
+    // sibling steps as a DAG layer (see the `ParallelStart`/`ParallelEnd`
+    // handling below), so the parallelisation structure round-trips faithfully
+    // instead of being linearised.
 
     // Walk the source in order, tracking the active `phase()` so each scanned
     // `agent()` step inherits it. The scan is string-aware (a prompt mentioning
@@ -111,6 +116,17 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
     let mut steps: Vec<WorkflowManifestStep> = Vec::new();
     let mut phase_titles: Vec<String> = Vec::new();
     let mut current_phase: Option<String> = None;
+    // Dependency reconstruction tracks the previous DAG "layer" so a
+    // `parallel([...])` block re-imports as sibling steps that fan out from the
+    // layer before it and fan into the step after it — the exact inverse of
+    // `export`'s topo-layers → `parallel(...)` rendering. A sequential step is a
+    // singleton layer (a plain chain). This recovers the parallelisation /
+    // orchestrator-workers DAG shape a flat scan would otherwise linearise, so
+    // re-imported siblings stay independent `Pending` tasks the dispatcher runs
+    // concurrently.
+    let mut prev_layer: Vec<usize> = Vec::new();
+    let mut parallel_depth: u32 = 0;
+    let mut parallel_group: Vec<usize> = Vec::new();
     for ev in scan_events(src) {
         match ev {
             ScanEvent::Phase(title) => {
@@ -118,6 +134,22 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     phase_titles.push(title.clone());
                 }
                 current_phase = Some(title);
+            }
+            ScanEvent::ParallelStart => {
+                // Only the outermost block defines a layer; nested parallels just
+                // keep accumulating into the same sibling group (all concurrent).
+                if parallel_depth == 0 {
+                    parallel_group.clear();
+                }
+                parallel_depth += 1;
+            }
+            ScanEvent::ParallelEnd => {
+                parallel_depth = parallel_depth.saturating_sub(1);
+                // Closing the outermost block: its members become the layer the
+                // next sequential step fans in from.
+                if parallel_depth == 0 && !parallel_group.is_empty() {
+                    prev_layer = std::mem::take(&mut parallel_group);
+                }
             }
             ScanEvent::Agent(call) => {
                 let i = steps.len();
@@ -132,15 +164,17 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     }
                 }
                 let phase = call.opts.phase.or_else(|| current_phase.clone());
+                // Depend on every step in the preceding layer: one for a
+                // sequential predecessor, N for a fan-in after a parallel block.
+                let depends_on: Vec<String> = prev_layer
+                    .iter()
+                    .map(|&p| format!("step_{}", p + 1))
+                    .collect();
                 steps.push(WorkflowManifestStep {
                     id: format!("step_{}", i + 1),
                     agent: "agent".to_string(),
                     prompt: call.prompt,
-                    depends_on: if i == 0 {
-                        Vec::new()
-                    } else {
-                        vec![format!("step_{i}")]
-                    },
+                    depends_on,
                     label: call.opts.label,
                     model: call.opts.model,
                     phase,
@@ -150,6 +184,13 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                 });
+                // A sibling inside a parallel block extends the current group; a
+                // sequential step becomes the next singleton layer.
+                if parallel_depth > 0 {
+                    parallel_group.push(i);
+                } else {
+                    prev_layer = vec![i];
+                }
             }
         }
     }
@@ -574,6 +615,11 @@ enum ScanEvent {
     Phase(String),
     /// An `agent("prompt", { opts })` call — the prompt plus any recovered opts.
     Agent(AgentCall),
+    /// The opening of a `parallel([...])` block — the agents up to the matching
+    /// [`ParallelEnd`](ScanEvent::ParallelEnd) are siblings (same DAG layer).
+    ParallelStart,
+    /// The close of the innermost open `parallel([...])` block.
+    ParallelEnd,
 }
 
 /// A recovered `agent()` call: its prompt and the literal opts that followed.
@@ -586,19 +632,28 @@ struct AgentCall {
 /// aware so a prompt mentioning `phase(`/`agent(` never registers as a call.
 ///
 /// A single forward pass tokenises identifiers and skips string-literal bodies
-/// wholesale; only a bare `phase`/`agent` identifier immediately followed by `(`
-/// counts, so `subagent(` / `useragent(` and the like never over-match. Calls
-/// whose first argument is not a string literal (e.g. `agent(promptVar)`) yield
-/// no event. Catches both top-level calls and `() => agent(` inside
-/// `parallel([...])`.
+/// wholesale; only a bare `phase`/`agent`/`parallel` identifier immediately
+/// followed by `(` counts, so `subagent(` / `useragent(` and the like never
+/// over-match. Calls whose first argument is not a string literal (e.g.
+/// `agent(promptVar)`) yield no event. Catches both top-level calls and
+/// `() => agent(` inside `parallel([...])`.
+///
+/// Parenthesis depth is tracked (string contents excluded) so a `parallel(`
+/// block's matching `)` is found: the agents between the emitted `ParallelStart`
+/// and `ParallelEnd` are siblings of one DAG layer.
 fn scan_events(src: &str) -> Vec<ScanEvent> {
     let chars: Vec<char> = src.chars().collect();
     let n = chars.len();
     let mut events = Vec::new();
     let mut i = 0;
+    // Depth of `(` nesting in code (not strings). `parallel_watch` records the
+    // depth at each open `parallel(` so its close emits `ParallelEnd`.
+    let mut paren_depth: i32 = 0;
+    let mut parallel_watch: Vec<i32> = Vec::new();
     while i < n {
         let c = chars[i];
-        // Skip string-literal bodies so their contents are never tokenised.
+        // Skip string-literal bodies so their contents are never tokenised
+        // (parens inside a prompt must not perturb the depth count).
         if c == '\'' || c == '"' || c == '`' {
             i += 1;
             while i < n {
@@ -621,7 +676,7 @@ fn scan_events(src: &str) -> Vec<ScanEvent> {
                 i += 1;
             }
             let ident: String = chars[start..i].iter().collect();
-            if ident == "phase" || ident == "agent" {
+            if ident == "phase" || ident == "agent" || ident == "parallel" {
                 let mut j = i;
                 while j < n && chars[j].is_whitespace() {
                     j += 1;
@@ -645,10 +700,33 @@ fn scan_events(src: &str) -> Vec<ScanEvent> {
                                 events.push(ScanEvent::Agent(AgentCall { prompt, opts }));
                             }
                         }
+                        // The block opens at the `(` the main loop is about to
+                        // count; watch for the `)` that returns to this depth.
+                        "parallel" => {
+                            parallel_watch.push(paren_depth);
+                            events.push(ScanEvent::ParallelStart);
+                        }
                         _ => {}
                     }
                 }
             }
+            continue;
+        }
+        // Track code paren depth so `parallel(`'s close can be located. An
+        // `agent(...)` / `() =>` call's own parens balance out at a deeper level
+        // and never spuriously close the watched block.
+        if c == '(' {
+            paren_depth += 1;
+            i += 1;
+            continue;
+        }
+        if c == ')' {
+            paren_depth -= 1;
+            if parallel_watch.last() == Some(&paren_depth) {
+                parallel_watch.pop();
+                events.push(ScanEvent::ParallelEnd);
+            }
+            i += 1;
             continue;
         }
         i += 1;
@@ -1144,5 +1222,120 @@ await agent('fix more')
         let s = &outcome.manifest.steps[0];
         assert_eq!(s.label.as_deref(), Some("a } b"));
         assert_eq!(s.model.as_deref(), Some("haiku"));
+    }
+
+    /// A manifest step with a literal prompt and named dependencies — for the
+    /// structural round-trip tests below.
+    fn mstep(id: &str, deps: &[&str]) -> WorkflowManifestStep {
+        WorkflowManifestStep {
+            id: id.into(),
+            agent: "agent".into(),
+            prompt: format!("do {id}"),
+            depends_on: deps.iter().map(|s| s.to_string()).collect(),
+            label: None,
+            model: None,
+            phase: None,
+            schema: None,
+            isolation: None,
+            agent_type: None,
+            kind: crate::workflow::def::WorkflowStepKind::Agent,
+            choices: vec![],
+        }
+    }
+
+    #[test]
+    fn bare_js_parallel_block_reconstructs_siblings() {
+        // A hand-written `parallel([...])` block re-imports as sibling steps:
+        // both fan out from the prior step and the next step fans in from both.
+        // The parallelisation structure is recovered, NOT linearised.
+        let src = "export const meta = { name: 'par' }\n\
+                   await agent('root')\n\
+                   await parallel([\n\
+                     () => agent('left'),\n\
+                     () => agent('right'),\n\
+                   ])\n\
+                   await agent('merge')";
+        let outcome = parse_workflow_js(src).expect("scan parallel");
+        let m = &outcome.manifest;
+        assert_eq!(m.steps.len(), 4);
+        assert!(m.steps[0].depends_on.is_empty(), "root has no deps");
+        assert_eq!(
+            m.steps[1].depends_on,
+            vec!["step_1".to_string()],
+            "left fans out from root"
+        );
+        assert_eq!(
+            m.steps[2].depends_on,
+            vec!["step_1".to_string()],
+            "right fans out from root"
+        );
+        assert_eq!(
+            m.steps[3].depends_on,
+            vec!["step_2".to_string(), "step_3".to_string()],
+            "merge fans in from BOTH siblings"
+        );
+        // No longer reported as a dropped sequential approximation.
+        assert!(
+            !outcome.dropped.iter().any(|d| d.contains("parallel")),
+            "parallel reconstructed, not dropped: {:?}",
+            outcome.dropped
+        );
+    }
+
+    #[test]
+    fn diamond_structure_survives_header_stripped_export_roundtrip() {
+        // A diamond (a → {b,c} → d) exports as agent / parallel([b,c]) / agent.
+        // Stripping the embed header forces the bare scan, which must rebuild the
+        // fan-out + fan-in edges — export and import are now symmetric on the DAG
+        // *shape*, not just the prompts. Before this, the bare path collapsed the
+        // diamond into a 4-step linear chain, silently serialising the workflow.
+        let m = WorkflowManifest {
+            name: "dia".into(),
+            description: String::new(),
+            when_to_use: String::new(),
+            phases: vec![],
+            steps: vec![
+                mstep("a", &[]),
+                mstep("b", &["a"]),
+                mstep("c", &["a"]),
+                mstep("d", &["b", "c"]),
+            ],
+        };
+        let js = render_workflow_js(&m);
+        let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert!(!bare.contains("@aleph-workflow"), "header stripped: {bare}");
+        let back = parse_workflow_js(&bare).expect("bare scan diamond").manifest;
+        assert_eq!(back.steps.len(), 4);
+        // Renumbered ids step_1..4 follow source order a, b, c, d.
+        assert!(back.steps[0].depends_on.is_empty(), "a is the root");
+        assert_eq!(back.steps[1].depends_on, vec!["step_1".to_string()], "b←a");
+        assert_eq!(back.steps[2].depends_on, vec!["step_1".to_string()], "c←a");
+        assert_eq!(
+            back.steps[3].depends_on,
+            vec!["step_2".to_string(), "step_3".to_string()],
+            "d fans in from both b and c"
+        );
+    }
+
+    #[test]
+    fn parallel_block_with_agent_opts_keeps_both_structure_and_opts() {
+        // The two recoveries compose: agents inside a parallel block keep their
+        // opts (here a per-agent phase) AND become siblings.
+        let src = "export const meta = { name: 'po' }\n\
+                   await parallel([\n\
+                     () => agent('x', { phase: \"Review\", label: \"a\" }),\n\
+                     () => agent('y', { phase: \"Review\", label: \"b\" }),\n\
+                   ])";
+        let m = parse_workflow_js(src).expect("scan").manifest;
+        assert_eq!(m.steps.len(), 2);
+        assert!(m.steps[0].depends_on.is_empty(), "both are roots in the layer");
+        assert!(m.steps[1].depends_on.is_empty());
+        assert_eq!(m.steps[0].label.as_deref(), Some("a"));
+        assert_eq!(m.steps[1].label.as_deref(), Some("b"));
+        assert_eq!(m.steps[0].phase.as_deref(), Some("Review"));
+        assert_eq!(
+            m.phases.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(),
+            vec!["Review"]
+        );
     }
 }
