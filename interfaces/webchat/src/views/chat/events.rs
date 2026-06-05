@@ -97,6 +97,9 @@ pub fn subscribe_run_events(
                             .and_then(|t| t.as_str())
                             .unwrap_or("tool");
                         chat.update_tool(run_id, tool_id, tool_name, "running", None);
+                        // Surface activity on the toggle when the pane is
+                        // closed (R5 — never force-open the Split).
+                        workspace.note_activity();
                         // Capture args/input for the workspace pane. Schema
                         // varies by tool kind — try the two known keys.
                         if !tool_id.is_empty() {

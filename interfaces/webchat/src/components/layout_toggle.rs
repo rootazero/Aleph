@@ -29,7 +29,7 @@ pub fn LayoutToggle() -> impl IntoView {
     view! {
         <button
             type="button"
-            class="aleph-layout-toggle aleph-no-drag flex items-center justify-center
+            class="aleph-layout-toggle aleph-no-drag relative flex items-center justify-center
                    h-7 w-7 rounded-full
                    text-text-secondary hover:text-text-primary
                    hover:bg-surface-raised transition-colors"
@@ -46,6 +46,13 @@ pub fn LayoutToggle() -> impl IntoView {
                 <rect x="3" y="3" width="18" height="18" rx="2"/>
                 <line x1="15" y1="3" x2="15" y2="21"/>
             </svg>
+            <Show when=move || {
+                workspace.mode.get() == LayoutMode::ChatOnly
+                    && workspace.unseen_activity.get() > 0
+            }>
+                <span class="absolute top-0.5 right-0.5 h-2 w-2 rounded-full
+                             bg-primary animate-pulse" />
+            </Show>
         </button>
     }
     .into_any()
