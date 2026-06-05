@@ -321,6 +321,10 @@ impl ReadSkillTool {
             let store = crate::skill::UsageStore::new(parent);
             if file_name == "SKILL.md" {
                 store.record_use(&args.skill_id);
+                // Co-occurrence capture rides this existing use chokepoint: the
+                // dream pipeline mines temporally-close uses into MetaSkill
+                // proposals (see `WorkflowProposalStage`). Best-effort.
+                crate::skill::CoOccurrenceLog::new(parent).record(&args.skill_id);
             } else {
                 store.record_view(&args.skill_id);
             }

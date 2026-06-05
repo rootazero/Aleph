@@ -7,6 +7,7 @@
 pub mod commands;
 pub mod compat;
 pub mod config;
+pub mod cooccurrence;
 pub mod eligibility;
 pub mod events;
 pub mod guard;
@@ -45,6 +46,7 @@ pub use shared::shared_skill_system;
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
 pub use usage::{SkillState, UsageStats, UsageStore};
+pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
 
 use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};

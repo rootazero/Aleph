@@ -61,6 +61,16 @@ pub enum WorkflowArgs {
         #[serde(default)]
         save: bool,
     },
+    /// List the gated MetaSkill proposals the dream pipeline auto-drafted from
+    /// recurring skill co-occurrence. These are NOT active until accepted.
+    Proposals {},
+    /// Accept (activate) a gated MetaSkill proposal: promote it from the
+    /// `proposals/` draft dir into the active workflow store, then run it with
+    /// `action='run'`. The draft is removed once accepted.
+    AcceptProposal {
+        /// Name of the pending proposal (see `action='proposals'`).
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,10 +137,13 @@ impl AlephTool for WorkflowTool {
          declarative multi-step pipeline (each step = one agent + a prompt + \
          dependencies); running it compiles the steps into a coordination-task \
          DAG that executes concurrently where dependencies allow. \
-         Actions: save / list / describe / delete / run / export / import. \
+         Actions: save / list / describe / delete / run / export / import / \
+         proposals / accept_proposal. \
          `export` renders a template to a Claude-Code-compatible .workflow.js; \
-         `import` parses one back into a template. For `run`, create a \
-         team first so each step's agent resolves to a member.";
+         `import` parses one back into a template. `proposals` lists MetaSkill \
+         drafts the dream pipeline auto-grew from recurring skill use; \
+         `accept_proposal` activates one. For `run`, create a team first so \
+         each step's agent resolves to a member.";
 
     type Args = WorkflowArgs;
     type Output = WorkflowToolOutput;
@@ -144,6 +157,8 @@ impl AlephTool for WorkflowTool {
             "workflow(action='delete', name='research-report')".into(),
             "workflow(action='export', name='research-report')".into(),
             r#"workflow(action='import', source='export const meta = { name: \"x\" }\nawait agent(\"do it\")', save=true)"#.into(),
+            "workflow(action='proposals')".into(),
+            "workflow(action='accept_proposal', name='metaskill-git-pr')".into(),
         ])
     }
 
@@ -312,6 +327,36 @@ impl AlephTool for WorkflowTool {
                     rendered: None,
                     dropped: Some(outcome.dropped),
                 })
+            }
+            WorkflowArgs::Proposals {} => {
+                let names: Vec<String> = workflow::proposal::list_proposals()?
+                    .into_iter()
+                    .map(|m| m.name)
+                    .collect();
+                Ok(WorkflowToolOutput {
+                    action: "proposals".into(),
+                    message: format!(
+                        "{} gated MetaSkill proposal(s); describe one with action='describe' is \
+                         for active workflows — accept with action='accept_proposal'",
+                        names.len()
+                    ),
+                    names: Some(names),
+                    definition: None,
+                    task_ids: None,
+                    rendered: None,
+                    dropped: None,
+                })
+            }
+            WorkflowArgs::AcceptProposal { name } => {
+                debug!(name = %name, "workflow: accept_proposal");
+                let path = workflow::proposal::accept(&name)?;
+                Ok(WorkflowToolOutput::msg(
+                    "accept_proposal",
+                    format!(
+                        "accepted MetaSkill '{name}' → active at {} (run with action='run')",
+                        path.display()
+                    ),
+                ))
             }
         }
     }
