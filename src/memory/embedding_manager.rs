@@ -5,6 +5,7 @@ use crate::error::AlephError;
 use crate::memory::embedding_provider::{
     create_provider, EmbeddingProvider, RemoteEmbeddingProvider,
 };
+use crate::memory::embedding_resolver::resolve;
 use crate::sync_primitives::Arc;
 use tokio::sync::{Mutex, RwLock};
 use tracing::{info, warn};
@@ -39,29 +40,44 @@ impl EmbeddingManager {
     /// Initialize the active provider from current settings.
     /// Returns Ok(()) even if no provider is configured (degrades gracefully).
     pub async fn init(&self) -> Result<(), AlephError> {
-        let (active_id, config) = {
+        // Resolve via the local-first `auto` resolver. A pinned id still wins
+        // exactly; an empty/`auto` id prefers an enabled local (Ollama) provider
+        // so embeddings stay on-device (数据不出本机) without manual config.
+        let (effective_id, reason, config) = {
             let settings = self.settings.read().await;
-            let active_id = settings.active_provider_id.clone();
-            let config = settings
-                .providers
-                .iter()
-                .find(|p| p.id == active_id)
-                .cloned();
-            (active_id, config)
+            let decision = resolve(&settings);
+            (
+                decision.effective.map(|c| c.id.clone()),
+                decision.reason,
+                decision.effective.cloned(),
+            )
         }; // settings lock released
 
         if let Some(config) = config {
             match create_provider(&config) {
                 Ok(provider) => {
                     *self.active_provider.write().await = Some(provider);
-                    info!(provider_id = %active_id, "Embedding provider initialized");
+                    info!(
+                        provider_id = effective_id.as_deref().unwrap_or(""),
+                        reason = reason.as_str(),
+                        "Embedding provider initialized"
+                    );
                 }
                 Err(e) => {
-                    warn!(provider_id = %active_id, error = %e, "Failed to initialize embedding provider");
+                    warn!(
+                        provider_id = effective_id.as_deref().unwrap_or(""),
+                        reason = reason.as_str(),
+                        error = %e,
+                        "Failed to initialize embedding provider"
+                    );
                 }
             }
         } else {
-            warn!("No active embedding provider configured (id={})", active_id);
+            warn!(
+                reason = reason.as_str(),
+                "No embedding provider resolved — semantic memory disabled. \
+                 Pin `active_provider_id` or set it to `auto` for local-first selection."
+            );
         }
 
         Ok(())

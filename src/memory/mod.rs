@@ -25,6 +25,7 @@ pub mod curated;
 pub mod dreaming;
 pub mod embedding_manager;
 pub mod embedding_provider;
+pub mod embedding_resolver;
 pub mod embedding_signature;
 pub mod events;
 pub mod extensions;
@@ -82,6 +83,9 @@ pub use embedding_manager::EmbeddingManager;
 pub use embedding_provider::{
     create_provider as create_embedding_provider, truncate_and_normalize, EmbeddingProvider,
     RemoteEmbeddingProvider,
+};
+pub use embedding_resolver::{
+    resolve as resolve_embedding, EmbeddingDecision, EmbeddingLocality, ResolutionReason,
 };
 pub use events::{
     commands::{

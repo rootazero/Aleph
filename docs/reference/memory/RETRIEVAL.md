@@ -291,6 +291,16 @@ pub trait EmbeddingProvider: Send + Sync {
 
 `pub fn create_provider(config: &EmbeddingProviderConfig) -> Result<Arc<dyn EmbeddingProvider>, AlephError>` is the single factory — it just wraps `RemoteEmbeddingProvider::from_config(config)` in an `Arc`. There is no local-process fallback; all embeddings are remote.
 
+### 7.2.1 Local-first `auto` resolution
+
+`src/memory/embedding_resolver.rs` maps `EmbeddingSettings.active_provider_id` onto a concrete provider before `create_provider` is called. `EmbeddingManager::init` uses `resolve(&settings) -> EmbeddingDecision { requested_id, effective, reason }`:
+
+- A **pinned** id (anything other than `""`/`auto`) wins by exact match against an *enabled* provider (`ExactMatch`). A pinned-but-missing/disabled id stays `Unresolved` — it never silently swaps in a different backend (`也可按需切到 OpenAI / Ollama` stays explicit).
+- An **empty or `auto`** id triggers local-first selection: the first enabled provider whose preset is `Ollama` (`EmbeddingLocality::Local`, 数据不出本机) is preferred (`AutoLocalFirst`), else the first enabled provider (`AutoRemoteFallback`).
+- No usable provider → `Unresolved`; semantic memory degrades to keyword-only (the shipped default — empty providers + empty id — resolves here, byte-identical to the prior behaviour).
+
+`reason.as_str()` is emitted in the init log so the chosen backend and *why* are observable. This is pure deterministic routing (no heavy dependency, no LLM reasoning) — the R3-safe half of "本地嵌入": Ollama already keeps data on-device, and `auto` makes it the default without manual config. A bundled in-process ONNX backend remains deliberately out of core (see [MEMORY_SYSTEM.md](../MEMORY_SYSTEM.md) §Embeddings, redline R3).
+
 ### 7.3 Provider Presets
 
 From `src/config/types/memory.rs`:
