@@ -153,7 +153,7 @@ pub fn subscribe_run_events(
                             return;
                         };
                         chat.begin_step(run_id, iteration);
-                        workspace.set_current_iteration(iteration);
+                        workspace.set_current_iteration(run_id, iteration);
                     }
                     "text_emitted" => {
                         let Some(iteration) = trace_event
@@ -230,6 +230,7 @@ pub fn subscribe_run_events(
             }
             "run_complete" => {
                 chat.complete_run(run_id);
+                workspace.current_iteration.set(None);
                 // Voice loop: if the mic button registered this run, speak the
                 // final reply via the core TTS path → endpoint playback.
                 if chat.take_speak_run(run_id) {

@@ -216,15 +216,20 @@ fn SendErrorBanner() -> impl IntoView {
     }
 }
 
-/// Strip the `assistant-` prefix from a message id to recover the run id.
-/// Matches the convention used by [`ChatState::start_assistant_message`].
-/// Returns the original id unchanged when no prefix matches (e.g. user
-/// messages, which never have tool calls anyway).
-fn run_id_from_message_id(message_id: &str) -> String {
-    message_id
-        .strip_prefix("assistant-")
-        .map(str::to_string)
-        .unwrap_or_else(|| message_id.to_string())
+/// Recover the run id from a message id. Handles both the live
+/// `assistant-{run}` id and finalized `intermediate-{run}-{n}` step ids.
+/// Returns the id unchanged for user messages.
+pub(crate) fn run_id_from_message_id(message_id: &str) -> String {
+    if let Some(r) = message_id.strip_prefix("assistant-") {
+        return r.to_string();
+    }
+    if let Some(rest) = message_id.strip_prefix("intermediate-") {
+        return match rest.rfind('-') {
+            Some(pos) => rest[..pos].to_string(),
+            None => rest.to_string(),
+        };
+    }
+    message_id.to_string()
 }
 
 /// Calendar-day separator row — a centered pill anchoring the run of messages

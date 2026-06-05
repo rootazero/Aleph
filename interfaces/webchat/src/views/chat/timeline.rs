@@ -26,10 +26,7 @@ pub enum TimelineRow {
     DaySeparator { key: String, label: String },
     /// A message plus its resolved clock label ("HH:MM", or empty when the
     /// message carries no timestamp — e.g. legacy history rows).
-    Message {
-        message: ChatMessage,
-        clock: String,
-    },
+    Message { message: ChatMessage, clock: String },
 }
 
 /// Fold `messages` into timeline rows, inserting a [`TimelineRow::DaySeparator`]
@@ -315,12 +312,7 @@ mod tests {
     #[test]
     fn mixed_dated_and_undated_degrades_gracefully() {
         // undated row carries no separator; the later dated row still anchors.
-        let rows = build_rows(
-            &[msg("a", None), msg("b", Some(1500))],
-            day,
-            label,
-            clock,
-        );
+        let rows = build_rows(&[msg("a", None), msg("b", Some(1500))], day, label, clock);
         // a(msg), sep(D1), b(msg)
         assert_eq!(rows.len(), 3);
         assert!(matches!(rows[0], TimelineRow::Message { .. }));

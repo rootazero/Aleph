@@ -16,20 +16,38 @@ use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-/// Flatten all tool calls across assistant messages into ordered
-/// `(run_id, tool_id, tool_name)` rows. The message id is
-/// `"assistant-{run_id}"`; strip the prefix to recover the run id used as
-/// the `tool_payloads` key.
-fn timeline_rows(chat: &ChatState) -> Vec<(String, String, String)> {
+use crate::views::chat::messages::run_id_from_message_id;
+
+/// One agent step (Think→Act iteration) for the workspace timeline: the
+/// iteration's narration plus the tool calls it triggered.
+#[derive(Clone, PartialEq)]
+struct StepGroup {
+    run_id: String,
+    iteration: usize,
+    narration: String,
+    tools: Vec<(String, String)>, // (tool_id, tool_name)
+}
+
+/// Build iteration-grouped steps from the chat transcript. Each assistant
+/// bubble carrying an `iteration` tag becomes one step; its content is the
+/// narration and its `tool_calls` are the step's tools.
+fn timeline_groups(chat: &ChatState) -> Vec<StepGroup> {
     chat.messages
         .get()
         .iter()
-        .flat_map(|m| {
-            let run = m.id.strip_prefix("assistant-").unwrap_or(&m.id).to_string();
-            m.tool_calls
-                .iter()
-                .map(move |t| (run.clone(), t.tool_id.clone(), t.tool_name.clone()))
-                .collect::<Vec<_>>()
+        .filter(|m| m.role == "assistant")
+        .filter_map(|m| {
+            let iteration = m.iteration?;
+            Some(StepGroup {
+                run_id: run_id_from_message_id(&m.id),
+                iteration,
+                narration: m.content.clone(),
+                tools: m
+                    .tool_calls
+                    .iter()
+                    .map(|t| (t.tool_id.clone(), t.tool_name.clone()))
+                    .collect(),
+            })
         })
         .collect()
 }
@@ -66,35 +84,94 @@ pub fn WorkspacePanel() -> impl IntoView {
     }
 }
 
-/// The reactive activity timeline.
+/// The reactive activity timeline — one card per agent step (iteration).
 #[component]
 fn ActivityTimeline() -> impl IntoView {
     let chat = expect_context::<ChatState>();
-    let rows = Memo::new(move |_| timeline_rows(&chat));
+    let groups = Memo::new(move |_| timeline_groups(&chat));
 
     move || {
-        let data = rows.get();
+        let data = groups.get();
         if data.is_empty() {
             view! { <WorkspaceEmptyHero /> }.into_any()
         } else {
             view! {
-                <div class="flex flex-col gap-2">
+                <div class="flex flex-col gap-3">
                     {data
                         .into_iter()
-                        .map(|(run_id, tool_id, tool_name)| {
-                            view! {
-                                <ActivityRow
-                                    run_id=run_id
-                                    tool_id=tool_id
-                                    tool_name=tool_name
-                                />
-                            }
-                        })
+                        .map(|g| view! { <StepCard group=g /> })
                         .collect_view()}
                 </div>
             }
             .into_any()
         }
+    }
+}
+
+/// One agent step: iteration header + narration + its tool rows. Clicking the
+/// header focuses the step (cross-highlight with the chat bubble).
+#[component]
+fn StepCard(group: StepGroup) -> impl IntoView {
+    let workspace = expect_context::<WorkspaceState>();
+
+    let run_id = group.run_id.clone();
+    let iteration = group.iteration;
+    let run_for_focus = run_id.clone();
+    let run_for_highlight = run_id.clone();
+    let run_for_active = run_id.clone();
+
+    let focused = Memo::new(move |_| workspace.is_step_focused(&run_for_highlight, iteration));
+    let active = Memo::new(move |_| {
+        workspace
+            .current_iteration
+            .with(|c| c.as_ref().is_some_and(|(r, i)| r == &run_for_active && *i == iteration))
+    });
+
+    let narration = group.narration.clone();
+    let has_narration = !narration.is_empty();
+    let tools = group.tools.clone();
+
+    view! {
+        <div
+            id=format!("group-{}-{}", run_id, iteration)
+            class=move || {
+                let base = "rounded-lg border p-2 flex flex-col gap-2 transition-colors";
+                if focused.get() {
+                    format!("{base} border-primary/60 bg-primary/5")
+                } else {
+                    format!("{base} border-border/50 bg-surface-sunken/40")
+                }
+            }
+        >
+            <button
+                type="button"
+                class="flex items-center gap-2 text-left"
+                on:click=move |_| workspace.focus_step(run_for_focus.clone(), iteration)
+            >
+                <span class="text-[10px] font-mono uppercase tracking-wider text-text-tertiary">
+                    {format!("#{iteration}")}
+                </span>
+                <Show when=move || active.get()>
+                    <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                </Show>
+            </button>
+            <Show when=move || has_narration>
+                <p class="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">
+                    {narration.clone()}
+                </p>
+            </Show>
+            <div class="flex flex-col gap-2">
+                {tools
+                    .clone()
+                    .into_iter()
+                    .map(|(tool_id, tool_name)| {
+                        view! {
+                            <ActivityRow run_id=run_id.clone() tool_id=tool_id tool_name=tool_name />
+                        }
+                    })
+                    .collect_view()}
+            </div>
+        </div>
     }
 }
 
@@ -113,16 +190,21 @@ fn ActivityRow(run_id: String, tool_id: String, tool_name: String) -> impl IntoV
     // Status + duration are looked up live from ChatState so a "running"
     // row flips to "completed" without re-deriving the whole timeline.
     let status = Memo::new(move |_| {
-        chat.messages.get().iter().flat_map(|m| m.tool_calls.iter()).find_map(|t| {
-            if t.tool_id == tid_for_status {
-                Some((t.status.clone(), t.duration_ms))
-            } else {
-                None
-            }
-        })
+        chat.messages
+            .get()
+            .iter()
+            .flat_map(|m| m.tool_calls.iter())
+            .find_map(|t| {
+                if t.tool_id == tid_for_status {
+                    Some((t.status.clone(), t.duration_ms))
+                } else {
+                    None
+                }
+            })
     });
 
-    let payload = Memo::new(move |_| workspace.get_tool_payload(&run_for_payload, &tid_for_payload));
+    let payload =
+        Memo::new(move |_| workspace.get_tool_payload(&run_for_payload, &tid_for_payload));
     let expanded = Memo::new(move |_| workspace.is_event_expanded(&tid_for_expanded));
 
     let path_label = move || file_path_of(&payload.get());
@@ -382,43 +464,79 @@ mod tests {
     use super::*;
     use crate::views::chat::state::{ChatMessage, ToolCallEntry};
 
-    fn msg_with_tools(id: &str, tools: Vec<ToolCallEntry>) -> ChatMessage {
+    fn step_msg(
+        id: &str,
+        iteration: Option<usize>,
+        content: &str,
+        tools: Vec<ToolCallEntry>,
+    ) -> ChatMessage {
         ChatMessage {
-            id: id.into(),
+            id: id.to_string(),
             role: "assistant".into(),
-            content: String::new(),
+            content: content.to_string(),
             tool_calls: tools,
             is_streaming: false,
             is_intermediate: false,
             error: None,
             model_info: None,
+            iteration,
             timestamp: None,
-            iteration: None,
-        }
-    }
-
-    fn tool(id: &str, name: &str) -> ToolCallEntry {
-        ToolCallEntry {
-            tool_id: id.into(),
-            tool_name: name.into(),
-            status: "completed".into(),
-            duration_ms: None,
         }
     }
 
     #[test]
-    fn timeline_rows_flatten_in_document_order_with_run_ids() {
+    fn timeline_groups_one_per_tagged_bubble() {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
         chat.messages.set(vec![
-            msg_with_tools("assistant-runA", vec![tool("t1", "read_file"), tool("t2", "search")]),
-            msg_with_tools("assistant-runB", vec![tool("t3", "write_file")]),
+            step_msg(
+                "intermediate-r1-1",
+                Some(1),
+                "search images",
+                vec![ToolCallEntry {
+                    tool_id: "t1".into(),
+                    tool_name: "search".into(),
+                    status: "completed".into(),
+                    duration_ms: Some(5),
+                }],
+            ),
+            step_msg(
+                "assistant-r1",
+                Some(2),
+                "write html",
+                vec![ToolCallEntry {
+                    tool_id: "t2".into(),
+                    tool_name: "write".into(),
+                    status: "running".into(),
+                    duration_ms: None,
+                }],
+            ),
         ]);
-        let rows = timeline_rows(&chat);
-        assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0], ("runA".to_string(), "t1".to_string(), "read_file".to_string()));
-        assert_eq!(rows[1], ("runA".to_string(), "t2".to_string(), "search".to_string()));
-        assert_eq!(rows[2], ("runB".to_string(), "t3".to_string(), "write_file".to_string()));
+
+        let groups = timeline_groups(&chat);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].run_id, "r1");
+        assert_eq!(groups[0].iteration, 1);
+        assert_eq!(groups[0].narration, "search images");
+        assert_eq!(
+            groups[0].tools,
+            vec![("t1".to_string(), "search".to_string())]
+        );
+        assert_eq!(groups[1].iteration, 2);
+        assert_eq!(
+            groups[1].tools,
+            vec![("t2".to_string(), "write".to_string())]
+        );
+    }
+
+    #[test]
+    fn timeline_groups_skips_untagged_messages() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.messages
+            .set(vec![step_msg("assistant-r1", None, "no tag", vec![])]);
+        assert!(timeline_groups(&chat).is_empty());
     }
 }

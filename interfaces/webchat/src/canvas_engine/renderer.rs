@@ -347,10 +347,7 @@ fn draw_edges_for_node(
 
             // Determine adjacency to the highlight anchor.
             let is_adjacent = highlight_anchor
-                .map(|h| {
-                    (idx_to_id(e.from_idx) == Some(h))
-                        || (idx_to_id(e.to_idx) == Some(h))
-                })
+                .map(|h| (idx_to_id(e.from_idx) == Some(h)) || (idx_to_id(e.to_idx) == Some(h)))
                 .unwrap_or(false);
 
             // Skip this edge in the wrong pass.

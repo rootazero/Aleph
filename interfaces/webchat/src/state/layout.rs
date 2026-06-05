@@ -106,9 +106,11 @@ pub struct WorkspaceState {
     /// on either surface. Both the chat bubble and the timeline step card read
     /// this to render a highlight ring. Cleared on reset.
     pub focused_step: RwSignal<Option<(String, usize)>>,
-    /// Iteration of the currently-active turn (set on `agent_trace.turn_started`).
-    /// Lets the timeline mark the live step. Cleared on reset.
-    pub current_iteration: RwSignal<Option<usize>>,
+    /// `(run_id, iteration)` of the currently-active turn (set on
+    /// `agent_trace.turn_started`, cleared on run completion + reset). Lets the
+    /// timeline mark the live step without colliding across runs that reuse an
+    /// iteration number.
+    pub current_iteration: RwSignal<Option<(String, usize)>>,
 }
 
 impl Default for WorkspaceState {
@@ -234,9 +236,9 @@ impl WorkspaceState {
         self.tool_payloads.with(|m| m.get(&key).cloned())
     }
 
-    /// Record the active turn's iteration (`agent_trace.turn_started`).
-    pub fn set_current_iteration(&self, iteration: usize) {
-        self.current_iteration.set(Some(iteration));
+    /// Record the active turn `(run_id, iteration)` (`agent_trace.turn_started`).
+    pub fn set_current_iteration(&self, run_id: impl Into<String>, iteration: usize) {
+        self.current_iteration.set(Some((run_id.into(), iteration)));
     }
 
     /// Focus a step for cross-highlight. Opens Split if not already (so a
@@ -423,8 +425,8 @@ mod tests {
         let owner = Owner::new();
         owner.set();
         let ws = test_ws(LayoutMode::Split);
-        ws.set_current_iteration(3);
-        assert_eq!(ws.current_iteration.get_untracked(), Some(3));
+        ws.set_current_iteration("run-1", 3);
+        assert_eq!(ws.current_iteration.get_untracked(), Some(("run-1".to_string(), 3)));
     }
 
     #[test]
@@ -433,7 +435,7 @@ mod tests {
         owner.set();
         let ws = test_ws(LayoutMode::Split);
         ws.focus_step("run-1", 1);
-        ws.set_current_iteration(5);
+        ws.set_current_iteration("run-1", 5);
         ws.reset();
         assert!(!ws.is_step_focused("run-1", 1));
         assert_eq!(ws.current_iteration.get_untracked(), None);
