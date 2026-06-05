@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// `localStorage` key for the chat/workspace split toggle.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 const LAYOUT_MODE_KEY: &str = "aleph.panel.layout_mode";
 
 /// Captured invocation payload for one tool call.
