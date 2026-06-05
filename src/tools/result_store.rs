@@ -256,6 +256,48 @@ impl ToolResultStore {
             }
         }
     }
+
+    /// Purge every offloaded tool result — the `.txt` blobs *and* the FTS5
+    /// index entries — while keeping the store usable for the rest of the
+    /// session (the directory and `index.db` survive; only their contents go).
+    ///
+    /// This is the **anti-reference-bypass** countermeasure (maps OpenSquilla's
+    /// `StaleOutputCache.purge`). Offloaded output is otherwise retrievable
+    /// indefinitely via `read_file` on the `[Full output persisted: …]` marker
+    /// path or via `ctx_search` over the index — neither of which consults the
+    /// approval gate. So when a session trips the denial circuit-breaker, the
+    /// gate's enforcement could be sidestepped by mining a result that was
+    /// cached under an earlier, more permissive moment. Wiping both vectors at
+    /// the trip closes that hole. It fires only on the brute-force threshold,
+    /// so ordinary large-output workflows are never disturbed.
+    pub fn purge_all(&self) {
+        // 1. Remove offloaded `.txt` blobs (the `read_file`-via-marker vector).
+        if let Ok(entries) = std::fs::read_dir(&self.base_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) == Some("txt") {
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        tracing::warn!(
+                            file = %path.display(),
+                            error = %e,
+                            "purge_all: failed to remove offloaded tool-result blob"
+                        );
+                    }
+                }
+            }
+        }
+        // 2. Clear the FTS5 index (the `ctx_search` vector). `index()` opens it
+        // lazily, so this also catches an on-disk `index.db` left by an earlier
+        // turn that was never reopened this run.
+        if let Some(idx) = self.index() {
+            if let Err(e) = idx.clear() {
+                tracing::warn!(
+                    error = %e,
+                    "purge_all: failed to clear offloaded-output index"
+                );
+            }
+        }
+    }
 }
 
 impl Drop for ToolResultStore {
@@ -492,6 +534,41 @@ mod tests {
         let text = "no marker here\njust regular output";
         let found = extract_persisted_ref(text);
         assert!(found.is_none(), "should return None when no marker present");
+    }
+
+    #[test]
+    fn purge_all_removes_blobs_and_clears_index() {
+        let (store, base) = test_store("purge_all_removes_blobs");
+        // Clean any residue from a prior run so the count assertions are exact.
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for e in entries.flatten() {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+        let content = "secret-token-abcdef ".repeat(200);
+        // Offload a large result (writes a `.txt` blob) and index it (so
+        // ctx_search could later mine it — the reference-bypass vector).
+        assert!(store.persist_if_large("call_x", "bash", &content, 1).is_some());
+        let _ = store.index_output("call_x", "bash", &content);
+        assert!(store.indexed_sections() > 0, "content should be indexed");
+
+        let txt_count = |base: &std::path::Path| {
+            std::fs::read_dir(base)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("txt"))
+                .count()
+        };
+        assert_eq!(txt_count(&base), 1, "one offloaded blob present before purge");
+
+        store.purge_all();
+
+        assert_eq!(txt_count(&base), 0, "offloaded blobs must be gone after purge");
+        assert_eq!(store.indexed_sections(), 0, "index must be empty after purge");
+        assert!(
+            store.search("secret-token-abcdef", 5).is_empty(),
+            "ctx_search must find nothing after purge"
+        );
     }
 
     // -------------------------------------------------------------------

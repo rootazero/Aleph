@@ -148,7 +148,15 @@ impl DenialLedger {
     /// Record that `fingerprint` was denied in `session` for `reason`. Bumps
     /// the per-intent count and the session total, tripping the sticky pause
     /// flag once the total reaches [`SESSION_PAUSE_THRESHOLD`].
-    pub fn record_denial(&self, session: &str, fingerprint: &str, reason: DenialReason) {
+    ///
+    /// Returns `true` iff this call *just* tripped the session pause (the
+    /// circuit-breaker flipped false→true on this denial, never on later ones
+    /// since the flag is sticky). Callers use that edge to fire one-shot side
+    /// effects — e.g. purging the offloaded tool-result cache so a paused,
+    /// adversarial session cannot mine previously-cached results
+    /// (anti-reference-bypass). The return is advisory: existing callers that
+    /// ignore it are unaffected.
+    pub fn record_denial(&self, session: &str, fingerprint: &str, reason: DenialReason) -> bool {
         let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if !guard.by_session.contains_key(session) {
             // New session: enforce the bound before inserting so the map and
@@ -166,7 +174,10 @@ impl DenialLedger {
         let denials = guard.by_session.entry(session.to_string()).or_default();
         *denials.counts.entry(fingerprint.to_string()).or_insert(0) += 1;
         denials.total += 1;
-        if denials.total >= SESSION_PAUSE_THRESHOLD {
+        // Only the false→true edge counts: a sticky pause must not re-fire the
+        // one-shot purge on every subsequent denial in the same session.
+        let just_tripped = !denials.paused && denials.total >= SESSION_PAUSE_THRESHOLD;
+        if just_tripped {
             denials.paused = true;
         }
         tracing::info!(
@@ -177,6 +188,7 @@ impl DenialLedger {
             paused = denials.paused,
             "denial ledger recorded a refused action"
         );
+        just_tripped
     }
 
     /// Number of times `fingerprint` was denied in `session`.
@@ -278,6 +290,31 @@ mod tests {
             led.is_blocked("s1", &fresh),
             Some(DenialReason::ThresholdExceeded),
             "pause outranks per-intent state"
+        );
+    }
+
+    #[test]
+    fn record_denial_signals_pause_trip_exactly_once() {
+        let led = DenialLedger::new();
+        // The denials below the threshold must not signal a trip.
+        for i in 0..(SESSION_PAUSE_THRESHOLD - 1) {
+            let fp = action_fingerprint("code_exec", &format!("intent-{i}"));
+            assert!(
+                !led.record_denial("s1", &fp, DenialReason::UserRejected),
+                "denial {i} must not trip the pause yet"
+            );
+        }
+        // The threshold-th distinct denial trips the circuit-breaker — once.
+        let trip_fp = action_fingerprint("code_exec", "intent-trip");
+        assert!(
+            led.record_denial("s1", &trip_fp, DenialReason::UserRejected),
+            "the threshold denial must signal the false→true pause trip"
+        );
+        // A sticky pause must not re-signal on later denials (one-shot edge).
+        let after_fp = action_fingerprint("code_exec", "intent-after");
+        assert!(
+            !led.record_denial("s1", &after_fp, DenialReason::UserRejected),
+            "an already-paused session must not re-fire the trip signal"
         );
     }
 
