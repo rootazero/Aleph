@@ -7,11 +7,14 @@
 //! (file-touching tools therefore reveal their content/diff in place).
 //! When no tools have run yet, shows a hero placeholder.
 
+use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::components::json_viewer::JsonViewer;
+use crate::context::DashboardState;
 use crate::i18n::*;
-use crate::state::layout::{LayoutMode, ToolPayload, WorkspaceState};
+use crate::state::layout::{FilePreview, LayoutMode, ToolPayload, WorkspaceState};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 /// Flatten all tool calls across assistant messages into ordered
 /// `(run_id, tool_id, tool_name)` rows. The message id is
@@ -57,6 +60,7 @@ pub fn WorkspacePanel() -> impl IntoView {
                 <div class="flex-1 overflow-y-auto px-4 py-3">
                     <ActivityTimeline />
                 </div>
+                <FilesDrawer />
             </aside>
         </Show>
     }
@@ -223,6 +227,125 @@ fn PayloadBlock(payload: Option<ToolPayload>) -> impl IntoView {
         </div>
     }
     .into_any()
+}
+
+/// Bottom drawer: collapsible project file tree + read-only preview.
+#[component]
+fn FilesDrawer() -> impl IntoView {
+    let workspace = expect_context::<WorkspaceState>();
+    let chat = expect_context::<ChatState>();
+    let dashboard = expect_context::<DashboardState>();
+    let i18n = use_i18n();
+
+    let entries = RwSignal::new(Vec::<DirEntry>::new());
+    let cur_path = RwSignal::new(Option::<String>::None);
+
+    Effect::new(move |_| {
+        if !workspace.files_drawer_open.get() {
+            return;
+        }
+        let target = cur_path.get().or_else(|| chat.active_project_root.get());
+        let dash = dashboard;
+        spawn_local(async move {
+            let path = match target {
+                Some(p) => p,
+                None => match FsApi::allowed_roots(&dash).await {
+                    Ok(roots) => match roots.first() {
+                        Some(r) => r.path.clone(),
+                        None => return,
+                    },
+                    Err(_) => return,
+                },
+            };
+            if let Ok(listing) = FsApi::list_dir(&dash, &path, false).await {
+                cur_path.set(Some(listing.path));
+                entries.set(listing.entries);
+            }
+        });
+    });
+
+    view! {
+        <div class="border-t border-border bg-surface-base/60">
+            <button
+                type="button"
+                class="w-full flex items-center gap-2 px-4 py-2 text-left text-xs
+                       uppercase tracking-wider text-text-tertiary hover:text-text-secondary"
+                on:click=move |_| workspace.toggle_files_drawer()
+            >
+                <span>{move || t_string!(i18n, common.workspace_files).to_string()}</span>
+                <span class="ml-auto">
+                    {move || if workspace.files_drawer_open.get() { "▾" } else { "▸" }}
+                </span>
+            </button>
+            <Show when=move || workspace.files_drawer_open.get()>
+                <div class="flex max-h-[40vh] border-t border-border/60">
+                    <div class="w-1/3 overflow-y-auto border-r border-border/60 p-2 text-xs">
+                        <For
+                            each=move || entries.get()
+                            key=|e| e.path.clone()
+                            children=move |e: DirEntry| {
+                                let path = e.path.clone();
+                                let is_dir = e.is_dir;
+                                view! {
+                                    <button
+                                        type="button"
+                                        class="w-full text-left truncate px-1 py-0.5 rounded
+                                               hover:bg-surface-raised/50"
+                                        on:click=move |_| {
+                                            if is_dir {
+                                                cur_path.set(Some(path.clone()));
+                                            } else {
+                                                let dash = dashboard;
+                                                let p = path.clone();
+                                                spawn_local(async move {
+                                                    if let Ok(ReadFileResult { path, content, truncated }) =
+                                                        FsApi::read_file(&dash, &p).await
+                                                    {
+                                                        workspace.select_file(Some(FilePreview {
+                                                            path,
+                                                            content,
+                                                            truncated,
+                                                        }));
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    >
+                                        {if e.is_dir {
+                                            format!("📁 {}", e.name)
+                                        } else {
+                                            format!("📄 {}", e.name)
+                                        }}
+                                    </button>
+                                }
+                            }
+                        />
+                    </div>
+                    <div class="flex-1 overflow-auto p-2">
+                        {move || match workspace.selected_file.get() {
+                            Some(f) => view! {
+                                <div class="flex flex-col gap-1">
+                                    <div class="text-[11px] font-mono text-text-tertiary truncate">
+                                        {f.path.clone()}
+                                        {if f.truncated { " (truncated)" } else { "" }}
+                                    </div>
+                                    <pre class="text-xs whitespace-pre-wrap break-words font-mono
+                                                text-text-secondary">{f.content.clone()}</pre>
+                                </div>
+                            }
+                            .into_any(),
+                            None => view! {
+                                <p class="text-xs text-text-tertiary italic">
+                                    {t!(i18n, common.workspace_files_hint)}
+                                </p>
+                            }
+                            .into_any(),
+                        }}
+                    </div>
+                </div>
+            </Show>
+        </div>
+    }
 }
 
 #[cfg(test)]

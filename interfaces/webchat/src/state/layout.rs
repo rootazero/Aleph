@@ -178,6 +178,16 @@ impl WorkspaceState {
         }
     }
 
+    /// Toggle the bottom files drawer.
+    pub fn toggle_files_drawer(&self) {
+        self.files_drawer_open.update(|o| *o = !*o);
+    }
+
+    /// Set the currently previewed file (None clears the preview pane).
+    pub fn select_file(&self, preview: Option<FilePreview>) {
+        self.selected_file.set(preview);
+    }
+
     /// Reset the pane for a new / switched chat session. Drops inline
     /// expansions, focus, badge, drawer selection, and every captured
     /// payload. Layout mode (the user's pane preference) is preserved.
