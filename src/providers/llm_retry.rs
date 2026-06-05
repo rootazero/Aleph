@@ -144,7 +144,11 @@ pub fn classify_exhausted(raw: &str) -> RetryVerdict {
 ///
 /// Providers embed "Retry after N seconds" in the suggestion/message field;
 /// parsing it yields a server-guided delay instead of a hardcoded value.
-fn extract_retry_after_str(raw: &str) -> Option<Duration> {
+///
+/// `pub` so the failover layer can parse the `Retry-After` the Anthropic
+/// adapter stashes in `AlephError::RateLimitError.suggestion` — a field the
+/// error's `Display` drops, so the string classifier never sees it.
+pub fn extract_retry_after_str(raw: &str) -> Option<Duration> {
     let msg = raw.to_lowercase();
     // Match patterns like "retry after 30 seconds" or "retry-after: 60"
     let after_idx = msg

@@ -17,7 +17,7 @@ use crate::providers::model_catalog::endpoint_kind_for_base_url;
 use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
-    FailoverNode, FailoverProvider, LoadStats, StaticDefault,
+    FailoverNode, FailoverProvider, LoadStats, ModelCooldown, StaticDefault,
 };
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 
@@ -116,6 +116,22 @@ pub fn build_failover_chain(
     // override see the same provider-outage picture.
     let health = FailoverHealth::default();
 
+    // Shared per-model rate-limit cooldown: a model-specific 429 sidelines that
+    // one model (not the whole provider) across every chain built here.
+    let model_cooldown = ModelCooldown::default();
+
+    // Operator-tunable in-place retry budget (`[fallback_provider].max_retries`),
+    // falling back to the built-in default. Useful for single-provider setups
+    // with no sibling to fail over to.
+    let failover_config = FailoverConfig {
+        max_retries: config
+            .fallback_provider
+            .as_ref()
+            .and_then(|fb| fb.max_retries)
+            .unwrap_or_else(|| FailoverConfig::default().max_retries),
+        ..FailoverConfig::default()
+    };
+
     // Shared runtime load registry: in-flight counts and observed latencies are
     // visible to every chain that might dial a given endpoint, so the
     // load-balancing strategy sees one consistent picture (scoped exactly like
@@ -186,10 +202,11 @@ pub fn build_failover_chain(
         fallbacks,
         model_catalog.clone(),
         health.clone(),
-        FailoverConfig::default(),
+        failover_config.clone(),
     )
     .with_route(route_mode, allow_escalation, escalation_approval.clone())
-    .with_load_stats(load.clone());
+    .with_load_stats(load.clone())
+    .with_model_cooldown(model_cooldown.clone());
     // A live handle (production) makes mode switches hot-apply; its absence
     // (tests) keeps the boot snapshot above — byte-identical to before.
     let global_provider = match route_handle.clone() {
@@ -226,11 +243,12 @@ pub fn build_failover_chain(
                 }],
                 model_catalog.clone(),
                 health.clone(),
-                FailoverConfig::default(),
+                failover_config.clone(),
             )
             .with_route(route_mode, allow_escalation, escalation_approval.clone())
             .with_primary_tier(pin_tier)
-            .with_load_stats(load.clone());
+            .with_load_stats(load.clone())
+            .with_model_cooldown(model_cooldown.clone());
             let pinned = match route_handle.clone() {
                 Some(h) => pinned.with_route_live(h),
                 None => pinned,
@@ -457,6 +475,7 @@ mod tests {
             Some(FallbackProviderToml {
                 chain: vec!["fb".to_string()],
                 provider: None,
+                max_retries: None,
             }),
             vec![
                 ("primary", mock_provider_config()),
@@ -481,6 +500,7 @@ mod tests {
             Some(FallbackProviderToml {
                 chain: vec!["Primary".to_string(), "ghost".to_string()],
                 provider: None,
+                max_retries: None,
             }),
             vec![("primary", mock_provider_config())],
         );
@@ -497,6 +517,7 @@ mod tests {
             Some(FallbackProviderToml {
                 chain: vec!["aux1".to_string()],
                 provider: None,
+                max_retries: None,
             }),
             vec![
                 ("primary", mock_provider_config()),
