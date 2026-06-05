@@ -12,6 +12,7 @@
 
 mod daemon;
 mod deeplink;
+mod external_link;
 mod hotkey;
 #[cfg(target_os = "macos")]
 mod menu;
@@ -186,7 +187,12 @@ fn build_main_window(app: &tauri::AppHandle) -> tauri::Result<()> {
         .resizable(true)
         .transparent(true)
         .visible(false)
-        .initialization_script(SHELL_MARKER_JS);
+        .initialization_script(SHELL_MARKER_JS)
+        // Turn `target="_blank"` clicks into a top-level navigation so the
+        // guard below can externalise them; pin the lone webview to the
+        // Panel origin and hand outside URLs to the OS browser (R5).
+        .initialization_script(external_link::CLICK_INTERCEPTOR_JS)
+        .on_navigation(external_link::route);
 
     // Overlay traffic lights over the content for a native-mac feel; the
     // Panel's CSS (Phase 2) leaves room for them.
