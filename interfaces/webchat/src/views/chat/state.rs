@@ -386,42 +386,6 @@ impl ChatState {
         self.reasoning_text.set(String::new());
     }
 
-    /// Finalize the current assistant message as intermediate and start a new one.
-    ///
-    /// Called when the DeltaSink signals an intermediate boundary (text + tool_calls).
-    /// The current message becomes a standalone intermediate message, and a new
-    /// placeholder is created for the next iteration's text.
-    pub fn finalize_intermediate(&self, run_id: &str) {
-        let target_id = format!("assistant-{}", run_id);
-        self.messages.update(|msgs| {
-            let len = msgs.len();
-            if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
-                // Only finalize if there's content; skip empty intermediate boundaries
-                if msg.content.is_empty() {
-                    return;
-                }
-                msg.is_streaming = false;
-                msg.is_intermediate = true;
-                // Rename ID so the next message can reuse the run_id-based ID
-                msg.id = format!("intermediate-{}-{}", run_id, len);
-            }
-            // Start a new placeholder for the next iteration
-            msgs.push(ChatMessage {
-                id: format!("assistant-{}", run_id),
-                role: "assistant".into(),
-                content: String::new(),
-                tool_calls: vec![],
-                is_streaming: true,
-                is_intermediate: false,
-                error: None,
-                model_info: None,
-                timestamp: Some(super::timeline::now_millis()),
-                iteration: None,
-            });
-        });
-        self.phase.set(ChatPhase::Thinking);
-    }
-
     /// Begin a new agent step (Think→Act iteration) for `run_id`.
     ///
     /// Driven by `agent_trace.turn_started`. If the current

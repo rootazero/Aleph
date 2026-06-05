@@ -246,6 +246,7 @@ pub fn subscribe_run_events(
                     .and_then(|e| e.as_str())
                     .unwrap_or("Unknown error");
                 chat.fail_run(run_id, error);
+                workspace.current_iteration.set(None);
             }
             _ => {} // Ignore unknown event types
         }
