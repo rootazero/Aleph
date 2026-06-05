@@ -310,6 +310,12 @@ mod tests {
         ws.focus_tool_row("run-1", "tool-a");
         ws.record_tool_args("run-1", "tool-a", serde_json::json!({"q": "x"}));
         ws.record_tool_result("run-1", "tool-a", serde_json::json!({"ok": true}));
+        ws.toggle_files_drawer();
+        ws.select_file(Some(FilePreview {
+            path: "/a".into(),
+            content: "x".into(),
+            truncated: false,
+        }));
 
         assert!(ws.get_tool_payload("run-1", "tool-a").is_some());
         assert!(ws.is_event_expanded("tool-a"));
@@ -320,6 +326,29 @@ mod tests {
         assert!(!ws.is_event_expanded("tool-a"));
         assert_eq!(ws.focus_tool.get_untracked(), None);
         assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
+        assert!(!ws.files_drawer_open.get_untracked());
+        assert!(ws.selected_file.get_untracked().is_none());
+    }
+
+    #[test]
+    fn toggle_files_drawer_and_select_file() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        assert!(!ws.files_drawer_open.get_untracked());
+        ws.toggle_files_drawer();
+        assert!(ws.files_drawer_open.get_untracked());
+        ws.toggle_files_drawer();
+        assert!(!ws.files_drawer_open.get_untracked());
+        assert!(ws.selected_file.get_untracked().is_none());
+        ws.select_file(Some(FilePreview {
+            path: "/p".into(),
+            content: "c".into(),
+            truncated: true,
+        }));
+        assert_eq!(ws.selected_file.get_untracked().unwrap().path, "/p");
+        ws.select_file(None);
+        assert!(ws.selected_file.get_untracked().is_none());
     }
 
     #[test]

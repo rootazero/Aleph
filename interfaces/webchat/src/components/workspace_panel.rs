@@ -240,25 +240,44 @@ fn FilesDrawer() -> impl IntoView {
     let entries = RwSignal::new(Vec::<DirEntry>::new());
     let cur_path = RwSignal::new(Option::<String>::None);
 
+    // Effect A — seed the path when the drawer opens. Prefer the active
+    // project root, else the first allowed root. Skips reseeding once a
+    // path is set so folder navigation isn't clobbered.
     Effect::new(move |_| {
         if !workspace.files_drawer_open.get() {
             return;
         }
-        let target = cur_path.get().or_else(|| chat.active_project_root.get());
+        if cur_path.get().is_some() {
+            return;
+        }
+        match chat.active_project_root.get() {
+            Some(root) => cur_path.set(Some(root)),
+            None => {
+                let dash = dashboard;
+                spawn_local(async move {
+                    if let Ok(roots) = FsApi::allowed_roots(&dash).await {
+                        if let Some(r) = roots.first() {
+                            cur_path.set(Some(r.path.clone()));
+                        }
+                    }
+                });
+            }
+        }
+    });
+
+    // Effect B — list entries whenever the path changes. Must NOT write
+    // `cur_path` (only `entries`), otherwise it would re-trigger itself
+    // and fire a redundant `list_dir`.
+    Effect::new(move |_| {
+        if !workspace.files_drawer_open.get() {
+            return;
+        }
+        let Some(path) = cur_path.get() else {
+            return;
+        };
         let dash = dashboard;
         spawn_local(async move {
-            let path = match target {
-                Some(p) => p,
-                None => match FsApi::allowed_roots(&dash).await {
-                    Ok(roots) => match roots.first() {
-                        Some(r) => r.path.clone(),
-                        None => return,
-                    },
-                    Err(_) => return,
-                },
-            };
             if let Ok(listing) = FsApi::list_dir(&dash, &path, false).await {
-                cur_path.set(Some(listing.path));
                 entries.set(listing.entries);
             }
         });
