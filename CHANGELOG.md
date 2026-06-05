@@ -64,6 +64,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dependency refresh (`schemars` 0.8 → 1.2, `rand` 0.8 → 0.10, `sha3`
   0.10 → 0.12, `sysinfo`, `teloxide`, `handlebars`, `tokio-tungstenite`,
   `printpdf`, and the consolidation onto a single `reqwest` 0.12).
+- **Panel workspace as a live activity stream** — the right-hand pane now
+  auto-renders the agent's tool activity as an inline-expandable timeline
+  (args + results) plus a project file-tree drawer with read-only preview over
+  a new scoped `fs.read_file` RPC, replacing the old click-to-open single-view
+  JSON inspector.
+- **Panel step cards & workflow echo** — multi-step Think→Act runs render as
+  iteration-grouped step cards driven by `agent_trace`, with iteration labels
+  and a cross-highlight ring linking each chat bubble to its workspace step
+  (instead of collapsing into one concatenated paragraph).
+- **Workflow clarify step** — a workflow run can pause to ask the user a
+  question over any channel and resume on their reply, durable across daemon
+  restarts (CoordTask-backed).
+- **Failover model migration on rate limits** — transient 429s ride out with
+  deeper in-place exponential backoff, and a per-model rate-limit cooldown
+  migrates within a request to a sibling model (honoring `Retry-After`) before
+  advancing the provider chain.
+- **Human-like memory** — permanent core-knowledge exemption from decay,
+  hot-surfacing + retrieval-time time-decay enabled by default, a
+  model-perceivable four-layer cognitive taxonomy over the memory envelope, and
+  local-first automatic embedding-provider resolution.
+- **Workflow interop fidelity** — `.workflow.js` round-trips multi-line agent
+  prompts as the `join`-array idiom, captures agent opts on the bare-scan import
+  path, and reconstructs `parallel([...])` blocks into a DAG layer; plus
+  auto-drafted, gated MetaSkill proposals mined from skill co-occurrence.
+- **CLI session export** — `aleph session export` dumps a session transcript to
+  Markdown or JSON.
+- **Desktop shell external-link guard** — external links route to the OS browser
+  while the webview stays pinned to the Panel origin.
+- **Skill index graceful degradation** — the prompt skill index degrades in two
+  tiers under budget pressure instead of hard-dropping low-priority skills.
 
 ### Fixed
 
@@ -99,6 +129,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Memory & migration** — fixed a curated-store deadlock under concurrent
   writes, note-layer starvation under embedding degrade, and a stale
   embedding-dimension left after `StateDatabase` migration.
+- **Sandbox denial ledger (否决账本)** — a session-scoped negative ledger trips a
+  brute-force pause after repeated denials and surfaces an agent hint to the
+  model, purges offloaded tool-result cache on circuit-break (防引用绕过),
+  broadens the file-ops credential denylist, collapses the three security tiers
+  onto an ordered `PolicyTier` single-source, neutralizes invisible-char
+  injection, and XML-escapes `system-reminder` fences in untrusted hook context.
+- **Config & build** — all state paths route through an `ALEPH_HOME`-aware
+  resolver with a guard against provider-config erasure; custom non-preset
+  providers now surface in the chat model catalog; an unconditional `warn!`
+  import unbreaks the Windows build; and `Cargo.lock` workspace versions are
+  synced to 26.6.5.
 
 ## [26.5.30]
 
