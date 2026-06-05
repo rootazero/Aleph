@@ -626,6 +626,24 @@ mod tests {
         let cfg = cfg_with_roots(vec![scope.to_string_lossy().to_string()]);
         let r = req("fs.read_file", json!({ "path": outside_file.to_string_lossy() }));
         let resp = handle_read_file(r, cfg).await;
-        assert!(resp.error.is_some(), "expected error for out-of-scope path");
+        let err = resp.error.expect("expected error");
+        assert_eq!(err.code, OUT_OF_SCOPE);
+    }
+
+    #[tokio::test]
+    async fn read_file_truncates_oversized_file() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let file_path = root.join("big.txt");
+        std::fs::write(&file_path, vec![b'a'; READ_FILE_CAP + 1]).unwrap();
+
+        let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
+        let r = req("fs.read_file", json!({ "path": file_path.to_string_lossy() }));
+        let resp = handle_read_file(r, cfg).await;
+        let result = resp.result.expect("expected success");
+        assert_eq!(result["truncated"], true);
+        // All-ASCII content decodes 1:1, so the capped byte slice maps to
+        // exactly READ_FILE_CAP chars.
+        assert_eq!(result["content"].as_str().unwrap().len(), READ_FILE_CAP);
     }
 }
