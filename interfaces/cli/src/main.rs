@@ -368,6 +368,11 @@ async fn dispatch_session(
         SessionAction::Truncate { key, keep } => {
             session::truncate(server_url, &key, keep, config, json).await
         }
+        SessionAction::Export {
+            key,
+            output,
+            format,
+        } => session::export(server_url, &key, output.as_deref(), format, config, json).await,
     }
 }
 

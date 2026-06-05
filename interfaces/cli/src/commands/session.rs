@@ -1,7 +1,9 @@
 //! Session management commands
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
+use crate::commands::cli_args::SessionExportFormat;
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliResult};
 
@@ -278,4 +280,125 @@ pub async fn compact(server_url: &str, key: &str, config: &CliConfig, json: bool
 
     client.close().await?;
     Ok(())
+}
+
+/// Export a session's full transcript.
+///
+/// Reads the complete message log via the existing `chat.history` RPC (limit
+/// omitted ⇒ full history) and renders it as Markdown or JSON. The result is
+/// written to `output` when given, otherwise printed to stdout. This command
+/// mutates no server-side state — it is pure I/O (R4).
+///
+/// Format resolution: explicit `--format` wins; otherwise the global `--json`
+/// flag selects JSON; the default is Markdown.
+pub async fn export(
+    server_url: &str,
+    key: &str,
+    output_path: Option<&str>,
+    format: Option<SessionExportFormat>,
+    config: &CliConfig,
+    json: bool,
+) -> CliResult<()> {
+    let (client, _events) = AlephClient::connect(server_url).await?;
+    client.authenticate(config).await?;
+
+    // No `limit` ⇒ the server returns the entire message log.
+    let params = serde_json::json!({ "session_key": key });
+    let result: Value = client.call("chat.history", Some(params)).await?;
+
+    let effective = format.unwrap_or(if json {
+        SessionExportFormat::Json
+    } else {
+        SessionExportFormat::Markdown
+    });
+
+    let rendered = match effective {
+        SessionExportFormat::Json => serde_json::to_string_pretty(&result)?,
+        SessionExportFormat::Markdown => render_markdown(key, &result),
+    };
+
+    match output_path {
+        Some(path) => {
+            std::fs::write(path, &rendered)?;
+            let count = result.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            println!("✓ exported {count} messages from session '{key}' → {path}");
+        }
+        None => println!("{rendered}"),
+    }
+
+    client.close().await?;
+    Ok(())
+}
+
+/// Render a `chat.history` envelope as a human-readable Markdown transcript.
+///
+/// Pure function (no I/O) so it can be unit-tested independently of the RPC
+/// transport. Unknown/missing fields degrade gracefully to placeholders.
+fn render_markdown(key: &str, history: &Value) -> String {
+    let count = history.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+    let mut out = String::new();
+    out.push_str(&format!("# Session `{key}`\n\n"));
+    out.push_str(&format!("> Exported by aleph · {count} messages\n\n"));
+
+    let messages = history.get("messages").and_then(|v| v.as_array());
+    match messages {
+        Some(msgs) if !msgs.is_empty() => {
+            for (i, msg) in msgs.iter().enumerate() {
+                let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
+                let ts = msg.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+                let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                out.push_str("---\n\n");
+                if ts.is_empty() {
+                    out.push_str(&format!("### {} · {role}\n\n", i + 1));
+                } else {
+                    out.push_str(&format!("### {} · {role} · {ts}\n\n", i + 1));
+                }
+                out.push_str(content);
+                out.push_str("\n\n");
+            }
+        }
+        _ => out.push_str("_No messages in this session._\n"),
+    }
+
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_markdown_emits_header_and_turns() {
+        let history = serde_json::json!({
+            "session_key": "abc",
+            "count": 2,
+            "messages": [
+                { "role": "user", "content": "hello", "timestamp": "2026-06-05T12:00:00+00:00" },
+                { "role": "assistant", "content": "hi there", "timestamp": "2026-06-05T12:00:01+00:00" },
+            ],
+        });
+        let md = render_markdown("abc", &history);
+        assert!(md.starts_with("# Session `abc`"));
+        assert!(md.contains("· 2 messages"));
+        assert!(md.contains("### 1 · user · 2026-06-05T12:00:00+00:00"));
+        assert!(md.contains("hello"));
+        assert!(md.contains("### 2 · assistant · 2026-06-05T12:00:01+00:00"));
+        assert!(md.contains("hi there"));
+    }
+
+    #[test]
+    fn render_markdown_handles_empty_and_missing_fields() {
+        let empty = serde_json::json!({ "count": 0, "messages": [] });
+        let md = render_markdown("k", &empty);
+        assert!(md.contains("_No messages in this session._"));
+
+        // Missing timestamp ⇒ header omits the trailing ` · <ts>`.
+        let no_ts = serde_json::json!({
+            "count": 1,
+            "messages": [ { "role": "user", "content": "x" } ],
+        });
+        let md = render_markdown("k", &no_ts);
+        assert!(md.contains("### 1 · user\n"));
+        assert!(md.contains("x"));
+    }
 }
