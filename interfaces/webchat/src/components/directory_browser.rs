@@ -50,6 +50,11 @@ pub fn DirectoryBrowser(
     /// reason as `title`.
     #[prop(into)]
     confirm_label: Signal<String>,
+    /// When true, the first time the modal settles into a directory after
+    /// opening it auto-pops the inline "新建子目录" input — the "new blank
+    /// project" entry point, so the user names a fresh folder immediately.
+    #[prop(optional, into)]
+    auto_create: Signal<bool>,
 ) -> impl IntoView {
     let i18n = use_i18n();
     let dashboard = expect_context::<DashboardState>();
@@ -65,6 +70,10 @@ pub fn DirectoryBrowser(
     // Inline "新建子目录" prompt: when Some(""), prompt is open and the
     // text field is mounted. Empty string == initial blank value.
     let create_name: RwSignal<Option<String>> = RwSignal::new(None);
+    // Armed by `auto_create` on each open; fires once the modal lands in a
+    // directory (see the effect below), then disarms so deeper navigation
+    // doesn't keep re-opening the create prompt.
+    let auto_create_armed = RwSignal::new(false);
 
     // When the modal first opens, fetch the root list. Reset every time
     // it re-opens so the user always starts at the top.
@@ -77,6 +86,7 @@ pub fn DirectoryBrowser(
         listing.set(None);
         error.set(None);
         create_name.set(None);
+        auto_create_armed.set(auto_create.get_untracked());
         let dash = dashboard;
         spawn_local(async move {
             busy.set(true);
@@ -118,6 +128,19 @@ pub fn DirectoryBrowser(
             }
             busy.set(false);
         });
+    });
+
+    // "New blank project": once we settle into a directory after opening,
+    // pop the inline create-folder input so the user can name a fresh
+    // folder right away — no flaky `window.prompt`. Disarms after firing.
+    Effect::new(move |_| {
+        if current_path.get().is_some()
+            && auto_create_armed.get()
+            && create_name.get_untracked().is_none()
+        {
+            auto_create_armed.set(false);
+            create_name.set(Some(String::new()));
+        }
     });
 
     // ── Action handlers ────────────────────────────────────────────────

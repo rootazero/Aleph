@@ -13,7 +13,6 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::fs::FsApi;
 use crate::api::projects::{ProjectInfo, ProjectsApi};
 use crate::components::directory_browser::DirectoryBrowser;
 use crate::context::DashboardState;
@@ -73,50 +72,25 @@ pub fn ProjectMenu() -> impl IntoView {
         menu_open.set(false);
     };
 
-    // The DirectoryBrowser fires this with whatever path the user picked.
-    // Branching on `purpose` does the right server-side action.
+    // The DirectoryBrowser fires this with the path the user confirmed.
+    // Both purposes resolve to the same action — register the folder and
+    // enter it. "New blank" differs only in that the browser auto-opens
+    // its inline "新建子目录" input (see `auto_create` on the component
+    // below), so the path we get back is the freshly created (and
+    // navigated-into) folder. We deliberately avoid `window.prompt`: it is
+    // silently disabled inside the Tauri webview, which previously left
+    // "new blank" unable to enter the folder at all.
     let on_pick = Callback::new(move |path: String| {
         let dash = dashboard;
-        let p = purpose.get_untracked();
         spawn_local(async move {
-            match p {
-                BrowserPurpose::PickExisting => match ProjectsApi::add(&dash, &path, None).await {
-                    Ok(project) => {
-                        chat.set_active_project(
-                            Some(project.path.clone()),
-                            Some(project.name.clone()),
-                        );
-                        if let Some(ws) = workspace {
-                            ws.reset();
-                        }
-                    }
-                    Err(e) => last_error.set(Some(e)),
-                },
-                BrowserPurpose::NewBlank => {
-                    let prompt_msg = t_string!(i18n, chat.project_prompt_name).to_string();
-                    let prompt_default = t_string!(i18n, chat.project_prompt_default).to_string();
-                    let name = match prompt_for_project_name(&prompt_msg, &prompt_default) {
-                        Some(n) if !n.trim().is_empty() => n.trim().to_string(),
-                        _ => return,
-                    };
-                    match FsApi::create_dir(&dash, &path, &name).await {
-                        Ok(new_path) => {
-                            match ProjectsApi::add(&dash, &new_path, Some(&name)).await {
-                                Ok(project) => {
-                                    chat.set_active_project(
-                                        Some(project.path.clone()),
-                                        Some(project.name.clone()),
-                                    );
-                                    if let Some(ws) = workspace {
-                                        ws.reset();
-                                    }
-                                }
-                                Err(e) => last_error.set(Some(e)),
-                            }
-                        }
-                        Err(e) => last_error.set(Some(e)),
+            match ProjectsApi::add(&dash, &path, None).await {
+                Ok(project) => {
+                    chat.set_active_project(Some(project.path.clone()), Some(project.name.clone()));
+                    if let Some(ws) = workspace {
+                        ws.reset();
                     }
                 }
+                Err(e) => last_error.set(Some(e)),
             }
         });
     });
@@ -273,24 +247,16 @@ pub fn ProjectMenu() -> impl IntoView {
             </Show>
 
             // Cross-platform directory picker — opens for both
-            // BrowserPurpose variants; `on_pick` branches on the active
-            // purpose to decide what to do with the chosen path.
+            // BrowserPurpose variants. `purpose` only drives the title /
+            // confirm label and whether the browser auto-opens its inline
+            // create-folder input; `on_pick` registers the path either way.
             <DirectoryBrowser
                 open=browser_open
                 on_pick=on_pick
                 title=Signal::derive(modal_title)
                 confirm_label=Signal::derive(modal_confirm)
+                auto_create=Signal::derive(move || purpose.get() == BrowserPurpose::NewBlank)
             />
         </div>
     }
-}
-
-/// Native `window.prompt` for the project name. We deliberately keep
-/// this as the only browser-native dialog — it's a single short string,
-/// and writing a Leptos modal for it would be 60 lines for a 1-line UX.
-fn prompt_for_project_name(message: &str, default: &str) -> Option<String> {
-    web_sys::window()?
-        .prompt_with_message_and_default(message, default)
-        .ok()
-        .flatten()
 }
