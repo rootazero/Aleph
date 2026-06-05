@@ -6,7 +6,11 @@
 //! 2. **Bare `.workflow.js`** → light-weight scan of the pure-literal `meta`
 //!    block + ordered `phase()` / `agent()` calls; imperative constructs go into
 //!    `dropped`. `phase()` markers are captured and assigned to the steps that
-//!    follow them, so a hand-written phased workflow keeps its phase plan.
+//!    follow them, so a hand-written phased workflow keeps its phase plan. Each
+//!    `agent(prompt, { opts })` call's opts object is parsed too — the literal
+//!    `label`/`phase`/`model`/`isolation`/`agentType` fields and a JSON `schema`
+//!    are recovered, making the bare path symmetric with `export`'s
+//!    `render_agent_call` (a header-stripped export re-imports its opts intact).
 //!
 //! No JS engine, no full parser (R3). The scan's limits are surfaced via
 //! `dropped`, never hidden.
@@ -115,23 +119,34 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                 }
                 current_phase = Some(title);
             }
-            ScanEvent::Agent(prompt) => {
+            ScanEvent::Agent(call) => {
                 let i = steps.len();
+                // An explicit `phase:` opt on the agent() call wins over the
+                // active `phase()` marker: the engineering format gives per-agent
+                // phases inside `parallel([...])` / `pipeline(...)` stages where no
+                // top-level marker precedes them. Register a phase seen only via an
+                // opt so it still appears in the reconstructed phase plan.
+                if let Some(ph) = &call.opts.phase {
+                    if !phase_titles.iter().any(|t| t == ph) {
+                        phase_titles.push(ph.clone());
+                    }
+                }
+                let phase = call.opts.phase.or_else(|| current_phase.clone());
                 steps.push(WorkflowManifestStep {
                     id: format!("step_{}", i + 1),
                     agent: "agent".to_string(),
-                    prompt,
+                    prompt: call.prompt,
                     depends_on: if i == 0 {
                         Vec::new()
                     } else {
                         vec![format!("step_{i}")]
                     },
-                    label: None,
-                    model: None,
-                    phase: current_phase.clone(),
-                    schema: None,
-                    isolation: None,
-                    agent_type: None,
+                    label: call.opts.label,
+                    model: call.opts.model,
+                    phase,
+                    schema: call.opts.schema,
+                    isolation: call.opts.isolation,
+                    agent_type: call.opts.agent_type,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
                 });
@@ -183,11 +198,15 @@ fn scan_meta_field(src: &str, field: &str) -> Option<String> {
 /// correct shape, not just a safer one.
 fn read_first_string_literal(s: &str) -> Option<String> {
     let chars: Vec<char> = s.chars().collect();
-    let i = first_non_ws(&chars, 0);
+    read_first_string_literal_chars(&chars)
+}
+
+/// Char-slice core of [`read_first_string_literal`]: the leading token of
+/// `chars` must be a quote, else `None` (no over-reach to a later literal).
+fn read_first_string_literal_chars(chars: &[char]) -> Option<String> {
+    let i = first_non_ws(chars, 0);
     match chars.get(i).copied() {
-        Some('\'') | Some('"') => read_literal_at(&chars, i).map(|(lit, _)| lit),
-        // First non-whitespace token is not a string literal — give up rather
-        // than over-reaching to a later, unrelated literal.
+        Some('\'') | Some('"') => read_literal_at(chars, i).map(|(lit, _)| lit),
         _ => None,
     }
 }
@@ -245,12 +264,14 @@ fn read_literal_at(chars: &[char], start: usize) -> Option<(String, usize)> {
 /// expression, or an array with a non-literal element) — those are dynamic and
 /// intentionally not statically importable (R7/R10); they surface elsewhere as
 /// `dropped` constructs rather than being half-captured.
-fn read_agent_prompt(s: &str) -> Option<String> {
-    let chars: Vec<char> = s.chars().collect();
-    let i = first_non_ws(&chars, 0);
+///
+/// On success the second tuple element is the char index just past the prompt
+/// argument, so the caller can continue into the `, { opts }` object.
+fn read_agent_prompt(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let i = first_non_ws(chars, start);
     match *chars.get(i)? {
-        '\'' | '"' => read_literal_at(&chars, i).map(|(lit, _)| lit),
-        '[' => read_joined_array(&chars, i),
+        '\'' | '"' => read_literal_at(chars, i),
+        '[' => read_joined_array(chars, i),
         _ => None,
     }
 }
@@ -260,7 +281,10 @@ fn read_agent_prompt(s: &str) -> Option<String> {
 /// element-level concatenation (`'a' + x`) makes the joined value not statically
 /// known, so the whole read abstains (returns `None`). The separator defaults to
 /// `"\n"` (the format's convention) when no explicit `.join(...)` follows.
-fn read_joined_array(chars: &[char], start: usize) -> Option<String> {
+///
+/// The second tuple element is the index just past the array (and its `.join`,
+/// if any), so the caller can resume scanning the agent opts.
+fn read_joined_array(chars: &[char], start: usize) -> Option<(String, usize)> {
     let n = chars.len();
     let mut i = start + 1; // past '['
     let mut parts: Vec<String> = Vec::new();
@@ -286,13 +310,16 @@ fn read_joined_array(chars: &[char], start: usize) -> Option<String> {
             _ => return None,
         }
     }
-    let sep = parse_join_separator(chars, i).unwrap_or_else(|| "\n".to_string());
-    Some(parts.join(&sep))
+    // `i` now points just past `]`. An optional `.join("sep")` follows; absent
+    // it, the convention separator is `"\n"` and the array ends at `]`.
+    let (sep, end) = parse_join_separator(chars, i).unwrap_or_else(|| ("\n".to_string(), i));
+    Some((parts.join(&sep), end))
 }
 
-/// After a `]`, read an optional `.join("sep")` and return the separator
-/// literal. `None` if no well-formed `.join(<string literal>)` follows.
-fn parse_join_separator(chars: &[char], start: usize) -> Option<String> {
+/// After a `]`, read an optional `.join("sep")` and return the separator literal
+/// plus the index just past the closing `)`. `None` if no well-formed
+/// `.join(<string literal>)` follows.
+fn parse_join_separator(chars: &[char], start: usize) -> Option<(String, usize)> {
     let i = first_non_ws(chars, start);
     // Match the `.join` identifier exactly.
     let dotjoin = ['.', 'j', 'o', 'i', 'n'];
@@ -304,10 +331,209 @@ fn parse_join_separator(chars: &[char], start: usize) -> Option<String> {
         return None;
     }
     let i = first_non_ws(chars, i + 1);
-    match *chars.get(i)? {
-        '\'' | '"' => read_literal_at(chars, i).map(|(lit, _)| lit),
-        _ => None,
+    let (sep, next) = match *chars.get(i)? {
+        '\'' | '"' => read_literal_at(chars, i)?,
+        _ => return None,
+    };
+    // Consume the closing `)` so the returned end index is past the whole
+    // `.join(...)` call, not stranded mid-expression.
+    let j = first_non_ws(chars, next);
+    if chars.get(j) != Some(&')') {
+        return None;
     }
+    Some((sep, j + 1))
+}
+
+/// Literal opts recovered from an `agent(prompt, { … })` call. Every field is
+/// optional; a key whose value is not a static literal (an identifier, a
+/// computed expression, a non-JSON schema) is left unset rather than guessed
+/// (R7/R10), exactly mirroring the prompt readers' abstain-on-dynamic policy.
+#[derive(Default)]
+struct AgentOpts {
+    label: Option<String>,
+    phase: Option<String>,
+    model: Option<String>,
+    schema: Option<serde_json::Value>,
+    isolation: Option<String>,
+    agent_type: Option<String>,
+}
+
+/// Read the optional `, { label: "…", phase: "…", model: "…", schema: {…},
+/// isolation: "…", agentType: "…" }` opts object that follows an agent prompt.
+///
+/// `start` is the index just past the prompt argument. Returns defaults when no
+/// `, {` opts object follows. String-valued keys decode via [`read_literal_at`];
+/// `schema` is captured as raw `{…}` text and JSON-parsed (a non-JSON object is
+/// skipped, leaving `schema` unset). Unknown keys and non-literal values are
+/// skipped without aborting the rest of the object — the inverse of `export`'s
+/// `render_agent_call`, so a header-stripped export round-trips its opts.
+fn read_agent_opts(chars: &[char], start: usize) -> AgentOpts {
+    let mut opts = AgentOpts::default();
+    let mut i = first_non_ws(chars, start);
+    if chars.get(i) != Some(&',') {
+        return opts;
+    }
+    i = first_non_ws(chars, i + 1);
+    if chars.get(i) != Some(&'{') {
+        return opts;
+    }
+    i += 1; // past '{'
+    let n = chars.len();
+    loop {
+        i = first_non_ws(chars, i);
+        match chars.get(i) {
+            None | Some('}') => break,
+            Some(',') => {
+                i += 1;
+                continue;
+            }
+            _ => {}
+        }
+        // Read a bare identifier key (label / phase / model / schema / …).
+        let key_start = i;
+        while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
+            i += 1;
+        }
+        if i == key_start {
+            // Not an identifier where a key was expected — give up on the rest
+            // of the object rather than spin.
+            break;
+        }
+        let key: String = chars[key_start..i].iter().collect();
+        i = first_non_ws(chars, i);
+        if chars.get(i) != Some(&':') {
+            break;
+        }
+        i = first_non_ws(chars, i + 1);
+        match chars.get(i) {
+            Some('\'') | Some('"') => match read_literal_at(chars, i) {
+                Some((lit, next)) => {
+                    assign_string_opt(&mut opts, &key, lit);
+                    i = next;
+                }
+                None => break,
+            },
+            Some('{') => match read_brace_object(chars, i) {
+                Some((raw, next)) => {
+                    if key == "schema" {
+                        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) {
+                            opts.schema = Some(v);
+                        }
+                    }
+                    i = next;
+                }
+                None => break,
+            },
+            // Non-literal value (identifier, number, array, expression): skip to
+            // the next top-level `,`/`}`. The field stays unset (not guessed).
+            _ => i = skip_value(chars, i),
+        }
+    }
+    opts
+}
+
+/// Assign a decoded string literal to its opts field by `.workflow.js` key name.
+/// Unknown keys are ignored (forward-compatible with format additions).
+fn assign_string_opt(opts: &mut AgentOpts, key: &str, val: String) {
+    match key {
+        "label" => opts.label = Some(val),
+        "phase" => opts.phase = Some(val),
+        "model" => opts.model = Some(val),
+        "isolation" => opts.isolation = Some(val),
+        "agentType" => opts.agent_type = Some(val),
+        _ => {}
+    }
+}
+
+/// Read a balanced `{ … }` object starting at `chars[start] == '{'`, returning
+/// its raw source text (braces included) and the index just past the close.
+/// Brace depth is tracked string-aware so a `}` inside a nested string never
+/// closes early. `None` if the object is unterminated.
+fn read_brace_object(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let n = chars.len();
+    let mut i = start;
+    let mut depth: i32 = 0;
+    let mut raw = String::new();
+    while i < n {
+        let c = chars[i];
+        raw.push(c);
+        match c {
+            '\'' | '"' | '`' => {
+                i += 1;
+                while i < n {
+                    let d = chars[i];
+                    raw.push(d);
+                    if d == '\\' {
+                        if let Some(&e) = chars.get(i + 1) {
+                            raw.push(e);
+                        }
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    if d == c {
+                        break;
+                    }
+                }
+            }
+            '{' => {
+                depth += 1;
+                i += 1;
+            }
+            '}' => {
+                depth -= 1;
+                i += 1;
+                if depth == 0 {
+                    return Some((raw, i));
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Skip a value at the current opts cursor, stopping at the next top-level `,` or
+/// the object's closing `}`. Nested `{}`/`[]`/`()` and string literals are
+/// skipped wholesale so an inner separator never ends the value early. Returns
+/// the index of the stopping delimiter.
+fn skip_value(chars: &[char], start: usize) -> usize {
+    let n = chars.len();
+    let mut i = start;
+    let mut depth: i32 = 0;
+    while i < n {
+        let c = chars[i];
+        match c {
+            '\'' | '"' | '`' => {
+                i += 1;
+                while i < n {
+                    let d = chars[i];
+                    if d == '\\' {
+                        i += 2;
+                        continue;
+                    }
+                    i += 1;
+                    if d == c {
+                        break;
+                    }
+                }
+            }
+            '{' | '[' | '(' => {
+                depth += 1;
+                i += 1;
+            }
+            '}' | ']' | ')' => {
+                if depth == 0 {
+                    return i; // the opts object's closing brace
+                }
+                depth -= 1;
+                i += 1;
+            }
+            ',' if depth == 0 => return i,
+            _ => i += 1,
+        }
+    }
+    i
 }
 
 /// Blank out the contents of every string literal (`'`, `"`, `` ` ``) so a
@@ -346,8 +572,14 @@ fn strip_string_literals(src: &str) -> String {
 enum ScanEvent {
     /// A `phase("title")` marker — the title of its string-literal argument.
     Phase(String),
-    /// An `agent("prompt", ...)` call — the prompt from its first string literal.
-    Agent(String),
+    /// An `agent("prompt", { opts })` call — the prompt plus any recovered opts.
+    Agent(AgentCall),
+}
+
+/// A recovered `agent()` call: its prompt and the literal opts that followed.
+struct AgentCall {
+    prompt: String,
+    opts: AgentOpts,
 }
 
 /// Scan `src` for `phase(...)` and `agent(...)` calls in source order, string-
@@ -395,18 +627,22 @@ fn scan_events(src: &str) -> Vec<ScanEvent> {
                     j += 1;
                 }
                 if j < n && chars[j] == '(' {
-                    let after: String = chars[j + 1..].iter().collect();
+                    // The call's argument list, as a char slice (paren consumed).
+                    let after = &chars[j + 1..];
                     match ident.as_str() {
                         // A phase title is always a plain literal.
                         "phase" => {
-                            if let Some(lit) = read_first_string_literal(&after) {
+                            if let Some(lit) = read_first_string_literal_chars(after) {
                                 events.push(ScanEvent::Phase(lit));
                             }
                         }
-                        // An agent prompt may be a literal or a `[...].join()` array.
+                        // An agent prompt may be a literal or a `[...].join()`
+                        // array; the trailing `{ opts }` object is parsed from
+                        // where the prompt ends.
                         "agent" => {
-                            if let Some(prompt) = read_agent_prompt(&after) {
-                                events.push(ScanEvent::Agent(prompt));
+                            if let Some((prompt, end)) = read_agent_prompt(after, 0) {
+                                let opts = read_agent_opts(after, end);
+                                events.push(ScanEvent::Agent(AgentCall { prompt, opts }));
                             }
                         }
                         _ => {}
@@ -787,5 +1023,126 @@ await agent('fix more')
         let outcome = parse_workflow_js(src).expect("scan");
         assert_eq!(outcome.manifest.steps.len(), 1);
         assert_eq!(outcome.manifest.steps[0].prompt, "real");
+    }
+
+    #[test]
+    fn bare_js_captures_agent_opts() {
+        // A hand-written agent() with a full opts object recovers every literal
+        // field plus the JSON schema — the bare path is no longer prompt-only.
+        let src = "export const meta = { name: 'opts' }\n\
+                   await agent('do it', { label: \"audit:a\", model: \"haiku\", \
+                   isolation: \"worktree\", agentType: \"Explore\", \
+                   schema: {\"type\":\"object\"} })";
+        let outcome = parse_workflow_js(src).expect("scan opts");
+        let s = &outcome.manifest.steps[0];
+        assert_eq!(s.prompt, "do it");
+        assert_eq!(s.label.as_deref(), Some("audit:a"));
+        assert_eq!(s.model.as_deref(), Some("haiku"));
+        assert_eq!(s.isolation.as_deref(), Some("worktree"));
+        assert_eq!(s.agent_type.as_deref(), Some("Explore"));
+        assert_eq!(s.schema, Some(serde_json::json!({"type": "object"})));
+    }
+
+    #[test]
+    fn agent_opts_survive_header_stripped_export_roundtrip() {
+        // The headline symmetry: export a step carrying every agent opt, drop the
+        // lossless `@aleph-workflow` embed header, and prove the bare scanner
+        // recovers each opt. Before this, a header-stripped export re-imported as
+        // a prompt-only skeleton — the persisted manifest silently lost label /
+        // model / phase / schema / isolation / agentType.
+        let m = WorkflowManifest {
+            name: "sym".into(),
+            description: String::new(),
+            when_to_use: String::new(),
+            phases: vec![],
+            steps: vec![WorkflowManifestStep {
+                id: "a".into(),
+                agent: "agent".into(),
+                prompt: "Audit the module.\nReport gaps.".into(),
+                depends_on: vec![],
+                label: Some("audit:mod".into()),
+                model: Some("opus".into()),
+                phase: Some("Audit".into()),
+                schema: Some(serde_json::json!({"type": "object", "required": ["x"]})),
+                isolation: Some("worktree".into()),
+                agent_type: Some("code-reviewer".into()),
+                kind: crate::workflow::def::WorkflowStepKind::Agent,
+                choices: vec![],
+            }],
+        };
+        let js = render_workflow_js(&m);
+        let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert!(
+            !bare.contains("@aleph-workflow"),
+            "embed header stripped: {bare}"
+        );
+        let outcome = parse_workflow_js(&bare).expect("bare scan of opts export");
+        let s = &outcome.manifest.steps[0];
+        assert_eq!(s.prompt, "Audit the module.\nReport gaps.");
+        assert_eq!(s.label.as_deref(), Some("audit:mod"));
+        assert_eq!(s.model.as_deref(), Some("opus"));
+        assert_eq!(s.phase.as_deref(), Some("Audit"));
+        assert_eq!(s.isolation.as_deref(), Some("worktree"));
+        assert_eq!(s.agent_type.as_deref(), Some("code-reviewer"));
+        assert_eq!(
+            s.schema,
+            Some(serde_json::json!({"type": "object", "required": ["x"]}))
+        );
+    }
+
+    #[test]
+    fn agent_phase_opt_registers_and_assigns_without_marker() {
+        // Inside a parallel([...]) stage the format gives the phase only as an
+        // opt, with no preceding phase() marker. The opt must both set the step's
+        // phase and register the title in the reconstructed phase plan.
+        let src = "export const meta = { name: 'p' }\n\
+                   await parallel([\n\
+                     () => agent('review bugs', { phase: \"Review\" }),\n\
+                   ])";
+        let outcome = parse_workflow_js(src).expect("scan");
+        let m = outcome.manifest;
+        assert_eq!(m.steps[0].phase.as_deref(), Some("Review"));
+        assert_eq!(
+            m.phases.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(),
+            vec!["Review"],
+            "phase plan reconstructed from the opt"
+        );
+    }
+
+    #[test]
+    fn agent_phase_opt_overrides_active_marker() {
+        // A `phase()` marker is active, but the agent carries a different `phase:`
+        // opt — the explicit opt wins (mirrors export, which writes the per-step
+        // phase faithfully).
+        let src = "export const meta = { name: 'ov' }\n\
+                   phase('Outer')\n\
+                   await agent('x', { phase: \"Inner\" })";
+        let outcome = parse_workflow_js(src).expect("scan");
+        assert_eq!(outcome.manifest.steps[0].phase.as_deref(), Some("Inner"));
+    }
+
+    #[test]
+    fn agent_opts_skip_nonliteral_value_keep_others() {
+        // A computed opt value (a bare identifier) is left unset rather than
+        // guessed (R7/R10), but literal siblings on either side still bind.
+        let src = "export const meta = { name: 'mix' }\n\
+                   await agent('go', { label: \"L\", schema: SOME_SCHEMA, model: \"haiku\" })";
+        let outcome = parse_workflow_js(src).expect("scan");
+        let s = &outcome.manifest.steps[0];
+        assert_eq!(s.label.as_deref(), Some("L"));
+        assert!(s.schema.is_none(), "identifier schema left unset, not guessed");
+        assert_eq!(s.model.as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn agent_opts_brace_in_string_value_does_not_close_early() {
+        // A `}` inside a string opt value must not end the opts object early —
+        // the brace/string tracking keeps the following key readable.
+        let src = "export const meta = { name: 'br' }\n\
+                   await agent('x', { label: \"a } b\", model: \"haiku\" })";
+        let outcome = parse_workflow_js(src).expect("scan");
+        let s = &outcome.manifest.steps[0];
+        assert_eq!(s.label.as_deref(), Some("a } b"));
+        assert_eq!(s.model.as_deref(), Some("haiku"));
     }
 }
