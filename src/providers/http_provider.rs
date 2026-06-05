@@ -145,7 +145,43 @@ impl HttpProvider {
         .await;
 
         let request = self.adapter.build_request(&final_payload, &self.config)?;
-        let response = request.send().await.map_err(|e| {
+        // Time-to-first-byte watchdog. `request.send()` resolves only once the
+        // upstream returns response headers; the streaming idle guard
+        // (`wrap_idle_timeout`) only covers gaps *between* SSE events *after*
+        // that. Without this, a provider that accepts the connection but stalls
+        // before responding hangs the whole turn until the harness 300s
+        // per-turn watchdog kills the run — too late to fail over. Reuse
+        // `stream_idle_timeout_secs` (same "max gap with no upstream bytes"
+        // semantics; `0` disables). On elapse, surface the typed `Timeout` that
+        // the failover/retry path already classifies as transient, so the next
+        // provider in the chain gets a turn.
+        let ttfb_secs = crate::providers::protocols::stream_idle::effective_idle_secs(&self.config);
+        let send_fut = request.send();
+        let send_result = if ttfb_secs == 0 {
+            send_fut.await
+        } else {
+            match tokio::time::timeout(std::time::Duration::from_secs(ttfb_secs), send_fut).await {
+                Ok(res) => res,
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        provider = %self.name,
+                        ttfb_secs,
+                        "Provider produced no response headers within TTFB timeout — \
+                         surfacing as transient error for failover"
+                    );
+                    return Err(crate::error::AlephError::Timeout {
+                        suggestion: Some(format!(
+                            "Provider '{}' sent no response for {ttfb_secs}s after the request \
+                             was dispatched (time-to-first-byte timeout). The upstream may be \
+                             unresponsive or throttling a large request; retry, switch \
+                             providers, or raise ProviderConfig.stream_idle_timeout_secs.",
+                            self.name
+                        )),
+                    });
+                }
+            }
+        };
+        let response = send_result.map_err(|e| {
             if e.is_timeout() {
                 crate::error::AlephError::Timeout {
                     suggestion: Some("Request timed out. Try again or switch providers.".into()),
@@ -485,6 +521,58 @@ mod tests {
         assert_eq!(
             super::hook_session_id(&RequestPayload::default()),
             "provider"
+        );
+    }
+
+    /// Reproduces the production hang: an upstream that accepts the TCP
+    /// connection but never sends response headers. Before the TTFB guard,
+    /// `execute` blocked until the harness 300s watchdog; now it must surface
+    /// `AlephError::Timeout` within `stream_idle_timeout_secs`.
+    #[tokio::test]
+    async fn ttfb_timeout_fires_when_upstream_never_responds() {
+        use crate::config::ProviderConfig;
+        use crate::providers::adapter::RequestPayload;
+        use crate::providers::message::UnifiedMessage;
+        use crate::providers::protocols::AnthropicProtocol;
+        use crate::sync_primitives::Arc;
+
+        // Bind a listener that accepts one connection and then hangs forever —
+        // a live socket that never writes a byte (the exact api.kimi.com
+        // failure mode).
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (_sock, _) = listener.accept().await.unwrap();
+            // Hold the socket open without responding.
+            futures::future::pending::<()>().await;
+        });
+
+        let mut config = ProviderConfig::test_config("claude-test");
+        config.base_url = Some(format!("http://{addr}"));
+        config.stream_idle_timeout_secs = Some(1);
+
+        let adapter = Arc::new(AnthropicProtocol::new(reqwest::Client::new()));
+        let provider = super::HttpProvider::new("hanging".to_string(), config, adapter).unwrap();
+
+        let messages = vec![UnifiedMessage::user("hi")];
+        let payload = RequestPayload {
+            messages: &messages,
+            model: Some("claude-test".to_string()),
+            ..Default::default()
+        };
+
+        // Outer guard so a regression (no TTFB timeout) fails fast instead of
+        // hanging the test binary.
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            provider.execute(payload, None),
+        )
+        .await
+        .expect("execute must return within 5s — TTFB guard did not fire");
+
+        assert!(
+            matches!(result, Err(crate::error::AlephError::Timeout { .. })),
+            "stalled upstream must yield AlephError::Timeout, got {result:?}",
         );
     }
 

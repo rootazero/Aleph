@@ -96,17 +96,23 @@ pub struct ProviderConfig {
     /// Request timeout in seconds
     #[serde(default = "default_timeout_seconds")]
     pub timeout_seconds: u64,
-    /// Per-event idle timeout for streaming responses, in seconds.
+    /// Idle timeout for streaming responses, in seconds — the maximum gap with
+    /// no bytes from the upstream.
     ///
-    /// Wraps each SSE event read with a watchdog: if no chunk arrives within
-    /// this duration, the stream aborts with `AlephError::Timeout`. This is
-    /// distinct from `timeout_seconds` (which is the total request timeout).
+    /// Two watchdogs honor it: (1) the time-to-first-byte guard in
+    /// `HttpProvider::execute` aborts if the upstream returns no response
+    /// headers within this duration (covers a provider that accepts the
+    /// connection but stalls before responding); (2) the Anthropic protocol
+    /// adapter wraps each SSE event read so a stall *between* events also
+    /// aborts. Both surface `AlephError::Timeout`, which the failover path
+    /// treats as transient. Distinct from `timeout_seconds` (total request
+    /// budget, not applied to the streaming path).
     ///
     /// `None` or unset: 60 seconds (default).
-    /// `Some(0)`: idle timeout disabled.
+    /// `Some(0)`: both watchdogs disabled.
     ///
-    /// Currently honored only by the Anthropic protocol adapter; other
-    /// protocols ignore this field.
+    /// The TTFB guard applies to every HTTP protocol; the inter-event guard is
+    /// currently honored only by the Anthropic protocol adapter.
     #[serde(default)]
     pub stream_idle_timeout_secs: Option<u64>,
     /// Prompt cache retention policy. Currently honored only by the Anthropic
