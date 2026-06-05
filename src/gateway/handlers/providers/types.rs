@@ -21,6 +21,11 @@ pub struct ProviderInfo {
     pub timeout_seconds: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Operator-declared total context window (tokens). Surfaced so the panel /
+    /// CLI can display and round-trip it through `providers.update`. `None`
+    /// means "use the capability catalog" (model-aware budgeting falls back).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
     pub is_default: bool,
@@ -92,6 +97,11 @@ pub struct ProviderConfigJson {
     pub timeout_seconds: Option<u64>,
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Operator-declared total context window (tokens) — escape hatch for
+    /// third-party endpoints whose window differs from / is absent in the
+    /// capability catalog. Round-tripped into `ProviderConfig.context_window`.
+    #[serde(default)]
+    pub context_window: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f32>,
     #[serde(default)]

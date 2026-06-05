@@ -46,6 +46,57 @@ fn test_update_params() {
 }
 
 #[test]
+fn provider_config_json_accepts_context_window() {
+    // create/update accept an operator-declared window through the JSON DTO.
+    let parsed: ProviderConfigJson = serde_json::from_value(json!({
+        "enabled": true,
+        "model": "kimi-k2",
+        "context_window": 200_000
+    }))
+    .unwrap();
+    assert_eq!(parsed.context_window, Some(200_000));
+
+    // Absent → None (back-compat: old panel/CLI payloads still deserialize).
+    let bare: ProviderConfigJson =
+        serde_json::from_value(json!({ "enabled": true, "model": "gpt-4o" })).unwrap();
+    assert_eq!(bare.context_window, None);
+}
+
+#[test]
+fn provider_info_round_trips_context_window() {
+    // get/list expose the window; None is omitted from the wire (skip_if).
+    let info = ProviderInfo {
+        name: "kimi".into(),
+        enabled: true,
+        models: vec!["kimi-k2".into()],
+        model: "kimi-k2".into(),
+        provider_type: None,
+        has_api_key: false,
+        api_key: None,
+        base_url: None,
+        color: "#808080".into(),
+        timeout_seconds: 300,
+        max_tokens: None,
+        context_window: Some(200_000),
+        temperature: None,
+        is_default: false,
+        verified: false,
+    };
+    let j = serde_json::to_value(&info).unwrap();
+    assert_eq!(j["context_window"], 200_000);
+
+    let omitted = ProviderInfo {
+        context_window: None,
+        ..info
+    };
+    let j2 = serde_json::to_value(&omitted).unwrap();
+    assert!(
+        j2.get("context_window").is_none(),
+        "None context_window omitted from response"
+    );
+}
+
+#[test]
 fn test_test_result_serialize() {
     let result = TestResult {
         success: true,
