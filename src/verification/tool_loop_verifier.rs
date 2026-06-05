@@ -14,47 +14,87 @@
 //!     `args_hash`
 //!   - the current turn's `final_text` is empty/None
 //!
-//! When all three hold, emit a `Veto` carrying `ErrorClass::Recoverable`
-//! and a human-readable reason. The harness injects this as a user
-//! message; on the next turn the model sees explicit feedback that
-//! its repeat behavior was caught.
+//! Two-tier escalation:
+//!   - at `repeat_threshold` identical trailing calls → emit a `Veto`
+//!     (`ErrorClass::Recoverable`). The harness injects it as a user message so
+//!     the model sees explicit feedback and gets a chance to course-correct.
+//!   - at `halt_threshold` (≥ repeat_threshold) identical trailing calls → emit
+//!     a `Halt`. By this point the model has ignored several vetoes and is still
+//!     repeating the same call with no thinking text; continuing would only burn
+//!     LLM round-trips until the provider's rate limit (or a turn/stall
+//!     timeout) kills the run with a confusing error. Halting deterministically
+//!     here ends the unproductive loop with a clear reason instead.
+//!
+//! Both tiers are pure structural checks over `(name, args_hash)` — no model
+//! reasoning, so this stays scaffolding (R10-safe), never a completion judge.
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::ErrorClass;
 use crate::verification::turn_verifier::{
-    TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
+    ToolCallSummary, TurnVerifier, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
 };
 
 pub struct ToolLoopVerifier {
     repeat_threshold: usize,
+    halt_threshold: usize,
 }
 
 impl ToolLoopVerifier {
-    /// Default threshold: 5 identical consecutive calls. Matches the
-    /// number cited in master spec § Stage 6 ("纯重复 tool call N
-    /// 轮"). Tunable per deployment via `with_threshold`.
+    /// Default thresholds: veto at 5 identical consecutive calls (master spec
+    /// § Stage 6 "纯重复 tool call N 轮"), hard-halt at the full
+    /// [`TOOL_HISTORY_WINDOW`] (8) — i.e. ~3 ignored vetoes before the loop is
+    /// cut off. Both tunable via `with_threshold` / `with_halt_threshold`.
     pub fn new() -> Self {
         Self {
             repeat_threshold: 5,
+            halt_threshold: TOOL_HISTORY_WINDOW,
         }
     }
 
-    /// Set the repetition threshold. Clamped to `[2, TOOL_HISTORY_WINDOW]`:
+    /// Set the repetition (veto) threshold. Clamped to `[2, TOOL_HISTORY_WINDOW]`:
     /// the lower bound avoids "single call ⇒ instant veto"; the upper bound
     /// is the harness ring-buffer capacity — a threshold above it could never
     /// be satisfied (`recent_tool_calls.len()` is bounded by the window), which
-    /// would silently disable detection.
+    /// would silently disable detection. The halt threshold is lifted to stay
+    /// `≥ repeat_threshold` so the two tiers never invert.
     pub fn with_threshold(mut self, n: usize) -> Self {
         self.repeat_threshold = n.clamp(2, TOOL_HISTORY_WINDOW);
+        self.halt_threshold = self.halt_threshold.max(self.repeat_threshold);
         self
     }
 
-    /// Current repetition threshold (always within `[2, TOOL_HISTORY_WINDOW]`).
+    /// Set the hard-halt threshold. Clamped to `[repeat_threshold,
+    /// TOOL_HISTORY_WINDOW]` so it can always be reached and never fires *before*
+    /// the soft veto tier.
+    pub fn with_halt_threshold(mut self, n: usize) -> Self {
+        self.halt_threshold = n.clamp(self.repeat_threshold, TOOL_HISTORY_WINDOW);
+        self
+    }
+
+    /// Current repetition (veto) threshold (always within `[2, TOOL_HISTORY_WINDOW]`).
     pub fn threshold(&self) -> usize {
         self.repeat_threshold
     }
+
+    /// Current hard-halt threshold (always within `[repeat_threshold, TOOL_HISTORY_WINDOW]`).
+    pub fn halt_threshold(&self) -> usize {
+        self.halt_threshold
+    }
+}
+
+/// Length of the trailing run of calls identical (same `name` + `args_hash`)
+/// to the most recent one. `0` for an empty slice.
+fn trailing_repeat_run(calls: &[ToolCallSummary]) -> usize {
+    let Some(last) = calls.last() else {
+        return 0;
+    };
+    calls
+        .iter()
+        .rev()
+        .take_while(|c| c.name == last.name && c.args_hash == last.args_hash)
+        .count()
 }
 
 impl Default for ToolLoopVerifier {
@@ -96,19 +136,31 @@ impl TurnVerifier for ToolLoopVerifier {
         if has_text {
             return VerifierVerdict::Continue;
         }
-        let tail_start = ctx.recent_tool_calls.len() - self.repeat_threshold;
-        let tail = &ctx.recent_tool_calls[tail_start..];
-        let first = &tail[0];
-        let all_same = tail
-            .iter()
-            .all(|c| c.name == first.name && c.args_hash == first.args_hash);
-        if !all_same {
+        let run = trailing_repeat_run(ctx.recent_tool_calls);
+        if run < self.repeat_threshold {
             return VerifierVerdict::Continue;
+        }
+        // `run >= repeat_threshold` guarantees a non-empty trailing run, so the
+        // last entry names the offending tool.
+        let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
+        // Halt only once the loop has persisted *past* at least one veto — i.e.
+        // when the halt tier sits strictly above the veto tier. In the
+        // degenerate clamp case where both collapse to the window size, there is
+        // no "ignored veto" stage, so keep vetoing (the conservative original
+        // behavior) rather than halting on first detection.
+        if run >= self.halt_threshold && self.halt_threshold > self.repeat_threshold {
+            return VerifierVerdict::Halt {
+                reason: format!(
+                    "tool '{tool}' invoked {run} consecutive times with no thinking text despite \
+                     repeated feedback — terminating to avoid an unproductive loop that would run \
+                     into the provider rate limit",
+                ),
+                class: ErrorClass::Recoverable,
+            };
         }
         VerifierVerdict::Veto {
             reason: format!(
-                "tool '{}' invoked {} consecutive times with no thinking text — try a different approach or summarize what you've found",
-                first.name, self.repeat_threshold
+                "tool '{tool}' invoked {run} consecutive times with no thinking text — try a different approach or summarize what you've found",
             ),
             class: ErrorClass::Recoverable,
         }
