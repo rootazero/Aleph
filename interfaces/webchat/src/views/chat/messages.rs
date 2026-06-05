@@ -283,6 +283,50 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // storybook), they degrade to static badges.
     let workspace = use_context::<WorkspaceState>();
     let message_run_id = run_id_from_message_id(&message.id);
+
+    // Left-side counterpart to the right-side StepCards: bubbles carrying an
+    // iteration tag get a clickable `#N` label (cross-highlights the matching
+    // StepCard + opens Split) and a reactive highlight ring when that step is
+    // focused from the right. User and untagged bubbles get neither.
+    let msg_iteration = message.iteration;
+    let focused = {
+        let run = message_run_id.clone();
+        Memo::new(move |_| match (workspace, msg_iteration) {
+            (Some(ws), Some(it)) => ws.is_step_focused(&run, it),
+            _ => false,
+        })
+    };
+    let bubble_class_reactive = {
+        let base = bubble_class;
+        move || {
+            if focused.get() {
+                format!("{base} ring-2 ring-primary/60")
+            } else {
+                base.clone()
+            }
+        }
+    };
+    let bubble_dom_id: Option<String> = match (msg_iteration, is_user) {
+        (Some(it), false) => Some(format!("step-{message_run_id}-{it}")),
+        _ => None,
+    };
+    let iteration_label = match (workspace, msg_iteration, is_user) {
+        (Some(ws), Some(it), false) => {
+            let run = message_run_id.clone();
+            Some(view! {
+                <button
+                    type="button"
+                    class="mb-1 text-[10px] font-mono uppercase tracking-wider
+                           text-text-tertiary hover:text-primary transition-colors"
+                    on:click=move |_| ws.focus_step(run.clone(), it)
+                >
+                    {format!("#{it}")}
+                </button>
+            })
+        }
+        _ => None,
+    };
+
     let tool_calls_view = if has_tools {
         let tools = message.tool_calls.clone();
         let run_id_for_chips = message_run_id.clone();
@@ -436,7 +480,8 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
 
     view! {
         <div class=wrapper_class>
-            <div class=bubble_class>
+            <div class=bubble_class_reactive id=bubble_dom_id>
+                {iteration_label}
                 {tool_calls_view}
 
                 // Message content — Markdown for assistant, plain text for user
@@ -510,5 +555,18 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                 }}
             </div>
         </div>
+    }
+}
+
+#[cfg(test)]
+mod run_id_tests {
+    use super::run_id_from_message_id;
+
+    #[test]
+    fn strips_assistant_and_intermediate_prefixes() {
+        assert_eq!(run_id_from_message_id("assistant-r1"), "r1");
+        assert_eq!(run_id_from_message_id("intermediate-r1-3"), "r1");
+        assert_eq!(run_id_from_message_id("intermediate-run-x-7"), "run-x");
+        assert_eq!(run_id_from_message_id("user-0"), "user-0");
     }
 }
