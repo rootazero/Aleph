@@ -1,0 +1,152 @@
+//! External-link routing for the Panel webview.
+//!
+//! The shell hosts a single webview pinned to the local daemon's Panel
+//! origin. Links the Panel renders to the outside world (`target="_blank"`
+//! markdown links, "open docs" anchors in settings) must NOT hijack that
+//! lone webview — there is no back button to recover with (R5: the shell
+//! never steals the user's context). Instead we keep the webview on its own
+//! origin and hand external URLs to the OS, which opens them in the user's
+//! real browser / mail client.
+//!
+//! Two cooperating halves, mirroring an Electron shell's `will-navigate` +
+//! `setWindowOpenHandler`:
+//!
+//! - [`route`] is the `WebviewWindowBuilder::on_navigation` guard: it allows
+//!   navigations that stay on a trusted local origin and cancels +
+//!   externalises everything else. This covers plain in-frame link clicks
+//!   and JS `location` changes.
+//! - [`CLICK_INTERCEPTOR_JS`] is injected into every document so that
+//!   `target="_blank"` anchors — which open no main-frame navigation and
+//!   would otherwise be dead in a webview — are turned into a top-level
+//!   navigation that [`route`] then catches. The script is shell-only by
+//!   construction (only the shell injects it); in a plain browser the
+//!   Panel's `_blank` links keep opening real tabs (R6).
+//!
+//! Pure OS integration, no business logic — the shell is the limb (R1/R10).
+
+use tauri::Url;
+
+/// Hosts whose http(s) origins are the Panel itself (the loopback daemon,
+/// on whatever port) and thus safe to navigate the hosting webview to.
+const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
+
+/// Injected into every document: redirect `target="_blank"` anchor clicks
+/// into a top-level navigation so [`route`] can externalise them. Capture
+/// phase so it runs before the Panel's own handlers; `closest` walks up
+/// from the click target to the enclosing anchor. Setting `location.href`
+/// is the only channel the (bridge-free) shell webview has back to the
+/// native [`route`] guard — which then cancels the navigation and opens the
+/// URL in the OS handler.
+pub const CLICK_INTERCEPTOR_JS: &str = r#"document.addEventListener('click',function(ev){var t=ev.target;var a=t&&t.closest?t.closest('a[target="_blank"]'):null;if(!a||!a.href)return;ev.preventDefault();window.location.href=a.href;},true);"#;
+
+/// `WebviewWindowBuilder::on_navigation` guard. Returns `true` to let the
+/// webview proceed (internal origins), `false` to cancel — opening the URL
+/// in the OS default handler instead.
+pub fn route(url: &Url) -> bool {
+    if is_internal(url) {
+        return true;
+    }
+    open_external(url.as_str());
+    false
+}
+
+/// Whether `url` is part of the Panel/splash surface and may load inside the
+/// hosting webview. Trusts the Tauri asset/data schemes and any http(s) URL
+/// on a loopback host (the local daemon) or the `tauri.localhost` asset host
+/// (Windows WebView2 serves bundled assets there).
+pub fn is_internal(url: &Url) -> bool {
+    match url.scheme() {
+        // Splash + bundled assets (`tauri://localhost`), and in-page schemes
+        // the Panel may render documents from.
+        "tauri" | "about" | "data" | "blob" => true,
+        "http" | "https" => match url.host_str() {
+            Some(host) => {
+                // `host_str` brackets IPv6 literals (`[::1]`); normalise.
+                let host = host.trim_start_matches('[').trim_end_matches(']');
+                LOOPBACK_HOSTS.contains(&host) || host == "tauri.localhost"
+            }
+            None => false,
+        },
+        _ => false,
+    }
+}
+
+/// Open `url` in the OS default handler (browser / mail client), detached.
+/// Best-effort: a failure just means the link does nothing, which is no
+/// worse than the pre-guard behaviour. No shell is invoked, so the URL is
+/// never interpreted as a command.
+fn open_external(url: &str) {
+    use std::process::Command;
+
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = Command::new("open");
+        c.arg(url);
+        c
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut cmd = {
+        // `rundll32 url.dll,FileProtocolHandler <url>` is the canonical
+        // injection-safe URL opener — no `cmd /c start` quoting pitfalls.
+        let mut c = Command::new("rundll32.exe");
+        c.arg("url.dll,FileProtocolHandler").arg(url);
+        c
+    };
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = Command::new("xdg-open");
+        c.arg(url);
+        c
+    };
+
+    match cmd.spawn() {
+        Ok(_child) => tracing::info!(target: "shell", "opened external URL in OS handler: {url}"),
+        Err(e) => tracing::warn!("failed to open external URL {url}: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn internal(u: &str) -> bool {
+        is_internal(&Url::parse(u).unwrap())
+    }
+
+    #[test]
+    fn loopback_panel_origins_are_internal() {
+        assert!(internal("http://127.0.0.1:18790"));
+        assert!(internal("http://127.0.0.1:18790/auth/bootstrap?nonce=abc"));
+        assert!(internal("http://localhost:18790/chat"));
+        assert!(internal("https://127.0.0.1:443/"));
+        assert!(internal("http://[::1]:18790/"));
+    }
+
+    #[test]
+    fn bundled_asset_schemes_are_internal() {
+        assert!(internal("tauri://localhost/index.html"));
+        assert!(internal("http://tauri.localhost/index.html"));
+        assert!(internal("about:blank"));
+        assert!(internal("data:text/html,hello"));
+    }
+
+    #[test]
+    fn outside_origins_are_external() {
+        assert!(!internal("https://github.com/aleph"));
+        assert!(!internal("https://example.com/127.0.0.1"));
+        assert!(!internal("http://10.0.0.5:18790/"));
+        assert!(!internal("mailto:hi@example.com"));
+        assert!(!internal("tel:+1555"));
+    }
+
+    #[test]
+    fn route_allows_internal_without_side_effects() {
+        // Only the internal branch is exercised here: it returns `true`
+        // without ever calling `open_external`, so no browser is spawned
+        // during tests. The external (cancel) decision is covered by the
+        // `is_internal` cases above — `route` simply negates it.
+        assert!(route(&Url::parse("http://127.0.0.1:18790/chat").unwrap()));
+    }
+}
