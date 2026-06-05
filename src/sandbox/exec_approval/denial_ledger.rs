@@ -37,7 +37,14 @@ const MAX_SESSIONS: usize = 1024;
 /// *elevation / confirm* prompts — it never blocks already-approved or
 /// auto-execute tools — so the cost of tripping it is at most a re-prompt the
 /// user can resolve by acting deliberately, never silent data loss.
-const SESSION_PAUSE_THRESHOLD: u32 = 5;
+///
+/// Set to 3 to match the product spec ("连续 3 次被拒绝 → AI 自动暂停执行,
+/// 防止暴力穷举") and OpenSquilla's `DEFAULT_DENIAL_THRESHOLD = 3` — the
+/// circuit breaker should trip the moment a brute-force pattern is
+/// unmistakable, not give it two more free attempts. Tightening only (a
+/// session that paused at 5 still pauses at 3); no caller hard-codes the
+/// value, so the change is internal to the ledger.
+const SESSION_PAUSE_THRESHOLD: u32 = 3;
 
 /// Why an action is being auto-denied by the ledger (independent of the live
 /// approval gate). Carries an agent-facing hint so the harness can tell the
@@ -264,9 +271,15 @@ mod tests {
     }
 
     #[test]
+    fn pause_threshold_matches_spec_of_three() {
+        // Product spec + OpenSquilla parity: brute-force pause trips at 3.
+        assert_eq!(SESSION_PAUSE_THRESHOLD, 3);
+    }
+
+    #[test]
     fn threshold_trips_sticky_session_pause() {
         let led = DenialLedger::new();
-        // Five distinct denied intents trip the pause.
+        // `SESSION_PAUSE_THRESHOLD` distinct denied intents trip the pause.
         for i in 0..SESSION_PAUSE_THRESHOLD {
             let fp = action_fingerprint("code_exec", &format!("intent-{i}"));
             led.record_denial("s1", &fp, DenialReason::UserRejected);
