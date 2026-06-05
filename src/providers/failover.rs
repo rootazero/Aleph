@@ -44,7 +44,8 @@ use crate::error::{AlephError, ErrorClass, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
 use crate::providers::llm_retry::{
-    backoff_delay, classify, classify_exhausted, is_transient_overload, RetryVerdict,
+    backoff_delay, classify, classify_exhausted, extract_retry_after_str, is_transient_overload,
+    RetryVerdict,
 };
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteHandle;
@@ -76,6 +77,10 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// to ~60s (2+4+8+16+30) before advancing the chain. A genuine account/quota
 /// 429 stays `Fatal` upstream and never reaches this budget.
 const OVERLOAD_RETRY_BUDGET: u32 = 5;
+/// Default sideline window for a *model-specific* 429 when the server gave no
+/// `Retry-After` hint. Short enough that a transient per-model throttle clears
+/// quickly; a longer server hint wins (capped by [`MAX_COOLDOWN`]).
+const DEFAULT_MODEL_COOLDOWN: Duration = Duration::from_secs(60);
 
 // =============================================================================
 // Configuration
@@ -187,6 +192,47 @@ impl Default for FailoverHealth {
     }
 }
 
+/// Per-(provider, model) rate-limit cooldown.
+///
+/// A model that returned a *model-specific* 429 is sidelined until its cooldown
+/// expires, so the walk prefers a healthy sibling model (or provider) instead
+/// of re-hitting the throttled one. Distinct from the provider-level circuit
+/// breaker ([`FailoverHealth`]): a rate-limited model does **not** trip the
+/// whole provider — its siblings stay live. Cloning shares the same map
+/// (`Arc`), so a throttle recorded by the global chain is visible to every
+/// per-hint override (scoped exactly like `FailoverHealth`).
+#[derive(Clone)]
+pub struct ModelCooldown(Arc<RwLock<HashMap<(String, String), Instant>>>);
+
+impl Default for ModelCooldown {
+    fn default() -> Self {
+        Self(Arc::new(RwLock::new(HashMap::new())))
+    }
+}
+
+impl ModelCooldown {
+    /// Sideline `(provider, model)` for `dur`.
+    async fn cool(&self, provider: &str, model: &str, dur: Duration) {
+        let until = Instant::now() + dur;
+        self.0
+            .write()
+            .await
+            .insert((provider.to_string(), model.to_string()), until);
+    }
+
+    /// Whether `(provider, model)` is still within its cooldown window. An
+    /// expired entry reads as not-cooling (and is overwritten on the next
+    /// [`cool`](Self::cool)).
+    async fn is_cooling(&self, provider: &str, model: &str) -> bool {
+        let key = (provider.to_string(), model.to_string());
+        self.0
+            .read()
+            .await
+            .get(&key)
+            .is_some_and(|&until| until > Instant::now())
+    }
+}
+
 // =============================================================================
 // Decision
 // =============================================================================
@@ -215,10 +261,30 @@ enum Decision {
     RetrySame(Duration),
     /// Advance to the next model of the same provider.
     NextModel,
+    /// This model hit a *model-specific* 429. Record a per-model cooldown
+    /// (`Some(d)` carries the server `Retry-After`), then prefer a sibling
+    /// model before advancing providers. Does **not** trip the provider
+    /// circuit — sibling models stay live.
+    RateLimited(Option<Duration>),
     /// Trip this provider's circuit and advance to the next provider.
     NextProvider(FailureKind),
     /// Abort the walk and return the error to the caller.
     Stop,
+}
+
+/// Server-guided `Retry-After` from a *typed* error's `suggestion` field.
+///
+/// The Anthropic adapter stashes "Rate limited. Retry after N seconds." in
+/// `RateLimitError.suggestion` / `ProviderError.suggestion`, but the error's
+/// `Display` only renders `message` — so the string classifier never sees the
+/// hint. Reading the typed field recovers it.
+fn retry_after_from_suggestion(err: &AlephError) -> Option<Duration> {
+    let suggestion = match err {
+        AlephError::RateLimitError { suggestion, .. }
+        | AlephError::ProviderError { suggestion, .. } => suggestion.as_deref(),
+        _ => None,
+    }?;
+    extract_retry_after_str(suggestion)
 }
 
 /// Classify one failed attempt into a [`Decision`].
@@ -233,10 +299,18 @@ fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
     let msg = err.to_string();
     let lower = msg.to_lowercase();
 
+    // Server-guided `Retry-After` from the *typed* error's `suggestion` field.
+    // The `Display` impl drops `suggestion`, so the string classifier never sees
+    // it; reading it here lets a real provider hint beat the body-parsed/default
+    // delay (matches openclaw/Pi, which honour Retry-After).
+    let server_delay = retry_after_from_suggestion(err);
     // A transient error the string classifier recognises is worth a brief
-    // in-place retry before the chain advances.
+    // in-place retry before the chain advances. A server `Retry-After` (if any)
+    // overrides the classifier's delay — but only when the classifier already
+    // judged the error transient, so an account/quota 429 whose suggestion
+    // carries a Retry-After is not lifted into a retry it should not get.
     let transient_delay = match classify(&msg) {
-        RetryVerdict::Retry { delay } => Some(delay),
+        RetryVerdict::Retry { delay } => Some(server_delay.unwrap_or(delay)),
         _ => None,
     };
     // A transient *server overload* (429 "please wait a moment", 529) earns a
@@ -277,6 +351,12 @@ fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
                 Decision::NextModel
             } else if let (Some(delay), true) = (transient_delay, can_retry) {
                 Decision::RetrySame(delay)
+            } else if reason.starts_with("rate limited") {
+                // A model-specific 429 (account/quota limits classify `Fatal`
+                // upstream and never reach here): sideline this model and try a
+                // sibling before advancing providers. The overload path above
+                // exhausts its deeper in-place budget first, then lands here.
+                Decision::RateLimited(server_delay)
             } else {
                 next_provider
             }
@@ -289,7 +369,7 @@ fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
                 && (lower.contains("bad request") || lower.contains("invalid"));
             if !explicit_bad_request && err.class() == ErrorClass::Transient {
                 if can_retry {
-                    Decision::RetrySame(DEFAULT_TRANSIENT_DELAY)
+                    Decision::RetrySame(server_delay.unwrap_or(DEFAULT_TRANSIENT_DELAY))
                 } else {
                     // A typed-transient error with no HTTP code: transient.
                     Decision::NextProvider(FailureKind::Transient)
@@ -346,6 +426,12 @@ pub struct FailoverProvider {
     /// global chain and every per-hint override, like [`FailoverHealth`], so one
     /// endpoint's in-flight/latency picture is visible to every chain.
     load: Option<Arc<LoadStats>>,
+    /// Shared per-model rate-limit cooldown. `None` (tests, `new()`) disables
+    /// cooldown entirely — the chain keeps every model, byte-identical to
+    /// pre-cooldown failover. Shared across the global chain and every per-hint
+    /// override (like [`FailoverHealth`]) so one model's throttle is visible
+    /// everywhere.
+    model_cooldown: Option<ModelCooldown>,
 }
 
 impl FailoverProvider {
@@ -376,6 +462,7 @@ impl FailoverProvider {
             route_handle: None,
             primary_tier: EndpointTier::Unknown,
             load: None,
+            model_cooldown: None,
         }
     }
 
@@ -426,6 +513,44 @@ impl FailoverProvider {
     pub fn with_load_stats(mut self, load: Arc<LoadStats>) -> Self {
         self.load = Some(load);
         self
+    }
+
+    /// Attach the shared per-model rate-limit cooldown registry. Wired only in
+    /// production (`build_failover_chain`) with one registry cloned across all
+    /// chains; tests omit it and keep no cooldown (byte-identical to before).
+    pub fn with_model_cooldown(mut self, cooldown: ModelCooldown) -> Self {
+        self.model_cooldown = Some(cooldown);
+        self
+    }
+
+    /// Drop models currently in rate-limit cooldown for `provider`, so the walk
+    /// prefers a healthy sibling. Fail-open: if *every* model is cooling the
+    /// original list is kept (better to re-probe a throttled model than to empty
+    /// the candidate). `None` registry (tests) is a no-op.
+    async fn drop_cooling_models(
+        &self,
+        provider: &str,
+        models: Vec<Option<String>>,
+    ) -> Vec<Option<String>> {
+        let Some(cd) = &self.model_cooldown else {
+            return models;
+        };
+        let mut kept = Vec::with_capacity(models.len());
+        for m in &models {
+            let cooling = match m {
+                // An unnamed default model can't be sidelined by name.
+                Some(name) => cd.is_cooling(provider, name).await,
+                None => false,
+            };
+            if !cooling {
+                kept.push(m.clone());
+            }
+        }
+        if kept.is_empty() {
+            models
+        } else {
+            kept
+        }
     }
 
     /// The load-balancing strategy to apply *now*: the live handle if attached,
@@ -746,6 +871,9 @@ impl AiProvider for FailoverProvider {
                         .map(Some)
                         .collect(),
                 };
+                // Sideline models still cooling from an earlier 429, preferring a
+                // healthy sibling (fail-open if all are cooling).
+                let models = self.drop_cooling_models(&cand.name, models).await;
 
                 let mut tripped: Option<FailureKind> = None;
                 'model: for model in models {
@@ -807,6 +935,29 @@ impl AiProvider for FailoverProvider {
                                         "failover: model unavailable, trying next model",
                                     );
                                     last_error = Some(e);
+                                    continue 'model;
+                                }
+                                Decision::RateLimited(hint) => {
+                                    // Cool this specific model (server Retry-After
+                                    // if given, else default; capped) and prefer a
+                                    // sibling model before giving up on the
+                                    // provider. `tripped` is set transient so the
+                                    // provider's circuit still trips IF every model
+                                    // ends up exhausted (single-model providers
+                                    // behave exactly as before); it is discarded the
+                                    // moment a sibling model succeeds.
+                                    if let (Some(cd), Some(m)) = (&self.model_cooldown, &model) {
+                                        let dur = hint
+                                            .unwrap_or(DEFAULT_MODEL_COOLDOWN)
+                                            .min(MAX_COOLDOWN);
+                                        cd.cool(&cand.name, m, dur).await;
+                                    }
+                                    tracing::warn!(
+                                        provider = %cand.name, model = ?model, error = %e,
+                                        "failover: model rate-limited, cooling down; trying next model",
+                                    );
+                                    last_error = Some(e);
+                                    tripped = Some(FailureKind::Transient);
                                     continue 'model;
                                 }
                                 Decision::NextProvider(kind) => {
@@ -986,11 +1137,43 @@ mod tests {
     }
 
     #[test]
-    fn decide_rate_limit_advances_provider() {
+    fn decide_model_rate_limit_returns_rate_limited() {
+        // A model-specific 429 (no account/quota markers) no longer trips the
+        // whole provider at the decide() level: it returns RateLimited so
+        // process() sidelines just this model and prefers a sibling before the
+        // provider's circuit is considered. The server gave no Retry-After, so
+        // the cooldown hint is None.
         let e = AlephError::provider("HTTP 429 too many requests");
+        assert_eq!(decide(&e, 0, 2), Decision::RateLimited(None));
+    }
+
+    #[test]
+    fn decide_model_rate_limit_honors_typed_retry_after() {
+        // Item #1: the server Retry-After lives in the typed `suggestion` field
+        // (Display drops it). It must flow through as the RateLimited cooldown
+        // hint so the model is sidelined for exactly as long as the server asked.
+        let e = AlephError::RateLimitError {
+            message: "HTTP 429 rate limit exceeded for this model".into(),
+            suggestion: Some("Rate limited. Retry after 42 seconds.".into()),
+        };
         assert_eq!(
             decide(&e, 0, 2),
-            Decision::NextProvider(FailureKind::Transient)
+            Decision::RateLimited(Some(Duration::from_secs(42)))
+        );
+    }
+
+    #[test]
+    fn decide_overload_429_honors_typed_retry_after() {
+        // Item #1 on the in-place-retry path: a server-overload 429 whose
+        // Retry-After sits in `suggestion` retries in place with the server's
+        // delay rather than the classifier's 2s default.
+        let e = AlephError::RateLimitError {
+            message: "Anthropic API rate limited (429): please wait a moment and try again".into(),
+            suggestion: Some("Retry after 7 seconds.".into()),
+        };
+        assert_eq!(
+            decide(&e, 0, 2),
+            Decision::RetrySame(Duration::from_secs(7))
         );
     }
 
@@ -1036,8 +1219,10 @@ mod tests {
         // The generic Anthropic server-throttle 429 ("please wait a moment")
         // must be retried in place well past the shallow `max_retries=2` so a
         // single-provider setup rides out the spike instead of hard-failing the
-        // flow (the 08:00 scheduled-job 429 crash). It only advances the chain
-        // once OVERLOAD_RETRY_BUDGET is exhausted.
+        // flow (the 08:00 scheduled-job 429 crash). Once OVERLOAD_RETRY_BUDGET is
+        // exhausted it escalates to the per-model cooldown path (RateLimited),
+        // which process() turns into a sibling-model migration and, only if the
+        // provider's models are exhausted, a provider advance.
         let e = AlephError::RateLimitError {
             message: "Anthropic API rate limited (429): We're receiving too many \
                       requests at the moment. Please wait a moment and try again."
@@ -1051,7 +1236,7 @@ mod tests {
         ));
         assert_eq!(
             decide(&e, OVERLOAD_RETRY_BUDGET, 2),
-            Decision::NextProvider(FailureKind::Transient)
+            Decision::RateLimited(None)
         );
     }
 
@@ -1138,6 +1323,86 @@ mod tests {
             primary.models(),
             vec![Some("opus".to_string()), Some("sonnet".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn model_specific_rate_limit_migrates_to_sibling_model() {
+        // Item #3: a model-specific 429 on the first model sidelines just that
+        // model and tries the provider's next model in the SAME request, rather
+        // than advancing providers (or hard-failing a single-provider setup).
+        let primary = ScriptProvider::new(
+            "anthropic",
+            vec![Err("HTTP 429 too many requests".into()), Ok(())],
+        );
+        let fp = build(
+            primary.clone(),
+            vec![("anthropic", vec!["opus", "sonnet"])],
+            vec![],
+        );
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        assert_eq!(resp.text_content(), "anthropic");
+        assert_eq!(
+            primary.models(),
+            vec![Some("opus".to_string()), Some("sonnet".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn cooling_model_is_skipped_on_next_request() {
+        // Item #3 (cross-request): once a model is cooled by a 429, a later
+        // request skips it and dials the healthy sibling first.
+        let primary = ScriptProvider::new(
+            "anthropic",
+            vec![
+                Err("HTTP 429 too many requests".into()), // req1: opus 429
+                Ok(()),                                   // req1: sonnet ok
+                Ok(()),                                   // req2: straight to sonnet
+            ],
+        );
+        let catalog = [(
+            "anthropic".to_string(),
+            vec!["opus".to_string(), "sonnet".to_string()],
+        )]
+        .into_iter()
+        .collect();
+        let fp = FailoverProvider::new(
+            Arc::new(StaticDefault::new(primary.clone())),
+            vec![],
+            catalog,
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        )
+        .with_model_cooldown(ModelCooldown::default());
+
+        let msgs = [UnifiedMessage::user("hi")];
+        // Request 1: opus 429 → cool opus → sonnet serves.
+        let _ = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        // Request 2: opus is still cooling → dial sonnet directly.
+        let _ = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+
+        assert_eq!(
+            primary.models(),
+            vec![
+                Some("opus".to_string()),
+                Some("sonnet".to_string()),
+                Some("sonnet".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn model_cooldown_tracks_per_model() {
+        let cd = ModelCooldown::default();
+        assert!(!cd.is_cooling("p", "a").await);
+        cd.cool("p", "a", Duration::from_secs(60)).await;
+        assert!(cd.is_cooling("p", "a").await);
+        // A different model on the same provider is unaffected.
+        assert!(!cd.is_cooling("p", "b").await);
+        // A zero-duration cool expires immediately.
+        cd.cool("p", "b", Duration::from_secs(0)).await;
+        assert!(!cd.is_cooling("p", "b").await);
     }
 
     #[tokio::test]

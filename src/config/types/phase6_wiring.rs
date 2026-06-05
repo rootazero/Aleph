@@ -67,6 +67,12 @@ pub struct FallbackProviderToml {
     /// [`FallbackProviderToml::resolved_chain`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Same-candidate retries on a transient error before the chain advances.
+    /// `None` keeps the built-in default (2). Raise it for single-provider
+    /// setups that have no sibling to fail over to, so a stubborn transient
+    /// throttle is ridden out longer in place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
 }
 
 impl FallbackProviderToml {
@@ -176,6 +182,7 @@ critical_threshold = 0.85
             Some(FallbackProviderToml {
                 chain: Vec::new(),
                 provider: Some("openai-mini".to_string()),
+                max_retries: None,
             })
         );
         assert_eq!(
@@ -196,6 +203,17 @@ critical_threshold = 0.85
         let fb = p.fallback_provider.expect("section present");
         assert_eq!(fb.chain, vec!["openai", "gemini"]);
         assert_eq!(fb.resolved_chain(), vec!["openai", "gemini"]);
+        // Unset `max_retries` keeps the built-in default downstream.
+        assert_eq!(fb.max_retries, None);
+    }
+
+    #[test]
+    fn fallback_provider_parses_max_retries() {
+        let p: Probe =
+            toml::from_str("[fallback_provider]\nchain = [\"openai\"]\nmax_retries = 6\n")
+                .expect("toml parses");
+        let fb = p.fallback_provider.expect("section present");
+        assert_eq!(fb.max_retries, Some(6));
     }
 
     #[test]
@@ -204,6 +222,7 @@ critical_threshold = 0.85
         let legacy = FallbackProviderToml {
             chain: Vec::new(),
             provider: Some("openai".to_string()),
+            max_retries: None,
         };
         assert_eq!(legacy.resolved_chain(), vec!["openai"]);
 
@@ -211,6 +230,7 @@ critical_threshold = 0.85
         let both = FallbackProviderToml {
             chain: vec!["openai".to_string(), "gemini".to_string()],
             provider: Some("openai".to_string()),
+            max_retries: None,
         };
         assert_eq!(both.resolved_chain(), vec!["openai", "gemini"]);
     }
