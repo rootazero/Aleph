@@ -21,6 +21,7 @@
 //! - `fs.home_dir`                 → `{ path }`
 //! - `fs.list_dir { path, show_hidden? }` → `{ path, parent?, entries: [{ name, path, is_dir }] }`
 //! - `fs.create_dir { parent, name }`     → `{ path }`
+//! - `fs.read_file { path }`               → `{ path, content, truncated }`
 //!
 //! All read paths are absolute, canonicalised, and stripped of symlinks
 //! before being handed back to the client.
@@ -47,6 +48,11 @@ const INTERNAL_ERROR: i32 = -32603;
 /// `node_modules`) would otherwise drag the panel into a slow JSON parse
 /// — at 5000 dirs the UX is already "you should narrow down first."
 const LIST_DIR_CAP: usize = 5000;
+
+/// Maximum bytes returned by `fs.read_file`. Beyond this the content is
+/// truncated and `truncated: true` is set — the preview pane is for
+/// reading, not for hauling multi-MB blobs over JSON-RPC.
+const READ_FILE_CAP: usize = 512 * 1024;
 
 /// Expand a single user-supplied root string into a real, canonical
 /// directory. `~` and `~/foo` are resolved against `dirs::home_dir()`;
@@ -320,6 +326,80 @@ pub async fn handle_create_dir(request: JsonRpcRequest, config: SharedConfig) ->
     JsonRpcResponse::success(request.id, json!({ "path": canon.to_string_lossy() }))
 }
 
+// ─── fs.read_file ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct ReadFileParams {
+    path: String,
+}
+
+pub async fn handle_read_file(request: JsonRpcRequest, config: SharedConfig) -> JsonRpcResponse {
+    let params: ReadFileParams = match request
+        .params
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+    {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return JsonRpcResponse::error(request.id, INVALID_PARAMS, "params required");
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("invalid params: {e}"),
+            );
+        }
+    };
+
+    let roots = resolve_roots(&*config.read().await);
+    if roots.is_empty() {
+        return JsonRpcResponse::error(
+            request.id,
+            OUT_OF_SCOPE,
+            "no allowed_roots configured — file reading is disabled",
+        );
+    }
+
+    let candidate = PathBuf::from(&params.path);
+    let canon = match validate_in_scope(&candidate, &roots) {
+        Ok(p) => p,
+        Err(msg) => return JsonRpcResponse::error(request.id, OUT_OF_SCOPE, &msg),
+    };
+
+    let bytes = match std::fs::read(&canon) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return JsonRpcResponse::error(
+                request.id,
+                NOT_FOUND,
+                format!("not found: {}", canon.display()),
+            );
+        }
+        Err(e) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INTERNAL_ERROR,
+                format!("read failed: {e}"),
+            );
+        }
+    };
+
+    let truncated = bytes.len() > READ_FILE_CAP;
+    let slice = if truncated { &bytes[..READ_FILE_CAP] } else { &bytes[..] };
+    let content = String::from_utf8_lossy(slice).into_owned();
+
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "path": canon.to_string_lossy(),
+            "content": content,
+            "truncated": truncated,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,5 +596,36 @@ mod tests {
             PathBuf::from(&path).is_dir(),
             "home dir should exist: {path}"
         );
+    }
+
+    #[tokio::test]
+    async fn read_file_returns_content_in_scope() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path().to_path_buf();
+        let file_path = root.join("hello.txt");
+        std::fs::write(&file_path, "hi there").unwrap();
+
+        let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
+        let r = req("fs.read_file", json!({ "path": file_path.to_string_lossy() }));
+        let resp = handle_read_file(r, cfg).await;
+        let result = resp.result.expect("expected success");
+        assert_eq!(result["content"], "hi there");
+        assert_eq!(result["truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn read_file_rejects_out_of_scope() {
+        let tmp = TempDir::new().unwrap();
+        let scope = tmp.path().join("scope");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&scope).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        let outside_file = outside.join("not-in-root.txt");
+        std::fs::write(&outside_file, "secret").unwrap();
+
+        let cfg = cfg_with_roots(vec![scope.to_string_lossy().to_string()]);
+        let r = req("fs.read_file", json!({ "path": outside_file.to_string_lossy() }));
+        let resp = handle_read_file(r, cfg).await;
+        assert!(resp.error.is_some(), "expected error for out-of-scope path");
     }
 }

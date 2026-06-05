@@ -151,6 +151,7 @@ pub(in crate::commands::start) fn register_fs_handlers(
         fs_handlers::handle_create_dir,
         config
     );
+    register_handler!(server, "fs.read_file", fs_handlers::handle_read_file, config);
 
     if !daemon {
         println!("Filesystem-browse methods (scoped by [projects].allowed_roots):");
@@ -158,6 +159,7 @@ pub(in crate::commands::start) fn register_fs_handlers(
         println!("  - fs.home_dir      : Server's $HOME (for default start path)");
         println!("  - fs.list_dir      : List subdirectories + files at a path");
         println!("  - fs.create_dir    : Create a subdirectory inside an allowed root");
+        println!("  - fs.read_file     : Read a file's text content (size-capped)");
         println!();
     }
 }
