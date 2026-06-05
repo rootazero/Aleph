@@ -655,6 +655,18 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     trace_sink
                 };
 
+            // Forward the harness trace stream to this run's WebSocket as
+            // `agent_trace` notifications so the WebChat Panel can segment the
+            // chat per Think→Act step and populate the workspace timeline.
+            // Outermost wrap: it sees every event and forwards to the inner
+            // (persistence + scratchpad) sink unchanged.
+            let trace_sink: Arc<dyn crate::harness::TraceSink> =
+                Arc::new(super::AgentTraceEmitSink::new(
+                    trace_sink,
+                    emitter.clone() as Arc<dyn crate::gateway::event_emitter::EventEmitter>,
+                    run_id.to_string(),
+                ));
+
             // SubagentTool construction
             let subagent_tool = {
                 use crate::agents::background_tracker::BackgroundAgentTracker;

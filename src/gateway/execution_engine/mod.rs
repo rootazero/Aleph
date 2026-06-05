@@ -9,6 +9,7 @@
 //! - `simple` - `SimpleExecutionEngine` for when providers/tools are not available
 
 mod adapter;
+mod agent_trace_emit_sink;
 mod callback;
 mod deadline;
 mod engine;
@@ -32,6 +33,8 @@ mod trace_sink_adapter;
 #[cfg(test)]
 mod tests;
 
+#[allow(unused_imports)] // wired into run_loop.rs in this commit
+pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
 pub use engine::ExecutionEngine;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
