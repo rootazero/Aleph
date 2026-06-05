@@ -325,7 +325,7 @@ fn classify_rate_limit(raw: &str) -> RetryVerdict {
 /// explicitly asked the client to "try again" (the failure that crashed
 /// scheduled jobs on 2026-05-29). Callers must check `account_patterns` first
 /// so genuine quota limits stay Fatal.
-fn is_transient_overload(msg_lower: &str) -> bool {
+pub fn is_transient_overload(msg_lower: &str) -> bool {
     msg_lower.contains("overloaded")
         || msg_lower.contains("529")
         || msg_lower.contains("please wait a moment")

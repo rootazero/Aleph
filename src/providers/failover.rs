@@ -43,7 +43,9 @@ use crate::config::types::{LoadBalanceStrategy, RouteMode};
 use crate::error::{AlephError, ErrorClass, Result};
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::capability_gate::{retain_capable_models, RequestRequirements};
-use crate::providers::llm_retry::{classify, classify_exhausted, RetryVerdict};
+use crate::providers::llm_retry::{
+    backoff_delay, classify, classify_exhausted, is_transient_overload, RetryVerdict,
+};
 use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::{
@@ -60,6 +62,20 @@ const CIRCUIT_OPEN_THRESHOLD: u32 = 3;
 const MAX_COOLDOWN: Duration = Duration::from_secs(600);
 /// Backoff used for a bare transient error whose message carried no delay hint.
 const DEFAULT_TRANSIENT_DELAY: Duration = Duration::from_millis(300);
+/// Ceiling on a single in-place retry wait. Matches `llm_retry`'s backoff cap
+/// (`MAX_DELAY`) so the failover loop and the standalone `retry_async` helper
+/// grow their backoff identically.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+/// In-place retry budget for a *transient server overload* — a 429 whose body
+/// says "please wait a moment and try again", or a 529 `overloaded`. Deeper
+/// than [`FailoverConfig::max_retries`] because in a single-provider setup
+/// there is no sibling to fail over to, and the server explicitly asked the
+/// client to wait and retry: a flat 2-retry budget gave up after ~4s and
+/// hard-failed the whole flow (the 08:00 scheduled job's 429 crash). With the
+/// exponential backoff applied in `process()` this rides out a throttle for up
+/// to ~60s (2+4+8+16+30) before advancing the chain. A genuine account/quota
+/// 429 stays `Fatal` upstream and never reaches this budget.
+const OVERLOAD_RETRY_BUDGET: u32 = 5;
 
 // =============================================================================
 // Configuration
@@ -223,7 +239,23 @@ fn decide(err: &AlephError, attempt: u32, max_retries: u32) -> Decision {
         RetryVerdict::Retry { delay } => Some(delay),
         _ => None,
     };
-    let can_retry = attempt < max_retries;
+    // A transient *server overload* (429 "please wait a moment", 529) earns a
+    // deeper in-place retry budget than the cross-provider `max_retries`: the
+    // server told us to wait, and a single-provider setup has no sibling to
+    // advance to. Plain network blips keep the shallow budget — there a sibling
+    // provider is the better next bet than hammering a flaky socket. The wait
+    // grows exponentially (capped at `MAX_RETRY_DELAY`) per attempt in
+    // `process()`.
+    // `transient_delay.is_some()` gates out account/quota 429s: `classify`
+    // returns `Fatal` (not `Retry`) for an account-scoped limit even when its
+    // body says "please wait a moment", so they keep the shallow budget and are
+    // never hammered in place.
+    let retry_budget = if transient_delay.is_some() && is_transient_overload(&lower) {
+        max_retries.max(OVERLOAD_RETRY_BUDGET)
+    } else {
+        max_retries
+    };
+    let can_retry = attempt < retry_budget;
 
     // When the walk advances providers, tag *why*: a permanent credential
     // failure sheds the provider immediately; everything else is transient.
@@ -748,12 +780,18 @@ impl AiProvider for FailoverProvider {
                             }
                             Err(e) => match decide(&e, attempt, self.config.max_retries) {
                                 Decision::RetrySame(delay) => {
-                                    // D3: jitter the backoff so concurrent agents
-                                    // hitting the same overloaded provider don't
-                                    // retry in lockstep and reignite the spike.
-                                    // Equal-jitter shape via `apply_jitter`.
+                                    // Grow the wait exponentially per in-place
+                                    // attempt (capped at MAX_RETRY_DELAY), then
+                                    // jitter. The exponential growth mirrors
+                                    // `llm_retry::retry_async` so a stubborn
+                                    // throttle is ridden out instead of hammered
+                                    // at a flat interval; D3: the jitter keeps
+                                    // concurrent agents hitting the same
+                                    // overloaded provider from retrying in
+                                    // lockstep and reigniting the spike.
+                                    let backed_off = backoff_delay(delay, attempt, MAX_RETRY_DELAY);
                                     let jittered =
-                                        crate::providers::retry::apply_jitter(delay, 0.25);
+                                        crate::providers::retry::apply_jitter(backed_off, 0.25);
                                     tracing::warn!(
                                         provider = %cand.name, model = ?model, attempt,
                                         delay_ms = jittered.as_millis() as u64,
@@ -987,6 +1025,57 @@ mod tests {
         let e = AlephError::provider("connection reset by peer");
         assert!(matches!(decide(&e, 0, 2), Decision::RetrySame(_)));
         assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
+        assert_eq!(
+            decide(&e, 2, 2),
+            Decision::NextProvider(FailureKind::Transient)
+        );
+    }
+
+    #[test]
+    fn decide_transient_overload_429_gets_deep_retry_budget() {
+        // The generic Anthropic server-throttle 429 ("please wait a moment")
+        // must be retried in place well past the shallow `max_retries=2` so a
+        // single-provider setup rides out the spike instead of hard-failing the
+        // flow (the 08:00 scheduled-job 429 crash). It only advances the chain
+        // once OVERLOAD_RETRY_BUDGET is exhausted.
+        let e = AlephError::RateLimitError {
+            message: "Anthropic API rate limited (429): We're receiving too many \
+                      requests at the moment. Please wait a moment and try again."
+                .into(),
+            suggestion: None,
+        };
+        assert!(matches!(decide(&e, 2, 2), Decision::RetrySame(_)));
+        assert!(matches!(
+            decide(&e, OVERLOAD_RETRY_BUDGET - 1, 2),
+            Decision::RetrySame(_)
+        ));
+        assert_eq!(
+            decide(&e, OVERLOAD_RETRY_BUDGET, 2),
+            Decision::NextProvider(FailureKind::Transient)
+        );
+    }
+
+    #[test]
+    fn decide_plain_network_transient_keeps_shallow_budget() {
+        // A bare connection blip is NOT a server-asked-to-wait overload, so it
+        // keeps the shallow `max_retries` budget — a sibling provider is the
+        // better next bet than hammering a flaky socket. Guards the overload
+        // budget from leaking into ordinary transient errors.
+        let e = AlephError::provider("connection reset by peer");
+        assert!(matches!(decide(&e, 1, 2), Decision::RetrySame(_)));
+        assert_eq!(
+            decide(&e, 2, 2),
+            Decision::NextProvider(FailureKind::Transient)
+        );
+    }
+
+    #[test]
+    fn decide_account_quota_429_excluded_from_deep_budget() {
+        // An account/quota 429 classifies `Fatal` upstream, so even though its
+        // body says "please wait a moment" it must NOT be lifted into the deep
+        // overload budget: it advances the chain at `max_retries`, whereas a
+        // genuine transient overload (above) is still `RetrySame` at attempt 2.
+        let e = AlephError::provider("429 account quota exceeded; please wait a moment");
         assert_eq!(
             decide(&e, 2, 2),
             Decision::NextProvider(FailureKind::Transient)
