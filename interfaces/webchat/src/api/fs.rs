@@ -30,6 +30,14 @@ pub struct DirEntry {
     pub is_dir: bool,
 }
 
+/// `fs.read_file` response payload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReadFileResult {
+    pub path: String,
+    pub content: String,
+    pub truncated: bool,
+}
+
 /// `fs.list_dir` response payload.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListDirResult {
@@ -85,6 +93,14 @@ impl FsApi {
         serde_json::from_value(result).map_err(|e| e.to_string())
     }
 
+    /// Read a file's text content (server-side, scoped to allowed_roots).
+    pub async fn read_file(state: &DashboardState, path: &str) -> Result<ReadFileResult, String> {
+        let result = state
+            .rpc_call("fs.read_file", serde_json::json!({ "path": path }))
+            .await?;
+        serde_json::from_value(result).map_err(|e| e.to_string())
+    }
+
     /// Create a fresh subdirectory `<parent>/<name>` and return its
     /// canonical absolute path. Server enforces: `parent` in scope, name
     /// has no separators / not '.'/'..', target doesn't already exist.
@@ -104,5 +120,19 @@ impl FsApi {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .ok_or_else(|| "missing path in response".to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_file_result_round_trips() {
+        let v = serde_json::json!({ "path": "/a", "content": "x", "truncated": false });
+        let r: ReadFileResult = serde_json::from_value(v).unwrap();
+        assert_eq!(r.path, "/a");
+        assert_eq!(r.content, "x");
+        assert!(!r.truncated);
     }
 }
