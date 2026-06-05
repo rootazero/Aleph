@@ -42,7 +42,8 @@ impl PromptLayer for GuidelinesLayer {
         output.push_str("10. No-repeat rule — before issuing a tool call, scan THIS turn's tool_results for an identical (tool_name, arguments) pair; if you already have the answer in context, use it directly instead of re-calling. The harness will short-circuit duplicates anyway, so re-issuing wastes a turn\n");
         output.push_str("11. Aggregate before iterating — for \"count lines / files / bytes in directory\" use `file_ops` operation `stats` (one call returns per-file + total); do NOT loop over `file_read` to count\n");
         output.push_str("12. Goal vs method — the goal (e.g. \"get latest news on X\", \"summarize page Y\") is independent of any specific tool or source. When one source is blocked, refocus on the goal and pick another method that achieves it; do not mistake a method failure for a goal failure.\n");
-        output.push_str("13. Web/external-data fallback ladder — when one route to online content fails, escalate in order: (a) refine the `search` query (different keywords, narrower/broader scope, different engine if multiple are configured); (b) `web_fetch` a known canonical URL of the same resource; (c) `web_fetch` an alternate reputable source (BBC, AP, NYT, Wikipedia, Reuters mirrors, government feeds, etc.); (d) browser-based tools (chrome-devtools MCP, playwright, or the `autocli` skill) for sites that gate API/headless access. At least TWO rungs of this ladder must have been attempted before `fail` is justified.\n\n");
+        output.push_str("13. Web/external-data fallback ladder — when one route to online content fails, escalate in order: (a) refine the `search` query (different keywords, narrower/broader scope, different engine if multiple are configured); (b) `web_fetch` a known canonical URL of the same resource; (c) `web_fetch` an alternate reputable source (BBC, AP, NYT, Wikipedia, Reuters mirrors, government feeds, etc.); (d) browser-based tools (chrome-devtools MCP, playwright, or the `autocli` skill) for sites that gate API/headless access. At least TWO rungs of this ladder must have been attempted before `fail` is justified.\n");
+        output.push_str("14. Delegate heavy research to protect your own context — when a task needs many searches and page-fetches across multiple sources (multi-source research, surveys, \"gather/analyze everything about X\", long report-writing), running them all in your own loop piles every raw page into your context and starves the final synthesis (the longer your context, the worse your writing and the higher the risk of a turn timeout). Fan out instead: call the `subagent` tool with `batch_tasks` to run independent research threads in parallel; each sub-agent does its own searching/fetching and returns only a distilled digest, so your main context holds digests — not raw pages — when you write the answer.\n\n");
     }
 }
 
@@ -82,6 +83,10 @@ mod tests {
         assert!(out.contains("Goal vs method"));
         assert!(out.contains("fallback ladder"));
         assert!(out.contains("chrome-devtools"));
+        // Rule 14: delegate heavy multi-source research to parallel sub-agents
+        // that return digests, so the main context stays lean for synthesis.
+        assert!(out.contains("Delegate heavy research"));
+        assert!(out.contains("batch_tasks"));
     }
 
     #[test]
