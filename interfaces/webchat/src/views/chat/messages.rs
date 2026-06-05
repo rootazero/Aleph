@@ -304,7 +304,7 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                     let run_for_click = run_id_for_chips.clone();
                     let on_click = move |_ev: web_sys::MouseEvent| {
                         if let Some(ws) = workspace {
-                            ws.show_tool(run_for_click.clone(), tool_id.clone());
+                            ws.focus_tool_row(run_for_click.clone(), tool_id.clone());
                         }
                     };
                     let clickable = workspace.is_some();

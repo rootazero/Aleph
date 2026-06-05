@@ -28,7 +28,7 @@ use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::components::tool_renderer::ToolRendererRegistry;
 use crate::context::{DashboardContext, DashboardState};
 use crate::state::hotkey::{self as hotkey, HotkeyState};
-use crate::state::layout::{LayoutMode, WorkspaceContent, WorkspaceState};
+use crate::state::layout::{LayoutMode, WorkspaceState};
 use crate::state::notifications::NotificationsState;
 use crate::state::sessions::SessionMap;
 use crate::views::chat::ChatState;
@@ -282,12 +282,12 @@ fn ChatBandChrome() -> impl IntoView {
                 >
                     <span>{move || t_string!(i18n, common.workspace_title).to_string()}</span>
                     <span class="text-text-tertiary/60">
-                        {move || match workspace.content.get() {
-                            WorkspaceContent::Empty => {
-                                t_string!(i18n, common.workspace_state_idle).to_string()
-                            }
-                            WorkspaceContent::ToolDetail { .. } => {
+                        {move || {
+                            let n = workspace.unseen_activity.get();
+                            if n > 0 {
                                 t_string!(i18n, common.workspace_state_tool).to_string()
+                            } else {
+                                t_string!(i18n, common.workspace_state_idle).to_string()
                             }
                         }}
                     </span>
