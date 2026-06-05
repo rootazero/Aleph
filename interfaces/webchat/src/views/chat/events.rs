@@ -80,8 +80,13 @@ pub fn subscribe_run_events(
                 let Some(trace_event) = data.get("event") else {
                     return;
                 };
+                // The harness serializes `LoopTraceEvent` with `#[serde(tag =
+                // "type")]`, so the discriminator arrives as `type`. The
+                // protocol `AgentTraceEvent` form tags it `kind`; accept either
+                // so both wire shapes parse.
                 let kind = trace_event
-                    .get("kind")
+                    .get("type")
+                    .or_else(|| trace_event.get("kind"))
                     .and_then(|k| k.as_str())
                     .unwrap_or("");
 
