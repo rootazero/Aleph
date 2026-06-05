@@ -1,31 +1,50 @@
 //! Workspace pane — the right-side surface that opens when
 //! [`LayoutMode::Split`] is active.
 //!
-//! Decides what to render based on [`WorkspaceContent`]:
-//!
-//! - `Empty`     — hero placeholder
-//! - `ToolDetail` — looks the tool entry up in `ChatState.messages` and
-//!   dispatches it through the [`ToolRendererRegistry`]
-//!
-//! Mount is conditional in `app.rs`: only when chat mode is active AND
-//! `LayoutMode::Split` is set, the panel slides in as a flex sibling of
-//! the chat surface.
+//! Renders an **activity timeline**: every tool call in the current
+//! session, derived reactively from `ChatState.messages` +
+//! `WorkspaceState.tool_payloads`. Rows expand inline to show args/result
+//! (file-touching tools therefore reveal their content/diff in place).
+//! When no tools have run yet, shows a hero placeholder.
 
 use crate::components::json_viewer::JsonViewer;
-use crate::components::tool_renderer::ToolRendererRegistry;
 use crate::i18n::*;
-use crate::state::layout::{LayoutMode, ToolPayload, WorkspaceContent, WorkspaceState};
-use crate::views::chat::state::{ChatState, ToolCallEntry};
+use crate::state::layout::{LayoutMode, ToolPayload, WorkspaceState};
+use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 
+/// Flatten all tool calls across assistant messages into ordered
+/// `(run_id, tool_id, tool_name)` rows. The message id is
+/// `"assistant-{run_id}"`; strip the prefix to recover the run id used as
+/// the `tool_payloads` key.
+fn timeline_rows(chat: &ChatState) -> Vec<(String, String, String)> {
+    chat.messages
+        .get()
+        .iter()
+        .flat_map(|m| {
+            let run = m.id.strip_prefix("assistant-").unwrap_or(&m.id).to_string();
+            m.tool_calls
+                .iter()
+                .map(move |t| (run.clone(), t.tool_id.clone(), t.tool_name.clone()))
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+/// Best-effort path extraction for a file-touching tool, so the row can
+/// show a `📄 path` header. Defensive: tries the known path-bearing arg
+/// keys and returns `None` for non-file tools (which then render plain).
+fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
+    let args = payload.as_ref()?.args.as_ref()?;
+    for key in ["path", "file_path", "filename"] {
+        if let Some(s) = args.get(key).and_then(|v| v.as_str()) {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
 /// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
-///
-/// The "WORKSPACE · idle / tool / notes" title row that used to live in
-/// a local `WorkspaceHeader` has moved up into the global
-/// `aleph-main-drag-band` (see `app.rs` → `ChatBandChrome`) so the label
-/// sits on the same y-baseline as the macOS traffic lights and the
-/// other chrome glyphs. The pane itself now starts directly with the
-/// scrollable body.
 #[component]
 pub fn WorkspacePanel() -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
@@ -36,26 +55,117 @@ pub fn WorkspacePanel() -> impl IntoView {
                            border-l border-border bg-surface-base/40
                            min-w-[280px] basis-[66%] shrink overflow-hidden">
                 <div class="flex-1 overflow-y-auto px-4 py-3">
-                    <WorkspaceBody />
+                    <ActivityTimeline />
                 </div>
             </aside>
         </Show>
     }
 }
 
+/// The reactive activity timeline.
 #[component]
-fn WorkspaceBody() -> impl IntoView {
-    let workspace = expect_context::<WorkspaceState>();
-    move || match workspace.content.get() {
-        WorkspaceContent::Empty => view! { <WorkspaceEmptyHero /> }.into_any(),
-        WorkspaceContent::ToolDetail { run_id, tool_id } => view! {
-            <ToolDetailView run_id=run_id tool_id=tool_id />
+fn ActivityTimeline() -> impl IntoView {
+    let chat = expect_context::<ChatState>();
+    let rows = Memo::new(move |_| timeline_rows(&chat));
+
+    move || {
+        let data = rows.get();
+        if data.is_empty() {
+            view! { <WorkspaceEmptyHero /> }.into_any()
+        } else {
+            view! {
+                <div class="flex flex-col gap-2">
+                    {data
+                        .into_iter()
+                        .map(|(run_id, tool_id, tool_name)| {
+                            view! {
+                                <ActivityRow
+                                    run_id=run_id
+                                    tool_id=tool_id
+                                    tool_name=tool_name
+                                />
+                            }
+                        })
+                        .collect_view()}
+                </div>
+            }
+            .into_any()
         }
-        .into_any(),
     }
 }
 
-/// Idle placeholder — invites the user to click a tool chip.
+/// One tool-call row. Click the header to expand args/result inline.
+#[component]
+fn ActivityRow(run_id: String, tool_id: String, tool_name: String) -> impl IntoView {
+    let workspace = expect_context::<WorkspaceState>();
+    let chat = expect_context::<ChatState>();
+
+    let tid_for_toggle = tool_id.clone();
+    let tid_for_expanded = tool_id.clone();
+    let tid_for_status = tool_id.clone();
+    let run_for_payload = run_id.clone();
+    let tid_for_payload = tool_id.clone();
+
+    // Status + duration are looked up live from ChatState so a "running"
+    // row flips to "completed" without re-deriving the whole timeline.
+    let status = Memo::new(move |_| {
+        chat.messages.get().iter().flat_map(|m| m.tool_calls.clone()).find_map(|t| {
+            if t.tool_id == tid_for_status {
+                Some((t.status.clone(), t.duration_ms))
+            } else {
+                None
+            }
+        })
+    });
+
+    let payload = Memo::new(move |_| workspace.get_tool_payload(&run_for_payload, &tid_for_payload));
+    let expanded = Memo::new(move |_| workspace.is_event_expanded(&tid_for_expanded));
+
+    let path_label = move || file_path_of(&payload.get());
+
+    view! {
+        <div class="rounded-md border border-border/60 bg-surface-sunken/40">
+            <button
+                type="button"
+                class="w-full flex items-center gap-2 px-3 py-2 text-left
+                       hover:bg-surface-raised/40 transition-colors"
+                on:click=move |_| workspace.toggle_event(&tid_for_toggle)
+            >
+                <span class="text-xs font-mono text-text-secondary">{tool_name.clone()}</span>
+                {move || {
+                    match status.get() {
+                        Some((s, dur)) => {
+                            let dur_txt = dur.map(|d| format!(" · {d}ms")).unwrap_or_default();
+                            view! {
+                                <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
+                                    {format!("{s}{dur_txt}")}
+                                </span>
+                            }
+                            .into_any()
+                        }
+                        None => view! { <span /> }.into_any(),
+                    }
+                }}
+                {move || match path_label() {
+                    Some(p) => view! {
+                        <span class="ml-auto text-[11px] font-mono text-text-tertiary truncate max-w-[50%]">
+                            {format!("📄 {p}")}
+                        </span>
+                    }
+                    .into_any(),
+                    None => view! { <span class="ml-auto" /> }.into_any(),
+                }}
+            </button>
+            <Show when=move || expanded.get()>
+                <div class="px-3 pb-2">
+                    <PayloadBlock payload=payload.get() />
+                </div>
+            </Show>
+        </div>
+    }
+}
+
+/// Idle placeholder — shown until the first tool call of the session.
 #[component]
 fn WorkspaceEmptyHero() -> impl IntoView {
     let i18n = use_i18n();
@@ -79,56 +189,8 @@ fn WorkspaceEmptyHero() -> impl IntoView {
     }
 }
 
-/// Look the tool entry up in `ChatState.messages` and dispatch through
-/// the renderer registry. Falls back to a "not found" notice if the
-/// referenced run / tool_id has been evicted (e.g. user cleared chat).
-#[component]
-fn ToolDetailView(run_id: String, tool_id: String) -> impl IntoView {
-    let i18n = use_i18n();
-    let chat = expect_context::<ChatState>();
-    let workspace = expect_context::<WorkspaceState>();
-    let registry = expect_context::<ToolRendererRegistry>();
-    let run_id_for_entry = run_id.clone();
-    let tool_id_for_entry = tool_id.clone();
-    let run_id_for_payload = run_id.clone();
-    let tool_id_for_payload = tool_id.clone();
-
-    let entry = Memo::new(move |_| find_tool_entry(&chat, &run_id_for_entry, &tool_id_for_entry));
-    let payload =
-        Memo::new(move |_| workspace.get_tool_payload(&run_id_for_payload, &tool_id_for_payload));
-
-    let run_id_for_missing = run_id.clone();
-    let tool_id_for_missing = tool_id.clone();
-    move || match entry.get() {
-        Some(e) => view! {
-            <div class="flex flex-col gap-3">
-                {registry.render(&e)}
-                <PayloadBlock payload=payload.get() />
-            </div>
-        }
-        .into_any(),
-        None => view! {
-            <div class="flex flex-col gap-2 text-sm text-text-tertiary">
-                <p>{t!(i18n, common.workspace_tool_evicted)}</p>
-                <p class="text-xs">
-                    "run: " <code class="font-mono">{run_id_for_missing.clone()}</code>
-                </p>
-                <p class="text-xs">
-                    "tool: " <code class="font-mono">{tool_id_for_missing.clone()}</code>
-                </p>
-            </div>
-        }
-        .into_any(),
-    }
-}
-
-/// Args + result hierarchical viewer for a tool call. Hidden entirely
-/// when the payload hasn't been captured yet (no flicker between
-/// renderer chip and pending payload).
-///
-/// Renders through [`JsonViewer`] for collapsible / type-coloured /
-/// per-node copy UX. Was previously a flat `<pre>{pretty_json(...)}</pre>`
-/// dump; see Round-2 panel refactor.
+/// Args + result hierarchical viewer for a tool call. Hidden when the
+/// payload hasn't been captured yet.
 #[component]
 fn PayloadBlock(payload: Option<ToolPayload>) -> impl IntoView {
     let Some(p) = payload else {
@@ -163,28 +225,10 @@ fn PayloadBlock(payload: Option<ToolPayload>) -> impl IntoView {
     .into_any()
 }
 
-/// Reactive lookup against `ChatState.messages`. The assistant message
-/// for a run is named `assistant-{run_id}`, but for resilience we
-/// fall-through and scan all messages if the canonical id is absent.
-fn find_tool_entry(chat: &ChatState, run_id: &str, tool_id: &str) -> Option<ToolCallEntry> {
-    let messages = chat.messages.get();
-    let canonical_id = format!("assistant-{run_id}");
-    if let Some(msg) = messages.iter().find(|m| m.id == canonical_id) {
-        if let Some(found) = msg.tool_calls.iter().find(|t| t.tool_id == tool_id) {
-            return Some(found.clone());
-        }
-    }
-    messages
-        .iter()
-        .flat_map(|m| m.tool_calls.iter())
-        .find(|t| t.tool_id == tool_id)
-        .cloned()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::views::chat::state::ChatMessage;
+    use crate::views::chat::state::{ChatMessage, ToolCallEntry};
 
     fn msg_with_tools(id: &str, tools: Vec<ToolCallEntry>) -> ChatMessage {
         ChatMessage {
@@ -209,46 +253,19 @@ mod tests {
         }
     }
 
-    /// The canonical `assistant-{run_id}` message must win even when an
-    /// identical `tool_id` lives in an earlier message — the lookup keys
-    /// off the run, not document order.
     #[test]
-    fn find_tool_entry_prefers_canonical_run_over_scan_order() {
+    fn timeline_rows_flatten_in_document_order_with_run_ids() {
         let owner = Owner::new();
         owner.set();
         let chat = ChatState::new();
         chat.messages.set(vec![
-            // Decoy: same tool_id, earlier in scan order, different run.
-            msg_with_tools("assistant-run2", vec![tool("t1", "DECOY")]),
-            // Canonical target for run1, deliberately placed second.
-            msg_with_tools("assistant-run1", vec![tool("t1", "search")]),
+            msg_with_tools("assistant-runA", vec![tool("t1", "read_file"), tool("t2", "search")]),
+            msg_with_tools("assistant-runB", vec![tool("t3", "write_file")]),
         ]);
-        let found = find_tool_entry(&chat, "run1", "t1").expect("entry present");
-        assert_eq!(found.tool_name, "search");
-    }
-
-    /// When no `assistant-{run_id}` message exists (e.g. history-loaded
-    /// rows with synthetic ids), the global scan still resolves the tool.
-    #[test]
-    fn find_tool_entry_falls_back_to_global_scan() {
-        let owner = Owner::new();
-        owner.set();
-        let chat = ChatState::new();
-        chat.messages
-            .set(vec![msg_with_tools("hist-7", vec![tool("t9", "fetch")])]);
-        let found = find_tool_entry(&chat, "missing-run", "t9").expect("fallback finds it");
-        assert_eq!(found.tool_name, "fetch");
-    }
-
-    #[test]
-    fn find_tool_entry_returns_none_when_absent() {
-        let owner = Owner::new();
-        owner.set();
-        let chat = ChatState::new();
-        chat.messages.set(vec![msg_with_tools(
-            "assistant-run1",
-            vec![tool("t1", "search")],
-        )]);
-        assert!(find_tool_entry(&chat, "run1", "nope").is_none());
+        let rows = timeline_rows(&chat);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0], ("runA".to_string(), "t1".to_string(), "read_file".to_string()));
+        assert_eq!(rows[1], ("runA".to_string(), "t2".to_string(), "search".to_string()));
+        assert_eq!(rows[2], ("runB".to_string(), "t3".to_string(), "write_file".to_string()));
     }
 }
