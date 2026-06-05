@@ -182,10 +182,7 @@ fn begin(
     // `record_start` that would race the first.
     state.set(RecState::Starting);
     spawn_local(async move {
-        match dash
-            .rpc_call("voice.record_start", serde_json::json!({}))
-            .await
-        {
+        match dash.rpc_call("voice.record_start", serde_json::json!({})).await {
             Ok(_) => {
                 handle.borrow_mut().native = true;
                 state.set(RecState::Recording);
@@ -322,10 +319,7 @@ fn finish(
         let handle = handle.clone();
         spawn_local(async move {
             handle.borrow_mut().native = false;
-            match dash
-                .rpc_call("voice.record_stop", serde_json::json!({}))
-                .await
-            {
+            match dash.rpc_call("voice.record_stop", serde_json::json!({})).await {
                 Ok(val) => {
                     let base64 = val
                         .get("audio_base64")
@@ -365,8 +359,7 @@ fn finish(
 #[component]
 pub(super) fn VoiceInputButton(
     /// Disable while a message send is in flight.
-    #[prop(into)]
-    disabled: Signal<bool>,
+    #[prop(into)] disabled: Signal<bool>,
 ) -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
     let chat = expect_context::<ChatState>();

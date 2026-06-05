@@ -13,11 +13,11 @@ mod queue_bar;
 mod voice;
 
 use attachments::{read_file_list_into, AttachmentPreviewBar};
+use queue_bar::QueuedPromptBar;
 use palette::{
     build_palette_entries, parse_command_info, CommandInfo, PaletteEntry, PaletteLabels,
     SlashPaletteView,
 };
-use queue_bar::QueuedPromptBar;
 
 use super::project_menu::ProjectMenu;
 use super::state::{ChatSendError, ChatSendErrorCode, ChatState, QueuedPrompt};
@@ -425,8 +425,9 @@ pub(super) fn InputArea() -> impl IntoView {
     // Draft is non-empty (text or attachments) — gates the queue button while
     // a run is active. Independent of `is_sending` (that's the brief outbound
     // HTTP window, not the whole run).
-    let has_draft =
-        Memo::new(move |_| !input_text.get().trim().is_empty() || !attachments.get().is_empty());
+    let has_draft = Memo::new(move |_| {
+        !input_text.get().trim().is_empty() || !attachments.get().is_empty()
+    });
 
     let on_attach_click = move |_: web_sys::MouseEvent| {
         if let Some(input) = file_input_ref.get() {

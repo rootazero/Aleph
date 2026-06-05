@@ -41,7 +41,7 @@ pub fn StatusBadge(level: AlertLevel, #[prop(optional)] count: Option<u32>) -> i
                 #[allow(clippy::unused_unit)]
                 let _: () = view! {};
                 ().into_any()
-            };
+            }
         }
         AlertLevel::Info => ("bg-info", ""),
         AlertLevel::Warning => ("bg-warning", ""),

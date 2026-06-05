@@ -50,7 +50,8 @@ pub(super) fn QueuedPromptBar(queue: RwSignal<Vec<QueuedPrompt>>) -> impl IntoVi
     // which reads the `<`/`>` as HTML tags. Keeping the angle brackets in plain
     // Rust here avoids that.
     let enumerated = move || {
-        let items: Vec<(usize, QueuedPrompt)> = queue.get().into_iter().enumerate().collect();
+        let items: Vec<(usize, QueuedPrompt)> =
+            queue.get().into_iter().enumerate().collect();
         items
     };
 
