@@ -74,6 +74,7 @@ pub(super) fn build_provider_config_for_persistence(
         timeout_seconds: params.timeout_seconds.unwrap_or(300),
         enabled: params.enabled,
         max_tokens: params.max_tokens,
+        context_window: None,
         temperature: params.temperature,
         top_p: params.top_p,
         top_k: params.top_k,

@@ -220,7 +220,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         verifier_chain,
         // H2: opt-in mid-run context compaction. `None` (section absent /
         // disabled) keeps the previous behavior — no compaction.
-        context_budget_config: build_context_budget_config(config),
+        context_budget_config: build_context_budget_config(config, primary_provider_key),
         skill_system: Some(alephcore::skill::shared_skill_system().clone()),
         // Stage 7 (#12) wiring placeholders — PHASE-6 will load these from
         // aleph.toml. Path is now plumbed end-to-end; defaults stay None
