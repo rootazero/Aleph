@@ -330,9 +330,11 @@ mod tests {
         ws.note_activity();
         ws.note_activity();
         assert_eq!(ws.unseen_activity.get_untracked(), 2);
-        ws.set_layout(LayoutMode::Split);
-        assert_eq!(ws.unseen_activity.get_untracked(), 0);
+        // In Split, activity does not accrue. Set the `mode` signal
+        // directly — set_layout() would hit web_sys::window(), which
+        // panics on the non-wasm test host (same reason new() is avoided).
+        ws.mode.set(LayoutMode::Split);
         ws.note_activity();
-        assert_eq!(ws.unseen_activity.get_untracked(), 0);
+        assert_eq!(ws.unseen_activity.get_untracked(), 2);
     }
 }
