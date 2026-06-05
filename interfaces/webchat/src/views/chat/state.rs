@@ -139,6 +139,12 @@ pub struct ChatMessage {
     /// they deserialize to `None` and simply render without a clock/separator.
     #[serde(default)]
     pub timestamp: Option<i64>,
+    /// Think→Act iteration this bubble belongs to, stamped from
+    /// `agent_trace.turn_started`. `None` for user messages, the pre-turn
+    /// placeholder, and legacy/hydrated history rows. Drives left-chat
+    /// segmentation and the `(run_id, iteration)` cross-highlight key.
+    #[serde(default)]
+    pub iteration: Option<usize>,
 }
 
 /// Minimal tool call record for display.
@@ -352,6 +358,7 @@ impl ChatState {
                 error: None,
                 model_info: None,
                 timestamp: Some(super::timeline::now_millis()),
+                iteration: None,
             });
         });
         self.error_message.set(None);
@@ -371,6 +378,7 @@ impl ChatState {
                 error: None,
                 model_info: None,
                 timestamp: Some(super::timeline::now_millis()),
+                iteration: None,
             });
         });
         self.active_run_id.set(Some(run_id.to_string()));
@@ -408,9 +416,66 @@ impl ChatState {
                 error: None,
                 model_info: None,
                 timestamp: Some(super::timeline::now_millis()),
+                iteration: None,
             });
         });
         self.phase.set(ChatPhase::Thinking);
+    }
+
+    /// Begin a new agent step (Think→Act iteration) for `run_id`.
+    ///
+    /// Driven by `agent_trace.turn_started`. If the current
+    /// `assistant-{run_id}` bubble already carries text or tool calls, it is
+    /// finalized as a standalone intermediate step and a fresh streaming
+    /// bubble tagged with `iteration` is started. An empty placeholder (the
+    /// one created on `run_accepted` before the first turn) is reused — just
+    /// stamped with the iteration — to avoid an empty step bubble.
+    pub fn begin_step(&self, run_id: &str, iteration: usize) {
+        let target_id = format!("assistant-{}", run_id);
+        self.messages.update(|msgs| {
+            let len = msgs.len();
+            if let Some(idx) = msgs.iter().rposition(|m| m.id == target_id) {
+                let has_payload = !msgs[idx].content.is_empty() || !msgs[idx].tool_calls.is_empty();
+                if has_payload {
+                    msgs[idx].is_streaming = false;
+                    msgs[idx].is_intermediate = true;
+                    msgs[idx].id = format!("intermediate-{}-{}", run_id, len);
+                    msgs.push(ChatMessage {
+                        id: target_id,
+                        role: "assistant".into(),
+                        content: String::new(),
+                        tool_calls: vec![],
+                        is_streaming: true,
+                        is_intermediate: false,
+                        error: None,
+                        model_info: None,
+                        iteration: Some(iteration),
+                        timestamp: Some(super::timeline::now_millis()),
+                    });
+                } else {
+                    msgs[idx].iteration = Some(iteration);
+                }
+            }
+        });
+        self.phase.set(ChatPhase::Thinking);
+    }
+
+    /// Set the authoritative text for the bubble of `run_id` at `iteration`,
+    /// overwriting any streamed typewriter preview. Targets the bubble
+    /// carrying the matching iteration tag — the live `assistant-{run_id}`
+    /// bubble or an already-finalized `intermediate-{run_id}-{n}` bubble for
+    /// this run — so late `text_emitted` events still land correctly.
+    pub fn set_step_text(&self, run_id: &str, iteration: usize, text: &str) {
+        let assistant_id = format!("assistant-{}", run_id);
+        let intermediate_prefix = format!("intermediate-{}-", run_id);
+        self.messages.update(|msgs| {
+            if let Some(m) = msgs.iter_mut().rev().find(|m| {
+                m.iteration == Some(iteration)
+                    && (m.id == assistant_id || m.id.starts_with(&intermediate_prefix))
+            }) {
+                m.content = text.to_string();
+            }
+        });
     }
 
     /// Set model info on the current assistant message for the given run.
@@ -606,4 +671,82 @@ pub struct SessionSnapshot {
     pub active_project_name: Option<String>,
     pub selected_model: Option<crate::api::providers::ModelOverride>,
     pub next_msg_id: u64,
+}
+
+#[cfg(test)]
+mod step_tests {
+    use super::*;
+
+    fn assistant_ids(chat: &ChatState) -> Vec<(String, Option<usize>, bool, bool)> {
+        chat.messages.with(|m| {
+            m.iter()
+                .map(|x| (x.id.clone(), x.iteration, x.is_streaming, x.is_intermediate))
+                .collect()
+        })
+    }
+
+    #[test]
+    fn begin_step_reuses_empty_placeholder() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.begin_step("r1", 1);
+
+        let rows = assistant_ids(&chat);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "assistant-r1");
+        assert_eq!(rows[0].1, Some(1));
+        assert!(rows[0].2, "reused placeholder still streaming");
+    }
+
+    #[test]
+    fn begin_step_finalizes_nonempty_and_opens_new() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.begin_step("r1", 1);
+        chat.append_chunk("r1", "step one");
+        chat.begin_step("r1", 2);
+
+        let rows = assistant_ids(&chat);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "intermediate-r1-1");
+        assert_eq!(rows[0].1, Some(1));
+        assert!(!rows[0].2 && rows[0].3, "finalized + intermediate");
+        assert_eq!(rows[1].0, "assistant-r1");
+        assert_eq!(rows[1].1, Some(2));
+        assert!(rows[1].2 && !rows[1].3);
+    }
+
+    #[test]
+    fn set_step_text_overwrites_streamed_preview() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.begin_step("r1", 1);
+        chat.append_chunk("r1", "par");
+        chat.append_chunk("r1", "tial");
+        chat.set_step_text("r1", 1, "authoritative");
+
+        let content = chat.messages.with(|m| m[0].content.clone());
+        assert_eq!(content, "authoritative");
+    }
+
+    #[test]
+    fn set_step_text_targets_finalized_step_by_iteration() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.begin_step("r1", 1);
+        chat.append_chunk("r1", "x");
+        chat.begin_step("r1", 2); // finalizes step 1 as intermediate
+        chat.set_step_text("r1", 1, "late fix");
+
+        let content = chat.messages.with(|m| m[0].content.clone());
+        assert_eq!(content, "late fix");
+    }
 }

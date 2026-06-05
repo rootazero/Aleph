@@ -225,6 +225,7 @@ mod tests {
             error: None,
             model_info: None,
             timestamp: ts,
+            iteration: None,
         }
     }
 

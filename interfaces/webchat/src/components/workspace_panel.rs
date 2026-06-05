@@ -393,6 +393,7 @@ mod tests {
             error: None,
             model_info: None,
             timestamp: None,
+            iteration: None,
         }
     }
 
