@@ -40,6 +40,24 @@ fn wrap_value_with_hook_contexts(value: Value, contexts: &[String]) -> Value {
     Value::String(text)
 }
 
+/// A refused confirmation: the raw approval outcome plus an optional
+/// model-facing hint explaining *why* the denial ledger auto-refused.
+///
+/// The hint is the denial ledger's [`DenialReason::agent_hint`] — the signal
+/// that turns the §否决账本 circuit breaker from a silent auto-deny into an
+/// actionable instruction ("this exact intent is already refused — change
+/// approach" / "escalation is paused, stop and let the user decide"). Without
+/// surfacing it the agent only sees a generic `Denied` and naturally retries,
+/// which the ledger then silently re-denies, defeating the loop guard. `None`
+/// when no transport is wired upstream of a denial that carries no ledger
+/// context.
+///
+/// [`DenialReason::agent_hint`]: crate::sandbox::exec_approval::denial_ledger::DenialReason::agent_hint
+struct ConfirmDenial {
+    outcome: ApprovalOutcome,
+    hint: Option<&'static str>,
+}
+
 /// Which dispatch branch `execute_inner` is routing into. Kept as a
 /// fieldless enum so the retry closure can capture it by value.
 #[derive(Copy, Clone)]
@@ -80,12 +98,14 @@ impl ScopedToolService {
             match &self.approval_requester {
                 Some(requester) => {
                     let reason = format!("Tool `{name}` requires your confirmation to run.");
-                    if let Err(outcome) = self.confirm_with_memory(requester, name, &reason).await {
+                    if let Err(denial) = self.confirm_with_memory(requester, name, &reason).await {
+                        let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
-                                "User did not approve running `{name}` ({outcome:?}). \
-                                 Do not retry; ask the user how to proceed."
+                                "User did not approve running `{name}` ({:?}).{hint} \
+                                 Do not retry; ask the user how to proceed.",
+                                denial.outcome
                             ),
                         });
                     }
@@ -250,7 +270,7 @@ impl ScopedToolService {
         requester: &Arc<dyn ApprovalRequester>,
         name: &str,
         reason: &str,
-    ) -> Result<(), ApprovalOutcome> {
+    ) -> Result<(), ConfirmDenial> {
         let mem_key = self.session_memory_key();
 
         // Session memory short-circuit: a prior session grant satisfies the
@@ -279,7 +299,12 @@ impl ScopedToolService {
                     "confirmation auto-denied by denial ledger: {}",
                     reason_kind.agent_hint()
                 );
-                return Err(ApprovalOutcome::Denied);
+                // Surface the ledger's reason to the model (not just the log)
+                // so the circuit breaker actually breaks the loop.
+                return Err(ConfirmDenial {
+                    outcome: ApprovalOutcome::Denied,
+                    hint: Some(reason_kind.agent_hint()),
+                });
             }
         }
 
@@ -308,16 +333,22 @@ impl ScopedToolService {
 
         let outcome = requester.request_approval(name, reason).await;
         if !outcome.is_approved() {
+            let reason_kind = match outcome {
+                ApprovalOutcome::Timeout => denial_ledger::DenialReason::Timeout,
+                _ => denial_ledger::DenialReason::UserRejected,
+            };
             // Record the refusal so a blind retry of this exact intent — or a
             // session past the threshold — is short-circuited next time.
             if let Some(ref key) = mem_key {
-                let reason_kind = match outcome {
-                    ApprovalOutcome::Timeout => denial_ledger::DenialReason::Timeout,
-                    _ => denial_ledger::DenialReason::UserRejected,
-                };
                 denial_ledger::global().record_denial(key, &fingerprint, reason_kind);
             }
-            return Err(outcome);
+            // Carry the same hint on the *first* live denial too, so the agent
+            // is told to change approach immediately rather than looping into
+            // the auto-deny path above.
+            return Err(ConfirmDenial {
+                outcome,
+                hint: Some(reason_kind.agent_hint()),
+            });
         }
 
         // Record a session-scoped grant so subsequent calls skip the prompt.
@@ -377,12 +408,14 @@ impl ScopedToolService {
         if let Some(PermissionDecision::Ask { reason }) = hook_result.permission_decision {
             match &self.approval_requester {
                 Some(requester) => {
-                    if let Err(outcome) = self.confirm_with_memory(requester, name, &reason).await {
+                    if let Err(denial) = self.confirm_with_memory(requester, name, &reason).await {
+                        let hint = denial.hint.map(|h| format!(" {h}")).unwrap_or_default();
                         return Err(ToolError::Execution {
                             name: name.to_string(),
                             cause: format!(
                                 "Hook requested user confirmation for `{name}` and the \
-                                 user did not approve ({outcome:?})."
+                                 user did not approve ({:?}).{hint}",
+                                denial.outcome
                             ),
                         });
                     }
