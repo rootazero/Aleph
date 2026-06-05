@@ -516,23 +516,18 @@ where
                     self.persist_run_task_status(&run_id, task_status).await;
                 }
 
-                let error_code = match &e {
-                    ExecutionError::Timeout => "TIMEOUT",
-                    ExecutionError::Cancelled => "CANCELLED",
-                    ExecutionError::Failed(_) => "FAILED",
-                    ExecutionError::TooManyRuns(_) => "TOO_MANY_RUNS",
-                    ExecutionError::AgentBusy(_) => "AGENT_BUSY",
-                    ExecutionError::RunNotFound(_) => "RUN_NOT_FOUND",
-                    ExecutionError::RunNotActive(_) => "RUN_NOT_ACTIVE",
-                    ExecutionError::Fallthrough { .. } => "FALLTHROUGH",
-                    ExecutionError::Orchestrator(_) => "ORCHESTRATOR",
-                };
+                // Render a user-facing receipt instead of the flattened
+                // internal error chain: a stable code plus a short message that
+                // tells the user whether retrying is worthwhile (rate-limited /
+                // unreachable). The typed `e` is still returned below for
+                // internal callers; only the channel presentation changes.
+                let receipt = super::failure_receipt::FailureReceipt::from_error(&e);
                 let _ = emitter
                     .emit(StreamEvent::RunError {
                         run_id: run_id.clone(),
                         seq: final_seq,
-                        error: e.to_string(),
-                        error_code: Some(error_code.to_string()),
+                        error: receipt.message,
+                        error_code: Some(receipt.code.to_string()),
                     })
                     .await;
                 // Preserve the typed variant so downstream callers (cron / heartbeat

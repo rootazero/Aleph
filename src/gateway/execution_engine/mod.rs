@@ -15,6 +15,7 @@ mod deadline;
 mod engine;
 pub(crate) mod event_drain;
 mod execute;
+mod failure_receipt;
 mod fast_path;
 pub mod helpers;
 mod history;

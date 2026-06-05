@@ -38,6 +38,7 @@ pub mod mdns_broadcaster;
 pub mod memory_monitor;
 pub mod middleware;
 pub mod model_override;
+pub mod orphan_notice;
 pub mod origin_policy;
 pub mod protocol;
 pub mod pty;

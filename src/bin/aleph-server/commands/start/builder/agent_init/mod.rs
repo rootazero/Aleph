@@ -1140,7 +1140,19 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         );
                     }
                     if !orphans.is_empty() {
-                        tracing::info!(count = orphans.len(), "Reconciled orphaned agent tasks");
+                        // Leave the user a durable receipt in each orphaned
+                        // task's session so a mid-run restart no longer ends
+                        // their conversation silently.
+                        let notified = alephcore::gateway::orphan_notice::notify_interrupted_tasks(
+                            session_store.as_ref(),
+                            &orphans,
+                        )
+                        .await;
+                        tracing::info!(
+                            count = orphans.len(),
+                            notified,
+                            "Reconciled orphaned agent tasks"
+                        );
                     }
                 }
                 Err(error) => {
