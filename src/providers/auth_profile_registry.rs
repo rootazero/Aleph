@@ -172,6 +172,7 @@ impl AuthProfileProviderRegistry {
             timeout_seconds: self.config.timeout_seconds,
             enabled: true,
             max_tokens: Some(8192),
+            context_window: None,
             temperature: Some(0.7),
             top_p: None,
             top_k: None,

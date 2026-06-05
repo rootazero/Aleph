@@ -228,6 +228,49 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
             supports_reasoning: false,
         },
     ),
+    // ── Moonshot / Kimi ──────────────────────────────────────────────────
+    (
+        "kimi",
+        ModelCapabilities {
+            context_window: 200_000,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    (
+        "moonshot",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
+    // ── Zhipu / GLM ──────────────────────────────────────────────────────
+    (
+        "glm",
+        ModelCapabilities {
+            context_window: 200_000,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: true,
+        },
+    ),
+    // ── Alibaba / Qwen ───────────────────────────────────────────────────
+    (
+        "qwen",
+        ModelCapabilities {
+            context_window: 131_072,
+            max_output_tokens: 8_192,
+            supports_vision: false,
+            supports_tools: true,
+            supports_reasoning: false,
+        },
+    ),
 ];
 
 /// Look up capability metadata for a model id (raw or canonical).
@@ -299,5 +342,21 @@ mod tests {
     #[test]
     fn unknown_model_is_none() {
         assert!(capabilities_for("totally-made-up-model").is_none());
+    }
+
+    #[test]
+    fn moonshot_zhipu_alibaba_families_resolve() {
+        // Newly added families so model-aware context budgeting can size the
+        // compaction window without per-provider config.
+        assert_eq!(capabilities_for("kimi-k2").unwrap().context_window, 200_000);
+        assert_eq!(
+            capabilities_for("moonshot-v1-128k").unwrap().context_window,
+            131_072
+        );
+        assert_eq!(capabilities_for("glm-4.6").unwrap().context_window, 200_000);
+        assert_eq!(
+            capabilities_for("qwen-max").unwrap().context_window,
+            131_072
+        );
     }
 }

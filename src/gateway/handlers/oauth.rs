@@ -124,6 +124,7 @@ fn new_provider_from_preset(provider_name: &str) -> ProviderConfig {
         timeout_seconds: 300,
         enabled: true,
         max_tokens: None,
+        context_window: None,
         temperature: None,
         top_p: None,
         top_k: None,

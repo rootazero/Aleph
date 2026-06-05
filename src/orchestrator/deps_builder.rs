@@ -13,7 +13,7 @@ use crate::config::types::ProviderConfig;
 use crate::config::Config;
 use crate::context::budget::ContextBudgetConfig;
 use crate::harness::StallConfig;
-use crate::providers::model_catalog::endpoint_kind_for_base_url;
+use crate::providers::model_catalog::{capabilities_for, endpoint_kind_for_base_url};
 use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
@@ -21,10 +21,22 @@ use crate::providers::{
 };
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 
-/// Default model context-window estimate (tokens) used when `[context_budget]`
-/// omits `token_budget`. Operators on larger- or smaller-window models should
-/// set `token_budget` explicitly — compaction thresholds are fractions of it.
+/// Default model context-window estimate (tokens) used when neither the
+/// primary provider nor the capability catalog reveals the active model's
+/// window. Compaction thresholds are fractions of the *usable* budget derived
+/// from it (window minus the reserved output margin).
 const DEFAULT_CONTEXT_TOKEN_BUDGET: u64 = 200_000;
+
+/// Output-token margin reserved out of the context window when neither the
+/// provider's `max_tokens` nor the catalog's `max_output_tokens` is known. The
+/// usable input budget is `window - reserve`, guaranteeing room for a reply
+/// even at critical pressure.
+const DEFAULT_OUTPUT_RESERVE: u64 = 8_192;
+
+/// Floor for the derived usable budget. A mis-declared tiny window (or a
+/// reserve ≥ window) must never collapse the budget to zero/near-zero, which
+/// would force compaction or a final reply on the very first turn.
+const MIN_USABLE_BUDGET: u64 = 16_384;
 
 /// Stability triple — three independent Optionals derived from `[stability]`.
 ///
@@ -157,38 +169,12 @@ pub fn build_failover_chain(
         }
     }
 
-    // Ordered fallback chain — the subset of `built` named by
-    // `[fallback_provider].chain`, in order.
-    let mut fallbacks: Vec<FailoverNode> = Vec::new();
-    if let Some(fb) = config.fallback_provider.as_ref() {
-        for name in fb.resolved_chain() {
-            if name.eq_ignore_ascii_case(primary_provider_key) {
-                tracing::warn!(provider = %name, "failover chain: entry matches primary; skipping");
-                continue;
-            }
-            let Some(provider) = built.get(&name) else {
-                tracing::warn!(
-                    provider = %name,
-                    "failover chain: provider not in [providers] or failed to build; skipping"
-                );
-                continue;
-            };
-            let models = model_catalog.get(&name).cloned().unwrap_or_default();
-            // Tier from the provider's base_url host, so the route policy can
-            // order/gate this fallback by local-vs-cloud.
-            let tier = config
-                .providers
-                .get(&name)
-                .map(provider_tier)
-                .unwrap_or(EndpointTier::Cloud);
-            fallbacks.push(FailoverNode {
-                name,
-                models,
-                provider: provider.clone(),
-                tier,
-            });
-        }
-    }
+    // Ordered fallback chain. Primary source is `[fallback_provider].chain`;
+    // when that resolves to nothing usable (missing section, typo'd entry, or a
+    // provider that failed to build) the helper auto-derives a chain from every
+    // other enabled provider — so a throttled primary always has somewhere to
+    // migrate instead of hard-failing the run on a 429.
+    let fallbacks = assemble_fallbacks(config, primary_provider_key, &built, &model_catalog);
 
     tracing::info!(
         primary = %primary_provider_key,
@@ -263,6 +249,84 @@ pub fn build_failover_chain(
     }
 }
 
+/// Assemble the ordered fallback chain for the global failover provider.
+///
+/// Source of truth is `[fallback_provider].chain` (with the back-compat
+/// `provider` field folded in by [`FallbackProviderToml::resolved_chain`]),
+/// resolved against the already-built non-primary provider set. Two hardening
+/// rules close the gap that let a 429 hard-fail despite the provider-layer
+/// retry/cooldown machinery — the failure was never "retry too shallow", it
+/// was "the chain to migrate into is empty":
+///
+/// 1. A chain entry naming a provider absent from `[providers]` (a typo, or one
+///    that failed to build) is logged at ERROR — loud enough to actually notice
+///    in the boot log — then skipped, instead of the old silent WARN.
+/// 2. If the resolved chain ends up empty but other enabled providers exist,
+///    derive the chain from all of them (deterministic, name-sorted). A missing
+///    or fully-invalid `[fallback_provider]` therefore no longer strands the
+///    primary with nowhere to fail over to: model fallback works by default.
+///
+/// An explicit, non-empty chain is always honored verbatim — auto-derivation
+/// only fills a vacuum, it never overrides operator intent.
+fn assemble_fallbacks(
+    config: &Config,
+    primary_provider_key: &str,
+    built: &HashMap<String, Arc<dyn AiProvider>>,
+    model_catalog: &HashMap<String, Vec<String>>,
+) -> Vec<FailoverNode> {
+    // Build one node from a name + its already-constructed provider. Tier comes
+    // from the provider's base_url host so the route policy can order/gate this
+    // fallback by local-vs-cloud.
+    let node_for = |name: &str, provider: &Arc<dyn AiProvider>| FailoverNode {
+        name: name.to_string(),
+        models: model_catalog.get(name).cloned().unwrap_or_default(),
+        tier: config
+            .providers
+            .get(name)
+            .map(provider_tier)
+            .unwrap_or(EndpointTier::Cloud),
+        provider: provider.clone(),
+    };
+
+    let mut fallbacks: Vec<FailoverNode> = Vec::new();
+    if let Some(fb) = config.fallback_provider.as_ref() {
+        for name in fb.resolved_chain() {
+            if name.eq_ignore_ascii_case(primary_provider_key) {
+                tracing::warn!(provider = %name, "failover chain: entry matches primary; skipping");
+                continue;
+            }
+            let Some(provider) = built.get(&name) else {
+                tracing::error!(
+                    provider = %name,
+                    "failover chain: '{name}' is not defined under [providers] (or failed to \
+                     build) — fix the [fallback_provider].chain entry; skipping it",
+                );
+                continue;
+            };
+            fallbacks.push(node_for(&name, provider));
+        }
+    }
+
+    // Self-heal: a primary with no usable configured fallback still gets one,
+    // derived from every other enabled provider (name-sorted for determinism).
+    if fallbacks.is_empty() && !built.is_empty() {
+        let mut names: Vec<&String> = built.keys().collect();
+        names.sort();
+        for name in names {
+            if let Some(provider) = built.get(name) {
+                fallbacks.push(node_for(name, provider));
+            }
+        }
+        tracing::warn!(
+            derived_count = fallbacks.len(),
+            "failover chain: no usable [fallback_provider].chain — auto-derived fallback from all \
+             enabled providers so the primary can fail over on rate-limit/outage",
+        );
+    }
+
+    fallbacks
+}
+
 /// Build the P0 rescue triple from `[stability]`. Each field is independent.
 pub fn build_stability_triple(config: &Config) -> StabilityTriple {
     let Some(s) = config.stability.as_ref() else {
@@ -298,12 +362,80 @@ pub fn build_stability_triple(config: &Config) -> StabilityTriple {
 /// `token_budget` and the two thresholds are user-tunable; the remaining
 /// `ContextBudgetConfig` fields use validated internal defaults (KISS — not
 /// every knob needs a toml surface).
-pub fn build_context_budget_config(config: &Config) -> Option<ContextBudgetConfig> {
+/// A model-aware compaction budget derived from the primary model's real
+/// context window. `usable` is what the pressure sensor consumes; the rest is
+/// kept for the one observability line at startup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DerivedBudget {
+    usable: u64,
+    window: u64,
+    reserve: u64,
+    source: &'static str,
+}
+
+/// Derive the usable context-compaction budget for `model` running on
+/// `primary`, in tokens.
+///
+/// Precedence (each independently for window and reserve):
+///   - **window**:  `provider.context_window` ▸ `capabilities_for(model)` ▸
+///     [`DEFAULT_CONTEXT_TOKEN_BUDGET`]
+///   - **reserve**: `provider.max_tokens` ▸ `capabilities_for(model)` ▸
+///     [`DEFAULT_OUTPUT_RESERVE`]
+///
+/// `usable = window.saturating_sub(reserve)`, floored at [`MIN_USABLE_BUDGET`]
+/// so a mis-declared window can never collapse the budget. Static (no harness
+/// involvement): a 200k-window model and a 1M-window model get proportionally
+/// different absolute compaction trigger points once the warning/critical
+/// fractions are applied.
+fn derive_token_budget(primary: Option<&ProviderConfig>, model: Option<&str>) -> DerivedBudget {
+    let caps = model.and_then(capabilities_for);
+    let (window, source) = primary
+        .and_then(|p| p.context_window)
+        .map(|w| (u64::from(w), "config"))
+        .or_else(|| caps.map(|c| (u64::from(c.context_window), "catalog")))
+        .unwrap_or((DEFAULT_CONTEXT_TOKEN_BUDGET, "default"));
+    let reserve = primary
+        .and_then(|p| p.max_tokens)
+        .map(u64::from)
+        .or_else(|| caps.map(|c| u64::from(c.max_output_tokens)))
+        .unwrap_or(DEFAULT_OUTPUT_RESERVE);
+    let usable = window.saturating_sub(reserve).max(MIN_USABLE_BUDGET);
+    DerivedBudget {
+        usable,
+        window,
+        reserve,
+        source,
+    }
+}
+
+pub fn build_context_budget_config(
+    config: &Config,
+    primary_provider_key: &str,
+) -> Option<ContextBudgetConfig> {
     let cb = config.context_budget.as_ref()?;
     if !cb.enabled {
         return None;
     }
-    let token_budget = cb.token_budget.unwrap_or(DEFAULT_CONTEXT_TOKEN_BUDGET);
+    // An explicit `token_budget` is an operator override — honored verbatim
+    // (back-compat). Otherwise derive a model-aware budget from the primary
+    // provider's first model.
+    let token_budget = match cb.token_budget {
+        Some(explicit) => explicit,
+        None => {
+            let primary = config.providers.get(primary_provider_key);
+            let model = primary.and_then(|p| p.models.first().map(String::as_str));
+            let derived = derive_token_budget(primary, model);
+            tracing::info!(
+                model = model.unwrap_or("<unknown>"),
+                window = derived.window,
+                reserve = derived.reserve,
+                usable = derived.usable,
+                source = derived.source,
+                "context budget derived from model context window"
+            );
+            derived.usable
+        }
+    };
     let warning_threshold = cb.warning_threshold.unwrap_or(0.70);
     let critical_threshold = cb.critical_threshold.unwrap_or(0.85);
 
@@ -358,7 +490,7 @@ mod tests {
     #[test]
     fn context_budget_none_when_section_missing() {
         let cfg = Config::default();
-        assert!(build_context_budget_config(&cfg).is_none());
+        assert!(build_context_budget_config(&cfg, "primary").is_none());
     }
 
     #[test]
@@ -368,17 +500,22 @@ mod tests {
             token_budget: Some(128_000),
             ..ContextBudgetToml::default()
         }));
-        assert!(build_context_budget_config(&cfg).is_none());
+        assert!(build_context_budget_config(&cfg, "primary").is_none());
     }
 
     #[test]
     fn context_budget_some_uses_defaults_when_fields_unset() {
+        // No explicit token_budget and no known primary provider/model →
+        // derived from the default window minus the default output reserve.
         let cfg = cfg_with_context_budget(Some(ContextBudgetToml {
             enabled: true,
             ..ContextBudgetToml::default()
         }));
-        let bc = build_context_budget_config(&cfg).expect("enabled → Some");
-        assert_eq!(bc.token_budget, DEFAULT_CONTEXT_TOKEN_BUDGET);
+        let bc = build_context_budget_config(&cfg, "primary").expect("enabled → Some");
+        assert_eq!(
+            bc.token_budget,
+            DEFAULT_CONTEXT_TOKEN_BUDGET - DEFAULT_OUTPUT_RESERVE
+        );
         assert_eq!(bc.warning_threshold, 0.70);
         assert_eq!(bc.critical_threshold, 0.85);
     }
@@ -391,7 +528,7 @@ mod tests {
             warning_threshold: Some(0.6),
             critical_threshold: Some(0.9),
         }));
-        let bc = build_context_budget_config(&cfg).expect("enabled → Some");
+        let bc = build_context_budget_config(&cfg, "primary").expect("enabled → Some");
         assert_eq!(bc.token_budget, 64_000);
         assert_eq!(bc.warning_threshold, 0.6);
         assert_eq!(bc.critical_threshold, 0.9);
@@ -408,7 +545,7 @@ mod tests {
             critical_threshold: Some(0.7),
             ..ContextBudgetToml::default()
         }));
-        assert!(build_context_budget_config(&cfg).is_none());
+        assert!(build_context_budget_config(&cfg, "primary").is_none());
     }
 
     #[test]
@@ -418,7 +555,7 @@ mod tests {
             token_budget: Some(0),
             ..ContextBudgetToml::default()
         }));
-        assert!(build_context_budget_config(&cfg).is_none());
+        assert!(build_context_budget_config(&cfg, "primary").is_none());
     }
 
     #[test]
@@ -428,7 +565,103 @@ mod tests {
             warning_threshold: Some(1.5),
             ..ContextBudgetToml::default()
         }));
-        assert!(build_context_budget_config(&cfg).is_none());
+        assert!(build_context_budget_config(&cfg, "primary").is_none());
+    }
+
+    // ── model-aware budget derivation ────────────────────────────────────
+
+    fn cfg_with_primary(key: &str, pc: ProviderConfig, cb: ContextBudgetToml) -> Config {
+        let mut providers: HashMap<String, ProviderConfig> = HashMap::new();
+        providers.insert(key.to_string(), pc);
+        Config {
+            context_budget: Some(cb),
+            providers,
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn derive_prefers_provider_declared_window_and_reserve() {
+        let mut pc = ProviderConfig::test_config("claude-sonnet-4-6");
+        pc.context_window = Some(1_000_000);
+        pc.max_tokens = Some(64_000);
+        let d = derive_token_budget(Some(&pc), Some("claude-sonnet-4-6"));
+        assert_eq!(d.window, 1_000_000);
+        assert_eq!(d.reserve, 64_000);
+        assert_eq!(d.usable, 936_000);
+        assert_eq!(d.source, "config");
+    }
+
+    #[test]
+    fn derive_falls_back_to_catalog_when_unset() {
+        // Kimi is in the catalog (200k window, 8_192 max output) but the
+        // provider declares neither field.
+        let pc = ProviderConfig::test_config("kimi-k2");
+        let d = derive_token_budget(Some(&pc), Some("kimi-k2"));
+        assert_eq!(d.window, 200_000);
+        assert_eq!(d.reserve, 8_192);
+        assert_eq!(d.usable, 200_000 - 8_192);
+        assert_eq!(d.source, "catalog");
+    }
+
+    #[test]
+    fn derive_defaults_when_model_unknown() {
+        let pc = ProviderConfig::test_config("totally-unknown-model");
+        let d = derive_token_budget(Some(&pc), Some("totally-unknown-model"));
+        assert_eq!(d.window, DEFAULT_CONTEXT_TOKEN_BUDGET);
+        assert_eq!(d.reserve, DEFAULT_OUTPUT_RESERVE);
+        assert_eq!(d.source, "default");
+    }
+
+    #[test]
+    fn derive_floors_tiny_or_inverted_window() {
+        // window < reserve must not underflow/collapse the budget.
+        let mut pc = ProviderConfig::test_config("x");
+        pc.context_window = Some(4_000);
+        pc.max_tokens = Some(8_000);
+        let d = derive_token_budget(Some(&pc), Some("x"));
+        assert_eq!(d.usable, MIN_USABLE_BUDGET);
+    }
+
+    #[test]
+    fn build_derives_budget_from_catalog_model() {
+        let cb = ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("kimi", ProviderConfig::test_config("kimi-k2"), cb);
+        let bc = build_context_budget_config(&cfg, "kimi").expect("enabled → Some");
+        assert_eq!(bc.token_budget, 200_000 - 8_192);
+    }
+
+    #[test]
+    fn build_derives_budget_from_declared_window() {
+        let mut pc = ProviderConfig::test_config("claude-sonnet-4-6");
+        pc.context_window = Some(1_000_000);
+        pc.max_tokens = Some(64_000);
+        let cb = ContextBudgetToml {
+            enabled: true,
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("c", pc, cb);
+        let bc = build_context_budget_config(&cfg, "c").expect("enabled → Some");
+        assert_eq!(bc.token_budget, 936_000);
+    }
+
+    #[test]
+    fn build_explicit_token_budget_overrides_model_derivation() {
+        // An explicit token_budget wins even when the model would derive a
+        // much larger window — operator override, back-compat.
+        let mut pc = ProviderConfig::test_config("claude-sonnet-4-6");
+        pc.context_window = Some(1_000_000);
+        let cb = ContextBudgetToml {
+            enabled: true,
+            token_budget: Some(50_000),
+            ..ContextBudgetToml::default()
+        };
+        let cfg = cfg_with_primary("c", pc, cb);
+        let bc = build_context_budget_config(&cfg, "c").expect("enabled → Some");
+        assert_eq!(bc.token_budget, 50_000);
     }
 
     fn cfg_with_fallback(
@@ -456,6 +689,86 @@ mod tests {
     fn mock_handle(name: &str) -> Arc<dyn DefaultProviderHandle> {
         let provider = create_provider(name, mock_provider_config()).expect("mock provider");
         Arc::new(StaticDefault::new(provider))
+    }
+
+    /// The already-built non-primary provider set, exactly as
+    /// `build_failover_chain` constructs it before assembling the chain.
+    fn built_map(names: &[&str]) -> HashMap<String, Arc<dyn AiProvider>> {
+        names
+            .iter()
+            .map(|n| {
+                (
+                    n.to_string(),
+                    create_provider(n, mock_provider_config()).expect("mock provider"),
+                )
+            })
+            .collect()
+    }
+
+    fn fallback_names(nodes: &[FailoverNode]) -> Vec<&str> {
+        nodes.iter().map(|n| n.name.as_str()).collect()
+    }
+
+    #[test]
+    fn assemble_fallbacks_auto_derives_when_no_chain_configured() {
+        // No `[fallback_provider]` at all, but two other enabled providers
+        // exist → they become the fallback chain (sorted) so the primary can
+        // still fail over.
+        let cfg = cfg_with_fallback(
+            None,
+            vec![
+                ("primary", mock_provider_config()),
+                ("aux2", mock_provider_config()),
+                ("aux1", mock_provider_config()),
+            ],
+        );
+        let built = built_map(&["aux1", "aux2"]);
+        let nodes = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        assert_eq!(fallback_names(&nodes), vec!["aux1", "aux2"]);
+    }
+
+    #[test]
+    fn assemble_fallbacks_auto_derives_when_chain_entries_all_invalid() {
+        // The real-world bug: the chain names providers that were never defined
+        // under `[providers]` (`minimax`/`chatgpt`), so every entry skips. The
+        // one healthy alternative is auto-derived instead of leaving the chain
+        // empty (which previously made a 429 hard-fail with nowhere to migrate).
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                chain: vec!["minimax".to_string(), "chatgpt".to_string()],
+                provider: None,
+                max_retries: None,
+            }),
+            vec![
+                ("kimi", mock_provider_config()),
+                ("x302", mock_provider_config()),
+            ],
+        );
+        // `kimi` is the primary, so only `x302` is in the built set.
+        let built = built_map(&["x302"]);
+        let nodes = assemble_fallbacks(&cfg, "kimi", &built, &HashMap::new());
+        assert_eq!(fallback_names(&nodes), vec!["x302"]);
+    }
+
+    #[test]
+    fn assemble_fallbacks_honors_explicit_chain_without_auto_deriving() {
+        // A valid explicit chain is used verbatim; auto-derivation must NOT
+        // append other enabled providers (`aux`) behind operator intent.
+        let cfg = cfg_with_fallback(
+            Some(FallbackProviderToml {
+                chain: vec!["fb".to_string()],
+                provider: None,
+                max_retries: None,
+            }),
+            vec![
+                ("primary", mock_provider_config()),
+                ("fb", mock_provider_config()),
+                ("aux", mock_provider_config()),
+            ],
+        );
+        let built = built_map(&["fb", "aux"]);
+        let nodes = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        assert_eq!(fallback_names(&nodes), vec!["fb"]);
     }
 
     #[test]

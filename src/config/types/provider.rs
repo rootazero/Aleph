@@ -129,6 +129,14 @@ pub struct ProviderConfig {
     /// Maximum tokens in response (optional)
     #[serde(default)]
     pub max_tokens: Option<u32>,
+    /// Operator-declared total context window (tokens) for this provider's
+    /// model(s). Escape hatch for third-party endpoints (302ai / moonshot /
+    /// openrouter) whose effective window differs from — or is absent in — the
+    /// static capability catalog (`capabilities_for`). Consumed only by
+    /// model-aware context-compaction budgeting: when unset, the catalog (then a
+    /// built-in default) is used. Has no effect on the wire request.
+    #[serde(default)]
+    pub context_window: Option<u32>,
     /// Temperature for response randomness (0.0-2.0 for OpenAI/Gemini, 0.0-1.0 for Claude)
     #[serde(default)]
     pub temperature: Option<f32>,
@@ -282,6 +290,7 @@ impl ProviderConfig {
             timeout_seconds: default_timeout_seconds(),
             enabled: true, // Tests need enabled providers
             max_tokens: None,
+            context_window: None,
             temperature: None,
             top_p: None,
             top_k: None,
@@ -336,6 +345,7 @@ mod tests {
             timeout_seconds: default_timeout_seconds(),
             enabled: default_provider_enabled(),
             max_tokens: None,
+            context_window: None,
             temperature: None,
             top_p: None,
             top_k: None,
@@ -373,6 +383,7 @@ mod tests {
             timeout_seconds: default_timeout_seconds(),
             enabled: default_provider_enabled(),
             max_tokens: None,
+            context_window: None,
             temperature: None,
             top_p: None,
             top_k: None,

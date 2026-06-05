@@ -172,3 +172,59 @@ async fn threshold_two_vetoes_at_exactly_two() {
     let cancel = CancellationToken::new();
     assert!(v.verify(&ctx, &cancel).await.is_veto());
 }
+
+#[tokio::test]
+async fn between_thresholds_still_vetoes_not_halts() {
+    // Default new(): veto at 5, halt at 8. Six identical calls → past the veto
+    // tier but short of the halt tier → still a (recoverable) Veto.
+    let v = ToolLoopVerifier::new();
+    let history = vec![make("read", 1); 6];
+    let ctx = TurnVerifyContext {
+        iterations: 6,
+        tool_calls_made: 6,
+        final_text: None,
+        recent_tool_calls: &history,
+        stop_reason: None,
+        session_id: None,
+    };
+    let cancel = CancellationToken::new();
+    assert!(v.verify(&ctx, &cancel).await.is_veto());
+}
+
+#[tokio::test]
+async fn at_halt_threshold_halts() {
+    // Eight identical calls (== TOOL_HISTORY_WINDOW, the default halt tier) →
+    // the model has ignored several vetoes; cut the loop off with a Halt before
+    // it runs into the provider rate limit.
+    let v = ToolLoopVerifier::new();
+    let history = vec![make("read", 1); TOOL_HISTORY_WINDOW];
+    let ctx = TurnVerifyContext {
+        iterations: TOOL_HISTORY_WINDOW,
+        tool_calls_made: TOOL_HISTORY_WINDOW,
+        final_text: None,
+        recent_tool_calls: &history,
+        stop_reason: None,
+        session_id: None,
+    };
+    let cancel = CancellationToken::new();
+    match v.verify(&ctx, &cancel).await {
+        VerifierVerdict::Halt { reason, .. } => {
+            assert!(reason.contains("read"));
+            assert!(reason.contains("unproductive loop"));
+        }
+        other => panic!("expected Halt, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn halt_threshold_clamped_at_or_above_repeat() {
+    // A halt threshold below the veto threshold would invert the tiers; it is
+    // lifted to `repeat_threshold`.
+    let v = ToolLoopVerifier::new()
+        .with_threshold(5)
+        .with_halt_threshold(2);
+    assert_eq!(v.halt_threshold(), 5);
+    // And it can never exceed the ring-buffer window (else it could never fire).
+    let v = ToolLoopVerifier::new().with_halt_threshold(TOOL_HISTORY_WINDOW + 50);
+    assert_eq!(v.halt_threshold(), TOOL_HISTORY_WINDOW);
+}

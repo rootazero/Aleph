@@ -45,9 +45,20 @@ fn is_transient_harness_message(msg: &str) -> bool {
     let is_server = contains_http_status(msg, 500)
         || contains_http_status(msg, 502)
         || contains_http_status(msg, 503);
-    // Rate-limited responses are NOT treated as retryable here (mirrors the
-    // retiring run_loop.rs which explicitly skips retry for rate limits).
-    is_network || is_auth || is_server
+    // Rate limit (429). A 429 that escapes here means the FailoverProvider
+    // already exhausted its in-place retry budget AND every chained
+    // provider/model (deep backoff + per-model cooldown + chain advance). At
+    // that point the failure is genuinely transient — the throttle window will
+    // pass — so let the Gateway's outer dispatch loop (`MAX_FALLBACK_ATTEMPTS`)
+    // take another spaced attempt instead of surfacing a fatal error to the
+    // user. The earlier "rate limits are not retryable" stance assumed an empty
+    // chain; with chain self-heal a 429 here is a load signal, not a dead end.
+    let is_rate_limited = contains_http_status(msg, 429)
+        || msg.contains("rate limit")
+        || msg.contains("Rate limit")
+        || msg.contains("rate_limit")
+        || msg.contains("receiving too many requests");
+    is_network || is_auth || is_server || is_rate_limited
 }
 
 fn contains_http_status(msg: &str, code: u16) -> bool {
@@ -64,4 +75,28 @@ fn contains_http_status(msg: &str, code: u16) -> bool {
         search_from = abs_pos + code_str.len();
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_429_is_transient() {
+        // The exact production string that previously surfaced as a fatal
+        // `flow: internal dispatch error` — now classified transient so the
+        // Gateway's outer dispatch loop retries instead of hard-failing.
+        let msg = "llm error: Rate limit error: Anthropic API rate limited (429): We're \
+                   receiving too many requests at the moment. Please wait a moment and try again.";
+        assert!(is_transient_harness_message(msg));
+    }
+
+    #[test]
+    fn plain_internal_error_is_not_transient() {
+        // A non-network, non-rate-limit failure must stay fatal so we don't
+        // spin the outer loop on a genuine bug.
+        assert!(!is_transient_harness_message(
+            "tool registry misconfigured: unknown tool"
+        ));
+    }
 }

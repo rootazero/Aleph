@@ -407,6 +407,7 @@ async fn handle_test_inner(
         timeout_seconds: config.timeout_seconds.unwrap_or(300),
         enabled: config.enabled,
         max_tokens: config.max_tokens,
+        context_window: None,
         temperature: config.temperature,
         top_p: config.top_p,
         top_k: config.top_k,
