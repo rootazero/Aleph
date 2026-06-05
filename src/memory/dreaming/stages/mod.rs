@@ -12,6 +12,7 @@ pub mod note_synthesis;
 pub mod skill_distill;
 pub mod skill_lifecycle;
 pub mod types;
+pub mod workflow_proposal;
 
 pub use daily_digest::DailyDigestStage;
 pub use feedback_distill::FeedbackDistillStage;
@@ -24,6 +25,7 @@ pub use note_review::NoteReviewStage;
 pub use note_synthesis::NoteSynthesisStage;
 pub use skill_distill::SkillDistillStage;
 pub use skill_lifecycle::SkillLifecycleStage;
+pub use workflow_proposal::WorkflowProposalStage;
 
 use async_trait::async_trait;
 

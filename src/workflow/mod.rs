@@ -20,10 +20,12 @@ pub mod clarify;
 pub mod compile;
 pub mod def;
 pub mod interop;
+pub mod proposal;
 pub mod store;
 
 pub use clarify::{is_clarify_task, ClarifyContext, ClarifyTaskMeta, CLARIFY_META_KEY, CLARIFY_OWNER};
 pub use compile::{materialize, MaterializedWorkflow};
 pub use def::{render_prompt, WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 pub use interop::{parse_workflow_js, render_workflow_js, ImportOutcome, WorkflowManifest};
+pub use proposal::{accept as accept_proposal, list_proposals, proposals_dir};
 pub use store::{WorkflowMeta, WORKFLOW_EXT};

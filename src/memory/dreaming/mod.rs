@@ -205,6 +205,12 @@ impl DreamPipeline {
                     min_candidates: dreaming_cfg.feedback_distill_min_candidates,
                     lookback: dreaming_cfg.feedback_lookback,
                 }),
+                // System-level co-occurrence mining: draft gated MetaSkill
+                // (workflow) proposals from recurring skill chains. Pure
+                // deterministic aggregation (no LLM) on the rarer high-growth
+                // synthesize path — see `WorkflowProposalStage` for the R7
+                // boundary. Drafts are gated; nothing auto-activates.
+                Box::new(stages::WorkflowProposalStage::default()),
                 Box::new(stages::DailyDigestStage),
             ],
             DreamStrategy::Conserve => vec![
@@ -222,8 +228,14 @@ impl DreamPipeline {
     ///   (a project must not fork the floor — see `project_scope`).
     /// - `skill_lifecycle`: ages skills in the global usage store.
     /// - `daily_digest`: writes a single global daily insight.
-    const GLOBAL_ONLY_STAGES: &'static [&'static str] =
-        &["feedback_distill", "skill_lifecycle", "daily_digest"];
+    /// - `workflow_proposal`: mines the global skill co-occurrence rings and
+    ///   writes to the single global `workflows/proposals/` dir.
+    const GLOBAL_ONLY_STAGES: &'static [&'static str] = &[
+        "feedback_distill",
+        "skill_lifecycle",
+        "daily_digest",
+        "workflow_proposal",
+    ];
 
     /// Drop the global-only stages, leaving the note-maintenance subset that is
     /// safe to run per project namespace. Built from the same `from_strategy`
