@@ -47,7 +47,6 @@ pub enum LayoutMode {
     Split,
 }
 
-
 impl LayoutMode {
     /// Token written to / read from `localStorage`.
     pub const fn as_token(self) -> &'static str {
@@ -103,6 +102,13 @@ pub struct WorkspaceState {
     pub files_drawer_open: RwSignal<bool>,
     /// Currently previewed file (Phase 2).
     pub selected_file: RwSignal<Option<FilePreview>>,
+    /// Cross-highlight focus: the `(run_id, iteration)` step the user clicked
+    /// on either surface. Both the chat bubble and the timeline step card read
+    /// this to render a highlight ring. Cleared on reset.
+    pub focused_step: RwSignal<Option<(String, usize)>>,
+    /// Iteration of the currently-active turn (set on `agent_trace.turn_started`).
+    /// Lets the timeline mark the live step. Cleared on reset.
+    pub current_iteration: RwSignal<Option<usize>>,
 }
 
 impl Default for WorkspaceState {
@@ -123,6 +129,8 @@ impl WorkspaceState {
             focus_tool: RwSignal::new(None),
             files_drawer_open: RwSignal::new(false),
             selected_file: RwSignal::new(None),
+            focused_step: RwSignal::new(None),
+            current_iteration: RwSignal::new(None),
         }
     }
 
@@ -198,6 +206,8 @@ impl WorkspaceState {
         self.focus_tool.set(None);
         self.files_drawer_open.set(false);
         self.selected_file.set(None);
+        self.focused_step.set(None);
+        self.current_iteration.set(None);
     }
 
     /// Record the input/args of a tool call. Idempotent.
@@ -222,6 +232,28 @@ impl WorkspaceState {
     pub fn get_tool_payload(&self, run_id: &str, tool_id: &str) -> Option<ToolPayload> {
         let key = (run_id.to_string(), tool_id.to_string());
         self.tool_payloads.with(|m| m.get(&key).cloned())
+    }
+
+    /// Record the active turn's iteration (`agent_trace.turn_started`).
+    pub fn set_current_iteration(&self, iteration: usize) {
+        self.current_iteration.set(Some(iteration));
+    }
+
+    /// Focus a step for cross-highlight. Opens Split if not already (so a
+    /// chat-side click reveals the timeline group), mirroring `focus_tool_row`.
+    pub fn focus_step(&self, run_id: impl Into<String>, iteration: usize) {
+        self.focused_step.set(Some((run_id.into(), iteration)));
+        if self.mode.get_untracked() != LayoutMode::Split {
+            self.set_layout(LayoutMode::Split);
+        }
+    }
+
+    /// True when `(run_id, iteration)` is the focused step.
+    pub fn is_step_focused(&self, run_id: &str, iteration: usize) -> bool {
+        self.focused_step.with(|f| {
+            f.as_ref()
+                .is_some_and(|(r, i)| r == run_id && *i == iteration)
+        })
     }
 }
 
@@ -263,6 +295,8 @@ mod tests {
             focus_tool: RwSignal::new(None),
             files_drawer_open: RwSignal::new(false),
             selected_file: RwSignal::new(None),
+            focused_step: RwSignal::new(None),
+            current_iteration: RwSignal::new(None),
         }
     }
 
@@ -361,6 +395,48 @@ mod tests {
         assert!(ws.is_event_expanded("t1"));
         ws.toggle_event("t1");
         assert!(!ws.is_event_expanded("t1"));
+    }
+
+    #[test]
+    fn focus_step_sets_focus_and_opens_split() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::ChatOnly);
+        ws.focus_step("run-1", 2);
+        assert!(ws.is_step_focused("run-1", 2));
+        assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
+    }
+
+    #[test]
+    fn is_step_focused_discriminates_run_and_iteration() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        ws.focus_step("run-1", 2);
+        assert!(ws.is_step_focused("run-1", 2));
+        assert!(!ws.is_step_focused("run-1", 3));
+        assert!(!ws.is_step_focused("run-2", 2));
+    }
+
+    #[test]
+    fn set_current_iteration_tracks_active_turn() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        ws.set_current_iteration(3);
+        assert_eq!(ws.current_iteration.get_untracked(), Some(3));
+    }
+
+    #[test]
+    fn reset_clears_focus_and_current_iteration() {
+        let owner = Owner::new();
+        owner.set();
+        let ws = test_ws(LayoutMode::Split);
+        ws.focus_step("run-1", 1);
+        ws.set_current_iteration(5);
+        ws.reset();
+        assert!(!ws.is_step_focused("run-1", 1));
+        assert_eq!(ws.current_iteration.get_untracked(), None);
     }
 
     #[test]
