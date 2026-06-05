@@ -265,7 +265,8 @@ mod tests {
     fn default_empty_settings_resolve_to_unresolved() {
         // The shipped default (no providers, empty id) must stay byte-identical
         // to the old behaviour: no embeddings.
-        let d = resolve(&EmbeddingSettings::default());
+        let settings = EmbeddingSettings::default();
+        let d = resolve(&settings);
         assert_eq!(d.reason, ResolutionReason::Unresolved);
         assert!(d.effective.is_none());
     }
