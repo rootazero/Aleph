@@ -174,6 +174,12 @@ pub fn GraphCanvas(
 
         let canvas: web_sys::HtmlCanvasElement = canvas_el;
 
+        // Park flag: set true when the rAF loop stops itself because the canvas
+        // is hidden. The IntersectionObserver callback clears it and re-kicks a
+        // frame when the canvas becomes visible again — so a hidden Memory tab
+        // costs zero CPU instead of rescheduling rAF ~60×/s just to re-check.
+        let parked: std::rc::Rc<std::cell::Cell<bool>> = std::rc::Rc::new(std::cell::Cell::new(false));
+
         // Attach IntersectionObserver to flip `is_visible` without forcing
         // synchronous layout. `offset_width`/`getBoundingClientRect` would
         // each trigger updateLayoutIfDimensionsOutOfDate → resolveStyle
@@ -181,13 +187,29 @@ pub fn GraphCanvas(
         // render loop it was supposed to skip. IntersectionObserver
         // dispatches asynchronously off the layout pipeline.
         let is_visible_obs = is_visible_for_effect.clone();
+        let parked_obs = parked.clone();
+        let raf_c_for_obs = raf_c.clone();
+        let raf_h_for_obs = raf_h.clone();
         let observer_cb: Closure<dyn FnMut(js_sys::Array)> =
             Closure::new(move |entries: js_sys::Array| {
                 if let Ok(entry_val) = entries
                     .get(0)
                     .dyn_into::<web_sys::IntersectionObserverEntry>()
                 {
-                    is_visible_obs.set(entry_val.is_intersecting());
+                    let vis = entry_val.is_intersecting();
+                    is_visible_obs.set(vis);
+                    // Resume a parked loop on becoming visible again.
+                    if vis && parked_obs.get() {
+                        parked_obs.set(false);
+                        if let Some(window) = web_sys::window() {
+                            if let Some(closure) = raf_c_for_obs.borrow().as_ref() {
+                                let id = window
+                                    .request_animation_frame(closure.as_ref().unchecked_ref())
+                                    .unwrap_or(0);
+                                *raf_h_for_obs.borrow_mut() = Some(id);
+                            }
+                        }
+                    }
                 }
             });
         if let Ok(observer) =
@@ -251,6 +273,7 @@ pub fn GraphCanvas(
 
         let canvas_for_resize = canvas.clone();
         let is_visible_for_raf = is_visible.clone();
+        let parked_for_raf = parked.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
             // Visibility pause: MainContent (app.rs) keeps every top-level
             // view mounted and toggles `display:none` for inactive tabs, so
@@ -262,14 +285,10 @@ pub fn GraphCanvas(
             // see the long comment there for why we don't poll layout
             // here.
             if !is_visible_for_raf.get() {
-                if let Some(window) = web_sys::window() {
-                    if let Some(closure) = raf_c_inner.borrow().as_ref() {
-                        let id = window
-                            .request_animation_frame(closure.as_ref().unchecked_ref())
-                            .unwrap_or(0);
-                        *raf_h_inner.borrow_mut() = Some(id);
-                    }
-                }
+                // Park: stop the rAF chain entirely (zero CPU while hidden).
+                // The IntersectionObserver callback re-kicks one frame when the
+                // canvas becomes visible again.
+                parked_for_raf.set(true);
                 return;
             }
 
