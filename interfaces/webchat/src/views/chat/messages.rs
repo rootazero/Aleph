@@ -138,8 +138,10 @@ pub(super) fn MessageList() -> impl IntoView {
                                     TimelineRow::Message { message, clock } => view! {
                                         <MessageBubble message=message clock=clock />
                                     }.into_any(),
-                                    // TODO(Task 7): render StepStrip as a collapsible step strip.
-                                    TimelineRow::StepStrip { .. } => ().into_any(),
+                                    TimelineRow::StepStrip { steps, completed, .. } => view! {
+                                        <StepStrip steps=steps completed=completed />
+                                    }
+                                    .into_any(),
                                 }
                             />
                             // Reasoning transcript — collapsible chain-of-thought
@@ -555,6 +557,46 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
                 } else {
                     None
                 }}
+            </div>
+        </div>
+    }
+}
+
+/// A run's intermediate steps folded into a bounded, internally-scrolling
+/// strip. Running (`completed == false`) → expanded + scrollable, so a long
+/// run keeps the chat column short. Done (`completed == true`) → collapsed to a
+/// single summary line the user can click to expand.
+#[component]
+fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
+    // Collapsed by default once the run is complete; running runs start open.
+    let open = RwSignal::new(!completed);
+    let count = steps.len();
+    let summary = format!("{count} steps");
+
+    view! {
+        <div class="flex justify-start my-1">
+            <div class="max-w-[80%] w-full rounded-2xl border border-border/50 bg-surface-sunken/40">
+                <button
+                    type="button"
+                    class="w-full flex items-center gap-2 px-3 py-1.5 text-left
+                           text-[11px] uppercase tracking-wider text-text-tertiary
+                           hover:text-text-secondary"
+                    on:click=move |_| open.update(|o| *o = !*o)
+                >
+                    <span>{summary}</span>
+                    <span class="ml-auto">
+                        {move || if open.get() { "▾" } else { "▸" }}
+                    </span>
+                </button>
+                <Show when=move || open.get()>
+                    <div class="max-h-[220px] overflow-y-auto px-2 pb-2 flex flex-col gap-1">
+                        {steps
+                            .clone()
+                            .into_iter()
+                            .map(|m| view! { <MessageBubble message=m clock=String::new() /> })
+                            .collect_view()}
+                    </div>
+                </Show>
             </div>
         </div>
     }

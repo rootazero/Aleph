@@ -137,7 +137,17 @@ pub fn row_key(row: &TimelineRow) -> String {
             clock,
         ),
         TimelineRow::StepStrip { run_id, steps, completed } => {
-            format!("strip:{run_id}:{}:{completed}", steps.len())
+            // Include aggregate volatile state (content length + tool counts) so
+            // a late `text_emitted` updating a folded step changes the <For> key
+            // and forces a fresh render — mirroring the Message arm which keys on
+            // content.len(). Without this, a streaming/late step update would
+            // reuse the DOM node and show a stale snapshot.
+            let content_len: usize = steps.iter().map(|s| s.content.len()).sum();
+            let tools: usize = steps.iter().map(|s| s.tool_calls.len()).sum();
+            format!(
+                "strip:{run_id}:{}:{completed}:{content_len}:{tools}",
+                steps.len()
+            )
         }
     }
 }
