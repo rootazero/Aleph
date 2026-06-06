@@ -18,8 +18,7 @@
 
 **Panel (aleph-panel):**
 - `src/api/trace.rs` — add `TraceApi::by_runs`.
-- `src/views/chat/events.rs` — extract `apply_trace_event` pure projection; live arm calls it.
-- `src/views/chat/replay.rs` (new) — pure `merge_session_messages` helper.
+- `src/views/chat/events.rs` — extract `apply_trace_event` projection (live arm calls it) + add `replay_run` (rebuild one run's bubbles from its persisted trace).
 - `src/components/chat_sidebar.rs` — fetch + replay on session load; drop hardcoded-empty hydration; reset badge.
 - `src/views/chat/timeline.rs` — `TimelineRow::StepStrip` aggregation.
 - `src/views/chat/messages.rs` — render `StepStrip` (scroll + auto-collapse).
@@ -432,149 +431,110 @@ git commit -m "panel: extract apply_trace_event projection shared by live + repl
 
 ---
 
-## Task 4: Pure `merge_session_messages` helper
+## Task 4: `replay_run` helper (reconstruct one run from its trace)
 
 **Files:**
-- Create: `interfaces/webchat/src/views/chat/replay.rs`
-- Modify: `interfaces/webchat/src/views/chat/mod.rs` (add `pub(crate) mod replay;`)
+- Modify: `interfaces/webchat/src/views/chat/events.rs`
+
+> Design note: `begin_step`/`set_step_text` operate on an `assistant-{run}` placeholder bubble that the live path creates via `start_assistant_message(run_id)` on `run_accepted`. The persisted trace contains only `agent_trace` events (no `run_accepted`), so replay must open the placeholder itself, project the events, finalize, then set the trailing answer bubble's text to the history-authoritative final content. The trailing `assistant-{run}` bubble IS the final answer (it carries the last iteration tag); earlier steps become `intermediate-{run}-{n}` bubbles.
 
 - [ ] **Step 1: Write the failing test**
 
-Create `interfaces/webchat/src/views/chat/replay.rs`:
+Add to the `projection_tests` module at the bottom of `interfaces/webchat/src/views/chat/events.rs` (created in Task 3):
 
 ```rust
-//! Pure assembly of a session transcript from persisted history (user +
-//! final answers) interleaved with trace-replayed intermediate step bubbles.
-
-use super::messages::run_id_from_message_id;
-use super::state::ChatMessage;
-use crate::api::chat::ChatMessage as WireMessage;
-
-/// Merge `history` (chronological user + final assistant rows from
-/// `chat.history`) with `replayed` intermediate step bubbles (each id
-/// `intermediate-{run}-{n}`, produced by replaying trace through
-/// `apply_trace_event`). For each assistant run, its intermediate steps are
-/// placed immediately BEFORE its final answer. Intermediates whose run has no
-/// final in history are appended at the end, grouped by first appearance.
-pub fn merge_session_messages(history: &[WireMessage], replayed: &[ChatMessage]) -> Vec<ChatMessage> {
-    let mut out: Vec<ChatMessage> = Vec::new();
-    let mut consumed: Vec<bool> = vec![false; replayed.len()];
-
-    for (i, h) in history.iter().enumerate() {
-        if h.role == "assistant" {
-            if let Some(run) = h.run_id.as_deref() {
-                for (j, r) in replayed.iter().enumerate() {
-                    if !consumed[j] && run_id_from_message_id(&r.id) == run {
-                        out.push(r.clone());
-                        consumed[j] = true;
-                    }
-                }
-            }
-        }
-        out.push(ChatMessage {
-            timestamp: h
-                .timestamp
-                .as_deref()
-                .and_then(super::timeline::parse_wire_timestamp),
-            id: h.run_id.clone().unwrap_or_else(|| format!("hist-{i}")),
-            role: h.role.clone(),
-            content: h.content.clone(),
-            tool_calls: vec![],
-            is_streaming: false,
-            is_intermediate: false,
-            error: None,
-            model_info: None,
-            iteration: None,
-        });
-    }
-
-    // Orphan intermediates (run never produced a final in history).
-    for (j, r) in replayed.iter().enumerate() {
-        if !consumed[j] {
-            out.push(r.clone());
-        }
-    }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::views::chat::state::{ChatMessage, ToolCallEntry};
-
-    fn wire(role: &str, content: &str, run: Option<&str>) -> WireMessage {
-        WireMessage {
-            role: role.into(),
-            content: content.into(),
-            run_id: run.map(|s| s.to_string()),
-            timestamp: None,
-            metadata: None,
-        }
-    }
-
-    fn step(run: &str, n: usize, content: &str) -> ChatMessage {
-        ChatMessage {
-            id: format!("intermediate-{run}-{n}"),
-            role: "assistant".into(),
-            content: content.into(),
-            tool_calls: Vec::<ToolCallEntry>::new(),
-            is_streaming: false,
-            is_intermediate: true,
-            error: None,
-            model_info: None,
-            iteration: Some(n),
-            timestamp: None,
-        }
-    }
-
     #[test]
-    fn intermediates_precede_their_final_answer() {
-        let history = vec![
-            wire("user", "hi", None),
-            wire("assistant", "final-a", Some("run-a")),
+    fn replay_run_rebuilds_intermediates_then_final_answer() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+
+        // Two turns: step 1 has a tool call, step 2 is the final turn.
+        let events = vec![
+            json!({ "kind": "turn_started", "iteration": 1 }),
+            json!({ "kind": "text_emitted", "iteration": 1, "stream": "step", "text": "looking" }),
+            json!({ "kind": "tool_call_started", "iteration": 1,
+                    "call": { "tool_id": "t1", "tool_name": "search", "input": { "q": "x" } } }),
+            json!({ "kind": "tool_call_completed", "iteration": 1,
+                    "call": { "tool_id": "t1", "tool_name": "search", "duration_ms": 3 },
+                    "result": { "ok": true } }),
+            json!({ "kind": "turn_started", "iteration": 2 }),
+            json!({ "kind": "text_emitted", "iteration": 2, "stream": "final", "text": "raw final" }),
         ];
-        let replayed = vec![step("run-a", 1, "s1"), step("run-a", 2, "s2")];
 
-        let merged = merge_session_messages(&history, &replayed);
-        let ids: Vec<&str> = merged.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(
-            ids,
-            vec!["intermediate-run-a-1", "intermediate-run-a-2", "run-a"]
+        replay_run(chat, ws, "run-1", &events, "AUTHORITATIVE ANSWER");
+
+        let msgs = chat.messages.get_untracked();
+        // Earlier turn folded into an intermediate bubble.
+        assert!(
+            msgs.iter().any(|m| m.is_intermediate && m.id.starts_with("intermediate-run-1-")),
+            "expected an intermediate step bubble"
         );
-        // The user message stays first.
-        assert_eq!(merged[0].role, "user");
-        assert_eq!(merged.last().unwrap().content, "final-a");
+        // Final bubble: the assistant-run-1 placeholder, not intermediate,
+        // not streaming, content overwritten by the history-authoritative text.
+        let final_bubble = msgs
+            .iter()
+            .find(|m| m.id == "assistant-run-1")
+            .expect("final answer bubble");
+        assert!(!final_bubble.is_intermediate);
+        assert!(!final_bubble.is_streaming);
+        assert_eq!(final_bubble.content, "AUTHORITATIVE ANSWER");
+        // Right-panel payload captured for the tool.
+        assert!(ws.get_tool_payload("run-1", "t1").is_some());
     }
+```
 
-    #[test]
-    fn orphan_intermediates_appended_at_end() {
-        let history = vec![wire("user", "hi", None)];
-        let replayed = vec![step("run-x", 1, "s1")];
-        let merged = merge_session_messages(&history, &replayed);
-        assert_eq!(merged.len(), 2);
-        assert_eq!(merged[1].id, "intermediate-run-x-1");
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `cargo test -p aleph-panel --lib views::chat::events::projection_tests::replay_run_rebuilds_intermediates_then_final_answer`
+Expected: FAIL — `replay_run` not found.
+
+- [ ] **Step 3: Implement `replay_run`**
+
+Add to `events.rs` (next to `apply_trace_event`):
+
+```rust
+/// Reconstruct one assistant run's chat bubbles + workspace tool payloads from
+/// its persisted trace `events`, mirroring the live event order: open the
+/// `assistant-{run}` placeholder, project every event through
+/// `apply_trace_event`, finalize the turn, then overwrite the trailing answer
+/// bubble's text with the history-authoritative `final_content`. Earlier turns
+/// become `intermediate-{run}-{n}` bubbles; the trailing `assistant-{run}`
+/// bubble is the final answer.
+pub(crate) fn replay_run(
+    chat: ChatState,
+    workspace: WorkspaceState,
+    run_id: &str,
+    events: &[serde_json::Value],
+    final_content: &str,
+) {
+    chat.start_assistant_message(run_id);
+    for ev in events {
+        apply_trace_event(chat, workspace, run_id, ev);
     }
+    chat.complete_run(run_id);
+    // History is authoritative for the final answer text (the last
+    // `text_emitted` may be a step narration, not the persisted reply).
+    let target_id = format!("assistant-{run_id}");
+    chat.messages.update(|msgs| {
+        if let Some(m) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
+            m.content = final_content.to_string();
+        }
+    });
 }
 ```
 
-- [ ] **Step 2: Register the module**
+- [ ] **Step 4: Run to verify it passes**
 
-In `interfaces/webchat/src/views/chat/mod.rs`, add alongside the other `mod` lines:
+Run: `cargo test -p aleph-panel --lib views::chat::events::projection_tests`
+Expected: PASS (both projection tests).
 
-```rust
-pub(crate) mod replay;
-```
-
-- [ ] **Step 3: Run test to verify it passes**
-
-Run: `cargo test -p aleph-panel --lib views::chat::replay`
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit (explicit path only; NEVER `git add -A` — unrelated dirty files exist)**
 
 ```bash
-git add interfaces/webchat/src/views/chat/replay.rs interfaces/webchat/src/views/chat/mod.rs
-git commit -m "panel: add pure merge_session_messages for trace replay assembly"
+git add interfaces/webchat/src/views/chat/events.rs
+git commit -m "panel: add replay_run to rebuild a run's bubbles from persisted trace"
 ```
 
 ---
@@ -582,17 +542,19 @@ git commit -m "panel: add pure merge_session_messages for trace replay assembly"
 ## Task 5: Wire replay into session load
 
 **Files:**
-- Modify: `interfaces/webchat/src/components/chat_sidebar.rs:185-216`
+- Modify: `interfaces/webchat/src/components/chat_sidebar.rs` (the history-load `spawn_local` block, around lines 185-216)
+
+> This replaces the old hydration that hardcoded `tool_calls: vec![]` / `iteration: None`. The new loop walks history in chronological order: user rows and trace-less assistant rows are pushed as plain bubbles (preserving the prior fallback), while assistant rows that have a persisted trace are rebuilt via `replay_run` so their intermediate steps + tool payloads come back. Processing in order means the assembled `chat.messages` is correctly ordered without a separate merge pass.
 
 - [ ] **Step 1: Replace the history-load closure body**
 
-Replace the `spawn_local(async move { match ChatApi::history(...) { Ok(history) => { ... } ... } });` block (lines ~185-216) with:
+Replace the `spawn_local(async move { match ChatApi::history(...) { ... } });` block with:
 
 ```rust
         leptos::task::spawn_local(async move {
             match ChatApi::history(&dash, &key, Some(50)).await {
                 Ok(history) => {
-                    // Collect assistant run_ids to fetch their persisted traces.
+                    // Distinct assistant run_ids → fetch their persisted traces.
                     let run_ids: Vec<String> = {
                         let mut seen = std::collections::HashSet::new();
                         history
@@ -603,53 +565,81 @@ Replace the `spawn_local(async move { match ChatApi::history(...) { Ok(history) 
                             .collect()
                     };
 
-                    // Replay persisted trace into the already-cleared real
-                    // `chat` (builds intermediate step bubbles + tool_calls)
-                    // and the real `ws` (right-panel payloads). Then harvest
-                    // those intermediates and merge them with the history
-                    // finals into the correct order. Replaying into the real
-                    // chat (vs a detached scratch ChatState) avoids creating
-                    // signals outside a live reactive owner inside spawn_local.
-                    let replayed: Vec<crate::views::chat::state::ChatMessage> = if run_ids
-                        .is_empty()
-                    {
-                        Vec::new()
-                    } else {
-                        match crate::api::trace::TraceApi::by_runs(&dash, run_ids).await {
-                            Ok(runs) => {
-                                if let Some(ws) = workspace {
-                                    for (run_id, events) in &runs {
-                                        for ev in events {
-                                            crate::views::chat::events::apply_trace_event(
-                                                chat, ws, run_id, ev,
-                                            );
-                                        }
-                                    }
-                                    // Loading an existing session = all activity
-                                    // already "seen"; clear the live-only badge +
-                                    // active-iteration marker the replay set.
-                                    ws.unseen_activity.set(0);
-                                    ws.current_iteration.set(None);
+                    let traces: std::collections::HashMap<String, Vec<serde_json::Value>> =
+                        if run_ids.is_empty() {
+                            std::collections::HashMap::new()
+                        } else {
+                            match crate::api::trace::TraceApi::by_runs(&dash, run_ids).await {
+                                Ok(runs) => runs,
+                                Err(e) => {
+                                    web_sys::console::warn_1(
+                                        &format!("trace.by_runs failed: {e}").into(),
+                                    );
+                                    std::collections::HashMap::new()
                                 }
-                                // Harvest the intermediate bubbles replay just
-                                // appended to the real chat, then clear so the
-                                // merged ordered list overwrites cleanly.
-                                let harvested = chat.messages.get_untracked();
-                                chat.messages.set(Vec::new());
-                                harvested
                             }
-                            Err(e) => {
-                                web_sys::console::warn_1(
-                                    &format!("trace.by_runs failed: {e}").into(),
-                                );
-                                Vec::new()
-                            }
-                        }
-                    };
+                        };
 
-                    let merged =
-                        crate::views::chat::replay::merge_session_messages(&history, &replayed);
-                    chat.messages.set(merged);
+                    // Build the transcript in order: replay traced assistant
+                    // runs into the (already-cleared) real chat; push user rows
+                    // and trace-less assistant rows as plain bubbles.
+                    chat.messages.set(Vec::new());
+                    for (i, m) in history.iter().enumerate() {
+                        let ts = m
+                            .timestamp
+                            .as_deref()
+                            .and_then(crate::views::chat::timeline::parse_wire_timestamp);
+
+                        let traced = m.role == "assistant"
+                            && m
+                                .run_id
+                                .as_deref()
+                                .and_then(|r| traces.get(r))
+                                .map(|evs| !evs.is_empty())
+                                .unwrap_or(false);
+
+                        if traced {
+                            if let (Some(run), Some(ws)) = (m.run_id.as_deref(), workspace) {
+                                let evs = traces.get(run).cloned().unwrap_or_default();
+                                crate::views::chat::events::replay_run(
+                                    chat, ws, run, &evs, &m.content,
+                                );
+                                // Stamp the final bubble's timestamp from history
+                                // so day separators stay correct.
+                                let target = format!("assistant-{run}");
+                                chat.messages.update(|msgs| {
+                                    if let Some(b) =
+                                        msgs.iter_mut().rev().find(|b| b.id == target)
+                                    {
+                                        b.timestamp = ts;
+                                    }
+                                });
+                            }
+                        } else {
+                            chat.messages.update(|msgs| {
+                                msgs.push(crate::views::chat::state::ChatMessage {
+                                    timestamp: ts,
+                                    id: m.run_id.clone().unwrap_or_else(|| format!("hist-{i}")),
+                                    role: m.role.clone(),
+                                    content: m.content.clone(),
+                                    tool_calls: vec![],
+                                    is_streaming: false,
+                                    is_intermediate: false,
+                                    error: None,
+                                    model_info: None,
+                                    iteration: None,
+                                });
+                            });
+                        }
+                    }
+
+                    // Loading an existing session = all activity already "seen";
+                    // clear the live-only badge + active-iteration marker that
+                    // replay set, and the lingering Idle/active run state.
+                    if let Some(ws) = workspace {
+                        ws.unseen_activity.set(0);
+                        ws.current_iteration.set(None);
+                    }
                 }
                 Err(e) => {
                     web_sys::console::error_1(&format!("Failed to load history: {e}").into());
@@ -658,19 +648,19 @@ Replace the `spawn_local(async move { match ChatApi::history(...) { Ok(history) 
         });
 ```
 
-> This removes the old hardcoded `tool_calls: vec![]` / `iteration: None` hydration — those fields now come from the replayed bubbles via `merge_session_messages`.
+> Confirm the surrounding closure already binds `dash`, `key`, `chat`, and `workspace` (the latter as `Option<WorkspaceState>` — the same binding used a few lines above for `ws.reset()`). If `workspace` is named differently, adapt. `replay_run` and `apply_trace_event` are `pub(crate)` in `crate::views::chat::events`.
 
 - [ ] **Step 2: Verify compile**
 
 Run: `cargo check -p aleph-panel`
-Expected: clean. (If `workspace` is not in scope as `Option<WorkspaceState>` here, confirm the existing `if let Some(ws) = workspace` usage earlier in the same function — it is used at line ~179 `ws.reset()` — and reuse that binding name.)
+Expected: clean.
 
 - [ ] **Step 3: Run panel tests (no regressions)**
 
 Run: `cargo test -p aleph-panel --lib`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Commit (explicit path only; NEVER `git add -A`)**
 
 ```bash
 git add interfaces/webchat/src/components/chat_sidebar.rs
@@ -964,4 +954,4 @@ git commit -m "panel: workspace trace persistence — manual verification tweaks
 - **Run id helper:** `run_id_from_message_id` (in `messages.rs`) maps both `assistant-{run}` and `intermediate-{run}-{n}` ids back to `{run}`. Reuse it everywhere a run id is derived from a message id.
 - **No memory writes:** every read in this plan targets `task_traces` (observability). Do not touch `src/memory/` or any `raw_memories`/notes path.
 - **Projection parity is the contract:** if you change `apply_trace_event`, both live and replay change together — that is intentional. The `projection_tests` test guards it.
-- **WASM test host:** `web_sys` panics off-wasm; the pure helpers (`merge_session_messages`, `derive_timeline`) and signal-only logic run on the host test target. Anything touching `web_sys` (the `spawn_local` wiring in Task 5, the rendered components) is verified manually in Task 8, not unit-tested.
+- **WASM test host:** `web_sys` panics off-wasm; the signal-only logic (`apply_trace_event`, `replay_run`, `derive_timeline`) runs on the host test target under an `Owner`. Anything touching `web_sys` (the `spawn_local` wiring in Task 5, the rendered components) is verified manually in Task 8, not unit-tested.
