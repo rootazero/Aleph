@@ -534,6 +534,28 @@ async fn deliver_to_channel(
     }
 }
 
+/// Bilingual note prepended to a cron run's persisted output when the
+/// requested agent was missing and the run fell back to the default agent.
+/// Kept as a fixed bilingual string because the executor has no panel i18n
+/// context; mirrors the `cron.fallback_note` locale entry.
+fn fallback_note(requested: &str) -> String {
+    format!(
+        "原 agent '{requested}' 不存在，已回退到 main / \
+         Agent '{requested}' not found, fell back to main"
+    )
+}
+
+/// Prepend [`fallback_note`] to a run's output. When the run produced no text,
+/// the note becomes the entire output so the fallback stays visible in run
+/// history. Always returns `Some`.
+fn prepend_fallback_note(output: Option<String>, requested: &str) -> Option<String> {
+    let note = fallback_note(requested);
+    Some(match output {
+        Some(text) => format!("{note}\n{text}"),
+        None => note,
+    })
+}
+
 /// Build an error `ExecutionResult`.
 fn make_error_result(
     started_at: i64,
@@ -599,5 +621,25 @@ mod tests {
         assert!(prompt.contains("[Cron Task: test-job-1]"));
         assert!(!prompt.contains("scheduled task"));
         assert!(prompt.contains("Check the weather"));
+    }
+
+    #[test]
+    fn fallback_note_names_requested_agent() {
+        let n = fallback_note("oldie");
+        assert!(n.contains("oldie"), "note must name the missing agent");
+        assert!(n.contains("main"), "note must mention the fallback target");
+    }
+
+    #[test]
+    fn prepend_fallback_note_prefixes_existing_output() {
+        let out = prepend_fallback_note(Some("done".to_string()), "oldie").unwrap();
+        assert!(out.starts_with(&fallback_note("oldie")));
+        assert!(out.ends_with("done"));
+    }
+
+    #[test]
+    fn prepend_fallback_note_uses_note_as_output_when_empty() {
+        let out = prepend_fallback_note(None, "oldie").unwrap();
+        assert_eq!(out, fallback_note("oldie"));
     }
 }
