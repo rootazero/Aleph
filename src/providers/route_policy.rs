@@ -27,6 +27,24 @@ pub struct LoadMetric {
     pub in_flight: usize,
     /// Observed EWMA latency in microseconds; `0` = unsampled (tried first).
     pub latency_us: u64,
+    /// Requests used in the current rolling rate window (raw count; filled by
+    /// [`LoadStats`](crate::providers::load_stats::LoadStats)). The failover
+    /// layer folds this against the configured limit into the two derived fields
+    /// below; the ordering logic itself never sees the limit (stays prompt- and
+    /// config-blind, pure infrastructure).
+    pub rpm_used: u32,
+    /// Tokens used in the current rolling rate window (raw count).
+    pub tpm_used: u64,
+    /// Rate-window utilisation in per-mille (‰): `max(rpm, tpm) / limit * 1000`,
+    /// pre-computed by the failover layer. `0` when no limit is configured — so
+    /// [`UsageBased`](crate::config::types::LoadBalanceStrategy::UsageBased)
+    /// degrades to configured order. The sort key for `UsageBased`.
+    pub utilization_permille: u16,
+    /// Whether this provider has hit or exceeded any configured rate dimension
+    /// (≥100% on rpm or tpm). Saturated providers are deprioritised to the back
+    /// of their tier under every strategy (never dropped). `false` when no limit
+    /// is set — so the gate is a no-op without `rate_limits`.
+    pub over_limit: bool,
 }
 
 /// Operator's explicit per-tier provider preference — "use *this* local /
@@ -61,6 +79,62 @@ impl RouteTargets {
     /// Whether any pin is set (the common no-op fast path checks this first).
     pub fn is_empty(&self) -> bool {
         self.local_provider.is_none() && self.cloud_provider.is_none()
+    }
+}
+
+/// Operator's per-provider rate ceilings, lifted out of `[route].rate_limits`.
+///
+/// Owned here (not in `config`) so the ordering layer keeps its own input type
+/// and the policy never depends on the config crate — the same decoupling
+/// precedent as [`RouteTargets`] / [`LoadMetric`]. The failover layer calls
+/// [`assess`](RateLimits::assess) to fold a provider's live window counts
+/// against its limit into the two prompt-blind scalars the ordering reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RateLimits {
+    /// provider name → `(rpm, tpm)`; `None` on a dimension means unbounded.
+    by_provider: std::collections::BTreeMap<String, (Option<u32>, Option<u32>)>,
+}
+
+impl RateLimits {
+    /// Lift the per-provider ceilings out of a `[route]` config snapshot.
+    pub fn from_config(cfg: &ModelRouteConfig) -> Self {
+        Self {
+            by_provider: cfg
+                .rate_limits
+                .iter()
+                .map(|(name, lim)| (name.clone(), (lim.rpm, lim.tpm)))
+                .collect(),
+        }
+    }
+
+    /// Whether any provider has a configured ceiling (the no-op fast path).
+    pub fn is_empty(&self) -> bool {
+        self.by_provider.is_empty()
+    }
+
+    /// Fold a provider's live window counts against its ceiling into
+    /// `(utilisation‰, over_limit)`.
+    ///
+    /// Utilisation is the *max* of the rpm and tpm utilisation (the binding
+    /// dimension); an unconfigured provider or dimension contributes 0. A
+    /// provider is `over_limit` once any configured dimension reaches 100%. The
+    /// per-mille value saturates at [`u16::MAX`] so a wildly-over provider still
+    /// sorts last without overflow.
+    pub fn assess(&self, name: &str, rpm_used: u32, tpm_used: u64) -> (u16, bool) {
+        let Some(&(rpm, tpm)) = self.by_provider.get(name) else {
+            return (0, false); // no ceiling → no signal
+        };
+        let rpm_permille = rpm
+            .filter(|&l| l > 0)
+            .map(|l| (rpm_used as u64 * 1000 / l as u64))
+            .unwrap_or(0);
+        let tpm_permille = tpm
+            .filter(|&l| l > 0)
+            .map(|l| (tpm_used * 1000 / l as u64))
+            .unwrap_or(0);
+        let permille = rpm_permille.max(tpm_permille);
+        let over = permille >= 1000;
+        (permille.min(u16::MAX as u64) as u16, over)
     }
 }
 
@@ -194,14 +268,18 @@ where
 /// Layering is deliberate and order-preserving at every step:
 /// 1. tier gating drops `Skip`, defers `CrossTier` crossings to the end;
 /// 2. operator pins ([`RouteTargets`]) are promoted to the front and are
-///    **never** reordered by the balancer (an explicit pin is a hard signal);
-/// 3. the remaining same-tier `Allow` candidates are reordered by `strategy`
-///    using the prompt-blind [`LoadMetric`] from `metric_of` (and `rr_base`
-///    for [`RoundRobin`](LoadBalanceStrategy::RoundRobin) rotation);
-/// 4. cross-tier crossings are appended last, unchanged.
+///    **never** reordered by the balancer (an explicit pin is a hard signal —
+///    it leads even when rate-saturated);
+/// 3. rate-saturated (`over_limit`) non-pinned candidates are split off and
+///    deprioritised to the back of the tier (never dropped — the chain must not
+///    starve);
+/// 4. the remaining fresh same-tier `Allow` candidates are reordered by
+///    `strategy` using the prompt-blind [`LoadMetric`] from `metric_of` (and
+///    `rr_base` for [`RoundRobin`](LoadBalanceStrategy::RoundRobin) rotation);
+/// 5. cross-tier crossings are appended last, unchanged.
 ///
-/// Under [`LoadBalanceStrategy::Ordered`] step 3 is a no-op, so the result is
-/// byte-identical to the pre-balance failover ordering.
+/// Under [`LoadBalanceStrategy::Ordered`] with no `rate_limits`, steps 3–4 are
+/// no-ops, so the result is byte-identical to the pre-balance failover ordering.
 #[allow(clippy::too_many_arguments)]
 pub fn order_candidates_balanced<T, FT, FN, FM>(
     candidates: Vec<T>,
@@ -232,19 +310,31 @@ where
     }
 
     // Promote pinned providers to the front of the active tier (stable —
-    // `Vec::partition` preserves relative order within each side). The pinned
-    // group is exempt from balancing; only the unpinned remainder is balanced.
-    let mut out: Vec<(T, CandidateAction)> = if targets.is_empty() {
-        balance_group(same_tier, strategy, rr_base, &metric_of, &name_of)
-    } else {
-        let (pinned, rest): (Vec<_>, Vec<_>) = same_tier
-            .into_iter()
-            .partition(|(c, _)| targets.is_pinned(name_of(c)));
-        let mut merged = pinned;
-        merged.extend(balance_group(rest, strategy, rr_base, &metric_of, &name_of));
-        merged
-    };
+    // `Vec::partition` preserves relative order within each side). An explicit
+    // pin is a hard operator signal: it leads its tier even when rate-saturated
+    // (pin beats the over-limit gate). The pinned group is exempt from balancing.
+    let (pinned, unpinned): (Vec<(T, CandidateAction)>, Vec<(T, CandidateAction)>) =
+        if targets.is_empty() {
+            (Vec::new(), same_tier)
+        } else {
+            same_tier
+                .into_iter()
+                .partition(|(c, _)| targets.is_pinned(name_of(c)))
+        };
 
+    // Over-limit gate (strategy-agnostic): deprioritise rate-saturated providers
+    // to the back of the tier — appended after the balanced fresh group, never
+    // dropped, so the chain can still fall back to a throttled endpoint rather
+    // than starve. A no-op without `rate_limits` (every `over_limit` is `false`
+    // → `saturated` is empty → byte-identical to pre-usage ordering). Stable:
+    // `partition` preserves configured order within the saturated group.
+    let (fresh, saturated): (Vec<(T, CandidateAction)>, Vec<(T, CandidateAction)>) = unpinned
+        .into_iter()
+        .partition(|(c, _)| !metric_of(name_of(c)).over_limit);
+
+    let mut out: Vec<(T, CandidateAction)> = pinned;
+    out.extend(balance_group(fresh, strategy, rr_base, &metric_of, &name_of));
+    out.extend(saturated);
     out.extend(crossings);
     out
 }
@@ -280,6 +370,11 @@ where
         // already-measured ones and gains a latency reading.
         LoadBalanceStrategy::LatencyAware => {
             sort_by_metric(group, metric_of, name_of, |m| m.latency_us)
+        }
+        // Lowest rate-window utilisation first — spread load toward whoever has
+        // the most remaining headroom. `0‰` (no limit / idle) sorts first.
+        LoadBalanceStrategy::UsageBased => {
+            sort_by_metric(group, metric_of, name_of, |m| m.utilization_permille as u64)
         }
     }
 }
@@ -532,6 +627,7 @@ mod tests {
                     .map(|(_, f, l)| LoadMetric {
                         in_flight: *f,
                         latency_us: *l,
+                        ..Default::default()
                     })
                     .unwrap_or_default()
             },
@@ -624,16 +720,127 @@ mod tests {
             |name| match name {
                 "a" => LoadMetric {
                     in_flight: 9,
-                    latency_us: 0,
+                    ..Default::default()
                 },
                 "b" => LoadMetric {
                     in_flight: 1,
-                    latency_us: 0,
+                    ..Default::default()
                 },
                 _ => LoadMetric::default(),
             },
         );
         let names: Vec<&str> = out.iter().map(|((n, _), _)| *n).collect();
         assert_eq!(names, vec!["c", "b", "a"]);
+    }
+
+    // --- usage-based strategy + over-limit gate tests -----------------------
+
+    /// Order three same-tier locals where `metrics` maps name → (utilisation‰,
+    /// over_limit), under `strategy`, with optional `pins`.
+    fn usage_names(
+        strategy: LoadBalanceStrategy,
+        pins: &RouteTargets,
+        metrics: &[(&str, u16, bool)],
+    ) -> Vec<&'static str> {
+        let cands = vec![
+            ("a", EndpointTier::Local),
+            ("b", EndpointTier::Local),
+            ("c", EndpointTier::Local),
+        ];
+        let lookup = metrics.to_vec();
+        let out = order_candidates_balanced(
+            cands,
+            RouteMode::Auto,
+            false,
+            pins,
+            |(_, t)| *t,
+            |(n, _)| *n,
+            strategy,
+            0,
+            |name| {
+                lookup
+                    .iter()
+                    .find(|(n, _, _)| *n == name)
+                    .map(|(_, u, o)| LoadMetric {
+                        utilization_permille: *u,
+                        over_limit: *o,
+                        ..Default::default()
+                    })
+                    .unwrap_or_default()
+            },
+        );
+        out.iter().map(|((n, _), _)| *n).collect()
+    }
+
+    #[test]
+    fn usage_based_prefers_lowest_utilisation() {
+        // a=700‰, b=100‰, c=400‰ → ascending headroom: b, c, a.
+        let names = usage_names(
+            LoadBalanceStrategy::UsageBased,
+            &RouteTargets::default(),
+            &[("a", 700, false), ("b", 100, false), ("c", 400, false)],
+        );
+        assert_eq!(names, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn over_limit_deprioritised_to_back_under_any_strategy() {
+        // b is saturated → pushed last even though Ordered would keep a,b,c.
+        let names = usage_names(
+            LoadBalanceStrategy::Ordered,
+            &RouteTargets::default(),
+            &[("a", 0, false), ("b", 1200, true), ("c", 0, false)],
+        );
+        assert_eq!(names, vec!["a", "c", "b"]);
+    }
+
+    #[test]
+    fn pin_beats_over_limit_gate() {
+        // Pin "b" though it is saturated → it still leads; a,c fresh follow.
+        let targets = RouteTargets {
+            local_provider: Some("b".to_string()),
+            cloud_provider: None,
+        };
+        let names = usage_names(
+            LoadBalanceStrategy::Ordered,
+            &targets,
+            &[("a", 0, false), ("b", 1500, true), ("c", 0, false)],
+        );
+        assert_eq!(names, vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn no_limits_is_byte_identical_under_usage_based() {
+        // Every metric 0‰/not-over → UsageBased degrades to configured order.
+        let names = usage_names(
+            LoadBalanceStrategy::UsageBased,
+            &RouteTargets::default(),
+            &[],
+        );
+        assert_eq!(names, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn rate_limits_assess_folds_binding_dimension() {
+        let cfg = ModelRouteConfig {
+            rate_limits: [(
+                "p".to_string(),
+                crate::config::types::ProviderRateLimit {
+                    rpm: Some(100),
+                    tpm: Some(1000),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        };
+        let limits = RateLimits::from_config(&cfg);
+        assert!(!limits.is_empty());
+        // rpm 50/100 = 500‰, tpm 200/1000 = 200‰ → binding dim = 500‰, not over.
+        assert_eq!(limits.assess("p", 50, 200), (500, false));
+        // tpm at the ceiling → over_limit.
+        assert_eq!(limits.assess("p", 0, 1000), (1000, true));
+        // Unconfigured provider → no signal.
+        assert_eq!(limits.assess("other", 9999, 9999), (0, false));
     }
 }

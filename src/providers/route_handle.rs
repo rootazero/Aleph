@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 use arc_swap::ArcSwap;
 
 use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
-use crate::providers::route_policy::RouteTargets;
+use crate::providers::route_policy::{RateLimits, RouteTargets};
 use crate::sync_primitives::Arc;
 
 const MODE_AUTO: u8 = 0;
@@ -37,6 +37,7 @@ const LB_ORDERED: u8 = 0;
 const LB_ROUND_ROBIN: u8 = 1;
 const LB_LEAST_BUSY: u8 = 2;
 const LB_LATENCY_AWARE: u8 = 3;
+const LB_USAGE_BASED: u8 = 4;
 
 fn mode_to_u8(mode: RouteMode) -> u8 {
     match mode {
@@ -61,6 +62,7 @@ fn lb_to_u8(s: LoadBalanceStrategy) -> u8 {
         LoadBalanceStrategy::RoundRobin => LB_ROUND_ROBIN,
         LoadBalanceStrategy::LeastBusy => LB_LEAST_BUSY,
         LoadBalanceStrategy::LatencyAware => LB_LATENCY_AWARE,
+        LoadBalanceStrategy::UsageBased => LB_USAGE_BASED,
     }
 }
 
@@ -69,6 +71,7 @@ fn u8_to_lb(raw: u8) -> LoadBalanceStrategy {
         LB_ROUND_ROBIN => LoadBalanceStrategy::RoundRobin,
         LB_LEAST_BUSY => LoadBalanceStrategy::LeastBusy,
         LB_LATENCY_AWARE => LoadBalanceStrategy::LatencyAware,
+        LB_USAGE_BASED => LoadBalanceStrategy::UsageBased,
         // LB_ORDERED and any out-of-range value fall back to the safe no-op.
         _ => LoadBalanceStrategy::Ordered,
     }
@@ -89,6 +92,9 @@ pub struct RouteHandle {
     /// scalar signal alongside `mode` — same relaxed-atomic, hot-swap contract.
     load_balance: AtomicU8,
     targets: ArcSwap<RouteTargets>,
+    /// Per-provider rate ceilings. Same lock-free RCU contract as `targets`: the
+    /// hot path reads a stable snapshot, the config-write path swaps a new one.
+    limits: ArcSwap<RateLimits>,
 }
 
 impl RouteHandle {
@@ -99,6 +105,7 @@ impl RouteHandle {
             allow_escalation: AtomicBool::new(cfg.allow_cloud_escalation),
             load_balance: AtomicU8::new(lb_to_u8(cfg.load_balance)),
             targets: ArcSwap::from_pointee(RouteTargets::from_config(cfg)),
+            limits: ArcSwap::from_pointee(RateLimits::from_config(cfg)),
         }
     }
 
@@ -112,6 +119,7 @@ impl RouteHandle {
         self.load_balance
             .store(lb_to_u8(cfg.load_balance), Ordering::Relaxed);
         self.targets.store(Arc::new(RouteTargets::from_config(cfg)));
+        self.limits.store(Arc::new(RateLimits::from_config(cfg)));
     }
 
     /// Read the current `(mode, allow_cloud_escalation)` — the two hard signals
@@ -132,6 +140,12 @@ impl RouteHandle {
     /// a stable snapshot for the duration of one candidate ordering pass.
     pub fn targets(&self) -> Arc<RouteTargets> {
         self.targets.load_full()
+    }
+
+    /// Read the current per-provider rate ceilings. Lock-free RCU load; the
+    /// returned `Arc` is a stable snapshot for one candidate ordering pass.
+    pub fn limits(&self) -> Arc<RateLimits> {
+        self.limits.load_full()
     }
 }
 
@@ -229,6 +243,41 @@ mod tests {
     #[test]
     fn unknown_raw_lb_decodes_to_ordered() {
         assert_eq!(u8_to_lb(99), LoadBalanceStrategy::Ordered);
+    }
+
+    #[test]
+    fn usage_based_lb_round_trips() {
+        assert_eq!(lb_to_u8(LoadBalanceStrategy::UsageBased), LB_USAGE_BASED);
+        assert_eq!(u8_to_lb(LB_USAGE_BASED), LoadBalanceStrategy::UsageBased);
+    }
+
+    #[test]
+    fn limits_default_empty_and_hot_apply() {
+        use crate::config::types::ProviderRateLimit;
+
+        let h = RouteHandle::from_config(&ModelRouteConfig::default());
+        assert!(h.limits().is_empty());
+
+        h.store(&ModelRouteConfig {
+            rate_limits: [(
+                "anthropic".to_string(),
+                ProviderRateLimit {
+                    rpm: Some(60),
+                    tpm: Some(90_000),
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        });
+        let lim = h.limits();
+        assert!(!lim.is_empty());
+        // 30/60 rpm = 500‰, 0 tpm → binding = 500‰, not over.
+        assert_eq!(lim.assess("anthropic", 30, 0), (500, false));
+
+        // Clearing hot-applies back to empty.
+        h.store(&ModelRouteConfig::default());
+        assert!(h.limits().is_empty());
     }
 
     #[test]
