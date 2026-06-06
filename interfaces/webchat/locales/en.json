@@ -1821,5 +1821,16 @@
     "gateway_disconnected": "Gateway disconnected",
     "no_jobs": "No scheduled jobs configured. Create one in Dashboard → Scheduled Tasks.",
     "consecutive_failures": "Consecutive failures"
+  },
+  "tool_card": {
+    "expand_all": "Show all",
+    "collapse": "Collapse",
+    "cat_edit": "edit",
+    "cat_write": "write",
+    "cat_patch": "patch",
+    "cat_read": "read",
+    "cat_run": "run",
+    "cat_search": "search",
+    "cat_tool": "tool"
   }
 }

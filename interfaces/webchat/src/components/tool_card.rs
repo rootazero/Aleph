@@ -5,6 +5,7 @@
 //! 宿主机 `cargo test -p aleph-panel --lib` 下测试。
 
 use crate::components::json_viewer::JsonViewer;
+use crate::i18n::*;
 use crate::state::layout::{ToolPayload, WorkspaceState};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
@@ -131,29 +132,6 @@ pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
         *counts.entry(kind).or_insert(0) += 1;
     }
     order.into_iter().map(|k| (k, counts[&k])).collect()
-}
-
-/// 大类的中性英文标签（i18n 在视图层覆盖；这里给纯函数一个稳定回退）。
-pub fn kind_label(kind: ToolKind) -> &'static str {
-    match kind {
-        ToolKind::FileEdit => "edit",
-        ToolKind::FileWrite => "write",
-        ToolKind::ApplyPatch => "patch",
-        ToolKind::FileRead => "read",
-        ToolKind::Bash => "run",
-        ToolKind::Search => "search",
-        ToolKind::Default => "tool",
-    }
-}
-
-/// 由工具调用合成一句占位标题（叙述为空时用）。形如
-/// `read×2 · run×1 · search×1`。无工具时返回空串。
-pub fn synthesize_step_title(tools: &[(String, String)]) -> String {
-    let parts: Vec<String> = summarize_tools(tools)
-        .into_iter()
-        .map(|(k, n)| format!("{}×{}", kind_label(k), n))
-        .collect();
-    parts.join(" · ")
 }
 
 /// 文件类工具的路径，用于头部 `📄 path`。非文件工具返回 None。
@@ -352,12 +330,16 @@ fn edit_body(p: &ToolPayload) -> AnyView {
     diff_view(lines)
 }
 
-/// 截断的等宽文本块 + 「展开全部 / 收起」。
-fn collapsible_text(text: String, extra_class: &'static str) -> AnyView {
+/// 截断的等宽文本块 + 「展开全部 / 收起」（i18n）。
+#[component]
+fn CollapsibleText(text: String, extra_class: &'static str) -> impl IntoView {
+    let i18n = use_i18n();
     let (preview, hidden) = split_preview(&text, MAX_PREVIEW_LINES);
     if hidden == 0 {
-        return view! { <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>{text}</pre> }
-            .into_any();
+        return view! {
+            <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>{text}</pre>
+        }
+        .into_any();
     }
     let show_all = RwSignal::new(false);
     let full = text.clone();
@@ -372,9 +354,9 @@ fn collapsible_text(text: String, extra_class: &'static str) -> AnyView {
                 on:click=move |_| show_all.update(|s| *s = !*s)
             >
                 {move || if show_all.get() {
-                    "收起".to_string()
+                    t_string!(i18n, tool_card.collapse).to_string()
                 } else {
-                    format!("展开全部 (+{hidden})")
+                    format!("{} (+{hidden})", t_string!(i18n, tool_card.expand_all))
                 }}
             </button>
         </div>
@@ -384,7 +366,7 @@ fn collapsible_text(text: String, extra_class: &'static str) -> AnyView {
 
 fn write_body(p: &ToolPayload) -> AnyView {
     let content = arg_str(p, "content").to_string();
-    collapsible_text(content, "")
+    view! { <CollapsibleText text=content extra_class="" /> }.into_any()
 }
 
 fn patch_body(p: &ToolPayload) -> AnyView {
@@ -407,7 +389,11 @@ fn patch_body(p: &ToolPayload) -> AnyView {
 }
 
 fn shell_body(p: &ToolPayload) -> AnyView {
-    let cmd = arg_str(p, "code").to_string();
+    let cmd = {
+        let v = arg_str(p, "cmd");
+        if v.is_empty() { arg_str(p, "code") } else { v }
+    }
+    .to_string();
     let out = p.result.as_ref().and_then(success_output).cloned();
     let stdout = out
         .as_ref()
@@ -436,8 +422,8 @@ fn shell_body(p: &ToolPayload) -> AnyView {
     view! {
         <div class="flex flex-col gap-1">
             <pre class=format!("{MONO_BLOCK} text-text-primary")>{format!("$ {cmd}")}</pre>
-            {(!stdout.is_empty()).then(|| collapsible_text(stdout, "text-text-secondary"))}
-            {(!stderr.is_empty()).then(|| collapsible_text(stderr, "text-danger/80"))}
+            {(!stdout.is_empty()).then(|| view! { <CollapsibleText text=stdout extra_class="text-text-secondary" /> })}
+            {(!stderr.is_empty()).then(|| view! { <CollapsibleText text=stderr extra_class="text-danger/80" /> })}
             {exit_badge}
         </div>
     }
@@ -458,7 +444,7 @@ fn read_body(p: &ToolPayload) -> AnyView {
     if text.is_empty() {
         return default_body(p);
     }
-    collapsible_text(text, "text-text-secondary")
+    view! { <CollapsibleText text=text extra_class="text-text-secondary" /> }.into_any()
 }
 
 fn search_body(p: &ToolPayload) -> AnyView {
@@ -620,18 +606,4 @@ mod tests {
         assert!(!ToolKind::Default.default_open());
     }
 
-    #[test]
-    fn synthesize_title_formats_counts() {
-        let tools = vec![
-            ("a".into(), "file_read".into()),
-            ("b".into(), "file_read".into()),
-            ("c".into(), "bash".into()),
-        ];
-        assert_eq!(synthesize_step_title(&tools), "read×2 · run×1");
-    }
-
-    #[test]
-    fn synthesize_title_empty_when_no_tools() {
-        assert_eq!(synthesize_step_title(&[]), "");
-    }
 }

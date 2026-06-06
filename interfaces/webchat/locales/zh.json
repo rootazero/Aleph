@@ -1821,5 +1821,16 @@
     "gateway_disconnected": "网关已断开",
     "no_jobs": "未配置定时任务。请在 仪表盘 → 定时任务 中创建。",
     "consecutive_failures": "连续失败次数"
+  },
+  "tool_card": {
+    "expand_all": "展开全部",
+    "collapse": "收起",
+    "cat_edit": "编辑",
+    "cat_write": "写入",
+    "cat_patch": "补丁",
+    "cat_read": "读取",
+    "cat_run": "执行",
+    "cat_search": "搜索",
+    "cat_tool": "工具"
   }
 }

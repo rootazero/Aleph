@@ -9,7 +9,7 @@
 
 use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::components::markdown::MarkdownRenderer;
-use crate::components::tool_card::{synthesize_step_title, ToolCard};
+use crate::components::tool_card::{summarize_tools, ToolCard, ToolKind};
 use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::state::layout::{FilePreview, LayoutMode, WorkspaceState};
@@ -101,6 +101,7 @@ fn ActivityTimeline() -> impl IntoView {
 #[component]
 fn StepCard(group: StepGroup) -> impl IntoView {
     let workspace = expect_context::<WorkspaceState>();
+    let i18n = use_i18n();
 
     let run_id = group.run_id.clone();
     let iteration = group.iteration;
@@ -117,7 +118,22 @@ fn StepCard(group: StepGroup) -> impl IntoView {
     });
 
     let narration = group.narration.clone();
-    let fallback_title = synthesize_step_title(&group.tools);
+    let fallback_title = summarize_tools(&group.tools)
+        .into_iter()
+        .map(|(k, n)| {
+            let label = match k {
+                ToolKind::FileEdit => t_string!(i18n, tool_card.cat_edit).to_string(),
+                ToolKind::FileWrite => t_string!(i18n, tool_card.cat_write).to_string(),
+                ToolKind::ApplyPatch => t_string!(i18n, tool_card.cat_patch).to_string(),
+                ToolKind::FileRead => t_string!(i18n, tool_card.cat_read).to_string(),
+                ToolKind::Bash => t_string!(i18n, tool_card.cat_run).to_string(),
+                ToolKind::Search => t_string!(i18n, tool_card.cat_search).to_string(),
+                ToolKind::Default => t_string!(i18n, tool_card.cat_tool).to_string(),
+            };
+            format!("{label}×{n}")
+        })
+        .collect::<Vec<_>>()
+        .join(" · ");
     let tools = group.tools.clone();
 
     view! {
