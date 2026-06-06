@@ -133,6 +133,29 @@ pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
     order.into_iter().map(|k| (k, counts[&k])).collect()
 }
 
+/// 大类的中性英文标签（i18n 在视图层覆盖；这里给纯函数一个稳定回退）。
+pub fn kind_label(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::FileEdit => "edit",
+        ToolKind::FileWrite => "write",
+        ToolKind::ApplyPatch => "patch",
+        ToolKind::FileRead => "read",
+        ToolKind::Bash => "run",
+        ToolKind::Search => "search",
+        ToolKind::Default => "tool",
+    }
+}
+
+/// 由工具调用合成一句占位标题（叙述为空时用）。形如
+/// `read×2 · run×1 · search×1`。无工具时返回空串。
+pub fn synthesize_step_title(tools: &[(String, String)]) -> String {
+    let parts: Vec<String> = summarize_tools(tools)
+        .into_iter()
+        .map(|(k, n)| format!("{}×{}", kind_label(k), n))
+        .collect();
+    parts.join(" · ")
+}
+
 /// 文件类工具的路径，用于头部 `📄 path`。非文件工具返回 None。
 pub fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
     let args = payload.as_ref()?.args.as_ref()?;
@@ -572,5 +595,20 @@ mod tests {
         assert!(!ToolKind::Search.default_open());
         assert!(!ToolKind::FileRead.default_open());
         assert!(!ToolKind::Default.default_open());
+    }
+
+    #[test]
+    fn synthesize_title_formats_counts() {
+        let tools = vec![
+            ("a".into(), "file_read".into()),
+            ("b".into(), "file_read".into()),
+            ("c".into(), "bash".into()),
+        ];
+        assert_eq!(synthesize_step_title(&tools), "read×2 · run×1");
+    }
+
+    #[test]
+    fn synthesize_title_empty_when_no_tools() {
+        assert_eq!(synthesize_step_title(&[]), "");
     }
 }

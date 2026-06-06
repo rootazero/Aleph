@@ -9,7 +9,7 @@
 
 use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::components::markdown::MarkdownRenderer;
-use crate::components::tool_card::ToolCard;
+use crate::components::tool_card::{synthesize_step_title, ToolCard};
 use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::state::layout::{FilePreview, LayoutMode, WorkspaceState};
@@ -117,7 +117,7 @@ fn StepCard(group: StepGroup) -> impl IntoView {
     });
 
     let narration = group.narration.clone();
-    let has_narration = !narration.is_empty();
+    let fallback_title = synthesize_step_title(&group.tools);
     let tools = group.tools.clone();
 
     view! {
@@ -144,11 +144,19 @@ fn StepCard(group: StepGroup) -> impl IntoView {
                     <span class="inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
                 </Show>
             </button>
-            <Show when=move || has_narration>
-                <div class="text-sm text-text-primary leading-relaxed aleph-step-narration">
-                    <MarkdownRenderer content=narration.clone() />
-                </div>
-            </Show>
+            {if !narration.is_empty() {
+                view! {
+                    <div class="text-sm text-text-primary leading-relaxed aleph-step-narration">
+                        <MarkdownRenderer content=narration.clone() />
+                    </div>
+                }.into_any()
+            } else if !fallback_title.is_empty() {
+                view! {
+                    <div class="text-xs text-text-tertiary font-mono">{fallback_title.clone()}</div>
+                }.into_any()
+            } else {
+                view! { <span /> }.into_any()
+            }}
             <div class="flex flex-col gap-2">
                 {tools
                     .clone()

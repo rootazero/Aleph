@@ -8,6 +8,7 @@ use super::reasoning::ReasoningPanel;
 use super::state::{ChatMessage, ChatPhase, ChatSendErrorCode, ChatState};
 use super::timeline::{self, TimelineRow};
 use crate::components::markdown::{MarkdownRenderer, StreamingRenderer};
+use crate::components::tool_card::ToolCard;
 use crate::i18n::*;
 use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
@@ -374,65 +375,16 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
 
     let tool_calls_view = if has_tools {
         let tools = message.tool_calls.clone();
-        let run_id_for_chips = message_run_id.clone();
+        let run_for_cards = message_run_id.clone();
         Some(view! {
-            <div class="mb-2 space-y-1">
+            <div class="mb-2 flex flex-col gap-1">
                 {tools.into_iter().map(|tc| {
-                    let status_color = match tc.status.as_str() {
-                        "running" => "text-warning",
-                        "completed" => "text-success",
-                        "failed" => "text-danger",
-                        _ => "text-text-secondary",
-                    };
-                    let status_icon = match tc.status.as_str() {
-                        "running" => "\u{27F3}",
-                        "completed" => "\u{2713}",
-                        "failed" => "\u{2717}",
-                        _ => "\u{00B7}",
-                    };
-                    let duration_text = tc.duration_ms
-                        .map(|d| format!(" ({d}ms)"))
-                        .unwrap_or_default();
-                    let tool_name = tc.tool_name.clone();
-                    let tool_id = tc.tool_id.clone();
-                    let run_for_click = run_id_for_chips.clone();
-                    let on_click = move |_ev: web_sys::MouseEvent| {
-                        if let Some(ws) = workspace {
-                            ws.focus_tool_row(run_for_click.clone(), tool_id.clone());
-                        }
-                    };
-                    let clickable = workspace.is_some();
-                    // Failed calls get a subtle danger tint so errors read at a
-                    // glance without opening the workspace pane.
-                    let is_failed = tc.status.as_str() == "failed";
-                    let chip_class = if clickable {
-                        let base = "flex items-center gap-2 text-xs font-mono cursor-pointer \
-                                    hover:bg-surface-sunken/60 rounded px-1 py-0.5 transition-colors";
-                        if is_failed {
-                            format!("{base} bg-danger-subtle border border-danger/20")
-                        } else {
-                            base.to_string()
-                        }
-                    } else if is_failed {
-                        "flex items-center gap-2 text-xs font-mono bg-danger-subtle \
-                         border border-danger/20 rounded px-1 py-0.5"
-                            .to_string()
-                    } else {
-                        "flex items-center gap-2 text-xs font-mono".to_string()
-                    };
                     view! {
-                        <div
-                            class=chip_class
-                            on:click=on_click
-                            role=move || if clickable { "button" } else { "" }
-                            title=move || if clickable { t_string!(i18n, chat.inspect_in_workspace).to_string() } else { String::new() }
-                        >
-                            <span class=status_color>
-                                {status_icon}
-                            </span>
-                            <span class="text-text-secondary">{tool_name}</span>
-                            <span class="text-text-tertiary">{duration_text}</span>
-                        </div>
+                        <ToolCard
+                            run_id=run_for_cards.clone()
+                            tool_id=tc.tool_id.clone()
+                            tool_name=tc.tool_name.clone()
+                        />
                     }
                 }).collect::<Vec<_>>()}
             </div>
