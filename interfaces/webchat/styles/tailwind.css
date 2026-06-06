@@ -975,6 +975,24 @@ html[data-platform="macos"] .aleph-sidebar-head { padding-top: 2.45rem; }
 }
 .node-card-dot:hover { width: 14px; height: 14px; box-shadow: 0 0 18px currentColor; }
 
+/* Soften Dot↔Mini↔Full swaps: the reactive match remounts the card element,
+   so a mount fade-in removes the harsh pop. Opacity-only — must not touch the
+   translate3d transform that positions the card each frame. */
+@keyframes node-card-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.node-card-full,
+.node-card-mini,
+.node-card-dot {
+    animation: node-card-in 120ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+    .node-card-full,
+    .node-card-mini,
+    .node-card-dot { animation: none; }
+}
+
 /* ── Sidebar node markdown editor ─────────────────────────────────── */
 .node-detail-editor {
     width: 100%;
