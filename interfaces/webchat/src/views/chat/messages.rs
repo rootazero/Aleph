@@ -576,6 +576,21 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
     let count = steps.len();
     let summary = format!("{count} {}", if count == 1 { "step" } else { "steps" });
 
+    // Stick the inner scroll window to its bottom so a running strip shows the
+    // latest step, not the first 220px. The row remounts on every streamed
+    // token (row_key folds in content length), so this Effect re-runs and
+    // re-pins to the bottom each update while the run is live; once complete it
+    // stops remounting, leaving the user free to scroll back through the steps.
+    let scroll_ref = NodeRef::<leptos::html::Div>::new();
+    Effect::new(move |_| {
+        if open.get() && !completed {
+            if let Some(el) = scroll_ref.get() {
+                let el: &web_sys::HtmlElement = &el;
+                el.set_scroll_top(el.scroll_height());
+            }
+        }
+    });
+
     view! {
         <div class="flex justify-start my-1">
             <div class="max-w-[80%] w-full rounded-2xl border border-border/50 bg-surface-sunken/40">
@@ -592,7 +607,7 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
                     </span>
                 </button>
                 <Show when=move || open.get()>
-                    <div class="max-h-[220px] overflow-y-auto px-2 pb-2 flex flex-col gap-1">
+                    <div node_ref=scroll_ref class="max-h-[220px] overflow-y-auto px-2 pb-2 flex flex-col gap-1">
                         {steps
                             .clone()
                             .into_iter()

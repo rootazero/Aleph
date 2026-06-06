@@ -59,9 +59,13 @@ pub fn build_rows(
     let mut pending: Vec<ChatMessage> = Vec::new();
 
     for m in messages {
-        // Fold consecutive intermediate (Think→Act) step bubbles of one run
-        // into a single StepStrip so a long run doesn't stretch the column.
-        if m.role == "assistant" && m.is_intermediate {
+        // Fold every Think→Act *step* bubble of one run into a single StepStrip
+        // so a long run doesn't stretch the column. A step is any iteration-
+        // tagged assistant bubble that is NOT the run's final answer — this
+        // includes the still-streaming current turn (which `begin_step` leaves
+        // as the non-intermediate `assistant-{run}` placeholder), so it folds
+        // into the strip instead of dangling below it as a bare bubble.
+        if is_step(m) {
             if pending
                 .first()
                 .is_some_and(|p| run_id_of(p) != run_id_of(m))
@@ -102,6 +106,26 @@ pub fn build_rows(
 /// a bare user id).
 fn run_id_of(m: &ChatMessage) -> String {
     crate::views::chat::messages::run_id_from_message_id(&m.id)
+}
+
+/// A trailing assistant bubble is the run's *final answer* — rendered as its
+/// own message, not folded into the step strip — only when it carries real
+/// text and issued no tool call (a pure reply that ends the run). A turn that
+/// called a tool, or an empty placeholder, is a step and belongs in the strip.
+/// This is what keeps a normal one-shot reply rendering as a plain bubble while
+/// a 200-iteration tool run collapses entirely into the strip.
+fn is_final_answer(m: &ChatMessage) -> bool {
+    m.role == "assistant"
+        && !m.is_intermediate
+        && m.tool_calls.is_empty()
+        && !m.content.trim().is_empty()
+}
+
+/// Whether this bubble folds into the step strip: any iteration-tagged
+/// assistant turn that isn't the final answer (finalized intermediates, the
+/// streaming current step, tool-only or empty placeholder turns).
+fn is_step(m: &ChatMessage) -> bool {
+    m.role == "assistant" && m.iteration.is_some() && !is_final_answer(m)
 }
 
 /// Flush accumulated intermediate steps into one StepStrip row. No-op when
@@ -370,6 +394,132 @@ mod tests {
             _ => None,
         });
         assert_eq!(strip, Some(false));
+    }
+
+    /// A trailing `assistant-{run}` step bubble (NOT intermediate) carrying a
+    /// tool call — the shape `begin_step` leaves the current turn in. Must fold
+    /// into the strip, not dangle below it.
+    fn msg_tool_step(run: &str, it: usize, content: &str, streaming: bool) -> ChatMessage {
+        ChatMessage {
+            id: format!("assistant-{run}"),
+            role: "assistant".into(),
+            content: content.into(),
+            tool_calls: vec![crate::views::chat::state::ToolCallEntry {
+                tool_id: "t1".into(),
+                tool_name: "code_exec".into(),
+                status: "completed".into(),
+                duration_ms: Some(3),
+            }],
+            is_streaming: streaming,
+            is_intermediate: false,
+            error: None,
+            model_info: None,
+            iteration: Some(it),
+            timestamp: None,
+        }
+    }
+
+    /// Empty streaming placeholder for the just-started current turn: tagged,
+    /// non-intermediate, no content, no tools. The dangling "#N + cursor" the
+    /// user saw — must fold into the strip (keeping it open) rather than render
+    /// as a bare bubble.
+    fn msg_empty_step(run: &str, it: usize) -> ChatMessage {
+        ChatMessage {
+            id: format!("assistant-{run}"),
+            role: "assistant".into(),
+            content: String::new(),
+            tool_calls: vec![],
+            is_streaming: true,
+            is_intermediate: false,
+            error: None,
+            model_info: None,
+            iteration: Some(it),
+            timestamp: None,
+        }
+    }
+
+    #[test]
+    fn trailing_tool_step_folds_into_strip_not_dangling() {
+        // A tool-only run that ended without a text reply (the 200-iteration
+        // convergence case): every turn, including the trailing one, is a step.
+        let msgs = vec![
+            msg_user("u1", "hi"),
+            msg_step("intermediate-run-z-1", 1, "trying api", false),
+            msg_tool_step("run-z", 2, "让我尝试使用东方财富的API获取数据", false),
+        ];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        // No standalone assistant Message row (the trailing step folded in).
+        assert!(
+            !rows.iter().any(|r| matches!(
+                r,
+                TimelineRow::Message { message, .. } if message.role == "assistant"
+            )),
+            "trailing tool step must not render as a dangling bubble"
+        );
+        let strip = rows
+            .iter()
+            .find_map(|r| match r {
+                TimelineRow::StepStrip { steps, completed, .. } => Some((steps.len(), *completed)),
+                _ => None,
+            })
+            .expect("a strip");
+        assert_eq!(strip.0, 2, "both steps fold into one strip");
+        assert!(strip.1, "all steps done → strip collapses");
+    }
+
+    #[test]
+    fn empty_placeholder_step_folds_and_keeps_strip_open() {
+        let msgs = vec![
+            msg_step("intermediate-run-y-1", 1, "step one", false),
+            msg_empty_step("run-y", 2),
+        ];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r, TimelineRow::Message { message, .. } if message.role == "assistant")),
+            "empty placeholder must fold, not dangle"
+        );
+        let completed = rows.iter().find_map(|r| match r {
+            TimelineRow::StepStrip { completed, .. } => Some(*completed),
+            _ => None,
+        });
+        assert_eq!(completed, Some(false), "streaming placeholder keeps strip open");
+    }
+
+    #[test]
+    fn pure_text_final_answer_stays_standalone() {
+        // Normal multi-step run that DID end with a text reply: steps fold, the
+        // reply renders as its own bubble.
+        let msgs = vec![
+            msg_step("intermediate-run-w-1", 1, "searching", false),
+            msg_final("run-w", "Here is your answer."),
+        ];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        assert!(
+            rows.iter().any(|r| matches!(
+                r,
+                TimelineRow::Message { message, .. } if message.id == "run-w"
+            )),
+            "final text answer renders as a standalone bubble"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r, TimelineRow::StepStrip { steps, .. } if steps.len() == 1)),
+            "the one tool step still folds into a strip"
+        );
+    }
+
+    #[test]
+    fn single_turn_reply_has_no_strip() {
+        // A one-shot answer (no tools) is the final answer — plain bubble, no strip.
+        let mut answer = msg_final("run-s", "hello there");
+        answer.iteration = Some(1); // begin_step stamps even single turns
+        let rows = derive_timeline(&[msg_user("u1", "hi"), answer], "Today", "Yesterday");
+        assert!(
+            !rows.iter().any(|r| matches!(r, TimelineRow::StepStrip { .. })),
+            "a tool-less reply must not be folded into a strip"
+        );
     }
 
     #[test]
