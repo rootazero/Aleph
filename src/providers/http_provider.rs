@@ -16,6 +16,47 @@ use std::future::Future;
 use std::pin::Pin;
 use tracing::debug;
 
+/// On a provider HTTP rejection, log the outgoing request body (truncated) so a
+/// request-shape bug can be pinned — most importantly a *cross-protocol*
+/// failover conversion that an OpenAI-compatible endpoint rejects with a vendor
+/// error like 302.ai's `-10003 "参数错误"`, which cannot be isolated from the
+/// converter source alone (black-box probing of the live endpoint accepted every
+/// isolated shape). Scoped to [`AlephError::ProviderError`] (generic 4xx/5xx);
+/// rate-limit and timeout errors carry no request-shape signal and are skipped
+/// to keep logs clean. The body holds prompt content but no secrets — the API
+/// key rides in the `Authorization` header, never the body — and is truncated to
+/// bound log volume.
+fn log_rejected_request_body(
+    provider: &str,
+    err: &crate::error::AlephError,
+    diag: Option<reqwest::RequestBuilder>,
+) {
+    if !matches!(err, crate::error::AlephError::ProviderError { .. }) {
+        return;
+    }
+    let Some(body) = diag
+        .and_then(|rb| rb.build().ok())
+        .as_ref()
+        .and_then(|req| req.body())
+        .and_then(|b| b.as_bytes())
+        .map(|bytes| {
+            String::from_utf8_lossy(bytes)
+                .chars()
+                .take(4000)
+                .collect::<String>()
+        })
+    else {
+        return;
+    };
+    tracing::warn!(
+        provider = %provider,
+        error = %err,
+        request_body = %body,
+        "provider rejected the request (HTTP error); logging the outgoing body (truncated) so a \
+         request-shape / cross-protocol conversion bug can be diagnosed",
+    );
+}
+
 /// Generic HTTP-based AI provider
 ///
 /// This provider uses a ProtocolAdapter for protocol-specific request/response handling.
@@ -145,6 +186,12 @@ impl HttpProvider {
         .await;
 
         let request = self.adapter.build_request(&final_payload, &self.config)?;
+        // Cheap clone of the outgoing request (the json body is `Bytes`, so
+        // `try_clone` is an Arc bump, not a deep copy) so a provider HTTP
+        // rejection can log the exact body that was rejected — the only way to
+        // pin a cross-protocol conversion bug like 302.ai's -10003. Materialized
+        // to a string only on the error path; the happy path drops it untouched.
+        let diag_request = request.try_clone();
         // Time-to-first-byte watchdog. `request.send()` resolves only once the
         // upstream returns response headers; the streaming idle guard
         // (`wrap_idle_timeout`) only covers gaps *between* SSE events *after*
@@ -192,7 +239,13 @@ impl HttpProvider {
         })?;
 
         // Collect streaming deltas into a ProviderResponse
-        let stream = self.adapter.stream_deltas(response).await?;
+        let stream = match self.adapter.stream_deltas(response).await {
+            Ok(s) => s,
+            Err(e) => {
+                log_rejected_request_body(&self.name, &e, diag_request);
+                return Err(e);
+            }
+        };
         let mut collector = crate::providers::DeltaCollector::new();
         // A provider-level semantic error (OpenAI Responses `response.failed`
         // or a top-level `error` frame, Anthropic error SSE) arrives as a
@@ -348,15 +401,19 @@ impl HttpProvider {
             .adapter
             .build_request(&final_payload, &self.config)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
+        // Cheap clone for body-on-rejection diagnostics (see path above).
+        let diag_request = request.try_clone();
         let response = request
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("Network error: {}", e))?;
-        let stream = self
-            .adapter
-            .stream_deltas(response)
-            .await
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let stream = match self.adapter.stream_deltas(response).await {
+            Ok(s) => s,
+            Err(e) => {
+                log_rejected_request_body(&self.name, &e, diag_request);
+                return Err(anyhow::anyhow!("{}", e));
+            }
+        };
         let inner = stream
             .map(|r| r.map_err(|e| anyhow::anyhow!("{}", e)))
             .boxed();
