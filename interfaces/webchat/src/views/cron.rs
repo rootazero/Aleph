@@ -6,6 +6,7 @@
 //! - View execution history for each job
 //! - Trigger immediate runs
 
+use crate::api::agents::{AgentsApi, AgentSummary};
 use crate::api::cron::{CreateCronJob, CronApi, CronJobInfo, JobRunInfo, UpdateCronJob};
 use crate::context::DashboardState;
 use crate::i18n::*;
@@ -625,6 +626,9 @@ fn JobEditor(
     let form_schedule_kind = RwSignal::new(String::from("cron"));
     let form_schedule = RwSignal::new(String::new());
     let form_agent_id = RwSignal::new(String::new());
+    // Available agents for the selector + default id.
+    let agents = RwSignal::new(Vec::<AgentSummary>::new());
+    let default_agent_id = RwSignal::new(String::from("main"));
     let form_prompt = RwSignal::new(String::new());
     let form_timezone = RwSignal::new(String::new());
     let form_tags = RwSignal::new(String::new());
@@ -644,6 +648,22 @@ fn JobEditor(
 
     let is_new = move || selected.get() == Some(usize::MAX);
     let is_editing = move || selected.get().is_some();
+
+    // Load available agents once connected, for the agent selector.
+    {
+        let dash = state;
+        Effect::new(move || {
+            if !dash.is_connected.get() {
+                return;
+            }
+            spawn_local(async move {
+                if let Ok(resp) = AgentsApi::list(&dash).await {
+                    default_agent_id.set(resp.default_id.clone());
+                    agents.set(resp.agents);
+                }
+            });
+        });
+    }
 
     // Populate form when selection changes
     Effect::new(move || {
