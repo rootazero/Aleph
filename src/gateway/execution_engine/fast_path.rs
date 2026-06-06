@@ -39,7 +39,12 @@ where
         }
 
         agent
-            .add_message(&request.session_key, MessageRole::Assistant, &response)
+            .add_message_with_run_id(
+                &request.session_key,
+                MessageRole::Assistant,
+                &response,
+                Some(run_id),
+            )
             .await;
         let _ = emitter
             .emit(StreamEvent::RunComplete {
@@ -108,10 +113,11 @@ where
         let error_response = format!("❌ {}", error_msg);
 
         agent
-            .add_message(
+            .add_message_with_run_id(
                 &request.session_key,
                 MessageRole::Assistant,
                 &error_response,
+                Some(run_id),
             )
             .await;
         let _ = emitter

@@ -313,6 +313,22 @@ impl AgentInstance {
     /// Add a message to a session (delegated to session store) and capture
     /// it into the L0 raw_memories buffer when a writer is wired.
     pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {
+        self.add_message_with_run_id(key, role, content, None).await;
+    }
+
+    /// Like [`add_message`], but stamps `metadata.run_id` on the persisted
+    /// row. This is the link that lets `chat.history` surface a run_id so the
+    /// Panel can fetch the run's observability trace (`task_traces`) and
+    /// rehydrate the workspace step view on session reload/switch. Without it,
+    /// assistant rows persist with NULL metadata and the workspace pane goes
+    /// blank whenever the live event stream is gone.
+    pub async fn add_message_with_run_id(
+        &self,
+        key: &SessionKey,
+        role: MessageRole,
+        content: &str,
+        run_id: Option<&str>,
+    ) {
         let key_str = key.to_key_string();
         let role_str = match role {
             MessageRole::User => "user",
@@ -320,6 +336,8 @@ impl AgentInstance {
             MessageRole::System => "system",
             MessageRole::Tool => "tool",
         };
+
+        let metadata = run_id.map(|r| serde_json::json!({ "run_id": r }));
 
         // Ensure session exists, then add message
         if let Err(e) = self.session_store.get_or_create(key).await {
@@ -334,7 +352,7 @@ impl AgentInstance {
                     role: role_str.to_string(),
                     content: content.to_string(),
                     timestamp: chrono::Utc::now().timestamp(),
-                    metadata: None,
+                    metadata,
                     input_tokens: 0,
                     output_tokens: 0,
                     model: None,
@@ -849,6 +867,39 @@ mod tests {
         assert!(instance.reset_session(&key).await);
         let history = instance.get_history(&key, None).await;
         assert!(history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn assistant_message_persists_run_id_in_metadata() {
+        let temp = tempdir().unwrap();
+        let sm = test_session_store(&temp);
+        let config = AgentInstanceConfig {
+            agent_id: "test".to_string(),
+            workspace: temp.path().join("workspace"),
+            agent_dir: temp.path().join("agents/test"),
+            ..Default::default()
+        };
+        let instance = AgentInstance::new(config, sm).unwrap();
+        let key = SessionKey::main("test");
+
+        // The agent loop stamps the run_id so chat.history can later map this
+        // assistant turn back to its persisted observability trace, letting
+        // the workspace panel rehydrate on session reload/switch.
+        instance
+            .add_message_with_run_id(&key, MessageRole::Assistant, "Hi!", Some("run-xyz"))
+            .await;
+
+        let history = instance.get_history(&key, None).await;
+        let last = history.last().expect("one persisted message");
+        assert_eq!(last.role, MessageRole::Assistant);
+        assert_eq!(
+            last.metadata
+                .as_ref()
+                .and_then(|m| m.get("run_id"))
+                .map(String::as_str),
+            Some("run-xyz"),
+            "assistant turn must carry run_id in metadata for trace replay"
+        );
     }
 
     #[tokio::test]

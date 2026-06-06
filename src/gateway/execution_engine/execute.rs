@@ -371,9 +371,16 @@ where
                         .await;
                 }
 
-                // Store assistant response
+                // Store assistant response, stamping the run_id so the
+                // workspace panel can rehydrate this turn's persisted trace
+                // on session reload/switch.
                 agent
-                    .add_message(&request.session_key, MessageRole::Assistant, response)
+                    .add_message_with_run_id(
+                        &request.session_key,
+                        MessageRole::Assistant,
+                        response,
+                        Some(&run_id),
+                    )
                     .await;
 
                 let _ = emitter
