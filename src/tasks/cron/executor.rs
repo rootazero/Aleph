@@ -547,13 +547,13 @@ fn fallback_note(requested: &str) -> String {
 
 /// Prepend [`fallback_note`] to a run's output. When the run produced no text,
 /// the note becomes the entire output so the fallback stays visible in run
-/// history. Always returns `Some`.
-fn prepend_fallback_note(output: Option<String>, requested: &str) -> Option<String> {
+/// history.
+fn prepend_fallback_note(output: Option<String>, requested: &str) -> String {
     let note = fallback_note(requested);
-    Some(match output {
+    match output {
         Some(text) => format!("{note}\n{text}"),
         None => note,
-    })
+    }
 }
 
 /// Build an error `ExecutionResult`.
@@ -632,14 +632,14 @@ mod tests {
 
     #[test]
     fn prepend_fallback_note_prefixes_existing_output() {
-        let out = prepend_fallback_note(Some("done".to_string()), "oldie").unwrap();
-        assert!(out.starts_with(&fallback_note("oldie")));
-        assert!(out.ends_with("done"));
+        let out = prepend_fallback_note(Some("done".to_string()), "oldie");
+        let expected = format!("{}\n{}", fallback_note("oldie"), "done");
+        assert_eq!(out, expected);
     }
 
     #[test]
-    fn prepend_fallback_note_uses_note_as_output_when_empty() {
-        let out = prepend_fallback_note(None, "oldie").unwrap();
+    fn prepend_fallback_note_uses_note_as_output_when_output_is_none() {
+        let out = prepend_fallback_note(None, "oldie");
         assert_eq!(out, fallback_note("oldie"));
     }
 }
