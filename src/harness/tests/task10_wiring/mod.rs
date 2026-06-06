@@ -875,7 +875,7 @@ impl AiProvider for OneShotSleepyCallProvider {
 }
 
 #[tokio::test]
-async fn per_tool_budget_fires_before_global_turn_timeout() {
+async fn per_tool_budget_overrun_recovers_as_tool_error_not_run_abort() {
     let session = MockSession::new(vec![
         turn_started_event(),
         user_message_event("call the slow tool"),
@@ -915,18 +915,28 @@ async fn per_tool_budget_fires_before_global_turn_timeout() {
         .await;
     let elapsed = started.elapsed();
 
-    assert!(
-        matches!(
-            &result,
-            Err(crate::harness::trait_def::HarnessError::StalledTurn {
-                phase: crate::harness::trait_def::TurnPhase::Act { .. },
-                ..
-            })
-        ),
-        "expected StalledTurn in Act phase, got: {result:?}",
-    );
+    // The 50ms per-tool budget still fires well before the 60s global — the
+    // per-tool ceiling is enforced, not the harness fallback.
     assert!(
         elapsed < std::time::Duration::from_millis(500),
         "per-tool 50ms budget must fire well before the 60s global; saw {elapsed:?}",
+    );
+    // ...but a per-tool overrun is RECOVERABLE: the turn completes instead of
+    // aborting the whole run with `StalledTurn`. Only the harness-wide
+    // `turn_timeout` is a run-level stall.
+    assert!(
+        result.is_ok(),
+        "per-tool budget overrun must NOT abort the run with StalledTurn; got: {result:?}",
+    );
+    // The overrun is surfaced as a recoverable tool error the next Think turn
+    // can react to (retry / narrow / switch), not silently dropped.
+    let events = session.snapshot().await;
+    assert!(
+        events.iter().any(|r| matches!(
+            &r.event,
+            crate::session::events::SessionEvent::ToolError { error, .. }
+                if error.contains("wall-clock budget")
+        )),
+        "per-tool timeout must be recorded as a recoverable ToolError",
     );
 }

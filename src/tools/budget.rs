@@ -27,8 +27,10 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
     ("get_tool_schema", 2_000),
     ("note_orient", 3_000),
     ("note_schema", 3_000),
-    // Legit slow
-    ("search", 20_000),
+    // Legit slow — `search` raised 20s→45s after a real A-share research run
+    // tripped the 20s ceiling on a slow query (the overrun is now a recoverable
+    // tool error, not a run abort, but a roomier ceiling avoids needless retries).
+    ("search", 45_000),
     ("web_fetch", 30_000),
     ("markdown_skill", 60_000),
     // Shell / code execution — these have user-supplied `timeout` in

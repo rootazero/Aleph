@@ -316,6 +316,24 @@ impl AgentHarness {
                     let started_call = Instant::now();
                     match tokio::time::timeout(budget, exec_fut).await {
                         Ok(inner) => Ok(inner),
+                        // A *per-tool* wall-clock budget overrun is RECOVERABLE:
+                        // surface it as a tool error the next Think turn can react
+                        // to (retry, narrow the query, switch source/tool) instead
+                        // of aborting the whole run on one slow `search`/`web_fetch`.
+                        // Only the harness-wide `turn_timeout` fallback
+                        // (`per_tool_budget == None`) is a genuine run-level stall
+                        // that must `StalledTurn`.
+                        Err(_) if per_tool_budget.is_some() => {
+                            Ok(Err(crate::tools::service::ToolError::Execution {
+                                name: call.name.clone(),
+                                cause: format!(
+                                    "exceeded its {}s wall-clock budget (slow or \
+                                     unresponsive source) — no result; retry, narrow the \
+                                     query, or switch source/tool",
+                                    budget.as_secs()
+                                ),
+                            }))
+                        }
                         Err(_) => Err(HarnessError::StalledTurn {
                             phase: TurnPhase::Act {
                                 tool_name: call.name.clone(),
@@ -478,7 +496,12 @@ impl AgentHarness {
         // Skipped calls take the synthetic-error fast path here and are
         // omitted from PASS 1 dispatch.
         let mut started_at: Vec<Instant> = Vec::with_capacity(tool_calls.len());
-        let mut budgets: Vec<Option<std::time::Duration>> = Vec::with_capacity(tool_calls.len());
+        // Per-call effective budget plus whether it came from the *per-tool*
+        // table (`true`) or the harness-wide `turn_timeout` fallback (`false`).
+        // The flag decides, on timeout, between a recoverable tool error and a
+        // run-aborting `StalledTurn` (see PASS 1 / PASS 2 below).
+        let mut budgets: Vec<Option<(std::time::Duration, bool)>> =
+            Vec::with_capacity(tool_calls.len());
         for (idx, call) in tool_calls.iter().enumerate() {
             callback.on_tool_call(&call.name);
             started_at.push(Instant::now());
@@ -573,10 +596,11 @@ impl AgentHarness {
                 .await
                 .and_then(|d| d.metadata.max_duration_ms)
                 .map(std::time::Duration::from_millis);
-            budgets.push(resolve_effective_budget(
-                per_tool_budget,
-                self.deps.turn_timeout,
-            ));
+            let per_tool = per_tool_budget.is_some();
+            budgets.push(
+                resolve_effective_budget(per_tool_budget, self.deps.turn_timeout)
+                    .map(|d| (d, per_tool)),
+            );
         }
 
         // PASS 1 — parallel: dispatch up to `parallelism` execute futures
@@ -627,8 +651,23 @@ impl AgentHarness {
             boxed_futs_opt.push(Some(Box::pin(async move {
                 let exec_fut = tools.execute_with_cancel(&name, args, call_cancel);
                 match budget {
-                    Some(b) => match tokio::time::timeout(b, exec_fut).await {
+                    Some((b, per_tool)) => match tokio::time::timeout(b, exec_fut).await {
                         Ok(inner) => Ok(inner),
+                        // Per-tool budget overrun → recoverable tool error (PASS 2
+                        // emits it like any failure and continues); only a
+                        // harness-wide `turn_timeout` overrun (`!per_tool`) bubbles
+                        // up as a run-aborting stall. Mirrors the serial path.
+                        Err(_) if per_tool => {
+                            Ok(Err(crate::tools::service::ToolError::Execution {
+                                name: name.clone(),
+                                cause: format!(
+                                    "exceeded its {}s wall-clock budget (slow or unresponsive \
+                                 source) — no result; retry, narrow the query, or switch \
+                                 source/tool",
+                                    b.as_secs()
+                                ),
+                            }))
+                        }
                         Err(_) => Err(started.elapsed()),
                     },
                     None => Ok(exec_fut.await),
@@ -679,9 +718,10 @@ impl AgentHarness {
                     if first_stall.is_none() {
                         first_stall = Some((call.name.clone(), elapsed));
                     }
-                    // No SessionEvent::ToolError emitted — matches serial
-                    // semantics where timeout returns StalledTurn without
-                    // emitting a per-call error event.
+                    // Only a harness-wide `turn_timeout` overrun reaches this arm
+                    // now (per-tool budget overruns are recovered as `Ok(Err)`
+                    // above) — a genuine run-level stall, bubbled up as
+                    // `StalledTurn` below with no per-call ToolError event.
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }
