@@ -72,6 +72,13 @@ pub fn ChatSidebar() -> impl IntoView {
     // Client-side session filter (R4 pure I/O — no backend search).
     let search_query = RwSignal::new(String::new());
 
+    // Live-only "session is running" tracking, driven by run lifecycle
+    // events. `running` is a refcount per session_key (handles concurrent
+    // runs); `run_to_session` maps run_id → session_key because the
+    // run_complete / run_error frames carry only run_id.
+    let running = RwSignal::new(std::collections::HashMap::<String, usize>::new());
+    let run_to_session = RwSignal::new(std::collections::HashMap::<String, String>::new());
+
     // Reusable closure: fetch both agents and sessions from the backend.
     let reload_data = Arc::new(move |dash: DashboardState| {
         is_loading.set(true);
@@ -140,6 +147,54 @@ pub fn ChatSidebar() -> impl IntoView {
         }
     });
 
+    // Subscribe to run lifecycle so each session row can show a live
+    // "running" dot. Refcounted: a session is "running" while it has ≥1
+    // in-flight run. run_complete / run_error carry only run_id, so we
+    // resolve the owning session via `run_to_session`.
+    let run_subscription_id = dashboard.subscribe_events(move |event| {
+        if !event.topic.starts_with("run.") {
+            return;
+        }
+        let data = &event.data;
+        let event_type = data
+            .get("type")
+            .and_then(|t| t.as_str())
+            .or_else(|| event.topic.strip_prefix("run."))
+            .unwrap_or("");
+        let run_id = data.get("run_id").and_then(|r| r.as_str()).unwrap_or("");
+        if run_id.is_empty() {
+            return;
+        }
+        match event_type {
+            "run_accepted" => {
+                let Some(sk) = data.get("session_key").and_then(|s| s.as_str()) else {
+                    return;
+                };
+                run_to_session.update(|m| {
+                    m.insert(run_id.to_string(), sk.to_string());
+                });
+                running.update(|m| {
+                    *m.entry(sk.to_string()).or_insert(0) += 1;
+                });
+            }
+            "run_complete" | "run_error" => {
+                let sk = run_to_session.with_untracked(|m| m.get(run_id).cloned());
+                run_to_session.update(|m| { m.remove(run_id); });
+                if let Some(sk) = sk {
+                    running.update(|m| {
+                        if let Some(n) = m.get_mut(&sk) {
+                            *n = n.saturating_sub(1);
+                            if *n == 0 {
+                                m.remove(&sk);
+                            }
+                        }
+                    });
+                }
+            }
+            _ => {}
+        }
+    });
+
     // Ask the Gateway to push stream.session_updated events to this client.
     let dash_for_topic = dashboard;
     leptos::task::spawn_local(async move {
@@ -159,12 +214,22 @@ pub fn ChatSidebar() -> impl IntoView {
                 &format!("Failed to subscribe to stream.session_updated: {e}").into(),
             );
         }
+
+        // Run lifecycle topics drive the per-session running dot.
+        for topic in ["stream.run_accepted", "stream.run_complete", "stream.run_error"] {
+            if let Err(e) = dash_for_topic.subscribe_topic(topic).await {
+                web_sys::console::error_1(
+                    &format!("Failed to subscribe to {topic}: {e}").into(),
+                );
+            }
+        }
     });
 
     // Cleanup: unsubscribe event handler when the component unmounts.
     let dash_for_cleanup = dashboard;
     on_cleanup(move || {
         dash_for_cleanup.unsubscribe_events(subscription_id);
+        dash_for_cleanup.unsubscribe_events(run_subscription_id);
     });
 
     // Select a session and load its history.
@@ -667,6 +732,8 @@ pub fn ChatSidebar() -> impl IntoView {
                                         let key_for_edit = key.clone();
                                         let key_for_del_menu = key.clone();
                                         let label_for_edit = label.clone();
+                                        let key_for_run = key.clone();
+                                        let is_running = move || running.with(|m| m.contains_key(&key_for_run));
                                         view! {
                                             <div class="relative group">
                                                 <button
@@ -687,8 +754,13 @@ pub fn ChatSidebar() -> impl IntoView {
                                                     }
                                                 >
                                                     <div class="flex-1 min-w-0">
-                                                        <div class="truncate font-medium text-xs">
-                                                            {label}
+                                                        <div class="flex items-center gap-1.5">
+                                                            <Show when=is_running>
+                                                                <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse flex-shrink-0" />
+                                                            </Show>
+                                                            <div class="truncate font-medium text-xs">
+                                                                {label.clone()}
+                                                            </div>
                                                         </div>
                                                         <div class="truncate text-[10px] text-text-tertiary mt-0.5">
                                                             {subtitle}
