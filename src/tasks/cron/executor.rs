@@ -130,24 +130,27 @@ async fn execute_cron_job(
 ) -> ExecutionResult {
     let started_at = chrono::Utc::now().timestamp_millis();
 
-    // Resolve agent_id, defaulting to "main"
-    let agent_id = snapshot.agent_id.as_deref().unwrap_or("main");
-
-    // Look up agent in registry
-    let agent = match registry.get(agent_id).await {
-        Some(a) => a,
-        None => {
-            warn!(job_id = %snapshot.id, agent_id, "cron job agent not found in registry");
-            return make_error_result(
-                started_at,
-                format!("agent not found: {agent_id}"),
-                ErrorReason::Permanent(format!("agent '{agent_id}' is not registered")),
-                // Missing-agent is never transient — classify returns permanent.
-                RetryHint::permanent(),
-                snapshot.trigger_source,
-            );
-        }
-    };
+    // Resolve agent, defaulting to "main" when unset and gracefully falling
+    // back to the built-in default when the bound agent was deleted.
+    let requested_agent = snapshot.agent_id.as_deref().unwrap_or("main").to_string();
+    let (agent, resolved_agent_id, fell_back) =
+        match resolve_cron_agent(&registry, &requested_agent).await {
+            Some(resolved) => resolved,
+            None => {
+                warn!(job_id = %snapshot.id, requested = %requested_agent,
+                    "cron job: neither requested agent nor default 'main' is registered");
+                return make_error_result(
+                    started_at,
+                    "built-in 'main' agent is not registered".to_string(),
+                    ErrorReason::Permanent(
+                        "built-in 'main' agent is not registered".to_string(),
+                    ),
+                    RetryHint::permanent(),
+                    snapshot.trigger_source,
+                );
+            }
+        };
+    let agent_id = resolved_agent_id.as_str();
 
     // Build task_id: Main sessions share by job_id, Isolated sessions get a unique suffix
     let task_id = match snapshot.session_target {
@@ -301,7 +304,11 @@ async fn execute_cron_job(
                 ended_at,
                 duration_ms: ended_at.saturating_sub(started_at),
                 status: RunStatus::Ok,
-                output: final_response,
+                output: if fell_back {
+                    Some(prepend_fallback_note(final_response, &requested_agent))
+                } else {
+                    final_response
+                },
                 error: None,
                 error_reason: None,
                 delivery_status: Some(delivery_status),
