@@ -8,11 +8,11 @@
 //! When no tools have run yet, shows a hero placeholder.
 
 use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
-use crate::components::json_viewer::JsonViewer;
 use crate::components::markdown::MarkdownRenderer;
+use crate::components::tool_card::ToolCard;
 use crate::context::DashboardState;
 use crate::i18n::*;
-use crate::state::layout::{FilePreview, LayoutMode, ToolPayload, WorkspaceState};
+use crate::state::layout::{FilePreview, LayoutMode, WorkspaceState};
 use crate::views::chat::state::ChatState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
@@ -51,19 +51,6 @@ fn timeline_groups(chat: &ChatState) -> Vec<StepGroup> {
             })
         })
         .collect()
-}
-
-/// Best-effort path extraction for a file-touching tool, so the row can
-/// show a `📄 path` header. Defensive: tries the known path-bearing arg
-/// keys and returns `None` for non-file tools (which then render plain).
-fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
-    let args = payload.as_ref()?.args.as_ref()?;
-    for key in ["path", "file_path", "filename"] {
-        if let Some(s) = args.get(key).and_then(|v| v.as_str()) {
-            return Some(s.to_string());
-        }
-    }
-    None
 }
 
 /// Workspace pane root. Renders nothing when [`LayoutMode::ChatOnly`].
@@ -168,87 +155,11 @@ fn StepCard(group: StepGroup) -> impl IntoView {
                     .into_iter()
                     .map(|(tool_id, tool_name)| {
                         view! {
-                            <ActivityRow run_id=run_id.clone() tool_id=tool_id tool_name=tool_name />
+                            <ToolCard run_id=run_id.clone() tool_id=tool_id tool_name=tool_name />
                         }
                     })
                     .collect_view()}
             </div>
-        </div>
-    }
-}
-
-/// One tool-call row. Click the header to expand args/result inline.
-#[component]
-fn ActivityRow(run_id: String, tool_id: String, tool_name: String) -> impl IntoView {
-    let workspace = expect_context::<WorkspaceState>();
-    let chat = expect_context::<ChatState>();
-
-    let tid_for_toggle = tool_id.clone();
-    let tid_for_expanded = tool_id.clone();
-    let tid_for_status = tool_id.clone();
-    let run_for_payload = run_id.clone();
-    let tid_for_payload = tool_id.clone();
-
-    // Status + duration are looked up live from ChatState so a "running"
-    // row flips to "completed" without re-deriving the whole timeline.
-    let status = Memo::new(move |_| {
-        chat.messages
-            .get()
-            .iter()
-            .flat_map(|m| m.tool_calls.iter())
-            .find_map(|t| {
-                if t.tool_id == tid_for_status {
-                    Some((t.status.clone(), t.duration_ms))
-                } else {
-                    None
-                }
-            })
-    });
-
-    let payload =
-        Memo::new(move |_| workspace.get_tool_payload(&run_for_payload, &tid_for_payload));
-    let expanded = Memo::new(move |_| workspace.is_event_expanded(&tid_for_expanded));
-
-    let path_label = move || file_path_of(&payload.get());
-
-    view! {
-        <div class="rounded-md border border-border/60 bg-surface-sunken/40">
-            <button
-                type="button"
-                class="w-full flex items-center gap-2 px-3 py-2 text-left
-                       hover:bg-surface-raised/40 transition-colors"
-                on:click=move |_| workspace.toggle_event(&tid_for_toggle)
-            >
-                <span class="text-xs font-mono text-text-secondary">{tool_name.clone()}</span>
-                {move || {
-                    match status.get() {
-                        Some((s, dur)) => {
-                            let dur_txt = dur.map(|d| format!(" · {d}ms")).unwrap_or_default();
-                            view! {
-                                <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
-                                    {format!("{s}{dur_txt}")}
-                                </span>
-                            }
-                            .into_any()
-                        }
-                        None => view! { <span /> }.into_any(),
-                    }
-                }}
-                {move || match path_label() {
-                    Some(p) => view! {
-                        <span class="ml-auto text-[11px] font-mono text-text-tertiary truncate max-w-[50%]">
-                            {format!("📄 {p}")}
-                        </span>
-                    }
-                    .into_any(),
-                    None => view! { <span class="ml-auto" /> }.into_any(),
-                }}
-            </button>
-            <Show when=move || expanded.get()>
-                <div class="px-3 pb-2">
-                    <PayloadBlock payload=payload.get() />
-                </div>
-            </Show>
         </div>
     }
 }
@@ -275,42 +186,6 @@ fn WorkspaceEmptyHero() -> impl IntoView {
             </p>
         </div>
     }
-}
-
-/// Args + result hierarchical viewer for a tool call. Hidden when the
-/// payload hasn't been captured yet.
-#[component]
-fn PayloadBlock(payload: Option<ToolPayload>) -> impl IntoView {
-    let Some(p) = payload else {
-        return view! { <span /> }.into_any();
-    };
-    view! {
-        <div class="flex flex-col gap-2 text-xs">
-            <details class="rounded-md border border-border/60 bg-surface-sunken/60" open=true>
-                <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">
-                    "input"
-                </summary>
-                <div class="px-3 py-2 overflow-x-auto">
-                    {match p.args {
-                        Some(v) => view! { <JsonViewer value=v /> }.into_any(),
-                        None => view! { <span class="text-text-tertiary italic">"—"</span> }.into_any(),
-                    }}
-                </div>
-            </details>
-            <details class="rounded-md border border-border/60 bg-surface-sunken/60" open=true>
-                <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">
-                    "result"
-                </summary>
-                <div class="px-3 py-2 overflow-x-auto">
-                    {match p.result {
-                        Some(v) => view! { <JsonViewer value=v /> }.into_any(),
-                        None => view! { <span class="text-text-tertiary italic">"—"</span> }.into_any(),
-                    }}
-                </div>
-            </details>
-        </div>
-    }
-    .into_any()
 }
 
 /// Bottom drawer: collapsible project file tree + read-only preview.
