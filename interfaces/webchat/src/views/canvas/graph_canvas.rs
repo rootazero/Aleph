@@ -946,15 +946,10 @@ pub fn GraphCanvas(
                 {move || {
                     let nodes = overlay_nodes.get();
                     nodes.into_iter().map(|n| {
-                        let id_clone = n.id.clone();
                         // Get-or-create the per-node screen position signal.
                         let pos_sig: RwSignal<(f32, f32)> =
                             node_screen_pos.with(|m| m.get(&n.id).copied())
                                 .unwrap_or_else(|| RwSignal::new((0.0_f32, 0.0_f32)));
-
-                        let on_card_click = Callback::new(move |_id: String| {
-                            selected_id_sig.set(Some(id_clone.clone()));
-                        });
 
                         let id_lookup = n.id.clone();
                         let excerpt = excerpt_by_id
@@ -974,7 +969,6 @@ pub fn GraphCanvas(
                                 zoom=zoom_signal.read_only()
                                 hovered_id=hovered_id_sig.read_only()
                                 selected_id=selected_id_sig.read_only()
-                                on_click=on_card_click
                             />
                         }
                     }).collect_view()
