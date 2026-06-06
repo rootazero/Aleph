@@ -185,29 +185,92 @@ pub fn ChatSidebar() -> impl IntoView {
         leptos::task::spawn_local(async move {
             match ChatApi::history(&dash, &key, Some(50)).await {
                 Ok(history) => {
-                    let msgs: Vec<crate::views::chat::state::ChatMessage> = history
-                        .into_iter()
-                        .enumerate()
-                        .map(|(i, m)| crate::views::chat::state::ChatMessage {
-                            // Hydrate the wire timestamp the backend already
-                            // ships (previously dropped here) so reloaded
-                            // history shows day separators + clocks too.
-                            timestamp: m
-                                .timestamp
+                    // Distinct assistant run_ids → fetch their persisted traces.
+                    let run_ids: Vec<String> = {
+                        let mut seen = std::collections::HashSet::new();
+                        history
+                            .iter()
+                            .filter(|m| m.role == "assistant")
+                            .filter_map(|m| m.run_id.clone())
+                            .filter(|r| seen.insert(r.clone()))
+                            .collect()
+                    };
+
+                    let traces: std::collections::HashMap<String, Vec<serde_json::Value>> =
+                        if run_ids.is_empty() {
+                            std::collections::HashMap::new()
+                        } else {
+                            match crate::api::trace::TraceApi::by_runs(&dash, run_ids).await {
+                                Ok(runs) => runs,
+                                Err(e) => {
+                                    web_sys::console::warn_1(
+                                        &format!("trace.by_runs failed: {e}").into(),
+                                    );
+                                    std::collections::HashMap::new()
+                                }
+                            }
+                        };
+
+                    // Build the transcript in order: replay traced assistant
+                    // runs into the (already-cleared) real chat; push user rows
+                    // and trace-less assistant rows as plain bubbles.
+                    chat.messages.set(Vec::new());
+                    for (i, m) in history.iter().enumerate() {
+                        let ts = m
+                            .timestamp
+                            .as_deref()
+                            .and_then(crate::views::chat::timeline::parse_wire_timestamp);
+
+                        let traced = m.role == "assistant"
+                            && m
+                                .run_id
                                 .as_deref()
-                                .and_then(crate::views::chat::timeline::parse_wire_timestamp),
-                            id: m.run_id.unwrap_or_else(|| format!("hist-{i}")),
-                            role: m.role,
-                            content: m.content,
-                            tool_calls: vec![],
-                            is_streaming: false,
-                            is_intermediate: false,
-                            error: None,
-                            model_info: None,
-                            iteration: None,
-                        })
-                        .collect();
-                    chat.messages.set(msgs);
+                                .and_then(|r| traces.get(r))
+                                .map(|evs| !evs.is_empty())
+                                .unwrap_or(false);
+
+                        if traced {
+                            if let (Some(run), Some(ws)) = (m.run_id.as_deref(), workspace) {
+                                let evs = traces.get(run).cloned().unwrap_or_default();
+                                crate::views::chat::events::replay_run(
+                                    chat, ws, run, &evs, &m.content,
+                                );
+                                // Stamp the final bubble's timestamp from history
+                                // so day separators stay correct.
+                                let target = format!("assistant-{run}");
+                                chat.messages.update(|msgs| {
+                                    if let Some(b) =
+                                        msgs.iter_mut().rev().find(|b| b.id == target)
+                                    {
+                                        b.timestamp = ts;
+                                    }
+                                });
+                            }
+                        } else {
+                            chat.messages.update(|msgs| {
+                                msgs.push(crate::views::chat::state::ChatMessage {
+                                    timestamp: ts,
+                                    id: m.run_id.clone().unwrap_or_else(|| format!("hist-{i}")),
+                                    role: m.role.clone(),
+                                    content: m.content.clone(),
+                                    tool_calls: vec![],
+                                    is_streaming: false,
+                                    is_intermediate: false,
+                                    error: None,
+                                    model_info: None,
+                                    iteration: None,
+                                });
+                            });
+                        }
+                    }
+
+                    // Loading an existing session = all activity already "seen";
+                    // clear the live-only badge + active-iteration marker that
+                    // replay set.
+                    if let Some(ws) = workspace {
+                        ws.unseen_activity.set(0);
+                        ws.current_iteration.set(None);
+                    }
                 }
                 Err(e) => {
                     web_sys::console::error_1(&format!("Failed to load history: {e}").into());
