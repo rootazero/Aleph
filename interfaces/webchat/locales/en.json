@@ -1435,7 +1435,6 @@
     "col_delivery": "Delivery",
     "col_error": "Error",
     "placeholder_name": "Daily report generation",
-    "placeholder_agent": "default",
     "placeholder_prompt": "Generate a daily summary of...",
     "placeholder_timezone": "Asia/Shanghai",
     "placeholder_tags": "report, daily",

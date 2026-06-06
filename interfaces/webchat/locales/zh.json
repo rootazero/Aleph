@@ -1435,7 +1435,6 @@
     "col_delivery": "传递",
     "col_error": "错误",
     "placeholder_name": "每日报告生成",
-    "placeholder_agent": "default",
     "placeholder_prompt": "生成每日摘要...",
     "placeholder_timezone": "Asia/Shanghai",
     "placeholder_tags": "报告, 每日",

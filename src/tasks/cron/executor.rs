@@ -563,7 +563,7 @@ async fn deliver_to_channel(
 /// Bilingual note prepended to a cron run's persisted output when the
 /// requested agent was missing and the run fell back to the default agent.
 /// Kept as a fixed bilingual string because the executor has no panel i18n
-/// context; mirrors the `cron.fallback_note` locale entry.
+/// context.
 fn fallback_note(requested: &str) -> String {
     format!(
         "原 agent '{requested}' 不存在，已回退到 main / \
