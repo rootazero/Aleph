@@ -250,6 +250,10 @@ impl CompressionService {
         //    When compound_enabled, delegate each source batch to CompoundIngestor
         //    and skip the legacy accumulation path.
         if self.compound_enabled {
+            // Rows to leave unprocessed for a later retry. Empty unless the
+            // stop-the-bleed grace window (below) defers ingestable rows.
+            let mut deferred_ids: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
             if let Some(ing) = self.compound_ingestor.clone() {
                 // ToolInvocation rows are per-call telemetry, consumed by the
                 // insights aggregator and dream signal metrics (which read them
@@ -316,7 +320,37 @@ impl CompressionService {
                 }
 
                 match ingest_outcome {
-                    Ok(_report) => {
+                    Ok(report) => {
+                        // Stop-the-bleed: when the plan produced no notes, don't
+                        // burn the knowledge. Defer marking the *ingestable* rows
+                        // processed while they are still within the grace window,
+                        // so a transiently-failed extraction (flaky planner LLM /
+                        // embedding outage) gets retried on a later tick instead
+                        // of being discarded forever. Telemetry rows are excluded
+                        // from ingest and can never yield a note, so they are
+                        // never deferred (they must stay bounded). Past the
+                        // window even ingestable rows are marked, to bound the
+                        // queue.
+                        if report.is_empty() {
+                            const RETRY_GRACE_SECS: i64 = 6 * 3600;
+                            let now = chrono::Utc::now().timestamp();
+                            for r in &raw_memories {
+                                let is_telemetry = matches!(
+                                    r.source,
+                                    crate::memory::store::raw_memory::RawMemorySource::ToolInvocation { .. }
+                                );
+                                if !is_telemetry && now - r.created_at < RETRY_GRACE_SECS {
+                                    deferred_ids.insert(r.id.clone());
+                                }
+                            }
+                            if !deferred_ids.is_empty() {
+                                tracing::info!(
+                                    deferred = deferred_ids.len(),
+                                    "compound ingest produced no notes; deferring \
+                                     ingestable rows for retry (within grace window)"
+                                );
+                            }
+                        }
                         // Fall through to mark_raw_as_processed below.
                     }
                     Err(e) => {
@@ -347,8 +381,13 @@ impl CompressionService {
                 return Ok(CompressionResult::empty());
             }
 
-            // Mark raw memories as processed (compound path).
-            let consumed_ids: Vec<String> = raw_memories.iter().map(|r| r.id.clone()).collect();
+            // Mark raw memories as processed (compound path), excluding any rows
+            // deferred for retry by the stop-the-bleed grace window above.
+            let consumed_ids: Vec<String> = raw_memories
+                .iter()
+                .filter(|r| !deferred_ids.contains(&r.id))
+                .map(|r| r.id.clone())
+                .collect();
             match self.database.mark_raw_as_processed(&consumed_ids).await {
                 Ok(n) => tracing::info!(marked = n, "Marked raw memories as processed (compound)"),
                 Err(e) => tracing::warn!(error = %e, "Failed to mark raw memories as processed"),
@@ -735,11 +774,93 @@ mod tests {
         );
         assert!(matches!(seen[0], RawMemorySource::Transcript));
 
-        // Both rows must still be consumed so the queue stays bounded.
+        // The telemetry row produced no note (stub returns empty) but must
+        // STILL be marked processed — it can never yield a note, so the
+        // stop-the-bleed grace window must never defer it. The young transcript,
+        // by contrast, IS deferred for retry (it could yield a note once the
+        // planner recovers), so it remains unprocessed.
+        let unprocessed = database
+            .get_unprocessed_raw_memories("default", 10)
+            .await
+            .unwrap();
+        assert_eq!(
+            unprocessed.len(),
+            1,
+            "telemetry must be marked; only the deferred transcript stays unprocessed"
+        );
+        assert!(
+            matches!(unprocessed[0].source, RawMemorySource::Transcript),
+            "the single deferred row must be the ingestable transcript, not telemetry"
+        );
+    }
+
+    /// Stop-the-bleed: an empty plan over an ingestable row that has aged past
+    /// the retry grace window must be marked processed (give-up), so the
+    /// unprocessed queue stays bounded even when extraction keeps failing.
+    #[tokio::test]
+    async fn compress_to_notes_marks_aged_rows_when_plan_empty() {
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+
+        struct EmptyIngestor;
+        #[async_trait::async_trait]
+        impl CompoundIngestor for EmptyIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                _raws: Vec<RawMemory>,
+            ) -> Result<ApplyReport, AlephError> {
+                Ok(ApplyReport::default())
+            }
+        }
+
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
+        let service = service.with_compound_ingestor(Arc::new(EmptyIngestor));
+
+        // Aged transcript: created well past the 6h grace window.
+        let mut aged = RawMemory::new("old conversation".to_string(), RawMemorySource::Transcript);
+        aged.created_at = chrono::Utc::now().timestamp() - 7 * 3600;
+        database.insert_raw_memory(&aged).await.unwrap();
+
+        service.compress_to_notes("default").await.unwrap();
+
         assert_eq!(
             database.count_unprocessed("default").await.unwrap(),
             0,
-            "telemetry rows must be marked processed too, not left to pile up"
+            "aged ingestable rows must be marked processed once past the grace window"
+        );
+    }
+
+    /// Stop-the-bleed: a young ingestable row whose plan produced no note is
+    /// deferred (left unprocessed) so a later tick can retry once the planner or
+    /// embedding backend recovers — knowledge is not discarded on first failure.
+    #[tokio::test]
+    async fn compress_to_notes_defers_young_rows_when_plan_empty() {
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+
+        struct EmptyIngestor;
+        #[async_trait::async_trait]
+        impl CompoundIngestor for EmptyIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                _raws: Vec<RawMemory>,
+            ) -> Result<ApplyReport, AlephError> {
+                Ok(ApplyReport::default())
+            }
+        }
+
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
+        let service = service.with_compound_ingestor(Arc::new(EmptyIngestor));
+
+        let fresh = RawMemory::new("new conversation".to_string(), RawMemorySource::Transcript);
+        database.insert_raw_memory(&fresh).await.unwrap();
+
+        service.compress_to_notes("default").await.unwrap();
+
+        assert_eq!(
+            database.count_unprocessed("default").await.unwrap(),
+            1,
+            "young ingestable rows must be deferred for retry, not burned"
         );
     }
 

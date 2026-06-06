@@ -93,12 +93,11 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
             }
         };
 
-        // Defensive: drop ops missing the `kind` discriminator before strict
-        // parsing. The LLM occasionally omits it despite the prompt; rather
-        // than failing the whole batch (which leaves the raws unprocessed
-        // forever), we silently skip the malformed op and proceed with the
-        // rest of the plan.
-        let json = strip_kindless_ops(json);
+        // Defensive: repair the `kind` discriminator before strict parsing.
+        // The LLM frequently omits it despite the prompt; rather than failing
+        // the whole batch (which starves the L1 note layer), we infer the op's
+        // kind from its field shape and only drop ops that fit no variant.
+        let json = repair_kind_tags(json);
 
         let mut plan: IngestPlan = serde_json::from_value(json).map_err(|e| {
             warn!("compound plan: parse failed: {e}");
@@ -163,18 +162,79 @@ fn summary_from_report(
     }
 }
 
-fn strip_kindless_ops(mut value: serde_json::Value) -> serde_json::Value {
-    if let Some(obj) = value.as_object_mut() {
-        if let Some(ops) = obj.get_mut("ops") {
-            if let Some(arr) = ops.as_array_mut() {
-                arr.retain(|op| {
-                    op.as_object()
-                        .and_then(|o| o.get("kind"))
-                        .and_then(|k| k.as_str())
-                        .is_some()
-                });
+/// Infer the missing `kind` discriminator from a plan op's field shape.
+///
+/// The planner LLM frequently emits an operation whose fields already pin down
+/// exactly one `PageOp` variant but forgets the `kind` tag. Dropping such an op
+/// (the old behaviour) discarded knowledge the model had already extracted, so
+/// instead we recover the label it forgot. Checked most-specific field first so
+/// the mapping stays unambiguous. Returns `None` when no variant fits.
+fn infer_op_kind(op: &serde_json::Map<String, serde_json::Value>) -> Option<&'static str> {
+    if op.contains_key("from") && op.contains_key("to") {
+        return Some("link");
+    }
+    if op.contains_key("old_path") && op.contains_key("new_path") {
+        return Some("supersede");
+    }
+    if op.contains_key("new_claim") {
+        return Some("contradict");
+    }
+    if op.contains_key("expected_content_hash") {
+        return Some("update");
+    }
+    if op.contains_key("title") || op.contains_key("summary") {
+        return Some("create");
+    }
+    if op.contains_key("new_facts") || op.contains_key("new_links") {
+        return Some("append");
+    }
+    None
+}
+
+/// Repair the `kind` discriminator on both tagged arrays of a raw plan JSON
+/// before strict deserialization.
+///
+/// `ops` entries get `kind` inferred from their shape ([`infer_op_kind`]); any
+/// op still unidentifiable is dropped rather than failing the whole batch.
+/// `schema_proposals` have no reliable shape to infer from, so kindless ones
+/// are simply dropped — leaving them in would make `serde` reject the entire
+/// plan with `missing field kind`, starving the L1 note layer.
+fn repair_kind_tags(mut value: serde_json::Value) -> serde_json::Value {
+    let Some(obj) = value.as_object_mut() else {
+        return value;
+    };
+    if let Some(arr) = obj.get_mut("ops").and_then(|v| v.as_array_mut()) {
+        let before = arr.len();
+        arr.retain_mut(|op| {
+            let Some(o) = op.as_object_mut() else {
+                return false;
+            };
+            if o.get("kind").and_then(|k| k.as_str()).is_some() {
+                return true;
             }
+            match infer_op_kind(o) {
+                Some(k) => {
+                    o.insert("kind".to_string(), serde_json::Value::String(k.to_string()));
+                    true
+                }
+                None => false,
+            }
+        });
+        let dropped = before - arr.len();
+        if dropped > 0 {
+            warn!("compound plan: dropped {dropped} ops with no identifiable kind");
         }
+    }
+    if let Some(arr) = obj
+        .get_mut("schema_proposals")
+        .and_then(|v| v.as_array_mut())
+    {
+        arr.retain(|p| {
+            p.as_object()
+                .and_then(|o| o.get("kind"))
+                .and_then(|k| k.as_str())
+                .is_some()
+        });
     }
     value
 }
@@ -665,6 +725,10 @@ fn build_user_prompt(
     } else {
         out.push_str("## Related existing pages\n\n(none — empty wiki or no matches)\n");
     }
+    out.push_str(
+        "Reminder: every object in `ops` and `schema_proposals` MUST begin with \
+         its `kind` field. Omitting `kind` makes the operation invalid.\n\n",
+    );
     out.push_str("Produce the IngestPlan JSON now.");
     out
 }
@@ -991,6 +1055,86 @@ mod plan_tests {
             prompt.contains("absolute date"),
             "must instruct the model to resolve relative time"
         );
+    }
+
+    #[test]
+    fn build_user_prompt_reminds_about_kind_field() {
+        let raws = vec![RawMemory::new("hello".into(), RawMemorySource::Transcript)];
+        let prompt = build_user_prompt(&raws, &[], "2026-01-15 (Thursday)");
+        assert!(
+            prompt.contains("`kind`"),
+            "prompt must remind the model to emit the kind discriminator"
+        );
+    }
+
+    #[test]
+    fn infer_op_kind_maps_each_variant_shape() {
+        let cases = [
+            (serde_json::json!({"from": "a/b", "to": "c/d"}), "link"),
+            (
+                serde_json::json!({"old_path": "a/b", "new_path": "c/d"}),
+                "supersede",
+            ),
+            (
+                serde_json::json!({"note_path": "a/b", "new_claim": "x"}),
+                "contradict",
+            ),
+            (
+                serde_json::json!({"note_path": "a/b", "expected_content_hash": "h"}),
+                "update",
+            ),
+            (
+                serde_json::json!({"note_path": "a/b", "title": "T", "summary": "S"}),
+                "create",
+            ),
+            (
+                serde_json::json!({"note_path": "a/b", "new_facts": ["f"]}),
+                "append",
+            ),
+        ];
+        for (op, expected) in cases {
+            let obj = op.as_object().unwrap();
+            assert_eq!(infer_op_kind(obj), Some(expected), "shape: {op}");
+        }
+        // Unidentifiable shape → None.
+        assert_eq!(
+            infer_op_kind(serde_json::json!({"note_path": "a/b"}).as_object().unwrap()),
+            None
+        );
+    }
+
+    #[test]
+    fn repair_kind_tags_recovers_kindless_plan() {
+        // The dominant failure: ops lack `kind`, and a schema_proposal also
+        // lacks `kind` (which used to hard-fail the whole parse).
+        let raw = serde_json::json!({
+            "reasoning": "r",
+            "ops": [
+                {"note_path": "learning/tokio", "title": "Tokio", "summary": "rt",
+                 "facts": ["x"], "links": ["learning/rust"], "tags": []},
+                {"kind": "append", "note_path": "learning/rust", "new_facts": ["y"]},
+                {"foo": "bar"}
+            ],
+            "schema_proposals": [
+                {"tag": "rust", "rationale": "r"},
+                {"kind": "new_tag", "tag": "async", "rationale": "r"}
+            ]
+        });
+        let repaired = repair_kind_tags(raw);
+        // The kindless create is recovered, the explicit append kept, the
+        // unidentifiable op dropped → 2 ops.
+        let ops = repaired["ops"].as_array().unwrap();
+        assert_eq!(ops.len(), 2);
+        assert_eq!(ops[0]["kind"], "create");
+        assert_eq!(ops[1]["kind"], "append");
+        // Kindless schema_proposal dropped, valid one kept.
+        let props = repaired["schema_proposals"].as_array().unwrap();
+        assert_eq!(props.len(), 1);
+        assert_eq!(props[0]["kind"], "new_tag");
+        // Crucially: the repaired JSON now deserializes into a real plan.
+        let plan: IngestPlan = serde_json::from_value(repaired).unwrap();
+        assert_eq!(plan.ops.len(), 2);
+        assert_eq!(plan.schema_proposals.len(), 1);
     }
 
     #[test]

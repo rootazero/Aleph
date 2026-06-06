@@ -93,9 +93,31 @@ pub struct ApplyReport {
     pub touched_paths: Vec<String>,
 }
 
+impl ApplyReport {
+    /// True when the apply pass wrote no notes. `touched_paths` is the
+    /// authoritative record of what landed on disk, so an empty list means the
+    /// plan produced nothing (empty plan, all ops filtered, or no-op apply).
+    /// Used by `CompressionService` to decide whether to defer marking the raw
+    /// batch processed (give a transiently-failed extraction a retry instead of
+    /// discarding the knowledge forever).
+    pub fn is_empty(&self) -> bool {
+        self.touched_paths.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn apply_report_is_empty_tracks_touched_paths() {
+        assert!(ApplyReport::default().is_empty());
+        let wrote = ApplyReport {
+            touched_paths: vec!["learning/tokio".into()],
+            ..Default::default()
+        };
+        assert!(!wrote.is_empty());
+    }
 
     #[test]
     fn page_op_roundtrip_json() {
