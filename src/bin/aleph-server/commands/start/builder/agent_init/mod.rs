@@ -1281,11 +1281,19 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     }
                 });
 
-                let trace_get_db = trace_db;
+                let trace_get_db = trace_db.clone();
                 server.handlers_mut().register("trace.get", move |req| {
                     let db = trace_get_db.clone();
                     async move {
                         alephcore::gateway::handlers::trace_replay::handle_get(req, db).await
+                    }
+                });
+
+                let trace_by_runs_db = trace_db.clone();
+                server.handlers_mut().register("trace.by_runs", move |req| {
+                    let db = trace_by_runs_db.clone();
+                    async move {
+                        alephcore::gateway::handlers::trace_replay::handle_by_runs(req, db).await
                     }
                 });
             }
@@ -1306,6 +1314,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             req.id,
                             alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
                             "trace.get disabled: no state_database configured".to_string(),
+                        )
+                    });
+                server
+                    .handlers_mut()
+                    .register("trace.by_runs", |req| async move {
+                        alephcore::gateway::protocol::JsonRpcResponse::error(
+                            req.id,
+                            alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                            "trace.by_runs disabled: no state_database configured".to_string(),
                         )
                     });
             }
