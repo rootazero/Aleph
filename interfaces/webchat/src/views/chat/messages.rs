@@ -17,6 +17,17 @@ use leptos::prelude::*;
 #[component]
 pub(super) fn ChatHero() -> impl IntoView {
     let i18n = use_i18n();
+    let chat = expect_context::<ChatState>();
+    // Starter prompts — clicking seeds the composer via `chat.draft_seed` so the
+    // user lands on an editable draft instead of a blank box. Mirrors
+    // hermes-desktop's `ChatEmptyState` suggestion cards. Small fixed set; each
+    // tuple is (emoji, short label, seed prompt).
+    let suggestions = [
+        ("🔍", "搜索网络", "帮我搜索今天的科技要闻，并总结 3 个重点"),
+        ("📝", "起草文字", "帮我起草一封简短得体的工作邮件"),
+        ("💻", "解释代码", "解释这段代码的作用，并指出潜在问题：\n\n```\n\n```"),
+        ("🧠", "回忆上下文", "我们上次聊到哪了？帮我回顾一下"),
+    ];
     view! {
         <div class="h-full flex flex-col items-center justify-center px-6 pb-10 text-center select-none">
             <div class="aleph-rise mb-7" style="animation-delay: 0s">
@@ -42,6 +53,29 @@ pub(super) fn ChatHero() -> impl IntoView {
             >
                 {t!(i18n, chat.hero_subtitle)}
             </p>
+            // Suggestion chips — staggered in last; seed the composer on click.
+            <div
+                class="aleph-rise mt-7 flex flex-wrap items-center justify-center gap-2 max-w-lg"
+                style="animation-delay: 0.27s"
+            >
+                {suggestions
+                    .into_iter()
+                    .map(|(icon, label, seed)| {
+                        view! {
+                            <button
+                                class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs
+                                       text-text-secondary bg-surface-raised/70 border border-border/60
+                                       hover:text-text-primary hover:bg-surface-raised hover:border-border
+                                       transition-colors"
+                                on:click=move |_| chat.draft_seed.set(Some(seed.to_string()))
+                            >
+                                <span>{icon}</span>
+                                <span>{label}</span>
+                            </button>
+                        }
+                    })
+                    .collect_view()}
+            </div>
         </div>
     }
 }

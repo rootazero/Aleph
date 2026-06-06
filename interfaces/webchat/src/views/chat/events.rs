@@ -1,6 +1,6 @@
 //! Maps Gateway streaming events (run.*) to ChatState mutations.
 
-use super::state::{ChatState, ModelInfo};
+use super::state::{ChatState, ContextUsage, ModelInfo};
 use crate::context::{DashboardState, GatewayEvent};
 use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
@@ -276,6 +276,31 @@ pub fn subscribe_run_events(
             "run_complete" => {
                 chat.complete_run(run_id);
                 workspace.current_iteration.set(None);
+                // Context gauge: the run summary already ships token_breakdown
+                // (input = last-turn context tokens) + total_tokens. Resolve the
+                // window denominator from the run's model client-side and publish
+                // for the composer's ContextGauge. Additive read of data already
+                // on the wire — no backend protocol change.
+                if let Some(summary) = data.get("summary") {
+                    let input = summary
+                        .get("token_breakdown")
+                        .and_then(|b| b.get("input"))
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0) as u32;
+                    let total = summary
+                        .get("total_tokens")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    if input > 0 || total > 0 {
+                        let model = chat.model_for_run(run_id).unwrap_or_default();
+                        let window = super::context_gauge::context_window_for(&model);
+                        chat.context_usage.set(Some(ContextUsage {
+                            used_tokens: input,
+                            window_tokens: window,
+                            total_tokens: total,
+                        }));
+                    }
+                }
                 // Voice loop: if the mic button registered this run, speak the
                 // final reply via the core TTS path → endpoint playback.
                 if chat.take_speak_run(run_id) {
