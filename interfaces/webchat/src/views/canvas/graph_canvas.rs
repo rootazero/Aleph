@@ -223,6 +223,31 @@ pub fn GraphCanvas(
         // hook to disconnect cleanly.
         observer_cb.forget();
 
+        // Parent-size channel: the ResizeObserver writes the latest content-box
+        // size here; the rAF loop reads it (cheap) instead of calling
+        // get_bounding_client_rect every frame (which forces synchronous
+        // layout — the same reason visibility uses IntersectionObserver above).
+        let pending_size: std::rc::Rc<std::cell::Cell<Option<(f64, f64)>>> =
+            std::rc::Rc::new(std::cell::Cell::new(None));
+        let pending_size_obs = pending_size.clone();
+        let resize_cb: Closure<dyn FnMut(js_sys::Array)> =
+            Closure::new(move |entries: js_sys::Array| {
+                if let Ok(entry) = entries.get(0).dyn_into::<web_sys::ResizeObserverEntry>() {
+                    let rect = entry.content_rect();
+                    let w = rect.width().max(1.0);
+                    let h = rect.height().max(1.0);
+                    pending_size_obs.set(Some((w, h)));
+                }
+            });
+        if let Ok(observer) = web_sys::ResizeObserver::new(resize_cb.as_ref().unchecked_ref()) {
+            if let Some(parent) = canvas.parent_element() {
+                observer.observe(&parent);
+            }
+        }
+        // Leak the resize callback for the panel's lifetime — same rationale as
+        // the IntersectionObserver and rAF closures (parent never unmounts us).
+        resize_cb.forget();
+
         // Initial canvas size — rAF loop will resize dynamically from parent
         let (w, h) = canvas
             .parent_element()
@@ -274,6 +299,7 @@ pub fn GraphCanvas(
         let canvas_for_resize = canvas.clone();
         let is_visible_for_raf = is_visible.clone();
         let parked_for_raf = parked.clone();
+        let pending_size_for_raf = pending_size.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
             // Visibility pause: MainContent (app.rs) keeps every top-level
             // view mounted and toggles `display:none` for inactive tabs, so
@@ -297,11 +323,10 @@ pub fn GraphCanvas(
                 return;
             }
 
-            // Dynamic canvas resize: check parent size each frame
-            if let Some(parent) = canvas_for_resize.parent_element() {
-                let rect = parent.get_bounding_client_rect();
-                let pw = rect.width();
-                let ph = rect.height();
+            // Apply a pending resize from the ResizeObserver, if any. take()
+            // consumes the cell so we only resize when a new size actually
+            // arrived — no per-frame getBoundingClientRect layout read.
+            if let Some((pw, ph)) = pending_size_for_raf.take() {
                 if pw > 1.0 && ph > 1.0 {
                     let cur_w = canvas_for_resize.width() as f64 / dpr;
                     let cur_h = canvas_for_resize.height() as f64 / dpr;
