@@ -1,7 +1,7 @@
 //! `ToolLoopVerifier` — structural watchdog that vetoes when the
-//! model has issued N consecutive identical tool calls without
-//! producing thinking text in between (closes master roadmap § 1.4
-//! P1: "stop hook 仅在模型停手触发；tool_use 死循环不覆盖").
+//! model has issued N consecutive identical tool calls (same `name` +
+//! `args_hash`), regardless of any narration text on the turn (closes
+//! master roadmap § 1.4 P1: "stop hook 仅在模型停手触发；tool_use 死循环不覆盖").
 //!
 //! Detection rule (deliberately conservative — false positives are
 //! costly because they inject a [verifier veto] message that disrupts
@@ -11,8 +11,7 @@
 //!     goal verifiers, and firing there would only re-judge stale history
 //!   - `ctx.recent_tool_calls.len() >= threshold`
 //!   - the trailing `threshold` entries all have the same `name` and
-//!     `args_hash`
-//!   - the current turn's `final_text` is empty/None
+//!     `args_hash` (identical, redundant calls — varied args reset the run)
 //!
 //! Two-tier escalation:
 //!   - at `repeat_threshold` identical trailing calls → emit a `Veto`
@@ -127,13 +126,6 @@ impl TurnVerifier for ToolLoopVerifier {
             return VerifierVerdict::Continue;
         }
         if ctx.recent_tool_calls.len() < self.repeat_threshold {
-            return VerifierVerdict::Continue;
-        }
-        let has_text = ctx
-            .final_text
-            .map(|t| !t.trim().is_empty())
-            .unwrap_or(false);
-        if has_text {
             return VerifierVerdict::Continue;
         }
         let run = trailing_repeat_run(ctx.recent_tool_calls);

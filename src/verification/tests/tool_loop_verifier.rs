@@ -1,4 +1,4 @@
-//! `ToolLoopVerifier` threshold + thinking-text guard semantics.
+//! `ToolLoopVerifier` threshold + identical-call repetition semantics.
 
 use tokio_util::sync::CancellationToken;
 
@@ -53,7 +53,11 @@ async fn at_threshold_with_no_text_vetoes() {
 }
 
 #[tokio::test]
-async fn at_threshold_with_thinking_text_allows() {
+async fn thinking_text_does_not_rescue_identical_loop() {
+    // Narration is now ENCOURAGED (guidelines rule 17), so it can no longer be
+    // the signal that suppresses death-loop detection. Five identical
+    // (name, args_hash) calls is a loop whether or not the model narrates —
+    // the args_hash equality already excludes legitimate varied exploration.
     let v = ToolLoopVerifier::new().with_threshold(5);
     let history = vec![make("read", 1); 5];
     let ctx = TurnVerifyContext {
@@ -65,11 +69,14 @@ async fn at_threshold_with_thinking_text_allows() {
         session_id: None,
     };
     let cancel = CancellationToken::new();
-    assert!(v.verify(&ctx, &cancel).await.is_continue());
+    assert!(v.verify(&ctx, &cancel).await.is_veto());
 }
 
 #[tokio::test]
-async fn whitespace_only_text_treated_as_no_text() {
+async fn text_present_still_vetoes_identical_loop() {
+    // After removing the has_text escape, the presence of *any* final_text
+    // (whitespace or substantive) does not change the verdict for an identical
+    // (name, args_hash) run — it vetoes on repetition alone.
     let v = ToolLoopVerifier::new().with_threshold(5);
     let history = vec![make("read", 1); 5];
     let ctx = TurnVerifyContext {
