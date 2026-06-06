@@ -229,7 +229,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                 .map(|evs| !evs.is_empty())
                                 .unwrap_or(false);
 
-                        if traced {
+                        let replayed = if traced {
                             if let (Some(run), Some(ws)) = (m.run_id.as_deref(), workspace) {
                                 let evs = traces.get(run).cloned().unwrap_or_default();
                                 crate::views::chat::events::replay_run(
@@ -245,8 +245,18 @@ pub fn ChatSidebar() -> impl IntoView {
                                         b.timestamp = ts;
                                     }
                                 });
+                                true
+                            } else {
+                                false
                             }
                         } else {
+                            false
+                        };
+
+                        // Fall back to a plain bubble whenever replay did NOT
+                        // run — including the unreachable "traced but no
+                        // workspace" case, so a row is never silently dropped.
+                        if !replayed {
                             chat.messages.update(|msgs| {
                                 msgs.push(crate::views::chat::state::ChatMessage {
                                     timestamp: ts,
