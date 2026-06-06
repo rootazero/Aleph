@@ -7,6 +7,115 @@ use leptos::prelude::*;
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
+/// Project one persisted/live `AgentTraceEvent` (tagged `kind` or `type`)
+/// onto ChatState (step bubbles, tool status, narration) + WorkspaceState
+/// (tool args/result payloads, current iteration). The single projection
+/// shared by the live WS stream and `trace.by_runs` replay so the two paths
+/// can never drift.
+pub(crate) fn apply_trace_event(
+    chat: ChatState,
+    workspace: WorkspaceState,
+    run_id: &str,
+    trace_event: &serde_json::Value,
+) {
+    // The harness serializes `LoopTraceEvent` with `#[serde(tag =
+    // "type")]`, so the discriminator arrives as `type`. The
+    // protocol `AgentTraceEvent` form tags it `kind`; accept either
+    // so both wire shapes parse.
+    let kind = trace_event
+        .get("type")
+        .or_else(|| trace_event.get("kind"))
+        .and_then(|k| k.as_str())
+        .unwrap_or("");
+
+    match kind {
+        "tool_call_started" => {
+            let call = trace_event.get("call");
+            let tool_id = call
+                .and_then(|c| c.get("tool_id"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            let tool_name = call
+                .and_then(|c| c.get("tool_name"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("tool");
+            chat.update_tool(run_id, tool_id, tool_name, "running", None);
+            // Surface activity on the toggle when the pane is
+            // closed (R5 — never force-open the Split).
+            workspace.note_activity();
+            // Capture args/input for the workspace pane. Schema
+            // varies by tool kind — try the two known keys.
+            if !tool_id.is_empty() {
+                let args = call
+                    .and_then(|c| c.get("input").or_else(|| c.get("args")))
+                    .cloned();
+                if let Some(args) = args {
+                    workspace.record_tool_args(run_id, tool_id, args);
+                }
+            }
+        }
+        "tool_call_completed" => {
+            let call = trace_event.get("call");
+            let tool_id = call
+                .and_then(|c| c.get("tool_id"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            let tool_name = call
+                .and_then(|c| c.get("tool_name"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            let duration = call
+                .and_then(|c| c.get("duration_ms"))
+                .and_then(|d| d.as_u64());
+            let result = trace_event
+                .get("result")
+                .unwrap_or(&serde_json::Value::Null);
+            let status = if result.get("Error").is_some() {
+                "failed"
+            } else {
+                "completed"
+            };
+            chat.update_tool(run_id, tool_id, tool_name, status, duration);
+            // Mirror the result into workspace state so the
+            // tool-detail view can show actual output.
+            if !tool_id.is_empty() {
+                workspace.record_tool_result(run_id, tool_id, result.clone());
+            }
+        }
+        "tool_summary" => {
+            if let Some(summary) = trace_event.get("summary").and_then(|s| s.as_str()) {
+                append_reasoning(chat, summary);
+            }
+        }
+        "turn_started" => {
+            let Some(iteration) = trace_event
+                .get("iteration")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+            else {
+                return;
+            };
+            chat.begin_step(run_id, iteration);
+            workspace.set_current_iteration(run_id, iteration);
+        }
+        "text_emitted" => {
+            let Some(iteration) = trace_event
+                .get("iteration")
+                .and_then(|v| v.as_u64())
+                .map(|v| v as usize)
+            else {
+                return;
+            };
+            let text = trace_event
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            chat.set_step_text(run_id, iteration, text);
+        }
+        _ => {}
+    }
+}
+
 fn append_reasoning(chat: ChatState, summary: &str) {
     if summary.is_empty() {
         return;
@@ -76,106 +185,10 @@ pub fn subscribe_run_events(
                 if let Ok(mut runs) = trace_runs.lock() {
                     runs.insert(run_id.to_string());
                 }
-
                 let Some(trace_event) = data.get("event") else {
                     return;
                 };
-                // The harness serializes `LoopTraceEvent` with `#[serde(tag =
-                // "type")]`, so the discriminator arrives as `type`. The
-                // protocol `AgentTraceEvent` form tags it `kind`; accept either
-                // so both wire shapes parse.
-                let kind = trace_event
-                    .get("type")
-                    .or_else(|| trace_event.get("kind"))
-                    .and_then(|k| k.as_str())
-                    .unwrap_or("");
-
-                match kind {
-                    "tool_call_started" => {
-                        let call = trace_event.get("call");
-                        let tool_id = call
-                            .and_then(|c| c.get("tool_id"))
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("");
-                        let tool_name = call
-                            .and_then(|c| c.get("tool_name"))
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("tool");
-                        chat.update_tool(run_id, tool_id, tool_name, "running", None);
-                        // Surface activity on the toggle when the pane is
-                        // closed (R5 — never force-open the Split).
-                        workspace.note_activity();
-                        // Capture args/input for the workspace pane. Schema
-                        // varies by tool kind — try the two known keys.
-                        if !tool_id.is_empty() {
-                            let args = call
-                                .and_then(|c| c.get("input").or_else(|| c.get("args")))
-                                .cloned();
-                            if let Some(args) = args {
-                                workspace.record_tool_args(run_id, tool_id, args);
-                            }
-                        }
-                    }
-                    "tool_call_completed" => {
-                        let call = trace_event.get("call");
-                        let tool_id = call
-                            .and_then(|c| c.get("tool_id"))
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("");
-                        let tool_name = call
-                            .and_then(|c| c.get("tool_name"))
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("");
-                        let duration = call
-                            .and_then(|c| c.get("duration_ms"))
-                            .and_then(|d| d.as_u64());
-                        let result = trace_event
-                            .get("result")
-                            .unwrap_or(&serde_json::Value::Null);
-                        let status = if result.get("Error").is_some() {
-                            "failed"
-                        } else {
-                            "completed"
-                        };
-                        chat.update_tool(run_id, tool_id, tool_name, status, duration);
-                        // Mirror the result into workspace state so the
-                        // tool-detail view can show actual output.
-                        if !tool_id.is_empty() {
-                            workspace.record_tool_result(run_id, tool_id, result.clone());
-                        }
-                    }
-                    "tool_summary" => {
-                        if let Some(summary) = trace_event.get("summary").and_then(|s| s.as_str()) {
-                            append_reasoning(chat, summary);
-                        }
-                    }
-                    "turn_started" => {
-                        let Some(iteration) = trace_event
-                            .get("iteration")
-                            .and_then(|v| v.as_u64())
-                            .map(|v| v as usize)
-                        else {
-                            return;
-                        };
-                        chat.begin_step(run_id, iteration);
-                        workspace.set_current_iteration(run_id, iteration);
-                    }
-                    "text_emitted" => {
-                        let Some(iteration) = trace_event
-                            .get("iteration")
-                            .and_then(|v| v.as_u64())
-                            .map(|v| v as usize)
-                        else {
-                            return;
-                        };
-                        let text = trace_event
-                            .get("text")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("");
-                        chat.set_step_text(run_id, iteration, text);
-                    }
-                    _ => {}
-                }
+                apply_trace_event(chat, workspace, run_id, trace_event);
             }
             "tool_start" => {
                 if trace_enabled {
@@ -256,4 +269,48 @@ pub fn subscribe_run_events(
             _ => {} // Ignore unknown event types
         }
     })
+}
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    use crate::state::layout::WorkspaceState;
+    use crate::views::chat::state::ChatState;
+    use leptos::prelude::Owner;
+    use serde_json::json;
+
+    #[test]
+    fn apply_trace_event_builds_steps_and_payloads() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+
+        // Simulate run_accepted which creates the placeholder message bubble
+        // that begin_step / set_step_text require to exist.
+        chat.start_assistant_message("run-1");
+
+        let events = vec![
+            json!({ "kind": "turn_started", "iteration": 1 }),
+            json!({ "kind": "tool_call_started", "iteration": 1,
+                    "call": { "tool_id": "t1", "tool_name": "search", "input": { "q": "rust" } } }),
+            json!({ "kind": "tool_call_completed", "iteration": 1,
+                    "call": { "tool_id": "t1", "tool_name": "search", "duration_ms": 5 },
+                    "result": { "ok": true } }),
+            json!({ "kind": "turn_started", "iteration": 2 }),
+            json!({ "kind": "text_emitted", "iteration": 2, "stream": "final", "text": "done" }),
+        ];
+        for ev in &events {
+            apply_trace_event(chat, ws, "run-1", ev);
+        }
+
+        let payload = ws.get_tool_payload("run-1", "t1").expect("payload");
+        assert!(payload.args.is_some());
+        assert!(payload.result.is_some());
+
+        let msgs = chat.messages.get_untracked();
+        let tagged: Vec<usize> = msgs.iter().filter_map(|m| m.iteration).collect();
+        assert_eq!(tagged, vec![1, 2]);
+        assert!(msgs.iter().any(|m| m.iteration == Some(2) && m.content.contains("done")));
+    }
 }
