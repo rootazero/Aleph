@@ -255,10 +255,21 @@ impl OutputGuardrail for SanitizeOutput {
 #[derive(Default)]
 struct CapturingCallback {
     safety_blocks: Vec<String>,
+    /// `(call_id, is_error)` for every `on_tool_call_done` fired by the loop.
+    /// Guards the ToolStart↔ToolEnd symmetry on the live broadcast stream.
+    tool_done: Vec<(String, bool)>,
 }
 impl HarnessCallback for CapturingCallback {
     fn on_safety_block(&mut self, reason: &str) {
         self.safety_blocks.push(reason.to_string());
+    }
+    fn on_tool_call_done(
+        &mut self,
+        id: &str,
+        _result: Option<&serde_json::Value>,
+        error: Option<&str>,
+    ) {
+        self.tool_done.push((id.to_string(), error.is_some()));
     }
 }
 
@@ -681,6 +692,21 @@ async fn tool_call_block_skips_only_blocked_call_in_batch() {
     // safety_blocks fired once with the blocked tool name in the reason.
     assert_eq!(cb.safety_blocks.len(), 1, "got {:?}", cb.safety_blocks);
     assert!(cb.safety_blocks[0].contains("forbidden_tool"));
+
+    // Live "done" event must fire for BOTH calls so the broadcast stream
+    // closes every ToolStart with a ToolEnd: the blocked call as an error,
+    // the safe call as a success. Before wiring `on_tool_call_done` the live
+    // stream emitted starts with no ends and leaked `pending_tools` entries.
+    assert!(
+        cb.tool_done.contains(&("c1".to_string(), true)),
+        "blocked call must emit an error `done`, got {:?}",
+        cb.tool_done
+    );
+    assert!(
+        cb.tool_done.contains(&("c2".to_string(), false)),
+        "safe call must emit a success `done`, got {:?}",
+        cb.tool_done
+    );
 
     // Session log: ToolError for the blocked call AND ToolResult for the safe one.
     let log = session.snapshot().await;
