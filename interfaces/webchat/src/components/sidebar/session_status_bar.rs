@@ -18,6 +18,8 @@ pub fn SessionStatusBar() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
 
     let active_runs = RwSignal::new(Option::<u64>::None);
+    // Bumped on each (re)connect so stale poll loops self-terminate.
+    let poll_gen = RwSignal::new(0u32);
 
     // Gateway state string + tone, derived reactively (matches Home).
     let gateway_label = move || {
@@ -45,9 +47,11 @@ pub fn SessionStatusBar() -> impl IntoView {
     // every 10s. Disconnect clears the count.
     Effect::new(move || {
         if dash.is_connected.get() {
+            let my_gen = poll_gen.get_untracked().wrapping_add(1);
+            poll_gen.set(my_gen);
             leptos::task::spawn_local(async move {
                 loop {
-                    if !dash.is_connected.get_untracked() {
+                    if !dash.is_connected.get_untracked() || poll_gen.get_untracked() != my_gen {
                         break;
                     }
                     match dash
