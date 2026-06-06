@@ -289,6 +289,17 @@ fn parse_interval_to_ms(s: &str) -> Option<u64> {
     }
 }
 
+/// Returns the id to render as a "(deleted)" placeholder option when the job's
+/// currently-bound agent is no longer in the available list. `None` when the
+/// current id is empty or still present.
+fn stale_agent_option(current: &str, available: &[crate::api::agents::AgentSummary]) -> Option<String> {
+    if current.is_empty() || available.iter().any(|a| a.id == current) {
+        None
+    } else {
+        Some(current.to_string())
+    }
+}
+
 // ============================================================================
 // CronView — Main Container
 // ============================================================================
@@ -673,7 +684,7 @@ fn JobEditor(
                 form_name.set(String::new());
                 form_schedule_kind.set(String::from("cron"));
                 form_schedule.set(String::new());
-                form_agent_id.set(String::new());
+                form_agent_id.set(default_agent_id.get_untracked());
                 form_prompt.set(String::new());
                 form_timezone.set(String::new());
                 form_tags.set(String::new());
@@ -1161,13 +1172,39 @@ fn JobEditor(
                                     <label class="block text-sm font-medium text-text-secondary mb-2">
                                         {t!(i18n, cron.field_agent)}
                                     </label>
-                                    <input
-                                        type="text"
-                                        prop:value=move || form_agent_id.get()
-                                        on:input=move |ev| form_agent_id.set(event_target_value(&ev))
+                                    <select
+                                        on:change=move |ev| form_agent_id.set(event_target_value(&ev))
                                         class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary focus:outline-none focus:border-primary"
-                                        placeholder=move || t_string!(i18n, cron.placeholder_agent).to_string()
-                                    />
+                                    >
+                                        {move || {
+                                            let current = form_agent_id.get();
+                                            let list = agents.get();
+                                            let deleted_suffix =
+                                                t_string!(i18n, cron.agent_deleted_suffix).to_string();
+                                            let stale = stale_agent_option(&current, &list);
+                                            let mut opts = list
+                                                .into_iter()
+                                                .map(|a| {
+                                                    let id = a.id.clone();
+                                                    let label = a.name.clone().unwrap_or_else(|| a.id.clone());
+                                                    let sel = id == current;
+                                                    view! {
+                                                        <option value=id selected=sel>{label}</option>
+                                                    }
+                                                    .into_any()
+                                                })
+                                                .collect::<Vec<_>>();
+                                            if let Some(stale_id) = stale {
+                                                let label = format!("{stale_id}{deleted_suffix}");
+                                                opts.push(view! {
+                                                    <option value=stale_id selected=true disabled=true>
+                                                        {label}
+                                                    </option>
+                                                }.into_any());
+                                            }
+                                            opts
+                                        }}
+                                    </select>
                                 </div>
 
                                 // Prompt
@@ -1399,6 +1436,41 @@ fn JobEditor(
 // ============================================================================
 // RunHistory — Execution History Table
 // ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::agents::AgentSummary;
+
+    fn agent(id: &str) -> AgentSummary {
+        AgentSummary {
+            id: id.to_string(),
+            name: Some(id.to_string()),
+            emoji: None,
+            description: None,
+            model: None,
+            is_default: id == "main",
+        }
+    }
+
+    #[test]
+    fn stale_option_none_when_current_in_list() {
+        let list = vec![agent("main"), agent("research")];
+        assert_eq!(stale_agent_option("research", &list), None);
+    }
+
+    #[test]
+    fn stale_option_none_when_current_empty() {
+        let list = vec![agent("main")];
+        assert_eq!(stale_agent_option("", &list), None);
+    }
+
+    #[test]
+    fn stale_option_some_when_current_deleted() {
+        let list = vec![agent("main")];
+        assert_eq!(stale_agent_option("gone", &list), Some("gone".to_string()));
+    }
+}
 
 #[component]
 fn RunHistory(runs: RwSignal<Vec<JobRunInfo>>) -> impl IntoView {
