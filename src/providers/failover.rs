@@ -67,6 +67,13 @@ const DEFAULT_TRANSIENT_DELAY: Duration = Duration::from_millis(300);
 /// (`MAX_DELAY`) so the failover loop and the standalone `retry_async` helper
 /// grow their backoff identically.
 const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
+/// Ceiling on a single in-place wait while *riding out a transient server
+/// overload* (429 "please wait a moment", 529). Higher than [`MAX_RETRY_DELAY`]
+/// so a large server `Retry-After` is honored in full rather than silently
+/// clamped to 30s — a paid primary (e.g. Kimi) that says "wait 60s" should be
+/// waited out on, not abandoned to a fallback. Also caps the proactive
+/// per-provider cooldown wait. Matches hermes' 120s `Retry-After` cap.
+const MAX_OVERLOAD_RETRY_DELAY: Duration = Duration::from_secs(120);
 /// In-place retry budget for a *transient server overload* — a 429 whose body
 /// says "please wait a moment and try again", or a 529 `overloaded`. Deeper
 /// than [`FailoverConfig::max_retries`] because in a single-provider setup
@@ -74,8 +81,9 @@ const MAX_RETRY_DELAY: Duration = Duration::from_secs(30);
 /// client to wait and retry: a flat 2-retry budget gave up after ~4s and
 /// hard-failed the whole flow (the 08:00 scheduled job's 429 crash). With the
 /// exponential backoff applied in `process()` this rides out a throttle for up
-/// to ~60s (2+4+8+16+30) before advancing the chain. A genuine account/quota
-/// 429 stays `Fatal` upstream and never reaches this budget.
+/// to ~60s (2+4+8+16+32) before advancing the chain — and honors a larger
+/// server `Retry-After` up to [`MAX_OVERLOAD_RETRY_DELAY`]. A genuine
+/// account/quota 429 stays `Fatal` upstream and never reaches this budget.
 const OVERLOAD_RETRY_BUDGET: u32 = 5;
 /// Default sideline window for a *model-specific* 429 when the server gave no
 /// `Retry-After` hint. Short enough that a transient per-model throttle clears
@@ -230,6 +238,50 @@ impl ModelCooldown {
             .await
             .get(&key)
             .is_some_and(|&until| until > Instant::now())
+    }
+}
+
+/// Per-provider rate-limit cooldown gate (proactive pacing).
+///
+/// After a provider 429s / overloads and the walk gives up its in-place retries,
+/// the provider name is parked until `available_at`. Before re-dialing that
+/// provider on a *later* turn, the walk waits out the **remaining** window
+/// instead of immediately re-triggering the same throttle — so a single paid
+/// primary (e.g. Kimi) is paced to its rate limit and kept in use, rather than
+/// eating a fresh 429 and bouncing to a fallback every turn. Provider-keyed twin
+/// of [`ModelCooldown`]; it *waits* (the primary has no equivalent sibling)
+/// where the model cooldown *sidelines*. Mirrors hermes'
+/// `nous_rate_limit_remaining()` pre-request wait and opensquilla's credential
+/// park. Cloning shares the same map (`Arc`), scoped exactly like
+/// [`FailoverHealth`].
+#[derive(Clone)]
+pub struct ProviderCooldown(Arc<RwLock<HashMap<String, Instant>>>);
+
+impl Default for ProviderCooldown {
+    fn default() -> Self {
+        Self(Arc::new(RwLock::new(HashMap::new())))
+    }
+}
+
+impl ProviderCooldown {
+    /// Park `provider` for `dur`. Extends an existing window, never shortens it,
+    /// so a longer server `Retry-After` is not clobbered by a later default.
+    async fn cool(&self, provider: &str, dur: Duration) {
+        let until = Instant::now() + dur;
+        let mut map = self.0.write().await;
+        let slot = map.entry(provider.to_string()).or_insert(until);
+        *slot = (*slot).max(until);
+    }
+
+    /// Remaining cooldown for `provider`, or `None` if it is not currently
+    /// cooling (no entry, or the window already elapsed).
+    async fn remaining(&self, provider: &str) -> Option<Duration> {
+        let now = Instant::now();
+        self.0
+            .read()
+            .await
+            .get(provider)
+            .and_then(|&until| until.checked_duration_since(now))
     }
 }
 
@@ -432,6 +484,11 @@ pub struct FailoverProvider {
     /// override (like [`FailoverHealth`]) so one model's throttle is visible
     /// everywhere.
     model_cooldown: Option<ModelCooldown>,
+    /// Shared per-provider rate-limit cooldown gate. `None` (tests, `new()`)
+    /// disables proactive pacing entirely — byte-identical to pre-gate failover.
+    /// Wired only in production (`build_failover_chain`), one registry cloned
+    /// across all chains like [`FailoverHealth`].
+    provider_cooldown: Option<ProviderCooldown>,
 }
 
 impl FailoverProvider {
@@ -463,6 +520,7 @@ impl FailoverProvider {
             primary_tier: EndpointTier::Unknown,
             load: None,
             model_cooldown: None,
+            provider_cooldown: None,
         }
     }
 
@@ -520,6 +578,14 @@ impl FailoverProvider {
     /// chains; tests omit it and keep no cooldown (byte-identical to before).
     pub fn with_model_cooldown(mut self, cooldown: ModelCooldown) -> Self {
         self.model_cooldown = Some(cooldown);
+        self
+    }
+
+    /// Attach the shared per-provider rate-limit cooldown gate. Wired only in
+    /// production (`build_failover_chain`) with one registry cloned across all
+    /// chains; tests omit it and keep no pacing (byte-identical to before).
+    pub fn with_provider_cooldown(mut self, cooldown: ProviderCooldown) -> Self {
+        self.provider_cooldown = Some(cooldown);
         self
     }
 
@@ -875,6 +941,27 @@ impl AiProvider for FailoverProvider {
                 // healthy sibling (fail-open if all are cooling).
                 let models = self.drop_cooling_models(&cand.name, models).await;
 
+                // Proactive rate-limit pacing: if this provider 429'd recently
+                // and is still inside its recorded cooldown, wait out the
+                // *remaining* window before re-dialing it instead of eating a
+                // fresh 429. Only the candidate we are about to try is paced
+                // (skipped candidates `continue` above). Keeps a single paid
+                // primary (e.g. Kimi) in use rather than bouncing to a fallback
+                // every turn; capped so a turn never blocks unboundedly (the
+                // harness per-turn watchdog is the outer bound). Mirrors hermes'
+                // `nous_rate_limit_remaining()` pre-request wait.
+                if let Some(pc) = &self.provider_cooldown {
+                    if let Some(remaining) = pc.remaining(&cand.name).await {
+                        let wait = remaining.min(MAX_OVERLOAD_RETRY_DELAY);
+                        tracing::warn!(
+                            provider = %cand.name,
+                            wait_ms = wait.as_millis() as u64,
+                            "failover: provider cooling from a recent 429, pacing before re-request",
+                        );
+                        tokio::time::sleep(wait).await;
+                    }
+                }
+
                 let mut tripped: Option<FailureKind> = None;
                 'model: for model in models {
                     let mut attempt: u32 = 0;
@@ -917,7 +1004,20 @@ impl AiProvider for FailoverProvider {
                                     // concurrent agents hitting the same
                                     // overloaded provider from retrying in
                                     // lockstep and reigniting the spike.
-                                    let backed_off = backoff_delay(delay, attempt, MAX_RETRY_DELAY);
+                                    // A transient server overload may carry a
+                                    // server `Retry-After` larger than the 30s
+                                    // blip cap; honor it up to the overload
+                                    // ceiling so a paid primary that asks to
+                                    // wait 60s is waited out, not clamped to 30s
+                                    // and abandoned. Plain network blips keep the
+                                    // tighter cap.
+                                    let cap =
+                                        if is_transient_overload(&e.to_string().to_lowercase()) {
+                                            MAX_OVERLOAD_RETRY_DELAY
+                                        } else {
+                                            MAX_RETRY_DELAY
+                                        };
+                                    let backed_off = backoff_delay(delay, attempt, cap);
                                     let jittered =
                                         crate::providers::retry::apply_jitter(backed_off, 0.25);
                                     tracing::warn!(
@@ -946,11 +1046,22 @@ impl AiProvider for FailoverProvider {
                                     // ends up exhausted (single-model providers
                                     // behave exactly as before); it is discarded the
                                     // moment a sibling model succeeds.
+                                    let dur =
+                                        hint.unwrap_or(DEFAULT_MODEL_COOLDOWN).min(MAX_COOLDOWN);
                                     if let (Some(cd), Some(m)) = (&self.model_cooldown, &model) {
-                                        let dur = hint
-                                            .unwrap_or(DEFAULT_MODEL_COOLDOWN)
-                                            .min(MAX_COOLDOWN);
                                         cd.cool(&cand.name, m, dur).await;
+                                    }
+                                    // Also park the provider so the *next* turn
+                                    // paces itself before re-dialing it (the
+                                    // proactive gate above), instead of eating a
+                                    // fresh 429 and bouncing to a fallback. For a
+                                    // single-model primary (Kimi) this is exactly
+                                    // "wait out the provider's stated cooldown";
+                                    // for a multi-model provider the brief pace is
+                                    // harmless and self-corrects as the window
+                                    // elapses.
+                                    if let Some(pc) = &self.provider_cooldown {
+                                        pc.cool(&cand.name, dur).await;
                                     }
                                     tracing::warn!(
                                         provider = %cand.name, model = ?model, error = %e,
@@ -1403,6 +1514,30 @@ mod tests {
         // A zero-duration cool expires immediately.
         cd.cool("p", "b", Duration::from_secs(0)).await;
         assert!(!cd.is_cooling("p", "b").await);
+    }
+
+    #[tokio::test]
+    async fn provider_cooldown_cools_extends_and_isolates() {
+        let pc = ProviderCooldown::default();
+        // Not cooling until parked.
+        assert!(pc.remaining("kimi").await.is_none());
+        pc.cool("kimi", Duration::from_secs(60)).await;
+        let r = pc.remaining("kimi").await.expect("should be cooling");
+        assert!(r > Duration::from_secs(58) && r <= Duration::from_secs(60));
+        // A shorter cool never shortens an existing window (server Retry-After
+        // wins over a later default).
+        pc.cool("kimi", Duration::from_millis(1)).await;
+        assert!(pc.remaining("kimi").await.expect("still cooling") > Duration::from_secs(58));
+        // A different provider is independent.
+        assert!(pc.remaining("other").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn provider_cooldown_remaining_is_none_after_window() {
+        let pc = ProviderCooldown::default();
+        pc.cool("p", Duration::from_millis(5)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(pc.remaining("p").await.is_none());
     }
 
     #[tokio::test]

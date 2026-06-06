@@ -111,7 +111,9 @@ pub use default_handle::{DefaultProviderHandle, StaticDefault};
 pub use delta::{
     response_to_delta_stream, DeltaCollector, DeltaSink, IndexIdTracker, NoopSink, ProviderDelta,
 };
-pub use failover::{FailoverConfig, FailoverHealth, FailoverNode, FailoverProvider, ModelCooldown};
+pub use failover::{
+    FailoverConfig, FailoverHealth, FailoverNode, FailoverProvider, ModelCooldown, ProviderCooldown,
+};
 pub use load_stats::{InFlightGuard, LoadStats};
 pub use health::{ModelInfo, ProviderError, ProviderHealth, ResolvedModel};
 pub use http_provider::HttpProvider;

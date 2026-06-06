@@ -17,7 +17,7 @@ use crate::providers::model_catalog::{capabilities_for, endpoint_kind_for_base_u
 use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
-    FailoverNode, FailoverProvider, LoadStats, ModelCooldown, StaticDefault,
+    FailoverNode, FailoverProvider, LoadStats, ModelCooldown, ProviderCooldown, StaticDefault,
 };
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
 
@@ -132,6 +132,12 @@ pub fn build_failover_chain(
     // one model (not the whole provider) across every chain built here.
     let model_cooldown = ModelCooldown::default();
 
+    // Shared per-provider rate-limit cooldown gate: after a provider 429s, the
+    // next turn paces itself (waits out the recorded window) before re-dialing
+    // it, instead of eating a fresh 429 and bouncing to a fallback — keeps a
+    // single paid primary (e.g. Kimi) in use. Scoped exactly like `health`.
+    let provider_cooldown = ProviderCooldown::default();
+
     // Operator-tunable in-place retry budget (`[fallback_provider].max_retries`),
     // falling back to the built-in default. Useful for single-provider setups
     // with no sibling to fail over to.
@@ -192,7 +198,8 @@ pub fn build_failover_chain(
     )
     .with_route(route_mode, allow_escalation, escalation_approval.clone())
     .with_load_stats(load.clone())
-    .with_model_cooldown(model_cooldown.clone());
+    .with_model_cooldown(model_cooldown.clone())
+    .with_provider_cooldown(provider_cooldown.clone());
     // A live handle (production) makes mode switches hot-apply; its absence
     // (tests) keeps the boot snapshot above — byte-identical to before.
     let global_provider = match route_handle.clone() {
@@ -234,7 +241,8 @@ pub fn build_failover_chain(
             .with_route(route_mode, allow_escalation, escalation_approval.clone())
             .with_primary_tier(pin_tier)
             .with_load_stats(load.clone())
-            .with_model_cooldown(model_cooldown.clone());
+            .with_model_cooldown(model_cooldown.clone())
+            .with_provider_cooldown(provider_cooldown.clone());
             let pinned = match route_handle.clone() {
                 Some(h) => pinned.with_route_live(h),
                 None => pinned,
@@ -288,6 +296,21 @@ fn assemble_fallbacks(
         provider: provider.clone(),
     };
 
+    // Effective protocol of a provider ("anthropic" / "openai" / ...), used to
+    // prefer *same-protocol* fallbacks. Cross-protocol failover (e.g. an
+    // Anthropic-protocol primary like Kimi migrating to an OpenAI-compatible
+    // endpoint) has to convert the request shape, and some OpenAI-compat Claude
+    // shims reject the conversion outright (the -10003 "参数错误" gap). A
+    // homogeneous chain sends the same format the primary already proved valid.
+    let protocol_of = |name: &str| -> Option<String> {
+        config
+            .providers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, pc)| pc.protocol())
+    };
+    let primary_protocol = protocol_of(primary_provider_key);
+
     let mut fallbacks: Vec<FailoverNode> = Vec::new();
     if let Some(fb) = config.fallback_provider.as_ref() {
         for name in fb.resolved_chain() {
@@ -303,15 +326,37 @@ fn assemble_fallbacks(
                 );
                 continue;
             };
+            // Loud diagnostic for a cross-protocol fallback: it still runs (the
+            // operator configured it on purpose), but a protocol mismatch is the
+            // root of the request-conversion rejection class, so make it visible.
+            if let (Some(prim), Some(fbp)) = (&primary_protocol, protocol_of(&name)) {
+                if !fbp.eq_ignore_ascii_case(prim) {
+                    tracing::warn!(
+                        primary_protocol = %prim,
+                        fallback = %name,
+                        fallback_protocol = %fbp,
+                        "failover chain: fallback protocol differs from primary — cross-protocol \
+                         failover converts the request shape and some OpenAI-compatible endpoints \
+                         reject it (e.g. -10003); prefer a same-protocol fallback",
+                    );
+                }
+            }
             fallbacks.push(node_for(&name, provider));
         }
     }
 
     // Self-heal: a primary with no usable configured fallback still gets one,
-    // derived from every other enabled provider (name-sorted for determinism).
+    // derived from every other enabled provider. Same-protocol providers are
+    // preferred (listed first) so an auto-derived chain stays homogeneous when
+    // possible; name-sort breaks ties for determinism.
     if fallbacks.is_empty() && !built.is_empty() {
         let mut names: Vec<&String> = built.keys().collect();
         names.sort();
+        if let Some(prim) = &primary_protocol {
+            // Stable sort: within each protocol group the name order is kept,
+            // and same-as-primary (`false`) sorts before different (`true`).
+            names.sort_by_key(|n| !protocol_of(n).is_some_and(|p| p.eq_ignore_ascii_case(prim)));
+        }
         for name in names {
             if let Some(provider) = built.get(name) {
                 fallbacks.push(node_for(name, provider));
@@ -320,7 +365,8 @@ fn assemble_fallbacks(
         tracing::warn!(
             derived_count = fallbacks.len(),
             "failover chain: no usable [fallback_provider].chain — auto-derived fallback from all \
-             enabled providers so the primary can fail over on rate-limit/outage",
+             enabled providers (same-protocol first) so the primary can fail over on \
+             rate-limit/outage",
         );
     }
 
@@ -866,6 +912,12 @@ mod tests {
         pc
     }
 
+    fn provider_config_with_protocol(proto: &str) -> ProviderConfig {
+        let mut pc = ProviderConfig::test_config("mock-model");
+        pc.protocol = Some(proto.to_string());
+        pc
+    }
+
     fn mock_handle(name: &str) -> Arc<dyn DefaultProviderHandle> {
         let provider = create_provider(name, mock_provider_config()).expect("mock provider");
         Arc::new(StaticDefault::new(provider))
@@ -928,6 +980,27 @@ mod tests {
         let built = built_map(&["x302"]);
         let nodes = assemble_fallbacks(&cfg, "kimi", &built, &HashMap::new());
         assert_eq!(fallback_names(&nodes), vec!["x302"]);
+    }
+
+    #[test]
+    fn assemble_fallbacks_prefers_same_protocol_in_auto_derive() {
+        // Primary is anthropic-protocol (e.g. Kimi). Auto-derive must list the
+        // same-protocol fallback first even though its name sorts LATER, so the
+        // derived chain stays homogeneous and avoids the cross-protocol request
+        // conversion that an OpenAI-compat endpoint rejects (-10003).
+        let cfg = cfg_with_fallback(
+            None,
+            vec![
+                ("primary", provider_config_with_protocol("anthropic")),
+                ("a_openai", provider_config_with_protocol("openai")),
+                ("z_anthropic", provider_config_with_protocol("anthropic")),
+            ],
+        );
+        let built = built_map(&["a_openai", "z_anthropic"]);
+        let nodes = assemble_fallbacks(&cfg, "primary", &built, &HashMap::new());
+        // Same-protocol (anthropic) first despite the later name, then the
+        // cross-protocol one — protocol affinity beats the name-sort tiebreak.
+        assert_eq!(fallback_names(&nodes), vec!["z_anthropic", "a_openai"]);
     }
 
     #[test]
