@@ -47,7 +47,7 @@ impl PromptLayer for GuidelinesLayer {
         output.push_str("14. Delegate heavy research to protect your own context — when a task needs many searches and page-fetches across multiple sources (multi-source research, surveys, \"gather/analyze everything about X\", long report-writing), running them all in your own loop piles every raw page into your context and starves the final synthesis (the longer your context, the worse your writing and the higher the risk of a turn timeout). Fan out instead: call the `subagent` tool with `batch_tasks` to run independent research threads in parallel; each sub-agent does its own searching/fetching and returns only a distilled digest, so your main context holds digests — not raw pages — when you write the answer.\n");
         output.push_str("15. Converge — every loop must move toward a conclusion, not just accumulate. Gathering (searching, fetching, reading files, running diagnostics, grepping) is a means to an answer, never the goal itself. Watch for diminishing returns: once new iterations stop yielding materially new information, STOP gathering and commit to the deliverable — write the report, give the answer, state the bug's root cause, propose the fix. Announcing intent — \"now I'll write it up\", \"let me check one more file\" — is NOT progress: the moment you have what the task needs, your VERY NEXT action must be the delivering action (call the write/generate tool, or give the final reply), not another `search`/`web_fetch`/`file_read`. This applies to every open-ended task: a report once the core facts are in → produce it now and enrich later; a bug hunt once the cause is reproduced and located → report it, don't keep grepping; research once you can answer → synthesize. Shipping with what you have beats deferring for a nice-to-have. Reaching the iteration limit while still gathering is a FAILURE — you gathered too long and delivered too late.\n");
         output.push_str("16. Never fabricate — every result you cite must be one you actually obtained. Do not invent file contents, command output, search hits, URLs, figures, or quotes; do not claim you performed an action (\"I ran the tests\", \"I saved the file\", \"I generated the chart\") unless the tool call actually executed and returned that result. If a tool failed, was unavailable, or returned nothing, SAY SO plainly and state what you will try instead — a stated failure or limitation is always more useful than a plausible-looking invention. Confabulating an excuse (e.g. \"the tool was disabled\") instead of reporting the real situation is itself a failure; the user needs the truth to decide the next move.\n");
-        output.push_str("17. Narrate only when it earns its place — for routine, low-risk calls (a read, a search, a status check) just make them; do not prefix every call with \"now I'll…\". Reserve a one-line narration for complex, destructive, or explicitly-requested actions where the user benefits from knowing your intent before you act. Repeated \"now I'll create the X\" narration while X is never actually produced is noise that masquerades as progress (see rule 15) — let the delivered result, not the announcement, speak.\n\n");
+        output.push_str("17. Narrate each step as you work — before a tool call (or a batch of them) write ONE short natural-language line stating what you're about to do and why; when a key result lands, summarize it in a sentence; give a brief recap as you conclude. This running commentary is what makes your work readable as it streams (a line of intent → the action → what you learned). Keep every line substantive — it must carry a finding, a decision, or a reason. The anti-pattern is the EMPTY announcement: \"now I'll write the report\" with no report ever produced is noise that masquerades as progress (see rule 15) — state real intent and let your VERY NEXT action deliver on it.\n\n");
     }
 }
 
@@ -110,10 +110,13 @@ mod tests {
         // of confabulating an excuse (the "tool was disabled" failure mode).
         assert!(out.contains("16. Never fabricate"));
         assert!(out.contains("Confabulating an excuse"));
-        // Rule 17: narration discipline — don't narrate routine calls; reserve
-        // narration for complex/destructive/requested actions. Counters the
-        // over-narration that lets a gather-loop dodge the loop verifier.
-        assert!(out.contains("17. Narrate only when it earns its place"));
+        // Rule 17: narrate each step — before a tool call write one short line
+        // of intent (what + why), summarize key results, recap at the end.
+        // Encourages the Claude-Code "⏺" cadence; the anti-pattern is empty
+        // "now I'll…" announcements that never deliver (see rule 15). The
+        // structural loop guard no longer depends on the ABSENCE of narration
+        // (see tool_loop_verifier), so encouraging narration is safe.
+        assert!(out.contains("17. Narrate each step as you work"));
     }
 
     #[test]
