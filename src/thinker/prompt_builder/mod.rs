@@ -19,7 +19,7 @@ use crate::agents::AgentDef;
 use super::identity_files::IdentityFiles;
 use super::inbound_context::InboundContext;
 use super::prompt_budget::{PromptResult, TokenBudget};
-use super::prompt_layer::{AssemblyPath, LayerInput};
+use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability};
 use super::prompt_mode::PromptMode;
 use super::prompt_pipeline::PromptPipeline;
 use super::soul::SoulManifest;
@@ -329,6 +329,7 @@ impl PromptBuilder {
         let input = input.with_resolved_context_opt(self.resolved_context.as_ref());
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
+        maybe_trace_prompt_size(&self.pipeline, path, &input);
         self.pipeline.execute_cached(path, &input)
     }
 
@@ -648,4 +649,42 @@ impl PromptBuilder {
             .with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Context, &input)
     }
+}
+
+/// Optional prompt-size introspection (hermes `prompt_size.py` analogue).
+///
+/// When the `ALEPH_PROMPT_SIZE_TRACE` env var is set, logs each active layer's
+/// char/token contribution for the prompt about to be built (largest first) so
+/// prompt bloat is visible while tuning. Off by default = zero overhead on the
+/// hot path; reuses [`PromptPipeline::layer_breakdown`] so no live state is
+/// duplicated.
+fn maybe_trace_prompt_size(pipeline: &PromptPipeline, path: AssemblyPath, input: &LayerInput) {
+    if std::env::var_os("ALEPH_PROMPT_SIZE_TRACE").is_none() {
+        return;
+    }
+    let mut bd = pipeline.layer_breakdown(path, input, PromptMode::Full);
+    bd.sort_by(|a, b| b.chars.cmp(&a.chars));
+    let total_chars: usize = bd.iter().map(|l| l.chars).sum();
+    let total_tokens: usize = bd.iter().map(|l| l.tokens).sum();
+    let rows: String = bd
+        .iter()
+        .map(|l| {
+            let zone = match l.stability {
+                LayerStability::Stable => "stable",
+                LayerStability::Dynamic => "dynamic",
+            };
+            format!(
+                "\n  {:>6}c {:>6}t  {:<7}  p{:<4} {}",
+                l.chars, l.tokens, zone, l.priority, l.name
+            )
+        })
+        .collect();
+    tracing::info!(
+        "prompt-size breakdown [{:?}] — {} layers, {} chars (~{} tokens):{}",
+        path,
+        bd.len(),
+        total_chars,
+        total_tokens,
+        rows
+    );
 }

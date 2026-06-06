@@ -7,6 +7,7 @@ use super::layers::*;
 use super::prompt_budget::{enforce_budget, PromptResult, TokenBudget};
 use super::prompt_layer::{AssemblyPath, LayerInput, LayerStability, PromptLayer};
 use super::prompt_mode::PromptMode;
+use crate::context::budget::pressure::estimate_tokens_aware;
 use crate::sync_primitives::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,6 +18,19 @@ pub struct CacheStats {
     pub hits: u64,
     pub misses: u64,
     pub entries: usize,
+}
+
+/// One layer's contribution to the assembled prompt, for size introspection
+/// and budget tuning. Produced by [`PromptPipeline::layer_breakdown`].
+#[derive(Debug, Clone)]
+pub struct LayerSize {
+    pub priority: u32,
+    pub name: &'static str,
+    pub stability: LayerStability,
+    /// Unicode scalar count of the layer's emitted section.
+    pub chars: usize,
+    /// Content-aware token estimate (CJK/code denser than prose).
+    pub tokens: usize,
 }
 
 /// Composable prompt assembly engine.
@@ -199,6 +213,40 @@ impl PromptPipeline {
             .iter()
             .map(|l| (l.priority(), l.name(), l.stability()))
             .collect()
+    }
+
+    /// Measure each active layer's contribution for the given path/mode/input,
+    /// WITHOUT budget truncation — the introspection twin of [`assemble`].
+    ///
+    /// Mirrors `assemble`'s section-collection phase (same path + mode filter,
+    /// same `!section.is_empty()` skip) but keeps the per-layer sizes that
+    /// `assemble` discards. Use it to see which layers dominate the prompt
+    /// before tuning their content or mode gating. Layers are already stored in
+    /// priority order, so the result is assembly order.
+    pub fn layer_breakdown(
+        &self,
+        path: AssemblyPath,
+        input: &LayerInput,
+        mode: PromptMode,
+    ) -> Vec<LayerSize> {
+        let mut out = Vec::new();
+        for layer in &self.layers {
+            if layer.paths().contains(&path) && layer.supports_mode(mode) {
+                let mut section = String::new();
+                layer.inject(&mut section, input);
+                if !section.is_empty() {
+                    out.push(LayerSize {
+                        priority: layer.priority(),
+                        name: layer.name(),
+                        stability: layer.stability(),
+                        chars: section.chars().count(),
+                        // 3.5 chars/token prose anchor; CJK/code auto-densify.
+                        tokens: estimate_tokens_aware(&section, 3.5),
+                    });
+                }
+            }
+        }
+        out
     }
 
     /// Create a pipeline pre-loaded with the 33 default layers.
@@ -791,6 +839,7 @@ mod cache_tests {
 #[cfg(test)]
 mod stability_tests {
     use super::*;
+    use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_layer::LayerStability;
 
     #[test]
@@ -877,5 +926,40 @@ mod stability_tests {
         let info = pipeline.layer_info();
         let priorities: Vec<u32> = info.iter().map(|(p, _, _)| *p).collect();
         assert!(priorities.windows(2).all(|w| w[0] <= w[1]));
+    }
+
+    #[test]
+    fn layer_breakdown_sums_to_assembled_prompt() {
+        let pipeline = PromptPipeline::default_layers();
+        let config = PromptConfig::default();
+        let tools = vec![];
+        let input = LayerInput::basic(&config, &tools);
+
+        let breakdown = pipeline.layer_breakdown(AssemblyPath::Basic, &input, PromptMode::Full);
+        assert!(!breakdown.is_empty(), "breakdown should list active layers");
+
+        // Priority order (assembly order).
+        let priorities: Vec<u32> = breakdown.iter().map(|l| l.priority).collect();
+        assert!(
+            priorities.windows(2).all(|w| w[0] <= w[1]),
+            "breakdown must be in priority order"
+        );
+
+        // Every listed layer emitted something; token estimate is non-zero
+        // whenever there are chars.
+        for l in &breakdown {
+            assert!(l.chars > 0, "layer {} listed with zero chars", l.name);
+            assert!(l.tokens > 0, "layer {} has chars but zero tokens", l.name);
+        }
+
+        // The per-layer char counts must account for the whole assembled
+        // (untrimmed) prompt — same path/mode, generous budget so nothing trims.
+        let assembled = pipeline.execute_with_mode(AssemblyPath::Basic, &input, PromptMode::Full);
+        let sum_chars: usize = breakdown.iter().map(|l| l.chars).sum();
+        assert_eq!(
+            sum_chars,
+            assembled.chars().count(),
+            "sum of per-layer chars must equal the assembled prompt length"
+        );
     }
 }
