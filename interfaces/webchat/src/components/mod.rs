@@ -23,6 +23,7 @@ pub mod session_tabs;
 pub mod settings_sidebar;
 pub mod sidebar;
 pub mod theme_toggle;
+pub mod tool_card;
 pub mod tool_renderer;
 pub mod ui;
 pub mod workspace_panel;
