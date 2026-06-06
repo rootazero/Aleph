@@ -141,7 +141,8 @@ impl PtySession {
             return Err("session closed".into());
         }
         let mut w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
-        w.write_all(data).map_err(|e| format!("write failed: {e}"))?;
+        w.write_all(data)
+            .map_err(|e| format!("write failed: {e}"))?;
         w.flush().map_err(|e| format!("flush failed: {e}"))
     }
 

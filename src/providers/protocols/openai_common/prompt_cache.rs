@@ -28,7 +28,10 @@ mod tests {
     #[test]
     fn short_key_borrowed_unchanged() {
         let k = "sess-abc";
-        assert!(matches!(clamp_prompt_cache_key(k), Cow::Borrowed("sess-abc")));
+        assert!(matches!(
+            clamp_prompt_cache_key(k),
+            Cow::Borrowed("sess-abc")
+        ));
     }
 
     #[test]

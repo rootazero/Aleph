@@ -354,7 +354,8 @@ mod tests {
     #[tokio::test]
     async fn inline_shell_error_is_non_fatal() {
         let dir = tempfile::TempDir::new().unwrap();
-        let content = "---\nname: Demo\ndescription: d\nallow-inline-shell: true\n---\n!`exit 1; echo never`";
+        let content =
+            "---\nname: Demo\ndescription: d\nallow-inline-shell: true\n---\n!`exit 1; echo never`";
         let ctx = ctx_for(dir.path());
         // A failing command yields empty stdout but never aborts; loading succeeds.
         let out = preprocess_skill_content(content, &ctx).await;

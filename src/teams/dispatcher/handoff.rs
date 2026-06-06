@@ -56,7 +56,10 @@ fn truncate_utf8(s: &str, max: usize) -> String {
 async fn build_recovery_section(coord_store: &Arc<dyn CoordTaskStore>, task: &CoordTask) -> String {
     // `build_handoff_context` runs before `start_task_run`, so every row here
     // belongs to an *earlier* attempt — the current claim is not yet recorded.
-    let runs = coord_store.list_task_runs(&task.id).await.unwrap_or_default();
+    let runs = coord_store
+        .list_task_runs(&task.id)
+        .await
+        .unwrap_or_default();
     if runs.is_empty() {
         return String::new();
     }
@@ -327,7 +330,10 @@ mod tests {
     async fn recovery_section_surfaces_prior_runs_and_journal() {
         let cs = coord_store().await;
         let ts = team_store().await;
-        let task = cs.create_task(plain_task("Migrate the parser")).await.unwrap();
+        let task = cs
+            .create_task(plain_task("Migrate the parser"))
+            .await
+            .unwrap();
 
         // Simulate a failed first attempt: a finished run + an exit journal the
         // prior self wrote via the task_exit_journal tool.
@@ -366,7 +372,10 @@ mod tests {
     async fn notes_section_injects_task_comments() {
         let cs = coord_store().await;
         let ts = team_store().await;
-        let task = cs.create_task(plain_task("Build the report")).await.unwrap();
+        let task = cs
+            .create_task(plain_task("Build the report"))
+            .await
+            .unwrap();
 
         cs.add_task_comment(&task.id, "lead", "Use the Q2 numbers, not Q1.")
             .await

@@ -501,8 +501,8 @@ pub(in crate::commands::start) async fn initialize_channels(
     // Start external bridge plugins via LinkManager
     {
         use alephcore::gateway::link::LinkManager;
-        let base_dir = alephcore::utils::paths::get_config_dir()
-            .unwrap_or_else(|_| PathBuf::from(".aleph"));
+        let base_dir =
+            alephcore::utils::paths::get_config_dir().unwrap_or_else(|_| PathBuf::from(".aleph"));
         let link_manager = LinkManager::new(base_dir);
         if let Err(e) = link_manager.start().await {
             tracing::warn!("LinkManager startup encountered errors: {}", e);

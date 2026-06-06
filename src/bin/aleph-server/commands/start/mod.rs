@@ -334,6 +334,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         args.daemon,
         &loaded_app_config.general.session_store_backend,
         event_bus.clone(),
+        Some(memory_db.clone() as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>),
     )
     .await?;
 

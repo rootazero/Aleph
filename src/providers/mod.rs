@@ -114,9 +114,9 @@ pub use delta::{
 pub use failover::{
     FailoverConfig, FailoverHealth, FailoverNode, FailoverProvider, ModelCooldown, ProviderCooldown,
 };
-pub use load_stats::{InFlightGuard, LoadStats};
 pub use health::{ModelInfo, ProviderError, ProviderHealth, ResolvedModel};
 pub use http_provider::HttpProvider;
+pub use load_stats::{InFlightGuard, LoadStats};
 pub use metering::MeteringProvider;
 pub use mock::{MockError, MockProvider};
 pub use model_catalog::{capabilities_for, infer_vendor, ModelCapabilities};

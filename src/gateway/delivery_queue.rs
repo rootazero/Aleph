@@ -261,8 +261,8 @@ impl DeliveryStore {
                 }),
                 Err(e) => {
                     warn!(id, error = %e, "dropping undeserializable delivery record");
-                    let _ = conn
-                        .execute("DELETE FROM outbound_deliveries WHERE id = ?1", params![id]);
+                    let _ =
+                        conn.execute("DELETE FROM outbound_deliveries WHERE id = ?1", params![id]);
                 }
             }
         }
@@ -415,7 +415,9 @@ mod tests {
     fn enqueue_then_claim_roundtrips_the_message() {
         let s = store();
         let now = now_secs();
-        let id = s.enqueue("telegram", &msg("hello"), "NotConnected", now).unwrap();
+        let id = s
+            .enqueue("telegram", &msg("hello"), "NotConnected", now)
+            .unwrap();
         assert!(id > 0);
 
         let due = s.claim_due(now, 10).unwrap();
@@ -430,7 +432,8 @@ mod tests {
     fn future_records_are_not_claimed_yet() {
         let s = store();
         let now = now_secs();
-        s.enqueue("signal", &msg("later"), "NotConnected", now + 3600).unwrap();
+        s.enqueue("signal", &msg("later"), "NotConnected", now + 3600)
+            .unwrap();
         assert!(s.claim_due(now, 10).unwrap().is_empty());
         // ...but become due once the clock passes their schedule.
         assert_eq!(s.claim_due(now + 3600, 10).unwrap().len(), 1);
@@ -440,7 +443,9 @@ mod tests {
     fn mark_delivered_removes_the_record() {
         let s = store();
         let now = now_secs();
-        let id = s.enqueue("telegram", &msg("bye"), "NotConnected", now).unwrap();
+        let id = s
+            .enqueue("telegram", &msg("bye"), "NotConnected", now)
+            .unwrap();
         s.mark_delivered(id).unwrap();
         assert!(s.is_empty());
     }
@@ -449,10 +454,15 @@ mod tests {
     fn reschedule_bumps_attempts_and_defers() {
         let s = store();
         let now = now_secs();
-        let id = s.enqueue("telegram", &msg("retry"), "NotConnected", now).unwrap();
+        let id = s
+            .enqueue("telegram", &msg("retry"), "NotConnected", now)
+            .unwrap();
         s.reschedule(id, 1, now + 100, "still down").unwrap();
 
-        assert!(s.claim_due(now, 10).unwrap().is_empty(), "deferred record not yet due");
+        assert!(
+            s.claim_due(now, 10).unwrap().is_empty(),
+            "deferred record not yet due"
+        );
         let due = s.claim_due(now + 100, 10).unwrap();
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].attempts, 1);
@@ -461,9 +471,13 @@ mod tests {
     #[test]
     fn should_enqueue_classifies_duplicate_safe_errors_only() {
         assert!(should_enqueue(&ChannelError::NotConnected("down".into())));
-        assert!(should_enqueue(&ChannelError::RateLimited { retry_after_secs: 5 }));
+        assert!(should_enqueue(&ChannelError::RateLimited {
+            retry_after_secs: 5
+        }));
         // Ambiguous / permanent — never retried (at-most-once for SendFailed).
-        assert!(!should_enqueue(&ChannelError::SendFailed("ambiguous".into())));
+        assert!(!should_enqueue(&ChannelError::SendFailed(
+            "ambiguous".into()
+        )));
         assert!(!should_enqueue(&ChannelError::Internal("boom".into())));
         assert!(!should_enqueue(&ChannelError::ConfigError("bad".into())));
         assert!(!should_enqueue(&ChannelError::MessageTooLarge {
@@ -496,7 +510,10 @@ mod tests {
 
         assert_eq!(s.len().unwrap(), 3);
         let surviving: Vec<i64> = s.claim_due(now, 10).unwrap().iter().map(|r| r.id).collect();
-        assert!(!surviving.contains(&first), "oldest record should be evicted");
+        assert!(
+            !surviving.contains(&first),
+            "oldest record should be evicted"
+        );
     }
 
     #[test]

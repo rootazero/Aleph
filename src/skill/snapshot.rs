@@ -173,8 +173,13 @@ mod tests {
         });
         registry.register(m2);
 
-        let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &no_overrides());
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &no_overrides(),
+        );
 
         assert_eq!(snap.version, 1);
         assert_eq!(snap.eligible.len(), 1);
@@ -223,8 +228,13 @@ mod tests {
         m3.set_scope(PromptScope::Disabled);
         registry.register(m3);
 
-        let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &no_overrides());
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &no_overrides(),
+        );
 
         // All three are eligible (no eligibility constraints)
         // But only the visible one should appear in prompt_xml
@@ -253,8 +263,13 @@ mod tests {
         });
         registry.register(m3);
 
-        let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &no_overrides());
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &no_overrides(),
+        );
         assert_eq!(snap.eligible.len(), 3);
         assert_eq!(snap.eligible_manifests.len(), 1);
         assert_eq!(snap.eligible_manifests[0].name(), "visible:skill");

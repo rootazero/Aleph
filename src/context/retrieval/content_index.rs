@@ -915,7 +915,10 @@ mod tests {
     #[test]
     fn proximity_relevance_zero_when_no_term_present() {
         let terms = vec!["payment".to_string(), "refund".to_string()];
-        assert_eq!(proximity_relevance("totally unrelated text here", &terms), 0.0);
+        assert_eq!(
+            proximity_relevance("totally unrelated text here", &terms),
+            0.0
+        );
     }
 
     #[test]
@@ -1023,7 +1026,9 @@ mod tests {
         let mut text = String::new();
         // Chunk 0: only the word "database" scattered with filler (20 lines).
         for i in 0..20 {
-            text.push_str(&format!("database mention {i} with assorted filler words\n"));
+            text.push_str(&format!(
+                "database mention {i} with assorted filler words\n"
+            ));
         }
         // Chunk 1: the three query terms together on one line.
         for _ in 0..20 {
@@ -1042,7 +1047,10 @@ mod tests {
     #[test]
     fn query_terms_lowercases_and_dedups() {
         let terms = query_terms("Database DATABASE  connection!! database");
-        assert_eq!(terms, vec!["database".to_string(), "connection".to_string()]);
+        assert_eq!(
+            terms,
+            vec!["database".to_string(), "connection".to_string()]
+        );
     }
 
     #[test]

@@ -559,7 +559,10 @@ mod tests {
 
         for bad in ["../escape.jsonc", "", "a/b.jsonc", ".."] {
             assert!(
-                matches!(scanner.find_upward(bad), Err(DiscoveryError::InvalidPath(_))),
+                matches!(
+                    scanner.find_upward(bad),
+                    Err(DiscoveryError::InvalidPath(_))
+                ),
                 "expected InvalidPath for {bad:?}"
             );
         }
@@ -591,7 +594,10 @@ mod tests {
         let cmds = scanner.discover_component("commands").unwrap();
         let names: Vec<&str> = cmds.iter().map(|c| c.name.as_str()).collect();
         assert!(names.contains(&"visible.md"), "got {names:?}");
-        assert!(!names.contains(&".hidden.md"), "hidden file leaked: {names:?}");
+        assert!(
+            !names.contains(&".hidden.md"),
+            "hidden file leaked: {names:?}"
+        );
     }
 
     #[test]

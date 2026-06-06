@@ -764,7 +764,10 @@ pub fn compute_runtime_state_blocks(
     let mut by_reason: std::collections::BTreeMap<&str, Vec<&str>> =
         std::collections::BTreeMap::new();
     for (name, reason) in snapshot.unhealthy_iter() {
-        by_reason.entry(reason.short_label()).or_default().push(name);
+        by_reason
+            .entry(reason.short_label())
+            .or_default()
+            .push(name);
     }
     by_reason
         .into_iter()

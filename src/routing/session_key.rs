@@ -561,13 +561,11 @@ impl SessionKey {
             // Main{main_key:"dm"} — leaking that DM into the agent's main
             // session. Rejecting them here forces the no-epoch fall-through in
             // `parse`, which matches the correct `["dm", peer_id]` arm.
-            [main_key] if !matches!(*main_key, "peer" | "dm" | "ephemeral") => {
-                Some(Self::Main {
-                    agent_id: agent_id.to_string(),
-                    main_key: main_key.to_string(),
-                    epoch,
-                })
-            }
+            [main_key] if !matches!(*main_key, "peer" | "dm" | "ephemeral") => Some(Self::Main {
+                agent_id: agent_id.to_string(),
+                main_key: main_key.to_string(),
+                epoch,
+            }),
 
             [task_type, task_id] => Some(Self::Task {
                 agent_id: agent_id.to_string(),
@@ -1089,7 +1087,11 @@ mod tests {
         let key = SessionKey::subagent(parent, "level2");
         let s = key.to_key_string();
         let parsed = SessionKey::parse(&s).expect("must parse nested subagent");
-        assert_eq!(parsed.to_key_string(), s, "nested subagent roundtrip failed");
+        assert_eq!(
+            parsed.to_key_string(),
+            s,
+            "nested subagent roundtrip failed"
+        );
         // The outer layer (level2) must survive parsing.
         match parsed {
             SessionKey::Subagent {

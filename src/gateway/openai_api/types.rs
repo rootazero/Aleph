@@ -303,7 +303,10 @@ mod tests {
         }))
         .expect("array-form content must parse, not 400");
         // Text parts are concatenated in order; non-text parts dropped.
-        assert_eq!(req.messages[0].content.as_deref(), Some("Describe this image"));
+        assert_eq!(
+            req.messages[0].content.as_deref(),
+            Some("Describe this image")
+        );
     }
 
     #[test]
@@ -339,10 +342,7 @@ mod tests {
             "stream_options": {"include_usage": true}
         }))
         .unwrap();
-        assert_eq!(
-            req.stream_options.and_then(|o| o.include_usage),
-            Some(true)
-        );
+        assert_eq!(req.stream_options.and_then(|o| o.include_usage), Some(true));
     }
 
     #[test]

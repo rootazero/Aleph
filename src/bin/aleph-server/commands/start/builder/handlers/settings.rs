@@ -151,7 +151,12 @@ pub(in crate::commands::start) fn register_fs_handlers(
         fs_handlers::handle_create_dir,
         config
     );
-    register_handler!(server, "fs.read_file", fs_handlers::handle_read_file, config);
+    register_handler!(
+        server,
+        "fs.read_file",
+        fs_handlers::handle_read_file,
+        config
+    );
 
     if !daemon {
         println!("Filesystem-browse methods (scoped by [projects].allowed_roots):");

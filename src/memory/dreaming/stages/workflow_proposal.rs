@@ -147,9 +147,10 @@ impl DreamStage for WorkflowProposalStage {
             }
         }
 
-        ctx.report
-            .extra
-            .insert("workflow_proposals_drafted".to_string(), drafted.to_string());
+        ctx.report.extra.insert(
+            "workflow_proposals_drafted".to_string(),
+            drafted.to_string(),
+        );
         ctx.report.extra.insert(
             "workflow_proposals_skipped_covered".to_string(),
             skipped_covered.to_string(),
@@ -175,7 +176,10 @@ mod tests {
         let ab = proposal::canonical_name(&["a".into(), "b".into()]);
         assert_eq!(agg.get(&ab).unwrap().0, 2);
         // Representative preserves first observed order.
-        assert_eq!(agg.get(&ab).unwrap().1, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(
+            agg.get(&ab).unwrap().1,
+            vec!["a".to_string(), "b".to_string()]
+        );
     }
 
     #[test]

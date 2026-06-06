@@ -51,9 +51,7 @@ impl McpErrorKind {
             McpErrorKind::SessionExpired => {
                 Some("the MCP session expired — it will reconnect on the next health probe")
             }
-            McpErrorKind::Transient => {
-                Some("a transient transport error — retry the call")
-            }
+            McpErrorKind::Transient => Some("a transient transport error — retry the call"),
             McpErrorKind::Unknown => None,
         }
     }
@@ -133,9 +131,18 @@ mod tests {
 
     #[test]
     fn classifies_auth_failures() {
-        assert_eq!(classify_mcp_error("HTTP 401 Unauthorized"), McpErrorKind::AuthExpired);
-        assert_eq!(classify_mcp_error("token expired"), McpErrorKind::AuthExpired);
-        assert_eq!(classify_mcp_error("invalid_grant"), McpErrorKind::AuthExpired);
+        assert_eq!(
+            classify_mcp_error("HTTP 401 Unauthorized"),
+            McpErrorKind::AuthExpired
+        );
+        assert_eq!(
+            classify_mcp_error("token expired"),
+            McpErrorKind::AuthExpired
+        );
+        assert_eq!(
+            classify_mcp_error("invalid_grant"),
+            McpErrorKind::AuthExpired
+        );
     }
 
     #[test]
@@ -144,20 +151,35 @@ mod tests {
             classify_mcp_error("Server reports: session expired"),
             McpErrorKind::SessionExpired
         );
-        assert_eq!(classify_mcp_error("broken pipe"), McpErrorKind::SessionExpired);
+        assert_eq!(
+            classify_mcp_error("broken pipe"),
+            McpErrorKind::SessionExpired
+        );
     }
 
     #[test]
     fn auth_wins_over_session_for_token_expiry() {
         // "token expired" must classify as auth, not session, despite "expired".
-        assert_eq!(classify_mcp_error("the token expired"), McpErrorKind::AuthExpired);
+        assert_eq!(
+            classify_mcp_error("the token expired"),
+            McpErrorKind::AuthExpired
+        );
     }
 
     #[test]
     fn classifies_transient() {
-        assert_eq!(classify_mcp_error("request timed out"), McpErrorKind::Transient);
-        assert_eq!(classify_mcp_error("connection reset by peer"), McpErrorKind::Transient);
-        assert_eq!(classify_mcp_error("502 Bad Gateway"), McpErrorKind::Transient);
+        assert_eq!(
+            classify_mcp_error("request timed out"),
+            McpErrorKind::Transient
+        );
+        assert_eq!(
+            classify_mcp_error("connection reset by peer"),
+            McpErrorKind::Transient
+        );
+        assert_eq!(
+            classify_mcp_error("502 Bad Gateway"),
+            McpErrorKind::Transient
+        );
     }
 
     #[test]
@@ -170,12 +192,19 @@ mod tests {
 
     #[test]
     fn recoverable_kinds_have_guidance_suffix() {
-        assert!(McpErrorKind::AuthExpired.guidance_suffix().contains("re-authenticate"));
-        assert!(McpErrorKind::SessionExpired.guidance_suffix().starts_with(" (hint:"));
+        assert!(McpErrorKind::AuthExpired
+            .guidance_suffix()
+            .contains("re-authenticate"));
+        assert!(McpErrorKind::SessionExpired
+            .guidance_suffix()
+            .starts_with(" (hint:"));
     }
 
     #[test]
     fn case_insensitive() {
-        assert_eq!(classify_mcp_error("UNAUTHORIZED"), McpErrorKind::AuthExpired);
+        assert_eq!(
+            classify_mcp_error("UNAUTHORIZED"),
+            McpErrorKind::AuthExpired
+        );
     }
 }

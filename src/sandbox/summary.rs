@@ -136,14 +136,14 @@ impl SandboxSummary {
     /// - non-empty `fs_write`                      → `"workspace-write"`
     /// - `network == AllowAll && fs_write covers /` → `"danger-full-access"`
     pub fn from_baseline(backend: &'static str, caps: &SandboxCapabilities) -> Self {
-        let tier =
-            if covers_root(&caps.fs_write) && matches!(caps.network, NetworkPolicy::AllowAll) {
-                PolicyTier::DangerFullAccess
-            } else if !caps.fs_write.is_empty() {
-                PolicyTier::WorkspaceWrite
-            } else {
-                PolicyTier::ReadOnly
-            };
+        let tier = if covers_root(&caps.fs_write) && matches!(caps.network, NetworkPolicy::AllowAll)
+        {
+            PolicyTier::DangerFullAccess
+        } else if !caps.fs_write.is_empty() {
+            PolicyTier::WorkspaceWrite
+        } else {
+            PolicyTier::ReadOnly
+        };
 
         let mut writable_roots: Vec<PathBuf> = caps.fs_write.to_vec();
         writable_roots.sort();
@@ -377,6 +377,9 @@ mod tests {
         );
         // A non-danger posture must NOT emit the caution line.
         let safe = SandboxSummary::from_baseline("linux/bwrap", &SandboxCapabilities::strict());
-        assert!(!safe.to_prompt_lines().iter().any(|l| l.contains("Danger posture")));
+        assert!(!safe
+            .to_prompt_lines()
+            .iter()
+            .any(|l| l.contains("Danger posture")));
     }
 }

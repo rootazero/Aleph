@@ -163,8 +163,7 @@ mod tests {
 
     #[test]
     fn redact_scrubs_multiple_secrets() {
-        let text =
-            "a=AKIAIOSFODNN7EXAMPLE b=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 end";
+        let text = "a=AKIAIOSFODNN7EXAMPLE b=sk-ant-api03-abcdefghijklmnopqrstuvwxyz0123456789 end";
         let out = redact_secrets(text);
         assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!out.contains("sk-ant-api03"));

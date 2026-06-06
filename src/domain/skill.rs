@@ -845,7 +845,10 @@ mod tests {
     fn test_os_serde_accepts_fromstr_aliases() {
         // Deserialization must accept the same lowercase aliases as FromStr,
         // so a hand-authored EligibilitySpec round-trips consistently.
-        assert_eq!(serde_json::from_str::<Os>("\"darwin\"").unwrap(), Os::Darwin);
+        assert_eq!(
+            serde_json::from_str::<Os>("\"darwin\"").unwrap(),
+            Os::Darwin
+        );
         assert_eq!(serde_json::from_str::<Os>("\"macos\"").unwrap(), Os::Darwin);
         assert_eq!(serde_json::from_str::<Os>("\"linux\"").unwrap(), Os::Linux);
         assert_eq!(

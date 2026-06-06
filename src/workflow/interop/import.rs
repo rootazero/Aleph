@@ -969,7 +969,10 @@ await agent('fix more')
         let outcome = parse_workflow_js(src).expect("scan phased js");
         let m = outcome.manifest;
         assert_eq!(
-            m.phases.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(),
+            m.phases
+                .iter()
+                .map(|p| p.title.as_str())
+                .collect::<Vec<_>>(),
             vec!["Audit", "Fix"],
             "phase plan reconstructed in order"
         );
@@ -1181,7 +1184,10 @@ await agent('fix more')
         let m = outcome.manifest;
         assert_eq!(m.steps[0].phase.as_deref(), Some("Review"));
         assert_eq!(
-            m.phases.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(),
+            m.phases
+                .iter()
+                .map(|p| p.title.as_str())
+                .collect::<Vec<_>>(),
             vec!["Review"],
             "phase plan reconstructed from the opt"
         );
@@ -1208,7 +1214,10 @@ await agent('fix more')
         let outcome = parse_workflow_js(src).expect("scan");
         let s = &outcome.manifest.steps[0];
         assert_eq!(s.label.as_deref(), Some("L"));
-        assert!(s.schema.is_none(), "identifier schema left unset, not guessed");
+        assert!(
+            s.schema.is_none(),
+            "identifier schema left unset, not guessed"
+        );
         assert_eq!(s.model.as_deref(), Some("haiku"));
     }
 
@@ -1304,7 +1313,9 @@ await agent('fix more')
         let js = render_workflow_js(&m);
         let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
         assert!(!bare.contains("@aleph-workflow"), "header stripped: {bare}");
-        let back = parse_workflow_js(&bare).expect("bare scan diamond").manifest;
+        let back = parse_workflow_js(&bare)
+            .expect("bare scan diamond")
+            .manifest;
         assert_eq!(back.steps.len(), 4);
         // Renumbered ids step_1..4 follow source order a, b, c, d.
         assert!(back.steps[0].depends_on.is_empty(), "a is the root");
@@ -1328,13 +1339,19 @@ await agent('fix more')
                    ])";
         let m = parse_workflow_js(src).expect("scan").manifest;
         assert_eq!(m.steps.len(), 2);
-        assert!(m.steps[0].depends_on.is_empty(), "both are roots in the layer");
+        assert!(
+            m.steps[0].depends_on.is_empty(),
+            "both are roots in the layer"
+        );
         assert!(m.steps[1].depends_on.is_empty());
         assert_eq!(m.steps[0].label.as_deref(), Some("a"));
         assert_eq!(m.steps[1].label.as_deref(), Some("b"));
         assert_eq!(m.steps[0].phase.as_deref(), Some("Review"));
         assert_eq!(
-            m.phases.iter().map(|p| p.title.as_str()).collect::<Vec<_>>(),
+            m.phases
+                .iter()
+                .map(|p| p.title.as_str())
+                .collect::<Vec<_>>(),
             vec!["Review"]
         );
     }

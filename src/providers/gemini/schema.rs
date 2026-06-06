@@ -267,10 +267,7 @@ fn reconcile_required(obj: &mut serde_json::Map<String, Value>) {
 
     let kept: Option<Vec<Value>> = obj.get("required").and_then(|r| r.as_array()).map(|arr| {
         arr.iter()
-            .filter(|item| {
-                item.as_str()
-                    .is_some_and(|name| prop_names.contains(name))
-            })
+            .filter(|item| item.as_str().is_some_and(|name| prop_names.contains(name)))
             .cloned()
             .collect()
     });

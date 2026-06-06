@@ -148,6 +148,7 @@ pub(super) async fn initialize_session_store(
     daemon: bool,
     backend: &str,
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
+    raw_memory_writer: Option<Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>>,
 ) -> Result<(Arc<dyn SessionStore>, Option<SessionManager>), Box<dyn std::error::Error>> {
     match backend {
         "file" => {
@@ -156,6 +157,12 @@ pub(super) async fn initialize_session_store(
             match alephcore::gateway::session_store::file_backend::FileSessionStore::new(config) {
                 Ok(mut store) => {
                     store = store.with_event_bus(event_bus.clone());
+                    // Spec 1 G3-A: wire the session-end emit for the file
+                    // backend too (the SQLite path does this via
+                    // `with_raw_memory_writer` in start/mod.rs).
+                    if let Some(writer) = raw_memory_writer {
+                        store = store.with_raw_memory_writer(writer);
+                    }
                     if alephcore::gateway::session_store::migration::migration_needed(
                         &store.config().base_dir,
                     ) {

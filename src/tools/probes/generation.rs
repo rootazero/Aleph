@@ -105,9 +105,6 @@ mod tests {
         // An image-only provider must not make `video_generate` look available.
         let reg = registry_with(Some(MockGenerationProvider::image_only("dalle")));
         let probe = GenerationProbe::new(reg, GenerationType::Video);
-        assert!(matches!(
-            probe.probe().await,
-            ProbeResult::Unhealthy { .. }
-        ));
+        assert!(matches!(probe.probe().await, ProbeResult::Unhealthy { .. }));
     }
 }

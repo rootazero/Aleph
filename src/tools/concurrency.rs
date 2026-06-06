@@ -225,7 +225,10 @@ mod tests {
 
     #[test]
     fn shared_calls_never_conflict() {
-        assert!(!claims_conflict(&ConcurrencyClaim::Shared, &ConcurrencyClaim::Shared));
+        assert!(!claims_conflict(
+            &ConcurrencyClaim::Shared,
+            &ConcurrencyClaim::Shared
+        ));
         assert!(batch_parallelizable(&[
             ConcurrencyClaim::Shared,
             ConcurrencyClaim::Shared,
@@ -260,7 +263,10 @@ mod tests {
 
     #[test]
     fn disjoint_paths_do_not_conflict() {
-        assert!(!claims_conflict(&paths(&["src/a.rs"]), &paths(&["src/b.rs"])));
+        assert!(!claims_conflict(
+            &paths(&["src/a.rs"]),
+            &paths(&["src/b.rs"])
+        ));
         // Sibling string-prefix but distinct path components.
         assert!(!claims_conflict(&paths(&["src/a"]), &paths(&["src/ab"])));
         assert!(batch_parallelizable(&[
@@ -272,9 +278,15 @@ mod tests {
 
     #[test]
     fn same_path_conflicts() {
-        assert!(claims_conflict(&paths(&["src/a.rs"]), &paths(&["src/a.rs"])));
+        assert!(claims_conflict(
+            &paths(&["src/a.rs"]),
+            &paths(&["src/a.rs"])
+        ));
         // Different normalizations of the same path still conflict.
-        assert!(claims_conflict(&paths(&["src/./a.rs"]), &paths(&["src/a.rs"])));
+        assert!(claims_conflict(
+            &paths(&["src/./a.rs"]),
+            &paths(&["src/a.rs"])
+        ));
         assert!(!batch_parallelizable(&[
             paths(&["src/a.rs"]),
             paths(&["src/a.rs"]),

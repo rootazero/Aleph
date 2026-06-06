@@ -34,6 +34,12 @@ impl Default for FileSessionStoreConfig {
 pub struct FileSessionStore {
     config: FileSessionStoreConfig,
     event_bus: crate::sync_primitives::RwLock<Option<Arc<GatewayEventBus>>>,
+    /// Optional raw-memory writer for the session-end emit (Spec 1 G3-A).
+    /// When set, `close_session` captures the conversation tail and fires
+    /// `emit_session_end_raw`, mirroring the SQLite `SessionManager` path so
+    /// the file backend also drives session-end summarization / reflection /
+    /// profile synthesis. `None` (the default) keeps the legacy behaviour.
+    raw_memory_writer: Option<Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>>,
 }
 
 impl FileSessionStore {
@@ -51,11 +57,23 @@ impl FileSessionStore {
         Ok(Self {
             config,
             event_bus: crate::sync_primitives::RwLock::new(None),
+            raw_memory_writer: None,
         })
     }
 
     pub fn with_event_bus(self, bus: Arc<GatewayEventBus>) -> Self {
         *self.event_bus.write().unwrap_or_else(|e| e.into_inner()) = Some(bus);
+        self
+    }
+
+    /// Inject the raw-memory writer that `close_session` uses to emit
+    /// session-end raws (Spec 1 G3-A). Without it, session close is silent —
+    /// session-end summarizer / reflector / profile synthesizer never fire.
+    pub fn with_raw_memory_writer(
+        mut self,
+        writer: Arc<dyn crate::memory::store::raw_memory::RawMemoryStore>,
+    ) -> Self {
+        self.raw_memory_writer = Some(writer);
         self
     }
 
@@ -710,6 +728,30 @@ impl SessionStore for FileSessionStore {
             if matches!(meta.state, Some(SessionState::Stopped)) {
                 return Ok(());
             }
+
+            // Spec 1 G3-A: capture the conversation tail for end-of-session
+            // digest / reflection extraction BEFORE flipping state. Mirrors
+            // `SessionManager::close_session` (the SQLite path); the file
+            // backend previously skipped this, leaving session-end
+            // summarizer / reflector / profile synthesis dormant.
+            if let Some(writer) = self.raw_memory_writer.clone() {
+                let tail = self
+                    .read_transcript(&key_str, Some(64))
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|m| format!("{}: {}", m.role, m.content))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                crate::gateway::session_manager::ops::emit_session_end_raw(
+                    writer,
+                    key.agent_id().to_string(),
+                    key_str.clone(),
+                    tail,
+                    crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                );
+            }
+
             meta.state = Some(SessionState::Stopped);
             let _topic = topic;
             self.write_metadata(&key_str, &meta).await?;
@@ -912,3 +954,149 @@ impl SessionStore for FileSessionStore {
 }
 
 use tokio::io::AsyncWriteExt;
+
+#[cfg(test)]
+mod emit_tests {
+    use super::*;
+    use crate::memory::store::raw_memory::{RawMemorySource, RawMemoryStore};
+    use crate::memory::store::sqlite::SqliteMemoryBackend;
+
+    fn msg(role: &str, content: &str) -> MessageRecord {
+        MessageRecord {
+            id: format!("m-{role}-{}", content.len()),
+            role: role.to_string(),
+            content: content.to_string(),
+            timestamp: 0,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: None,
+            model_provider: None,
+        }
+    }
+
+    fn temp_store(
+        writer: Option<Arc<dyn RawMemoryStore>>,
+    ) -> (FileSessionStore, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = FileSessionStoreConfig {
+            base_dir: dir.path().to_path_buf(),
+            ..Default::default()
+        };
+        let mut store = FileSessionStore::new(config).expect("store");
+        if let Some(w) = writer {
+            store = store.with_raw_memory_writer(w);
+        }
+        (store, dir)
+    }
+
+    async fn wait_for_session_end(
+        raw: &Arc<dyn RawMemoryStore>,
+        agent_id: &str,
+    ) -> Vec<crate::memory::store::raw_memory::RawMemory> {
+        // emit is fire-and-forget (spawned); poll briefly for the row.
+        for _ in 0..50 {
+            let rows = raw
+                .get_raw_by_source(
+                    RawMemorySource::SessionEnd {
+                        reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                    },
+                    agent_id,
+                    16,
+                )
+                .await
+                .unwrap();
+            if !rows.is_empty() {
+                return rows;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        Vec::new()
+    }
+
+    #[tokio::test]
+    async fn close_session_emits_session_end_raw_when_writer_present() {
+        let raw: Arc<dyn RawMemoryStore> =
+            Arc::new(SqliteMemoryBackend::in_memory().expect("mem backend"));
+        let (store, _dir) = temp_store(Some(raw.clone()));
+        let key = SessionKey::Main {
+            agent_id: "main".into(),
+            main_key: "reflect".into(),
+            epoch: 0,
+        };
+        store.get_or_create(&key).await.unwrap();
+        store
+            .append_message(
+                &key,
+                msg("user", "remember to rebuild wasm before the panel"),
+            )
+            .await
+            .unwrap();
+        store
+            .append_message(&key, msg("assistant", "noted"))
+            .await
+            .unwrap();
+
+        store.close_session(&key, None).await.unwrap();
+
+        let rows = wait_for_session_end(&raw, "main").await;
+        assert_eq!(rows.len(), 1, "expected one session_end raw");
+        assert!(
+            rows[0].content.contains("rebuild wasm"),
+            "tail must carry the transcript, got: {}",
+            rows[0].content
+        );
+    }
+
+    #[tokio::test]
+    async fn close_session_silent_without_writer() {
+        let (store, _dir) = temp_store(None);
+        let key = SessionKey::Main {
+            agent_id: "main".into(),
+            main_key: "nowriter".into(),
+            epoch: 0,
+        };
+        store.get_or_create(&key).await.unwrap();
+        store
+            .append_message(&key, msg("user", "hello world this is content"))
+            .await
+            .unwrap();
+        // Must not panic and must succeed even with no writer wired.
+        store.close_session(&key, None).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn already_stopped_session_does_not_double_emit() {
+        let raw: Arc<dyn RawMemoryStore> =
+            Arc::new(SqliteMemoryBackend::in_memory().expect("mem backend"));
+        let (store, _dir) = temp_store(Some(raw.clone()));
+        let key = SessionKey::Main {
+            agent_id: "main".into(),
+            main_key: "twice".into(),
+            epoch: 0,
+        };
+        store.get_or_create(&key).await.unwrap();
+        store
+            .append_message(&key, msg("user", "some substantial content here please"))
+            .await
+            .unwrap();
+
+        store.close_session(&key, None).await.unwrap();
+        let _ = wait_for_session_end(&raw, "main").await;
+        // Second close: session already Stopped → early return, no new emit.
+        store.close_session(&key, None).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+
+        let rows = raw
+            .get_raw_by_source(
+                RawMemorySource::SessionEnd {
+                    reason: crate::memory::store::raw_memory::SessionEndReason::Disconnect,
+                },
+                "main",
+                16,
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1, "second close must not emit again");
+    }
+}

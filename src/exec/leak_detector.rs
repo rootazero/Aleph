@@ -384,9 +384,8 @@ mod tests {
     #[test]
     fn test_github_fine_grained_pat_detection() {
         let detector = LeakDetector::default_patterns();
-        let result = detector.scan_outbound(
-            "token=github_pat_11ABCDE0Y0abcdefghijklmnopqrstuvwxyz0123456789ABCDEF",
-        );
+        let result = detector
+            .scan_outbound("token=github_pat_11ABCDE0Y0abcdefghijklmnopqrstuvwxyz0123456789ABCDEF");
         assert!(
             result.has_blocks(),
             "should detect github fine-grained PAT as block"
@@ -395,6 +394,9 @@ mod tests {
             .findings
             .iter()
             .find(|f| f.pattern_name == "github_fine_grained_pat");
-        assert!(finding.is_some(), "should have a github_fine_grained_pat finding");
+        assert!(
+            finding.is_some(),
+            "should have a github_fine_grained_pat finding"
+        );
     }
 }

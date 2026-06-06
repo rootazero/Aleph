@@ -115,8 +115,7 @@ impl TabRegistry {
         // Drop entries whose tab is gone; track newly-seen live tabs as of now.
         tabs.retain(|id, _| live_ids.contains(id));
         for id in live_ids {
-            tabs.entry(id.clone())
-                .or_insert(Tracked { last_used: now });
+            tabs.entry(id.clone()).or_insert(Tracked { last_used: now });
         }
 
         // Never reap when ≤1 live tab — the agent always keeps a page.
@@ -217,8 +216,7 @@ mod tests {
         reg.touch("p", "1");
         reg.touch("p", "2");
         reg.touch("p", "3");
-        let victims =
-            reg.select_victims("p", &ids(&["1", "2", "3"]), 2, Duration::from_secs(3600));
+        let victims = reg.select_victims("p", &ids(&["1", "2", "3"]), 2, Duration::from_secs(3600));
         assert_eq!(victims, ids(&["1"]));
     }
 
@@ -229,8 +227,7 @@ mod tests {
         reg.touch("p", "2");
         // Live list no longer has "1" (closed elsewhere) but has a new "9".
         // No victims (long timeout, under cap) but the registry reconciles.
-        let victims =
-            reg.select_victims("p", &ids(&["2", "9"]), 8, Duration::from_secs(3600));
+        let victims = reg.select_victims("p", &ids(&["2", "9"]), 8, Duration::from_secs(3600));
         assert!(victims.is_empty());
         reg.forget("p", "2");
         assert!(reg.has_tabs("p")); // "9" still tracked
@@ -243,8 +240,7 @@ mod tests {
         let reg = TabRegistry::new();
         reg.touch("p", "1");
         reg.touch("p", "2");
-        let victims =
-            reg.select_victims("p", &ids(&["1", "2"]), 8, Duration::from_secs(3600));
+        let victims = reg.select_victims("p", &ids(&["1", "2"]), 8, Duration::from_secs(3600));
         assert!(victims.is_empty());
     }
 }

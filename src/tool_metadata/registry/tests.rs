@@ -865,7 +865,10 @@ async fn test_resolve_alias_never_shadows_canonical_name() {
     registry.register_with_conflict_resolution(b).await;
 
     let resolved = registry.resolve_command("/go").await.unwrap();
-    assert_eq!(resolved.tool.name, "go", "canonical name must win over alias");
+    assert_eq!(
+        resolved.tool.name, "go",
+        "canonical name must win over alias"
+    );
 }
 
 #[tokio::test]

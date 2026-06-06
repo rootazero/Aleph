@@ -996,8 +996,14 @@ async fn tool_call_guardrail_sanitize_applies_on_parallel_fast_path() {
     );
     for (_, args) in &seen {
         let s = serde_json::to_string(args).unwrap();
-        assert!(s.contains("[REDACTED]"), "tool should see redacted args: {s}");
-        assert!(!s.contains("SECRET"), "raw SECRET leaked into tool args: {s}");
+        assert!(
+            s.contains("[REDACTED]"),
+            "tool should see redacted args: {s}"
+        );
+        assert!(
+            !s.contains("SECRET"),
+            "raw SECRET leaked into tool args: {s}"
+        );
     }
     assert!(
         cb.safety_blocks.is_empty(),

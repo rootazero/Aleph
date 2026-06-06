@@ -148,11 +148,7 @@ impl GenerationProvider for DeepgramSttProvider {
             query.push(("punctuate", "true".to_string()));
 
             // Decide between URL mode and inline-bytes mode.
-            let (body_bytes, content_type, used_url): (
-                Option<Vec<u8>>,
-                String,
-                Option<String>,
-            ) = {
+            let (body_bytes, content_type, used_url): (Option<Vec<u8>>, String, Option<String>) = {
                 if let Some(ref src) = request.params.reference_audio {
                     if src.starts_with("http://") || src.starts_with("https://") {
                         (None, "application/json".to_string(), Some(src.clone()))

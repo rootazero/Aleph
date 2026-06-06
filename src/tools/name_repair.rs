@@ -101,9 +101,9 @@ pub fn repair_tool_name(emitted: &str, offered: &[&str]) -> Option<Repair> {
     // attempting when the emitted name actually carries a separator.
     if lower.contains('.') || lower.contains('_') {
         let normalized = normalize_sep(&lower);
-        if let Some(hit) =
-            unique_match(offered, |o| normalize_sep(&o.to_ascii_lowercase()) == normalized)
-        {
+        if let Some(hit) = unique_match(offered, |o| {
+            normalize_sep(&o.to_ascii_lowercase()) == normalized
+        }) {
             return Some(Repair {
                 name: hit,
                 tier: RepairTier::Separator,

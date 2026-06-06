@@ -1644,7 +1644,10 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&frame).unwrap();
         assert_eq!(v["method"].as_str(), Some("event"));
         assert_eq!(v["params"]["topic"].as_str(), Some("connection.warning"));
-        assert_eq!(v["params"]["data"]["reason"].as_str(), Some("events_overflow"));
+        assert_eq!(
+            v["params"]["data"]["reason"].as_str(),
+            Some("events_overflow")
+        );
         assert_eq!(v["params"]["data"]["dropped"].as_u64(), Some(7));
         assert_eq!(v["params"]["data"]["total_overflow"].as_u64(), Some(42));
         assert_eq!(v["params"]["data"]["advice"].as_str(), Some("reconnect"));
@@ -1694,7 +1697,10 @@ mod tests {
 
         assert_eq!(metrics.overflow(), 0, "no overflow on the healthy path");
         for i in 0..5 {
-            assert_eq!(client_rx.try_recv().ok().as_deref(), Some(format!("m{i}").as_str()));
+            assert_eq!(
+                client_rx.try_recv().ok().as_deref(),
+                Some(format!("m{i}").as_str())
+            );
         }
     }
 }

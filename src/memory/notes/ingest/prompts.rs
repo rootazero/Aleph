@@ -19,10 +19,14 @@ to them, emit an IngestPlan that updates the wiki.
 4. When an existing page already covers a topic, emit `append` rather
    than creating a duplicate.
 5. When new info SUPERSEDES an older page entirely, emit `supersede`.
-6. Every `create` must include at least two `links` to existing pages
-   (otherwise the new page is an orphan). If you cannot find two
-   existing pages to link, the claim likely belongs as an `append` on
-   an existing page instead.
+6. Prefer linking a new `create` to related existing pages so it is not
+   an orphan. BUT only use `[P<n>]` tokens that ACTUALLY APPEAR in the
+   "Related existing pages" section below — never invent a token number
+   that is not shown (an out-of-range token is discarded and can cost you
+   the whole note). When the wiki is sparse or empty (few or no related
+   pages shown), it is correct to create a SEED note with an empty
+   `links` list — do NOT skip a durable fact, and do NOT fabricate tokens,
+   just to satisfy a linking preference. Later consolidation links seeds.
 7. When you want to introduce a NEW tag (one not present in any
    provided related page), put it in `schema_proposals` as
    `new_tag`; do NOT invent a tag in `tags:` that the Schema has not
@@ -76,7 +80,9 @@ Operations missing `kind` are silently discarded — do not omit it.
 Concrete shapes:
 
 Existing-page references use `[P<n>]` tokens; a `create`'s own `note_path`
-is a fresh path:
+is a fresh path. The `[P<n>]` numbers below are ILLUSTRATIVE placeholders —
+use only the token numbers that actually appear in your input's "Related
+existing pages" section (e.g. if only `[P0]` is shown, never write `[P1]`):
 
 ```json
 {"kind": "create", "note_path": "personal/li-wei.md", "title": "Li Wei", "summary": "User's partner of six years", "facts": ["Li Wei works in tech."], "links": ["[P3]"], "tags": ["personal"]}

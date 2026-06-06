@@ -40,14 +40,18 @@ impl ManifestAdapter for AlephTomlAdapter {
         }
         // Commands are merged into skills following the OpenClaw convention.
         if plugin_dir.join("commands").is_dir() {
-            capabilities.extend(parsers::parse_skills_dir(plugin_dir, "commands", &plugin_id)?);
+            capabilities.extend(parsers::parse_skills_dir(
+                plugin_dir, "commands", &plugin_id,
+            )?);
         }
         if plugin_dir.join("agents").is_dir() {
             capabilities.extend(parsers::parse_agents_dir(plugin_dir, "agents", &plugin_id)?);
         }
         for hooks_path in &["hooks/hooks.json", "hooks.json"] {
             if plugin_dir.join(hooks_path).exists() {
-                capabilities.extend(parsers::parse_hooks_file(plugin_dir, hooks_path, &plugin_id)?);
+                capabilities.extend(parsers::parse_hooks_file(
+                    plugin_dir, hooks_path, &plugin_id,
+                )?);
                 break;
             }
         }
@@ -109,11 +113,7 @@ mod tests {
     #[test]
     fn test_detect_native_toml() {
         let dir = tempdir().unwrap();
-        fs::write(
-            dir.path().join(ALEPH_PLUGIN_TOML),
-            "[plugin]\nid = \"x\"\n",
-        )
-        .unwrap();
+        fs::write(dir.path().join(ALEPH_PLUGIN_TOML), "[plugin]\nid = \"x\"\n").unwrap();
         assert!(AlephTomlAdapter.detect(dir.path()));
     }
 

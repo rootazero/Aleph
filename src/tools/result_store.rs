@@ -548,7 +548,9 @@ mod tests {
         let content = "secret-token-abcdef ".repeat(200);
         // Offload a large result (writes a `.txt` blob) and index it (so
         // ctx_search could later mine it — the reference-bypass vector).
-        assert!(store.persist_if_large("call_x", "bash", &content, 1).is_some());
+        assert!(store
+            .persist_if_large("call_x", "bash", &content, 1)
+            .is_some());
         let _ = store.index_output("call_x", "bash", &content);
         assert!(store.indexed_sections() > 0, "content should be indexed");
 
@@ -559,12 +561,24 @@ mod tests {
                 .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("txt"))
                 .count()
         };
-        assert_eq!(txt_count(&base), 1, "one offloaded blob present before purge");
+        assert_eq!(
+            txt_count(&base),
+            1,
+            "one offloaded blob present before purge"
+        );
 
         store.purge_all();
 
-        assert_eq!(txt_count(&base), 0, "offloaded blobs must be gone after purge");
-        assert_eq!(store.indexed_sections(), 0, "index must be empty after purge");
+        assert_eq!(
+            txt_count(&base),
+            0,
+            "offloaded blobs must be gone after purge"
+        );
+        assert_eq!(
+            store.indexed_sections(),
+            0,
+            "index must be empty after purge"
+        );
         assert!(
             store.search("secret-token-abcdef", 5).is_empty(),
             "ctx_search must find nothing after purge"

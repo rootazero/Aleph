@@ -95,9 +95,8 @@ impl AlephTool for BrowserScreenshotTool {
                         // is always PNG (see ScreenshotOpts default format).
                         let (ocr_text, description) = match (&self.vision_bridge, args.describe) {
                             (Some(bridge), Some(true)) => {
-                                let aug = bridge
-                                    .augment(&image_base64, ImageFormat::Png, true)
-                                    .await;
+                                let aug =
+                                    bridge.augment(&image_base64, ImageFormat::Png, true).await;
                                 (aug.ocr_text, aug.description)
                             }
                             _ => (None, None),

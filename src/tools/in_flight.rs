@@ -195,7 +195,11 @@ pub struct InFlightGuard {
 
 impl Drop for InFlightGuard {
     fn drop(&mut self) {
-        let mut guard = self.registry.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self
+            .registry
+            .inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Only evict the entry this guard installed. If a duplicate `register`
         // for the same `call_id` replaced it (fresh `guard_id`), the live
         // registration owns the slot and a stale guard must leave it intact —

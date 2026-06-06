@@ -250,7 +250,11 @@ impl ToolQuery {
                     continue 'tool;
                 }
                 let dist = levenshtein_distance(&cand, &needle);
-                let threshold = if cand.len().max(needle.len()) <= 6 { 2 } else { 3 };
+                let threshold = if cand.len().max(needle.len()) <= 6 {
+                    2
+                } else {
+                    3
+                };
                 let substring_hit = cand.contains(&needle) || needle.contains(&cand);
                 if dist <= threshold || substring_hit {
                     let effective = if substring_hit { dist.min(2) } else { dist };

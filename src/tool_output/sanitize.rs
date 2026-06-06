@@ -60,7 +60,10 @@ pub fn sanitize_command_output(text: &str) -> Cow<'_, str> {
     if !no_ansi.chars().any(is_droppable_control) {
         return no_ansi;
     }
-    let cleaned: String = no_ansi.chars().filter(|c| !is_droppable_control(*c)).collect();
+    let cleaned: String = no_ansi
+        .chars()
+        .filter(|c| !is_droppable_control(*c))
+        .collect();
     Cow::Owned(cleaned)
 }
 
@@ -72,7 +75,10 @@ mod tests {
     fn clean_text_is_borrowed_and_byte_identical() {
         let input = "Compiling alephcore v0.1.0\n   Finished in 3.2s\n";
         let out = sanitize_command_output(input);
-        assert!(matches!(out, Cow::Borrowed(_)), "clean output must not allocate");
+        assert!(
+            matches!(out, Cow::Borrowed(_)),
+            "clean output must not allocate"
+        );
         assert_eq!(out, input);
     }
 

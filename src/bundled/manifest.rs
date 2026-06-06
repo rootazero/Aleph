@@ -192,7 +192,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut m = InstallRegistry::new("1.0.0");
         // Tracked in manifest but never present on disk.
-        m.skills.insert("ghost".to_string(), official_entry("1.0.0"));
+        m.skills
+            .insert("ghost".to_string(), official_entry("1.0.0"));
 
         m.reconcile(dir.path()).unwrap();
         assert!(!m.skills.contains_key("ghost"));

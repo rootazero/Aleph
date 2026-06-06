@@ -13,7 +13,9 @@ pub async fn send_poll(
     let mut req = bot.send_poll(
         chat_id,
         question,
-        options.into_iter().map(teloxide::types::InputPollOption::new),
+        options
+            .into_iter()
+            .map(teloxide::types::InputPollOption::new),
     );
     req.is_anonymous = Some(is_anonymous);
     req.allows_multiple_answers = Some(allows_multiple_answers);

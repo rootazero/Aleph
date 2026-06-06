@@ -201,7 +201,10 @@ make several coordinated edits at once."#;
                 path,
                 move_to,
                 hunks,
-            } => self.do_update(path, move_to.as_deref(), hunks, output_dir).await,
+            } => {
+                self.do_update(path, move_to.as_deref(), hunks, output_dir)
+                    .await
+            }
         }
     }
 

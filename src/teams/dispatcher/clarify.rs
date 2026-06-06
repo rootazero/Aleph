@@ -78,7 +78,10 @@ impl TeamDispatcher {
 
         // Deliver the question to the originating channel.
         let message = OutboundMessage::text(meta.conversation_id.clone(), meta.rendered_prompt());
-        match channels.send(&ChannelId::new(&meta.channel_id), message).await {
+        match channels
+            .send(&ChannelId::new(&meta.channel_id), message)
+            .await
+        {
             Ok(_) => {
                 tracing::info!(
                     task_id = %task.id,

@@ -40,58 +40,58 @@ impl ManifestAdapter for CursorAdapter {
                     e
                 ),
                 Ok(json) => {
-                if let Some(n) = json.get("name").and_then(|v| v.as_str()) {
-                    // Sanitize so a third-party manifest cannot claim an
-                    // arbitrary/colliding capability-registry id.
-                    let sanitized = crate::extension::manifest::sanitize_plugin_id(n);
-                    if !sanitized.is_empty() {
-                        plugin_id = sanitized;
+                    if let Some(n) = json.get("name").and_then(|v| v.as_str()) {
+                        // Sanitize so a third-party manifest cannot claim an
+                        // arbitrary/colliding capability-registry id.
+                        let sanitized = crate::extension::manifest::sanitize_plugin_id(n);
+                        if !sanitized.is_empty() {
+                            plugin_id = sanitized;
+                        }
                     }
-                }
-                name = json.get("name").and_then(|v| v.as_str()).map(String::from);
-                version = json
-                    .get("version")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
-                description = json
-                    .get("description")
-                    .and_then(|v| v.as_str())
-                    .map(String::from);
+                    name = json.get("name").and_then(|v| v.as_str()).map(String::from);
+                    version = json
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    description = json
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
 
-                // Parse standard components
-                if let Some(skills) = json.get("skills").and_then(|v| v.as_str()) {
-                    if let Ok(s) = parsers::parse_skills_dir(dir, skills, &plugin_id) {
-                        caps.extend(s);
+                    // Parse standard components
+                    if let Some(skills) = json.get("skills").and_then(|v| v.as_str()) {
+                        if let Ok(s) = parsers::parse_skills_dir(dir, skills, &plugin_id) {
+                            caps.extend(s);
+                        }
                     }
-                }
-                // Commands are merged into skills following OpenClaw convention
-                if let Some(commands) = json.get("commands").and_then(|v| v.as_str()) {
-                    if let Ok(c) = parsers::parse_skills_dir(dir, commands, &plugin_id) {
-                        caps.extend(c);
+                    // Commands are merged into skills following OpenClaw convention
+                    if let Some(commands) = json.get("commands").and_then(|v| v.as_str()) {
+                        if let Ok(c) = parsers::parse_skills_dir(dir, commands, &plugin_id) {
+                            caps.extend(c);
+                        }
                     }
-                }
-                if let Some(agents) = json.get("agents").and_then(|v| v.as_str()) {
-                    if let Ok(a) = parsers::parse_agents_dir(dir, agents, &plugin_id) {
-                        caps.extend(a);
+                    if let Some(agents) = json.get("agents").and_then(|v| v.as_str()) {
+                        if let Ok(a) = parsers::parse_agents_dir(dir, agents, &plugin_id) {
+                            caps.extend(a);
+                        }
                     }
-                }
-                if let Some(hooks) = json.get("hooks").and_then(|v| v.as_str()) {
-                    if let Ok(h) = parsers::parse_hooks_file(dir, hooks, &plugin_id) {
-                        caps.extend(h);
+                    if let Some(hooks) = json.get("hooks").and_then(|v| v.as_str()) {
+                        if let Ok(h) = parsers::parse_hooks_file(dir, hooks, &plugin_id) {
+                            caps.extend(h);
+                        }
                     }
-                }
-                if let Some(mcp) = json.get("mcpServers").and_then(|v| v.as_str()) {
-                    if let Ok(m) = parsers::parse_mcp_config_file(dir, mcp, &plugin_id) {
-                        caps.extend(m);
+                    if let Some(mcp) = json.get("mcpServers").and_then(|v| v.as_str()) {
+                        if let Ok(m) = parsers::parse_mcp_config_file(dir, mcp, &plugin_id) {
+                            caps.extend(m);
+                        }
                     }
-                }
 
-                // Cursor-specific: rules → skills
-                if let Some(rules_path) = json.get("rules").and_then(|v| v.as_str()) {
-                    if let Ok(r) = parsers::parse_skills_dir(dir, rules_path, &plugin_id) {
-                        caps.extend(r);
+                    // Cursor-specific: rules → skills
+                    if let Some(rules_path) = json.get("rules").and_then(|v| v.as_str()) {
+                        if let Ok(r) = parsers::parse_skills_dir(dir, rules_path, &plugin_id) {
+                            caps.extend(r);
+                        }
                     }
-                }
                 }
             }
         }

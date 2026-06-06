@@ -389,8 +389,7 @@ mod tests {
 
     #[test]
     fn clarify_step_roundtrips_with_choices() {
-        let json =
-            r#"{"id":"ask","prompt":"Deploy where?","kind":"clarify","choices":["staging","prod"]}"#;
+        let json = r#"{"id":"ask","prompt":"Deploy where?","kind":"clarify","choices":["staging","prod"]}"#;
         let s: WorkflowStepDef = serde_json::from_str(json).unwrap();
         assert!(s.is_clarify());
         assert_eq!(s.choices, vec!["staging", "prod"]);

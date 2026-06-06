@@ -327,10 +327,7 @@ mod tests {
         let a1 = capability_lock("alpha");
         let a2 = capability_lock("alpha");
         let b = capability_lock("beta");
-        assert!(
-            Arc::ptr_eq(&a1, &a2),
-            "same capability must reuse one lock"
-        );
+        assert!(Arc::ptr_eq(&a1, &a2), "same capability must reuse one lock");
         assert!(
             !Arc::ptr_eq(&a1, &b),
             "distinct capabilities must not share a lock"

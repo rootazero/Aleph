@@ -403,13 +403,20 @@ mod tests {
         // Build a v2 source with changed content + a new file.
         let v2 = cache.path().join("my-plugin-v2");
         fs::create_dir_all(&v2).unwrap();
-        fs::write(v2.join("manifest.toml"), "[plugin]\nname = \"my-plugin\"\nversion=\"2\"").unwrap();
+        fs::write(
+            v2.join("manifest.toml"),
+            "[plugin]\nname = \"my-plugin\"\nversion=\"2\"",
+        )
+        .unwrap();
         fs::write(v2.join("NEW.txt"), "added in v2").unwrap();
 
         let dest = update_plugin_from_cache(&v2, install_root.path(), "my-plugin").unwrap();
         assert!(dest.join("NEW.txt").exists(), "new file should be present");
         // Old-only file (src/main.py) should be gone after a full swap.
-        assert!(!dest.join("src/main.py").exists(), "stale file should be removed");
+        assert!(
+            !dest.join("src/main.py").exists(),
+            "stale file should be removed"
+        );
         // No backup or staging residue.
         assert!(!install_root.path().join(".bak-my-plugin").exists());
         assert!(!install_root.path().join(".tmp-install-my-plugin").exists());

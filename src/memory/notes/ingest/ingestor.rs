@@ -15,7 +15,7 @@ use crate::memory::notes::governance::gate::{
     CandidateNote, GateOutcome, NoteWriteAction, NoteWriteGate,
 };
 use crate::memory::notes::indexer::NoteIndexer;
-use crate::memory::notes::ingest::plan::{IngestPlan, PageOp};
+use crate::memory::notes::ingest::plan::{IngestPlan, PageOp, SchemaProposal};
 use crate::memory::notes::ingest::prompts::build_compound_system_prompt;
 use crate::memory::notes::ingest::ref_table::RefTable;
 use crate::memory::notes::ingest::retrieve::{RelatedBudget, RelatedPage};
@@ -99,26 +99,29 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         // kind from its field shape and only drop ops that fit no variant.
         let json = repair_kind_tags(json);
 
-        let mut plan: IngestPlan = serde_json::from_value(json).map_err(|e| {
-            warn!("compound plan: parse failed: {e}");
-            AlephError::other(format!("compound plan parse: {e}"))
-        })?;
+        let mut plan = parse_plan_lenient(json);
 
         // Anti-hallucination: rewrite `[P<n>]` reference tokens back to the
         // exact canonical paths of the related pages, and drop ops whose token
         // is out of range. Raw-path fields pass through unchanged, so planners
         // that still emit full paths keep working. See `ref_table`.
+        //
+        // Run this even when the related set is EMPTY: on a sparse/empty wiki
+        // (or when `gather_related` degraded because the embedding endpoint was
+        // down) every `[P<n>]` token is by definition out of range, so this
+        // strips the stray tokens the planner emits by imitating the prompt's
+        // examples. Without it those tokens leak into notes as literal "[P3]"
+        // links (and a token-targeted append/link would forge a `[P3]` orphan
+        // page — the exact silent data loss `RefTable` exists to prevent).
         let refs = RefTable::from_related(related);
-        if !refs.is_empty() {
-            let stats = refs.resolve_plan(&mut plan);
-            if stats.dropped_ops > 0 || stats.dropped_links > 0 {
-                warn!(
-                    resolved = stats.resolved,
-                    dropped_ops = stats.dropped_ops,
-                    dropped_links = stats.dropped_links,
-                    "compound plan: dropped hallucinated page references"
-                );
-            }
+        let stats = refs.resolve_plan(&mut plan);
+        if stats.dropped_ops > 0 || stats.dropped_links > 0 {
+            warn!(
+                resolved = stats.resolved,
+                dropped_ops = stats.dropped_ops,
+                dropped_links = stats.dropped_links,
+                "compound plan: dropped hallucinated page references"
+            );
         }
 
         plan.ops.retain(valid_op);
@@ -237,6 +240,55 @@ fn repair_kind_tags(mut value: serde_json::Value) -> serde_json::Value {
         });
     }
     value
+}
+
+/// Deserialize an `IngestPlan` element-wise so one malformed item can't sink
+/// the whole batch.
+///
+/// `serde_json::from_value::<IngestPlan>` is all-or-nothing: a single op or
+/// schema-proposal that the planner emitted with a missing required field
+/// (`kind` on an op, `rationale` on a proposal, etc.) fails the entire parse
+/// and starves the L1 note layer. Instead we parse each `ops` / `schema_proposals`
+/// entry independently and drop only the entries that fail, keeping every
+/// well-formed operation. `reasoning` defaults to empty when absent.
+fn parse_plan_lenient(json: serde_json::Value) -> IngestPlan {
+    let reasoning = json
+        .get("reasoning")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let ops = json
+        .get("ops")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|op| match serde_json::from_value::<PageOp>(op.clone()) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        warn!("compound plan: dropping malformed op ({e})");
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let schema_proposals = json
+        .get("schema_proposals")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|p| serde_json::from_value::<SchemaProposal>(p.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    IngestPlan {
+        reasoning,
+        ops,
+        schema_proposals,
+    }
 }
 
 #[async_trait]
@@ -735,9 +787,18 @@ fn build_user_prompt(
 
 fn valid_op(op: &PageOp) -> bool {
     match op {
-        PageOp::Create {
-            note_path, links, ..
-        } => note_path.contains('/') && !links.is_empty(),
+        // A `Create` only needs a well-formed `category/filename` path. It is
+        // deliberately NOT required to carry links: on a sparse/just-bootstrapped
+        // wiki (or when `gather_related` degraded to an empty set because the
+        // embedding endpoint was down) there are no existing pages to link to,
+        // and the planner's `[P<n>]` link tokens get stripped as out-of-range by
+        // `RefTable::resolve_plan`. Dropping the resulting linkless Create here
+        // silently discarded knowledge the model had already extracted — the
+        // dominant reason the L1 note layer could not grow past its seed. A seed
+        // note is recoverable (dream consolidation links it later); discarded
+        // knowledge is gone forever. This mirrors the anti-starvation degradation
+        // in `ingest_batch` (related-gathering failure must not starve the layer).
+        PageOp::Create { note_path, .. } => note_path.contains('/'),
         PageOp::Append { note_path, .. }
         | PageOp::Update { note_path, .. }
         | PageOp::Contradict { note_path, .. } => note_path.contains('/'),
@@ -931,7 +992,68 @@ mod plan_tests {
             .plan("default", &[raw], &[], &RawMemorySource::Transcript)
             .await
             .unwrap();
-        assert_eq!(plan.ops.len(), 1);
+        // The no-slash create is dropped (malformed path); the linkless create
+        // with a valid path is KEPT as a seed note (see `valid_op`), and the
+        // append is kept. Linkless creates are no longer discarded — that silent
+        // drop was starving the L1 note layer on a sparse wiki.
+        assert_eq!(plan.ops.len(), 2);
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            PageOp::Create { note_path, links, .. } if note_path == "learning/x" && links.is_empty()
+        )));
+        assert!(
+            !plan.ops.iter().any(
+                |op| matches!(op, PageOp::Create { note_path, .. } if note_path == "bad-no-slash")
+            ),
+            "no-slash create must still be dropped"
+        );
+    }
+
+    /// Bootstrap regression: on a sparse wiki the planner emits a `create`
+    /// whose only links are out-of-range `[P<n>]` tokens (e.g. the few-shot
+    /// examples use `[P3]` but no related pages are shown). `RefTable` strips
+    /// the hallucinated link, leaving the create linkless — it must STILL
+    /// survive as a seed note instead of being silently dropped, otherwise the
+    /// note layer can never grow past its seed. This is the exact live failure
+    /// observed on agent `main` (notes_index stuck at 1).
+    #[tokio::test]
+    async fn plan_keeps_seed_create_when_all_link_tokens_hallucinated() {
+        let (dir, backend, indexer) = mk().await;
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new(
+            r#"{"ops":[
+                {"kind":"create","note_path":"system/video-config","title":"Video config",
+                 "summary":"durable fact","facts":["The user configured a custom video provider."],
+                 "links":["[P3]"],"tags":["system"]}
+            ]}"#
+            .into(),
+        ));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget::default(),
+            embedding_manager: None,
+            gate: None,
+        };
+        // No related pages (sparse wiki) → `[P3]` is out of range and stripped.
+        let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
+        let plan = ing
+            .plan("default", &[raw], &[], &RawMemorySource::Transcript)
+            .await
+            .unwrap();
+        assert_eq!(plan.ops.len(), 1, "seed create must survive stripped links");
+        match &plan.ops[0] {
+            PageOp::Create {
+                note_path, links, ..
+            } => {
+                assert_eq!(note_path, "system/video-config");
+                assert!(links.is_empty(), "hallucinated link token must be stripped");
+            }
+            other => panic!("expected surviving Create, got {other:?}"),
+        }
     }
 
     #[tokio::test]
@@ -1135,6 +1257,34 @@ mod plan_tests {
         let plan: IngestPlan = serde_json::from_value(repaired).unwrap();
         assert_eq!(plan.ops.len(), 2);
         assert_eq!(plan.schema_proposals.len(), 1);
+    }
+
+    #[test]
+    fn parse_plan_lenient_keeps_good_op_despite_malformed_proposal() {
+        // Regression for the live failure: the planner emitted a valid create
+        // op AND a schema_proposal missing its required `rationale` field. The
+        // old all-or-nothing parse failed the whole batch (`missing field
+        // rationale`), discarding the good op. Element-wise parsing must keep
+        // the op and drop only the malformed proposal.
+        let json = serde_json::json!({
+            "reasoning": "extract durable ops fact",
+            "ops": [
+                {"kind": "create", "note_path": "reference/aws-tokyo", "title": "AWS Tokyo",
+                 "summary": "prod db region", "facts": ["ap-northeast-1"],
+                 "links": ["reference/ops"], "tags": ["ops"]}
+            ],
+            "schema_proposals": [
+                {"kind": "new_tag", "tag": "ops"}
+            ]
+        });
+        let plan = parse_plan_lenient(json);
+        assert_eq!(plan.ops.len(), 1, "valid create op must survive");
+        assert_eq!(
+            plan.schema_proposals.len(),
+            0,
+            "proposal missing required `rationale` is dropped, not fatal"
+        );
+        assert_eq!(plan.reasoning, "extract durable ops fact");
     }
 
     #[test]
@@ -1494,9 +1644,7 @@ mod plan_tests {
             links: vec!["learning/rust".into()],
             tags: vec![],
         }];
-        let out = ing
-            .dedup_redirect_creates("default", ops, &related)
-            .await;
+        let out = ing.dedup_redirect_creates("default", ops, &related).await;
         assert_eq!(out.len(), 1);
         match &out[0] {
             PageOp::Append {
@@ -1552,9 +1700,7 @@ mod plan_tests {
             links: vec!["learning/rust".into()],
             tags: vec![],
         }];
-        let out = ing
-            .dedup_redirect_creates("default", ops, &related)
-            .await;
+        let out = ing.dedup_redirect_creates("default", ops, &related).await;
         assert!(
             matches!(out[0], PageOp::Create { .. }),
             "dedup disabled must leave Create unchanged"
@@ -1605,9 +1751,7 @@ mod plan_tests {
             links: vec!["learning/rust".into()],
             tags: vec![],
         }];
-        let out = ing
-            .dedup_redirect_creates("default", ops, &related)
-            .await;
+        let out = ing.dedup_redirect_creates("default", ops, &related).await;
         assert!(
             matches!(out[0], PageOp::Create { .. }),
             "must not redirect a Create onto its own path"

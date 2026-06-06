@@ -122,7 +122,11 @@ fn repair_object_shape(out: &mut Map<String, Value>) {
         if let Some(Value::Array(required)) = out.get("required") {
             let pruned: Vec<Value> = required
                 .iter()
-                .filter(|entry| entry.as_str().is_some_and(|name| known.iter().any(|k| k == name)))
+                .filter(|entry| {
+                    entry
+                        .as_str()
+                        .is_some_and(|name| known.iter().any(|k| k == name))
+                })
                 .cloned()
                 .collect();
 

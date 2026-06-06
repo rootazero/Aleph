@@ -1629,9 +1629,11 @@ impl ToolRegistry for BuiltinToolRegistry {
             // to `_ =>` and returned "Unknown tool". select_model/doctor are
             // dependency-free unit structs; config_audit needs the live Config
             // handle (same source as `create_tool_boxed`). (logic-audit fix)
-            "select_model" => {
-                Box::pin(async move { crate::builtin_tools::SelectModelTool.call_json(arguments).await })
-            }
+            "select_model" => Box::pin(async move {
+                crate::builtin_tools::SelectModelTool
+                    .call_json(arguments)
+                    .await
+            }),
             "doctor" => {
                 Box::pin(async move { crate::builtin_tools::DoctorTool.call_json(arguments).await })
             }
@@ -1688,23 +1690,19 @@ impl ToolRegistry for BuiltinToolRegistry {
                         )
                     })?;
                     let session_id = session_id.ok_or_else(|| {
-                        AlephError::tool(
-                            "recall_context not available: no active session context",
-                        )
+                        AlephError::tool("recall_context not available: no active session context")
                     })?;
                     let args: crate::builtin_tools::recall_context::RecallContextArgs =
                         serde_json::from_value(arguments).map_err(|e| {
                             AlephError::tool(format!("recall_context: bad args: {e}"))
                         })?;
-                    let tool =
-                        crate::builtin_tools::RecallContextTool::new(db.clone(), session_id);
+                    let tool = crate::builtin_tools::RecallContextTool::new(db.clone(), session_id);
                     let out = tool
                         .call_impl(args)
                         .await
                         .map_err(|e| AlephError::tool(format!("recall_context: {e}")))?;
-                    serde_json::to_value(out).map_err(|e| {
-                        AlephError::tool(format!("recall_context: serialize: {e}"))
-                    })
+                    serde_json::to_value(out)
+                        .map_err(|e| AlephError::tool(format!("recall_context: serialize: {e}")))
                 })
             }
 

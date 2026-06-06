@@ -45,8 +45,7 @@ pub enum MethodPrivilege {
 /// entirety — every method under them mutates control-plane state or exposes
 /// secrets, with no guest-safe read variant.
 const OPERATOR_NAMESPACES: &[&str] = &[
-    "secret.",
-    "secrets.",
+    "secret.", "secrets.",
     // Embedded PTY terminal: spawning/driving an interactive host shell is a
     // privileged control-plane action — never expose it to guest/node roles.
     "pty.",
@@ -210,7 +209,13 @@ mod tests {
 
     #[test]
     fn pty_namespace_is_fully_operator() {
-        for m in ["pty.spawn", "pty.input", "pty.resize", "pty.close", "pty.list"] {
+        for m in [
+            "pty.spawn",
+            "pty.input",
+            "pty.resize",
+            "pty.close",
+            "pty.list",
+        ] {
             assert_eq!(
                 required_privilege(m),
                 MethodPrivilege::Operator,

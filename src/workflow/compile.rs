@@ -284,10 +284,7 @@ mod tests {
         let def = WorkflowDef {
             name: "dup".into(),
             description: String::new(),
-            steps: vec![
-                step("a", "w", &[]),
-                step("b", "w", &["a", "a"]),
-            ],
+            steps: vec![step("a", "w", &[]), step("b", "w", &["a", "a"])],
         };
         let mat = materialize(&def, "x", "t", &store, None)
             .await
@@ -303,7 +300,9 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].depends_on = vec!["ghost".into()];
-        assert!(materialize(&def, "x", "team-1", &store, None).await.is_err());
+        assert!(materialize(&def, "x", "team-1", &store, None)
+            .await
+            .is_err());
     }
 
     #[tokio::test]

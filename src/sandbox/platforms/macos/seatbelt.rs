@@ -1252,7 +1252,10 @@ mod tests {
         let outbound = r#"(allow network-outbound (remote ip "localhost:*"))"#;
         assert!(profile.contains(bind), "missing loopback bind allow");
         assert!(profile.contains(inbound), "missing loopback inbound allow");
-        assert!(profile.contains(outbound), "missing loopback outbound allow");
+        assert!(
+            profile.contains(outbound),
+            "missing loopback outbound allow"
+        );
 
         let deny_idx = profile
             .find("(deny network*)")

@@ -146,9 +146,7 @@ pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
                             for err in
                                 super::manifest::validate_config_against_schema(schema, &value)
                             {
-                                result
-                                    .errors
-                                    .push(format!("{sample}: {err}"));
+                                result.errors.push(format!("{sample}: {err}"));
                             }
                         }
                         None => result

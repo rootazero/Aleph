@@ -60,7 +60,10 @@ impl ChromeMcpBackend {
     /// `select_page` → action sequence so concurrent same-profile operations
     /// can't interleave the server-side page selection.
     async fn profile_guard(&self) -> tokio::sync::OwnedMutexGuard<()> {
-        self.driver.profile_lock(&self.profile_name).lock_owned().await
+        self.driver
+            .profile_lock(&self.profile_name)
+            .lock_owned()
+            .await
     }
 
     /// Atomically (under the per-profile lock) select `tab_id` then invoke
@@ -238,7 +241,9 @@ impl BrowserBackend for ChromeMcpBackend {
         tab_id: &str,
         _opts: ScreenshotOpts,
     ) -> Result<ScreenshotOutput, BrowserError> {
-        let result = self.select_and_call(tab_id, "take_screenshot", json!({})).await?;
+        let result = self
+            .select_and_call(tab_id, "take_screenshot", json!({}))
+            .await?;
         // Check if result has image content type with base64 data
         if let Some(content) = result.get("content").and_then(|v| v.as_array()) {
             for item in content {
@@ -270,7 +275,9 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     async fn snapshot(&self, tab_id: &str) -> Result<SnapshotOutput, BrowserError> {
-        let result = self.select_and_call(tab_id, "take_snapshot", json!({})).await?;
+        let result = self
+            .select_and_call(tab_id, "take_snapshot", json!({}))
+            .await?;
         let snapshot_text = Self::extract_text(&result);
         // Best-effort: parse page URL and title from snapshot header lines
         let (page_url, page_title) = parse_snapshot_header(&snapshot_text);
@@ -314,8 +321,12 @@ impl BrowserBackend for ChromeMcpBackend {
         text: &str,
         timeout_ms: u64,
     ) -> Result<bool, BrowserError> {
-        self.select_and_call(tab_id, "wait_for", json!({ "text": text, "timeout": timeout_ms }))
-            .await?;
+        self.select_and_call(
+            tab_id,
+            "wait_for",
+            json!({ "text": text, "timeout": timeout_ms }),
+        )
+        .await?;
         Ok(true)
     }
 
@@ -409,8 +420,12 @@ impl BrowserBackend for ChromeMcpBackend {
     }
 
     async fn resize(&self, tab_id: &str, width: u32, height: u32) -> Result<(), BrowserError> {
-        self.select_and_call(tab_id, "resize_page", json!({ "width": width, "height": height }))
-            .await?;
+        self.select_and_call(
+            tab_id,
+            "resize_page",
+            json!({ "width": width, "height": height }),
+        )
+        .await?;
         Ok(())
     }
 

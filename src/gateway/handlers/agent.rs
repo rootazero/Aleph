@@ -270,14 +270,27 @@ impl AgentRunManager {
 
     /// Cancel an active run
     pub async fn cancel_run(&self, run_id: &str) -> bool {
+        // Forward to the execution engine FIRST: firing the run's
+        // CancellationToken is the only thing that actually interrupts the
+        // in-flight Think→Act loop (LLM call, tool execution, and between
+        // iterations). Updating local status alone never reaches the running
+        // task, which is why the chat-window Stop button used to do nothing.
+        let signalled = self.execution_adapter.cancel(run_id).await.is_ok();
+
+        // Reflect the request in our local bookkeeping so status queries
+        // report Cancelled even if the run finished between the signal and now.
         let mut runs = self.active_runs.write().await;
-        if let Some(run) = runs.get_mut(run_id) {
-            if run.status == RunStatus::Running {
+        let was_running = matches!(
+            runs.get(run_id).map(|r| &r.status),
+            Some(RunStatus::Running)
+        );
+        if was_running {
+            if let Some(run) = runs.get_mut(run_id) {
                 run.status = RunStatus::Cancelled;
-                return true;
             }
         }
-        false
+
+        signalled || was_running
     }
 
     /// List active runs
@@ -539,6 +552,49 @@ mod tests {
         }
     }
 
+    /// Execution adapter that records every `cancel(run_id)` it receives, so a
+    /// test can assert the run manager actually forwards cancellation to the
+    /// execution engine (the only thing that fires the run's CancellationToken).
+    #[derive(Default)]
+    struct RecordingExecutionAdapter {
+        cancelled: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl ExecutionAdapter for RecordingExecutionAdapter {
+        async fn execute(
+            &self,
+            _request: RunRequest,
+            _agent: Arc<AgentInstance>,
+            _emitter: Arc<dyn EventEmitter + Send + Sync>,
+        ) -> Result<(), ExecutionError> {
+            Ok(())
+        }
+
+        async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
+            self.cancelled
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(run_id.to_string());
+            Ok(())
+        }
+
+        async fn get_status(&self, run_id: &str) -> Option<EngineRunStatus> {
+            Some(EngineRunStatus {
+                run_id: run_id.to_string(),
+                state: RunState::Completed,
+                started_at: Some(Utc::now()),
+                completed_at: Some(Utc::now()),
+                steps_completed: 0,
+                current_tool: None,
+            })
+        }
+
+        async fn active_run_count(&self) -> usize {
+            0
+        }
+    }
+
     #[tokio::test]
     async fn test_agent_run_manager() {
         let router = Arc::new(AgentRouter::new());
@@ -591,5 +647,29 @@ mod tests {
         // Should be able to get status
         let status = manager.get_run_status(&result.run_id).await;
         assert!(status.is_some());
+    }
+
+    /// Regression: aborting a run must forward the cancellation to the
+    /// execution engine. Flipping only the local status is a no-op for the
+    /// in-flight Think→Act loop — the engine's CancellationToken is the sole
+    /// mechanism that actually stops it, so `cancel_run` MUST call
+    /// `ExecutionAdapter::cancel`.
+    #[tokio::test]
+    async fn cancel_run_forwards_to_execution_adapter() {
+        let router = Arc::new(AgentRouter::new());
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let adapter = Arc::new(RecordingExecutionAdapter::default());
+        let execution_adapter: Arc<dyn ExecutionAdapter> = adapter.clone();
+        let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
+
+        manager.cancel_run("run-under-test").await;
+
+        let cancelled = adapter.cancelled.lock().unwrap_or_else(|e| e.into_inner());
+        assert_eq!(
+            &*cancelled,
+            &["run-under-test".to_string()],
+            "cancel_run must forward the run_id to ExecutionAdapter::cancel"
+        );
     }
 }

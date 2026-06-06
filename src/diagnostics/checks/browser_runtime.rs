@@ -172,7 +172,11 @@ mod tests {
         let findings = check.run(Posture::Inspect).await;
         // Chromium + Node probes always emit exactly one finding each; the
         // display finding is conditional, so there are 2 or 3 total.
-        assert!(findings.len() == 2 || findings.len() == 3, "got {}", findings.len());
+        assert!(
+            findings.len() == 2 || findings.len() == 3,
+            "got {}",
+            findings.len()
+        );
         assert!(findings.iter().all(|f| f.check_id == ID));
     }
 

@@ -28,6 +28,7 @@ pub use compat::SkillInfo;
 pub use config::{
     InstallPreferences, NodeManager, SkillConfigUpdate, SkillEntryConfig, SkillsConfig,
 };
+pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
 pub use eligibility::{EligibilityResult, EligibilityService, IneligibilityReason};
 pub use events::SkillSystemEvent;
 pub use guard::{
@@ -46,7 +47,6 @@ pub use shared::shared_skill_system;
 pub use snapshot::SkillSnapshot;
 pub use status::{InstallOption, MissingRequirements, SkillStatusEntry, SkillStatusFilter};
 pub use usage::{SkillState, UsageStats, UsageStore};
-pub use cooccurrence::{cluster_chains, CoOccurrenceLog, RecentUse};
 
 use crate::sync_primitives::Arc;
 use std::path::{Path, PathBuf};

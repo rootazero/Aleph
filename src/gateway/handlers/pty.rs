@@ -148,9 +148,7 @@ pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
 
 /// Parse typed params, mapping a missing/invalid body to `INVALID_PARAMS`.
 #[allow(clippy::result_large_err)]
-fn parse<T: serde::de::DeserializeOwned>(
-    request: &JsonRpcRequest,
-) -> Result<T, JsonRpcResponse> {
+fn parse<T: serde::de::DeserializeOwned>(request: &JsonRpcRequest) -> Result<T, JsonRpcResponse> {
     match &request.params {
         Some(p) => serde_json::from_value(p.clone()).map_err(|e| {
             JsonRpcResponse::error(

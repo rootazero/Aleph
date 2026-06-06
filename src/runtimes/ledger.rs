@@ -265,9 +265,9 @@ impl CapabilityLedger {
         // one another's temp file (one rename consumes it, the other ENOENTs).
         // A pid+sequence suffix keeps each writer's temp private.
         let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp_path = self
-            .persist_path
-            .with_extension(format!("json.tmp.{}.{}", std::process::id(), seq));
+        let tmp_path =
+            self.persist_path
+                .with_extension(format!("json.tmp.{}.{}", std::process::id(), seq));
         std::fs::write(&tmp_path, &content)?;
         if let Err(e) = std::fs::rename(&tmp_path, &self.persist_path) {
             // Don't leak the orphan temp on a failed rename.

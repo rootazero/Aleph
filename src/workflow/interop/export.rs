@@ -96,7 +96,10 @@ pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
 /// body `phase()` marker is also declared in `meta`, matching the `.workflow.js`
 /// convention ("use the same titles in meta.phases as in phase() calls"). Pure
 /// field shuffling — no reasoning (R10).
-fn effective_phases(manifest: &WorkflowManifest, levels: Option<&[Vec<usize>]>) -> Vec<WorkflowPhase> {
+fn effective_phases(
+    manifest: &WorkflowManifest,
+    levels: Option<&[Vec<usize>]>,
+) -> Vec<WorkflowPhase> {
     let mut out = manifest.phases.clone();
     let mut seen: HashSet<String> = manifest.phases.iter().map(|p| p.title.clone()).collect();
     // Visit steps in the order the body emits them so a derived phase lines up
@@ -309,7 +312,12 @@ mod tests {
         }
     }
 
-    fn clarify_step(id: &str, question: &str, choices: &[&str], deps: &[&str]) -> WorkflowManifestStep {
+    fn clarify_step(
+        id: &str,
+        question: &str,
+        choices: &[&str],
+        deps: &[&str],
+    ) -> WorkflowManifestStep {
         WorkflowManifestStep {
             id: id.into(),
             agent: String::new(),
@@ -444,7 +452,10 @@ mod tests {
         assert!(js.contains("].join(\"\\n\")"), "join separator: {js}");
         // A single-line prompt stays a plain literal (no array).
         let plain = render_workflow_js(&manifest(vec![step("b", &[])]));
-        assert!(!plain.contains(".join("), "single-line stays plain: {plain}");
+        assert!(
+            !plain.contains(".join("),
+            "single-line stays plain: {plain}"
+        );
     }
 
     #[test]
@@ -516,14 +527,28 @@ mod tests {
         )]));
         assert!(js.contains("await clarify("), "clarify call: {js}");
         assert!(js.contains("\"Deploy where?\""), "question: {js}");
-        assert!(js.contains("[\"staging\", \"prod\"]"), "choices array: {js}");
-        assert!(!js.contains("agent("), "no agent() for a clarify step: {js}");
+        assert!(
+            js.contains("[\"staging\", \"prod\"]"),
+            "choices array: {js}"
+        );
+        assert!(
+            !js.contains("agent("),
+            "no agent() for a clarify step: {js}"
+        );
     }
 
     #[test]
     fn clarify_step_without_choices_renders_no_array() {
-        let js = render_workflow_js(&manifest(vec![clarify_step("ask", "Which file?", &[], &[])]));
-        assert!(js.contains("await clarify(\"Which file?\")"), "free-text clarify: {js}");
+        let js = render_workflow_js(&manifest(vec![clarify_step(
+            "ask",
+            "Which file?",
+            &[],
+            &[],
+        )]));
+        assert!(
+            js.contains("await clarify(\"Which file?\")"),
+            "free-text clarify: {js}"
+        );
     }
 
     #[test]

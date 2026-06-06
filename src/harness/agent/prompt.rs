@@ -144,6 +144,19 @@ pub(crate) fn build_prompt(
         messages.push(UnifiedMessage::user(&notice));
     }
 
+    // P2 (sibling of the two above): gather-volume budget. The failure summary
+    // sees only errors and no_progress sees only byte-identical idempotent
+    // repeats; neither catches a model making 150+ *successful* varied-query
+    // search/web_fetch calls that never converge on the deliverable (the runaway
+    // the interactive max_iterations cap force-summarises). Fires when gather
+    // calls in the visible window cross GATHER_BUDGET_THRESHOLD, surfacing the
+    // live count so the convergence nudge is harder to tune out than the static
+    // guideline #15. Same `<system-reminder>` channel; a soft nudge, never a
+    // control-flow branch (R7/R10). Scoped to the tail, recomputed every Think.
+    if let Some(notice) = crate::tools::gather_budget::render_gather_notice(&events[tail_start..]) {
+        messages.push(UnifiedMessage::user(&notice));
+    }
+
     messages
 }
 

@@ -127,7 +127,10 @@ mod tests {
     fn unknown_field_rejected_when_additional_properties_false() {
         let value = json!({ "api_key": "secret", "extra": true });
         let errors = validate_config_against_schema(&object_schema(), &value);
-        assert!(!errors.is_empty(), "strict schema should reject extra field");
+        assert!(
+            !errors.is_empty(),
+            "strict schema should reject extra field"
+        );
     }
 
     #[test]

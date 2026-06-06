@@ -847,8 +847,7 @@ pub async fn handle_catalog(
     // matching built-in chat preset (e.g. an OpenAI-compatible relay added via
     // `providers.create`). The catalog above is preset-driven, so without this
     // a fully configured custom provider stays invisible to the model picker.
-    let preset_ids: std::collections::HashSet<&str> =
-        items.iter().map(|i| i.id.as_str()).collect();
+    let preset_ids: std::collections::HashSet<&str> = items.iter().map(|i| i.id.as_str()).collect();
     let mut custom: Vec<CatalogEntryView> = config_guard
         .providers
         .iter()
@@ -864,10 +863,7 @@ pub async fn handle_catalog(
                 display_name: name.clone(),
                 default_model,
                 base_url: cfg.base_url.clone().unwrap_or_default(),
-                protocol: cfg
-                    .protocol
-                    .clone()
-                    .unwrap_or_else(|| "openai".to_string()),
+                protocol: cfg.protocol.clone().unwrap_or_else(|| "openai".to_string()),
                 color: cfg.color.clone(),
                 homepage: None,
                 notes: None,

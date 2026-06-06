@@ -208,9 +208,7 @@ pub async fn handle_update(request: JsonRpcRequest) -> JsonRpcResponse {
     // Refresh the live extension set so an updated plugin's new capabilities take
     // effect without a daemon restart (matches the install handler's behaviour).
     if matches!(outcome, UpdateOutcome::Updated { .. }) {
-        if let Ok(mgr) =
-            crate::gateway::handlers::plugins::handlers::get_extension_manager()
-        {
+        if let Ok(mgr) = crate::gateway::handlers::plugins::handlers::get_extension_manager() {
             if let Err(e) = mgr.reload().await {
                 tracing::warn!("Failed to refresh extensions after update: {}", e);
             }

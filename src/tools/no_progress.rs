@@ -115,7 +115,10 @@ pub fn aggregate_no_progress(events: &[SessionEventRecord]) -> Vec<NoProgressGro
     let mut tallies: HashMap<(String, String), Tally> = HashMap::new();
 
     for (idx, record) in events.iter().enumerate() {
-        let SessionEvent::ToolResult { call_id, output, .. } = &record.event else {
+        let SessionEvent::ToolResult {
+            call_id, output, ..
+        } = &record.event
+        else {
             continue;
         };
         let Some((name, input)) = resolve_request(events, idx, call_id) else {

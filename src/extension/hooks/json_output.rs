@@ -112,11 +112,7 @@ impl JsonHookOutput {
                 }
             }
             if let Some(decision) = hso.permission_decision.as_deref() {
-                apply_permission_decision(
-                    decision,
-                    hso.permission_decision_reason,
-                    result,
-                );
+                apply_permission_decision(decision, hso.permission_decision_reason, result);
             }
         }
 
@@ -162,11 +158,7 @@ impl JsonHookOutput {
 }
 
 /// Apply a `permissionDecision` string to the result (allow/deny/ask).
-fn apply_permission_decision(
-    decision: &str,
-    reason: Option<String>,
-    result: &mut HookResult,
-) {
+fn apply_permission_decision(decision: &str, reason: Option<String>, result: &mut HookResult) {
     match decision {
         "allow" => {
             result.blocked = false;

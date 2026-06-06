@@ -81,7 +81,10 @@ impl ShutdownContext {
                 // Truncate on a char boundary: `parent_command` is lossy-decoded
                 // external (ps) output, so byte index 200 may split a multi-byte
                 // char and panic.
-                let end = (0..=200).rev().find(|&i| c.is_char_boundary(i)).unwrap_or(0);
+                let end = (0..=200)
+                    .rev()
+                    .find(|&i| c.is_char_boundary(i))
+                    .unwrap_or(0);
                 c.truncate(end);
             }
             parts.push(format!("parent={}", c));

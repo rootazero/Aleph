@@ -177,7 +177,9 @@ mod tests {
         assert!(p.contains("1. staging"));
         assert!(p.contains("2. production"));
         assert!(p.contains("number"));
-        assert!(text_meta().rendered_prompt().contains("Reply with your answer"));
+        assert!(text_meta()
+            .rendered_prompt()
+            .contains("Reply with your answer"));
     }
 
     #[test]

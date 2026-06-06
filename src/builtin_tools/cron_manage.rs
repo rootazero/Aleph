@@ -118,9 +118,7 @@ fn validate_schedule(schedule: &ScheduleInput) -> Result<()> {
                 timezone.as_deref(),
                 chrono::Utc::now(),
             )
-            .map_err(|e| {
-                crate::error::AlephError::tool(format!("Invalid cron schedule: {e}"))
-            })?;
+            .map_err(|e| crate::error::AlephError::tool(format!("Invalid cron schedule: {e}")))?;
         }
     }
     Ok(())

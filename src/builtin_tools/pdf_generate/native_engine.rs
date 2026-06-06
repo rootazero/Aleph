@@ -310,7 +310,14 @@ impl DocBuilder {
 
     /// Draw a single line of text with its baseline at `(x_mm, y_mm)` from the
     /// bottom-left corner of the page.
-    fn draw_line(&mut self, text: &str, font_size: f32, x_mm: f32, y_mm: f32, font: &PdfFontHandle) {
+    fn draw_line(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        x_mm: f32,
+        y_mm: f32,
+        font: &PdfFontHandle,
+    ) {
         self.ops.push(Op::StartTextSection);
         self.ops.push(Op::SetFont {
             font: font.clone(),
@@ -352,10 +359,7 @@ fn load_font(doc: &mut PdfDocument) -> PdfFontHandle {
                     debug!("Using system font: {:?}", font_path);
                     return PdfFontHandle::External(doc.add_font(&parsed));
                 }
-                warn!(
-                    "Failed to parse font {:?}, using built-in font",
-                    font_path
-                );
+                warn!("Failed to parse font {:?}, using built-in font", font_path);
             }
             Err(e) => warn!(
                 "Failed to read font {:?}: {}, using built-in font",

@@ -129,8 +129,7 @@ mod tests {
     #[test]
     fn merge_preserves_other_keys_and_is_immutable() {
         let original = json!({ "managed_by": "dispatcher" });
-        let merged =
-            with_acceptance_criteria(original.clone(), vec!["a".into(), "b".into()]);
+        let merged = with_acceptance_criteria(original.clone(), vec!["a".into(), "b".into()]);
         // Original untouched.
         assert!(original.get(ACCEPTANCE_METADATA_KEY).is_none());
         // Sibling key preserved.

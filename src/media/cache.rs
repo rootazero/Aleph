@@ -545,8 +545,7 @@ mod tests {
     #[test]
     fn test_decode_data_url_base64() {
         // "Hello" base64-encoded
-        let (mime, bytes) =
-            MediaCache::decode_data_url("data:text/plain;base64,SGVsbG8=").unwrap();
+        let (mime, bytes) = MediaCache::decode_data_url("data:text/plain;base64,SGVsbG8=").unwrap();
         assert_eq!(mime.as_deref(), Some("text/plain"));
         assert_eq!(bytes, b"Hello");
     }
@@ -555,7 +554,8 @@ mod tests {
     fn test_decode_data_url_percent_encoded() {
         // Non-base64 data URL with percent-encoded text must be decoded, not
         // stored as literal "%20" / "%21" byte sequences.
-        let (mime, bytes) = MediaCache::decode_data_url("data:text/plain,Hello%20World%21").unwrap();
+        let (mime, bytes) =
+            MediaCache::decode_data_url("data:text/plain,Hello%20World%21").unwrap();
         assert_eq!(mime.as_deref(), Some("text/plain"));
         assert_eq!(bytes, b"Hello World!");
     }

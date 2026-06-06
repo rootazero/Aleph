@@ -285,19 +285,21 @@ fn build_marketplace_manager(
     let marketplace_configs: std::collections::HashMap<String, MarketplaceConfig> = config
         .plugin_marketplaces
         .iter()
-        .map(|(name, entry): (&String, &alephcore::PluginMarketplaceEntry)| {
-            let source_type = match entry.source_type.as_str() {
-                "local" => MarketplaceSourceType::Local,
-                _ => MarketplaceSourceType::Github,
-            };
-            (
-                name.clone(),
-                MarketplaceConfig {
-                    source: entry.source.clone(),
-                    source_type,
-                },
-            )
-        })
+        .map(
+            |(name, entry): (&String, &alephcore::PluginMarketplaceEntry)| {
+                let source_type = match entry.source_type.as_str() {
+                    "local" => MarketplaceSourceType::Local,
+                    _ => MarketplaceSourceType::Github,
+                };
+                (
+                    name.clone(),
+                    MarketplaceConfig {
+                        source: entry.source.clone(),
+                        source_type,
+                    },
+                )
+            },
+        )
         .collect();
     Ok(MarketplaceManager::new(marketplace_configs, None))
 }

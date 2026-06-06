@@ -337,20 +337,15 @@ impl ChannelRegistry {
     /// attached and the error is duplicate-safe to retry. Best-effort: a
     /// persistence failure is logged and swallowed (the original send error is
     /// what the caller sees).
-    fn maybe_enqueue(
-        &self,
-        channel_id: &ChannelId,
-        message: &OutboundMessage,
-        err: &ChannelError,
-    ) {
+    fn maybe_enqueue(&self, channel_id: &ChannelId, message: &OutboundMessage, err: &ChannelError) {
         let Some(store) = &self.delivery_store else {
             return;
         };
         if !super::delivery_queue::should_enqueue(err) {
             return;
         }
-        let next = super::delivery_queue::now_secs()
-            + store.config().initial_backoff.as_secs() as i64;
+        let next =
+            super::delivery_queue::now_secs() + store.config().initial_backoff.as_secs() as i64;
         match store.enqueue(channel_id.as_str(), message, &format!("{:?}", err), next) {
             Ok(_) => info!(
                 channel = %channel_id,

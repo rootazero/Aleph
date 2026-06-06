@@ -458,8 +458,10 @@ fn sandbox_result_to_output(
             // Strip ANSI/VT100 escapes + stray binary control bytes before the
             // text enters the agent envelope (pi/openclaw parity; clean output
             // stays byte-identical via the borrow fast-path).
-            let stdout = sanitize_command_output(&String::from_utf8_lossy(&out.stdout)).into_owned();
-            let stderr = sanitize_command_output(&String::from_utf8_lossy(&out.stderr)).into_owned();
+            let stdout =
+                sanitize_command_output(&String::from_utf8_lossy(&out.stdout)).into_owned();
+            let stderr =
+                sanitize_command_output(&String::from_utf8_lossy(&out.stderr)).into_owned();
             let exit_code = out.exit_code.unwrap_or(-1);
 
             debug!(
@@ -497,7 +499,8 @@ fn sandbox_result_to_output(
             );
             // Same sanitization as the natural-exit path — partial output is
             // just as agent-facing.
-            let stdout = sanitize_command_output(&String::from_utf8_lossy(&partial_stdout)).into_owned();
+            let stdout =
+                sanitize_command_output(&String::from_utf8_lossy(&partial_stdout)).into_owned();
             let partial_stderr_text =
                 sanitize_command_output(&String::from_utf8_lossy(&partial_stderr)).into_owned();
             // Frame the human-readable banner so the model can see _that_
@@ -1026,7 +1029,9 @@ mod tests {
                 _cmd: SandboxCommand,
             ) -> std::result::Result<SandboxOutput, SandboxError> {
                 Ok(SandboxOutput {
-                    stdout: "\u{1b}[32mPASS\u{1b}[0m\u{0} 12 tests\n".as_bytes().to_vec(),
+                    stdout: "\u{1b}[32mPASS\u{1b}[0m\u{0} 12 tests\n"
+                        .as_bytes()
+                        .to_vec(),
                     stderr: "\u{1b}[31mwarn\u{1b}[0m\u{7}\n".as_bytes().to_vec(),
                     exit_code: Some(0),
                     duration_ms: 3,

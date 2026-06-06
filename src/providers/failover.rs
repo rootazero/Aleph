@@ -723,8 +723,7 @@ impl FailoverProvider {
         // Classify the primary in place. A `Skip` (a hard-guardrail mode with
         // escalation off, on a cross-tier pin) drops it so the chain falls
         // straight through to the fallbacks; `Allow`/`CrossTier` keep it first.
-        let mut out: Vec<(FailoverNode, CandidateAction)> =
-            Vec::with_capacity(fallbacks.len() + 1);
+        let mut out: Vec<(FailoverNode, CandidateAction)> = Vec::with_capacity(fallbacks.len() + 1);
         match classify_candidate(mode, primary_node.tier, allow_escalation) {
             CandidateAction::Skip => {}
             action => out.push((primary_node, action)),

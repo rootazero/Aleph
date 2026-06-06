@@ -445,7 +445,12 @@ mod tests {
         };
         storage.save_tokens("srv", &v1).await.unwrap();
         assert_eq!(
-            storage.get_tokens("srv").await.unwrap().unwrap().access_token,
+            storage
+                .get_tokens("srv")
+                .await
+                .unwrap()
+                .unwrap()
+                .access_token,
             "v1"
         );
 
@@ -464,7 +469,12 @@ mod tests {
 
         // The original handle must observe the on-disk change, not serve "v1".
         assert_eq!(
-            storage.get_tokens("srv").await.unwrap().unwrap().access_token,
+            storage
+                .get_tokens("srv")
+                .await
+                .unwrap()
+                .unwrap()
+                .access_token,
             "v2"
         );
     }

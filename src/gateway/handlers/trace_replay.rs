@@ -191,7 +191,10 @@ mod tests {
         let runs = result.get("runs").unwrap();
         assert_eq!(runs.get("run-a").unwrap().as_array().unwrap().len(), 2);
         assert_eq!(runs.get("run-b").unwrap().as_array().unwrap().len(), 1);
-        assert_eq!(runs.get("run-missing").unwrap().as_array().unwrap().len(), 0);
+        assert_eq!(
+            runs.get("run-missing").unwrap().as_array().unwrap().len(),
+            0
+        );
         let first = &runs.get("run-a").unwrap().as_array().unwrap()[0];
         assert_eq!(first.get("text").unwrap().as_str().unwrap(), "a0");
     }

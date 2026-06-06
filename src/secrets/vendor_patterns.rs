@@ -25,11 +25,20 @@
 pub const VENDOR_SECRET_PATTERNS: &[(&str, &str)] = &[
     // Slack bot/user/refresh tokens (`xoxb-`, `xoxp-`, …) and app-level tokens.
     ("Slack Token", r"xox[baprs]-[A-Za-z0-9-]{10,}"),
-    ("Slack App Token", r"xapp-[0-9]-[A-Z0-9]+-[0-9]+-[a-zA-Z0-9]+"),
+    (
+        "Slack App Token",
+        r"xapp-[0-9]-[A-Z0-9]+-[0-9]+-[a-zA-Z0-9]+",
+    ),
     // Stripe secret/restricted keys (publishable `pk_` keys are intentionally
     // omitted — they are not secret).
-    ("Stripe Secret Key", r"(?:sk|rk)_(?:live|test)_[0-9a-zA-Z]{20,}"),
-    ("SendGrid API Key", r"SG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}"),
+    (
+        "Stripe Secret Key",
+        r"(?:sk|rk)_(?:live|test)_[0-9a-zA-Z]{20,}",
+    ),
+    (
+        "SendGrid API Key",
+        r"SG\.[A-Za-z0-9_\-]{16,}\.[A-Za-z0-9_\-]{16,}",
+    ),
     ("Hugging Face Token", r"hf_[A-Za-z0-9]{30,}"),
     ("Replicate Token", r"r8_[A-Za-z0-9]{30,}"),
     ("Groq API Key", r"gsk_[A-Za-z0-9]{40,}"),

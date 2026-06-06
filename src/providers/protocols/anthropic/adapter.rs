@@ -136,12 +136,9 @@ fn strip_anthropic_tool_schema_unions(schema: &mut serde_json::Value) {
 /// paused) or an `Error` (the provider reported a fault). Either means the
 /// stream reached a defined end, so the truncation guard must NOT fire.
 fn queue_has_terminal(pending: &VecDeque<Result<ProviderDelta>>) -> bool {
-    pending.iter().any(|d| {
-        matches!(
-            d,
-            Ok(ProviderDelta::Done(_)) | Ok(ProviderDelta::Error(_))
-        )
-    })
+    pending
+        .iter()
+        .any(|d| matches!(d, Ok(ProviderDelta::Done(_)) | Ok(ProviderDelta::Error(_))))
 }
 
 /// Decide whether a now-closed Anthropic stream was truncated mid-flight.
@@ -1049,7 +1046,10 @@ mod error_classification_tests {
             }
             other => panic!("expected RateLimitError, got {other:?}"),
         }
-        assert!(!is_retryable(&e), "rate limit retry amplifies — must be fatal");
+        assert!(
+            !is_retryable(&e),
+            "rate limit retry amplifies — must be fatal"
+        );
     }
 
     #[test]

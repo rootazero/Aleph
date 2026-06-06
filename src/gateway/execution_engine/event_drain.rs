@@ -551,7 +551,10 @@ mod tests {
         .expect("complete ok");
 
         let text = emitted_text(&inner.events().await);
-        assert!(!text.contains("SECRET RECALL"), "fenced body must not leak: {text:?}");
+        assert!(
+            !text.contains("SECRET RECALL"),
+            "fenced body must not leak: {text:?}"
+        );
         assert!(!text.contains("memory-context"), "fence tag must not leak");
         assert!(text.contains("Sure."));
         assert!(text.contains("Done."));
@@ -584,7 +587,10 @@ mod tests {
         .expect("complete ok");
 
         let text = emitted_text(&inner.events().await);
-        assert!(!text.contains("leaky"), "split fence body must not leak: {text:?}");
+        assert!(
+            !text.contains("leaky"),
+            "split fence body must not leak: {text:?}"
+        );
         assert!(text.contains("answer"));
         assert!(text.contains("tail"));
     }

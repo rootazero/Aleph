@@ -369,7 +369,10 @@ mod tests {
         let pinned = fire_before_compaction(Some(&executor), "s", vec![]).await;
 
         assert!(pinned.is_empty(), "observer hooks must not pin context");
-        assert!(sentinel.exists(), "BeforeCompaction observer must still run");
+        assert!(
+            sentinel.exists(),
+            "BeforeCompaction observer must still run"
+        );
     }
 
     #[tokio::test]

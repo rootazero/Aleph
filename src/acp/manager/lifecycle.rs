@@ -237,7 +237,11 @@ impl AcpAdapterManager {
                         // disk I/O and must never run under the session lock
                         // (matches the Removed paths above and the Err arm below).
                         let alive = session.is_alive();
-                        let sid = if alive { session.acp_session_id() } else { None };
+                        let sid = if alive {
+                            session.acp_session_id()
+                        } else {
+                            None
+                        };
                         drop(session);
                         if alive {
                             if let Some(sid) = sid {

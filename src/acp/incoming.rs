@@ -329,8 +329,7 @@ fn pick_option(options: &[Value], wanted: &[&str]) -> Option<String> {
             // like "disallow" satisfy a wanted "allow", inverting the
             // permission decision. "allow_once" still matches generic "allow"
             // via its leading token.
-            let matches = kind == *want
-                || kind.split(['_', '-']).any(|tok| tok == *want);
+            let matches = kind == *want || kind.split(['_', '-']).any(|tok| tok == *want);
             if matches {
                 if let Some(id) = opt.get("optionId").and_then(Value::as_str) {
                     return Some(id.to_string());

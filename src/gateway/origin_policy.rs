@@ -163,10 +163,7 @@ mod tests {
         let p = OriginPolicy::loopback_only();
         // Remote deployment served from its own domain: Origin authority
         // equals the request Host → allowed, no config needed.
-        assert!(p.is_allowed(
-            Some("https://aleph.example.com"),
-            Some("aleph.example.com")
-        ));
+        assert!(p.is_allowed(Some("https://aleph.example.com"), Some("aleph.example.com")));
         assert!(p.is_allowed(
             Some("https://aleph.example.com:8443"),
             Some("aleph.example.com:8443")
@@ -181,10 +178,7 @@ mod tests {
         // DNS-rebinding lookalike must not pass the loopback test.
         assert!(!p.is_allowed(Some("http://127.0.0.1.evil.com"), None));
         // Origin host differs from request Host → not same-origin.
-        assert!(!p.is_allowed(
-            Some("https://evil.com"),
-            Some("aleph.example.com")
-        ));
+        assert!(!p.is_allowed(Some("https://evil.com"), Some("aleph.example.com")));
     }
 
     #[test]

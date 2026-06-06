@@ -281,7 +281,11 @@ mod tests {
         input.extend_from_slice(&[0xEF, 0xBB, 0xBF]); // U+FEFF BOM
         let (out, n) = strip_unsafe_invisible(&input);
         assert_eq!(n, 3, "three control sequences removed");
-        assert_eq!(out.as_ref(), b"admin", "visible text preserved, controls gone");
+        assert_eq!(
+            out.as_ref(),
+            b"admin",
+            "visible text preserved, controls gone"
+        );
     }
 
     #[test]

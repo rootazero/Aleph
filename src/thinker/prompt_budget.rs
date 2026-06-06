@@ -355,7 +355,10 @@ mod tests {
         let budget = TokenBudget::default();
         let dynamic = "session context".to_string();
         let out = fit_dynamic_suffix(1000, dynamic.clone(), &budget);
-        assert_eq!(out, dynamic, "under-budget suffix must pass through unchanged");
+        assert_eq!(
+            out, dynamic,
+            "under-budget suffix must pass through unchanged"
+        );
     }
 
     #[test]

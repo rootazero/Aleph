@@ -280,5 +280,4 @@ mod tests {
         let node2 = CommandNode::new_with_source("test2", "Test2", ToolSourceType::Mcp);
         assert!(!node2.has_children);
     }
-
 }

@@ -184,8 +184,7 @@ pub fn covered_by_step_set(chain: &[String]) -> bool {
             continue;
         };
         let have: HashSet<&str> = manifest.steps.iter().map(|s| s.id.as_str()).collect();
-        let want_sanitised: HashSet<String> =
-            want.iter().map(|s| sanitise_name(s)).collect();
+        let want_sanitised: HashSet<String> = want.iter().map(|s| sanitise_name(s)).collect();
         let want_ref: HashSet<&str> = want_sanitised.iter().map(String::as_str).collect();
         if have == want_ref {
             return true;

@@ -205,10 +205,7 @@ mod tests {
     fn pinned_but_missing_stays_unresolved() {
         // No auto fall-through: a typo'd or disabled pin must not silently
         // activate a different backend.
-        let s = settings(
-            "ghost",
-            vec![cfg("ollama", EmbeddingPreset::Ollama, true)],
-        );
+        let s = settings("ghost", vec![cfg("ollama", EmbeddingPreset::Ollama, true)]);
         let d = resolve(&s);
         assert_eq!(d.reason, ResolutionReason::Unresolved);
         assert!(d.effective.is_none());
@@ -241,10 +238,7 @@ mod tests {
 
     #[test]
     fn auto_falls_back_to_remote_when_no_local() {
-        let s = settings(
-            "auto",
-            vec![cfg("openai", EmbeddingPreset::OpenAi, true)],
-        );
+        let s = settings("auto", vec![cfg("openai", EmbeddingPreset::OpenAi, true)]);
         let d = resolve(&s);
         assert_eq!(d.reason, ResolutionReason::AutoRemoteFallback);
         assert_eq!(d.effective.unwrap().id, "openai");
@@ -252,10 +246,7 @@ mod tests {
 
     #[test]
     fn empty_active_id_is_treated_as_auto() {
-        let s = settings(
-            "",
-            vec![cfg("ollama", EmbeddingPreset::Ollama, true)],
-        );
+        let s = settings("", vec![cfg("ollama", EmbeddingPreset::Ollama, true)]);
         let d = resolve(&s);
         assert_eq!(d.reason, ResolutionReason::AutoLocalFirst);
         assert_eq!(d.effective.unwrap().id, "ollama");

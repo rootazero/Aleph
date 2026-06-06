@@ -378,16 +378,16 @@ pub async fn handle_read_file(request: JsonRpcRequest, config: SharedConfig) -> 
             );
         }
         Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("read failed: {e}"),
-            );
+            return JsonRpcResponse::error(request.id, INTERNAL_ERROR, format!("read failed: {e}"));
         }
     };
 
     let truncated = bytes.len() > READ_FILE_CAP;
-    let slice = if truncated { &bytes[..READ_FILE_CAP] } else { &bytes[..] };
+    let slice = if truncated {
+        &bytes[..READ_FILE_CAP]
+    } else {
+        &bytes[..]
+    };
     let content = String::from_utf8_lossy(slice).into_owned();
 
     JsonRpcResponse::success(
@@ -606,7 +606,10 @@ mod tests {
         std::fs::write(&file_path, "hi there").unwrap();
 
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
-        let r = req("fs.read_file", json!({ "path": file_path.to_string_lossy() }));
+        let r = req(
+            "fs.read_file",
+            json!({ "path": file_path.to_string_lossy() }),
+        );
         let resp = handle_read_file(r, cfg).await;
         let result = resp.result.expect("expected success");
         assert_eq!(result["content"], "hi there");
@@ -624,7 +627,10 @@ mod tests {
         std::fs::write(&outside_file, "secret").unwrap();
 
         let cfg = cfg_with_roots(vec![scope.to_string_lossy().to_string()]);
-        let r = req("fs.read_file", json!({ "path": outside_file.to_string_lossy() }));
+        let r = req(
+            "fs.read_file",
+            json!({ "path": outside_file.to_string_lossy() }),
+        );
         let resp = handle_read_file(r, cfg).await;
         let err = resp.error.expect("expected error");
         assert_eq!(err.code, OUT_OF_SCOPE);
@@ -638,7 +644,10 @@ mod tests {
         std::fs::write(&file_path, vec![b'a'; READ_FILE_CAP + 1]).unwrap();
 
         let cfg = cfg_with_roots(vec![root.to_string_lossy().to_string()]);
-        let r = req("fs.read_file", json!({ "path": file_path.to_string_lossy() }));
+        let r = req(
+            "fs.read_file",
+            json!({ "path": file_path.to_string_lossy() }),
+        );
         let resp = handle_read_file(r, cfg).await;
         let result = resp.result.expect("expected success");
         assert_eq!(result["truncated"], true);

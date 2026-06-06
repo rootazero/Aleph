@@ -418,7 +418,10 @@ mod tests {
         assert_eq!(encode_slug_path("./owner/./skill"), "owner/skill");
         assert_eq!(encode_slug_path(".."), "");
         // A literal dot inside a legitimate name is preserved (not a segment).
-        assert_eq!(encode_slug_path("owner/node.js-helper"), "owner/node.js-helper");
+        assert_eq!(
+            encode_slug_path("owner/node.js-helper"),
+            "owner/node.js-helper"
+        );
     }
 
     #[test]

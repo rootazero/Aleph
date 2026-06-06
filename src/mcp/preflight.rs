@@ -35,7 +35,10 @@ pub async fn preflight_remote_url(url: &str, headers: &HashMap<String, String>) 
     validate_url(url, &SsrfPolicy::default())
         .map_err(|e| AlephError::IoError(format!("SSRF blocked for '{}': {}", url, e)))?;
 
-    let client = match reqwest::Client::builder().timeout(PREFLIGHT_TIMEOUT).build() {
+    let client = match reqwest::Client::builder()
+        .timeout(PREFLIGHT_TIMEOUT)
+        .build()
+    {
         Ok(c) => c,
         // If we cannot even build a client, skip the probe — the real
         // connection path will surface the failure with full context.

@@ -141,14 +141,16 @@ static LEAK_PATTERNS: Lazy<Vec<(&str, Regex)>> = Lazy::new(|| {
                 .expect("static private key pattern compiles"),
         ),
     ];
-    patterns.extend(super::vendor_patterns::VENDOR_SECRET_PATTERNS.iter().map(
-        |(label, src)| {
-            (
-                *label,
-                Regex::new(src).expect("static vendor pattern compiles"),
-            )
-        },
-    ));
+    patterns.extend(
+        super::vendor_patterns::VENDOR_SECRET_PATTERNS
+            .iter()
+            .map(|(label, src)| {
+                (
+                    *label,
+                    Regex::new(src).expect("static vendor pattern compiles"),
+                )
+            }),
+    );
     patterns
 });
 
@@ -463,7 +465,10 @@ mod tests {
     fn test_outbound_blocks_vendor_slack_token() {
         let detector = LeakDetector::new();
         let decision = detector.scan_outbound("SLACK_TOKEN=xoxb-1234567890-abcdefghijklmnop");
-        assert!(decision.is_blocked(), "slack bot token should block on egress");
+        assert!(
+            decision.is_blocked(),
+            "slack bot token should block on egress"
+        );
         if let LeakDecision::Block { reason, .. } = decision {
             assert!(reason.contains("Slack Token"));
         }
@@ -472,17 +477,21 @@ mod tests {
     #[test]
     fn test_outbound_blocks_vendor_huggingface_token() {
         let detector = LeakDetector::new();
-        let decision =
-            detector.scan_outbound("export HF=hf_abcdefghijklmnopqrstuvwxyz0123456789");
-        assert!(decision.is_blocked(), "hugging face token should block on egress");
+        let decision = detector.scan_outbound("export HF=hf_abcdefghijklmnopqrstuvwxyz0123456789");
+        assert!(
+            decision.is_blocked(),
+            "hugging face token should block on egress"
+        );
     }
 
     #[test]
     fn test_outbound_blocks_vendor_stripe_key() {
         let detector = LeakDetector::new();
-        let decision =
-            detector.scan_outbound("key: sk_live_abcdefghijklmnopqrstuvwx1234");
-        assert!(decision.is_blocked(), "stripe secret key should block on egress");
+        let decision = detector.scan_outbound("key: sk_live_abcdefghijklmnopqrstuvwx1234");
+        assert!(
+            decision.is_blocked(),
+            "stripe secret key should block on egress"
+        );
     }
 
     #[test]
@@ -491,7 +500,10 @@ mod tests {
         // sandbox stdout is scrubbed of the same secrets the egress guard blocks.
         let patterns = default_patterns_bytes();
         let has_groq = patterns.iter().any(|(name, _)| *name == "Groq API Key");
-        assert!(has_groq, "vendor catalog should be wired into byte scrubber");
+        assert!(
+            has_groq,
+            "vendor catalog should be wired into byte scrubber"
+        );
         let groq = patterns
             .iter()
             .find(|(name, _)| *name == "Groq API Key")

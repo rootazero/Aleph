@@ -116,7 +116,10 @@ async fn test_healthcheck_empty_providers() {
     let response = handle_healthcheck(request, config, vault).await;
     let result = response.result.unwrap();
     let providers = result["providers"].as_array().unwrap();
-    assert!(providers.is_empty(), "no providers configured → empty sweep");
+    assert!(
+        providers.is_empty(),
+        "no providers configured → empty sweep"
+    );
 }
 
 #[tokio::test]

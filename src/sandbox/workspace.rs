@@ -1125,13 +1125,15 @@ mod tests {
         // First attempt: live denial records the refusal in the ledger.
         let _ = sandbox.execute(mk()).await.expect_err("first denied");
         // Second attempt: same intent → auto-blocked by the ledger.
-        let err = sandbox.execute(mk()).await.expect_err("blind retry blocked");
+        let err = sandbox
+            .execute(mk())
+            .await
+            .expect_err("blind retry blocked");
         let SandboxError::CapabilityDenied { reason } = err else {
             panic!("expected CapabilityDenied, got {err:?}");
         };
         assert!(
-            reason.contains("previously denied this session")
-                && reason.contains("auto-refused"),
+            reason.contains("previously denied this session") && reason.contains("auto-refused"),
             "auto-block reason must carry the RepeatedSameIntent hint; got: {reason}"
         );
     }

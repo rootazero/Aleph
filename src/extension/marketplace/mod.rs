@@ -234,8 +234,7 @@ impl MarketplaceManager {
                 // whose manifest fails to parse, has duplicate tools, or declares
                 // a malformed `config_schema` cannot load anyway, so reject it
                 // here with the concrete reasons rather than after install.
-                let validation =
-                    crate::extension::validation::validate_plugin(&result.plugin_path);
+                let validation = crate::extension::validation::validate_plugin(&result.plugin_path);
                 if !validation.is_valid() {
                     return Err(format!(
                         "Plugin '{}' failed validation and was not installed:\n  - {}",

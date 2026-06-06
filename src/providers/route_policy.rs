@@ -273,9 +273,9 @@ where
             g.rotate_left(k);
             g
         }
-        LoadBalanceStrategy::LeastBusy => sort_by_metric(group, metric_of, name_of, |m| {
-            m.in_flight as u64
-        }),
+        LoadBalanceStrategy::LeastBusy => {
+            sort_by_metric(group, metric_of, name_of, |m| m.in_flight as u64)
+        }
         // `0` (unsampled) sorts first, so a fresh endpoint is tried before
         // already-measured ones and gains a latency reading.
         LoadBalanceStrategy::LatencyAware => {

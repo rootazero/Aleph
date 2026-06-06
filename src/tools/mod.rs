@@ -39,6 +39,7 @@ pub mod context;
 pub mod error_kind;
 pub mod execution_context;
 pub mod fallback_registry;
+pub mod gather_budget;
 pub mod in_flight;
 pub mod info;
 pub mod name_repair;

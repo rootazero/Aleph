@@ -168,10 +168,7 @@ const MAX_REPLY_LENGTH: usize = 10_000;
 /// `pub(crate)` so the inbound router can reuse the exact same number / label /
 /// free-text interpretation when resolving a workflow `clarify` step (which is
 /// backed by a durable `coord_task`, not this in-memory registry).
-pub(crate) fn interpret_reply(
-    request: &ClarificationRequest,
-    reply: &str,
-) -> ClarificationResult {
+pub(crate) fn interpret_reply(request: &ClarificationRequest, reply: &str) -> ClarificationResult {
     let trimmed = reply.trim();
     let trimmed = if trimmed.len() > MAX_REPLY_LENGTH {
         let mut end = MAX_REPLY_LENGTH;
