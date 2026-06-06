@@ -27,6 +27,14 @@ pub enum TimelineRow {
     /// A message plus its resolved clock label ("HH:MM", or empty when the
     /// message carries no timestamp — e.g. legacy history rows).
     Message { message: ChatMessage, clock: String },
+    /// A run's consecutive intermediate step bubbles, folded into one bounded
+    /// scrolling strip (keeps the chat column short). `completed` is true when
+    /// no step is still streaming → render auto-collapsed to a summary line.
+    StepStrip {
+        run_id: String,
+        steps: Vec<ChatMessage>,
+        completed: bool,
+    },
 }
 
 /// Fold `messages` into timeline rows, inserting a [`TimelineRow::DaySeparator`]
@@ -48,7 +56,25 @@ pub fn build_rows(
 ) -> Vec<TimelineRow> {
     let mut rows = Vec::with_capacity(messages.len() + 2);
     let mut last_day: Option<i64> = None;
+    let mut pending: Vec<ChatMessage> = Vec::new();
+
     for m in messages {
+        // Fold consecutive intermediate (Think→Act) step bubbles of one run
+        // into a single StepStrip so a long run doesn't stretch the column.
+        if m.role == "assistant" && m.is_intermediate {
+            if pending
+                .first()
+                .is_some_and(|p| run_id_of(p) != run_id_of(m))
+            {
+                flush_strip(&mut rows, &mut pending);
+            }
+            pending.push(m.clone());
+            continue;
+        }
+
+        // A non-step row closes any open strip before it renders.
+        flush_strip(&mut rows, &mut pending);
+
         let clock = match m.timestamp {
             Some(ts) => {
                 let day = day_ordinal(ts);
@@ -68,7 +94,29 @@ pub fn build_rows(
             clock,
         });
     }
+    flush_strip(&mut rows, &mut pending);
     rows
+}
+
+/// Run id behind a message id (`intermediate-{run}-{n}`, `assistant-{run}`, or
+/// a bare user id).
+fn run_id_of(m: &ChatMessage) -> String {
+    crate::views::chat::messages::run_id_from_message_id(&m.id)
+}
+
+/// Flush accumulated intermediate steps into one StepStrip row. No-op when
+/// empty. `completed` is true when no step is still streaming.
+fn flush_strip(rows: &mut Vec<TimelineRow>, pending: &mut Vec<ChatMessage>) {
+    if pending.is_empty() {
+        return;
+    }
+    let run_id = run_id_of(&pending[0]);
+    let completed = pending.iter().all(|m| !m.is_streaming);
+    rows.push(TimelineRow::StepStrip {
+        run_id,
+        steps: std::mem::take(pending),
+        completed,
+    });
 }
 
 /// Stable `<For>` key for a timeline row.
@@ -88,6 +136,9 @@ pub fn row_key(row: &TimelineRow) -> String {
             m.model_info.is_some(),
             clock,
         ),
+        TimelineRow::StepStrip { run_id, steps, completed } => {
+            format!("strip:{run_id}:{}:{completed}", steps.len())
+        }
     }
 }
 
@@ -224,6 +275,91 @@ mod tests {
             timestamp: ts,
             iteration: None,
         }
+    }
+
+    fn msg_user(id: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            role: "user".into(),
+            content: content.into(),
+            tool_calls: vec![],
+            is_streaming: false,
+            is_intermediate: false,
+            error: None,
+            model_info: None,
+            iteration: None,
+            timestamp: None,
+        }
+    }
+
+    fn msg_step(id: &str, it: usize, content: &str, streaming: bool) -> ChatMessage {
+        ChatMessage {
+            id: id.into(),
+            role: "assistant".into(),
+            content: content.into(),
+            tool_calls: vec![],
+            is_streaming: streaming,
+            is_intermediate: true,
+            error: None,
+            model_info: None,
+            iteration: Some(it),
+            timestamp: None,
+        }
+    }
+
+    fn msg_final(run: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: run.into(),
+            role: "assistant".into(),
+            content: content.into(),
+            tool_calls: vec![],
+            is_streaming: false,
+            is_intermediate: false,
+            error: None,
+            model_info: None,
+            iteration: None,
+            timestamp: None,
+        }
+    }
+
+    #[test]
+    fn consecutive_intermediates_fold_into_one_strip() {
+        let msgs = vec![
+            msg_user("u1", "hi"),
+            msg_step("intermediate-run-a-1", 1, "s1", false),
+            msg_step("intermediate-run-a-2", 2, "s2", false),
+            msg_final("run-a", "answer"),
+        ];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        let strips: Vec<&TimelineRow> = rows
+            .iter()
+            .filter(|r| matches!(r, TimelineRow::StepStrip { .. }))
+            .collect();
+        assert_eq!(strips.len(), 1);
+        if let TimelineRow::StepStrip { run_id, steps, completed } = strips[0] {
+            assert_eq!(run_id, "run-a");
+            assert_eq!(steps.len(), 2);
+            assert!(*completed, "no streaming step → completed");
+        } else {
+            panic!("expected StepStrip");
+        }
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, TimelineRow::Message { message, .. } if message.id == "run-a")));
+    }
+
+    #[test]
+    fn streaming_step_marks_strip_incomplete() {
+        let msgs = vec![
+            msg_step("intermediate-run-b-1", 1, "s1", false),
+            msg_step("intermediate-run-b-2", 2, "s2", true),
+        ];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        let strip = rows.iter().find_map(|r| match r {
+            TimelineRow::StepStrip { completed, .. } => Some(*completed),
+            _ => None,
+        });
+        assert_eq!(strip, Some(false));
     }
 
     // Fake mappers: treat each whole "1000ms" bucket as a day.

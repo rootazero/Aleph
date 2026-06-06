@@ -138,6 +138,8 @@ pub(super) fn MessageList() -> impl IntoView {
                                     TimelineRow::Message { message, clock } => view! {
                                         <MessageBubble message=message clock=clock />
                                     }.into_any(),
+                                    // TODO(Task 7): render StepStrip as a collapsible step strip.
+                                    TimelineRow::StepStrip { .. } => ().into_any(),
                                 }
                             />
                             // Reasoning transcript — collapsible chain-of-thought
