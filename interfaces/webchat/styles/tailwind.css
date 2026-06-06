@@ -531,23 +531,6 @@ html.translucent .glass-surface {
   40%           { opacity: 1;    transform: translateY(-3px); }
 }
 
-/* Streaming assistant bubble — a soft accent ring breathes while tokens
-   are still arriving. Uses box-shadow (not border) so it never reflows
-   the bubble when the stream finalises. Pairs with the inline caret. */
-.streaming-bubble {
-  animation: aleph-stream-pulse 1.6s ease-in-out infinite;
-}
-@keyframes aleph-stream-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 1px color-mix(in oklch, var(--color-primary) 0%, transparent);
-  }
-  50% {
-    box-shadow:
-      0 0 0 1px  color-mix(in oklch, var(--color-primary) 40%, transparent),
-      0 0 12px   color-mix(in oklch, var(--color-primary) 18%, transparent);
-  }
-}
-
 /* ============================================================
    Theme switch — circular reveal via the View Transition API.
    `theme_toggle.rs` adds `.theme-switching` to <html> and sets

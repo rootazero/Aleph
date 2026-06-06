@@ -158,13 +158,85 @@ fn kind_icon(kind: ToolKind) -> &'static str {
     }
 }
 
-/// 共享工具卡片：头部（图标+名+状态+耗时+路径+diff统计）+ 可展开体。
-/// 左侧聊天与右侧工作区面板都渲染它。展开状态为每卡本地信号：
-/// 文件改动类默认展开，其余默认折叠。
+/// 行内图标 —— 先按工具名给几个常见工具更贴切的字形（web_fetch 🌐 /
+/// skill 📖 / memory 🧠），否则回落到大类图标。图标即代表动作，让聊天里
+/// 一行 `🌐 https://…` 自解释，无需再写工具名。
+pub fn tool_icon(tool_name: &str, kind: ToolKind) -> &'static str {
+    let n = tool_name.to_lowercase();
+    if n.contains("web_fetch") || n.contains("fetch") || n.contains("browse") || n.contains("http")
+    {
+        "🌐"
+    } else if n.contains("skill") {
+        "📖"
+    } else if n.contains("memory") || n.contains("recall") || n.contains("remember") {
+        "🧠"
+    } else {
+        kind_icon(kind)
+    }
+}
+
+/// 把多行/含连续空白的参数压成单行：用于在头部用一行文字描述工具调用。
+/// `split_whitespace` 是 UTF-8 安全的，CJK 文本不会被切坏。
+fn collapse_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Default 大类工具按优先级扫描这些参数键，取首个非空字符串作为标题。
+const HEADLINE_KEYS: &[&str] = &[
+    "query",
+    "q",
+    "url",
+    "path",
+    "file_path",
+    "filename",
+    "name",
+    "skill_id",
+    "pattern",
+    "description",
+    "cmd",
+    "command",
+    "text",
+    "prompt",
+];
+
+/// 工具行的自然语言标题 —— 取最能说明这次调用的参数（搜索词 / shell 命令 /
+/// 文件路径 / URL……）压成一行。没有可描述的参数时返回 `None`，由调用方
+/// 改用大类动词标签（搜索 / 读取 / 执行……）。这取代了老旧的
+/// 「工具名 + COMPLETED + 耗时」式标题。
+pub fn tool_headline(kind: ToolKind, payload: &Option<ToolPayload>) -> Option<String> {
+    match kind {
+        ToolKind::FileEdit | ToolKind::FileWrite | ToolKind::FileRead | ToolKind::ApplyPatch => {
+            file_path_of(payload).map(|p| collapse_ws(&p))
+        }
+        _ => {
+            let args = payload.as_ref()?.args.as_ref()?;
+            let keys: &[&str] = match kind {
+                ToolKind::Search => &["query", "q"],
+                ToolKind::Bash => &["cmd", "code", "command"],
+                _ => HEADLINE_KEYS,
+            };
+            for k in keys {
+                if let Some(s) = args.get(*k).and_then(|v| v.as_str()) {
+                    let one = collapse_ws(s);
+                    if !one.is_empty() {
+                        return Some(one);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+/// 共享工具卡片：头部（图标 + 一行文字标题 + 运行指示 + diff统计 + 折叠箭头）
+/// + 可展开体。标题取最能说明调用的参数（搜索词/命令/路径/URL），不再渲染
+/// 工具名与「COMPLETED · 耗时」。左侧聊天与右侧工作区面板都渲染它。展开状态为
+/// 每卡本地信号：文件改动类默认展开，其余默认折叠。
 #[component]
 pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let chat = expect_context::<ChatState>();
+    let i18n = use_i18n();
     let kind = ToolKind::from_name(&tool_name);
 
     let tid_for_status = tool_id.clone();
@@ -191,7 +263,6 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
     });
 
     let expanded = RwSignal::new(kind.default_open());
-    let path_label = move || file_path_of(&payload.get());
 
     // diff 统计（仅 FileEdit 有意义）：从 args 的 old/new 计算。
     let diff_stat = move || {
@@ -212,36 +283,53 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
         Some((added, removed))
     };
 
-    let icon = kind_icon(kind);
-    let name_for_head = tool_name.clone();
+    let icon = tool_icon(&tool_name, kind);
+
+    // 标题：取最能说明这次调用的参数压成一行（搜索词 / 命令 / 路径 / URL）；
+    // 没有参数时回落到大类动词标签，Default 工具回落到工具名本身。
+    let tn = tool_name.clone();
+    let headline = move || {
+        if let Some(h) = tool_headline(kind, &payload.get()) {
+            return h;
+        }
+        match kind {
+            ToolKind::FileEdit => t_string!(i18n, tool_card.cat_edit).to_string(),
+            ToolKind::FileWrite => t_string!(i18n, tool_card.cat_write).to_string(),
+            ToolKind::ApplyPatch => t_string!(i18n, tool_card.cat_patch).to_string(),
+            ToolKind::FileRead => t_string!(i18n, tool_card.cat_read).to_string(),
+            ToolKind::Bash => t_string!(i18n, tool_card.cat_run).to_string(),
+            ToolKind::Search => t_string!(i18n, tool_card.cat_search).to_string(),
+            ToolKind::Default => tn.clone(),
+        }
+    };
+
+    let running = move || matches!(status.get(), Some((s, _)) if s == "running");
+    let failed = move || matches!(status.get(), Some((s, _)) if s == "failed");
 
     view! {
-        <div class="rounded-md border border-border/60 bg-surface-sunken/40">
+        <div class="rounded-md hover:bg-surface-raised/30 transition-colors">
             <button
                 type="button"
-                class="w-full flex items-center gap-2 px-3 py-2 text-left
-                       hover:bg-surface-raised/40 transition-colors"
+                class="w-full flex items-center gap-2 px-2 py-1 text-left"
                 on:click=move |_| expanded.update(|e| *e = !*e)
             >
-                <span class="text-xs">{icon}</span>
-                <span class="text-xs font-mono text-text-secondary">{name_for_head}</span>
-                {move || {
-                    match status.get() {
-                        Some((s, dur)) => {
-                            let dur_txt = dur.map(|d| format!(" · {d}ms")).unwrap_or_default();
-                            view! {
-                                <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
-                                    {format!("{s}{dur_txt}")}
-                                </span>
-                            }
-                            .into_any()
-                        }
-                        None => view! { <span /> }.into_any(),
+                <span class="text-sm shrink-0 leading-none">{icon}</span>
+                <span class=move || {
+                    let base = "flex-1 min-w-0 truncate text-sm";
+                    if failed() {
+                        format!("{base} text-danger")
+                    } else {
+                        format!("{base} text-text-secondary")
                     }
-                }}
+                }>
+                    {headline}
+                </span>
+                <Show when=running>
+                    <span class="shrink-0 inline-block w-1.5 h-1.5 rounded-full bg-primary animate-pulse"></span>
+                </Show>
                 {move || match diff_stat() {
                     Some((a, r)) => view! {
-                        <span class="text-[10px] font-mono">
+                        <span class="shrink-0 text-[10px] font-mono">
                             <span class="text-success">{format!("+{a}")}</span>
                             " "
                             <span class="text-danger">{format!("-{r}")}</span>
@@ -249,17 +337,12 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
                     }.into_any(),
                     None => view! { <span /> }.into_any(),
                 }}
-                {move || match path_label() {
-                    Some(p) => view! {
-                        <span class="ml-auto text-[11px] font-mono text-text-tertiary truncate max-w-[50%]">
-                            {format!("📄 {p}")}
-                        </span>
-                    }.into_any(),
-                    None => view! { <span class="ml-auto" /> }.into_any(),
-                }}
+                <span class="shrink-0 text-text-tertiary text-[10px]">
+                    {move || if expanded.get() { "▾" } else { "▸" }}
+                </span>
             </button>
             <Show when=move || expanded.get()>
-                <div class="px-3 pb-2">
+                <div class="pl-7 pr-2 pb-2">
                     {move || render_body(kind, &payload.get())}
                 </div>
             </Show>
@@ -391,7 +474,11 @@ fn patch_body(p: &ToolPayload) -> AnyView {
 fn shell_body(p: &ToolPayload) -> AnyView {
     let cmd = {
         let v = arg_str(p, "cmd");
-        if v.is_empty() { arg_str(p, "code") } else { v }
+        if v.is_empty() {
+            arg_str(p, "code")
+        } else {
+            v
+        }
     }
     .to_string();
     let out = p.result.as_ref().and_then(success_output).cloned();
@@ -448,15 +535,7 @@ fn read_body(p: &ToolPayload) -> AnyView {
 }
 
 fn search_body(p: &ToolPayload) -> AnyView {
-    let query = {
-        let q = arg_str(p, "query");
-        if q.is_empty() {
-            arg_str(p, "q")
-        } else {
-            q
-        }
-    }
-    .to_string();
+    // 查询词已由头部标题展示，这里只渲染命中数 + 结果 JSON。
     let out = p.result.as_ref().and_then(success_output).cloned();
     let count = out
         .as_ref()
@@ -465,7 +544,6 @@ fn search_body(p: &ToolPayload) -> AnyView {
         .map(|a| a.len());
     view! {
         <div class="flex flex-col gap-1 text-xs">
-            <pre class=format!("{MONO_BLOCK} text-text-primary")>{format!("🔍 {query}")}</pre>
             {count.map(|c| view! {
                 <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
                     {format!("{c} results")}
@@ -595,6 +673,81 @@ mod tests {
         assert_eq!(ToolKind::from_name("memory_recall"), ToolKind::Default);
     }
 
+    fn payload(args: Value) -> Option<ToolPayload> {
+        Some(ToolPayload {
+            args: Some(args),
+            result: None,
+        })
+    }
+
+    #[test]
+    fn tool_headline_picks_salient_arg_by_kind() {
+        // search → query (collapsed to one line)
+        assert_eq!(
+            tool_headline(
+                ToolKind::Search,
+                &payload(serde_json::json!({"query": "美股 暴跌\n 关税"}))
+            )
+            .as_deref(),
+            Some("美股 暴跌 关税")
+        );
+        // bash → cmd
+        assert_eq!(
+            tool_headline(
+                ToolKind::Bash,
+                &payload(serde_json::json!({"cmd": "cargo test"}))
+            )
+            .as_deref(),
+            Some("cargo test")
+        );
+        // file ops → path
+        assert_eq!(
+            tool_headline(
+                ToolKind::FileRead,
+                &payload(serde_json::json!({"file_path": "src/main.rs"}))
+            )
+            .as_deref(),
+            Some("src/main.rs")
+        );
+        // default → url via key scan (web_fetch shape)
+        assert_eq!(
+            tool_headline(
+                ToolKind::Default,
+                &payload(serde_json::json!({"url": "https://example.com"}))
+            )
+            .as_deref(),
+            Some("https://example.com")
+        );
+    }
+
+    #[test]
+    fn tool_headline_none_when_no_descriptive_arg() {
+        assert_eq!(tool_headline(ToolKind::Search, &None), None);
+        assert_eq!(
+            tool_headline(ToolKind::Default, &payload(serde_json::json!({"foo": 1}))),
+            None
+        );
+        // empty/whitespace-only value is treated as absent
+        assert_eq!(
+            tool_headline(
+                ToolKind::Search,
+                &payload(serde_json::json!({"query": "   "}))
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn tool_icon_overrides_then_falls_back_to_kind() {
+        assert_eq!(tool_icon("web_fetch", ToolKind::Default), "🌐");
+        assert_eq!(tool_icon("skill_read", ToolKind::Default), "📖");
+        assert_eq!(tool_icon("memory_recall", ToolKind::Default), "🧠");
+        // unknown default name → bullet (kind icon)
+        assert_eq!(tool_icon("some_tool", ToolKind::Default), "•");
+        // search keeps the magnifier from its kind
+        assert_eq!(tool_icon("ctx_search", ToolKind::Search), "🔍");
+    }
+
     #[test]
     fn default_open_only_for_file_mutations() {
         assert!(ToolKind::FileEdit.default_open());
@@ -605,5 +758,4 @@ mod tests {
         assert!(!ToolKind::FileRead.default_open());
         assert!(!ToolKind::Default.default_open());
     }
-
 }

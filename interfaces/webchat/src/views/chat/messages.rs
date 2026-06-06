@@ -163,7 +163,7 @@ pub(super) fn MessageList() -> impl IntoView {
                 <Show
                     when=move || chat.messages.get().is_empty()
                     fallback=move || view! {
-                        <div class="max-w-3xl mx-auto px-4 py-6 space-y-4">
+                        <div class="max-w-3xl mx-auto px-4 py-6 space-y-3">
                             // Inline send-error banner (G2) — shown when the last
                             // outbound send failed; colour-coded by error code.
                             <SendErrorBanner />
@@ -303,25 +303,24 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     } else {
         "flex justify-start"
     };
-    // `min-w-0` lets the flex bubble shrink below its content's intrinsic width
-    // so wide children (code blocks, tables) can scroll internally via
-    // `overflow-x:auto` instead of spilling past the bubble's right edge.
+    // `min-w-0` lets a flex child shrink below its content's intrinsic width so
+    // wide children (code blocks, tables) scroll internally via `overflow-x:auto`
+    // instead of spilling past the right edge.
+    //
+    // Only the user message keeps a bubble — a compact right-aligned chip is the
+    // one place a bubble aids scannability. Assistant / intermediate / error rows
+    // flow bubble-less and full-width for higher information density (matches the
+    // opencode / claude-code transcript look): no card chrome, denser padding.
     let bubble_style = if is_user {
-        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-primary text-white"
+        "min-w-0 max-w-[80%] rounded-2xl px-3.5 py-2 bg-primary text-white"
     } else if has_error {
-        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-danger-subtle text-danger border border-danger/20"
+        "min-w-0 w-full px-2 py-1 text-danger border-l-2 border-danger/40"
     } else if message.is_intermediate {
-        "min-w-0 max-w-[80%] rounded-2xl px-3 py-2 bg-surface-raised/60 text-text-secondary text-sm italic"
+        "min-w-0 w-full px-2 py-0.5 text-text-secondary text-sm"
     } else {
-        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-surface-raised text-text-primary"
+        "min-w-0 w-full px-2 py-1 text-text-primary"
     };
-    // While an assistant turn is still streaming, breathe a soft accent ring
-    // around its bubble (box-shadow keeps the layout stable on finalize).
-    let bubble_class = if message.is_streaming && !is_user {
-        format!("{bubble_style} streaming-bubble")
-    } else {
-        bubble_style.to_string()
-    };
+    let bubble_class = bubble_style.to_string();
 
     // Tool calls render as ToolCard rows. WorkspaceState (when present)
     // lets a card look up its captured args/result payload; without it
@@ -584,8 +583,8 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
     });
 
     view! {
-        <div class="flex justify-start my-1">
-            <div class="max-w-[80%] w-full rounded-2xl border border-border/50 bg-surface-sunken/40">
+        <div class="my-1">
+            <div class="w-full rounded-lg border border-border/40 bg-surface-sunken/25">
                 <button
                     type="button"
                     class="w-full flex items-center gap-2 px-3 py-1.5 text-left
