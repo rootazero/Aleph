@@ -4,6 +4,11 @@
 //! 纯逻辑（ToolKind 分流、diff、截断、汇总）与视图组件分离：逻辑可在
 //! 宿主机 `cargo test -p aleph-panel --lib` 下测试。
 
+use crate::components::json_viewer::JsonViewer;
+use crate::state::layout::{ToolPayload, WorkspaceState};
+use crate::views::chat::state::ChatState;
+use leptos::prelude::*;
+
 /// 工具大类 —— 决定卡片体如何渲染。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ToolKind {
@@ -126,6 +131,354 @@ pub fn summarize_tools(tools: &[(String, String)]) -> Vec<(ToolKind, usize)> {
         *counts.entry(kind).or_insert(0) += 1;
     }
     order.into_iter().map(|k| (k, counts[&k])).collect()
+}
+
+/// 文件类工具的路径，用于头部 `📄 path`。非文件工具返回 None。
+pub fn file_path_of(payload: &Option<ToolPayload>) -> Option<String> {
+    let args = payload.as_ref()?.args.as_ref()?;
+    for key in ["path", "file_path", "filename"] {
+        if let Some(s) = args.get(key).and_then(|v| v.as_str()) {
+            return Some(s.to_string());
+        }
+    }
+    None
+}
+
+/// 工具大类图标字形。
+fn kind_icon(kind: ToolKind) -> &'static str {
+    match kind {
+        ToolKind::FileEdit => "✏️",
+        ToolKind::FileWrite => "📝",
+        ToolKind::ApplyPatch => "🩹",
+        ToolKind::FileRead => "📄",
+        ToolKind::Bash => "❯",
+        ToolKind::Search => "🔍",
+        ToolKind::Default => "•",
+    }
+}
+
+/// 共享工具卡片：头部（图标+名+状态+耗时+路径+diff统计）+ 可展开体。
+/// 左侧聊天与右侧工作区面板都渲染它。展开状态为每卡本地信号：
+/// 文件改动类默认展开，其余默认折叠。
+#[component]
+pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl IntoView {
+    let workspace = use_context::<WorkspaceState>();
+    let chat = expect_context::<ChatState>();
+    let kind = ToolKind::from_name(&tool_name);
+
+    let tid_for_status = tool_id.clone();
+    let status = Memo::new(move |_| {
+        chat.messages
+            .get()
+            .iter()
+            .flat_map(|m| m.tool_calls.iter())
+            .find_map(|t| {
+                if t.tool_id == tid_for_status {
+                    Some((t.status.clone(), t.duration_ms))
+                } else {
+                    None
+                }
+            })
+    });
+
+    let run_for_payload = run_id.clone();
+    let tid_for_payload = tool_id.clone();
+    let payload = Memo::new(move |_| {
+        workspace
+            .as_ref()
+            .and_then(|ws| ws.get_tool_payload(&run_for_payload, &tid_for_payload))
+    });
+
+    let expanded = RwSignal::new(kind.default_open());
+    let path_label = move || file_path_of(&payload.get());
+
+    // diff 统计（仅 FileEdit 有意义）：从 args 的 old/new 计算。
+    let diff_stat = move || {
+        if kind != ToolKind::FileEdit {
+            return None;
+        }
+        let p = payload.get();
+        let args = p.as_ref()?.args.as_ref()?;
+        let old = args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
+        let new = args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+        let (_lines, added, removed) = diff_lines(old, new);
+        Some((added, removed))
+    };
+
+    let icon = kind_icon(kind);
+    let name_for_head = tool_name.clone();
+
+    view! {
+        <div class="rounded-md border border-border/60 bg-surface-sunken/40">
+            <button
+                type="button"
+                class="w-full flex items-center gap-2 px-3 py-2 text-left
+                       hover:bg-surface-raised/40 transition-colors"
+                on:click=move |_| expanded.update(|e| *e = !*e)
+            >
+                <span class="text-xs">{icon}</span>
+                <span class="text-xs font-mono text-text-secondary">{name_for_head}</span>
+                {move || {
+                    match status.get() {
+                        Some((s, dur)) => {
+                            let dur_txt = dur.map(|d| format!(" · {d}ms")).unwrap_or_default();
+                            view! {
+                                <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
+                                    {format!("{s}{dur_txt}")}
+                                </span>
+                            }
+                            .into_any()
+                        }
+                        None => view! { <span /> }.into_any(),
+                    }
+                }}
+                {move || match diff_stat() {
+                    Some((a, r)) => view! {
+                        <span class="text-[10px] font-mono">
+                            <span class="text-success">{format!("+{a}")}</span>
+                            " "
+                            <span class="text-danger">{format!("-{r}")}</span>
+                        </span>
+                    }.into_any(),
+                    None => view! { <span /> }.into_any(),
+                }}
+                {move || match path_label() {
+                    Some(p) => view! {
+                        <span class="ml-auto text-[11px] font-mono text-text-tertiary truncate max-w-[50%]">
+                            {format!("📄 {p}")}
+                        </span>
+                    }.into_any(),
+                    None => view! { <span class="ml-auto" /> }.into_any(),
+                }}
+            </button>
+            <Show when=move || expanded.get()>
+                <div class="px-3 pb-2">
+                    {move || render_body(kind, &payload.get())}
+                </div>
+            </Show>
+        </div>
+    }
+}
+
+/// 单行等宽容器样式。
+const MONO_BLOCK: &str =
+    "font-mono text-xs whitespace-pre-wrap break-words leading-relaxed";
+/// 大输出/大文件预览的最大行数。
+const MAX_PREVIEW_LINES: usize = 20;
+
+/// 按工具大类渲染卡片体。
+fn render_body(kind: ToolKind, payload: &Option<ToolPayload>) -> AnyView {
+    let Some(p) = payload else {
+        return view! { <span class="text-text-tertiary italic text-xs">"…"</span> }.into_any();
+    };
+    // 错误优先：任何工具失败都先显示错误文案。
+    if let Some(res) = p.result.as_ref() {
+        if let Some(err) = error_message(res) {
+            return view! {
+                <pre class=format!("{MONO_BLOCK} text-danger")>{err}</pre>
+            }
+            .into_any();
+        }
+    }
+    match kind {
+        ToolKind::FileEdit => edit_body(p),
+        ToolKind::FileWrite => write_body(p),
+        ToolKind::ApplyPatch => patch_body(p),
+        ToolKind::Bash => shell_body(p),
+        ToolKind::FileRead => read_body(p),
+        ToolKind::Search => search_body(p),
+        ToolKind::Default => default_body(p),
+    }
+}
+
+fn arg_str<'a>(p: &'a ToolPayload, key: &str) -> &'a str {
+    p.args
+        .as_ref()
+        .and_then(|a| a.get(key))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
+/// 把 diff 行渲染为红删/绿增/中性上下文。
+fn diff_view(lines: Vec<DiffLine>) -> AnyView {
+    view! {
+        <div class=format!("{MONO_BLOCK} rounded border border-border/60 overflow-x-auto")>
+            {lines.into_iter().map(|l| {
+                let cls = match l.sign {
+                    '+' => "block px-2 bg-success/10 text-success",
+                    '-' => "block px-2 bg-danger/10 text-danger",
+                    _ => "block px-2 text-text-secondary",
+                };
+                let line = format!("{} {}", l.sign, l.text);
+                view! { <span class=cls>{line}</span> }
+            }).collect_view()}
+        </div>
+    }
+    .into_any()
+}
+
+fn edit_body(p: &ToolPayload) -> AnyView {
+    let old = arg_str(p, "old_string");
+    let new = arg_str(p, "new_string");
+    let (lines, _a, _r) = diff_lines(old, new);
+    diff_view(lines)
+}
+
+/// 截断的等宽文本块 + 「展开全部 / 收起」。
+fn collapsible_text(text: String, extra_class: &'static str) -> AnyView {
+    let (preview, hidden) = split_preview(&text, MAX_PREVIEW_LINES);
+    if hidden == 0 {
+        return view! { <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>{text}</pre> }
+            .into_any();
+    }
+    let show_all = RwSignal::new(false);
+    let full = text.clone();
+    view! {
+        <div>
+            <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>
+                {move || if show_all.get() { full.clone() } else { preview.clone() }}
+            </pre>
+            <button
+                type="button"
+                class="mt-1 text-[10px] uppercase tracking-wider text-text-tertiary hover:text-primary"
+                on:click=move |_| show_all.update(|s| *s = !*s)
+            >
+                {move || if show_all.get() {
+                    "收起".to_string()
+                } else {
+                    format!("展开全部 (+{hidden})")
+                }}
+            </button>
+        </div>
+    }
+    .into_any()
+}
+
+fn write_body(p: &ToolPayload) -> AnyView {
+    let content = arg_str(p, "content").to_string();
+    collapsible_text(content, "")
+}
+
+fn patch_body(p: &ToolPayload) -> AnyView {
+    let patch = arg_str(p, "patch");
+    let lines: Vec<DiffLine> = patch
+        .lines()
+        .map(|raw| {
+            let sign = match raw.chars().next() {
+                Some('+') => '+',
+                Some('-') => '-',
+                _ => ' ',
+            };
+            DiffLine { sign, text: raw.to_string() }
+        })
+        .collect();
+    diff_view(lines)
+}
+
+fn shell_body(p: &ToolPayload) -> AnyView {
+    let cmd = arg_str(p, "code").to_string();
+    let out = p.result.as_ref().and_then(success_output).cloned();
+    let stdout = out
+        .as_ref()
+        .and_then(|o| o.get("stdout"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let stderr = out
+        .as_ref()
+        .and_then(|o| o.get("stderr"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let exit = out
+        .as_ref()
+        .and_then(|o| o.get("exit_code"))
+        .and_then(|v| v.as_i64());
+    let exit_badge = exit.map(|c| {
+        let cls = if c == 0 { "text-success" } else { "text-danger" };
+        view! { <span class=format!("text-[10px] font-mono {cls}")>{format!("exit {c}")}</span> }
+    });
+    view! {
+        <div class="flex flex-col gap-1">
+            <pre class=format!("{MONO_BLOCK} text-text-primary")>{format!("$ {cmd}")}</pre>
+            {(!stdout.is_empty()).then(|| collapsible_text(stdout, "text-text-secondary"))}
+            {(!stderr.is_empty()).then(|| collapsible_text(stderr, "text-danger/80"))}
+            {exit_badge}
+        </div>
+    }
+    .into_any()
+}
+
+fn read_body(p: &ToolPayload) -> AnyView {
+    let out = p.result.as_ref().and_then(success_output).cloned();
+    let text = match out {
+        Some(Value::String(s)) => s.clone(),
+        Some(ref other) => other
+            .get("content")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| other.to_string()),
+        None => String::new(),
+    };
+    if text.is_empty() {
+        return default_body(p);
+    }
+    collapsible_text(text, "text-text-secondary")
+}
+
+fn search_body(p: &ToolPayload) -> AnyView {
+    let query = {
+        let q = arg_str(p, "query");
+        if q.is_empty() { arg_str(p, "q") } else { q }
+    }
+    .to_string();
+    let out = p.result.as_ref().and_then(success_output).cloned();
+    let count = out
+        .as_ref()
+        .and_then(|o| o.get("results"))
+        .and_then(|v| v.as_array())
+        .map(|a| a.len());
+    view! {
+        <div class="flex flex-col gap-1 text-xs">
+            <pre class=format!("{MONO_BLOCK} text-text-primary")>{format!("🔍 {query}")}</pre>
+            {count.map(|c| view! {
+                <span class="text-[10px] uppercase tracking-wider text-text-tertiary">
+                    {format!("{c} results")}
+                </span>
+            })}
+            {move || match out.clone() {
+                Some(v) => view! { <JsonViewer value=v /> }.into_any(),
+                None => view! { <span /> }.into_any(),
+            }}
+        </div>
+    }
+    .into_any()
+}
+
+fn default_body(p: &ToolPayload) -> AnyView {
+    view! {
+        <div class="flex flex-col gap-2 text-xs">
+            {match p.args.clone() {
+                Some(v) => view! {
+                    <details class="rounded-md border border-border/60 bg-surface-sunken/60">
+                        <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">"input"</summary>
+                        <div class="px-3 py-2 overflow-x-auto"><JsonViewer value=v /></div>
+                    </details>
+                }.into_any(),
+                None => view! { <span /> }.into_any(),
+            }}
+            {match p.result.clone() {
+                Some(v) => view! {
+                    <details class="rounded-md border border-border/60 bg-surface-sunken/60" open=true>
+                        <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">"result"</summary>
+                        <div class="px-3 py-2 overflow-x-auto"><JsonViewer value=v /></div>
+                    </details>
+                }.into_any(),
+                None => view! { <span /> }.into_any(),
+            }}
+        </div>
+    }
+    .into_any()
 }
 
 #[cfg(test)]
