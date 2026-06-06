@@ -9,6 +9,7 @@
 
 use crate::api::fs::{DirEntry, FsApi, ReadFileResult};
 use crate::components::json_viewer::JsonViewer;
+use crate::components::markdown::MarkdownRenderer;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::state::layout::{FilePreview, LayoutMode, ToolPayload, WorkspaceState};
@@ -156,9 +157,9 @@ fn StepCard(group: StepGroup) -> impl IntoView {
                 </Show>
             </button>
             <Show when=move || has_narration>
-                <p class="text-xs text-text-secondary whitespace-pre-wrap leading-relaxed">
-                    {narration.clone()}
-                </p>
+                <div class="text-sm text-text-primary leading-relaxed aleph-step-narration">
+                    <MarkdownRenderer content=narration.clone() />
+                </div>
             </Show>
             <div class="flex flex-col gap-2">
                 {tools
