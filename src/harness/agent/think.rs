@@ -410,9 +410,17 @@ impl AgentHarness {
                 overhead_tokens: 0,
                 available_for_messages: 0,
             };
-            // Mirror the compactor's fresh_tail default when no explicit
-            // config is in scope; 6 matches `CompactorConfig::default`.
-            let fresh_tail = 6usize;
+            // Protect exactly the same recent window the budget sensor and the
+            // compactor treat as untouchable. Sourcing this from the live
+            // `ContextBudget` (rather than a magic `6`) keeps the fresh-tail
+            // invariant intact if `fresh_tail_count` is ever retuned or exposed
+            // as a knob — otherwise preflight could prune/strip messages inside
+            // the tail the compactor still considers verbatim. Falls back to the
+            // `CompactorConfig::default` of 6 only when no budget is wired.
+            let fresh_tail = match self.deps.context_budget.as_ref() {
+                Some(budget) => budget.lock().await.fresh_tail_count(),
+                None => 6usize,
+            };
             let freed = pipeline
                 .run(&mut messages, &placeholder_pressure, fresh_tail)
                 .await;
