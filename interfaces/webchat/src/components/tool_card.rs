@@ -222,8 +222,14 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
         }
         let p = payload.get();
         let args = p.as_ref()?.args.as_ref()?;
-        let old = args.get("old_string").and_then(|v| v.as_str()).unwrap_or("");
-        let new = args.get("new_string").and_then(|v| v.as_str()).unwrap_or("");
+        let old = args
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let new = args
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let (_lines, added, removed) = diff_lines(old, new);
         Some((added, removed))
     };
@@ -284,8 +290,7 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
 }
 
 /// 单行等宽容器样式。
-const MONO_BLOCK: &str =
-    "font-mono text-xs whitespace-pre-wrap break-words leading-relaxed";
+const MONO_BLOCK: &str = "font-mono text-xs whitespace-pre-wrap break-words leading-relaxed";
 /// 大输出/大文件预览的最大行数。
 const MAX_PREVIEW_LINES: usize = 20;
 
@@ -392,7 +397,10 @@ fn patch_body(p: &ToolPayload) -> AnyView {
                 Some('-') => '-',
                 _ => ' ',
             };
-            DiffLine { sign, text: raw.to_string() }
+            DiffLine {
+                sign,
+                text: raw.to_string(),
+            }
         })
         .collect();
     diff_view(lines)
@@ -418,7 +426,11 @@ fn shell_body(p: &ToolPayload) -> AnyView {
         .and_then(|o| o.get("exit_code"))
         .and_then(|v| v.as_i64());
     let exit_badge = exit.map(|c| {
-        let cls = if c == 0 { "text-success" } else { "text-danger" };
+        let cls = if c == 0 {
+            "text-success"
+        } else {
+            "text-danger"
+        };
         view! { <span class=format!("text-[10px] font-mono {cls}")>{format!("exit {c}")}</span> }
     });
     view! {
@@ -452,7 +464,11 @@ fn read_body(p: &ToolPayload) -> AnyView {
 fn search_body(p: &ToolPayload) -> AnyView {
     let query = {
         let q = arg_str(p, "query");
-        if q.is_empty() { arg_str(p, "q") } else { q }
+        if q.is_empty() {
+            arg_str(p, "q")
+        } else {
+            q
+        }
     }
     .to_string();
     let out = p.result.as_ref().and_then(success_output).cloned();
@@ -512,7 +528,9 @@ mod tests {
     fn success_output_and_error_extract() {
         let ok = serde_json::json!({"Success": {"output": {"stdout": "hi"}}});
         assert_eq!(
-            success_output(&ok).and_then(|o| o.get("stdout")).and_then(|v| v.as_str()),
+            success_output(&ok)
+                .and_then(|o| o.get("stdout"))
+                .and_then(|v| v.as_str()),
             Some("hi")
         );
         assert_eq!(error_message(&ok), None);
@@ -524,7 +542,8 @@ mod tests {
 
     #[test]
     fn diff_lines_counts_add_remove_equal() {
-        let (lines, added, removed) = diff_lines("let x = 1;\nlet y = 2;\n", "let x = 2;\nlet y = 2;\n");
+        let (lines, added, removed) =
+            diff_lines("let x = 1;\nlet y = 2;\n", "let x = 2;\nlet y = 2;\n");
         assert_eq!(added, 1);
         assert_eq!(removed, 1);
         // 至少包含一条 '-'、一条 '+'、一条 ' '(相等的 y 行)
@@ -562,7 +581,11 @@ mod tests {
         let got = summarize_tools(&tools);
         assert_eq!(
             got,
-            vec![(ToolKind::FileRead, 2), (ToolKind::Bash, 1), (ToolKind::Search, 1)]
+            vec![
+                (ToolKind::FileRead, 2),
+                (ToolKind::Bash, 1),
+                (ToolKind::Search, 1)
+            ]
         );
     }
 
