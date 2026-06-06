@@ -150,6 +150,20 @@ where
             .add_message(&request.session_key, MessageRole::User, &session_text)
             .await;
 
+        // Announce the session the moment it's created (first message), not just
+        // when the run completes. Without this, a brand-new session is silent for
+        // the entire first turn and never appears in clients that refresh their
+        // session list on `SessionUpdated` (e.g. the Panel sidebar) until a manual
+        // reload. The run-completion `SessionUpdated` below still fires for
+        // topic/title/token updates.
+        if is_first_message {
+            let _ = emitter
+                .emit(StreamEvent::SessionUpdated {
+                    session_key: request.session_key.to_key_string(),
+                })
+                .await;
+        }
+
         // Inline slash command resolution for non-router paths (Panel, CLI)
         if request.input.trim().starts_with('/')
             && !request.metadata.contains_key(SLASH_COMMAND_MODE_KEY)

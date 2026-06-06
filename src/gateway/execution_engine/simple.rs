@@ -78,10 +78,29 @@ impl SimpleExecutionEngine {
             })
             .await;
 
+        // Detect a brand-new session before persisting the first message so we
+        // can announce it immediately (see the emit below).
+        let is_first_message = agent
+            .get_history(&request.session_key, Some(1))
+            .await
+            .is_empty();
+
         // Store user message in session
         agent
             .add_message(&request.session_key, MessageRole::User, &request.input)
             .await;
+
+        // Announce the session the moment it's created (first message). Mirrors
+        // the full ExecutionEngine path so clients that refresh their session
+        // list on `SessionUpdated` (e.g. the Panel sidebar) show the new session
+        // right away instead of only after the turn completes / a manual reload.
+        if is_first_message {
+            let _ = emitter
+                .emit(StreamEvent::SessionUpdated {
+                    session_key: request.session_key.to_key_string(),
+                })
+                .await;
+        }
 
         // Execute with timeout
         let timeout_secs = request

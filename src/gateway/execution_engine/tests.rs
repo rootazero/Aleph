@@ -105,6 +105,66 @@ async fn test_simple_execution_engine_basic() {
     assert!(has_run_complete, "Should have RunComplete event");
 }
 
+/// Regression: a brand-new session must be announced via `SessionUpdated` at the
+/// moment of creation (first user message), not only at run completion. Without
+/// the early emit, clients that refresh their session list on `SessionUpdated`
+/// (e.g. the Panel sidebar) don't show the new session until the turn finishes
+/// or a manual reload. We assert the first `SessionUpdated` arrives *before*
+/// `RunComplete`.
+///
+/// Exercised against `SimpleExecutionEngine` (the harness-friendly engine); the
+/// production panel path is `ExecutionEngine::<P, R>::execute` (execute.rs),
+/// which carries the identical first-message emit.
+#[tokio::test]
+async fn test_first_message_emits_session_updated_before_completion() {
+    let temp = tempfile::tempdir().unwrap();
+    let sm = test_session_manager(&temp);
+    let config = AgentInstanceConfig {
+        agent_id: "test-new-session".to_string(),
+        workspace: temp.path().join("workspace"),
+        agent_dir: temp.path().join("agents/test-new-session"),
+        ..Default::default()
+    };
+
+    let agent = Arc::new(AgentInstance::new(config, sm).unwrap());
+    let emitter = Arc::new(TestEmitter::new());
+    let engine = SimpleExecutionEngine::default();
+
+    let request = RunRequest {
+        run_id: "run-new-session".to_string(),
+        input: "first message in a brand-new session".to_string(),
+        session_key: SessionKey::main("test-new-session"),
+        timeout_secs: Some(5),
+        metadata: HashMap::new(),
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    };
+
+    let result = engine.execute(request, agent, emitter.clone()).await;
+    assert!(result.is_ok());
+
+    let events = emitter.get_events().await;
+
+    let first_session_updated = events
+        .iter()
+        .position(|e| matches!(e, StreamEvent::SessionUpdated { .. }))
+        .expect("first message should emit a SessionUpdated event");
+    let run_complete = events
+        .iter()
+        .position(|e| matches!(e, StreamEvent::RunComplete { .. }))
+        .expect("Should have RunComplete event");
+
+    assert!(
+        first_session_updated < run_complete,
+        "new session must be announced before run completion \
+         (got SessionUpdated at {first_session_updated}, RunComplete at {run_complete})"
+    );
+}
+
 #[tokio::test]
 async fn test_simple_execution_engine_run() {
     let temp = tempfile::tempdir().unwrap();
