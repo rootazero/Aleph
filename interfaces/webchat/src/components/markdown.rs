@@ -82,12 +82,63 @@ fn highlight_code(code: &str, lang: &str) -> String {
         .find_syntax_by_token(lang)
         .unwrap_or_else(|| ss.find_syntax_plain_text());
 
+    // Match the syntax foreground to the active UI mode: a light theme in light
+    // mode keeps code blocks airy (the dark theme's heavy black slab clashed
+    // with the light palette). The block's background comes from our own
+    // `surface-sunken` token, so syntect's hardcoded background is stripped.
+    let theme_name = if is_dark_mode() {
+        "base16-ocean.dark"
+    } else {
+        "InspiredGitHub"
+    };
     let theme = ts
         .themes
-        .get("base16-ocean.dark")
+        .get(theme_name)
         .unwrap_or_else(|| ts.themes.values().next().expect("no themes available"));
 
-    highlighted_html_for_string(code, ss, syntax, theme).unwrap_or_else(|_| html_escape(code))
+    match highlighted_html_for_string(code, ss, syntax, theme) {
+        Ok(html) => strip_syntect_background(html),
+        Err(_) => html_escape(code),
+    }
+}
+
+/// Whether the UI is in dark mode — drives the syntax theme choice.
+///
+/// Mirrors `appearance::root()`: explicit `dark`/`light` class on the document
+/// element wins; with neither (System mode) we follow the OS preference.
+fn is_dark_mode() -> bool {
+    let Some(win) = web_sys::window() else {
+        return false;
+    };
+    if let Some(el) = win.document().and_then(|d| d.document_element()) {
+        let cls = el.class_list();
+        if cls.contains("dark") {
+            return true;
+        }
+        if cls.contains("light") {
+            return false;
+        }
+    }
+    win.match_media("(prefers-color-scheme: dark)")
+        .ok()
+        .flatten()
+        .map(|m| m.matches())
+        .unwrap_or(false)
+}
+
+/// Strip syntect's wrapping `<pre style="background-color:…">…</pre>`, leaving
+/// only the highlighted spans. The surrounding `surface-sunken` block then
+/// supplies a theme-adaptive background instead of syntect's hardcoded slab.
+fn strip_syntect_background(html: String) -> String {
+    let after_open = html
+        .find('>')
+        .map(|i| &html[i + 1..])
+        .unwrap_or(html.as_str());
+    let inner = after_open
+        .trim_end_matches('\n')
+        .strip_suffix("</pre>")
+        .unwrap_or(after_open);
+    inner.trim_matches('\n').to_string()
 }
 
 /// Escape HTML special characters.

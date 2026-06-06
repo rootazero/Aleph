@@ -160,7 +160,11 @@ pub fn row_key(row: &TimelineRow) -> String {
             m.model_info.is_some(),
             clock,
         ),
-        TimelineRow::StepStrip { run_id, steps, completed } => {
+        TimelineRow::StepStrip {
+            run_id,
+            steps,
+            completed,
+        } => {
             // Include aggregate volatile state (content length + tool counts) so
             // a late `text_emitted` updating a folded step changes the <For> key
             // and forces a fresh render — mirroring the Message arm which keys on
@@ -370,7 +374,12 @@ mod tests {
             .filter(|r| matches!(r, TimelineRow::StepStrip { .. }))
             .collect();
         assert_eq!(strips.len(), 1);
-        if let TimelineRow::StepStrip { run_id, steps, completed } = strips[0] {
+        if let TimelineRow::StepStrip {
+            run_id,
+            steps,
+            completed,
+        } = strips[0]
+        {
             assert_eq!(run_id, "run-a");
             assert_eq!(steps.len(), 2);
             assert!(*completed, "no streaming step → completed");
@@ -459,7 +468,9 @@ mod tests {
         let strip = rows
             .iter()
             .find_map(|r| match r {
-                TimelineRow::StepStrip { steps, completed, .. } => Some((steps.len(), *completed)),
+                TimelineRow::StepStrip {
+                    steps, completed, ..
+                } => Some((steps.len(), *completed)),
                 _ => None,
             })
             .expect("a strip");
@@ -475,16 +486,20 @@ mod tests {
         ];
         let rows = derive_timeline(&msgs, "Today", "Yesterday");
         assert!(
-            !rows
-                .iter()
-                .any(|r| matches!(r, TimelineRow::Message { message, .. } if message.role == "assistant")),
+            !rows.iter().any(
+                |r| matches!(r, TimelineRow::Message { message, .. } if message.role == "assistant")
+            ),
             "empty placeholder must fold, not dangle"
         );
         let completed = rows.iter().find_map(|r| match r {
             TimelineRow::StepStrip { completed, .. } => Some(*completed),
             _ => None,
         });
-        assert_eq!(completed, Some(false), "streaming placeholder keeps strip open");
+        assert_eq!(
+            completed,
+            Some(false),
+            "streaming placeholder keeps strip open"
+        );
     }
 
     #[test]
@@ -517,7 +532,9 @@ mod tests {
         answer.iteration = Some(1); // begin_step stamps even single turns
         let rows = derive_timeline(&[msg_user("u1", "hi"), answer], "Today", "Yesterday");
         assert!(
-            !rows.iter().any(|r| matches!(r, TimelineRow::StepStrip { .. })),
+            !rows
+                .iter()
+                .any(|r| matches!(r, TimelineRow::StepStrip { .. })),
             "a tool-less reply must not be folded into a strip"
         );
     }
@@ -534,7 +551,11 @@ mod tests {
             steps: vec![msg_step("intermediate-r1-1", 1, "partial content", true)],
             completed: false,
         };
-        assert_ne!(row_key(&s1), row_key(&s2), "key must change when content grows");
+        assert_ne!(
+            row_key(&s1),
+            row_key(&s2),
+            "key must change when content grows"
+        );
     }
 
     // Fake mappers: treat each whole "1000ms" bucket as a day.

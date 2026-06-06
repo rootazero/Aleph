@@ -480,7 +480,10 @@ mod tests {
             p.contains(OPEN_LOOPS_HEADER),
             "tracking mode must request the open-loops section"
         );
-        assert!(p.contains("OPEN LOOPS"), "must explain what an open loop is");
+        assert!(
+            p.contains("OPEN LOOPS"),
+            "must explain what an open loop is"
+        );
     }
 
     #[test]
@@ -488,7 +491,10 @@ mod tests {
         let out = "LESSONS:\n- I should rebuild wasm first\n\nOPEN_LOOPS:\n- Follow up on the deploy status";
         let (lessons, loops) = split_sections(out);
         assert!(lessons.contains("rebuild wasm"));
-        assert!(!lessons.contains("Follow up"), "loops must not leak into lessons");
+        assert!(
+            !lessons.contains("Follow up"),
+            "loops must not leak into lessons"
+        );
         assert!(loops.contains("Follow up on the deploy"));
     }
 

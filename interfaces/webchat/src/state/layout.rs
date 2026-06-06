@@ -426,7 +426,10 @@ mod tests {
         owner.set();
         let ws = test_ws(LayoutMode::Split);
         ws.set_current_iteration("run-1", 3);
-        assert_eq!(ws.current_iteration.get_untracked(), Some(("run-1".to_string(), 3)));
+        assert_eq!(
+            ws.current_iteration.get_untracked(),
+            Some(("run-1".to_string(), 3))
+        );
     }
 
     #[test]

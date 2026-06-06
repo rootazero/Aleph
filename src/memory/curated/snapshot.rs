@@ -9,8 +9,8 @@ use super::format::serialize;
 #[derive(Debug, Clone)]
 pub struct CuratedSnapshot {
     pub agent_id: String,
-    pub agent_md_block: String,         // <CuratedMemory> XML
-    pub user_md_block: Option<String>,  // <UserProfile> XML, optional
+    pub agent_md_block: String,           // <CuratedMemory> XML
+    pub user_md_block: Option<String>,    // <UserProfile> XML, optional
     pub open_loops_block: Option<String>, // <OpenLoops> XML, optional (Batch 2 open-loop tracking)
     pub captured_at: SystemTime,
 }
@@ -130,7 +130,8 @@ mod tests {
     fn open_loops_block_wraps_body_and_truncates() {
         assert_eq!(render_open_loops_block("", 100), "");
         assert_eq!(render_open_loops_block("   \n ", 100), "");
-        let block = render_open_loops_block("- chase the failing wasm build\n- ask about deploy", 200);
+        let block =
+            render_open_loops_block("- chase the failing wasm build\n- ask about deploy", 200);
         assert!(block.starts_with("<OpenLoops>"));
         assert!(block.ends_with("</OpenLoops>"));
         assert!(block.contains("chase the failing wasm build"));
@@ -138,7 +139,10 @@ mod tests {
         let long = "网".repeat(500);
         let block = render_open_loops_block(&long, 100);
         let inside = block.replace("<OpenLoops>", "").replace("</OpenLoops>", "");
-        assert!(inside.matches('网').count() <= 100, "must truncate to char_limit");
+        assert!(
+            inside.matches('网').count() <= 100,
+            "must truncate to char_limit"
+        );
     }
 
     #[test]

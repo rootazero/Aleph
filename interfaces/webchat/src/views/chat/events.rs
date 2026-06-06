@@ -354,7 +354,8 @@ mod projection_tests {
 
         let msgs = chat.messages.get_untracked();
         assert!(
-            msgs.iter().any(|m| m.is_intermediate && m.id.starts_with("intermediate-run-1-")),
+            msgs.iter()
+                .any(|m| m.is_intermediate && m.id.starts_with("intermediate-run-1-")),
             "expected an intermediate step bubble"
         );
         let final_bubble = msgs
@@ -399,6 +400,8 @@ mod projection_tests {
         let msgs = chat.messages.get_untracked();
         let tagged: Vec<usize> = msgs.iter().filter_map(|m| m.iteration).collect();
         assert_eq!(tagged, vec![1, 2]);
-        assert!(msgs.iter().any(|m| m.iteration == Some(2) && m.content.contains("done")));
+        assert!(msgs
+            .iter()
+            .any(|m| m.iteration == Some(2) && m.content.contains("done")));
     }
 }

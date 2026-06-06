@@ -25,7 +25,11 @@ pub(super) fn ChatHero() -> impl IntoView {
     let suggestions = [
         ("🔍", "搜索网络", "帮我搜索今天的科技要闻，并总结 3 个重点"),
         ("📝", "起草文字", "帮我起草一封简短得体的工作邮件"),
-        ("💻", "解释代码", "解释这段代码的作用，并指出潜在问题：\n\n```\n\n```"),
+        (
+            "💻",
+            "解释代码",
+            "解释这段代码的作用，并指出潜在问题：\n\n```\n\n```",
+        ),
         ("🧠", "回忆上下文", "我们上次聊到哪了？帮我回顾一下"),
     ];
     view! {
@@ -298,14 +302,17 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     } else {
         "flex justify-start"
     };
+    // `min-w-0` lets the flex bubble shrink below its content's intrinsic width
+    // so wide children (code blocks, tables) can scroll internally via
+    // `overflow-x:auto` instead of spilling past the bubble's right edge.
     let bubble_style = if is_user {
-        "max-w-[80%] rounded-2xl px-4 py-3 bg-primary text-white"
+        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-primary text-white"
     } else if has_error {
-        "max-w-[80%] rounded-2xl px-4 py-3 bg-danger-subtle text-danger border border-danger/20"
+        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-danger-subtle text-danger border border-danger/20"
     } else if message.is_intermediate {
-        "max-w-[80%] rounded-2xl px-3 py-2 bg-surface-raised/60 text-text-secondary text-sm italic"
+        "min-w-0 max-w-[80%] rounded-2xl px-3 py-2 bg-surface-raised/60 text-text-secondary text-sm italic"
     } else {
-        "max-w-[80%] rounded-2xl px-4 py-3 bg-surface-raised text-text-primary"
+        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-surface-raised text-text-primary"
     };
     // While an assistant turn is still streaming, breathe a soft accent ring
     // around its bubble (box-shadow keeps the layout stable on finalize).

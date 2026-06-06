@@ -222,8 +222,7 @@ pub fn ChatSidebar() -> impl IntoView {
                             .and_then(crate::views::chat::timeline::parse_wire_timestamp);
 
                         let traced = m.role == "assistant"
-                            && m
-                                .run_id
+                            && m.run_id
                                 .as_deref()
                                 .and_then(|r| traces.get(r))
                                 .map(|evs| !evs.is_empty())
@@ -239,8 +238,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                 // so day separators stay correct.
                                 let target = format!("assistant-{run}");
                                 chat.messages.update(|msgs| {
-                                    if let Some(b) =
-                                        msgs.iter_mut().rev().find(|b| b.id == target)
+                                    if let Some(b) = msgs.iter_mut().rev().find(|b| b.id == target)
                                     {
                                         b.timestamp = ts;
                                     }

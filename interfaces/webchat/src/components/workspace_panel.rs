@@ -123,9 +123,10 @@ fn StepCard(group: StepGroup) -> impl IntoView {
 
     let focused = Memo::new(move |_| workspace.is_step_focused(&run_for_highlight, iteration));
     let active = Memo::new(move |_| {
-        workspace
-            .current_iteration
-            .with(|c| c.as_ref().is_some_and(|(r, i)| r == &run_for_active && *i == iteration))
+        workspace.current_iteration.with(|c| {
+            c.as_ref()
+                .is_some_and(|(r, i)| r == &run_for_active && *i == iteration)
+        })
     });
 
     let narration = group.narration.clone();
