@@ -400,7 +400,7 @@ impl AgentHarness {
         // side-channel LLM call later fails. No LLM cost in this step.
         if let Some(pipeline) = self.deps.preflight_pipeline.as_ref() {
             // Stages mostly key off `fresh_tail_count`; the pressure ratio is
-            // not currently consulted by the two shipped stages. Pass a max-
+            // not currently consulted by the three shipped stages. Pass a max-
             // pressure placeholder so any future pressure-gated stage still
             // fires when wired in.
             let placeholder_pressure = crate::context::budget::ContextPressure {
