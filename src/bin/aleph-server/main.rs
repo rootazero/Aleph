@@ -151,6 +151,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             alephcore::sandbox::windows_init::run_init(init_args);
         }
         Some(Command::BootstrapToken) => return commands::handle_bootstrap_token(),
+        // Offline prompt-size introspection: no tokio, no network, no lock.
+        Some(Command::PromptSize { path, mode, json }) => {
+            return commands::prompt_size::run(&path, &mode, json);
+        }
         other => {
             args.command = other;
         }
@@ -271,6 +275,7 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         | Some(Command::Devices { .. })
         | Some(Command::Hooks { .. })
         | Some(Command::BootstrapToken)
+        | Some(Command::PromptSize { .. })
         | Some(Command::SandboxInit { .. })
         | Some(Command::SandboxInitWindows { .. }) => unreachable!(),
     }

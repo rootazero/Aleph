@@ -90,6 +90,25 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect the assembled system-prompt size, broken down per layer.
+    ///
+    /// Offline diagnostic (no network, no daemon): builds the prompt pipeline
+    /// with default config and reports each layer's byte / char / token
+    /// contribution so you can see where the fixed prompt budget goes.
+    /// Session-specific content (tool schemas, memory, dynamic context) is
+    /// excluded — this measures the static scaffold. hermes `prompt-size`
+    /// analogue.
+    PromptSize {
+        /// Assembly path: basic | hydration | soul | context | cached.
+        #[arg(long, default_value = "basic")]
+        path: String,
+        /// Prompt mode: full | compact | minimal.
+        #[arg(long, default_value = "full")]
+        mode: String,
+        /// Emit a machine-readable JSON envelope instead of human output.
+        #[arg(long)]
+        json: bool,
+    },
     /// Manage device pairing
     Pairing {
         #[command(subcommand)]

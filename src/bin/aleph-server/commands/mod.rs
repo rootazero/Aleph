@@ -12,6 +12,7 @@ pub mod gateway;
 pub mod hooks;
 pub mod pairing;
 pub mod plugins;
+pub mod prompt_size;
 pub mod sandbox_debug;
 pub mod secret;
 pub mod start;

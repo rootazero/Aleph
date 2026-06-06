@@ -29,6 +29,10 @@ pub struct LayerSize {
     pub stability: LayerStability,
     /// Unicode scalar count of the layer's emitted section.
     pub chars: usize,
+    /// UTF-8 byte length of the layer's emitted section. The on-the-wire size
+    /// (hermes `prompt_size.py` reports bytes); differs from `chars` for any
+    /// multi-byte content (CJK, emoji).
+    pub bytes: usize,
     /// Content-aware token estimate (CJK/code denser than prose).
     pub tokens: usize,
 }
@@ -240,6 +244,7 @@ impl PromptPipeline {
                         name: layer.name(),
                         stability: layer.stability(),
                         chars: section.chars().count(),
+                        bytes: section.len(),
                         // 3.5 chars/token prose anchor; CJK/code auto-densify.
                         tokens: estimate_tokens_aware(&section, 3.5),
                     });
@@ -950,6 +955,7 @@ mod stability_tests {
         for l in &breakdown {
             assert!(l.chars > 0, "layer {} listed with zero chars", l.name);
             assert!(l.tokens > 0, "layer {} has chars but zero tokens", l.name);
+            assert!(l.bytes >= l.chars, "layer {} bytes < chars", l.name);
         }
 
         // The per-layer char counts must account for the whole assembled
@@ -960,6 +966,13 @@ mod stability_tests {
             sum_chars,
             assembled.chars().count(),
             "sum of per-layer chars must equal the assembled prompt length"
+        );
+        // Same invariant on the byte axis.
+        let sum_bytes: usize = breakdown.iter().map(|l| l.bytes).sum();
+        assert_eq!(
+            sum_bytes,
+            assembled.len(),
+            "sum of per-layer bytes must equal the assembled prompt byte length"
         );
     }
 }
