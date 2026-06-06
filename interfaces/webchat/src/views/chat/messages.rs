@@ -292,7 +292,15 @@ fn DaySeparator(label: String) -> impl IntoView {
 /// Single message bubble. `clock` is a pre-resolved "HH:MM" label (empty for
 /// undated/legacy rows) shown in the hover action bar.
 #[component]
-fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
+fn MessageBubble(
+    message: ChatMessage,
+    clock: String,
+    /// True when this bubble is one of a run's intermediate steps rendered
+    /// inside the [`StepStrip`]. Steps flow bubble-less and dense; the user
+    /// message and the run's standalone *final answer* keep their bubble.
+    #[prop(optional)]
+    in_strip: bool,
+) -> impl IntoView {
     let i18n = use_i18n();
     let is_user = message.role == "user";
     let has_error = message.error.is_some();
@@ -307,18 +315,28 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     // wide children (code blocks, tables) scroll internally via `overflow-x:auto`
     // instead of spilling past the right edge.
     //
-    // Only the user message keeps a bubble — a compact right-aligned chip is the
-    // one place a bubble aids scannability. Assistant / intermediate / error rows
-    // flow bubble-less and full-width for higher information density (matches the
-    // opencode / claude-code transcript look): no card chrome, denser padding.
+    // Bubbles are reserved for the two rows that are conversational turns: the
+    // user message (a compact right-aligned chip) and the run's standalone
+    // *final answer* (a left bubble). A run's intermediate steps — folded into
+    // the step strip — flow bubble-less and dense (the opencode / claude-code
+    // transcript look), so the live streaming echo no longer wears card chrome.
     let bubble_style = if is_user {
         "min-w-0 max-w-[80%] rounded-2xl px-3.5 py-2 bg-primary text-white"
+    } else if in_strip {
+        // Intermediate step inside the run's step strip — no bubble.
+        if has_error {
+            "min-w-0 w-full px-2 py-1 text-danger border-l-2 border-danger/40"
+        } else if message.is_intermediate {
+            "min-w-0 w-full px-2 py-0.5 text-text-secondary text-sm"
+        } else {
+            "min-w-0 w-full px-2 py-1 text-text-primary"
+        }
     } else if has_error {
-        "min-w-0 w-full px-2 py-1 text-danger border-l-2 border-danger/40"
-    } else if message.is_intermediate {
-        "min-w-0 w-full px-2 py-0.5 text-text-secondary text-sm"
+        // Standalone final answer that errored — keep the bubble.
+        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-danger-subtle text-danger border border-danger/20"
     } else {
-        "min-w-0 w-full px-2 py-1 text-text-primary"
+        // Standalone final answer — the conversational reply keeps its bubble.
+        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-surface-raised text-text-primary"
     };
     let bubble_class = bubble_style.to_string();
 
@@ -328,10 +346,11 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     let workspace = use_context::<WorkspaceState>();
     let message_run_id = run_id_from_message_id(&message.id);
 
-    // Left-side counterpart to the right-side StepCards: bubbles carrying an
-    // iteration tag get a clickable `#N` label (cross-highlights the matching
-    // StepCard + opens Split) and a reactive highlight ring when that step is
-    // focused from the right. User and untagged bubbles get neither.
+    // Left-side counterpart to the right-side StepCards: an iteration-tagged
+    // bubble still gets a stable dom id + a reactive highlight ring so the
+    // right panel can scroll-focus and cross-highlight it. The visible `#N`
+    // label was dropped — it added a line of height per step without earning
+    // it; focus is now driven entirely from the right StepCards.
     let msg_iteration = message.iteration;
     let focused = {
         let run = message_run_id.clone();
@@ -352,22 +371,6 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     };
     let bubble_dom_id: Option<String> = match (msg_iteration, is_user) {
         (Some(it), false) => Some(format!("step-{message_run_id}-{it}")),
-        _ => None,
-    };
-    let iteration_label = match (workspace, msg_iteration, is_user) {
-        (Some(ws), Some(it), false) => {
-            let run = message_run_id.clone();
-            Some(view! {
-                <button
-                    type="button"
-                    class="mb-1 text-[10px] font-mono uppercase tracking-wider
-                           text-text-tertiary hover:text-primary transition-colors"
-                    on:click=move |_| ws.focus_step(run.clone(), it)
-                >
-                    {format!("#{it}")}
-                </button>
-            })
-        }
         _ => None,
     };
 
@@ -476,7 +479,6 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
     view! {
         <div class=wrapper_class>
             <div class=bubble_class_reactive id=bubble_dom_id>
-                {iteration_label}
                 {tool_calls_view}
 
                 // Message content — Markdown for assistant, plain text for user
@@ -602,7 +604,7 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
                         {steps
                             .clone()
                             .into_iter()
-                            .map(|m| view! { <MessageBubble message=m clock=String::new() /> })
+                            .map(|m| view! { <MessageBubble message=m clock=String::new() in_strip=true /> })
                             .collect_view()}
                     </div>
                 </Show>
