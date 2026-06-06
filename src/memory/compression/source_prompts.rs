@@ -24,6 +24,9 @@ pub fn prompt_for(source: &RawMemorySource) -> Option<&'static str> {
         RawMemorySource::SessionEnd {
             reason: SessionEndReason::TaskDone,
         } => Some(PROMPT_RETRO),
+        // Reflection rows already carry first-person lessons; the lesson-tuned
+        // prompt keeps the ingestor on the feedback/lessons track.
+        RawMemorySource::Reflection => Some(PROMPT_LESSON),
         RawMemorySource::SessionCompressed
         | RawMemorySource::Transcript
         | RawMemorySource::ToolOutput
@@ -67,6 +70,14 @@ mod tests {
                 reason: SessionEndReason::Disconnect,
             }),
             Some(PROMPT_DIGEST)
+        );
+    }
+
+    #[test]
+    fn reflection_selects_lesson() {
+        assert_eq!(
+            prompt_for(&RawMemorySource::Reflection),
+            Some(PROMPT_LESSON)
         );
     }
 

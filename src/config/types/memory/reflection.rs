@@ -11,8 +11,15 @@ pub struct ReflectionConfig {
     pub min_user_chars: u32,
     #[serde(default = "super::defaults::default_reflection_cooldown")]
     pub cooldown_minutes: u32,
+    /// Extract this session's *open loops* — unresolved questions, promised
+    /// follow-ups, or incomplete tasks — during the same session-end reflection
+    /// LLM call (no extra call), and persist them to
+    /// `~/.aleph/agents/<id>/OPEN_LOOPS.md`. Default off. Requires `enabled`.
     #[serde(default)]
     pub open_loop_tracking: bool,
+    /// Inject the persisted open loops into the next session's curated context
+    /// so the agent proactively picks them back up (R5 — "AI 主动到达").
+    /// Default off; only meaningful alongside `open_loop_tracking`.
     #[serde(default)]
     pub open_loop_inject_prompt: bool,
 }

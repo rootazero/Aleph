@@ -42,6 +42,7 @@ pub mod retrieval;
 pub mod ripple;
 pub mod scratchpad;
 pub mod session_compactor;
+pub mod session_reflection;
 pub mod session_resume;
 pub mod session_search_summary;
 pub mod store;

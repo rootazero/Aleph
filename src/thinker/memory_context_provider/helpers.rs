@@ -75,3 +75,45 @@ pub fn session_end_summarizer(
 ) -> Option<Arc<crate::memory::session_search_summary::end_hook::SessionEndSummarizer>> {
     SESSION_END_SUMMARIZER.get().cloned()
 }
+
+/// Process-wide handle for the session-end reflection path (Batch 2).
+///
+/// Mirrors the two cells above: registered once at startup by `agent_init`
+/// (only when `[memory.reflection] enabled = true`), consumed fire-and-forget
+/// at session-end in `emit_session_end_raw_with_registry`. Kept separate so the
+/// reflection feature stays independently removable from Spec A/Spec B.
+static SESSION_REFLECTOR: tokio::sync::OnceCell<
+    Arc<crate::memory::session_reflection::SessionReflector>,
+> = tokio::sync::OnceCell::const_new();
+
+/// Register a `SessionReflector` for on-session-end lesson distillation.
+/// Idempotent; subsequent calls are a no-op.
+pub fn register_session_reflector(
+    reflector: Arc<crate::memory::session_reflection::SessionReflector>,
+) {
+    let _ = SESSION_REFLECTOR.set(reflector);
+}
+
+/// Read the registered `SessionReflector`, if any.
+pub fn session_reflector() -> Option<Arc<crate::memory::session_reflection::SessionReflector>> {
+    SESSION_REFLECTOR.get().cloned()
+}
+
+/// Process-wide opt-in flag for injecting last session's open loops into the
+/// next session's curated context (Batch 2 — `[memory.reflection]
+/// open_loop_inject_prompt`). Mirrors the OnceCell idiom above to avoid
+/// threading a bool through the `MemoryContextProvider` constructor and its
+/// callers. Set once at startup by `agent_init`; read in `capture_curated`.
+/// Unset (default) reads `false`, so the open-loops block is never injected
+/// unless explicitly enabled.
+static OPEN_LOOP_INJECT: tokio::sync::OnceCell<bool> = tokio::sync::OnceCell::const_new();
+
+/// Enable/disable open-loop injection. Idempotent; first call wins.
+pub fn set_open_loop_inject(enabled: bool) {
+    let _ = OPEN_LOOP_INJECT.set(enabled);
+}
+
+/// Whether last session's open loops should be injected into curated context.
+pub fn open_loop_inject() -> bool {
+    OPEN_LOOP_INJECT.get().copied().unwrap_or(false)
+}

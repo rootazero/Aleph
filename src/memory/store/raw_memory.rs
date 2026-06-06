@@ -40,6 +40,13 @@ pub enum RawMemorySource {
         success: bool,
         duration_ms: u64,
     },
+
+    // Batch 2 (session-end reflection) — a first-person "lessons learned"
+    // distillation produced once a substantive session ends. Unlike the raw
+    // `SessionEnd` transcript tail, the content is already condensed into
+    // reusable lessons; it is ingestable (the compound ingestor turns it into
+    // feedback/lessons notes) and never telemetry.
+    Reflection,
 }
 
 /// Sub-reason for `RawMemorySource::SessionEnd`.
@@ -98,6 +105,7 @@ impl RawMemorySource {
                     .to_string(),
                 ),
             ),
+            Self::Reflection => ("reflection", None),
         }
     }
 
@@ -173,6 +181,7 @@ impl RawMemorySource {
                     duration_ms,
                 }
             }
+            "reflection" => Self::Reflection,
             _ => Self::ToolOutput,
         }
     }
@@ -374,6 +383,16 @@ mod tests {
         let src = RawMemorySource::PreCompress;
         let (token, detail) = src.to_persisted();
         assert_eq!(token, "pre_compress");
+        assert!(detail.is_none());
+        let back = RawMemorySource::from_persisted(token, detail.as_deref());
+        assert_eq!(back, src);
+    }
+
+    #[test]
+    fn round_trip_reflection() {
+        let src = RawMemorySource::Reflection;
+        let (token, detail) = src.to_persisted();
+        assert_eq!(token, "reflection");
         assert!(detail.is_none());
         let back = RawMemorySource::from_persisted(token, detail.as_deref());
         assert_eq!(back, src);

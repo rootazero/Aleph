@@ -82,10 +82,35 @@ impl MemoryContextProvider {
             None
         };
 
+        // Open loops from the previous session (Batch 2 open-loop tracking).
+        // Opt-in via `set_open_loop_inject`. `SessionReflector` writes
+        // `OPEN_LOOPS.md` beside MEMORY.md on session end; absence (or the
+        // feature being off) simply yields no block. Bounded to keep the
+        // injected prompt small.
+        const OPEN_LOOPS_CHAR_LIMIT: usize = 2000;
+        let open_loops_block = if super::helpers::open_loop_inject() {
+            let path = self
+                .agent_memory_path(agent_id)
+                .with_file_name("OPEN_LOOPS.md");
+            match tokio::fs::read_to_string(&path).await {
+                Ok(body) => {
+                    let block = crate::memory::curated::snapshot::render_open_loops_block(
+                        &body,
+                        OPEN_LOOPS_CHAR_LIMIT,
+                    );
+                    (!block.is_empty()).then_some(block)
+                }
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
         Ok(CuratedSnapshot {
             agent_id: agent_id.to_string(),
             agent_md_block: agent_block,
             user_md_block: user_block,
+            open_loops_block,
             captured_at: std::time::SystemTime::now(),
         })
     }
@@ -105,6 +130,12 @@ impl MemoryContextProvider {
                 combined.push('\n');
             }
             combined.push_str(ub);
+        }
+        if let Some(ol) = &snap.open_loops_block {
+            if !combined.is_empty() {
+                combined.push('\n');
+            }
+            combined.push_str(ol);
         }
         if combined.is_empty() {
             return None;

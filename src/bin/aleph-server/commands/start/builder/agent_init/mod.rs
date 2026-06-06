@@ -282,7 +282,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // registered, honor it — otherwise the env provider silently wins
             // over the configured choice.
             if let Some(cfg_default) = app_config.general.default_provider.as_deref() {
-                if registry.list_providers().iter().any(|p| p.as_str() == cfg_default) {
+                if registry
+                    .list_providers()
+                    .iter()
+                    .any(|p| p.as_str() == cfg_default)
+                {
                     let _ = registry.set_default(cfg_default);
                 }
             }
@@ -1001,7 +1005,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     memory_db.clone()
                         as std::sync::Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
                     session_store.clone(),
-                    summary_llm,
+                    summary_llm.clone(),
                 ));
                 let summarizer = std::sync::Arc::new(SessionEndSummarizer {
                     store: memory_db.clone()
@@ -1011,6 +1015,31 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 alephcore::thinker::memory_context_provider::register_session_end_summarizer(
                     summarizer,
                 );
+
+                // Batch 2 — session-end reflection ("经验教训"). Opt-in: only
+                // registered when [memory.reflection] enabled = true, so the
+                // disabled default adds zero session-end overhead. Reuses the
+                // same SummaryLlm wrapper as the Spec B summarizer.
+                if app_config.memory.reflection.enabled {
+                    use alephcore::memory::session_reflection::SessionReflector;
+                    let reflector = std::sync::Arc::new(SessionReflector::new(
+                        memory_db.clone()
+                            as std::sync::Arc<
+                                dyn alephcore::memory::store::raw_memory::RawMemoryStore,
+                            >,
+                        session_store.clone(),
+                        summary_llm.clone(),
+                        app_config.memory.reflection.clone(),
+                    ));
+                    alephcore::thinker::memory_context_provider::register_session_reflector(
+                        reflector,
+                    );
+                    // Open-loop injection: surface last session's unresolved
+                    // follow-ups in the next session's curated context (R5).
+                    alephcore::thinker::memory_context_provider::set_open_loop_inject(
+                        app_config.memory.reflection.open_loop_inject_prompt,
+                    );
+                }
             }
 
             mcp_for_orchestrator = Some(mcp.clone());

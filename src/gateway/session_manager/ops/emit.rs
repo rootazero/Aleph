@@ -87,6 +87,25 @@ pub(crate) fn emit_session_end_raw_with_registry(
             });
         }
 
+        // Batch 2 — session-end reflection (lessons learned). Only present when
+        // [memory.reflection] enabled; the reflector self-gates on substance +
+        // cooldown. Fire-and-forget, never blocks close_session.
+        if let Some(reflector) = crate::thinker::memory_context_provider::session_reflector() {
+            let r_agent_id = agent_id.clone();
+            let r_session_id = session_id.clone();
+            rt.spawn(async move {
+                if let Err(e) = reflector.reflect(&r_agent_id, &r_session_id).await {
+                    tracing::warn!(
+                        target: "reflection.end_hook",
+                        agent_id = %r_agent_id,
+                        session_id = %r_session_id,
+                        error = %e,
+                        "session-end reflection failed (non-fatal)"
+                    );
+                }
+            });
+        }
+
         rt.spawn(async move {
             if let Some(reg) = registry {
                 let ctx = crate::memory::extensions::types::CaptureCtx {

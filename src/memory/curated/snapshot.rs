@@ -9,8 +9,9 @@ use super::format::serialize;
 #[derive(Debug, Clone)]
 pub struct CuratedSnapshot {
     pub agent_id: String,
-    pub agent_md_block: String,        // <CuratedMemory> XML
-    pub user_md_block: Option<String>, // <UserProfile> XML, optional
+    pub agent_md_block: String,         // <CuratedMemory> XML
+    pub user_md_block: Option<String>,  // <UserProfile> XML, optional
+    pub open_loops_block: Option<String>, // <OpenLoops> XML, optional (Batch 2 open-loop tracking)
     pub captured_at: SystemTime,
 }
 
@@ -38,6 +39,27 @@ pub fn render_user_block(body: &str, char_limit: usize, near_threshold: f32) -> 
     };
     let head = user_header(&truncated, char_limit, near_threshold);
     format!("<UserProfile>\n{head}\n{truncated}\n</UserProfile>")
+}
+
+/// Render last session's unresolved follow-ups as an XML envelope. Injected at
+/// the start of the next session so the agent can proactively pick them back up
+/// (R5 — "AI 主动到达"). `body` is the persisted `OPEN_LOOPS.md` markdown,
+/// truncated to `char_limit` (counted in chars, CJK-safe) to bound the prompt.
+/// Empty body → empty string (caller omits the block).
+pub fn render_open_loops_block(body: &str, char_limit: usize) -> String {
+    if body.trim().is_empty() {
+        return String::new();
+    }
+    let truncated: String = if body.chars().count() > char_limit {
+        body.chars().take(char_limit).collect()
+    } else {
+        body.to_string()
+    };
+    format!(
+        "<OpenLoops>\n[Unresolved items from your last session with this user. \
+         Proactively follow up on any still relevant; skip ones already resolved.]\n{}\n</OpenLoops>",
+        truncated.trim()
+    )
 }
 
 /// Render a budget header for a single user-profile body. Counts chars (not
@@ -102,6 +124,21 @@ mod tests {
     fn user_block_empty_body_returns_empty() {
         assert_eq!(render_user_block("", 100, 0.95), "");
         assert_eq!(render_user_block("   \n  ", 100, 0.95), "");
+    }
+
+    #[test]
+    fn open_loops_block_wraps_body_and_truncates() {
+        assert_eq!(render_open_loops_block("", 100), "");
+        assert_eq!(render_open_loops_block("   \n ", 100), "");
+        let block = render_open_loops_block("- chase the failing wasm build\n- ask about deploy", 200);
+        assert!(block.starts_with("<OpenLoops>"));
+        assert!(block.ends_with("</OpenLoops>"));
+        assert!(block.contains("chase the failing wasm build"));
+        // Truncation honours char_limit (CJK-safe count, no byte panic).
+        let long = "网".repeat(500);
+        let block = render_open_loops_block(&long, 100);
+        let inside = block.replace("<OpenLoops>", "").replace("</OpenLoops>", "");
+        assert!(inside.matches('网').count() <= 100, "must truncate to char_limit");
     }
 
     #[test]
