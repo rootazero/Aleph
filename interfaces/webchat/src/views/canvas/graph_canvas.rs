@@ -145,6 +145,7 @@ pub fn GraphCanvas(
     // `drag_state`, and `last_frame_ms` are all moved into the rAF Effect closure
     // below. (Effect::new takes `move ||`, which consumes its captures.)
     let nav_for_md = nav.clone();
+    let nav_for_mm = nav.clone();
     let nav_for_mu = nav.clone();
     let drag_state_for_md = drag_state.clone();
     let drag_state_for_mm = drag_state.clone();
@@ -669,13 +670,37 @@ pub fn GraphCanvas(
                 }
             }
         } else {
-            // Hover detection
-            let hit = state.viewport.hit_test(screen, &state.nodes);
-            let new_hovered = hit.and_then(|idx| state.nodes.get(idx).map(|n| n.id.clone()));
-            if new_hovered != state.hovered_node {
-                state.hovered_node = new_hovered.clone();
-                drop(state);
-                on_event.run(CanvasEvent::HoverNode(new_hovered));
+            // Freeze hover during a retarget/focus tween: hit-test reads target
+            // positions from state.nodes while the renderer draws interpolated
+            // positions, so updating hover mid-animation picks the wrong node.
+            if let Some(ref nav_rc) = nav_for_mm {
+                if nav_rc.borrow().is_animating() {
+                    return;
+                }
+            }
+
+            // Hover hysteresis: keep the held node while the pointer rests
+            // anywhere over its enlarged card footprint (hover_retains); only
+            // re-test for a new node once the pointer leaves that region. This
+            // kills the boundary flicker and lets the user move onto the card.
+            let retained = match state.hovered_node.as_deref() {
+                Some(hid) => state
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == hid)
+                    .map(|n| state.viewport.hover_retains(screen, n.position, n.radius))
+                    .unwrap_or(false),
+                None => false,
+            };
+
+            if !retained {
+                let hit = state.viewport.hit_test(screen, &state.nodes);
+                let new_hovered = hit.and_then(|idx| state.nodes.get(idx).map(|n| n.id.clone()));
+                if new_hovered != state.hovered_node {
+                    state.hovered_node = new_hovered.clone();
+                    drop(state);
+                    on_event.run(CanvasEvent::HoverNode(new_hovered));
+                }
             }
         }
     };
