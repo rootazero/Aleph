@@ -27,6 +27,7 @@ fn job_view_to_json(view: &CronJobView) -> Value {
         "enabled": view.enabled,
         "schedule_kind": view.schedule_kind,
         "agent_id": view.agent_id,
+        "source_channel_id": view.source_channel_id,
         "prompt": view.prompt,
         "timezone": view.timezone,
         "tags": view.tags,
