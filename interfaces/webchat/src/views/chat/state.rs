@@ -106,6 +106,23 @@ impl ChatSendError {
     }
 }
 
+/// Context-window occupancy snapshot for the composer gauge.
+///
+/// Populated from each `run_complete` summary (`token_breakdown.input` is the
+/// last turn's context tokens, `total_tokens` the run's running total). The
+/// window denominator is resolved client-side by
+/// [`super::context_gauge::context_window_for`] since the panel — an I/O-only
+/// interface (R4) — cannot reach core's model catalogue.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextUsage {
+    /// Input/context tokens occupying the window after the latest turn.
+    pub used_tokens: u32,
+    /// Resolved context-window size for the run's model (gauge denominator).
+    pub window_tokens: u32,
+    /// Running total tokens billed for the run (shown in the tooltip).
+    pub total_tokens: u64,
+}
+
 /// Model resolution info (mirrors core ModelInfo).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ModelInfo {
@@ -199,6 +216,17 @@ pub struct ChatState {
     /// True while a drag is hovering the chat surface — drives the drop
     /// overlay highlight.
     pub is_dragging_files: RwSignal<bool>,
+    /// One-shot composer prefill request. Empty-state suggestion chips (and any
+    /// future "insert prompt" source) drop a starter string here; the composer's
+    /// consume-Effect drains it into the textarea and resets it to `None`.
+    /// Ephemeral like `is_dragging_files` / `retry_pulse` — intentionally
+    /// excluded from [`SessionSnapshot`] so it never replays on a tab swap.
+    pub draft_seed: RwSignal<Option<String>>,
+    /// Latest context-window occupancy, set on each `run_complete` and read by
+    /// the composer's [`super::context_gauge::ContextGauge`]. `None` until the
+    /// first run reports usage. Ephemeral (excluded from [`SessionSnapshot`]);
+    /// it simply repopulates on the next completed turn after a tab swap.
+    pub context_usage: RwSignal<Option<ContextUsage>>,
     /// Follow-up prompts queued while a run is active. Drained one-at-a-time
     /// when the turn settles naturally (see
     /// [`shared_ui_logic::state::should_auto_drain_on_settle`]). Session-scoped
@@ -259,6 +287,8 @@ impl ChatState {
             send_error: RwSignal::new(None),
             pending_attachments: RwSignal::new(Vec::new()),
             is_dragging_files: RwSignal::new(false),
+            draft_seed: RwSignal::new(None),
+            context_usage: RwSignal::new(None),
             prompt_queue: RwSignal::new(Vec::new()),
             retry_pulse: RwSignal::new(0),
             active_project_root: RwSignal::new(None),
@@ -460,6 +490,19 @@ impl ChatState {
                 msg.model_info = Some(info);
             }
         });
+    }
+
+    /// Resolved model id for `run_id`, read from the assistant bubble's
+    /// `model_info`. Used by the context gauge to pick a window size.
+    pub fn model_for_run(&self, run_id: &str) -> Option<String> {
+        let target_id = format!("assistant-{}", run_id);
+        self.messages.with(|msgs| {
+            msgs.iter()
+                .rev()
+                .find(|m| m.id == target_id)
+                .and_then(|m| m.model_info.as_ref())
+                .map(|info| info.model.clone())
+        })
     }
 
     /// Append a response text chunk to the current assistant message.

@@ -178,6 +178,20 @@ pub(super) fn InputArea() -> impl IntoView {
         });
     }
 
+    // Empty-state suggestion chips (and any future "insert prompt" source) drop
+    // a starter string on `chat.draft_seed`; drain it into this local
+    // `input_text` here so the chips never need a handle on the composer. Same
+    // shape as the retry plumbing above. Writing the signal back to `None`
+    // inside the Effect that reads it is safe — the re-run sees `None` and stops.
+    {
+        Effect::new(move |_| {
+            if let Some(seed) = chat.draft_seed.get() {
+                input_text.set(seed);
+                chat.draft_seed.set(None);
+            }
+        });
+    }
+
     // Queue auto-drain — when a run settles naturally (busy → idle), replay
     // the head of the queue through the normal send pipeline. An explicit
     // Stop sets `user_interrupted`, which suppresses exactly one drain so
@@ -510,6 +524,31 @@ pub(super) fn InputArea() -> impl IntoView {
                 <div class="aleph-project-row flex items-center gap-2 px-1 pb-1">
                     <ProjectMenu />
                     <crate::components::model_picker::ModelPicker />
+                    // Live context-window gauge (mirrors hermes-desktop's
+                    // ContextGauge): an SVG ring of the last turn's prompt-token
+                    // occupancy. Self-hides until the first usage event lands.
+                    <super::context_gauge::ContextGauge />
+                    // Export conversation → Markdown download. Pushed to the far
+                    // right; only present once the thread has content.
+                    <Show when=move || !chat.messages.get().is_empty()>
+                        <button
+                            class="ml-auto p-1.5 rounded-lg text-text-tertiary hover:text-text-primary
+                                   hover:bg-surface-sunken transition-colors flex-shrink-0"
+                            title="导出对话为 Markdown"
+                            on:click=move |_| {
+                                let msgs = chat.messages.get_untracked();
+                                super::transcript::download_transcript(&msgs);
+                            }
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4"
+                                 viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                <polyline points="7 10 12 15 17 10" />
+                                <line x1="12" y1="15" x2="12" y2="3" />
+                            </svg>
+                        </button>
+                    </Show>
                 </div>
 
                 // Compact single-row composer — paperclip | textarea |
