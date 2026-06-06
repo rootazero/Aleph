@@ -116,6 +116,33 @@ pub(crate) fn apply_trace_event(
     }
 }
 
+/// Reconstruct one assistant run's chat bubbles + workspace tool payloads from
+/// its persisted trace `events`, mirroring the live event order: open the
+/// `assistant-{run}` placeholder, project every event through
+/// `apply_trace_event`, finalize the turn, then overwrite the trailing answer
+/// bubble's text with the history-authoritative `final_content`. Earlier turns
+/// become `intermediate-{run}-{n}` bubbles; the trailing `assistant-{run}`
+/// bubble is the final answer.
+pub(crate) fn replay_run(
+    chat: ChatState,
+    workspace: WorkspaceState,
+    run_id: &str,
+    events: &[serde_json::Value],
+    final_content: &str,
+) {
+    chat.start_assistant_message(run_id);
+    for ev in events {
+        apply_trace_event(chat, workspace, run_id, ev);
+    }
+    chat.complete_run(run_id);
+    let target_id = format!("assistant-{run_id}");
+    chat.messages.update(|msgs| {
+        if let Some(m) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
+            m.content = final_content.to_string();
+        }
+    });
+}
+
 fn append_reasoning(chat: ChatState, summary: &str) {
     if summary.is_empty() {
         return;
@@ -278,6 +305,42 @@ mod projection_tests {
     use crate::views::chat::state::ChatState;
     use leptos::prelude::Owner;
     use serde_json::json;
+
+    #[test]
+    fn replay_run_rebuilds_intermediates_then_final_answer() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        let ws = WorkspaceState::new();
+
+        let events = vec![
+            json!({ "kind": "turn_started", "iteration": 1 }),
+            json!({ "kind": "text_emitted", "iteration": 1, "stream": "step", "text": "looking" }),
+            json!({ "kind": "tool_call_started", "iteration": 1,
+                    "call": { "tool_id": "t1", "tool_name": "search", "input": { "q": "x" } } }),
+            json!({ "kind": "tool_call_completed", "iteration": 1,
+                    "call": { "tool_id": "t1", "tool_name": "search", "duration_ms": 3 },
+                    "result": { "ok": true } }),
+            json!({ "kind": "turn_started", "iteration": 2 }),
+            json!({ "kind": "text_emitted", "iteration": 2, "stream": "final", "text": "raw final" }),
+        ];
+
+        replay_run(chat, ws, "run-1", &events, "AUTHORITATIVE ANSWER");
+
+        let msgs = chat.messages.get_untracked();
+        assert!(
+            msgs.iter().any(|m| m.is_intermediate && m.id.starts_with("intermediate-run-1-")),
+            "expected an intermediate step bubble"
+        );
+        let final_bubble = msgs
+            .iter()
+            .find(|m| m.id == "assistant-run-1")
+            .expect("final answer bubble");
+        assert!(!final_bubble.is_intermediate);
+        assert!(!final_bubble.is_streaming);
+        assert_eq!(final_bubble.content, "AUTHORITATIVE ANSWER");
+        assert!(ws.get_tool_payload("run-1", "t1").is_some());
+    }
 
     #[test]
     fn apply_trace_event_builds_steps_and_payloads() {
