@@ -164,6 +164,11 @@ impl AgentHarness {
                 }
             }
             callback.on_tool_call(&call.name);
+            // Structured tool-start event (id + name + args). The legacy
+            // name-only `on_tool_call` above is kept for backward compat; this
+            // is the preferred signal (see `HarnessCallback::on_tool_call_start`)
+            // that lets the stream sink emit a real call id instead of "legacy".
+            callback.on_tool_call_start(&call.id, &call.name, &call.arguments);
             let started = Instant::now();
             self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallStarted {
                 iteration,
@@ -327,10 +332,10 @@ impl AgentHarness {
                             Ok(Err(crate::tools::service::ToolError::Execution {
                                 name: call.name.clone(),
                                 cause: format!(
-                                    "exceeded its {}s wall-clock budget (slow or \
+                                    "exceeded its {:.1}s wall-clock budget (slow or \
                                      unresponsive source) — no result; retry, narrow the \
                                      query, or switch source/tool",
-                                    budget.as_secs()
+                                    budget.as_secs_f64()
                                 ),
                             }))
                         }
@@ -504,6 +509,8 @@ impl AgentHarness {
             Vec::with_capacity(tool_calls.len());
         for (idx, call) in tool_calls.iter().enumerate() {
             callback.on_tool_call(&call.name);
+            // Structured tool-start event (parallel path parity with serial).
+            callback.on_tool_call_start(&call.id, &call.name, &call.arguments);
             started_at.push(Instant::now());
             self.emit(|| crate::harness::trace::LoopTraceEvent::ToolCallStarted {
                 iteration,
@@ -661,10 +668,10 @@ impl AgentHarness {
                             Ok(Err(crate::tools::service::ToolError::Execution {
                                 name: name.clone(),
                                 cause: format!(
-                                    "exceeded its {}s wall-clock budget (slow or unresponsive \
+                                    "exceeded its {:.1}s wall-clock budget (slow or unresponsive \
                                  source) — no result; retry, narrow the query, or switch \
                                  source/tool",
-                                    b.as_secs()
+                                    b.as_secs_f64()
                                 ),
                             }))
                         }
