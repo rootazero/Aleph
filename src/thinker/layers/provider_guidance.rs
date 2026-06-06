@@ -176,8 +176,8 @@ const GOOGLE_OPERATIONAL_DIRECTIVES: &str = "## Google Model Operational Directi
 contents.\n\
 - **Dependency checks**: never assume a library is available; check package.json / requirements.txt \
 / Cargo.toml first.\n\
-- **Conciseness**: keep explanatory text brief — a few sentences, not paragraphs. Actions and \
-results beat narration.\n\
+- **Conciseness**: keep explanatory text brief — a few sentences, not paragraphs. Still narrate \
+each step in one short line (what you're doing and why); just keep it tight.\n\
 - **Parallel tool calls**: when independent operations are needed (reading several files, for \
 example), make all the calls in a single response rather than sequentially.\n\
 - **Non-interactive commands**: pass flags like `-y`, `--yes`, `--non-interactive` to prevent CLI \
