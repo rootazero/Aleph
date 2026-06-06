@@ -69,6 +69,9 @@ pub fn ChatSidebar() -> impl IntoView {
     let is_saving = RwSignal::new(false);
     let edit_input_ref = NodeRef::<leptos::html::Input>::new();
 
+    // Client-side session filter (R4 pure I/O — no backend search).
+    let search_query = RwSignal::new(String::new());
+
     // Reusable closure: fetch both agents and sessions from the backend.
     let reload_data = Arc::new(move |dash: DashboardState| {
         is_loading.set(true);
@@ -462,14 +465,20 @@ pub fn ChatSidebar() -> impl IntoView {
                     </button>
                 </div>
 
-                // Search
-                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken border border-border text-sm">
+                // Search — client-side filter over the session list.
+                <div class="flex items-center gap-2 px-3 py-2 rounded-lg bg-surface-sunken border border-border text-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/30">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-text-tertiary flex-shrink-0">
                         <circle cx="11" cy="11" r="8" />
                         <line x1="21" y1="21" x2="16.65" y2="16.65" />
                     </svg>
-                    <span class="text-text-tertiary">{move || t_string!(i18n, chat.search_placeholder).to_string()}</span>
+                    <input
+                        type="text"
+                        class="flex-1 min-w-0 bg-transparent outline-none text-text-primary placeholder:text-text-tertiary"
+                        placeholder=move || t_string!(i18n, chat.search_placeholder).to_string()
+                        prop:value=move || search_query.get()
+                        on:input=move |ev| search_query.set(event_target_value(&ev))
+                    />
                 </div>
             </div>
 
@@ -501,12 +510,26 @@ pub fn ChatSidebar() -> impl IntoView {
                         }.into_any();
                     }
 
-                    // Filter sessions for selected agent, sorted by updated_at desc
+                    // Filter by selected agent AND the search query, sorted by
+                    // updated_at desc. Empty query → behaves exactly as before.
+                    let needle = search_query.get().trim().to_lowercase();
                     let mut filtered: Vec<SessionEntry> = session_list
                         .into_iter()
                         .filter(|s| sel_agent.as_deref() == Some(&s.agent_id))
+                        .filter(|s| {
+                            if needle.is_empty() {
+                                true
+                            } else {
+                                let hay = s
+                                    .topic
+                                    .as_deref()
+                                    .unwrap_or(&s.key)
+                                    .to_lowercase();
+                                hay.contains(&needle)
+                            }
+                        })
                         .collect();
-                    filtered.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+                    filtered.sort_by_key(|s| std::cmp::Reverse(s.updated_at));
 
                     if filtered.is_empty() {
                         return view! {
