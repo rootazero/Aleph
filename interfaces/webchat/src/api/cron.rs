@@ -24,6 +24,8 @@ pub struct CronJobInfo {
     #[serde(default)]
     pub agent_id: String,
     #[serde(default)]
+    pub source_channel_id: Option<String>,
+    #[serde(default)]
     pub prompt: String,
     #[serde(default)]
     pub enabled: bool,
