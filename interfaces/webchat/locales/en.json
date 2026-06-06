@@ -1440,6 +1440,9 @@
     "placeholder_timezone": "Asia/Shanghai",
     "placeholder_tags": "report, daily",
     "placeholder_session_target": "e.g. new, reuse, reuse:session-id",
+    "field_channel": "Delivery channel",
+    "channel_none": "None (recorded to run history only)",
+    "agent_deleted_suffix": " (deleted)",
     "error_name_required": "Job name is required"
   },
   "heartbeat": {
@@ -1784,15 +1787,6 @@
     "max_iterations_description": "Maximum number of think-act loop iterations per agent run.",
     "saving": "Saving...",
     "save": "Save"
-  },
-  "runtime_deps": {
-    "title": "Runtime",
-    "description": "Bootstrap runtime dependencies that power browser automation, Python execution, and skills.",
-    "gateway_unavailable": "Gateway unavailable. Runtimes will load when connected.",
-    "loading": "Loading...",
-    "install_missing": "Install missing",
-    "refresh": "Refresh",
-    "install_log": "Install log"
   },
   "browser_banner": {
     "configure": "Configure →",

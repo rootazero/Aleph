@@ -1440,6 +1440,9 @@
     "placeholder_timezone": "Asia/Shanghai",
     "placeholder_tags": "报告, 每日",
     "placeholder_session_target": "例如 new、reuse、reuse:session-id",
+    "field_channel": "投递通道",
+    "channel_none": "无（仅记录到运行历史）",
+    "agent_deleted_suffix": "（已删除）",
     "error_name_required": "任务名称不能为空"
   },
   "heartbeat": {
@@ -1784,15 +1787,6 @@
     "max_iterations_description": "单次 Agent 运行中 think-act 循环的最大迭代次数。",
     "saving": "保存中...",
     "save": "保存"
-  },
-  "runtime_deps": {
-    "title": "运行时",
-    "description": "引导用于驱动浏览器自动化、Python 执行和技能的运行时依赖。",
-    "gateway_unavailable": "网关不可用。连接后将加载运行时。",
-    "loading": "加载中...",
-    "install_missing": "安装缺失项",
-    "refresh": "刷新",
-    "install_log": "安装日志"
   },
   "browser_banner": {
     "configure": "配置 →",
