@@ -829,6 +829,9 @@ pub fn ChatSidebar() -> impl IntoView {
                     .into_any()
                 }}
             </div>
+
+            // Bottom status bar — gateway state + active run count.
+            <crate::components::sidebar::SessionStatusBar />
         </div>
     }
 }
