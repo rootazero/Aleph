@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::gateway::agent_instance::AgentRegistry;
+use crate::gateway::agent_instance::{AgentInstance, AgentRegistry};
 use crate::gateway::channel::OutboundMessage;
 use crate::gateway::channel_registry::ChannelRegistry;
 use crate::gateway::event_emitter::CollectingEventEmitter;
@@ -111,7 +111,7 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
 async fn resolve_cron_agent(
     registry: &AgentRegistry,
     requested: &str,
-) -> Option<(Arc<crate::gateway::agent_instance::AgentInstance>, String, bool)> {
+) -> Option<(Arc<AgentInstance>, String, bool)> {
     if let Some(agent) = registry.get(requested).await {
         return Some((agent, requested.to_string(), false));
     }
@@ -663,14 +663,14 @@ mod tests {
     }
 
     async fn test_registry_with_main() -> (tempfile::TempDir, AgentRegistry) {
-        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
+        use crate::gateway::agent_instance::AgentInstanceConfig;
         use crate::gateway::session_store::sqlite_backend::{
             SqliteSessionStore, SqliteSessionStoreConfig,
         };
         use crate::gateway::session_store::SessionStore;
 
         let temp = tempfile::tempdir().unwrap();
-        let store: std::sync::Arc<dyn SessionStore> = std::sync::Arc::new(
+        let store: Arc<dyn SessionStore> = Arc::new(
             SqliteSessionStore::new(SqliteSessionStoreConfig {
                 db_path: temp.path().join("s.db"),
                 ..Default::default()
