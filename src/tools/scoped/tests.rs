@@ -1269,3 +1269,88 @@ async fn describe_surfaces_requires_approval_metadata() {
     let plain = svc.describe("plain").await.expect("plain described");
     assert!(!plain.metadata.requires_approval);
 }
+
+// -------------------------------------------------------------------------
+// SESSION_ID scoping at the dispatch chokepoint.
+//
+// Regression: `code_exec` / `bash` / `code_check` refuse to run with
+// "no active session context" because `current_session()` reads the
+// `SESSION_ID` task-local, which the gateway path never scoped — only
+// `TURN_CONTEXT` was scoped here. The dispatch chokepoint must scope BOTH
+// from the turn's `session_key` so exec-class tools target the right
+// per-session workspace instead of looping on a deterministic refusal.
+// -------------------------------------------------------------------------
+
+/// Tool that captures `current_session()` observed during `execute`.
+struct SessionProbeTool {
+    seen: StdArc<crate::sync_primitives::Mutex<Option<crate::session::service::SessionId>>>,
+}
+
+#[async_trait::async_trait]
+impl LoopTool for SessionProbeTool {
+    fn name(&self) -> &str {
+        "session_probe"
+    }
+    fn description(&self) -> &str {
+        "captures current_session() during execute"
+    }
+    fn schema(&self) -> Value {
+        json!({ "type": "object" })
+    }
+    async fn execute(&self, _input: Value, _cancel: CancellationToken) -> LoopToolResult {
+        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) =
+            crate::sandbox::context::current_session();
+        LoopToolResult::Success { output: json!({}) }
+    }
+}
+
+#[tokio::test]
+async fn execute_scopes_session_id_from_turn_context() {
+    let seen = StdArc::new(crate::sync_primitives::Mutex::new(None));
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(SessionProbeTool { seen: seen.clone() }));
+    let registry = Arc::new(reg);
+
+    let sid = crate::routing::session_key::SessionKey::ephemeral("scoped-sess");
+    let turn = crate::tools::turn_context::TurnContext {
+        session_key: sid.clone(),
+        channel_id: String::new(),
+        conversation_id: String::new(),
+    };
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(turn);
+
+    svc.execute("session_probe", json!({}))
+        .await
+        .expect("probe executes");
+
+    let captured = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(
+        captured.as_ref(),
+        Some(&sid),
+        "execute must scope SESSION_ID from turn_context so exec-class tools see the session"
+    );
+}
+
+/// Without a turn context there is no session to scope — exec-class tools
+/// still fall back to the no-session policy. Locks in that the new scoping
+/// is gated on `turn_context` being present and never invents a session.
+#[tokio::test]
+async fn execute_without_turn_context_leaves_session_unset() {
+    let seen = StdArc::new(crate::sync_primitives::Mutex::new(Some(
+        crate::routing::session_key::SessionKey::ephemeral("stale"),
+    )));
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(SessionProbeTool { seen: seen.clone() }));
+    let registry = Arc::new(reg);
+
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    svc.execute("session_probe", json!({}))
+        .await
+        .expect("probe executes");
+
+    let captured = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert!(
+        captured.is_none(),
+        "no turn_context ⇒ no SESSION_ID scope; current_session() must be None"
+    );
+}

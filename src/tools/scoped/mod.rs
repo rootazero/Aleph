@@ -220,13 +220,25 @@ impl ToolService for ScopedToolService {
 
         // Scope the turn's routing context so HITL tools (sandbox escalation,
         // `requires_confirmation`, `ask_user`) can reach the originating
-        // channel. Scoped here — the immediate caller of every tool's
-        // `execute` — so it stays visible without crossing a `tokio::spawn`.
+        // channel, and the turn's `session_key` into `SESSION_ID` so exec-class
+        // tools (`code_exec` / `bash` / `code_check`) discover the active
+        // session via `sandbox::context::current_session()` and target the
+        // right per-session workspace. The gateway path never funnels through
+        // `invoke_with_session_trace`, so without this it would refuse every
+        // exec call with "no active session context" and the model would loop
+        // on the deterministic failure. Both are scoped here — the immediate
+        // caller of every tool's `execute` — so they stay visible without
+        // crossing a `tokio::spawn`.
         let fut = async move {
             match self.turn_context.clone() {
                 Some(turn) => {
-                    crate::tools::turn_context::TURN_CONTEXT
-                        .scope(turn, self.execute_inner(name, input, cancel))
+                    let session = turn.session_key.clone();
+                    crate::sandbox::context::SESSION_ID
+                        .scope(
+                            session,
+                            crate::tools::turn_context::TURN_CONTEXT
+                                .scope(turn, self.execute_inner(name, input, cancel)),
+                        )
                         .await
                 }
                 None => self.execute_inner(name, input, cancel).await,
