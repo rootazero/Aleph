@@ -102,6 +102,25 @@ pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> A
     })
 }
 
+/// Resolve which agent instance to run a cron job with. When `requested` is
+/// missing from the registry, fall back to the registry's default agent
+/// (the built-in "main", which cannot be deleted). Returns the resolved
+/// instance, the id it resolved under (for session keying), and whether a
+/// fallback occurred. Returns `None` only when even the default is absent
+/// (should not happen in production — "main" is built-in).
+async fn resolve_cron_agent(
+    registry: &AgentRegistry,
+    requested: &str,
+) -> Option<(Arc<crate::gateway::agent_instance::AgentInstance>, String, bool)> {
+    if let Some(agent) = registry.get(requested).await {
+        return Some((agent, requested.to_string(), false));
+    }
+    warn!(requested, "cron agent missing, falling back to default agent");
+    let agent = registry.get_default().await?;
+    let used = agent.id().to_string();
+    Some((agent, used, true))
+}
+
 async fn execute_cron_job(
     adapter: Arc<dyn ExecutionAdapter>,
     registry: Arc<AgentRegistry>,
@@ -641,5 +660,59 @@ mod tests {
     fn prepend_fallback_note_uses_note_as_output_when_output_is_none() {
         let out = prepend_fallback_note(None, "oldie");
         assert_eq!(out, fallback_note("oldie"));
+    }
+
+    async fn test_registry_with_main() -> (tempfile::TempDir, AgentRegistry) {
+        use crate::gateway::agent_instance::{AgentInstance, AgentInstanceConfig};
+        use crate::gateway::session_store::sqlite_backend::{
+            SqliteSessionStore, SqliteSessionStoreConfig,
+        };
+        use crate::gateway::session_store::SessionStore;
+
+        let temp = tempfile::tempdir().unwrap();
+        let store: std::sync::Arc<dyn SessionStore> = std::sync::Arc::new(
+            SqliteSessionStore::new(SqliteSessionStoreConfig {
+                db_path: temp.path().join("s.db"),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        let registry = AgentRegistry::new(); // default_agent = "main"
+        let main = AgentInstance::new(
+            AgentInstanceConfig {
+                agent_id: "main".to_string(),
+                workspace: temp.path().join("ws"),
+                agent_dir: temp.path().join("agents/main"),
+                ..Default::default()
+            },
+            store,
+        )
+        .unwrap();
+        registry.register(main).await;
+        (temp, registry)
+    }
+
+    #[tokio::test]
+    async fn resolve_uses_requested_agent_when_present() {
+        let (_t, registry) = test_registry_with_main().await;
+        let (inst, used, fell_back) = resolve_cron_agent(&registry, "main").await.unwrap();
+        assert_eq!(inst.id(), "main");
+        assert_eq!(used, "main");
+        assert!(!fell_back);
+    }
+
+    #[tokio::test]
+    async fn resolve_falls_back_to_default_when_missing() {
+        let (_t, registry) = test_registry_with_main().await;
+        let (inst, used, fell_back) = resolve_cron_agent(&registry, "ghost").await.unwrap();
+        assert_eq!(inst.id(), "main");
+        assert_eq!(used, "main");
+        assert!(fell_back);
+    }
+
+    #[tokio::test]
+    async fn resolve_returns_none_when_default_absent() {
+        let registry = AgentRegistry::new(); // empty: no "main"
+        assert!(resolve_cron_agent(&registry, "ghost").await.is_none());
     }
 }
