@@ -803,6 +803,152 @@ async fn tool_loop_verifier_vetoes_repeated_tool_call_with_no_text() {
 }
 
 // =============================================================================
+// Test — ToolLoopVerifier Halt is salvaged, not cold-terminated. The provider
+// loops an identical tool call until Tier-1 halts (8×), then — when it sees the
+// salvage nudge appended by the grace turn — returns a final deliverable. This
+// covers ① (salvage grace turn on halt) and ② (orphan tool_use closed so the
+// salvage prompt keeps the looped turns' context).
+// =============================================================================
+
+/// Loops an identical tool call (so `ToolLoopVerifier` Tier-1 halts), but emits
+/// final text once the grace turn's salvage nudge appears in the prompt.
+struct LoopThenSalvageProvider {
+    calls: AtomicUsize,
+}
+
+impl LoopThenSalvageProvider {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl AiProvider for LoopThenSalvageProvider {
+    fn process<'a>(
+        &'a self,
+        payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        // The grace turn appends GRACE_NUDGE_TOOL_LOOP_HALT, which contains this
+        // phrase, as the trailing user message. Detect it to switch to salvage.
+        let salvage = payload
+            .messages
+            .last()
+            .map(|m| {
+                m.text_content()
+                    .contains("produce your best final deliverable")
+            })
+            .unwrap_or(false);
+        Box::pin(async move {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            if salvage {
+                return Ok(ProviderResponse {
+                    text: Some("Here is the report built from what I gathered.".to_string()),
+                    ..Default::default()
+                });
+            }
+            Ok(ProviderResponse {
+                text: None,
+                tool_calls: vec![crate::providers::adapter::NativeToolCall {
+                    thought_signature: None,
+                    id: "loop-id".to_string(),
+                    name: "loop_tool".to_string(),
+                    arguments: serde_json::json!({"x": 1}),
+                }],
+                ..Default::default()
+            })
+        })
+    }
+    fn name(&self) -> &str {
+        "loop_then_salvage"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+#[tokio::test]
+async fn tool_loop_halt_fires_salvage_grace_turn_and_closes_orphan() {
+    let session = MockSession::new(vec![turn_started_event(), user_message_event("loop on me")]);
+    let provider = LoopThenSalvageProvider::new();
+    let chain = Arc::new(
+        VerifierChain::builder()
+            .with(Arc::new(ToolLoopVerifier::new()))
+            .build(),
+    );
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: Some(chain),
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        // High enough that the Tier-1 halt (at 8 identical calls) fires before
+        // the iteration cap, so we exercise the halt path, not max_iterations.
+        max_iterations: Some(20),
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+    let cancel = CancellationToken::new();
+    let mut cb = NoopHarnessCallback;
+    harness
+        .run(&sample_session_id(), &mut cb, &cancel)
+        .await
+        .expect("harness.run should complete via halt");
+
+    // Terminated via the loop halt, not the iteration cap.
+    assert!(
+        matches!(
+            harness.terminate_reason(),
+            crate::orchestrator::dispatch::TerminateReason::StopHookHalt { .. }
+        ),
+        "expected StopHookHalt, got {:?}",
+        harness.terminate_reason()
+    );
+
+    let events = session.snapshot().await;
+
+    // ① Salvage: a grace AssistantMessage with the deliverable text exists.
+    let salvaged = events.iter().any(|r| {
+        matches!(&r.event,
+            SessionEvent::AssistantMessage { content, .. }
+            if content.text.contains("built from what I gathered"))
+    });
+    assert!(
+        salvaged,
+        "expected a salvage AssistantMessage from the grace turn; events: {events:#?}"
+    );
+
+    // ② Orphan closed: the looped tool_use got a synthetic ToolError so the
+    // prompt builder would not drop it.
+    let closed_orphan = events.iter().any(|r| {
+        matches!(&r.event,
+            SessionEvent::ToolError { call_id, error, .. }
+            if call_id == "loop-id" && error.contains("not executed"))
+    });
+    assert!(
+        closed_orphan,
+        "expected a ToolError closing the orphaned 'loop-id' tool_use; events: {events:#?}"
+    );
+}
+
+// =============================================================================
 // Test — Per-tool budget fires before harness-wide turn_timeout. The sleeping
 // tool's describe() advertises max_duration_ms=50; the harness turn_timeout is
 // 60s. The inner per-tool cap must win → StalledTurn in <500ms. Cycle 3.

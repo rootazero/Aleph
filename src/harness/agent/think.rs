@@ -10,7 +10,7 @@ use crate::harness::callback::HarnessCallback;
 use crate::harness::trait_def::{HarnessError, TurnState};
 use crate::providers::adapter::{NativeToolCall, ProviderResponse, RequestPayload, StopReason};
 use crate::providers::message::UnifiedMessage;
-use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord};
+use crate::session::events::{MessageContent, SessionEvent, SessionEventRecord, TurnId};
 use crate::session::service::SessionId;
 use crate::verification::{
     hash_tool_args, ToolCallSummary, TurnVerifyContext, VerifierVerdict, TOOL_HISTORY_WINDOW,
@@ -95,6 +95,20 @@ const GRACE_NUDGE_FAILURE_CAP: &str =
      obstacle that keeps recurring, and what decision or input you need from \
      the user to proceed.";
 
+/// Ephemeral nudge for the grace turn fired when the `ToolLoopVerifier` halts
+/// an unproductive tool-call loop. The loop ran many tool calls without ever
+/// converging on a deliverable (the original 116-step failure mode), so this
+/// turns the dead halt into a salvage: use everything already gathered to
+/// produce the best possible final answer instead of leaving the user with
+/// only a "stop hook" apology. The model writes the actual content (R7 — no
+/// hardcoded user-facing template).
+const GRACE_NUDGE_TOOL_LOOP_HALT: &str =
+    "The run was stopped to end an unproductive tool-call loop. Do NOT call any \
+     more tools. Using everything you have ALREADY gathered, produce your best \
+     final deliverable for the user now. If a specific piece of data is \
+     genuinely missing, state that gap plainly and deliver the rest — do not \
+     let one missing item block the whole response.";
+
 /// Maximum re-issues of the LLM call when the provider returns a response
 /// with no text, no tool_calls and no thinking. A small bound — an empty
 /// response is usually transient; persistent emptiness is a broken
@@ -153,6 +167,9 @@ pub(crate) enum GraceReason {
     VerifierVeto,
     /// `consecutive_failure_cap` reached — repeated total-failure turns.
     ConsecutiveFailureCap,
+    /// `ToolLoopVerifier` halted an unproductive tool-call loop — salvage a
+    /// deliverable from what was already gathered instead of cold-terminating.
+    ToolLoopHalt,
 }
 
 impl GraceReason {
@@ -163,6 +180,7 @@ impl GraceReason {
             Self::MaxIterations => GRACE_NUDGE_MAX_ITERATIONS,
             Self::VerifierVeto => GRACE_NUDGE_VERIFIER_VETO,
             Self::ConsecutiveFailureCap => GRACE_NUDGE_FAILURE_CAP,
+            Self::ToolLoopHalt => GRACE_NUDGE_TOOL_LOOP_HALT,
         }
     }
 }
@@ -998,6 +1016,30 @@ impl AgentHarness {
                 synthetic: true,
             };
             self.deps.session.emit_event(session_id, halt_event).await?;
+            // ② Close the tool_use blocks this halted turn emitted but never ran
+            // — otherwise the prompt builder drops them as orphans and erases the
+            // turn's context from the salvage prompt below.
+            let pending_tool_use_ids: Vec<String> =
+                response.tool_calls.iter().map(|c| c.id.clone()).collect();
+            self.close_unexecuted_tool_uses(
+                session_id,
+                turn_id,
+                &pending_tool_use_ids,
+                "tool-loop halt",
+            )
+            .await;
+            // ① Salvage: turn the dead halt into a final deliverable built from
+            // what was already gathered, so the user gets an answer instead of
+            // only the "stop hook" apology. Skips itself if the turn already has
+            // terminal text. Fail-soft on any LLM error.
+            self.fire_boundary_grace_turn(
+                session_id,
+                callback,
+                iterations,
+                GraceReason::ToolLoopHalt,
+                parent_cancel,
+            )
+            .await;
             callback.on_stop_hook_halt(&reason);
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::StopHookHalt {
@@ -1029,6 +1071,19 @@ impl AgentHarness {
                 .session
                 .emit_event(session_id, block_event)
                 .await?;
+            // ② A vetoed turn re-enters the loop without executing its tool
+            // calls, so close them out — an orphaned tool_use would be dropped
+            // by the next prompt build, taking this turn's context (and the veto
+            // feedback's pairing) with it.
+            let pending_tool_use_ids: Vec<String> =
+                response.tool_calls.iter().map(|c| c.id.clone()).collect();
+            self.close_unexecuted_tool_uses(
+                session_id,
+                turn_id,
+                &pending_tool_use_ids,
+                "verifier veto",
+            )
+            .await;
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Continue;
             metrics_for_trace = zero_metrics;
             result = Ok((TurnState::Continue, 0, true, None));
@@ -1479,6 +1534,34 @@ impl AgentHarness {
             parent_cancel,
         )
         .await;
+    }
+
+    /// Close out tool_use blocks the model emitted on a turn the verifier then
+    /// vetoed/halted. Those calls are never executed (Act is skipped on a
+    /// non-Continue verdict), so without a matching result the prompt builder
+    /// drops the orphaned tool_use block to avoid an Anthropic 400 — which
+    /// silently erases the whole assistant turn (text + remaining context) from
+    /// the next prompt. Emitting a synthetic `ToolError` per call preserves the
+    /// tool_use↔result invariant and lets the model see *why* the call did not
+    /// run. Fail-soft: a failed emit logs at WARN and continues.
+    async fn close_unexecuted_tool_uses(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        call_ids: &[String],
+        reason: &str,
+    ) {
+        for id in call_ids {
+            let event = SessionEvent::ToolError {
+                turn_id,
+                call_id: id.clone(),
+                error: format!("call not executed — {reason}"),
+                at: crate::session::events::now_ms(),
+            };
+            if let Err(e) = self.deps.session.emit_event(session_id, event).await {
+                tracing::warn!(?session_id, ?e, "close_unexecuted_tool_uses emit failed");
+            }
+        }
     }
 
     /// Stage 6a (#10): dispatch the per-turn verifier chain. `None` chain → noop.

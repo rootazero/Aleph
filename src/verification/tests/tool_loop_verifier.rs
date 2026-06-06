@@ -224,6 +224,75 @@ async fn at_halt_threshold_halts() {
 }
 
 #[tokio::test]
+async fn tier2_same_name_varying_args_no_text_halts() {
+    // A full window of the SAME tool name with all-different args (so Tier 1's
+    // identical run never reaches the threshold) and no narration text → the
+    // exploration-loop Tier 2 halts. This is the template.html/layouts.md/
+    // themes.md thrash the identical-args check is blind to.
+    let v = ToolLoopVerifier::new();
+    let history: Vec<_> = (0..TOOL_HISTORY_WINDOW as u64)
+        .map(|i| make("file_read", i)) // same name, every args_hash distinct
+        .collect();
+    let ctx = TurnVerifyContext {
+        iterations: TOOL_HISTORY_WINDOW,
+        tool_calls_made: TOOL_HISTORY_WINDOW,
+        final_text: None,
+        recent_tool_calls: &history,
+        stop_reason: None,
+        session_id: None,
+    };
+    let cancel = CancellationToken::new();
+    match v.verify(&ctx, &cancel).await {
+        VerifierVerdict::Halt { reason, .. } => {
+            assert!(reason.contains("file_read"));
+            assert!(reason.contains("varying arguments"));
+        }
+        other => panic!("expected Tier-2 Halt, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tier2_narration_rescues_varying_args_loop() {
+    // The same full-window varying-args run, but WITH narration text. Tier 2 is
+    // silence-gated (varying-args exploration with reasoning can be legitimate,
+    // and the Tier-2 Halt is terminal), so this must NOT halt.
+    let v = ToolLoopVerifier::new();
+    let history: Vec<_> = (0..TOOL_HISTORY_WINDOW as u64)
+        .map(|i| make("file_read", i))
+        .collect();
+    let ctx = TurnVerifyContext {
+        iterations: TOOL_HISTORY_WINDOW,
+        tool_calls_made: TOOL_HISTORY_WINDOW,
+        final_text: Some("comparing the three layout references before composing"),
+        recent_tool_calls: &history,
+        stop_reason: None,
+        session_id: None,
+    };
+    let cancel = CancellationToken::new();
+    assert!(v.verify(&ctx, &cancel).await.is_continue());
+}
+
+#[tokio::test]
+async fn tier2_below_window_continues() {
+    // One short of a full window of same-name varying-args calls, no text →
+    // Tier 2 requires the entire window, so this still continues.
+    let v = ToolLoopVerifier::new();
+    let history: Vec<_> = (0..(TOOL_HISTORY_WINDOW as u64 - 1))
+        .map(|i| make("file_read", i))
+        .collect();
+    let ctx = TurnVerifyContext {
+        iterations: TOOL_HISTORY_WINDOW - 1,
+        tool_calls_made: TOOL_HISTORY_WINDOW - 1,
+        final_text: None,
+        recent_tool_calls: &history,
+        stop_reason: None,
+        session_id: None,
+    };
+    let cancel = CancellationToken::new();
+    assert!(v.verify(&ctx, &cancel).await.is_continue());
+}
+
+#[tokio::test]
 async fn halt_threshold_clamped_at_or_above_repeat() {
     // A halt threshold below the veto threshold would invert the tiers; it is
     // lifted to `repeat_threshold`.

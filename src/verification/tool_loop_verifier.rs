@@ -24,8 +24,18 @@
 //!     timeout) kills the run with a confusing error. Halting deterministically
 //!     here ends the unproductive loop with a clear reason instead.
 //!
-//! Both tiers are pure structural checks over `(name, args_hash)` — no model
-//! reasoning, so this stays scaffolding (R10-safe), never a completion judge.
+//! Tier 2 (same name, varying args): when the *entire* history window is the
+//! same tool `name` but the args keep changing — so Tier 1's identical run never
+//! accumulates — and the turn carries no narration text, emit a `Halt`. This
+//! catches a thrash the identical-args check is blind to (e.g. re-reading three
+//! reference files round and round). It is gated on silence: varying-args
+//! exploration *with* narration can be legitimate, and a Tier-2 Halt is
+//! terminal, so only a wholly silent loop is cut. Tier 1 fires regardless of
+//! narration text; Tier 2 only on its absence.
+//!
+//! All tiers are pure structural checks over `(name, args_hash)` and the
+//! presence/absence of text — no model reasoning, so this stays scaffolding
+//! (R10-safe), never a completion judge.
 
 use async_trait::async_trait;
 use tokio_util::sync::CancellationToken;
@@ -96,6 +106,21 @@ fn trailing_repeat_run(calls: &[ToolCallSummary]) -> usize {
         .count()
 }
 
+/// Length of the trailing run of calls sharing the most recent call's `name`,
+/// **ignoring `args_hash`**. `0` for an empty slice. Used by Tier 2 to catch a
+/// same-tool thrash whose arguments keep changing (so the identical-args
+/// [`trailing_repeat_run`] never accumulates).
+fn trailing_same_name_run(calls: &[ToolCallSummary]) -> usize {
+    let Some(last) = calls.last() else {
+        return 0;
+    };
+    calls
+        .iter()
+        .rev()
+        .take_while(|c| c.name == last.name)
+        .count()
+}
+
 impl Default for ToolLoopVerifier {
     fn default() -> Self {
         Self::new()
@@ -129,32 +154,62 @@ impl TurnVerifier for ToolLoopVerifier {
             return VerifierVerdict::Continue;
         }
         let run = trailing_repeat_run(ctx.recent_tool_calls);
-        if run < self.repeat_threshold {
-            return VerifierVerdict::Continue;
-        }
-        // `run >= repeat_threshold` guarantees a non-empty trailing run, so the
-        // last entry names the offending tool.
-        let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
-        // Halt only once the loop has persisted *past* at least one veto — i.e.
-        // when the halt tier sits strictly above the veto tier. In the
-        // degenerate clamp case where both collapse to the window size, there is
-        // no "ignored veto" stage, so keep vetoing (the conservative original
-        // behavior) rather than halting on first detection.
-        if run >= self.halt_threshold && self.halt_threshold > self.repeat_threshold {
-            return VerifierVerdict::Halt {
+        // Tier 1 — identical (name + args_hash) consecutive calls. Fires
+        // regardless of narration text: repeating the *exact* same call with
+        // unchanged arguments is never productive, so a thinking-text escape
+        // would only let a loop disguise itself.
+        if run >= self.repeat_threshold {
+            // `run >= repeat_threshold` guarantees a non-empty trailing run, so
+            // the last entry names the offending tool.
+            let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
+            // Halt only once the loop has persisted *past* at least one veto —
+            // i.e. when the halt tier sits strictly above the veto tier. In the
+            // degenerate clamp case where both collapse to the window size, there
+            // is no "ignored veto" stage, so keep vetoing (the conservative
+            // original behavior) rather than halting on first detection.
+            if run >= self.halt_threshold && self.halt_threshold > self.repeat_threshold {
+                return VerifierVerdict::Halt {
+                    reason: format!(
+                        "tool '{tool}' invoked {run} consecutive times with no thinking text despite \
+                         repeated feedback — terminating to avoid an unproductive loop that would run \
+                         into the provider rate limit",
+                    ),
+                    class: ErrorClass::Recoverable,
+                };
+            }
+            return VerifierVerdict::Veto {
                 reason: format!(
-                    "tool '{tool}' invoked {run} consecutive times with no thinking text despite \
-                     repeated feedback — terminating to avoid an unproductive loop that would run \
-                     into the provider rate limit",
+                    "tool '{tool}' invoked {run} consecutive times with no thinking text — try a different approach or summarize what you've found",
                 ),
                 class: ErrorClass::Recoverable,
             };
         }
-        VerifierVerdict::Veto {
-            reason: format!(
-                "tool '{tool}' invoked {run} consecutive times with no thinking text — try a different approach or summarize what you've found",
-            ),
-            class: ErrorClass::Recoverable,
+
+        // Tier 2 — same tool NAME repeated across the *entire* history window
+        // with varying arguments and no narration text. Catches a thrash Tier 1
+        // misses: e.g. re-reading template.html / layouts.md / themes.md in a
+        // loop — all `file_read`, never the same args twice, so the
+        // identical-args run never builds. Gated on silence because varying-args
+        // exploration *with* narration can be legitimate, and a Tier-2 Halt is
+        // terminal; we only cut a loop the model is running with no reasoning
+        // text at all.
+        let same_name_run = trailing_same_name_run(ctx.recent_tool_calls);
+        let has_text = ctx
+            .final_text
+            .map(|t| !t.trim().is_empty())
+            .unwrap_or(false);
+        if !has_text && same_name_run >= TOOL_HISTORY_WINDOW {
+            let tool = &ctx.recent_tool_calls[ctx.recent_tool_calls.len() - 1].name;
+            return VerifierVerdict::Halt {
+                reason: format!(
+                    "tool '{tool}' invoked {same_name_run} consecutive times with varying arguments \
+                     and no thinking text — terminating an unproductive exploration loop that would \
+                     run into the provider rate limit",
+                ),
+                class: ErrorClass::Recoverable,
+            };
         }
+
+        VerifierVerdict::Continue
     }
 }
