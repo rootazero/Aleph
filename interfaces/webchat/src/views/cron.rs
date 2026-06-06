@@ -653,6 +653,7 @@ fn JobEditor(
     let form_alert_kind = RwSignal::new(String::from("announce"));
     let form_alert_channel = RwSignal::new(String::new());
     let form_alert_expanded = RwSignal::new(false);
+    let form_channel = RwSignal::new(Option::<String>::None);
 
     let runs = RwSignal::new(Vec::<JobRunInfo>::new());
     let run_success = RwSignal::new(Option::<String>::None);
@@ -697,6 +698,7 @@ fn JobEditor(
                 form_alert_kind.set("announce".to_string());
                 form_alert_channel.set(String::new());
                 form_alert_expanded.set(false);
+                form_channel.set(None);
                 runs.set(Vec::new());
             } else {
                 // Load existing job data
@@ -711,6 +713,7 @@ fn JobEditor(
                     form_schedule.set(sk_val);
 
                     form_agent_id.set(job.agent_id.clone());
+                    form_channel.set(job.source_channel_id.clone());
                     form_prompt.set(job.prompt.clone());
                     form_timezone.set(job.timezone.clone().unwrap_or_default());
                     form_tags.set(job.tags.join(", "));
@@ -1205,6 +1208,19 @@ fn JobEditor(
                                             opts
                                         }}
                                     </select>
+                                </div>
+
+                                // Delivery channel (read-only)
+                                <div>
+                                    <label class="block text-sm font-medium text-text-secondary mb-2">
+                                        {t!(i18n, cron.field_channel)}
+                                    </label>
+                                    <div class="w-full px-4 py-2 bg-surface-sunken border border-border rounded-lg text-text-tertiary text-sm">
+                                        {move || match form_channel.get() {
+                                            Some(ch) if !ch.is_empty() => ch,
+                                            _ => t_string!(i18n, cron.channel_none).to_string(),
+                                        }}
+                                    </div>
                                 </div>
 
                                 // Prompt
