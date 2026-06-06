@@ -109,16 +109,20 @@ fn run_id_of(m: &ChatMessage) -> String {
 }
 
 /// A trailing assistant bubble is the run's *final answer* — rendered as its
-/// own message, not folded into the step strip — only when it carries real
-/// text and issued no tool call (a pure reply that ends the run). A turn that
-/// called a tool, or an empty placeholder, is a step and belongs in the strip.
-/// This is what keeps a normal one-shot reply rendering as a plain bubble while
-/// a 200-iteration tool run collapses entirely into the strip.
+/// own message, not folded into the step strip — when it carries real text and
+/// either issued no tool call (a pure reply that ends the run) or has been
+/// flagged `is_final` by `run_complete`/`replay_run` from the harness's
+/// authoritative `summary.final_response`. The `is_final` escape hatch covers a
+/// run whose last turn emitted the answer *and* a tool call (e.g. a closing
+/// `web_fetch`): the answer renders as a bubble with its tool card inline,
+/// instead of staying trapped in the strip. A plain mid-run tool turn (no
+/// `is_final`) still folds into the strip, so a 200-iteration tool run collapses
+/// entirely while a normal one-shot reply renders as a plain bubble.
 fn is_final_answer(m: &ChatMessage) -> bool {
     m.role == "assistant"
         && !m.is_intermediate
-        && m.tool_calls.is_empty()
         && !m.content.trim().is_empty()
+        && (m.tool_calls.is_empty() || m.is_final)
 }
 
 /// Whether this bubble folds into the step strip: any iteration-tagged
@@ -310,6 +314,8 @@ mod tests {
             is_intermediate: false,
             error: None,
             model_info: None,
+            is_final: false,
+            text_finalized: false,
             timestamp: ts,
             iteration: None,
         }
@@ -325,6 +331,8 @@ mod tests {
             is_intermediate: false,
             error: None,
             model_info: None,
+            is_final: false,
+            text_finalized: false,
             iteration: None,
             timestamp: None,
         }
@@ -340,6 +348,8 @@ mod tests {
             is_intermediate: true,
             error: None,
             model_info: None,
+            is_final: false,
+            text_finalized: false,
             iteration: Some(it),
             timestamp: None,
         }
@@ -355,6 +365,8 @@ mod tests {
             is_intermediate: false,
             error: None,
             model_info: None,
+            is_final: false,
+            text_finalized: false,
             iteration: None,
             timestamp: None,
         }
@@ -423,6 +435,8 @@ mod tests {
             is_intermediate: false,
             error: None,
             model_info: None,
+            is_final: false,
+            text_finalized: false,
             iteration: Some(it),
             timestamp: None,
         }
@@ -442,6 +456,8 @@ mod tests {
             is_intermediate: false,
             error: None,
             model_info: None,
+            is_final: false,
+            text_finalized: false,
             iteration: Some(it),
             timestamp: None,
         }
@@ -522,6 +538,38 @@ mod tests {
             rows.iter()
                 .any(|r| matches!(r, TimelineRow::StepStrip { steps, .. } if steps.len() == 1)),
             "the one tool step still folds into a strip"
+        );
+    }
+
+    #[test]
+    fn final_answer_with_tool_call_escapes_the_strip() {
+        // The real bug: the terminating turn emitted the answer text AND a
+        // closing tool call (e.g. a `web_fetch`), then the run ended. Without
+        // the `is_final` flag this trailing bubble — having a non-empty
+        // `tool_calls` — was folded into the step strip instead of rendering as
+        // the conversational reply. `run_complete`/`replay_run` flag it
+        // `is_final`, so it must render as a standalone Message (tool card
+        // inline) while the earlier steps still fold.
+        let mut answer = msg_tool_step("run-r", 2, "根据我的搜索，我为您整理了以下报告……", false);
+        answer.is_final = true;
+        let msgs = vec![
+            msg_user("u1", "今天美股发生了什么"),
+            msg_step("intermediate-run-r-1", 1, "searching", false),
+            answer,
+        ];
+        let rows = derive_timeline(&msgs, "Today", "Yesterday");
+        assert!(
+            rows.iter().any(|r| matches!(
+                r,
+                TimelineRow::Message { message, .. }
+                    if message.id == "assistant-run-r" && !message.tool_calls.is_empty()
+            )),
+            "is_final answer renders as a standalone bubble even with a tool call"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r, TimelineRow::StepStrip { steps, .. } if steps.len() == 1)),
+            "the earlier tool step still folds into a strip"
         );
     }
 

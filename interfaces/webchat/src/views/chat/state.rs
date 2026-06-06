@@ -162,6 +162,23 @@ pub struct ChatMessage {
     /// segmentation and the `(run_id, iteration)` cross-highlight key.
     #[serde(default)]
     pub iteration: Option<usize>,
+    /// The completed run's authoritative final answer (`run_complete`'s
+    /// `summary.final_response`). When set this bubble renders as the
+    /// conversational answer even if its terminating turn also issued a tool
+    /// call — the tool card stays inline. Without it, a run whose last turn
+    /// emitted text *and* a tool call (e.g. a closing `web_fetch`) would trap
+    /// the answer in the step strip, since `is_final_answer` otherwise requires
+    /// no tool calls. Mirrors the reference agents' typed-part model where text
+    /// is always the answer and tools are always steps.
+    #[serde(default)]
+    pub is_final: bool,
+    /// Set once `set_step_text` writes this bubble's authoritative per-turn text
+    /// (`agent_trace.text_emitted`). Locks out late-arriving streamed
+    /// `response_chunk` previews: the two travel independent async pipelines, so
+    /// a chunk landing *after* the authoritative text would otherwise
+    /// `push_str` a duplicate copy on top of it.
+    #[serde(default)]
+    pub text_finalized: bool,
 }
 
 /// Minimal tool call record for display.
@@ -387,6 +404,8 @@ impl ChatState {
                 is_intermediate: false,
                 error: None,
                 model_info: None,
+                is_final: false,
+                text_finalized: false,
                 timestamp: Some(super::timeline::now_millis()),
                 iteration: None,
             });
@@ -407,6 +426,8 @@ impl ChatState {
                 is_intermediate: false,
                 error: None,
                 model_info: None,
+                is_final: false,
+                text_finalized: false,
                 timestamp: Some(super::timeline::now_millis()),
                 iteration: None,
             });
@@ -455,6 +476,8 @@ impl ChatState {
                         model_info: None,
                         iteration: Some(iteration),
                         timestamp: Some(super::timeline::now_millis()),
+                        is_final: false,
+                        text_finalized: false,
                     });
                 } else {
                     msgs[idx].iteration = Some(iteration);
@@ -478,6 +501,11 @@ impl ChatState {
                     && (m.id == assistant_id || m.id.starts_with(&intermediate_prefix))
             }) {
                 m.content = text.to_string();
+                // Authoritative per-turn text has landed: lock this bubble so a
+                // late streamed `response_chunk` preview can't `push_str` a
+                // duplicate copy on top of it (the two arrive on independent
+                // async pipelines and can race).
+                m.text_finalized = true;
             }
         });
     }
@@ -510,7 +538,12 @@ impl ChatState {
         let target_id = format!("assistant-{}", run_id);
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
-                msg.content.push_str(content);
+                // Skip once `set_step_text` has written the authoritative text
+                // for this bubble — a late preview chunk would otherwise double
+                // the content (see `text_finalized`).
+                if !msg.text_finalized {
+                    msg.content.push_str(content);
+                }
             }
         });
         self.phase.set(ChatPhase::Streaming);
@@ -553,6 +586,33 @@ impl ChatState {
         });
         self.active_run_id.set(None);
         self.phase.set(ChatPhase::Idle);
+    }
+
+    /// Promote a completed run's authoritative final answer into its trailing
+    /// assistant bubble. Driven by `run_complete` from `summary.final_response`
+    /// (and mirrored on the `replay_run` history path). Overwrites the trailing
+    /// bubble with the authoritative text and flags it `is_final`, so the answer
+    /// renders as a conversational bubble even when its terminating turn also
+    /// issued a tool call — without this, such an answer stays trapped in the
+    /// step strip. No-op for an empty answer or a run with no assistant bubble.
+    pub fn finalize_answer(&self, run_id: &str, final_text: &str) {
+        if final_text.trim().is_empty() {
+            return;
+        }
+        let assistant_id = format!("assistant-{}", run_id);
+        let intermediate_prefix = format!("intermediate-{}-", run_id);
+        self.messages.update(|msgs| {
+            if let Some(m) = msgs.iter_mut().rev().find(|m| {
+                m.role == "assistant"
+                    && (m.id == assistant_id || m.id.starts_with(&intermediate_prefix))
+            }) {
+                m.content = final_text.to_string();
+                m.is_final = true;
+                m.is_intermediate = false;
+                m.is_streaming = false;
+                m.text_finalized = true;
+            }
+        });
     }
 
     /// Mark current run as errored.
@@ -790,5 +850,76 @@ mod step_tests {
 
         let content = chat.messages.with(|m| m[0].content.clone());
         assert_eq!(content, "late fix");
+    }
+
+    #[test]
+    fn late_chunk_after_finalize_does_not_duplicate() {
+        // Symptom B: `text_emitted` (set_step_text) and the streamed
+        // `response_chunk` (append_chunk) ride independent async pipelines. When
+        // the authoritative text lands first and a preview chunk arrives after,
+        // the late chunk must be dropped — not appended on top — or the text
+        // shows doubled ("好的…报告。好的…报告。").
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.begin_step("r1", 1);
+        chat.set_step_text("r1", 1, "好的，我来继续制作HTML报告。");
+        // Late streamed preview for the same turn races in after the
+        // authoritative text — must be ignored.
+        chat.append_chunk("r1", "好的，我来继续制作HTML报告。");
+
+        let content = chat.messages.with(|m| m[0].content.clone());
+        assert_eq!(content, "好的，我来继续制作HTML报告。");
+    }
+
+    #[test]
+    fn finalize_answer_promotes_trailing_tool_turn() {
+        // Symptom A: the run's last turn emitted the answer text *and* a tool
+        // call, then ended. `finalize_answer` (driven by run_complete's
+        // authoritative summary.final_response) must flag the trailing bubble
+        // `is_final` and overwrite its text, so the timeline lifts it out of the
+        // step strip — while its tool call is preserved (rendered inline).
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.begin_step("r1", 1);
+        chat.append_chunk("r1", "report draft");
+        chat.update_tool("r1", "t1", "web_fetch", "completed", Some(3));
+        chat.complete_run("r1");
+        chat.finalize_answer("r1", "AUTHORITATIVE REPORT");
+
+        chat.messages.with(|m| {
+            let bubble = m
+                .iter()
+                .find(|b| b.id == "assistant-r1")
+                .expect("trailing bubble");
+            assert!(bubble.is_final, "promoted to final answer");
+            assert!(!bubble.is_intermediate);
+            assert!(!bubble.is_streaming);
+            assert_eq!(bubble.content, "AUTHORITATIVE REPORT");
+            assert!(
+                !bubble.tool_calls.is_empty(),
+                "tool call preserved for inline render"
+            );
+        });
+    }
+
+    #[test]
+    fn finalize_answer_ignores_empty_final_text() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.begin_step("r1", 1);
+        chat.append_chunk("r1", "kept");
+        chat.finalize_answer("r1", "   ");
+
+        chat.messages.with(|m| {
+            let bubble = m.iter().find(|b| b.id == "assistant-r1").unwrap();
+            assert!(!bubble.is_final, "empty final text is a no-op");
+            assert_eq!(bubble.content, "kept");
+        });
     }
 }

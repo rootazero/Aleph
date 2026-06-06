@@ -267,6 +267,8 @@ pub fn ChatSidebar() -> impl IntoView {
                                     error: None,
                                     model_info: None,
                                     iteration: None,
+                                    is_final: false,
+                                    text_finalized: false,
                                 });
                             });
                         }

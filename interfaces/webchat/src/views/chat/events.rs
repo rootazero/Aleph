@@ -135,12 +135,11 @@ pub(crate) fn replay_run(
         apply_trace_event(chat, workspace, run_id, ev);
     }
     chat.complete_run(run_id);
-    let target_id = format!("assistant-{run_id}");
-    chat.messages.update(|msgs| {
-        if let Some(m) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
-            m.content = final_content.to_string();
-        }
-    });
+    // Same authoritative promotion as the live `run_complete` path: overwrite
+    // the trailing bubble with the history-authoritative answer and flag it
+    // `is_final` so a turn that ended with text + a tool call still renders the
+    // answer as a bubble, not a trapped step.
+    chat.finalize_answer(run_id, final_content);
 }
 
 fn append_reasoning(chat: ChatState, summary: &str) {
@@ -276,6 +275,18 @@ pub fn subscribe_run_events(
             "run_complete" => {
                 chat.complete_run(run_id);
                 workspace.current_iteration.set(None);
+                // Promote the harness-authoritative final answer into the
+                // trailing bubble so it renders as the conversational reply —
+                // even when the terminating turn also issued a tool call (which
+                // would otherwise keep `is_final_answer` false and trap the
+                // answer in the step strip). Mirrors `replay_run`'s overwrite.
+                if let Some(final_text) = data
+                    .get("summary")
+                    .and_then(|s| s.get("final_response"))
+                    .and_then(|v| v.as_str())
+                {
+                    chat.finalize_answer(run_id, final_text);
+                }
                 // Context gauge: the run summary already ships token_breakdown
                 // (input = last-turn context tokens) + total_tokens. Resolve the
                 // window denominator from the run's model client-side and publish

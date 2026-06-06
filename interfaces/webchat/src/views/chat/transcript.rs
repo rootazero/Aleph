@@ -96,6 +96,8 @@ mod tests {
             model_info: None,
             timestamp: None,
             iteration: None,
+            is_final: false,
+            text_finalized: false,
         }
     }
 

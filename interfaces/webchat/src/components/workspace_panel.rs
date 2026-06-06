@@ -382,6 +382,8 @@ mod tests {
             model_info: None,
             iteration,
             timestamp: None,
+            is_final: false,
+            text_finalized: false,
         }
     }
 
