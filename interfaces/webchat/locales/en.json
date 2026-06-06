@@ -1821,8 +1821,5 @@
     "gateway_disconnected": "Gateway disconnected",
     "no_jobs": "No scheduled jobs configured. Create one in Dashboard → Scheduled Tasks.",
     "consecutive_failures": "Consecutive failures"
-  },
-  "tool_renderer": {
-    "no_renderer_prefix": "No renderer matched (tool: "
   }
 }

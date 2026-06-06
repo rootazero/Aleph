@@ -323,10 +323,9 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
         bubble_style.to_string()
     };
 
-    // Tool chips are clickable when WorkspaceState is provided: clicking
-    // any chip opens the workspace pane in Split mode and dispatches the
-    // call through the ToolRendererRegistry. Without WorkspaceState (e.g.
-    // storybook), they degrade to static badges.
+    // Tool calls render as ToolCard rows. WorkspaceState (when present)
+    // lets a card look up its captured args/result payload; without it
+    // (e.g. storybook) cards degrade to header-only.
     let workspace = use_context::<WorkspaceState>();
     let message_run_id = run_id_from_message_id(&message.id);
 

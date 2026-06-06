@@ -1821,8 +1821,5 @@
     "gateway_disconnected": "网关已断开",
     "no_jobs": "未配置定时任务。请在 仪表盘 → 定时任务 中创建。",
     "consecutive_failures": "连续失败次数"
-  },
-  "tool_renderer": {
-    "no_renderer_prefix": "未匹配到渲染器 (工具: "
   }
 }
