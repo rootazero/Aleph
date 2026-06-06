@@ -1787,6 +1787,15 @@
     "saving": "保存中...",
     "save": "保存"
   },
+  "runtime_deps": {
+    "title": "运行时",
+    "description": "引导用于驱动浏览器自动化、Python 执行和技能的运行时依赖。",
+    "gateway_unavailable": "网关不可用。连接后将加载运行时。",
+    "loading": "加载中...",
+    "install_missing": "安装缺失项",
+    "refresh": "刷新",
+    "install_log": "安装日志"
+  },
   "browser_banner": {
     "configure": "配置 →",
     "ready": "浏览器运行时已就绪",

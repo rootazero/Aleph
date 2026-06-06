@@ -1787,6 +1787,15 @@
     "saving": "Saving...",
     "save": "Save"
   },
+  "runtime_deps": {
+    "title": "Runtime",
+    "description": "Bootstrap runtime dependencies that power browser automation, Python execution, and skills.",
+    "gateway_unavailable": "Gateway unavailable. Runtimes will load when connected.",
+    "loading": "Loading...",
+    "install_missing": "Install missing",
+    "refresh": "Refresh",
+    "install_log": "Install log"
+  },
   "browser_banner": {
     "configure": "Configure →",
     "ready": "Browser runtime ready",
