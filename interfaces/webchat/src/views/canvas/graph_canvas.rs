@@ -178,7 +178,7 @@ pub fn GraphCanvas(
         // is hidden. The IntersectionObserver callback clears it and re-kicks a
         // frame when the canvas becomes visible again — so a hidden Memory tab
         // costs zero CPU instead of rescheduling rAF ~60×/s just to re-check.
-        let parked: std::rc::Rc<std::cell::Cell<bool>> = std::rc::Rc::new(std::cell::Cell::new(false));
+        let parked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
 
         // Attach IntersectionObserver to flip `is_visible` without forcing
         // synchronous layout. `offset_width`/`getBoundingClientRect` would
@@ -227,8 +227,7 @@ pub fn GraphCanvas(
         // size here; the rAF loop reads it (cheap) instead of calling
         // get_bounding_client_rect every frame (which forces synchronous
         // layout — the same reason visibility uses IntersectionObserver above).
-        let pending_size: std::rc::Rc<std::cell::Cell<Option<(f64, f64)>>> =
-            std::rc::Rc::new(std::cell::Cell::new(None));
+        let pending_size: Rc<Cell<Option<(f64, f64)>>> = Rc::new(Cell::new(None));
         let pending_size_obs = pending_size.clone();
         let resize_cb: Closure<dyn FnMut(js_sys::Array)> =
             Closure::new(move |entries: js_sys::Array| {
@@ -910,8 +909,8 @@ pub fn GraphCanvas(
     // The rAF chain is leaked on purpose: the parent <MainContent> keeps
     // <CanvasView /> mounted (only toggles display:none) so `on_cleanup`
     // does not fire on route change. The closure's own visibility guard
-    // (offset_width == 0 → return) does the heavy lifting: zero per-frame
-    // work when hidden, instant resume when shown.
+    // parks the loop when hidden — it stops rescheduling entirely (zero CPU)
+    // and the IntersectionObserver re-kicks one frame on resume.
     //
     // NB: wasm32 is single-threaded so on_cleanup IS available — the
     // historical `Send` excuse was wrong. The real reason we skip it is
@@ -940,8 +939,8 @@ pub fn GraphCanvas(
                 on:keydown=on_keydown
             />
             // DOM overlay: NodeCard components positioned over each visible node.
-            // pointer-events-none on the wrapper so mouse events fall through to the canvas;
-            // individual cards re-enable pointer events for click handling.
+            // pointer-events-none on the wrapper so all mouse events fall through
+            // to the canvas, which owns hit-testing, hover and click selection.
             <div class="absolute inset-0 pointer-events-none overflow-hidden">
                 {move || {
                     let nodes = overlay_nodes.get();
