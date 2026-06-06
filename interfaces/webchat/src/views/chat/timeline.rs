@@ -372,6 +372,21 @@ mod tests {
         assert_eq!(strip, Some(false));
     }
 
+    #[test]
+    fn row_key_strip_changes_on_content_update() {
+        let s1 = TimelineRow::StepStrip {
+            run_id: "r1".into(),
+            steps: vec![msg_step("intermediate-r1-1", 1, "partial", true)],
+            completed: false,
+        };
+        let s2 = TimelineRow::StepStrip {
+            run_id: "r1".into(),
+            steps: vec![msg_step("intermediate-r1-1", 1, "partial content", true)],
+            completed: false,
+        };
+        assert_ne!(row_key(&s1), row_key(&s2), "key must change when content grows");
+    }
+
     // Fake mappers: treat each whole "1000ms" bucket as a day.
     fn day(ts: i64) -> i64 {
         ts / 1000

@@ -568,10 +568,13 @@ fn MessageBubble(message: ChatMessage, clock: String) -> impl IntoView {
 /// single summary line the user can click to expand.
 #[component]
 fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
+    // NOTE: row_key changes on each streaming token, so this remounts and resets
+    // open to !completed each update — a manually-collapsed running strip re-opens
+    // on the next token. Hoist to ChatState keyed by run_id if that ever matters.
     // Collapsed by default once the run is complete; running runs start open.
     let open = RwSignal::new(!completed);
     let count = steps.len();
-    let summary = format!("{count} steps");
+    let summary = format!("{count} {}", if count == 1 { "step" } else { "steps" });
 
     view! {
         <div class="flex justify-start my-1">
