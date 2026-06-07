@@ -303,7 +303,7 @@ fn Pager(
     let total_pages = Signal::derive(move || {
         total
             .get()
-            .map(|t| ((t + PAGE_SIZE as u64 - 1) / PAGE_SIZE as u64).max(1) as u32)
+            .map(|t| t.div_ceil(PAGE_SIZE as u64).max(1) as u32)
     });
     let has_prev = Signal::derive(move || page.get() > 0);
     let has_next = Signal::derive(move || match total_pages.get() {

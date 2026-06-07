@@ -149,7 +149,7 @@ pub(super) fn ReembedMigrationCard() -> impl IntoView {
                     let completed = progress_completed.get();
                     let failed = progress_failed.get();
                     let phase = progress_phase.get();
-                    let pct = if total > 0 { (completed * 100) / total } else { 0 };
+                    let pct = (completed * 100).checked_div(total).unwrap_or(0);
                     let phase_label = match phase.as_str() {
                         "facts" => "Processing facts...",
                         "memories" => "Processing memories...",

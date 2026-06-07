@@ -390,7 +390,6 @@ fn SettingsRouter() -> impl IntoView {
 
             // Browser
             "/settings/browser" => view! { <BrowserView /> }.into_any(),
-            "/settings/runtime" => view! { <RuntimeView /> }.into_any(),
 
             // Extensions
             "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),

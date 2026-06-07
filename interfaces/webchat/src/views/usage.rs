@@ -187,11 +187,10 @@ pub fn UsageView() -> impl IntoView {
 fn LaneCard(row: LaneOccupancy) -> impl IntoView {
     let i18n = use_i18n();
     let shared_used = row.shared_total.saturating_sub(row.shared_available);
-    let shared_pct = if row.shared_total > 0 {
-        (shared_used * 100 / row.shared_total).min(100)
-    } else {
-        0
-    };
+    let shared_pct = (shared_used * 100)
+        .checked_div(row.shared_total)
+        .unwrap_or(0)
+        .min(100);
     let desktop_split = match (row.desktop_total, row.desktop_available) {
         (Some(total), Some(avail)) => Some((total, total.saturating_sub(avail))),
         _ => None,

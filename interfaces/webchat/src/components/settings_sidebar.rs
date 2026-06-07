@@ -38,7 +38,6 @@ pub enum SettingsTab {
 
     // Advanced
     Browser,
-    Runtime,
     Search,
     Policies,
     RoutingRules,
@@ -70,7 +69,6 @@ impl SettingsTab {
             Self::WhatsApp => "/settings/channels/whatsapp",
             Self::IMessage => "/settings/channels/imessage",
             Self::Browser => "/settings/browser",
-            Self::Runtime => "/settings/runtime",
             Self::Search => "/settings/search",
             Self::Policies => "/settings/policies",
             Self::RoutingRules => "/settings/routing",
@@ -102,7 +100,6 @@ impl SettingsTab {
             Self::WhatsApp => t_string!(i18n, settings.tabs.whatsapp).to_string(),
             Self::IMessage => t_string!(i18n, settings.tabs.imessage).to_string(),
             Self::Browser => "Browser".to_string(),
-            Self::Runtime => "Runtime".to_string(),
             Self::Search => t_string!(i18n, settings.tabs.search).to_string(),
             Self::Policies => t_string!(i18n, settings.tabs.policies).to_string(),
             Self::RoutingRules => t_string!(i18n, settings.tabs.routing_rules).to_string(),
@@ -171,9 +168,6 @@ impl SettingsTab {
             }
             Self::Browser => {
                 r#"<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>"#
-            }
-            Self::Runtime => {
-                r#"<rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8m-4-4v4"/><polyline points="7 8 12 13 17 8"/>"#
             }
             Self::Search => r#"<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>"#,
             Self::Policies => {
@@ -250,7 +244,6 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
         label: "Advanced",
         tabs: &[
             SettingsTab::Browser,
-            SettingsTab::Runtime,
             SettingsTab::Policies,
             SettingsTab::Security,
             SettingsTab::Auth,

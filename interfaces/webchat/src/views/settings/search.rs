@@ -1060,7 +1060,9 @@ fn ProviderDetailPanel(
                                     </button>
                                 </div>
 
-                                {let sel_name_for_row2 = sel_name.clone(); move || {
+                                {let sel_name_for_row2 = sel_name.clone();
+                                 let is_custom = preset.is_none();
+                                 move || {
                                     let has_backend = config.get().backends.iter().any(|b| b.name == sel_name_for_row2);
                                     if has_backend {
                                         view! {
@@ -1078,7 +1080,7 @@ fn ProviderDetailPanel(
                                                 } else {
                                                     None
                                                 }}
-                                                {if !is_active {
+                                                {if !is_active && is_custom {
                                                     Some(view! {
                                                         <button
                                                             on:click=on_delete

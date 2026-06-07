@@ -54,7 +54,7 @@ pub fn RuntimeSummaryBanner() -> impl IntoView {
                 Some(view! {
                     <div class="p-3 bg-warning-subtle border border-warning/20 rounded-lg text-warning text-sm flex items-center justify-between gap-2">
                         <span>{format!("{}{names}", t_string!(i18n, browser_banner.missing_prefix))}</span>
-                        <a href="/settings/runtime"
+                        <a href="/dashboard/runtimes"
                            class="text-sm font-medium underline hover:no-underline">
                             {t!(i18n, browser_banner.configure)}
                         </a>
