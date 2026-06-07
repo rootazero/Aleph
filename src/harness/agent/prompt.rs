@@ -157,6 +157,21 @@ pub(crate) fn build_prompt(
         messages.push(UnifiedMessage::user(&notice));
     }
 
+    // P2 (4th sibling): redundant side-effecting call loop. no_progress catches
+    // identical-result loops only on *idempotent* reads; this is its complement,
+    // covering non-idempotent tools (bash/code_exec/writes/sends/MCP) when the
+    // exact same (tool, args) call keeps returning the byte-identical result.
+    // Order-independent, so it catches the interleaved code_exec↔bash alternation
+    // that defeats the consecutive-run tool_loop_verifier and slips past
+    // attempt_summary (those failures are Ok results, not ToolError). Same
+    // `<system-reminder>` channel; a soft nudge, never a control-flow branch
+    // (R7/R10). Scoped to the tail, recomputed every Think.
+    if let Some(notice) =
+        crate::tools::redundant_calls::render_redundant_call_notice(&events[tail_start..])
+    {
+        messages.push(UnifiedMessage::user(&notice));
+    }
+
     messages
 }
 

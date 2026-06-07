@@ -44,6 +44,7 @@ pub mod in_flight;
 pub mod info;
 pub mod name_repair;
 pub mod no_progress;
+pub mod redundant_calls;
 pub mod refresh;
 pub mod result_processing;
 pub mod result_store;
