@@ -31,9 +31,8 @@ pub struct AuthState {
     /// so the JSON-RPC issuer and the HTTP consumer see the same map.
     pub bootstrap_mgr: Arc<crate::gateway::bootstrap::BootstrapNonceManager>,
     /// Browser-pairing manager. Shared with [`super::handlers::auth::AuthContext`]
-    /// so `pairing.approve` (Browser arm) can stash a session_id keyed by
-    /// the pairing code that `/auth/bootstrap/from_pairing` then trades
-    /// for a session cookie.
+    /// so `pairing.approve` (Browser arm) mints a chat-tier device token that
+    /// `pairing.poll` returns to the cold `/pair` page.
     pub pairing_mgr: Arc<crate::gateway::security::PairingManager>,
     /// Shared AuthContext so the anonymous `/rpc` HTTP route (scoped to
     /// pairing.start_browser + pairing.poll only) can reach the same
@@ -57,10 +56,6 @@ pub fn auth_routes(state: Arc<AuthState>) -> Router {
         .route("/auth/logout", post(handle_logout))
         .route("/auth/bootstrap", get(handle_bootstrap_consume))
         .route("/pair", get(show_pair_page))
-        .route(
-            "/auth/bootstrap/from_pairing",
-            get(handle_bootstrap_from_pairing),
-        )
         // Tiny anonymous JSON-RPC HTTP endpoint scoped to the two browser-
         // pairing methods. The gateway's primary RPC surface is WebSocket
         // (/ws), but the cold `/pair` page can't open a WS before it has
@@ -166,48 +161,6 @@ async fn show_pair_page(Query(q): Query<PairQuery>) -> Html<String> {
     Html(pair_page_html(q.code.as_deref()))
 }
 
-#[derive(Deserialize)]
-struct BootstrapFromPairingQuery {
-    code: String,
-}
-
-/// Trade an approved Browser pairing code for a session cookie + 303 to /.
-///
-/// The corresponding `pairing.approve` call deposited a session_id into
-/// `PairingManager.approved_browser_sessions[code]`. This single-use
-/// fetch removes it; a second request for the same code receives 401.
-///
-/// Unlike `/auth/bootstrap`, this is NOT loopback-gated — the whole
-/// browser-pairing flow exists precisely so a remote LAN browser (mobile,
-/// other laptop) can pair. The security boundary is the in-Panel
-/// operator's 1-click approve.
-async fn handle_bootstrap_from_pairing(
-    State(state): State<Arc<AuthState>>,
-    Query(q): Query<BootstrapFromPairingQuery>,
-) -> Response {
-    let session_id = match state.pairing_mgr.fetch_browser_session(&q.code) {
-        Some(id) => id,
-        None => {
-            tracing::info!(code = %q.code, "pairing not approved or expired");
-            return (StatusCode::UNAUTHORIZED, "pairing not approved").into_response();
-        }
-    };
-    let max_age = state.session_mgr.expiry_hours() * 3600;
-    let cookie = format!(
-        "aleph_session={}; HttpOnly; SameSite=Strict; Path=/; Max-Age={}",
-        session_id, max_age,
-    );
-    tracing::info!(code = %q.code, "browser pairing cookie issued");
-    (
-        StatusCode::SEE_OTHER,
-        [
-            (header::LOCATION, "/".to_string()),
-            (header::SET_COOKIE, cookie),
-        ],
-    )
-        .into_response()
-}
-
 /// Tiny anonymous JSON-RPC HTTP endpoint scoped exclusively to the two
 /// browser-pairing methods (`pairing.start_browser`, `pairing.poll`). The
 /// gateway's main RPC surface is WebSocket-only; this endpoint exists so
@@ -245,8 +198,9 @@ async fn handle_anonymous_rpc(
 /// Generate the cold-browser pairing HTML page.
 ///
 /// Renders a 6-digit code container, polls `pairing.poll` every 2s via
-/// the `/rpc` HTTP endpoint, and redirects to
-/// `/auth/bootstrap/from_pairing?code=…` once approved. No build step,
+/// the `/rpc` HTTP endpoint, and once approved stashes the returned chat-
+/// tier device token in `localStorage["aleph_device_token"]` and redirects
+/// to `/` (connect Case 1 then lands role=guest). No build step,
 /// no framework — single-file vanilla HTML/JS so the page works even
 /// from a fresh browser with no extensions.
 pub fn pair_page_html(prefilled_code: Option<&str>) -> String {
@@ -305,7 +259,10 @@ function poll(code) {{
             if (r.error) {{ showErr(r.error.message); return; }}
             var s = r.result.status;
             if (s === 'approved') {{
-                window.location.href = '/auth/bootstrap/from_pairing?code=' + encodeURIComponent(code);
+                if (r.result.token) {{
+                    try {{ localStorage.setItem('aleph_device_token', r.result.token); }} catch (e) {{}}
+                }}
+                window.location.href = '/';
             }} else if (s === 'rejected') {{
                 document.getElementById('status').textContent = 'Pairing rejected';
             }} else if (s === 'expired') {{
@@ -432,8 +389,9 @@ mod tests {
         // The two anonymous RPC methods the page issues
         assert!(html.contains("pairing.start_browser"));
         assert!(html.contains("pairing.poll"));
-        // Redirect target after approval
-        assert!(html.contains("/auth/bootstrap/from_pairing"));
+        // After approval the page stashes the device token and goes to /.
+        assert!(html.contains("aleph_device_token"));
+        assert!(!html.contains("/auth/bootstrap/from_pairing"));
     }
 
     #[test]

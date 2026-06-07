@@ -3,8 +3,8 @@
 //! 1. GET  /pair                                  → HTML with polling JS
 //! 2. POST /rpc { pairing.start_browser }         → { code }
 //! 3. (out-of-band) pairing.approve(code) by an authenticated client
-//! 4. POST /rpc { pairing.poll(code) }            → { status: "approved", session_id }
-//! 5. GET  /auth/bootstrap/from_pairing?code=…    → 303 + Set-Cookie
+//! 4. POST /rpc { pairing.poll(code) }            → { status: "approved", token, device_id }
+//!    The page then stashes the chat-tier token in localStorage and goes to /.
 //!
 //! Mirrors `tests/bootstrap_loopback_gate.rs`'s pattern: spawn a real
 //! axum server on an ephemeral loopback port and drive it with `reqwest`
@@ -209,14 +209,11 @@ async fn other_rpc_methods_are_blocked_at_anonymous_endpoint() {
 }
 
 #[tokio::test]
-async fn bootstrap_from_pairing_sets_cookie_when_approved() {
+async fn poll_returns_chat_tier_token_when_approved() {
     let (ctx, state) = setup();
     let addr = spawn_server(state).await;
 
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("build client");
+    let client = reqwest::Client::new();
 
     // 1. start_browser → grab code
     let start = client
@@ -255,49 +252,28 @@ async fn bootstrap_from_pairing_sets_cookie_when_approved() {
     .await;
     assert!(approve.is_success(), "approve failed: {:?}", approve);
 
-    // 3. GET /auth/bootstrap/from_pairing?code=… should 303 + Set-Cookie
-    let resp = client
-        .get(format!(
-            "http://{addr}/auth/bootstrap/from_pairing?code={code}"
-        ))
+    // 3. poll → approved, carrying the chat-tier device token + device_id.
+    let poll = client
+        .post(format!("http://{addr}/rpc"))
+        .json(&json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "pairing.poll",
+            "params": {"code": code}
+        }))
         .send()
         .await
-        .expect("send bootstrap");
-    assert_eq!(resp.status(), reqwest::StatusCode::SEE_OTHER);
-    let cookie = resp
-        .headers()
-        .get(reqwest::header::SET_COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .expect("cookie");
-    assert!(cookie.starts_with("aleph_session="));
-    assert!(cookie.contains("HttpOnly"));
-
-    // 4. Single-use: a second hit returns 401
-    let second = client
-        .get(format!(
-            "http://{addr}/auth/bootstrap/from_pairing?code={code}"
-        ))
-        .send()
-        .await
-        .expect("send second");
-    assert_eq!(second.status(), reqwest::StatusCode::UNAUTHORIZED);
-}
-
-#[tokio::test]
-async fn bootstrap_from_pairing_refuses_unapproved_code() {
-    let (_ctx, state) = setup();
-    let addr = spawn_server(state).await;
-
-    let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("build client");
-    let resp = client
-        .get(format!(
-            "http://{addr}/auth/bootstrap/from_pairing?code=999999"
-        ))
-        .send()
-        .await
-        .expect("send");
-    assert_eq!(resp.status(), reqwest::StatusCode::UNAUTHORIZED);
+        .expect("poll");
+    let body: serde_json::Value = poll.json().await.expect("json");
+    let result = body.get("result").expect("result");
+    assert_eq!(
+        result.get("status").and_then(|s| s.as_str()),
+        Some("approved"),
+    );
+    let token = result
+        .get("token")
+        .and_then(|t| t.as_str())
+        .expect("token present");
+    assert!(!token.is_empty());
+    assert!(result.get("device_id").and_then(|d| d.as_str()).is_some());
 }

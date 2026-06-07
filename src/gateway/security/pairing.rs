@@ -439,6 +439,9 @@ impl PairingManager {
         // device token out exactly once is the fail-closed choice for a real
         // credential (vs. the old peekable session_id).
         if let Some((_, (token, device_id, _))) = self.approved_browser_sessions.remove(code) {
+            // Drop the DB pairing row too so a second poll falls through to
+            // Expired rather than re-reporting Pending off the lingering row.
+            let _ = self.store.delete_pairing_request(code);
             return PollState::Approved { token, device_id };
         }
         if self.rejected_browser_codes.remove(code).is_some() {
