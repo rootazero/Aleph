@@ -109,6 +109,31 @@ impl ScopedToolService {
             });
         }
 
+        // Config-tier authorization gate. A chat-tier connection (remote device
+        // paired at "chat" level) may converse and read, but must not mutate
+        // Aleph's own configuration through tools (R8: config IS a tool, so the
+        // interception must live at the tool-dispatch chokepoint). The
+        // originating connection's role rides in TURN_CONTEXT, stamped at run
+        // start. Operator devices, the local no-auth daemon, and non-gateway
+        // runs (cron/internal) all pass. Live operator approval ("sudo") is
+        // Phase 2b — today this hard-rejects, mirroring B1's RPC gate.
+        if crate::gateway::method_authz::tool_requires_operator(name) {
+            let is_operator = crate::tools::turn_context::current_turn_context()
+                .map(|t| t.caller_is_operator())
+                .unwrap_or(true);
+            if !is_operator {
+                return Err(ToolError::PermissionDenied {
+                    name: name.to_string(),
+                    reason: format!(
+                        "`{name}` changes Aleph's own configuration and requires operator \
+                         (config) authorization. This device is paired at chat level. Ask the \
+                         server operator to grant config access (Devices → 授权配置), then retry. \
+                         Do not retry until authorized."
+                    ),
+                });
+            }
+        }
+
         // Confirmation gate: tools flagged `requires_confirmation` must be
         // approved by the user before they run. Fails closed when no approval
         // transport is wired. A tool is gated when it appears in the

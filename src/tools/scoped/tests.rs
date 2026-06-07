@@ -1356,3 +1356,51 @@ async fn execute_without_turn_context_leaves_session_unset() {
         "no turn_context ⇒ no SESSION_ID scope; current_session() must be None"
     );
 }
+
+// -------------------------------------------------------------------------
+// Config-tier authorization gate — chat-tier connections must be denied
+// when they call operator-only (config-mutating) tools. Operator-tier and
+// no-turn-context (internal/cron) runs must pass through unobstructed.
+// -------------------------------------------------------------------------
+
+#[tokio::test]
+async fn chat_tier_blocked_from_config_tool() {
+    use crate::routing::session_key::SessionKey;
+    let registry = make_registry(&["cron_manage"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new())
+        .with_turn_context(crate::tools::turn_context::TurnContext {
+            session_key: SessionKey::main("a"),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+        });
+    let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
+    assert!(
+        matches!(err, ToolError::PermissionDenied { .. }),
+        "chat tier must be denied config tool, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn operator_tier_allowed_config_tool() {
+    use crate::routing::session_key::SessionKey;
+    let registry = make_registry(&["cron_manage"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new())
+        .with_turn_context(crate::tools::turn_context::TurnContext {
+            session_key: SessionKey::main("a"),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("operator".to_string()),
+        });
+    assert!(svc.execute("cron_manage", json!({})).await.is_ok());
+}
+
+#[tokio::test]
+async fn no_turn_context_allows_config_tool() {
+    let registry = make_registry(&["cron_manage"]);
+    let svc = ScopedToolService::new(registry, BTreeSet::new());
+    assert!(
+        svc.execute("cron_manage", json!({})).await.is_ok(),
+        "internal/non-gateway run (no turn context) must pass"
+    );
+}
