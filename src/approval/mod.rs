@@ -44,10 +44,13 @@
 
 pub mod adapters;
 pub mod callback_sink;
+pub mod operator_requester;
 mod config;
 mod policy;
 mod session_route;
 mod types;
+
+pub use operator_requester::OperatorApprovalRequester;
 
 pub use config::{matches_glob, ConfigApprovalPolicy, PolicyConfig, PolicyRule};
 pub use policy::ApprovalPolicy;
