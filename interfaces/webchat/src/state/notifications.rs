@@ -38,6 +38,22 @@ pub struct IncomingPairing {
     pub created_at_ms: i64,
 }
 
+/// A pending operator-approval request rendered by the NotificationCenter with
+/// inline allow-once / allow-session / deny buttons. Sourced from the
+/// `exec.approvals.pending` RPC (the `approval.**` events are sparse — they only
+/// trigger a refetch). Display-only.
+#[derive(Debug, Clone)]
+pub struct PendingApprovalView {
+    /// Approval request id (passed to `exec.approval.resolve`).
+    pub id: String,
+    /// The config tool name being requested (ExecApprovalRecord.command).
+    pub command: String,
+    /// The requesting agent id.
+    pub agent_id: String,
+    /// Milliseconds until the approval times out.
+    pub remaining_ms: u64,
+}
+
 /// Per-window notification UI state. Provided once in `app.rs`, consumed by
 /// [`crate::components::notification_center::NotificationCenter`].
 #[derive(Copy, Clone)]
