@@ -40,6 +40,10 @@ impl EventScopeGuard {
                     vec!["admin".to_string(), "guest.manager".to_string()],
                 ),
                 (
+                    "approval.".to_string(),
+                    vec!["admin".to_string(), "exec.approver".to_string()],
+                ),
+                (
                     "exec.approval.".to_string(),
                     vec!["admin".to_string(), "exec.approver".to_string()],
                 ),
@@ -60,8 +64,10 @@ impl EventScopeGuard {
     pub fn can_receive(&self, topic: &str, permissions: &[String]) -> bool {
         for (prefix, required) in &self.rules {
             if topic.starts_with(prefix) || topic == prefix {
-                // Topic is guarded — client needs at least one required perm.
-                return permissions.iter().any(|p| required.contains(p));
+                // A device holding the `"*"` wildcard (operator / local daemon) is a
+                // superuser and satisfies every scope rule. Otherwise it needs at
+                // least one of the topic's required permissions.
+                return permissions.iter().any(|p| p == "*" || required.contains(p));
             }
         }
         // No rule matched — unguarded, allow for all.
@@ -124,5 +130,23 @@ mod tests {
         assert!(guard.can_receive("guest.joined", &admin));
         assert!(guard.can_receive("exec.approval.pending", &admin));
         assert!(guard.can_receive("config.changed", &admin));
+    }
+
+    #[test]
+    fn wildcard_permission_satisfies_guarded_topics() {
+        let g = EventScopeGuard::default_rules();
+        let star = vec!["*".to_string()];
+        assert!(g.can_receive("approval.requested", &star), "operator [*] must receive approval events");
+        assert!(g.can_receive("pairing.requested", &star), "operator [*] must receive pairing events");
+        assert!(g.can_receive("config.changed", &star));
+    }
+
+    #[test]
+    fn chat_tier_excluded_from_approval_events() {
+        let g = EventScopeGuard::default_rules();
+        let chat = vec!["chat".to_string(), "read".to_string()];
+        assert!(!g.can_receive("approval.requested", &chat), "chat tier must NOT see approval requests");
+        assert!(!g.can_receive("approval.resolved", &chat));
+        assert!(g.can_receive("agent.run.started", &chat), "unguarded topics still flow");
     }
 }
