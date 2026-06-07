@@ -94,6 +94,34 @@ impl ApprovalRequester for OperatorApprovalRequester {
             tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
         }
 
+        // Phase 3b-2b: surface an in-band "waiting for operator approval" notice
+        // on the requester's OWN run output stream, so a chat-tier device sees
+        // why its config tool is suspended instead of a silently-spinning tool.
+        // Reuses the existing intermediate ResponseChunk path (rendered by every
+        // channel + the Panel, never persisted to the transcript). Best-effort:
+        // only when we have a gateway run to target; publish failures are
+        // non-fatal and must not derail the approval.
+        if let Some(t) = &turn {
+            if !t.run_id.is_empty() {
+                let notice = format!("⏳ 正在等待管理员授权运行工具 `{}`…", tool_name);
+                if let Err(e) = self
+                    .event_bus
+                    .publish_frame(&GatewayEventFrame::ResponseChunk {
+                        run_id: t.run_id.clone(),
+                        seq: 0,
+                        delta: notice.clone(),
+                        full_text: notice.clone(),
+                        content: notice,
+                        chunk_index: 0,
+                        is_final: false,
+                        is_intermediate: true,
+                    })
+                {
+                    tracing::debug!(error = %e, "failed to publish waiting-for-approval notice");
+                }
+            }
+        }
+
         let decision = self
             .manager
             .await_registered(approval_id.clone(), rx, timeout)
@@ -120,6 +148,127 @@ impl ApprovalRequester for OperatorApprovalRequester {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routing::session_key::SessionKey;
+    use crate::tools::turn_context::{TurnContext, TURN_CONTEXT};
+    use std::time::Duration;
+
+    fn guest_turn(run_id: &str) -> TurnContext {
+        TurnContext {
+            session_key: SessionKey::main("approval-test"),
+            run_id: run_id.to_string(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn emits_waiting_notice_when_run_id_present() {
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester = OperatorApprovalRequester::new(manager.clone(), event_bus.clone());
+        let mut rx = event_bus.subscribe_typed();
+
+        // request_approval blocks on the decision oneshot; resolve it once the
+        // approval is registered so the test terminates.
+        let mgr = manager.clone();
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(guest_turn("run-123"), async move {
+                    requester
+                        .request_approval("set_provider", "needs config")
+                        .await
+                })
+                .await
+        });
+
+        let mut saw_notice = false;
+        let mut approval_id: Option<String> = None;
+        for _ in 0..6 {
+            let Ok(Ok(frame)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await
+            else {
+                break;
+            };
+            match frame {
+                GatewayEventFrame::ApprovalRequested {
+                    approval_id: id, ..
+                } => {
+                    approval_id = Some(id);
+                }
+                GatewayEventFrame::ResponseChunk {
+                    run_id,
+                    is_intermediate,
+                    is_final,
+                    ..
+                } => {
+                    assert_eq!(run_id, "run-123", "notice must target the requester's run");
+                    assert!(
+                        is_intermediate,
+                        "notice must be an intermediate (ephemeral) chunk"
+                    );
+                    assert!(!is_final, "notice must not be the final answer");
+                    saw_notice = true;
+                }
+                _ => {}
+            }
+            if saw_notice {
+                if let Some(id) = &approval_id {
+                    mgr.resolve(id, ApprovalDecisionType::AllowOnce, None);
+                    break;
+                }
+            }
+        }
+
+        assert!(
+            saw_notice,
+            "expected a run-scoped waiting-for-approval ResponseChunk"
+        );
+        let outcome = handle.await.unwrap();
+        assert_eq!(outcome, ApprovalOutcome::Approved);
+    }
+
+    #[tokio::test]
+    async fn no_notice_when_run_id_empty() {
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let manager = Arc::new(ExecApprovalManager::new());
+        let requester = OperatorApprovalRequester::new(manager.clone(), event_bus.clone());
+        let mut rx = event_bus.subscribe_typed();
+
+        let mgr = manager.clone();
+        let handle = tokio::spawn(async move {
+            TURN_CONTEXT
+                .scope(guest_turn(""), async move {
+                    requester
+                        .request_approval("set_provider", "needs config")
+                        .await
+                })
+                .await
+        });
+
+        // Drain frames; resolve on ApprovalRequested; assert no ResponseChunk
+        // appears before the approval resolves.
+        let mut saw_chunk = false;
+        for _ in 0..6 {
+            let Ok(Ok(frame)) = tokio::time::timeout(Duration::from_secs(2), rx.recv()).await
+            else {
+                break;
+            };
+            match frame {
+                GatewayEventFrame::ApprovalRequested { approval_id, .. } => {
+                    mgr.resolve(&approval_id, ApprovalDecisionType::AllowOnce, None);
+                }
+                GatewayEventFrame::ResponseChunk { .. } => {
+                    saw_chunk = true;
+                }
+                GatewayEventFrame::ApprovalResolved { .. } => break,
+                _ => {}
+            }
+        }
+
+        assert!(!saw_chunk, "no notice must be emitted when run_id is empty");
+        let outcome = handle.await.unwrap();
+        assert_eq!(outcome, ApprovalOutcome::Approved);
+    }
 
     #[test]
     fn decision_mapping() {
