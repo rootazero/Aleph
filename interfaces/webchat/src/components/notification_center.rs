@@ -142,12 +142,10 @@ pub fn NotificationCenter() -> impl IntoView {
                             view! {
                                 <ul class="divide-y divide-border">
                                     {pairings.into_iter().map(|p: IncomingPairing| {
-                                        let code_for_chat = p.code.clone();
-                                        let code_for_config = p.code.clone();
+                                        let code_for_approve = p.code.clone();
                                         let code_for_reject = p.code.clone();
                                         let code_display = p.code.clone();
                                         let label = p.origin_label.clone();
-                                        let i18n = use_i18n();
                                         view! {
                                             <li class="px-4 py-3">
                                                 <div class="text-sm font-medium text-text-primary">
@@ -162,43 +160,24 @@ pub fn NotificationCenter() -> impl IntoView {
                                                 <div class="flex gap-2">
                                                     <button
                                                         type="button"
-                                                        class="flex-1 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary text-xs transition-colors"
-                                                        on:click=move |_| {
-                                                            let c = code_for_chat.clone();
-                                                            spawn_local(async move {
-                                                                let _ = dashboard
-                                                                    .rpc_call(
-                                                                        "pairing.approve",
-                                                                        json!({"code": c, "level": "chat"}),
-                                                                    )
-                                                                    .await;
-                                                            });
-                                                        }
-                                                    >
-                                                        {t!(i18n, notifications.approve_chat)}
-                                                    </button>
-                                                    <button
-                                                        type="button"
                                                         class="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
                                                         on:click=move |_| {
-                                                            let c = code_for_config.clone();
+                                                            let c = code_for_approve.clone();
                                                             spawn_local(async move {
                                                                 let _ = dashboard
                                                                     .rpc_call(
                                                                         "pairing.approve",
-                                                                        json!({"code": c, "level": "config"}),
+                                                                        json!({"code": c}),
                                                                     )
                                                                     .await;
                                                             });
                                                         }
                                                     >
-                                                        {t!(i18n, notifications.approve_config)}
+                                                        "Approve"
                                                     </button>
-                                                </div>
-                                                <div class="mt-2">
                                                     <button
                                                         type="button"
-                                                        class="w-full py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-tertiary text-xs transition-colors"
+                                                        class="flex-1 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary text-xs transition-colors"
                                                         on:click=move |_| {
                                                             let c = code_for_reject.clone();
                                                             spawn_local(async move {

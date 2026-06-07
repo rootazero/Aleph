@@ -108,6 +108,16 @@ DeviceCard 切换钮 on:click
 
 Panel 改动需 `just wasm` 重建 dist + 重编 `aleph-server` binary（rust_embed 烧 dist）+ 热替换运行中 daemon，才能见效（CLAUDE.md Panel↔Daemon 资源嵌入链）。本期是否部署由用户在 3b-1 完成后决定（此前已表态「3b 全 UI 一起做」，3b-2 后再统一部署亦可）。
 
+## Addendum (2026-06-07, post-implementation) — 配对卡档位选择降级
+
+最终集成审查发现：通知中心的「Pair browser」卡**只渲染 browser 类配对**（`IncomingPairing` 唯一来源 `handle_pairing_start_browser`），而 `pairing.approve` 的 `PairingRequest::Browser` 分支（`src/gateway/handlers/auth/pairing.rs:83-142`）提前 return——它用**共享令牌 HMAC 铸造 operator 会话**，从不读 `level`、不建 `ApprovedDevice`、不入 device_store。`Tier::from_level → permissions` 仅对 `Device`（CLI/native）配对生效，而那类配对不显示在此卡上。
+
+因此 Task 5 的「批准为聊天/批准为配置」双钮在该卡上**无差别效果**（spec 阶段疏漏：只验证了 `level` 被解析，未验证 browser 审批路径是否使用它）。
+
+**决策（用户）：回退 Task 5 为单 Approve**。browser 配对卡恢复单个 `pairing.approve {code}` 钮；连带移除变为死键的 `notifications.approve_chat/approve_config`（`settings.security.tier_*` 仍被 DeviceCard 使用，保留）。**Tasks 1-4（DeviceCard 档位徽章+升降档切换，对 device_store 设备完全有效）照常发布**。
+
+**推迟到专门 phase**：让 browser/remote 配对档位化——即 chat 档 browser 审批铸造 guest-scoped 会话（而非共享 operator 令牌）。这是实质性的 auth/会话模型改动、有安全含义，应另立 spec。它也暴露了一个更广的事实：远程 browser/mobile 经 `/pair` 配对当前一律拿到共享令牌(operator)会话，与「远程 chat 档设备不能改配置」的目标相抵，值得在该 phase 一并处理。
+
 ## Git 约束（继承本会话纪律）
 
 - 共享单分支 main + 并发提交者：只追加式提交，**显式文件路径**暂存（禁 `git add -A/-u/.`），禁 reset/amend/rebase/push。

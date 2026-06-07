@@ -89,8 +89,6 @@
     "open_label": "Notifications",
     "title": "Notifications",
     "empty": "Nothing to report.",
-    "approve_chat": "Approve as chat",
-    "approve_config": "Approve as config",
     "dismiss_all": "Dismiss all"
   },
   "dashboard": {

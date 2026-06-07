@@ -89,8 +89,6 @@
     "open_label": "通知",
     "title": "通知",
     "empty": "暂无通知。",
-    "approve_chat": "批准为聊天",
-    "approve_config": "批准为配置",
     "dismiss_all": "全部清除"
   },
   "dashboard": {
