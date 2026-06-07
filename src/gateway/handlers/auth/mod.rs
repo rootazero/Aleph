@@ -10,11 +10,10 @@ mod pairing;
 pub(crate) mod tier;
 
 use crate::sync_primitives::Arc;
-use crate::gateway::server::ConnectionState;
-use std::collections::HashMap;
-use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 
 use crate::gateway::config::AuthMode;
 use crate::gateway::device_store::DeviceStore;
@@ -23,6 +22,7 @@ use crate::gateway::presence::PresenceTracker;
 use crate::gateway::protocol::JsonRpcRequest;
 use crate::gateway::security::SecurityStore;
 use crate::gateway::security::{PairingManager, SharedTokenManager, TokenManager};
+use crate::gateway::server::ConnectionState;
 
 /// Capabilities advertised by every aleph-gateway build at handshake time.
 ///
