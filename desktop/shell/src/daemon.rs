@@ -276,6 +276,17 @@ async fn port_open() -> bool {
     TcpStream::connect((DAEMON_HOST, DAEMON_PORT)).await.is_ok()
 }
 
+/// Bare TCP reachability for a remote Gateway — connect only, no HTTP/TLS.
+/// True reachability + auth + TLS are the webview's job; the supervisor only
+/// needs "is the port answering".
+pub async fn tcp_reachable(host: &str, port: u16) -> bool {
+    tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect((host, port)))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .is_some()
+}
+
 /// Minimal HTTP/1.0 GET that returns just the numeric status code. Avoids
 /// pulling a full HTTP client into the shell for a single localhost probe.
 /// The whole exchange is bounded by [`PROBE_TIMEOUT`].

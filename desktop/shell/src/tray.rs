@@ -18,6 +18,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     // Let the auto-updater relabel this item once an update is staged.
     app.state::<crate::update::Updater>()
         .attach_tray_item(update_item.clone());
+    // Connection-target entry points: switch the shell between the bundled
+    // local daemon and a remote Gateway. "Connect to Remote…" opens the
+    // bundled connection page; "Back to Local" resets to the local daemon.
+    let connect_remote = MenuItem::with_id(
+        app,
+        "connect_remote",
+        "Connect to Remote…",
+        true,
+        None::<&str>,
+    )?;
+    let connect_local =
+        MenuItem::with_id(app, "connect_local", "Back to Local", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(
         app,
@@ -27,7 +39,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let quit_stop = MenuItem::with_id(app, "quit_stop", "Quit & Stop Aleph", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &update_item, &separator, &quit, &quit_stop])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &show,
+            &update_item,
+            &connect_remote,
+            &connect_local,
+            &separator,
+            &quit,
+            &quit_stop,
+        ],
+    )?;
 
     let mut builder = TrayIconBuilder::with_id("aleph-tray")
         .tooltip("Aleph")
@@ -42,6 +65,20 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                 } else {
                     crate::update::check_now(app);
                 }
+            }
+            // Navigate to the bundled connection page so the user can enter a
+            // remote Gateway address.
+            "connect_remote" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    if let Ok(url) = tauri::Url::parse("tauri://localhost/connect.html") {
+                        let _ = w.navigate(url);
+                    }
+                    crate::focus_window(app);
+                }
+            }
+            // Reset to the local daemon (launch + supervise it again).
+            "connect_local" => {
+                let _ = crate::connection::clear_connection_target(app.clone());
             }
             "quit" => app.exit(0),
             "quit_stop" => {

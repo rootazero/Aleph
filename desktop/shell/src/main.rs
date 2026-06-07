@@ -252,30 +252,62 @@ fn spawn_background(handle: tauri::AppHandle) {
                 }
             };
             rt.block_on(async move {
-                // First launch / post-update: force any stale daemon offline
-                // so the `aleph-server` bundled in this app takes over.
                 let version = handle.package_info().version.to_string();
-                daemon::reconcile_for_version(&version).await;
+                let target = connection::load_target();
 
-                let daemon_up = match daemon::ensure_ready().await {
-                    Ok(()) => {
-                        reveal_panel(&handle);
-                        true
+                // Bring the chosen target online. Local owns + supervises the
+                // bundled daemon (today's behaviour, kept byte-for-byte);
+                // Remote never touches a local daemon — we only probe TCP
+                // reachability and navigate the webview at the remote origin.
+                let up = match &target {
+                    connection::ConnectionTarget::Local => {
+                        // Explicitly clear the remote allow-list (idempotent):
+                        // Local navigations only ever touch loopback.
+                        external_link::set_remote_host(None);
+                        // First launch / post-update: force any stale daemon
+                        // offline so the `aleph-server` bundled in this app
+                        // takes over.
+                        daemon::reconcile_for_version(&version).await;
+                        match daemon::ensure_ready().await {
+                            Ok(()) => {
+                                reveal_panel(&handle);
+                                true
+                            }
+                            Err(e) => {
+                                tracing::error!("daemon did not become ready: {e}");
+                                show_daemon_error(&handle, &e);
+                                false
+                            }
+                        }
                     }
-                    Err(e) => {
-                        tracing::error!("daemon did not become ready: {e}");
-                        show_daemon_error(&handle, &e);
-                        false
+                    connection::ConnectionTarget::Remote(url) => {
+                        // Allow the remote origin in the link guard so in-Panel
+                        // navigations stay in the webview instead of escaping
+                        // to the OS browser.
+                        external_link::set_remote_host(Some(url.clone()));
+                        let host = url.host_str().unwrap_or("").to_string();
+                        let port = url.port_or_known_default().unwrap_or(18790);
+                        let reachable = daemon::tcp_reachable(&host, port).await;
+                        if !reachable {
+                            tracing::warn!("remote Gateway {host}:{port} not reachable at startup");
+                        }
+                        // Navigate the webview to the remote root; an
+                        // unauthenticated client is redirected to `/pair`.
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.navigate(url.clone());
+                        }
+                        focus_window(&handle);
+                        reachable
                     }
                 };
 
                 // Three resident background tasks for the lifetime of the
-                // shell: the OS-notification bridge, the daemon health
+                // shell: the OS-notification bridge, the daemon/Gateway health
                 // supervisor, and the auto-update checker. None returns;
                 // run them together.
                 tokio::join!(
                     notify::run_notification_bridge(handle.clone()),
-                    supervise_daemon(handle.clone(), daemon_up),
+                    supervise_daemon(handle.clone(), up),
                     update::run_update_checker(handle),
                 );
             });
@@ -321,13 +353,32 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
     let _ = window.set_focus();
 }
 
-/// Re-route the shell for a freshly-chosen connection target.
-///
-/// TODO(Task 6): this is a minimal stub so the connection commands compile.
-/// Task 6 fleshes it out to update the link allow-list, navigate the webview,
-/// and (re)start supervision for the new target. The `set_connection_target`
-/// command in `connection.rs` calls this after persisting the target.
-pub(crate) fn reroute_for_target(_app: &tauri::AppHandle, _target: connection::ConnectionTarget) {}
+/// Re-route the shell for a freshly-chosen target: update the link allow-list,
+/// then navigate + (re)start supervision. Called by the connection commands
+/// (`set_connection_target` / `clear_connection_target`) after the new target
+/// has been persisted. The resident `supervise_daemon` loop picks up the
+/// persisted switch on its next tick and re-arms in the matching mode.
+pub(crate) fn reroute_for_target(app: &tauri::AppHandle, target: connection::ConnectionTarget) {
+    match &target {
+        connection::ConnectionTarget::Remote(url) => {
+            external_link::set_remote_host(Some(url.clone()));
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.navigate(url.clone());
+            }
+        }
+        connection::ConnectionTarget::Local => {
+            external_link::set_remote_host(None);
+            // bring the local daemon up and reveal the Panel
+            let handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let version = handle.package_info().version.to_string();
+                daemon::reconcile_for_version(&version).await;
+                let _ = daemon::ensure_ready().await;
+                reveal_panel(&handle);
+            });
+        }
+    }
+}
 
 /// Reveal the Panel for the first time: navigate to it and bring the window
 /// forward. The window starts hidden, so this is what the user sees on a
@@ -469,29 +520,92 @@ impl Supervisor {
 /// Panel: it relaunches the daemon when it disappears and reloads the Panel
 /// once it is back. Silent by design — it never shows or focuses the window
 /// (R5), it just keeps the plumbing connected.
-async fn supervise_daemon(handle: tauri::AppHandle, daemon_up: bool) {
-    let mut supervisor = Supervisor::new(daemon_up);
+async fn supervise_daemon(handle: tauri::AppHandle, up: bool) {
+    // The supervisor adapts to a target switch made at runtime (via the
+    // connection commands / tray / menu): each tick re-reads the persisted
+    // target and, when it differs from the one currently supervised, rebuilds
+    // the state machine in the matching mode. This keeps a single resident
+    // supervisor — no second loop is ever spawned.
+    let mut target = connection::load_target();
+    let mut supervisor = match &target {
+        connection::ConnectionTarget::Local => Supervisor::new(up),
+        connection::ConnectionTarget::Remote(_) => Supervisor::new_remote(up),
+    };
     loop {
         tokio::time::sleep(HEALTH_POLL_INTERVAL).await;
-        match supervisor.tick(daemon::is_ready().await) {
+
+        // Re-read the target; a switch resets the supervisor to the new mode.
+        let current = connection::load_target();
+        if current != target {
+            tracing::info!("connection target changed — re-arming supervisor");
+            supervisor = match &current {
+                connection::ConnectionTarget::Local => Supervisor::new(false),
+                connection::ConnectionTarget::Remote(_) => Supervisor::new_remote(false),
+            };
+            target = current;
+        }
+
+        // Probe the live target: loopback `/ready` for Local, bare TCP for Remote.
+        let ready = match &target {
+            connection::ConnectionTarget::Local => daemon::is_ready().await,
+            connection::ConnectionTarget::Remote(url) => {
+                let host = url.host_str().unwrap_or("");
+                let port = url.port_or_known_default().unwrap_or(18790);
+                daemon::tcp_reachable(host, port).await
+            }
+        };
+
+        match supervisor.tick(ready) {
             SupervisorAction::Idle => {}
             SupervisorAction::Relaunch => {
                 tracing::warn!("daemon unreachable — attempting relaunch");
                 daemon::relaunch_if_down().await;
             }
             SupervisorAction::ReloadPanel => {
-                tracing::info!("daemon recovered — reloading the Panel");
-                // No bootstrap nonce on in-window reloads — the Panel has
-                // already obtained an `aleph_session` cookie on the first
-                // reveal.
-                navigate_to_panel(&handle, None);
+                tracing::info!("Gateway recovered — reloading the Panel");
+                match &target {
+                    // No bootstrap nonce on in-window reloads — the Panel has
+                    // already obtained an `aleph_session` cookie on the first
+                    // reveal.
+                    connection::ConnectionTarget::Local => navigate_to_panel(&handle, None),
+                    // Remote recovery: re-point the webview at the remote root.
+                    connection::ConnectionTarget::Remote(url) => {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            let _ = window.navigate(url.clone());
+                        }
+                    }
+                }
             }
-            // TODO(Task 6): navigate to connect page and surface error message.
             SupervisorAction::ShowConnectionError => {
-                tracing::warn!("remote Gateway unreachable — show connection error");
+                tracing::warn!("remote Gateway unreachable — showing connection page");
+                show_connection_page(
+                    &handle,
+                    "Remote Gateway unreachable. Retry or go back to local.",
+                );
             }
         }
     }
+}
+
+/// Surface a remote-Gateway connection failure by navigating the main window
+/// to the bundled connection page and forwarding the message to its
+/// `window.__alephError` hook. Mirrors `show_daemon_error`, but targets the
+/// connect page (where the user can retry or fall back to Local) rather than
+/// the splash.
+fn show_connection_page(handle: &tauri::AppHandle, message: &str) {
+    let Some(window) = handle.get_webview_window("main") else {
+        return;
+    };
+    let _ = window.show();
+    if let Ok(url) = tauri::Url::parse("tauri://localhost/connect.html") {
+        if let Err(e) = window.navigate(url) {
+            tracing::warn!("could not navigate to the connection page: {e}");
+        }
+    }
+    let safe = message.replace('\\', "\\\\").replace('\'', "\\'");
+    let _ = window.eval(format!(
+        "window.__alephError && window.__alephError('{safe}')"
+    ));
 }
 
 /// Enable launch-at-login on first run only, leaving later user choices

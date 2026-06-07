@@ -11,6 +11,8 @@ use tauri::{AppHandle, Manager, Wry};
 
 const ID_SHOW: &str = "menu_show";
 const ID_OPEN_BROWSER: &str = "menu_open_browser";
+const ID_CONNECT_REMOTE: &str = "menu_connect_remote";
+const ID_CONNECT_LOCAL: &str = "menu_connect_local";
 const ID_CHECK_UPDATE: &str = "menu_check_update";
 const ID_QUIT: &str = "menu_quit";
 const ID_QUIT_STOP: &str = "menu_quit_stop";
@@ -34,6 +36,14 @@ pub fn build(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, ID_SHOW, "Show Aleph", true, None::<&str>)?,
             &MenuItem::with_id(app, ID_OPEN_BROWSER, "Open in Browser", true, None::<&str>)?,
+            &MenuItem::with_id(
+                app,
+                ID_CONNECT_REMOTE,
+                "Connect to Remote…",
+                true,
+                None::<&str>,
+            )?,
+            &MenuItem::with_id(app, ID_CONNECT_LOCAL, "Back to Local", true, None::<&str>)?,
             &MenuItem::with_id(
                 app,
                 ID_CHECK_UPDATE,
@@ -143,6 +153,17 @@ pub fn on_event(app: &AppHandle, id: &str) {
             tauri::async_runtime::spawn(async {
                 crate::daemon::open_in_system_browser().await;
             });
+        }
+        ID_CONNECT_REMOTE => {
+            if let Some(window) = app.get_webview_window("main") {
+                if let Ok(url) = tauri::Url::parse("tauri://localhost/connect.html") {
+                    let _ = window.navigate(url);
+                }
+                crate::focus_window(app);
+            }
+        }
+        ID_CONNECT_LOCAL => {
+            let _ = crate::connection::clear_connection_target(app.clone());
         }
         ID_CHECK_UPDATE => crate::update::check_now(app),
         ID_QUIT => app.exit(0),

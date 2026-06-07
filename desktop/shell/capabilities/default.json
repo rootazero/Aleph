@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Surface the shell exposes to the Panel webview. `core:window:allow-start-dragging` is required for the macOS overlay-titlebar drag strip. The shell no longer exposes any custom Tauri commands — the directory picker and project creation flows route through the gateway's `fs.*` / `projects.*` JSON-RPC instead, which works identically for desktop, localhost web, and remote Tailnet web (R6 — one core, many channels).",
+  "description": "Surface the shell exposes to the Panel webview. `core:window:allow-start-dragging` is required for the macOS overlay-titlebar drag strip. The only custom Tauri commands the shell exposes are connection-target config toggles (`get_connection_target` / `set_connection_target` / `clear_connection_target`) — I/O config, not business or UI logic (R2/R4 boundary, spec §5.2 explicit exception). Every panel-facing operation still routes through the gateway's `fs.*` / `projects.*` JSON-RPC, which works identically for desktop, localhost web, and remote Tailnet web (R6 — one core, many channels).",
   "windows": ["main"],
   "remote": {
     "urls": ["http://127.0.0.1:18790/*"]
