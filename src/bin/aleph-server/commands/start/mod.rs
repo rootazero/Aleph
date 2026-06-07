@@ -2058,6 +2058,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         // P3: `requires_confirmation` tools route through the same requester.
         alephcore::gateway::execution_engine::set_confirmation_requester(approval_requester);
 
+        // Phase 2b: operator-targeted approval for config-tier tools. A chat-tier
+        // remote device calling a config tool suspends here until an operator
+        // resolves it via `exec.approval.resolve`. Distinct from the channel-backed
+        // requester above (which delivers to the requester's own channel).
+        {
+            use alephcore::approval::operator_requester::OperatorApprovalRequester;
+            let config_approver: Arc<
+                dyn alephcore::sandbox::exec_approval::gate::ApprovalRequester,
+            > = Arc::new(OperatorApprovalRequester::new(
+                exec_approval_manager.clone(),
+                event_bus.clone(),
+            ));
+            alephcore::gateway::execution_engine::set_config_approval_requester(config_approver);
+        }
+
         if !args.daemon {
             println!(
                 "exec-approval: ApprovalGate + ScopedToolService.with_confirmation \
