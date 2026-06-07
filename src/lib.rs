@@ -145,7 +145,7 @@ pub use crate::config::{
     policies::CompressionPolicy,
     types::acp::{AcpAdapterEntry, AcpConfig, AdapterModeSerde, OutputFormatSerde},
     types::generation::GenerationConfig,
-    types::memory::DreamingConfig,
+    types::memory::{DreamingConfig, MemoryDecayPolicy},
     types::phase6_wiring::{
         ContextBudgetToml, FallbackProviderToml, GuardrailsToml, StabilityToml,
     },

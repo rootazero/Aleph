@@ -15,7 +15,7 @@ use alephcore::memory::dreaming::validation::{
     check_duplicate_hashes, run_l1_validation, DreamValidationReport, ValidationTier,
 };
 use alephcore::memory::dreaming::{DreamPipeline, DreamReport};
-use alephcore::DreamingConfig;
+use alephcore::{DreamingConfig, MemoryDecayPolicy};
 
 /// Full evolution cycle: signals → select → gate → validate → log.
 #[tokio::test]
@@ -37,7 +37,11 @@ async fn full_evolution_cycle_consolidate() {
     assert_eq!(selection.strategy, DreamStrategy::Consolidate);
 
     // 4. Build pipeline (verify stages)
-    let pipeline = DreamPipeline::from_strategy(selection.strategy, &DreamingConfig::default());
+    let pipeline = DreamPipeline::from_strategy(
+        selection.strategy,
+        &DreamingConfig::default(),
+        &MemoryDecayPolicy::default(),
+    );
     // Consolidate: lint, review, consolidate, feedback_distill, drift, index, decay, skill_lifecycle
     assert_eq!(pipeline.stages.len(), 8);
 
@@ -102,11 +106,17 @@ async fn high_growth_selects_synthesize() {
     let selection = selector.select(&snapshot, &gate_decision);
     assert_eq!(selection.strategy, DreamStrategy::Synthesize);
 
-    let pipeline = DreamPipeline::from_strategy(selection.strategy, &DreamingConfig::default());
-    // Synthesize: lint, review, consolidate, note_synthesis, skill_distill, feedback_distill, daily_digest
-    assert_eq!(pipeline.stages.len(), 7);
+    let pipeline = DreamPipeline::from_strategy(
+        selection.strategy,
+        &DreamingConfig::default(),
+        &MemoryDecayPolicy::default(),
+    );
+    // Synthesize: lint, review, consolidate, note_synthesis, skill_distill,
+    // feedback_distill, workflow_proposal, daily_digest
+    assert_eq!(pipeline.stages.len(), 8);
     assert_eq!(pipeline.stages[4].name(), "skill_distill");
     assert_eq!(pipeline.stages[5].name(), "feedback_distill");
+    assert_eq!(pipeline.stages[6].name(), "workflow_proposal");
 }
 
 /// Mutation gate forces Conserve on merge cycle.
@@ -138,7 +148,11 @@ async fn merge_cycle_forces_conserve() {
     assert_eq!(selection.strategy, DreamStrategy::Conserve);
 
     // Conserve pipeline is minimal: lint, review, index
-    let pipeline = DreamPipeline::from_strategy(selection.strategy, &DreamingConfig::default());
+    let pipeline = DreamPipeline::from_strategy(
+        selection.strategy,
+        &DreamingConfig::default(),
+        &MemoryDecayPolicy::default(),
+    );
     assert_eq!(pipeline.stages.len(), 3);
 }
 

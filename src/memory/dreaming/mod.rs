@@ -1174,6 +1174,7 @@ mod tests {
                 "note_synthesis",
                 "skill_distill",
                 "feedback_distill",
+                "workflow_proposal",
                 "daily_digest"
             ]
         );
