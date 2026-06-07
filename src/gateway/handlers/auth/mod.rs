@@ -7,6 +7,7 @@ mod connect;
 mod connect_challenge;
 mod devices;
 mod pairing;
+pub(crate) mod tier;
 
 use crate::sync_primitives::Arc;
 use serde::{Deserialize, Serialize};
