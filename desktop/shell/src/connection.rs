@@ -105,11 +105,11 @@ fn has_explicit_port_in_input(raw: &str) -> bool {
         after_scheme.find(':')
     };
     match host_end {
-        // IPv6: check for `:port` after the closing `]`.
+        // IPv6: `idx` is already one past `]` (i.e. pointing at `:` when a
+        // port is present), so check for `:` directly at `idx`.
         Some(idx) if after_scheme.starts_with('[') => {
-            after_scheme[idx..].starts_with(']')
-                && after_scheme[idx + 1..].starts_with(':')
-                && after_scheme[idx + 2..]
+            after_scheme[idx..].starts_with(':')
+                && after_scheme[idx + 1..]
                     .split('/')
                     .next()
                     .is_some_and(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
@@ -202,5 +202,17 @@ mod tests {
     fn is_local_flag() {
         assert!(ConnectionTarget::Local.is_local());
         assert!(!ConnectionTarget::parse("10.0.0.1").unwrap().is_local());
+    }
+
+    #[test]
+    fn ipv6_with_port_keeps_user_port() {
+        let t = ConnectionTarget::parse("http://[::1]:9000").unwrap();
+        assert_eq!(t.to_persisted(), "http://[::1]:9000");
+    }
+
+    #[test]
+    fn ipv6_without_port_gets_default_port() {
+        let t = ConnectionTarget::parse("http://[::1]").unwrap();
+        assert_eq!(t.to_persisted(), "http://[::1]:18790");
     }
 }
