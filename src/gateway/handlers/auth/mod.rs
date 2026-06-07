@@ -42,7 +42,7 @@ pub const SERVER_CAPABILITIES: &[&str] = &[
 pub use bootstrap::handle_gateway_bootstrap_issue;
 pub use connect::handle_connect;
 pub use connect_challenge::handle_connect_challenge;
-pub use devices::{handle_devices_list, handle_devices_revoke};
+pub use devices::{handle_devices_list, handle_devices_revoke, handle_devices_set_level};
 pub use pairing::{
     handle_pairing_approve, handle_pairing_list, handle_pairing_poll, handle_pairing_reject,
     handle_pairing_start_browser,

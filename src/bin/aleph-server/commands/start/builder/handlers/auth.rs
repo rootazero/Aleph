@@ -60,6 +60,12 @@ pub(in crate::commands::start) fn register_auth_handlers(
         auth_handlers::handle_devices_revoke,
         auth_ctx
     );
+    register_handler!(
+        server,
+        "devices.set_level",
+        auth_handlers::handle_devices_set_level,
+        auth_ctx
+    );
 
     // Auth management tools (R9: Everything is a Tool)
     register_handler!(
