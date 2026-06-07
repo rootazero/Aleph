@@ -478,6 +478,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // empty for non-channel turns (cron, webhook) — HITL tools degrade.
         let turn_context = crate::tools::turn_context::TurnContext {
             session_key: request.session_key.clone(),
+            run_id: run_id.to_string(),
             channel_id: request
                 .metadata
                 .get("channel_id")

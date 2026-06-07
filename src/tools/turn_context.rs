@@ -21,6 +21,11 @@ use crate::routing::session_key::SessionKey;
 pub struct TurnContext {
     /// Session key of the running turn — the key HITL managers register under.
     pub session_key: SessionKey,
+    /// Gateway run id of the running turn. Lets the config-approval gate emit a
+    /// run-scoped "waiting for operator approval" notice on the requester's own
+    /// output stream. Empty for non-gateway runs (cron, internal, tests) — the
+    /// notice is then skipped (best-effort).
+    pub run_id: String,
     /// Originating channel id (e.g. `telegram`). Empty for non-channel turns
     /// (cron, webhook, internal).
     pub channel_id: String,
@@ -69,6 +74,7 @@ mod caller_tier_tests {
     fn ctx(role: Option<&str>) -> TurnContext {
         TurnContext {
             session_key: SessionKey::main("t"),
+            run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: role.map(String::from),

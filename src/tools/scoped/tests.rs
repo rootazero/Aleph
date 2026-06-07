@@ -1154,6 +1154,7 @@ async fn declared_confirmation_tool_runs_when_approved() {
 fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
     crate::tools::turn_context::TurnContext {
         session_key: crate::routing::session_key::SessionKey::main(agent),
+        run_id: String::new(),
         channel_id: "test".to_string(),
         conversation_id: "conv".to_string(),
         caller_role: None,
@@ -1315,6 +1316,7 @@ async fn execute_scopes_session_id_from_turn_context() {
     let sid = crate::routing::session_key::SessionKey::ephemeral("scoped-sess");
     let turn = crate::tools::turn_context::TurnContext {
         session_key: sid.clone(),
+        run_id: String::new(),
         channel_id: String::new(),
         conversation_id: String::new(),
         caller_role: None,
@@ -1370,6 +1372,7 @@ async fn chat_tier_blocked_from_config_tool() {
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
         crate::tools::turn_context::TurnContext {
             session_key: SessionKey::main("a"),
+            run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
@@ -1389,6 +1392,7 @@ async fn operator_tier_allowed_config_tool() {
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
         crate::tools::turn_context::TurnContext {
             session_key: SessionKey::main("a"),
+            run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("operator".to_string()),
@@ -1445,6 +1449,7 @@ async fn chat_tier_config_tool_approved_executes() {
             // sharing a key across tests would let the `denied` test's ledger
             // entry auto-reject this one (order-dependent flake).
             session_key: SessionKey::main("cfg-approve-test"),
+            run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
@@ -1467,6 +1472,7 @@ async fn chat_tier_config_tool_denied_rejected() {
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
         .with_turn_context(crate::tools::turn_context::TurnContext {
             session_key: SessionKey::main("cfg-deny-test"),
+            run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),

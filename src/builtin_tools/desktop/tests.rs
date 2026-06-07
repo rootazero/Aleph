@@ -420,6 +420,7 @@ fn audit_identity_reads_agent_and_channel_from_turn_context() {
 
     let turn = TurnContext {
         session_key: SessionKey::task("research-agent", "cron", "daily"),
+        run_id: String::new(),
         channel_id: "slack".to_string(),
         conversation_id: "C123".to_string(),
         caller_role: None,
@@ -439,6 +440,7 @@ fn audit_identity_omits_origin_for_non_channel_turn() {
     // action only, with no trailing `via .../...`.
     let turn = TurnContext {
         session_key: SessionKey::task("cron-agent", "cron", "daily"),
+        run_id: String::new(),
         channel_id: String::new(),
         conversation_id: String::new(),
         caller_role: None,
@@ -466,6 +468,7 @@ async fn approval_request_carries_agent_id_from_turn_context() {
 
     let turn = TurnContext {
         session_key: SessionKey::task("desktop-agent", "cron", "daily"),
+        run_id: String::new(),
         channel_id: "telegram".to_string(),
         conversation_id: "user-1".to_string(),
         caller_role: None,

@@ -120,6 +120,7 @@ mod tests {
 
         let ctx = TurnContext {
             session_key: sk.clone(),
+            run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,

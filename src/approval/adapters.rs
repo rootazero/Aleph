@@ -134,6 +134,7 @@ mod tests {
     fn routable_turn() -> TurnContext {
         TurnContext {
             session_key: SessionKey::ephemeral("adapter-test"),
+            run_id: String::new(),
             channel_id: "telegram".to_string(),
             conversation_id: "user-1".to_string(),
             caller_role: None,
@@ -201,6 +202,7 @@ mod tests {
         let adapter = ChannelApprovalBridgeAdapter::new(bridge, test_manager());
         let non_channel_turn = TurnContext {
             session_key: SessionKey::task("main", "cron", "daily"),
+            run_id: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: None,
