@@ -10,6 +10,7 @@
     windows_subsystem = "windows"
 )]
 
+mod connection;
 mod daemon;
 mod deeplink;
 mod external_link;
