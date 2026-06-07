@@ -305,7 +305,10 @@ mod tests {
             vec!["*".to_string()],
             Some("operator".to_string()),
         );
-        ctx.connections.write().await.insert("c-other".to_string(), other);
+        ctx.connections
+            .write()
+            .await
+            .insert("c-other".to_string(), other);
 
         let req = JsonRpcRequest::with_id(
             "devices.set_level",

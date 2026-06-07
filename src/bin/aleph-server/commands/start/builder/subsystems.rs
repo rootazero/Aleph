@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use alephcore::sync_primitives::{Arc, RwLock};
 use alephcore::gateway::server::ConnectionState;
+use alephcore::sync_primitives::{Arc, RwLock};
 
 use alephcore::gateway::device_store::DeviceStore;
 use alephcore::gateway::handlers::auth as auth_handlers;

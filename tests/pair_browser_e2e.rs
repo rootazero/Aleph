@@ -82,6 +82,7 @@ fn setup() -> (Arc<AuthContext>, Arc<AuthState>) {
         bind_port: 18790,
         allow_guest: false,
         enable_pairing: true,
+        connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
     });
 
     let auth_state = Arc::new(AuthState {
