@@ -347,24 +347,6 @@ pub(crate) fn build_panel_url(bootstrap_url: Option<&str>) -> Result<Url, url::P
     super::PANEL_URL.parse()
 }
 
-/// The root URL the webview should land on for a given connection target.
-///
-/// `Local` → the bundled local-daemon Panel origin (same as `build_panel_url`'s
-/// no-bootstrap path). `Remote` → the remote Gateway origin verbatim; the
-/// webview hits its root unauthenticated and the gateway redirects to `/pair`.
-///
-/// Returns `None` only if the local `PANEL_URL` constant fails to parse, which
-/// cannot happen for the compiled-in literal — callers treat `None` as "no
-/// navigation target".
-// Consumed by Task 6's `reroute_for_target` / `spawn_background` remote branch.
-#[allow(dead_code)]
-pub(crate) fn target_root_url(target: &super::connection::ConnectionTarget) -> Option<Url> {
-    match target {
-        super::connection::ConnectionTarget::Local => super::PANEL_URL.parse().ok(),
-        super::connection::ConnectionTarget::Remote(url) => Some(url.clone()),
-    }
-}
-
 /// Issue a one-time bootstrap nonce via the bundled `aleph-server
 /// bootstrap-url` subcommand and open the resulting loopback URL in
 /// the system browser. Best-effort — failures are logged; user-visible
