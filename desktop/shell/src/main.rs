@@ -163,14 +163,25 @@ fn main() {
         }
     };
 
-    app.run(|_app, event| {
+    app.run(|_app_handle, event| match event {
         // A window-close-driven exit is vetoed (stay in the tray); an
         // explicit "Quit" calls `app.exit(code)` and is allowed.
-        if let RunEvent::ExitRequested { code, api, .. } = event {
+        RunEvent::ExitRequested { code, api, .. } => {
             if code.is_none() {
                 api.prevent_exit();
             }
         }
+        // macOS only: closing the window hides it (see `on_window_event`)
+        // rather than destroying it, so the app stays in the dock. Clicking
+        // the dock icon then fires `Reopen` with no visible windows — bring
+        // the hidden window back, matching native dock behaviour so users
+        // don't have to reach for the menu's "Show Aleph". Windows/Linux
+        // re-entry is the tray icon and single-instance relaunch.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => {
+            focus_window(_app_handle);
+        }
+        _ => {}
     });
 }
 

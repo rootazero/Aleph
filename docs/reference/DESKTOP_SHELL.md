@@ -65,6 +65,45 @@ single-instance plugin routes it to the already-running shell and focuses
 that. The window's size and position are remembered across restarts (the
 window-state plugin); the shell still owns visibility itself.
 
+### Window & process lifecycle (cross-platform)
+
+The operating model is identical on every platform: **the daemon's life is
+decoupled from the shell's.** What differs is only the *native gesture* each
+OS uses to re-enter — the lifecycle itself never changes.
+
+There are two distinct "close" actions, and both leave the daemon running:
+
+| Action | Effect on shell | Effect on daemon |
+|---|---|---|
+| **Close the window** (✕ / Cmd+W) | Window is **hidden, not destroyed** — `CloseRequested` calls `window.hide()` + `prevent_close()`; the shell process stays resident in the tray. | Untouched, keeps serving. |
+| **"Quit (Aleph keeps running)"** (tray / macOS menu) | Shell process **exits** (`app.exit(0)`). | Untouched — it was spawned detached (Unix double-fork + `setsid`; Windows `DETACHED_PROCESS`), so it is **not** a child of the shell and survives. |
+| **"Quit & Stop Aleph"** (tray / macOS menu) | Shell process exits. | **Stopped** — `aleph-server stop` then `app.exit(0)`. The only full teardown. |
+
+**Re-opening always reconnects, never restarts.** A freshly launched (or
+re-revealed) shell probes `/ready`, finds the daemon already on its port
+(`DaemonReady`), and reveals the Panel against the live daemon instead of
+relaunching it (`reconcile` only forces a stale daemon offline on a version
+change). So "continue working where you left off" holds whether you closed
+the window or quit the shell entirely.
+
+**The re-entry gesture is the only platform-specific part.** The lifecycle
+above is uniform; how you bring a closed-to-tray window back is per-OS native
+convention:
+
+- **macOS** — click the dock icon (fires `RunEvent::Reopen`, which calls
+  `focus_window`; this is the canonical reopen behaviour and the reason the
+  app must handle that event), **or** the tray icon, **or** the menu bar's
+  *Show Aleph*.
+- **Windows / Linux** — `window.hide()` removes the taskbar button entirely,
+  so there is nothing to click there. Re-entry is the **tray icon** (left
+  click → `focus_window`) or relaunching the app (single-instance focuses the
+  running shell).
+
+Likewise the menu-bar items (*Show Aleph*, *Quit & Stop Aleph*, …) are
+**macOS-only** (`#[cfg(target_os = "macos")] mod menu`); on the chromeless
+Windows/Linux builds the same actions live in the **system-tray menu**. Same
+capabilities, native entry points.
+
 ### Daemon lifecycle
 
 The daemon is **not** a child of the shell. On Unix the shell runs
