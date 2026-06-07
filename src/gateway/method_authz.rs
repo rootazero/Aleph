@@ -65,6 +65,7 @@ const OPERATOR_METHODS: &[&str] = &[
     // Device & pairing management
     "devices.remove",
     "devices.revoke",
+    "devices.set_level",
     "pairing.approve",
     "pairing.reject",
     // Plugin lifecycle
@@ -298,6 +299,14 @@ mod tests {
                 "{t} must stay open to chat tier"
             );
         }
+    }
+
+    #[test]
+    fn devices_set_level_requires_operator() {
+        assert_eq!(
+            required_privilege("devices.set_level"),
+            MethodPrivilege::Operator
+        );
     }
 
     #[test]
