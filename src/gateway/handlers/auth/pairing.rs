@@ -81,42 +81,80 @@ pub async fn handle_pairing_approve(
             );
         }
         PairingRequest::Browser {
-            code, origin_label, ..
+            code,
+            origin_label,
+            user_agent,
+            ..
         } => {
-            // Mint a session keyed to the shared-token HMAC (mirrors
-            // auth_middleware::handle_bootstrap_consume). The session_id
-            // is stashed in PairingManager.approved_browser_sessions so the
-            // browser's `pairing.poll` can retrieve it and redirect to
-            // `/auth/bootstrap/from_pairing?code=…`.
-            let shared = match ctx.shared_token_mgr.get_current_token() {
-                Some(t) => t,
-                None => {
-                    warn!("Browser pairing approval failed: no shared token");
-                    return JsonRpcResponse::error(
-                        request.id,
-                        -32603,
-                        "Server has no shared token to mint a session",
-                    );
-                }
-            };
-            let hash = crate::gateway::security::hmac_sign(ctx.shared_token_mgr.secret(), &shared);
-            let session_id = match ctx.session_mgr.create_session(&hash) {
-                Ok(id) => id,
-                Err(e) => {
-                    warn!(error = %e, "Failed to create session for browser pairing");
-                    return JsonRpcResponse::error(
-                        request.id,
-                        -32603,
-                        format!("Failed to create session: {}", e),
-                    );
-                }
-            };
-            ctx.pairing_manager
-                .record_browser_session(code, &session_id);
+            // Browser pairing always lands at the Chat tier (chat + read, no
+            // config rights). The operator can later elevate it to config via
+            // the Devices list (devices.set_level). We mint a *persistent*
+            // chat-tier device — identical to the Device branch but tier-forced
+            // — and hand its device token to the browser via pairing.poll, so
+            // it connects through Case 1 (role derived from permissions =
+            // "guest"). This is remote-capable; it does NOT ride the
+            // loopback-only shared-token cookie bootstrap.
+            let tier = super::tier::Tier::Chat;
+            let tier_permissions = tier.permissions();
 
-            // Light up the PairingCompleted event so the Panel notification
-            // can be dismissed cleanly (paired with pairing.rejected for the
-            // reject branch in handle_pairing_reject).
+            let device_id = format!("browser-{}", uuid::Uuid::new_v4());
+            let device_name = if !origin_label.is_empty() {
+                origin_label.clone()
+            } else if !user_agent.is_empty() {
+                user_agent.clone()
+            } else {
+                "Browser".to_string()
+            };
+            let mut device = ApprovedDevice::new(device_id.clone(), device_name.clone(), None);
+            device.permissions = tier_permissions.clone();
+
+            if let Err(e) = ctx.device_store.approve_device(&device) {
+                warn!(error = %e, "Failed to store approved browser device");
+                return JsonRpcResponse::error(
+                    request.id,
+                    -32603,
+                    format!("Failed to store device: {}", e),
+                );
+            }
+
+            let device_fingerprint: String = device_id.chars().take(16).collect();
+            if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
+                device_id: &device_id,
+                device_name: &device_name,
+                device_type: None,
+                public_key: &[0u8; 32],
+                fingerprint: &device_fingerprint,
+                role: super::tier::role_for_permissions(&tier_permissions),
+                scopes: &tier_permissions,
+            }) {
+                warn!(error = %e, "Failed to register browser device in security store");
+                return JsonRpcResponse::error(
+                    request.id,
+                    -32603,
+                    format!("Failed to register device: {}", e),
+                );
+            }
+
+            let signed_token = match ctx.token_manager.issue_token(
+                &device_id,
+                DeviceRole::Operator, // memory namespace only; authz uses connect-response role
+                tier_permissions.clone(),
+            ) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = %e, "Failed to issue browser device token");
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32603,
+                        format!("Failed to issue token: {}", e),
+                    );
+                }
+            };
+            let token = format!("{}:{}", signed_token.token, signed_token.signature);
+
+            ctx.pairing_manager
+                .record_browser_credential(code, &token, &device_id);
+
             if let Err(e) = ctx
                 .event_bus
                 .publish_frame(&GatewayEventFrame::PairingCompleted {
@@ -128,14 +166,16 @@ pub async fn handle_pairing_approve(
 
             info!(
                 code = %code,
+                device_id = %device_id,
                 origin = %origin_label,
-                "Browser pairing approved"
+                "Browser pairing approved as chat-tier device"
             );
             return JsonRpcResponse::success(
                 request.id,
                 json!({
                     "code": code,
                     "kind": "browser",
+                    "device_id": device_id,
                     "approved": true,
                 }),
             );
@@ -485,9 +525,9 @@ pub async fn handle_pairing_poll(
 
     match ctx.pairing_manager.poll_browser_pairing(&params.code) {
         PollState::Pending => JsonRpcResponse::success(request.id, json!({"status": "pending"})),
-        PollState::Approved { session_id } => JsonRpcResponse::success(
+        PollState::Approved { token, device_id } => JsonRpcResponse::success(
             request.id,
-            json!({"status": "approved", "session_id": session_id}),
+            json!({"status": "approved", "token": token, "device_id": device_id}),
         ),
         PollState::Rejected => JsonRpcResponse::success(request.id, json!({"status": "rejected"})),
         PollState::Expired => JsonRpcResponse::success(request.id, json!({"status": "expired"})),
@@ -561,6 +601,102 @@ mod tests {
         );
         let reconnect_resp = handle_connect(reconnect_req, ctx).await;
         assert!(reconnect_resp.is_success());
+    }
+
+    #[tokio::test]
+    async fn browser_pairing_mints_chat_tier_device_and_connects_as_guest() {
+        let ctx = super::super::tests::create_test_context();
+
+        let start = handle_pairing_start_browser(
+            JsonRpcRequest::new(
+                "pairing.start_browser",
+                Some(json!({
+                    "origin_label": "Safari on 192.168.1.9",
+                    "user_agent": "Mozilla/5.0",
+                    "peer_ip": "192.168.1.9"
+                })),
+                Some(json!(1)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        let code = start
+            .result
+            .unwrap()
+            .get("code")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let approve = handle_pairing_approve(
+            JsonRpcRequest::new(
+                "pairing.approve",
+                Some(json!({ "code": code.clone() })),
+                Some(json!(2)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        assert!(approve.is_success(), "approve failed: {:?}", approve);
+
+        let poll = handle_pairing_poll(
+            JsonRpcRequest::new(
+                "pairing.poll",
+                Some(json!({ "code": code })),
+                Some(json!(3)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        let body = poll.result.unwrap();
+        assert_eq!(body.get("status").unwrap().as_str().unwrap(), "approved");
+        let token = body
+            .get("token")
+            .and_then(|v| v.as_str())
+            .expect("approved poll must include a device token")
+            .to_string();
+        let device_id = body
+            .get("device_id")
+            .and_then(|v| v.as_str())
+            .expect("approved poll must include device_id")
+            .to_string();
+        assert!(
+            body.get("session_id").is_none(),
+            "browser pairing no longer returns session_id"
+        );
+
+        assert!(ctx.device_store.is_approved(&device_id));
+        let device = ctx.device_store.get_device(&device_id).unwrap();
+        assert_eq!(
+            device.permissions,
+            vec!["chat".to_string(), "read".to_string()]
+        );
+
+        let connect = handle_connect(
+            JsonRpcRequest::new(
+                "connect",
+                Some(json!({ "token": token, "device_name": "Web Panel" })),
+                Some(json!(4)),
+            ),
+            ctx,
+        )
+        .await;
+        assert!(connect.is_success(), "connect failed: {:?}", connect);
+        let cr = connect.result.unwrap();
+        assert_eq!(cr.get("role").unwrap().as_str().unwrap(), "guest");
+        let perms: Vec<String> = cr
+            .get("permissions")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            !perms.iter().any(|p| p == "*"),
+            "chat tier must not hold wildcard"
+        );
     }
 
     #[tokio::test]
@@ -668,8 +804,12 @@ mod tests {
         let body = poll.result.unwrap();
         assert_eq!(body.get("status").unwrap().as_str().unwrap(), "approved");
         assert!(
-            body.get("session_id").is_some(),
-            "approved poll must include session_id"
+            body.get("token").is_some(),
+            "approved poll must include token"
+        );
+        assert!(
+            body.get("device_id").is_some(),
+            "approved poll must include device_id"
         );
     }
 
