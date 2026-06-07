@@ -394,7 +394,11 @@ fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
         crate::connection::ConnectionTarget::Remote(url) => {
             let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
             let host = url.host_str().unwrap_or("127.0.0.1");
-            let port = url.port().unwrap_or(18790);
+            // port_or_known_default(): the url crate elides scheme-default ports
+            // (443/80) from `.port()`, so use the known-default form to recover
+            // an https-on-443 remote correctly; parse() always set a port so
+            // this is effectively always Some, the unwrap_or is belt-and-braces.
+            let port = url.port_or_known_default().unwrap_or(18790);
             format!("{scheme}://{host}:{port}/ws")
         }
     }
@@ -694,7 +698,7 @@ git show --stat HEAD
 
 Read `spawn_background`（:231-277）。在读 version 后 `let target = connection::load_target();`，按 target 分支：
 - **Local**（`target.is_local()`）：**逐字节保留**现有 `reconcile_for_version` + `ensure_ready` + `reveal_panel` + `supervise_daemon(handle, daemon_up)`。另调 `external_link::set_remote_host(None)`（显式清空，幂等）。
-- **Remote(url)**：跳过 reconcile/launch；`external_link::set_remote_host(Some(url.clone()))`；裸 TCP 可达性探测（`daemon::tcp_reachable(host, port).await` —— 见 Step 2）；导航 webview 到远程 root（`window.navigate(url)`，未鉴权自动跳 `/pair`）；启动 `supervise_daemon_remote`（或给 `supervise_daemon` 传 target + 用 `Supervisor::new_remote`）。notify/update 任务照常启动（notify 在 Task 3 已按 target 省 token）。
+- **Remote(url)**：跳过 reconcile/launch；`external_link::set_remote_host(Some(url.clone()))`；裸 TCP 可达性探测（`daemon::tcp_reachable(host, port).await` —— 见 Step 2；host=`url.host_str()`，port=`url.port_or_known_default().unwrap_or(18790)`，因 url crate 省略 scheme-default 端口）；导航 webview 到远程 root（`window.navigate(url)`，未鉴权自动跳 `/pair`）；启动 `supervise_daemon_remote`（或给 `supervise_daemon` 传 target + 用 `Supervisor::new_remote`）。notify/update 任务照常启动（notify 在 Task 3 已按 target 省 token）。
 
 - [ ] **Step 2: 裸 TCP 可达性探测 helper（`daemon.rs`）**
 
