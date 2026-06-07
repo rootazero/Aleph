@@ -75,7 +75,12 @@ impl ApprovalRequester for OperatorApprovalRequester {
             session_key: session_key_str.clone(),
         };
         let record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
-        let approval_id = record.id.clone();
+        // Register the pending entry BEFORE publishing the event, so an operator
+        // who resolves the instant they see it cannot race ahead of
+        // registration (resolve-before-register would otherwise be lost and the
+        // approval would spuriously time out). The entry is resolvable the
+        // moment `register_pending` returns.
+        let (approval_id, rx, timeout) = self.manager.register_pending(record);
 
         if let Err(e) = self
             .event_bus
@@ -89,7 +94,10 @@ impl ApprovalRequester for OperatorApprovalRequester {
             tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
         }
 
-        let decision = self.manager.wait_for_decision(record).await;
+        let decision = self
+            .manager
+            .await_registered(approval_id.clone(), rx, timeout)
+            .await;
 
         let frame = match decision {
             Some(d) => GatewayEventFrame::ApprovalResolved {

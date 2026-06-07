@@ -177,9 +177,29 @@ impl ExecApprovalManager {
         &self,
         record: ExecApprovalRecord,
     ) -> Option<ApprovalDecisionType> {
+        let (id, rx, timeout) = self.register_pending(record);
+        self.await_registered(id, rx, timeout).await
+    }
+
+    /// Register `record` as pending and return its id + receiver + remaining
+    /// timeout — WITHOUT awaiting.
+    ///
+    /// Synchronous: the entry is in `pending` (and thus resolvable via
+    /// [`Self::resolve`]) the instant this returns. Callers that publish a
+    /// notification about the pending approval should call this FIRST, then
+    /// publish, then [`Self::await_registered`] — so a fast resolver cannot
+    /// race ahead of registration (resolve-before-register → spurious timeout).
+    pub fn register_pending(
+        &self,
+        record: ExecApprovalRecord,
+    ) -> (
+        String,
+        oneshot::Receiver<Option<ApprovalDecisionType>>,
+        Duration,
+    ) {
         // Use remaining time from now, not the full original timeout window.
-        // This prevents granting a full timeout if wait_for_decision is called
-        // long after the record was created.
+        // This prevents granting a full timeout if the wait begins long after
+        // the record was created.
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -190,7 +210,6 @@ impl ExecApprovalManager {
         let (tx, rx) = oneshot::channel();
         let id = record.id.clone();
 
-        // Add to pending
         {
             let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
             pending.insert(
@@ -203,6 +222,17 @@ impl ExecApprovalManager {
             );
         }
 
+        (id, rx, timeout)
+    }
+
+    /// Await a previously [`register_pending`](Self::register_pending)ed
+    /// approval, removing it from `pending` on resolution or timeout.
+    pub async fn await_registered(
+        &self,
+        id: String,
+        rx: oneshot::Receiver<Option<ApprovalDecisionType>>,
+        timeout: Duration,
+    ) -> Option<ApprovalDecisionType> {
         // Wait with timeout
         let result = tokio::time::timeout(timeout, rx).await;
 
@@ -539,6 +569,24 @@ mod tests {
         assert_eq!(record.id, request.id);
         assert_eq!(record.command, "npm install");
         assert!(record.expires_at_ms > record.created_at_ms);
+    }
+
+    #[tokio::test]
+    async fn resolve_after_register_before_await_is_not_lost() {
+        // Regression: register_pending must make the entry resolvable BEFORE the
+        // caller awaits, so a resolver racing right after a published
+        // notification is not lost (resolve-before-register → spurious timeout).
+        let (_dir, manager) = temp_manager();
+        let record = manager.create(&mock_request(), 60_000);
+
+        let (id, rx, timeout) = manager.register_pending(record);
+        // Resolve immediately — entry must already exist in `pending`.
+        assert!(
+            manager.resolve(&id, ApprovalDecisionType::AllowOnce, None),
+            "resolve must find the entry registered by register_pending"
+        );
+        let decision = manager.await_registered(id, rx, timeout).await;
+        assert_eq!(decision, Some(ApprovalDecisionType::AllowOnce));
     }
 
     #[tokio::test]
