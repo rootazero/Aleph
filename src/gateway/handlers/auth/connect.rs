@@ -627,6 +627,7 @@ mod tests {
                 24,
             )),
             bind_port: 18790,
+            connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         });
 
         let request = JsonRpcRequest::new(
@@ -738,6 +739,7 @@ mod tests {
                 24,
             )),
             bind_port: 18790,
+            connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         });
 
         let request = JsonRpcRequest::new(
@@ -810,6 +812,7 @@ mod tests {
                 24,
             )),
             bind_port: 18790,
+            connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         });
 
         let request = JsonRpcRequest::new(
@@ -883,6 +886,7 @@ mod tests {
                 24,
             )),
             bind_port: 18790,
+            connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         });
 
         let request = JsonRpcRequest::new(
@@ -951,6 +955,7 @@ mod tests {
                 24,
             )),
             bind_port: 18790,
+            connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         });
 
         // Missing challenge → rejected, even though the shared_token is valid.
@@ -1026,6 +1031,7 @@ mod tests {
                 24,
             )),
             bind_port: 18790,
+            connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         });
 
         let request = JsonRpcRequest::new(

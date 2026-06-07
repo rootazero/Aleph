@@ -402,6 +402,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         server.instance_id.clone(),
         server.started_at_unix,
         server.presence.clone(),
+        server.connections.clone(),
         u32::try_from(full_config.gateway.max_connections).unwrap_or(u32::MAX),
         full_config.gateway.require_challenge,
         full_config.gateway.allow_guest,

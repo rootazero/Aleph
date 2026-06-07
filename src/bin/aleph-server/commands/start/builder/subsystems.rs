@@ -11,9 +11,11 @@
 //! - Channel registration
 //! - Inbound message routing
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use alephcore::sync_primitives::{Arc, RwLock};
+use alephcore::gateway::server::ConnectionState;
 
 use alephcore::gateway::device_store::DeviceStore;
 use alephcore::gateway::handlers::auth as auth_handlers;
@@ -62,6 +64,7 @@ pub(in crate::commands::start) fn initialize_auth(
     instance_id: String,
     started_at_unix: i64,
     presence: Arc<alephcore::gateway::presence::PresenceTracker>,
+    connections: Arc<tokio::sync::RwLock<HashMap<String, ConnectionState>>>,
     max_connections: u32,
     require_challenge: bool,
     allow_guest: bool,
@@ -197,6 +200,7 @@ pub(in crate::commands::start) fn initialize_auth(
         instance_id: instance_id.clone(),
         started_at_unix,
         presence,
+        connections,
         max_connections,
         challenge_manager: Arc::new(
             alephcore::gateway::challenge::ChallengeManager::with_server_id(instance_id),

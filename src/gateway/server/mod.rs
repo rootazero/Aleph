@@ -83,7 +83,7 @@ pub struct ConnectionState {
 impl ConnectionState {
     /// Create a new connection state for a connection from `client_ip`
     /// (the resolved real client IP — see [`ConnectionState::client_ip`]).
-    fn new(client_ip: std::net::IpAddr) -> Self {
+    pub(crate) fn new(client_ip: std::net::IpAddr) -> Self {
         Self {
             authenticated: false,
             first_message: true,
@@ -284,7 +284,7 @@ pub struct GatewayServer {
     config: GatewayConfig,
     handlers: Arc<HandlerRegistry>,
     event_bus: Arc<GatewayEventBus>,
-    connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
+    pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
     /// Subscription manager for per-connection event filtering
     subscription_manager: Arc<SubscriptionManager>,
     /// Guest session manager for tracking guest connections

@@ -10,6 +10,9 @@ mod pairing;
 pub(crate) mod tier;
 
 use crate::sync_primitives::Arc;
+use crate::gateway::server::ConnectionState;
+use std::collections::HashMap;
+use tokio::sync::RwLock;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -228,6 +231,11 @@ pub struct AuthContext {
     /// returned by `gateway.bootstrap.issue` so callers (CLI, Tauri
     /// shell) don't need to know it independently.
     pub bind_port: u16,
+    /// Live connection registry, shared with `GatewayServer`. Lets
+    /// `devices.set_level` refresh the role/permissions of a device's active
+    /// connection(s) in place so a tier change takes effect on the next
+    /// request without waiting for reconnect.
+    pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
 }
 
 impl AuthContext {
@@ -338,6 +346,7 @@ mod connect_result_role_tests {
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
             session_mgr,
             bind_port: 18790,
+            connections: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 }
@@ -401,6 +410,7 @@ pub(crate) mod tests {
             bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
             session_mgr,
             bind_port: 18790,
+            connections: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 }
