@@ -363,6 +363,9 @@ enum SupervisorAction {
     Relaunch,
     /// The daemon just came back; reload the Panel webview.
     ReloadPanel,
+    /// Remote target unreachable; we don't own that daemon — surface a
+    /// connection error and offer retry / back-to-local instead of relaunch.
+    ShowConnectionError,
 }
 
 /// A small state machine that turns a stream of `/ready` probe results into
@@ -371,6 +374,10 @@ enum SupervisorAction {
 struct Supervisor {
     health: DaemonHealth,
     consecutive_failures: u32,
+    /// Whether this supervisor is tracking a remote Gateway (true) or the
+    /// local daemon (false). Remote mode never relaunches — it surfaces a
+    /// connection error instead, because the remote daemon is not ours to manage.
+    remote: bool,
 }
 
 impl Supervisor {
@@ -384,6 +391,33 @@ impl Supervisor {
                 DaemonHealth::Down
             },
             consecutive_failures: 0,
+            remote: false,
+        }
+    }
+
+    /// Start supervising a remote Gateway. `reachable` is the outcome of the
+    /// initial TCP probe. Unlike Local mode, a failed probe does not relaunch
+    /// the daemon — it surfaces a connection error instead.
+    fn new_remote(reachable: bool) -> Self {
+        Self {
+            health: if reachable {
+                DaemonHealth::Up
+            } else {
+                DaemonHealth::Down
+            },
+            consecutive_failures: 0,
+            remote: true,
+        }
+    }
+
+    /// The action to take when the target transitions to Down. Local mode
+    /// relaunches; Remote mode surfaces a connection error instead (the remote
+    /// daemon is not ours to manage).
+    fn down_action(&self) -> SupervisorAction {
+        if self.remote {
+            SupervisorAction::ShowConnectionError
+        } else {
+            SupervisorAction::Relaunch
         }
     }
 
@@ -399,12 +433,12 @@ impl Supervisor {
                 self.consecutive_failures += 1;
                 if self.consecutive_failures >= FAILURES_TO_DECLARE_DOWN {
                     self.health = DaemonHealth::Down;
-                    SupervisorAction::Relaunch
+                    self.down_action()
                 } else {
                     SupervisorAction::Idle
                 }
             }
-            (DaemonHealth::Down, false) => SupervisorAction::Relaunch,
+            (DaemonHealth::Down, false) => self.down_action(),
             (DaemonHealth::Down, true) => {
                 self.health = DaemonHealth::Up;
                 self.consecutive_failures = 0;
@@ -435,6 +469,10 @@ async fn supervise_daemon(handle: tauri::AppHandle, daemon_up: bool) {
                 // already obtained an `aleph_session` cookie on the first
                 // reveal.
                 navigate_to_panel(&handle, None);
+            }
+            // TODO(Task 6): navigate to connect page and surface error message.
+            SupervisorAction::ShowConnectionError => {
+                tracing::warn!("remote Gateway unreachable — show connection error");
             }
         }
     }
@@ -542,5 +580,36 @@ mod tests {
         assert_eq!(sup.health, DaemonHealth::Up);
         // Back to steady state once recovered.
         assert_eq!(sup.tick(true), SupervisorAction::Idle);
+    }
+
+    #[test]
+    fn supervisor_remote_shows_error_instead_of_relaunch() {
+        let mut sup = Supervisor::new_remote(true);
+        // sustained failure on a remote target must NOT try to relaunch a
+        // daemon we don't own — it surfaces a connection error instead.
+        let mut action = SupervisorAction::Idle;
+        for _ in 0..FAILURES_TO_DECLARE_DOWN {
+            action = sup.tick(false);
+        }
+        assert_eq!(action, SupervisorAction::ShowConnectionError);
+        assert_eq!(sup.health, DaemonHealth::Down);
+    }
+
+    #[test]
+    fn supervisor_remote_reloads_on_recovery() {
+        let mut sup = Supervisor::new_remote(false);
+        assert_eq!(sup.tick(false), SupervisorAction::ShowConnectionError);
+        assert_eq!(sup.tick(true), SupervisorAction::ReloadPanel);
+    }
+
+    #[test]
+    fn supervisor_local_behaviour_unchanged() {
+        // regression guard: local mode still relaunches
+        let mut sup = Supervisor::new(true); // existing ctor = Local
+        let mut action = SupervisorAction::Idle;
+        for _ in 0..FAILURES_TO_DECLARE_DOWN {
+            action = sup.tick(false);
+        }
+        assert_eq!(action, SupervisorAction::Relaunch);
     }
 }
