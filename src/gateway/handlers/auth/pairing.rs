@@ -16,16 +16,20 @@ use crate::gateway::security::{DeviceRole, DeviceType, PairingRequest, PollState
 
 use super::AuthContext;
 
+#[derive(Debug, Deserialize)]
+struct ApproveParams {
+    code: String,
+    /// `"config"` → operator (full control). Anything else / missing →
+    /// chat tier (safe default): chat + read, no Aleph-config rights.
+    #[serde(default)]
+    level: Option<String>,
+}
+
 /// Handle "pairing.approve" request (from authorized client or CLI)
 pub async fn handle_pairing_approve(
     request: JsonRpcRequest,
     ctx: Arc<AuthContext>,
 ) -> JsonRpcResponse {
-    #[derive(Debug, Deserialize)]
-    struct ApproveParams {
-        code: String,
-    }
-
     let params: ApproveParams = match parse_params(&request) {
         Ok(p) => p,
         Err(e) => return e,
@@ -138,9 +142,15 @@ pub async fn handle_pairing_approve(
         }
     };
 
+    // Determine tier permissions from the requested level.
+    // Missing or unrecognised → Chat (safe default: chat + read, no config rights).
+    let tier = super::tier::Tier::from_level(params.level.as_deref());
+    let tier_permissions = tier.permissions();
+
     // Generate device ID and create approved device
     let device_id = uuid::Uuid::new_v4().to_string();
-    let device = ApprovedDevice::new(device_id.clone(), device_name.clone(), device_type);
+    let mut device = ApprovedDevice::new(device_id.clone(), device_name.clone(), device_type);
+    device.permissions = tier_permissions.clone();
 
     // Store in device store
     if let Err(e) = ctx.device_store.approve_device(&device) {
@@ -160,8 +170,8 @@ pub async fn handle_pairing_approve(
         device_type: None,
         public_key: &[0u8; 32],           // placeholder public key
         fingerprint: &device_fingerprint, // use device_id prefix as fingerprint
-        role: "operator",
-        scopes: &["*".to_string()],
+        role: super::tier::role_for_permissions(&tier_permissions),
+        scopes: &tier_permissions,
     }) {
         warn!(error = %e, "Failed to register device in security store");
         return JsonRpcResponse::error(
@@ -171,22 +181,24 @@ pub async fn handle_pairing_approve(
         );
     }
 
-    // Generate token for the new device
-    let signed_token =
-        match ctx
-            .token_manager
-            .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
-        {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(error = %e, "Failed to issue token");
-                return JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    format!("Failed to issue token: {}", e),
-                );
-            }
-        };
+    // Generate token for the new device.
+    // DeviceRole::Operator is kept (memory namespace only; authz gate uses
+    // the connect-response role derived from permissions).
+    let signed_token = match ctx.token_manager.issue_token(
+        &device_id,
+        DeviceRole::Operator,
+        tier_permissions.clone(),
+    ) {
+        Ok(t) => t,
+        Err(e) => {
+            warn!(error = %e, "Failed to issue token");
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to issue token: {}", e),
+            );
+        }
+    };
 
     info!(
         device_id = %device_id,
@@ -479,6 +491,26 @@ pub async fn handle_pairing_poll(
         ),
         PollState::Rejected => JsonRpcResponse::success(request.id, json!({"status": "rejected"})),
         PollState::Expired => JsonRpcResponse::success(request.id, json!({"status": "expired"})),
+    }
+}
+
+#[cfg(test)]
+mod tier_param_tests {
+    use super::*;
+
+    #[test]
+    fn approve_params_defaults_level_to_none() {
+        let req = serde_json::json!({ "code": "ABCD1234" });
+        let p: ApproveParams = serde_json::from_value(req).unwrap();
+        assert_eq!(p.code, "ABCD1234");
+        assert_eq!(p.level, None);
+    }
+
+    #[test]
+    fn approve_params_parses_config_level() {
+        let req = serde_json::json!({ "code": "X", "level": "config" });
+        let p: ApproveParams = serde_json::from_value(req).unwrap();
+        assert_eq!(p.level.as_deref(), Some("config"));
     }
 }
 
