@@ -196,6 +196,8 @@ pub struct DeviceInfo {
     pub device_type: String,
     pub paired_at: String,
     pub last_seen: Option<String>,
+    /// UI tier label from the backend: `"chat"` | `"config"`.
+    pub tier: String,
 }
 
 pub struct SecurityConfigApi;
@@ -238,6 +240,22 @@ impl SecurityConfigApi {
         state
             .rpc_call("security_config.revoke_device", params)
             .await?;
+        Ok(())
+    }
+
+    /// Change a device's tier (chat | config) via the Phase 3a operator RPC.
+    /// `level` is the target tier: "chat" downgrades, "config" elevates.
+    pub async fn set_level(
+        state: &DashboardState,
+        device_id: String,
+        level: String,
+    ) -> Result<(), String> {
+        let params = serde_json::json!({
+            "device_id": device_id,
+            "level": level,
+        });
+
+        state.rpc_call("devices.set_level", params).await?;
         Ok(())
     }
 }
