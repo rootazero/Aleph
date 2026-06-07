@@ -115,22 +115,48 @@ impl ScopedToolService {
         // interception must live at the tool-dispatch chokepoint). The
         // originating connection's role rides in TURN_CONTEXT, stamped at run
         // start. Operator devices, the local no-auth daemon, and non-gateway
-        // runs (cron/internal) all pass. Live operator approval ("sudo") is
-        // Phase 2b — today this hard-rejects, mirroring B1's RPC gate.
+        // runs (cron/internal) all pass.
         if crate::gateway::method_authz::tool_requires_operator(name) {
             let is_operator = crate::tools::turn_context::current_turn_context()
                 .map(|t| t.caller_is_operator())
                 .unwrap_or(true);
             if !is_operator {
-                return Err(ToolError::PermissionDenied {
-                    name: name.to_string(),
-                    reason: format!(
-                        "`{name}` changes Aleph's own configuration and requires operator \
-                         (config) authorization. This device is paired at chat level. Ask the \
-                         server operator to grant config access (Devices → 授权配置), then retry. \
-                         Do not retry until authorized."
-                    ),
-                });
+                // Phase 2b: suspend for live operator approval instead of an
+                // outright reject. Routes through the operator-targeted requester
+                // (publishes an operator-only `approval.requested`, waits on the
+                // exec-approval oneshot resolved via `exec.approval.resolve`).
+                // Reuses confirm_with_memory for session-grant memory + the
+                // denial-ledger blind-retry guard. No requester wired (tests /
+                // pre-boot) → fail closed (hard reject), never silent allow.
+                match &self.config_approval_requester {
+                    Some(req) => {
+                        let reason = format!(
+                            "A chat-tier device asked to run `{name}`, which changes Aleph's own \
+                             configuration. Approve to allow this change."
+                        );
+                        if let Err(denial) = self.confirm_with_memory(req, name, &reason).await {
+                            return Err(ToolError::PermissionDenied {
+                                name: name.to_string(),
+                                reason: format!(
+                                    "config change via `{name}` was not authorized by the server \
+                                     operator ({:?}). Do not retry until authorized.",
+                                    denial.outcome
+                                ),
+                            });
+                        }
+                        // Approved → fall through to normal execution.
+                    }
+                    None => {
+                        return Err(ToolError::PermissionDenied {
+                            name: name.to_string(),
+                            reason: format!(
+                                "`{name}` changes Aleph's own configuration and requires operator \
+                                 authorization, but no approval channel is available. This device \
+                                 is paired at chat level. Do not retry."
+                            ),
+                        });
+                    }
+                }
             }
         }
 

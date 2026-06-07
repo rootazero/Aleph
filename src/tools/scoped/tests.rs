@@ -1406,3 +1406,67 @@ async fn no_turn_context_allows_config_tool() {
         "internal/non-gateway run (no turn context) must pass"
     );
 }
+
+// -------------------------------------------------------------------------
+// Phase 2b: live operator sudo approval for chat-tier config tools.
+//
+// When `config_approval_requester` is wired, a chat-tier connection's
+// attempt to run a config tool suspends for operator approval via
+// `confirm_with_memory`. Approval → falls through to normal execution.
+// Denial → `PermissionDenied`. No requester (None) → hard-reject (fail
+// closed) — `chat_tier_blocked_from_config_tool` above already covers this.
+// -------------------------------------------------------------------------
+
+struct StubApprover(crate::sandbox::exec_approval::gate::ApprovalOutcome);
+
+#[async_trait::async_trait]
+impl crate::sandbox::exec_approval::gate::ApprovalRequester for StubApprover {
+    async fn request_approval(
+        &self,
+        _tool: &str,
+        _reason: &str,
+    ) -> crate::sandbox::exec_approval::gate::ApprovalOutcome {
+        self.0
+    }
+}
+
+#[tokio::test]
+async fn chat_tier_config_tool_approved_executes() {
+    use crate::routing::session_key::SessionKey;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(StubTool { tool_name: "cron_manage" }));
+    let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
+        .with_turn_context(crate::tools::turn_context::TurnContext {
+            session_key: SessionKey::main("a"),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+        })
+        .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Approved)));
+    assert!(
+        svc.execute("cron_manage", json!({})).await.is_ok(),
+        "operator-approved config tool must execute"
+    );
+}
+
+#[tokio::test]
+async fn chat_tier_config_tool_denied_rejected() {
+    use crate::routing::session_key::SessionKey;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let mut reg = LoopToolRegistry::new();
+    reg.register(Box::new(StubTool { tool_name: "cron_manage" }));
+    let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
+        .with_turn_context(crate::tools::turn_context::TurnContext {
+            session_key: SessionKey::main("a"),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: Some("guest".to_string()),
+        })
+        .with_config_approval(Arc::new(StubApprover(ApprovalOutcome::Denied)));
+    let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
+    assert!(
+        matches!(err, ToolError::PermissionDenied { .. }),
+        "operator-denied config tool must be PermissionDenied, got {err:?}"
+    );
+}
