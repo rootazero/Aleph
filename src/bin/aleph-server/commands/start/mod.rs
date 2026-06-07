@@ -421,7 +421,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     server.set_guest_session_manager(auth_bundle.guest_session_manager.clone());
 
     // Mount HTTP auth routes (/auth/logout, /auth/bootstrap, /pair,
-    // /auth/bootstrap/from_pairing, /rpc) at the router root so the
+    // /rpc) at the router root so the
     // loopback bootstrap-consume and browser-pairing endpoints are
     // reachable from a real browser. Same BootstrapNonceManager,
     // HttpSessionManager, and PairingManager Arcs as the JSON-RPC handlers

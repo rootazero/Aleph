@@ -20,10 +20,10 @@ const DEFAULT_PAIRING_EXPIRY_MS: i64 = 5 * 60 * 1000;
 /// Maximum pending pairing requests
 const MAX_PENDING_REQUESTS: usize = 10;
 
-/// How long an approved browser session_id is retained after pairing.approve
-/// runs, giving the cold browser time to consume it via `pairing.poll`.
-/// After this window the entry is dropped from `approved_browser_sessions`
-/// and a late poll returns `PollState::Expired`.
+/// How long an approved browser credential (device token + device_id) is
+/// retained after pairing.approve runs, giving the cold browser time to
+/// consume it via `pairing.poll`. After this window the entry is dropped from
+/// `approved_browser_sessions` and a late poll returns `PollState::Expired`.
 const APPROVED_SESSION_TTL_MS: i64 = 5 * 60 * 1000;
 
 /// Pairing-related errors

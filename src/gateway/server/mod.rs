@@ -344,7 +344,7 @@ pub struct GatewayServer {
     /// lock instead.
     admin_router: Option<Router>,
     /// HTTP auth routes (`/auth/logout`, `/auth/bootstrap`, `/pair`,
-    /// `/auth/bootstrap/from_pairing`, `/rpc`). Mounted at the router
+    /// `/rpc`). Mounted at the router
     /// root when set so the loopback bootstrap-consume endpoint and the
     /// browser-pairing flow are reachable from the browser. The legacy
     /// `/login` + `/auth/login` token-paste form was removed in Phase 4.
@@ -504,7 +504,7 @@ impl GatewayServer {
     }
 
     /// Mount HTTP auth routes (`/auth/logout`, `/auth/bootstrap`,
-    /// `/pair`, `/auth/bootstrap/from_pairing`, `/rpc`) at the router
+    /// `/pair`, `/rpc`) at the router
     /// root in `build_router`. Built by
     /// [`crate::gateway::auth_middleware::auth_routes`]. The Phase 4
     /// deletion of `/login` + `/auth/login` means these routes now

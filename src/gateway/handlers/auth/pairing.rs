@@ -505,8 +505,10 @@ pub async fn handle_pairing_start_browser(
 /// Handle "pairing.poll" — anonymous polling RPC the `/pair` HTML page
 /// hits every ~2s. Returns one of:
 /// - `{"status": "pending"}` while the operator hasn't decided yet
-/// - `{"status": "approved", "session_id": "…"}` once approved
-///   (single-use: a second poll returns "expired")
+/// - `{"status": "approved", "token": "…", "device_id": "…"}` once approved —
+///   the chat-tier device token the browser stores in
+///   `localStorage["aleph_device_token"]` and connects with (single-use: a
+///   second poll returns "expired")
 /// - `{"status": "rejected"}` if the operator rejected
 /// - `{"status": "expired"}` if unknown, never created, or TTL elapsed
 pub async fn handle_pairing_poll(

@@ -46,9 +46,9 @@ pub(in crate::commands::start) struct AuthBundle {
     /// issuer (RPC handler inside `auth_ctx`) and the consumer (HTTP
     /// route) see the same nonce map.
     pub bootstrap_mgr: Arc<alephcore::gateway::bootstrap::BootstrapNonceManager>,
-    /// Shared with the loopback `/auth/bootstrap{,/from_pairing}` HTTP
-    /// routes so the Browser-pairing approve flow (inside auth_ctx) and
-    /// the cookie issuer (HTTP route) operate on the same session store.
+    /// Shared with the loopback `/auth/bootstrap` HTTP route so the
+    /// same-machine bootstrap-consume flow (inside auth_ctx) and the cookie
+    /// issuer (HTTP route) operate on the same session store.
     pub session_mgr: Arc<alephcore::gateway::session::HttpSessionManager>,
 }
 
