@@ -128,6 +128,12 @@ pub struct ConnectResult {
     pub device_id: String,
     /// Permissions granted
     pub permissions: Vec<String>,
+    /// Connection role this device authenticated as: `"operator"` (config
+    /// tier, full control plane) or `"guest"` (chat tier). The dispatch loop
+    /// copies this into `ConnectionState.role`, which `is_operator()` and the
+    /// method-authz gate consult. Derived from `permissions` via
+    /// `tier::role_for_permissions`.
+    pub role: String,
     /// Token expiry time (ISO 8601)
     pub expires_at: String,
     /// Snapshot of server state versions {presence, health, config} at
@@ -274,6 +280,66 @@ pub fn create_hello_notification(auth_mode: &AuthMode) -> JsonRpcRequest {
             auth_required: auth_mode.is_auth_required(),
         })),
     )
+}
+
+#[cfg(test)]
+mod connect_result_role_tests {
+    use super::*;
+
+    #[test]
+    fn connect_result_serializes_role() {
+        let r = ConnectResult {
+            token: "t".into(),
+            device_id: "d".into(),
+            permissions: vec!["*".into()],
+            role: "operator".into(),
+            expires_at: "2026-01-01T00:00:00Z".into(),
+            state_version: crate::gateway::state_version::StateVersionTracker::new().snapshot(),
+            transport: TransportPolicy::defaults(),
+            hello: super::build_hello_snapshot(&create_test_auth_context_for_role_test()),
+        };
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v.get("role").and_then(|x| x.as_str()), Some("operator"));
+    }
+
+    fn create_test_auth_context_for_role_test() -> AuthContext {
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+        let shared_token_mgr = Arc::new(crate::gateway::security::SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test_role.vault",
+        ));
+        let session_mgr = Arc::new(crate::gateway::session::HttpSessionManager::new(
+            store.clone(),
+            24,
+        ));
+        AuthContext {
+            token_manager: Arc::new(crate::gateway::security::TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(crate::gateway::security::PairingManager::new(store.clone())),
+            device_store: Arc::new(crate::gateway::device_store::DeviceStore::in_memory().unwrap()),
+            security_store: store,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
+            auth_mode: crate::gateway::config::AuthMode::None,
+            allow_guest: true,
+            enable_pairing: true,
+            shared_token_mgr,
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: TransportPolicy::defaults(),
+            instance_id: "test".to_string(),
+            started_at_unix: 0,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 10,
+            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
+            require_challenge: false,
+            bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr,
+            bind_port: 18790,
+        }
+    }
 }
 
 #[cfg(test)]

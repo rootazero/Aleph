@@ -161,17 +161,20 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                 );
 
                 // Return session info (no persistent token for guests)
+                let permissions: Vec<String> = guest_token
+                    .scope
+                    .allowed_tools
+                    .iter()
+                    .map(|t| format!("tool:{}", t))
+                    .collect();
+                let role = super::tier::role_for_permissions(&permissions).to_string();
                 return JsonRpcResponse::success(
                     request.id,
                     json!(ConnectResult {
                         token: format!("guest:{}:{}", session_id, guest_token.token),
                         device_id: format!("guest-{}", guest_token.guest_id),
-                        permissions: guest_token
-                            .scope
-                            .allowed_tools
-                            .iter()
-                            .map(|t| format!("tool:{}", t))
-                            .collect(),
+                        permissions,
+                        role,
                         expires_at: guest_token
                             .scope
                             .expires_at
@@ -251,6 +254,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                         token: format!("{}:{}", signed_token.token, signed_token.signature),
                         device_id,
                         permissions: vec!["*".to_string()],
+                        role: "operator".to_string(),
                         expires_at: chrono::DateTime::from_timestamp_millis(
                             signed_token.expires_at
                         )
@@ -329,6 +333,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                 token: format!("{}:{}", signed_token.token, signed_token.signature),
                 device_id,
                 permissions: vec!["*".to_string()],
+                role: "operator".to_string(),
                 expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
                     .map(|dt| dt.to_rfc3339())
                     .unwrap_or_else(
@@ -374,12 +379,15 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
 
                     info!(device_id = %device_id, "Connection authenticated via token");
 
+                    let permissions = validation.scopes;
+                    let role = super::tier::role_for_permissions(&permissions).to_string();
                     return JsonRpcResponse::success(
                         request.id,
                         json!(ConnectResult {
                             token: token_str.clone(),
                             device_id,
-                            permissions: validation.scopes,
+                            permissions,
+                            role,
                             expires_at: chrono::DateTime::from_timestamp_millis(
                                 chrono::Utc::now().timestamp_millis() + validation.remaining_ms
                             )
@@ -437,12 +445,14 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
 
             info!(device_id = %device_id, "Connection authenticated via approved device");
 
+            let role = super::tier::role_for_permissions(&permissions).to_string();
             return JsonRpcResponse::success(
                 request.id,
                 json!(ConnectResult {
                     token: format!("{}:{}", signed_token.token, signed_token.signature),
                     device_id: device_id.clone(),
                     permissions,
+                    role,
                     expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
                         .map(|dt| dt.to_rfc3339())
                         .unwrap_or_else(
