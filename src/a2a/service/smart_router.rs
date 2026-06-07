@@ -161,11 +161,11 @@ impl SmartRouter {
             let before_ok = haystack[..start]
                 .chars()
                 .next_back()
-                .map_or(true, |c| !c.is_alphanumeric());
+                .is_none_or(|c| !c.is_alphanumeric());
             let after_ok = haystack[start + matched.len()..]
                 .chars()
                 .next()
-                .map_or(true, |c| !c.is_alphanumeric());
+                .is_none_or(|c| !c.is_alphanumeric());
             before_ok && after_ok
         })
     }

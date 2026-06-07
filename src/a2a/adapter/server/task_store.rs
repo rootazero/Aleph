@@ -36,7 +36,7 @@ fn evict_terminal_tasks(tasks: &mut HashMap<String, A2ATask>) {
         .map(|(id, t)| (id.clone(), t.status.timestamp))
         .collect();
     // Oldest first.
-    terminal.sort_by(|a, b| a.1.cmp(&b.1));
+    terminal.sort_by_key(|a| a.1);
     // Reclaim down to ~90% capacity to avoid evicting on every insert.
     let target = MAX_TASKS * 9 / 10;
     for (id, _) in terminal {

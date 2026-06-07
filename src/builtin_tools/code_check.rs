@@ -362,7 +362,7 @@ fn interpret(
     // does not — the exact failure mode this tool exists to catch. Warnings
     // that merely make a linter exit non-zero are still ok (they produce
     // parsed diagnostics, so total > 0).
-    let exit_failed = exit_code.map_or(false, |c| c != 0);
+    let exit_failed = exit_code.is_some_and(|c| c != 0);
 
     CodeCheckOutput {
         ok: error_count == 0 && !(exit_failed && total == 0),

@@ -14,8 +14,10 @@ pub enum SocketMessage {
         token: String,
         /// Request ID
         id: String,
-        /// Request payload
-        request: ApprovalRequestPayload,
+        /// Request payload (boxed: it dwarfs the other variants, so keep
+        /// `SocketMessage` small. `Box<T>` is serde-transparent — wire format
+        /// is unchanged).
+        request: Box<ApprovalRequestPayload>,
     },
 
     /// Decision response (UI -> Core)
@@ -150,7 +152,7 @@ mod tests {
         let msg = SocketMessage::Request {
             token: "secret".into(),
             id: "req-123".into(),
-            request: ApprovalRequestPayload {
+            request: Box::new(ApprovalRequestPayload {
                 command: "npm install".into(),
                 cwd: Some("/project".into()),
                 agent_id: "main".into(),
@@ -164,7 +166,7 @@ mod tests {
                     args: vec!["install".into()],
                 }],
                 allowed_decisions: crate::exec::allowed_decisions::full_set(),
-            },
+            }),
         };
 
         let json = serde_json::to_string(&msg).unwrap();

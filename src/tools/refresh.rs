@@ -57,6 +57,9 @@ impl ToolRefreshSource for CompositeRefreshSource {
         // side effect, so short-circuiting would leave some sources stale.
         // `fold` with `poll_changes()` on the left of `||` guarantees every
         // source is polled even after one reports a change (unlike `.any()`).
+        // clippy's `unnecessary_fold` suggestion (`.any()`) would reintroduce
+        // the short-circuit this fold deliberately avoids.
+        #[allow(clippy::unnecessary_fold)]
         self.sources
             .iter()
             .fold(false, |acc, s| s.poll_changes() || acc)

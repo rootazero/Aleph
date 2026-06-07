@@ -191,7 +191,7 @@ impl ClawHubTool {
         // Validate and sanitize the skill directory name
         let skill_name = sanitize_skill_name(slug)?;
         let skills_root = Self::skills_dir();
-        let dest_dir = skills_root.join(&skill_name);
+        let dest_dir = skills_root.join(skill_name);
 
         // Extract into a staging directory, never the live install dir. On an
         // *update*, dest_dir holds the previously-working skill; writing into it

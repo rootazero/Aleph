@@ -153,13 +153,12 @@ pub async fn run(
                     }
                 }
             }
-            StreamEvent::ReasoningBlock { content, .. } => {
-                if verbose && !agent_trace_seen && !json {
+            StreamEvent::ReasoningBlock { content, .. }
+                if verbose && !agent_trace_seen && !json => {
                     if let Some(line) = exec_echo::render_reasoning(&content) {
                         eprintln!("{line}");
                     }
                 }
-            }
             _ => {}
         }
     }

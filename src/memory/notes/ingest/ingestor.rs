@@ -575,7 +575,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                     continue;
                 }
                 let sim = cosine_similarity(cand, vec);
-                if best.map_or(true, |(_, b)| sim > b) {
+                if best.is_none_or(|(_, b)| sim > b) {
                     best = Some((*path, sim));
                 }
             }

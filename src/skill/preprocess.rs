@@ -201,7 +201,7 @@ async fn expand_inline_shell(content: &str, ctx: &SkillPreprocessContext) -> Str
 
     let mut out = String::with_capacity(content.len());
     let mut cursor = 0usize;
-    for (span, rendered) in spans.iter().zip(results.into_iter()) {
+    for (span, rendered) in spans.iter().zip(results) {
         out.push_str(&content[cursor..span.full_start]);
         out.push_str(&rendered);
         cursor = span.full_end;

@@ -663,7 +663,7 @@ fn maybe_trace_prompt_size(pipeline: &PromptPipeline, path: AssemblyPath, input:
         return;
     }
     let mut bd = pipeline.layer_breakdown(path, input, PromptMode::Full);
-    bd.sort_by(|a, b| b.chars.cmp(&a.chars));
+    bd.sort_by_key(|l| std::cmp::Reverse(l.chars));
     let total_chars: usize = bd.iter().map(|l| l.chars).sum();
     let total_tokens: usize = bd.iter().map(|l| l.tokens).sum();
     let rows: String = bd

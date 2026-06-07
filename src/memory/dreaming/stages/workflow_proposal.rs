@@ -113,7 +113,7 @@ impl DreamStage for WorkflowProposalStage {
             .into_values()
             .filter(|(n, _)| *n >= self.min_observations)
             .collect();
-        ranked.sort_by(|a, b| b.0.cmp(&a.0));
+        ranked.sort_by_key(|(n, _)| std::cmp::Reverse(*n));
 
         let mut drafted = 0u32;
         let mut skipped_covered = 0u32;
