@@ -89,6 +89,8 @@
     "open_label": "Notifications",
     "title": "Notifications",
     "empty": "Nothing to report.",
+    "approve_chat": "Approve as chat",
+    "approve_config": "Approve as config",
     "dismiss_all": "Dismiss all"
   },
   "dashboard": {
@@ -1021,6 +1023,10 @@
       "paired": "Paired",
       "last_seen": "Last seen",
       "never": "Never",
+      "tier_chat": "Chat",
+      "tier_config": "Config",
+      "grant_config": "Grant config",
+      "downgrade_chat": "Downgrade to chat",
       "network_access": "Network Access",
       "network_scope": "Access Scope",
       "localhost_only": "Localhost Only (127.0.0.1)",

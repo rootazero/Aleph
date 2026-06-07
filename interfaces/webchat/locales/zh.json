@@ -89,6 +89,8 @@
     "open_label": "通知",
     "title": "通知",
     "empty": "暂无通知。",
+    "approve_chat": "批准为聊天",
+    "approve_config": "批准为配置",
     "dismiss_all": "全部清除"
   },
   "dashboard": {
@@ -1021,6 +1023,10 @@
       "paired": "配对时间",
       "last_seen": "最后在线",
       "never": "从未",
+      "tier_chat": "聊天档",
+      "tier_config": "配置档",
+      "grant_config": "授权配置",
+      "downgrade_chat": "降级为聊天",
       "network_access": "网络访问",
       "network_scope": "访问范围",
       "localhost_only": "仅本机 (127.0.0.1)",
