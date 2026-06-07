@@ -235,7 +235,7 @@ impl AgentHarness {
                 self.emit_tool_error(
                     session_id, turn_id, &call, synthetic, started, iteration, callback,
                 )
-                    .await;
+                .await;
                 if let Some(ref tracker) = self.stall_tracker {
                     tracker.record_activity().await;
                 }
@@ -371,7 +371,7 @@ impl AgentHarness {
                     self.emit_tool_success(
                         session_id, turn_id, &call, output, started, iteration, callback,
                     )
-                        .await?;
+                    .await?;
                 }
                 Err(e) => {
                     // Do NOT abort — continue processing remaining tool calls.
@@ -381,7 +381,7 @@ impl AgentHarness {
                     self.emit_tool_error(
                         session_id, turn_id, &call, e, started, iteration, callback,
                     )
-                        .await;
+                    .await;
                 }
             }
 
@@ -753,7 +753,7 @@ impl AgentHarness {
                     self.emit_tool_success(
                         session_id, turn_id, call, output, started, iteration, callback,
                     )
-                        .await?;
+                    .await?;
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }
@@ -765,7 +765,7 @@ impl AgentHarness {
                     self.emit_tool_error(
                         session_id, turn_id, call, e, started, iteration, callback,
                     )
-                        .await;
+                    .await;
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
                     }

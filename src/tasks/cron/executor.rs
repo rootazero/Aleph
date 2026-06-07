@@ -115,7 +115,10 @@ async fn resolve_cron_agent(
     if let Some(agent) = registry.get(requested).await {
         return Some((agent, requested.to_string(), false));
     }
-    warn!(requested, "cron agent missing, falling back to default agent");
+    warn!(
+        requested,
+        "cron agent missing, falling back to default agent"
+    );
     let agent = registry.get_default().await?;
     let used = agent.id().to_string();
     Some((agent, used, true))
@@ -142,9 +145,7 @@ async fn execute_cron_job(
                 return make_error_result(
                     started_at,
                     "built-in 'main' agent is not registered".to_string(),
-                    ErrorReason::Permanent(
-                        "built-in 'main' agent is not registered".to_string(),
-                    ),
+                    ErrorReason::Permanent("built-in 'main' agent is not registered".to_string()),
                     RetryHint::permanent(),
                     snapshot.trigger_source,
                 );
