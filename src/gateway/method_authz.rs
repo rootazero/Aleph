@@ -143,6 +143,37 @@ const OPERATOR_METHODS: &[&str] = &[
     "session.truncate",
 ];
 
+/// Self-management tool names that mutate Aleph's OWN configuration. Sibling to
+/// [`OPERATOR_METHODS`] (the RPC table) — kept in this one file so the two stay
+/// in sync (the spec's "同源" requirement). A chat-tier connection is rejected
+/// from these at the tool-dispatch gate (`ScopedToolService::execute_inner`),
+/// mirroring how `required_privilege` rejects config RPCs.
+///
+/// Read-only self-management tools (`config_audit`, `gateway_route`,
+/// `*_list`/`*_status`/`*_read`) are deliberately absent — chat tier keeps them.
+const OPERATOR_TOOLS: &[&str] = &[
+    "self_config",
+    "self_manage",
+    "vault_store",
+    "cron_manage",
+    "heartbeat_create",
+    "heartbeat_update",
+    "heartbeat_delete",
+    "heartbeat_toggle",
+    "skill_install",
+    "skill_manage",
+    "agent_create",
+    "agent_delete",
+    "channel_pairing",
+    "clawhub",
+];
+
+/// True when `tool` mutates Aleph's own configuration and therefore requires an
+/// operator (config-tier) connection. Names not listed stay open to chat tier.
+pub fn tool_requires_operator(tool: &str) -> bool {
+    OPERATOR_TOOLS.contains(&tool)
+}
+
 /// Classify an RPC method into the privilege required to invoke it.
 ///
 /// Returns [`MethodPrivilege::Operator`] for the conservative administrative
@@ -221,6 +252,29 @@ mod tests {
                 MethodPrivilege::Operator,
                 "{m} should be operator-only"
             );
+        }
+    }
+
+    #[test]
+    fn config_tools_require_operator() {
+        for t in [
+            "self_config", "self_manage", "vault_store", "cron_manage",
+            "heartbeat_create", "heartbeat_update", "heartbeat_delete", "heartbeat_toggle",
+            "skill_install", "skill_manage", "agent_create", "agent_delete",
+            "channel_pairing", "clawhub",
+        ] {
+            assert!(tool_requires_operator(t), "{t} must require operator");
+        }
+    }
+
+    #[test]
+    fn chat_safe_tools_stay_open() {
+        for t in [
+            "search", "web_fetch", "file_read", "config_audit", "gateway_route",
+            "heartbeat_list", "skill_list", "agent_list", "memory_search", "ask_user",
+            "bash", "code_exec",
+        ] {
+            assert!(!tool_requires_operator(t), "{t} must stay open to chat tier");
         }
     }
 
