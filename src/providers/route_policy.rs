@@ -126,11 +126,11 @@ impl RateLimits {
         };
         let rpm_permille = rpm
             .filter(|&l| l > 0)
-            .map(|l| (rpm_used as u64 * 1000 / l as u64))
+            .map(|l| rpm_used as u64 * 1000 / l as u64)
             .unwrap_or(0);
         let tpm_permille = tpm
             .filter(|&l| l > 0)
-            .map(|l| (tpm_used * 1000 / l as u64))
+            .map(|l| tpm_used * 1000 / l as u64)
             .unwrap_or(0);
         let permille = rpm_permille.max(tpm_permille);
         let over = permille >= 1000;
@@ -333,7 +333,9 @@ where
         .partition(|(c, _)| !metric_of(name_of(c)).over_limit);
 
     let mut out: Vec<(T, CandidateAction)> = pinned;
-    out.extend(balance_group(fresh, strategy, rr_base, &metric_of, &name_of));
+    out.extend(balance_group(
+        fresh, strategy, rr_base, &metric_of, &name_of,
+    ));
     out.extend(saturated);
     out.extend(crossings);
     out
