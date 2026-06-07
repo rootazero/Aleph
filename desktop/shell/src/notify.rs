@@ -472,4 +472,27 @@ mod tests {
         // Multi-byte characters must not be split mid-codepoint.
         assert_eq!(truncate("日本語テスト", 3), "日本語…");
     }
+
+    #[test]
+    fn ws_url_local_is_the_loopback_constant() {
+        assert_eq!(ws_url(&crate::connection::ConnectionTarget::Local), WS_URL);
+    }
+
+    #[test]
+    fn ws_url_http_remote_uses_ws_scheme() {
+        let t = crate::connection::ConnectionTarget::parse("10.0.0.5:9000").unwrap();
+        assert_eq!(ws_url(&t), "ws://10.0.0.5:9000/ws");
+    }
+
+    #[test]
+    fn ws_url_https_remote_uses_wss_scheme() {
+        let t = crate::connection::ConnectionTarget::parse("https://gw.example.com").unwrap();
+        assert_eq!(ws_url(&t), "wss://gw.example.com:18790/ws");
+    }
+
+    #[test]
+    fn ws_url_https_remote_on_443_keeps_port() {
+        let t = crate::connection::ConnectionTarget::parse("https://gw.example.com:443").unwrap();
+        assert_eq!(ws_url(&t), "wss://gw.example.com:443/ws");
+    }
 }
