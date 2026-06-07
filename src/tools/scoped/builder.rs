@@ -36,6 +36,7 @@ impl ScopedToolService {
             hook_session_id: String::new(),
             confirm_tools: BTreeSet::new(),
             approval_requester: None,
+            config_approval_requester: None,
             turn_context: None,
             result_store: None,
             schema_cache: arc_swap::ArcSwap::from_pointee(None),
@@ -115,6 +116,15 @@ impl ScopedToolService {
     ) -> Self {
         self.confirm_tools = confirm_tools;
         self.approval_requester = Some(requester);
+        self
+    }
+
+    /// Wire the operator-targeted config approval requester (Phase 2b sudo).
+    pub fn with_config_approval(
+        mut self,
+        requester: Arc<dyn ApprovalRequester>,
+    ) -> Self {
+        self.config_approval_requester = Some(requester);
         self
     }
 

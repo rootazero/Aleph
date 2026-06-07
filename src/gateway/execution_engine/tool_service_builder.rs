@@ -31,6 +31,15 @@ pub fn set_confirmation_requester(requester: Arc<dyn ApprovalRequester>) {
     let _ = CONFIRMATION_REQUESTER.set(requester);
 }
 
+/// Process-wide config-tier approval requester (Phase 2b sudo), installed by
+/// boot once the gateway event bus + exec approval manager exist.
+static CONFIG_APPROVAL_REQUESTER: OnceLock<Arc<dyn ApprovalRequester>> = OnceLock::new();
+
+/// Install the process-wide config-tier approval requester. Called once at boot.
+pub fn set_config_approval_requester(requester: Arc<dyn ApprovalRequester>) {
+    let _ = CONFIG_APPROVAL_REQUESTER.set(requester);
+}
+
 /// Build the per-request `ToolService` for a chat turn.
 ///
 /// * `tool_registry` — shared `LoopToolRegistry` (agent builtins + MCP).
@@ -85,6 +94,12 @@ pub fn build_request_tool_service(
     // runtime-injected confirm tools.
     if let Some(requester) = CONFIRMATION_REQUESTER.get() {
         svc = svc.with_confirmation(BTreeSet::new(), Arc::clone(requester));
+    }
+    // Phase 2b: operator-targeted approval for config-tier tools invoked by a
+    // chat-tier connection. Inert until boot installs the requester (then the
+    // config gate suspends for operator approval instead of hard-rejecting).
+    if let Some(requester) = CONFIG_APPROVAL_REQUESTER.get() {
+        svc = svc.with_config_approval(Arc::clone(requester));
     }
     Arc::new(svc)
 }

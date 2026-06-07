@@ -70,6 +70,11 @@ pub struct ScopedToolService {
     /// Transport used to obtain that confirmation. `None` = no approval
     /// channel wired, so confirm-required tools fail closed (denied).
     pub(super) approval_requester: Option<Arc<dyn ApprovalRequester>>,
+    /// Operator-targeted approval requester for config-tier tools (Phase 2b
+    /// sudo). Distinct from `approval_requester` (which routes to the
+    /// requester's OWN channel for `requires_confirmation`); this routes to the
+    /// server operator. `None` → config gate hard-rejects (fail closed).
+    pub(super) config_approval_requester: Option<Arc<dyn ApprovalRequester>>,
     /// Routing context of the agent turn this service serves. When set,
     /// `execute()` scopes it into the `TURN_CONTEXT` task-local so HITL tools
     /// (sandbox escalation, `requires_confirmation`, `ask_user`) can route a
