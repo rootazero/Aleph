@@ -193,6 +193,7 @@
     "dismiss": "Dismiss",
     "copy_message": "Copy message",
     "copy": "Copy",
+    "copied": "Copied",
     "retry_last_prompt": "Retry last prompt",
     "retry": "Retry",
     "drop_to_attach": "Drop to attach"

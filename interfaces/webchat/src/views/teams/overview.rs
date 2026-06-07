@@ -200,7 +200,7 @@ pub fn OverviewView() -> impl IntoView {
     };
 
     view! {
-        <div class="px-8 pb-8 aleph-content-top max-w-7xl mx-auto space-y-6">
+        <div class="px-6 pb-8 aleph-content-top space-y-6">
             // ---- Header ----
             <header class="flex items-center justify-between">
                 <div>

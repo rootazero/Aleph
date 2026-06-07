@@ -444,6 +444,10 @@ fn MessageBubble(
     // without prop-drilling a callback through MessageList → MessageBubble.
     let chat = expect_context::<ChatState>();
     let copy_text = content.clone();
+    // One-shot click feedback — flip green + checkmark, auto-revert after a beat
+    // so the user gets a clear "it worked" signal on an otherwise silent action.
+    let copied = RwSignal::new(false);
+    let retried = RwSignal::new(false);
     let on_copy = move |_: web_sys::MouseEvent| {
         let win = match web_sys::window() {
             Some(w) => w,
@@ -452,9 +456,19 @@ fn MessageBubble(
         // Modern API — navigator.clipboard.writeText(text)
         let clipboard = win.navigator().clipboard();
         let _promise = clipboard.write_text(&copy_text);
+        copied.set(true);
+        set_timeout(
+            move || copied.set(false),
+            std::time::Duration::from_millis(1500),
+        );
     };
     let on_retry = move |_: web_sys::MouseEvent| {
         chat.request_retry();
+        retried.set(true);
+        set_timeout(
+            move || retried.set(false),
+            std::time::Duration::from_millis(1500),
+        );
     };
     // Retry only makes sense on a finalized assistant turn — streaming /
     // intermediate / error messages are noise.
@@ -515,30 +529,67 @@ fn MessageBubble(
                     </span>
                 })}
                 <button
-                    class="px-1.5 h-6 rounded-md bg-surface-raised border border-border
-                           text-[11px] text-text-tertiary hover:text-text-primary hover:bg-surface-sunken
-                           shadow-sm transition-colors flex items-center gap-1"
+                    class=move || {
+                        let base = "px-1.5 h-6 rounded-md border shadow-sm transition-colors \
+                                    text-[11px] flex items-center gap-1";
+                        if copied.get() {
+                            format!("{base} bg-success-subtle border-success text-success")
+                        } else {
+                            format!(
+                                "{base} bg-surface-raised border-border text-text-tertiary \
+                                 hover:text-text-primary hover:bg-surface-sunken"
+                            )
+                        }
+                    }
                     title=move || t_string!(i18n, chat.copy_message).to_string()
                     on:click=on_copy
                 >
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24"
-                         fill="none" stroke="currentColor" stroke-width="2"
-                         stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                    <span>{t!(i18n, chat.copy)}</span>
+                    {move || if copied.get() {
+                        view! {
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24"
+                                 fill="none" stroke="currentColor" stroke-width="2.5"
+                                 stroke-linecap="round" stroke-linejoin="round">
+                                <polyline points="20 6 9 17 4 12"></polyline>
+                            </svg>
+                            <span>{t!(i18n, chat.copied)}</span>
+                        }.into_any()
+                    } else {
+                        view! {
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24"
+                                 fill="none" stroke="currentColor" stroke-width="2"
+                                 stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                            <span>{t!(i18n, chat.copy)}</span>
+                        }.into_any()
+                    }}
                 </button>
                 {if show_retry {
                     Some(view! {
                         <button
-                            class="px-1.5 h-6 rounded-md bg-surface-raised border border-border
-                                   text-[11px] text-text-tertiary hover:text-text-primary hover:bg-surface-sunken
-                                   shadow-sm transition-colors flex items-center gap-1"
+                            class=move || {
+                                let base = "px-1.5 h-6 rounded-md border shadow-sm transition-colors \
+                                            text-[11px] flex items-center gap-1";
+                                if retried.get() {
+                                    format!("{base} bg-primary/15 border-primary text-primary")
+                                } else {
+                                    format!(
+                                        "{base} bg-surface-raised border-border text-text-tertiary \
+                                         hover:text-text-primary hover:bg-surface-sunken"
+                                    )
+                                }
+                            }
                             title=move || t_string!(i18n, chat.retry_last_prompt).to_string()
                             on:click=on_retry
                         >
-                            <svg xmlns="http://www.w3.org/2000/svg" class="w-3 h-3" viewBox="0 0 24 24"
+                            <svg xmlns="http://www.w3.org/2000/svg"
+                                 class=move || if retried.get() {
+                                     "w-3 h-3 aleph-spin-once"
+                                 } else {
+                                     "w-3 h-3"
+                                 }
+                                 viewBox="0 0 24 24"
                                  fill="none" stroke="currentColor" stroke-width="2"
                                  stroke-linecap="round" stroke-linejoin="round">
                                 <polyline points="23 4 23 10 17 10"></polyline>

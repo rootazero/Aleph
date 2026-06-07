@@ -1351,3 +1351,19 @@ html.translucent .aleph-shell::after { display: none; }
 .aleph-msg-in {
   animation: aleph-msg-in 0.34s var(--ease-out) both;
 }
+
+/* One-shot spin for the retry button — confirms the click registered. */
+@keyframes aleph-spin-once {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(-360deg); }
+}
+.aleph-spin-once {
+  animation: aleph-spin-once 0.5s var(--ease-out);
+}
+
+/* Code-block copy button — green confirmation flash after a successful copy. */
+.copy-btn.copied {
+  color: var(--color-success);
+  background-color: var(--color-success-subtle);
+  opacity: 1;
+}

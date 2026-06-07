@@ -193,6 +193,7 @@
     "dismiss": "关闭",
     "copy_message": "复制消息",
     "copy": "复制",
+    "copied": "已复制",
     "retry_last_prompt": "重试上一次提问",
     "retry": "重试",
     "drop_to_attach": "拖放以添加附件"

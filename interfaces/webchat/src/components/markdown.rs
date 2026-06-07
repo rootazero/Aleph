@@ -53,7 +53,7 @@ fn render_markdown(content: &str) -> String {
                 };
 
                 html_output.push_str(&format!(
-                    r#"<div class="code-block-wrapper relative group my-3"><div class="flex items-center justify-between px-3 py-1.5 bg-surface-sunken/50 rounded-t-lg border border-b-0 border-border text-xs text-text-tertiary"><span>{lang_label}</span><button class="copy-btn opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-raised" onclick="navigator.clipboard.writeText(this.closest('.code-block-wrapper').querySelector('code').textContent)">Copy</button></div><pre class="rounded-b-lg border border-border bg-surface-sunken overflow-x-auto p-3 text-sm leading-relaxed"><code>{highlighted}</code></pre></div>"#,
+                    r#"<div class="code-block-wrapper relative group my-3"><div class="flex items-center justify-between px-3 py-1.5 bg-surface-sunken/50 rounded-t-lg border border-b-0 border-border text-xs text-text-tertiary"><span>{lang_label}</span><button class="copy-btn opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-raised" onclick="navigator.clipboard.writeText(this.closest('.code-block-wrapper').querySelector('code').textContent);var b=this;if(b._t)clearTimeout(b._t);b.textContent='Copied!';b.classList.add('copied');b._t=setTimeout(function(){{b.textContent='Copy';b.classList.remove('copied')}},1500)">Copy</button></div><pre class="rounded-b-lg border border-border bg-surface-sunken overflow-x-auto p-3 text-sm leading-relaxed"><code>{highlighted}</code></pre></div>"#,
                 ));
             }
             Event::Text(text) if in_code_block => {
