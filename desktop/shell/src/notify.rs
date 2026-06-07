@@ -60,7 +60,8 @@ const COMPLETION_NOTIFY_MIN_MS: u64 = 15_000;
 pub async fn run_notification_bridge(app: AppHandle) {
     let mut backoff = INITIAL_BACKOFF;
     loop {
-        match session(&app).await {
+        let target = crate::connection::load_target();
+        match session(&app, &target).await {
             Ok(()) => backoff = INITIAL_BACKOFF,
             Err(e) => tracing::debug!("notification bridge disconnected: {e}"),
         }
@@ -71,13 +72,16 @@ pub async fn run_notification_bridge(app: AppHandle) {
 
 /// One connection: connect, handshake, subscribe, then forward events
 /// until the socket closes or errors.
-async fn session(app: &AppHandle) -> Result<(), String> {
-    let (mut ws, _) = tokio_tungstenite::connect_async(WS_URL)
+async fn session(
+    app: &AppHandle,
+    target: &crate::connection::ConnectionTarget,
+) -> Result<(), String> {
+    let (mut ws, _) = tokio_tungstenite::connect_async(ws_url(target))
         .await
         .map_err(|e| format!("connect failed: {e}"))?;
 
     // The Gateway rejects any first frame that is not `connect`.
-    ws.send(Message::Text(connect_request()))
+    ws.send(Message::Text(connect_request(target)))
         .await
         .map_err(|e| format!("connect send failed: {e}"))?;
     ws.send(Message::Text(subscribe_request()))
@@ -86,14 +90,14 @@ async fn session(app: &AppHandle) -> Result<(), String> {
 
     while let Some(frame) = ws.next().await {
         match frame.map_err(|e| format!("stream error: {e}"))? {
-            Message::Text(text) => {
-                match serde_json::from_str::<Value>(&text) {
-                    Ok(value) => handle_message(app, &value),
-                    Err(e) => {
-                        tracing::warn!("notification bridge: failed to parse JSON frame: {e}; raw={text:?}");
-                    }
+            Message::Text(text) => match serde_json::from_str::<Value>(&text) {
+                Ok(value) => handle_message(app, &value),
+                Err(e) => {
+                    tracing::warn!(
+                        "notification bridge: failed to parse JSON frame: {e}; raw={text:?}"
+                    );
                 }
-            }
+            },
             Message::Close(_) => return Ok(()),
             Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_) => {}
         }
@@ -101,17 +105,42 @@ async fn session(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Build the EventBus WS URL for a target. Local → the loopback default;
+/// Remote → `ws(s)://host:port/ws` derived from the target origin (https→wss).
+fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
+    match target {
+        crate::connection::ConnectionTarget::Local => WS_URL.to_string(),
+        crate::connection::ConnectionTarget::Remote(url) => {
+            let scheme = if url.scheme() == "https" { "wss" } else { "ws" };
+            let host = url.host_str().unwrap_or("127.0.0.1");
+            // port_or_known_default(): the url crate elides scheme-default ports
+            // (443/80) from `.port()`, so use the known-default form to recover
+            // an https-on-443 remote correctly; parse() always sets a port, so
+            // this is effectively always Some; the unwrap_or is belt-and-braces.
+            let port = url.port_or_known_default().unwrap_or(18790);
+            format!("{scheme}://{host}:{port}/ws")
+        }
+    }
+}
+
 /// Build the `connect` handshake request, including a token if one is
-/// supplied via `ALEPH_GATEWAY_TOKEN`.
-fn connect_request() -> String {
+/// supplied via `ALEPH_GATEWAY_TOKEN` — but only for the Local target.
+///
+/// Security: only the LOCAL daemon may receive the auto-provisioned local
+/// shared token. A remote Gateway must never see it (it would hand a remote
+/// server full local operator control). Remote auth rides the /pair cookie
+/// flow in the webview; the notify WS gracefully degrades without creds.
+fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
     let mut params = json!({
         "device_name": "Aleph Desktop",
         "device_type": "desktop",
         "device_id": "aleph-desktop-shell",
     });
-    if let Ok(token) = std::env::var("ALEPH_GATEWAY_TOKEN") {
-        if !token.is_empty() {
-            params["shared_token"] = json!(token);
+    if target.is_local() {
+        if let Ok(token) = std::env::var("ALEPH_GATEWAY_TOKEN") {
+            if !token.is_empty() {
+                params["shared_token"] = json!(token);
+            }
         }
     }
     json!({
@@ -298,9 +327,39 @@ mod tests {
 
     #[test]
     fn connect_request_is_well_formed() {
-        let v: Value = serde_json::from_str(&connect_request()).unwrap();
+        let v: Value = serde_json::from_str(&connect_request(
+            &crate::connection::ConnectionTarget::Local,
+        ))
+        .unwrap();
         assert_eq!(v["method"], "connect");
         assert_eq!(v["params"]["device_type"], "desktop");
+    }
+
+    /// Both token cases are in one test to avoid races on the shared env var
+    /// when the test suite runs in parallel.
+    #[test]
+    fn connect_request_token_gating_by_target() {
+        std::env::set_var("ALEPH_GATEWAY_TOKEN", "tok-local");
+
+        // Local target: token MUST be present.
+        let v: Value = serde_json::from_str(&connect_request(
+            &crate::connection::ConnectionTarget::Local,
+        ))
+        .unwrap();
+        assert_eq!(
+            v["params"]["shared_token"], "tok-local",
+            "Local connect must include the shared_token"
+        );
+
+        // Remote target: token MUST be absent.
+        let remote = crate::connection::ConnectionTarget::parse("10.0.0.5").unwrap();
+        let v: Value = serde_json::from_str(&connect_request(&remote)).unwrap();
+        assert!(
+            v["params"].get("shared_token").is_none(),
+            "remote connect must NOT leak the local token"
+        );
+
+        std::env::remove_var("ALEPH_GATEWAY_TOKEN");
     }
 
     #[test]
