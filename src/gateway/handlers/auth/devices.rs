@@ -267,6 +267,7 @@ mod tests {
         );
         let resp = handle_devices_set_level(req, ctx).await;
         assert!(!resp.is_success());
+        assert_eq!(resp.error.unwrap().code, -32004);
     }
 
     #[tokio::test]
@@ -283,6 +284,7 @@ mod tests {
         );
         let resp = handle_devices_set_level(req, ctx.clone()).await;
         assert!(!resp.is_success());
+        assert_eq!(resp.error.as_ref().unwrap().code, -32602);
 
         let stored = ctx.device_store.get_device("dev-bad").unwrap();
         assert_eq!(stored.permissions, vec!["*".to_string()]);
