@@ -646,11 +646,12 @@ async fn handle_connection(
                                                         }
                                                     });
 
-                                                // Role drives the method-level authorization gate.
-                                                // Guest sessions are always "guest"; device connects
-                                                // carry the role from the connect response (currently
-                                                // always "operator"), defaulting to operator for the
-                                                // device path since every device token is operator.
+                                                // Role drives the method-level authorization gate. Guest sessions are
+                                                // always "guest"; device connects carry the role from the connect
+                                                // response, derived from the device's permissions (chat tier → "guest",
+                                                // config tier → "operator"). The fallback is "guest" (the safe,
+                                                // least-privilege default): every connect success path sets `role`
+                                                // explicitly, so this only guards a future path that forgets to.
                                                 let role = if guest_session_id.is_some() {
                                                     Some("guest".to_string())
                                                 } else {
@@ -659,7 +660,7 @@ async fn handle_connection(
                                                             .as_ref()
                                                             .and_then(|r| r.get("role"))
                                                             .and_then(|v| v.as_str())
-                                                            .unwrap_or("operator")
+                                                            .unwrap_or("guest")
                                                             .to_string(),
                                                     )
                                                 };
