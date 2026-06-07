@@ -145,6 +145,22 @@ pub(super) fn PairedDevices(
             }
         });
     };
+    let set_level = move |device_id: String, level: String| {
+        spawn_local(async move {
+            match SecurityConfigApi::set_level(&state, device_id, level).await {
+                Ok(_) => {
+                    if let Ok(devs) = SecurityConfigApi::list_devices(&state).await {
+                        devices.set(devs);
+                    }
+                }
+                Err(e) => {
+                    web_sys::console::error_1(
+                        &format!("Failed to set device level: {}", e).into(),
+                    );
+                }
+            }
+        });
+    };
 
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
@@ -164,8 +180,13 @@ pub(super) fn PairedDevices(
                             <div class="space-y-2">
                                 {device_list.into_iter().map(|device| {
                                     let device_id = device.device_id.clone();
+                                    let device_id_sl = device.device_id.clone();
                                     view! {
-                                        <DeviceCard device=device on_revoke=move || revoke_device(device_id.clone()) />
+                                        <DeviceCard
+                                            device=device
+                                            on_revoke=move || revoke_device(device_id.clone())
+                                            on_set_level=move |level: String| set_level(device_id_sl.clone(), level)
+                                        />
                                     }
                                 }).collect::<Vec<_>>()}
                             </div>
@@ -178,9 +199,10 @@ pub(super) fn PairedDevices(
 }
 
 #[component]
-pub(super) fn DeviceCard<F>(device: DeviceInfo, on_revoke: F) -> impl IntoView
+pub(super) fn DeviceCard<F, G>(device: DeviceInfo, on_revoke: F, on_set_level: G) -> impl IntoView
 where
     F: Fn() + 'static,
+    G: Fn(String) + 'static,
 {
     let i18n = use_i18n();
     let paired_date = device.paired_at.clone();
@@ -188,11 +210,28 @@ where
         .last_seen
         .clone()
         .unwrap_or_else(|| t_string!(i18n, settings.security.never).to_string());
+    let is_config = device.tier == "config";
+    let target_level = if is_config { "chat" } else { "config" };
 
     view! {
         <div class="flex items-center justify-between p-4 bg-surface-sunken rounded border border-border">
             <div class="flex-1">
-                <div class="font-medium">{device.device_name}</div>
+                <div class="font-medium flex items-center gap-2">
+                    {device.device_name}
+                    <span class=move || {
+                        if is_config {
+                            "text-xs px-1.5 py-0.5 rounded bg-indigo-600 text-white"
+                        } else {
+                            "text-xs px-1.5 py-0.5 rounded bg-surface-raised text-text-secondary"
+                        }
+                    }>
+                        {move || if is_config {
+                            t_string!(i18n, settings.security.tier_config).to_string()
+                        } else {
+                            t_string!(i18n, settings.security.tier_chat).to_string()
+                        }}
+                    </span>
+                </div>
                 <div class="text-sm text-text-tertiary">
                     {device.device_type} " • " {device.device_id}
                 </div>
@@ -200,12 +239,24 @@ where
                     {t!(i18n, settings.security.paired)} ": " {paired_date} " • " {t!(i18n, settings.security.last_seen)} ": " {last_seen_text}
                 </div>
             </div>
-            <button
-                on:click=move |_| on_revoke()
-                class="px-3 py-1 bg-danger text-white text-sm rounded hover:bg-danger"
-            >
-                {t!(i18n, settings.security.revoke)}
-            </button>
+            <div class="flex items-center gap-2">
+                <button
+                    on:click=move |_| on_set_level(target_level.to_string())
+                    class="px-3 py-1 bg-surface-raised text-text-primary text-sm rounded hover:bg-surface-sunken border border-border"
+                >
+                    {move || if is_config {
+                        t_string!(i18n, settings.security.downgrade_chat).to_string()
+                    } else {
+                        t_string!(i18n, settings.security.grant_config).to_string()
+                    }}
+                </button>
+                <button
+                    on:click=move |_| on_revoke()
+                    class="px-3 py-1 bg-danger text-white text-sm rounded hover:bg-danger"
+                >
+                    {t!(i18n, settings.security.revoke)}
+                </button>
+            </div>
         </div>
     }
 }
