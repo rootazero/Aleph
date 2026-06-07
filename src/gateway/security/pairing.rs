@@ -154,16 +154,17 @@ impl From<PairingRequestRow> for PairingRequest {
 /// Result of `PairingManager::poll_browser_pairing`.
 ///
 /// The cold browser polls every ~2s; this enum is the entire response
-/// surface. `Approved` carries the freshly-minted `session_id` so the
-/// browser can redirect to `/auth/bootstrap/from_pairing?code=…` and the
-/// HTTP handler trades it for a session cookie.
+/// surface. `Approved` carries the chat-tier device token the browser
+/// stores and connects with.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PollState {
     /// Pairing record still exists in the store and has not been approved.
     Pending,
-    /// `pairing.approve` ran; `record_browser_session` deposited the
-    /// session_id keyed by the pairing code.
-    Approved { session_id: String },
+    /// `pairing.approve` ran; `record_browser_credential` deposited the
+    /// chat-tier device token + device_id keyed by the pairing code. The
+    /// browser stores the token in `localStorage["aleph_device_token"]` and
+    /// connects via Case 1. Single-use: drained on first approved poll.
+    Approved { token: String, device_id: String },
     /// `pairing.reject` ran or the record was cancelled by the operator.
     Rejected,
     /// Record was never created, has expired, or the approval TTL elapsed
@@ -176,13 +177,12 @@ pub struct PairingManager {
     store: Arc<SecurityStore>,
     expiry_ms: i64,
     max_pending: usize,
-    /// In-memory map: pairing code → (session_id, approved_at_ms).
-    /// Populated by `record_browser_session` when the operator approves a
-    /// Browser pairing; drained by `fetch_browser_session` when the
-    /// `/auth/bootstrap/from_pairing` HTTP route is hit. Single-use: entries
-    /// are removed on retrieval. TTL bounded by `APPROVED_SESSION_TTL_MS`
-    /// so a never-redirected browser doesn't pin memory.
-    approved_browser_sessions: DashMap<String, (String, i64)>,
+    /// In-memory map: pairing code → (device_token, device_id, approved_at_ms).
+    /// Populated by `record_browser_credential` when the operator approves a
+    /// Browser pairing; drained single-use by `poll_browser_pairing` on the
+    /// first approved poll. TTL bounded by `APPROVED_SESSION_TTL_MS` so a
+    /// never-polled browser doesn't pin memory.
+    approved_browser_sessions: DashMap<String, (String, String, i64)>,
     /// In-memory map: pairing code → "rejected". Lets `poll_browser_pairing`
     /// distinguish "expired / unknown" from "operator explicitly rejected"
     /// after `cancel_pairing` removed the DB row. Same TTL semantics as
@@ -404,26 +404,15 @@ impl PairingManager {
         Ok((code, expires_at))
     }
 
-    /// Record the session_id minted for an approved Browser pairing so the
-    /// browser's next `pairing.poll` can pick it up. Bounded TTL prevents
-    /// a never-redirected browser from pinning memory.
-    pub fn record_browser_session(&self, code: &str, session_id: &str) {
+    /// Stash the chat-tier device token + device_id minted by the operator's
+    /// `pairing.approve` for a Browser pairing, keyed by the pairing code.
+    /// Drained single-use by the next approved `poll_browser_pairing`.
+    pub fn record_browser_credential(&self, code: &str, token: &str, device_id: &str) {
         self.gc_browser_state();
         self.approved_browser_sessions.insert(
             code.to_string(),
-            (session_id.to_string(), current_timestamp_ms()),
+            (token.to_string(), device_id.to_string(), current_timestamp_ms()),
         );
-    }
-
-    /// Atomically remove and return the session_id stashed by
-    /// `record_browser_session`. Single-use: a second call returns `None`.
-    /// Used by the loopback `/auth/bootstrap/from_pairing` HTTP route to
-    /// trade an approved pairing code for a session cookie.
-    pub fn fetch_browser_session(&self, code: &str) -> Option<String> {
-        self.gc_browser_state();
-        self.approved_browser_sessions
-            .remove(code)
-            .map(|(_, (session_id, _))| session_id)
     }
 
     /// Mark a Browser pairing as operator-rejected so `poll_browser_pairing`
@@ -440,14 +429,13 @@ impl PairingManager {
     /// Rejected per the in-memory side-tables, Expired otherwise.
     pub fn poll_browser_pairing(&self, code: &str) -> PollState {
         self.gc_browser_state();
-        // PEEK, don't drain: the single-use consumer is the cookie endpoint
-        // `/auth/bootstrap/from_pairing` → `fetch_browser_session`. If this poll
-        // drained the entry, the subsequent bootstrap call would find nothing
-        // and 401, so the cookie would never be issued. The entry expires via
-        // gc_browser_state (APPROVED_SESSION_TTL_MS) if the redirect never runs.
-        if let Some(entry) = self.approved_browser_sessions.get(code) {
-            let session_id = entry.value().0.clone();
-            return PollState::Approved { session_id };
+        // Single-use: drain the credential on the first approved poll. The
+        // /pair page acts on this exact response (stores token + redirects),
+        // so a second poll for the same code returns Expired. Handing the
+        // device token out exactly once is the fail-closed choice for a real
+        // credential (vs. the old peekable session_id).
+        if let Some((_, (token, device_id, _))) = self.approved_browser_sessions.remove(code) {
+            return PollState::Approved { token, device_id };
         }
         if self.rejected_browser_codes.remove(code).is_some() {
             return PollState::Rejected;
@@ -463,7 +451,7 @@ impl PairingManager {
     fn gc_browser_state(&self) {
         let cutoff = current_timestamp_ms() - APPROVED_SESSION_TTL_MS;
         self.approved_browser_sessions
-            .retain(|_, (_, recorded_at)| *recorded_at >= cutoff);
+            .retain(|_, (_, _, recorded_at)| *recorded_at >= cutoff);
         self.rejected_browser_codes
             .retain(|_, recorded_at| *recorded_at >= cutoff);
     }
@@ -728,18 +716,16 @@ mod tests {
             .unwrap();
         assert_eq!(manager.poll_browser_pairing(&code), PollState::Pending);
 
-        manager.record_browser_session(&code, "session-xyz");
+        manager.record_browser_credential(&code, "tok-abc", "browser-1");
         match manager.poll_browser_pairing(&code) {
-            PollState::Approved { session_id } => assert_eq!(session_id, "session-xyz"),
+            PollState::Approved { token, device_id } => {
+                assert_eq!(token, "tok-abc");
+                assert_eq!(device_id, "browser-1");
+            }
             other => panic!("expected Approved, got {other:?}"),
         }
-        // Poll PEEKS (does not drain): a second poll still reports Approved.
-        // The single drain happens in `fetch_browser_session` (the cookie
-        // endpoint) — see `fetch_browser_session_is_single_use`.
-        match manager.poll_browser_pairing(&code) {
-            PollState::Approved { session_id } => assert_eq!(session_id, "session-xyz"),
-            other => panic!("expected Approved on re-poll, got {other:?}"),
-        }
+        // single-use: second poll after drain is Expired
+        assert_eq!(manager.poll_browser_pairing(&code), PollState::Expired);
     }
 
     #[test]
@@ -761,16 +747,20 @@ mod tests {
     }
 
     #[test]
-    fn fetch_browser_session_is_single_use() {
+    fn poll_browser_pairing_approved_is_single_use() {
         let manager = create_test_manager();
         let (code, _) = manager
             .create_browser_pairing("Browser", "ua", "127.0.0.1")
             .unwrap();
-        manager.record_browser_session(&code, "sid-1");
-        assert_eq!(
-            manager.fetch_browser_session(&code).as_deref(),
-            Some("sid-1")
-        );
-        assert!(manager.fetch_browser_session(&code).is_none());
+        manager.record_browser_credential(&code, "tok-xyz", "dev-42");
+        match manager.poll_browser_pairing(&code) {
+            PollState::Approved { token, device_id } => {
+                assert_eq!(token, "tok-xyz");
+                assert_eq!(device_id, "dev-42");
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+        // Credential drained: second poll returns Expired.
+        assert_eq!(manager.poll_browser_pairing(&code), PollState::Expired);
     }
 }
