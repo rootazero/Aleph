@@ -10,11 +10,12 @@
 //! sits BELOW the boot/service gates (which take over the whole screen) so
 //! a runtime disconnect still blanks the bell.
 
+use crate::api::ExecApprovalApi;
 use crate::components::sidebar::AlertLevel;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::state::notifications::{
-    unread_count, visible_alerts, IncomingPairing, NotificationsState,
+    unread_count, visible_alerts, IncomingPairing, NotificationsState, PendingApprovalView,
 };
 use leptos::ev::keydown;
 use leptos::prelude::*;
@@ -28,6 +29,7 @@ pub fn NotificationCenter() -> impl IntoView {
 
     let alerts = dashboard.alerts;
     let incoming_pairings = dashboard.incoming_pairings;
+    let pending_approvals = dashboard.pending_approvals;
     let is_open = notif.is_open;
     let dismissed = notif.dismissed;
 
@@ -41,7 +43,7 @@ pub fn NotificationCenter() -> impl IntoView {
     let badge_count = Memo::new(move |_| {
         let a = alerts.get();
         let d = dismissed.get();
-        unread_count(&a, &d) + incoming_pairings.get().len()
+        unread_count(&a, &d) + incoming_pairings.get().len() + pending_approvals.get().len()
     });
 
     // Visible alerts list (sorted). Re-evaluates on either signal change.
@@ -201,8 +203,85 @@ pub fn NotificationCenter() -> impl IntoView {
                         }
                     }}
                     {move || {
+                        let approvals = pending_approvals.get();
+                        if approvals.is_empty() {
+                            view! { <div></div> }.into_any()
+                        } else {
+                            view! {
+                                <ul class="divide-y divide-border">
+                                    {approvals.into_iter().map(|a: PendingApprovalView| {
+                                        let i18n = use_i18n();
+                                        let id_once = a.id.clone();
+                                        let id_session = a.id.clone();
+                                        let id_deny = a.id.clone();
+                                        let command = a.command.clone();
+                                        let agent_id = a.agent_id.clone();
+                                        let secs = (a.remaining_ms / 1000).to_string();
+                                        view! {
+                                            <li class="px-4 py-3">
+                                                <div class="text-sm font-medium text-text-primary">
+                                                    {t!(i18n, notifications.approval_header)}
+                                                </div>
+                                                <div class="font-mono text-sm my-1 text-indigo-300">
+                                                    {command}
+                                                </div>
+                                                <div class="text-xs text-text-secondary">
+                                                    {t!(i18n, notifications.approval_requested_by)} ": " {agent_id}
+                                                </div>
+                                                <div class="text-xs text-text-tertiary mt-0.5">
+                                                    {t!(i18n, notifications.approval_expires)} " " {secs} "s"
+                                                </div>
+                                                <div class="flex gap-2 mt-2">
+                                                    <button
+                                                        type="button"
+                                                        class="flex-1 py-1.5 rounded bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors"
+                                                        on:click=move |_| {
+                                                            let id = id_once.clone();
+                                                            spawn_local(async move {
+                                                                let _ = ExecApprovalApi::resolve(&dashboard, id.clone(), "allow-once").await;
+                                                                dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                            });
+                                                        }
+                                                    >
+                                                        {t!(i18n, notifications.approval_allow_once)}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        class="flex-1 py-1.5 rounded bg-surface-raised hover:bg-surface-sunken text-text-primary text-xs border border-border transition-colors"
+                                                        on:click=move |_| {
+                                                            let id = id_session.clone();
+                                                            spawn_local(async move {
+                                                                let _ = ExecApprovalApi::resolve(&dashboard, id.clone(), "allow-session").await;
+                                                                dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                            });
+                                                        }
+                                                    >
+                                                        {t!(i18n, notifications.approval_allow_session)}
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        class="flex-1 py-1.5 rounded bg-surface-sunken hover:bg-surface-raised text-text-secondary text-xs transition-colors"
+                                                        on:click=move |_| {
+                                                            let id = id_deny.clone();
+                                                            spawn_local(async move {
+                                                                let _ = ExecApprovalApi::resolve(&dashboard, id.clone(), "deny").await;
+                                                                dashboard.pending_approvals.update(|l| l.retain(|x| x.id != id));
+                                                            });
+                                                        }
+                                                    >
+                                                        {t!(i18n, notifications.approval_deny)}
+                                                    </button>
+                                                </div>
+                                            </li>
+                                        }
+                                    }).collect::<Vec<_>>()}
+                                </ul>
+                            }.into_any()
+                        }
+                    }}
+                    {move || {
                         let items = list.get();
-                        if items.is_empty() && incoming_pairings.get().is_empty() {
+                        if items.is_empty() && incoming_pairings.get().is_empty() && pending_approvals.get().is_empty() {
                             view! {
                                 <div class="px-4 py-6 text-center text-sm text-text-tertiary">
                                     {move || t_string!(use_i18n(), notifications.empty).to_string()}
