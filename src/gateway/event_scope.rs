@@ -136,8 +136,14 @@ mod tests {
     fn wildcard_permission_satisfies_guarded_topics() {
         let g = EventScopeGuard::default_rules();
         let star = vec!["*".to_string()];
-        assert!(g.can_receive("approval.requested", &star), "operator [*] must receive approval events");
-        assert!(g.can_receive("pairing.requested", &star), "operator [*] must receive pairing events");
+        assert!(
+            g.can_receive("approval.requested", &star),
+            "operator [*] must receive approval events"
+        );
+        assert!(
+            g.can_receive("pairing.requested", &star),
+            "operator [*] must receive pairing events"
+        );
         assert!(g.can_receive("config.changed", &star));
     }
 
@@ -145,8 +151,14 @@ mod tests {
     fn chat_tier_excluded_from_approval_events() {
         let g = EventScopeGuard::default_rules();
         let chat = vec!["chat".to_string(), "read".to_string()];
-        assert!(!g.can_receive("approval.requested", &chat), "chat tier must NOT see approval requests");
+        assert!(
+            !g.can_receive("approval.requested", &chat),
+            "chat tier must NOT see approval requests"
+        );
         assert!(!g.can_receive("approval.resolved", &chat));
-        assert!(g.can_receive("agent.run.started", &chat), "unguarded topics still flow");
+        assert!(
+            g.can_receive("agent.run.started", &chat),
+            "unguarded topics still flow"
+        );
     }
 }

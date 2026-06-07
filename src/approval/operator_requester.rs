@@ -77,12 +77,15 @@ impl ApprovalRequester for OperatorApprovalRequester {
         let record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
         let approval_id = record.id.clone();
 
-        if let Err(e) = self.event_bus.publish_frame(&GatewayEventFrame::ApprovalRequested {
-            approval_id: approval_id.clone(),
-            session_key: session_key_str.clone(),
-            channel_id,
-            conversation_id,
-        }) {
+        if let Err(e) = self
+            .event_bus
+            .publish_frame(&GatewayEventFrame::ApprovalRequested {
+                approval_id: approval_id.clone(),
+                session_key: session_key_str.clone(),
+                channel_id,
+                conversation_id,
+            })
+        {
             tracing::warn!(error = %e, "failed to publish ApprovalRequested for config approval");
         }
 

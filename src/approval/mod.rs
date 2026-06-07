@@ -44,8 +44,8 @@
 
 pub mod adapters;
 pub mod callback_sink;
-pub mod operator_requester;
 mod config;
+pub mod operator_requester;
 mod policy;
 mod session_route;
 mod types;

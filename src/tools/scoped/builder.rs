@@ -120,10 +120,7 @@ impl ScopedToolService {
     }
 
     /// Wire the operator-targeted config approval requester (Phase 2b sudo).
-    pub fn with_config_approval(
-        mut self,
-        requester: Arc<dyn ApprovalRequester>,
-    ) -> Self {
+    pub fn with_config_approval(mut self, requester: Arc<dyn ApprovalRequester>) -> Self {
         self.config_approval_requester = Some(requester);
         self
     }

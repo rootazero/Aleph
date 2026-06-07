@@ -1435,10 +1435,16 @@ async fn chat_tier_config_tool_approved_executes() {
     use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
-    reg.register(Box::new(StubTool { tool_name: "cron_manage" }));
+    reg.register(Box::new(StubTool {
+        tool_name: "cron_manage",
+    }));
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
         .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("a"),
+            // Distinct session key per test: confirm_with_memory writes to the
+            // process-global denial_ledger / session_memory keyed by session, so
+            // sharing a key across tests would let the `denied` test's ledger
+            // entry auto-reject this one (order-dependent flake).
+            session_key: SessionKey::main("cfg-approve-test"),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
@@ -1455,10 +1461,12 @@ async fn chat_tier_config_tool_denied_rejected() {
     use crate::routing::session_key::SessionKey;
     use crate::sandbox::exec_approval::gate::ApprovalOutcome;
     let mut reg = LoopToolRegistry::new();
-    reg.register(Box::new(StubTool { tool_name: "cron_manage" }));
+    reg.register(Box::new(StubTool {
+        tool_name: "cron_manage",
+    }));
     let svc = ScopedToolService::new(Arc::new(reg), BTreeSet::new())
         .with_turn_context(crate::tools::turn_context::TurnContext {
-            session_key: SessionKey::main("a"),
+            session_key: SessionKey::main("cfg-deny-test"),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
