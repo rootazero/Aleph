@@ -105,10 +105,18 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // No `invoke_handler` — every panel-facing operation now goes
-        // through the gateway's JSON-RPC (see `fs.*` for directory
-        // browsing, `projects.*` for the catalogue). The shell stays
-        // pure UI: window, tray, updater, hotkey.
+        // The only `invoke_handler` the shell exposes: connection-config
+        // commands (local vs remote Gateway target). These are I/O config
+        // toggles, not business or UI logic — the R2/R4 boundary holds
+        // (spec §5.2 explicit exception). Every *panel-facing* operation
+        // still goes through the gateway's JSON-RPC (`fs.*` for directory
+        // browsing, `projects.*` for the catalogue); the shell stays pure
+        // I/O: window, tray, updater, hotkey, connection target.
+        .invoke_handler(tauri::generate_handler![
+            connection::get_connection_target,
+            connection::set_connection_target,
+            connection::clear_connection_target,
+        ])
         // Shared update state: the background checker, the tray, and the
         // macOS menu all read it.
         .manage(update::Updater::default());
@@ -312,6 +320,14 @@ pub(crate) fn focus_window(handle: &tauri::AppHandle) {
     let _ = window.unminimize();
     let _ = window.set_focus();
 }
+
+/// Re-route the shell for a freshly-chosen connection target.
+///
+/// TODO(Task 6): this is a minimal stub so the connection commands compile.
+/// Task 6 fleshes it out to update the link allow-list, navigate the webview,
+/// and (re)start supervision for the new target. The `set_connection_target`
+/// command in `connection.rs` calls this after persisting the target.
+pub(crate) fn reroute_for_target(_app: &tauri::AppHandle, _target: connection::ConnectionTarget) {}
 
 /// Reveal the Panel for the first time: navigate to it and bring the window
 /// forward. The window starts hidden, so this is what the user sees on a

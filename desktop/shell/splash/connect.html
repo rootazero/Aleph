@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Connect Aleph</title>
+<style>
+  body { font: 14px -apple-system, system-ui, sans-serif; background:#0d0d10; color:#e8e8ea;
+         display:flex; min-height:100vh; align-items:center; justify-content:center; margin:0; }
+  .card { width:340px; padding:28px; background:#17171c; border-radius:14px; box-shadow:0 10px 40px #0008; }
+  h1 { font-size:18px; margin:0 0 4px; }
+  p { color:#9a9aa2; margin:0 0 18px; font-size:13px; }
+  input { width:100%; box-sizing:border-box; padding:10px 12px; border-radius:8px;
+          border:1px solid #2a2a32; background:#0d0d10; color:#e8e8ea; font-size:14px; }
+  .row { display:flex; gap:8px; margin-top:14px; }
+  button { flex:1; padding:10px; border:0; border-radius:8px; font-size:14px; cursor:pointer; }
+  .primary { background:#4f46e5; color:#fff; }
+  .ghost { background:#23232b; color:#cfcfd6; }
+  .err { color:#ff6b6b; font-size:12px; margin-top:10px; min-height:14px; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>Connect to a Gateway</h1>
+    <p>Enter a remote Aleph address (e.g. <code>192.168.1.5</code> or <code>https://gw.example.com</code>), or go back to the local daemon.</p>
+    <input id="addr" placeholder="host, host:port, or http(s)://host" autofocus />
+    <div class="row">
+      <button class="primary" id="connect">Connect</button>
+      <button class="ghost" id="local">Back to Local</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+  <script>
+    const invoke = (cmd, args) => window.__TAURI__.core.invoke(cmd, args);
+    const err = (m) => { document.getElementById('err').textContent = m || ''; };
+    document.getElementById('connect').addEventListener('click', async () => {
+      err('');
+      const raw = document.getElementById('addr').value.trim();
+      if (!raw) { err('Enter an address'); return; }
+      try { await invoke('set_connection_target', { raw }); }
+      catch (e) { err(String(e)); }
+    });
+    document.getElementById('local').addEventListener('click', async () => {
+      err('');
+      try { await invoke('clear_connection_target'); }
+      catch (e) { err(String(e)); }
+    });
+    // prefill with the current target
+    invoke('get_connection_target').then(t => {
+      if (t && t !== 'local') document.getElementById('addr').value = t;
+    }).catch(() => {});
+    // shell calls this to surface routing errors (mirrors window.__alephError)
+    window.__alephError = (m) => err(m);
+  </script>
+</body>
+</html>

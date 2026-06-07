@@ -148,6 +148,39 @@ pub fn save_target(target: &ConnectionTarget) -> Result<(), String> {
     std::fs::write(&marker, target.to_persisted()).map_err(|e| format!("write target: {e}"))
 }
 
+// ---------------------------------------------------------------------------
+// Tauri commands — the shell's *only* invoke surface, strictly limited to
+// connection configuration (spec §5.2 explicit exception to "no invoke_handler";
+// these are I/O config toggles, not business logic — R2/R4 boundary held).
+// ---------------------------------------------------------------------------
+
+/// Return the current target as a string (`"local"` or the remote URL).
+#[tauri::command]
+pub fn get_connection_target() -> String {
+    load_target().to_persisted()
+}
+
+/// Validate + persist a new target, update the external-link allow-list, and
+/// ask the shell to re-route (navigate + supervise) for it. `raw` accepts the
+/// same forms as `ConnectionTarget::parse`.
+#[tauri::command]
+pub fn set_connection_target(app: tauri::AppHandle, raw: String) -> Result<(), String> {
+    let target = ConnectionTarget::parse(&raw)?;
+    save_target(&target)?;
+    match &target {
+        ConnectionTarget::Remote(url) => crate::external_link::set_remote_host(Some(url.clone())),
+        ConnectionTarget::Local => crate::external_link::set_remote_host(None),
+    }
+    crate::reroute_for_target(&app, target);
+    Ok(())
+}
+
+/// Reset to Local (launch + supervise the local daemon).
+#[tauri::command]
+pub fn clear_connection_target(app: tauri::AppHandle) -> Result<(), String> {
+    set_connection_target(app, "local".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
