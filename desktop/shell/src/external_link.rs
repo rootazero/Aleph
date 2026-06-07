@@ -24,11 +24,29 @@
 //!
 //! Pure OS integration, no business logic — the shell is the limb (R1/R10).
 
+use std::sync::RwLock;
 use tauri::Url;
 
 /// Hosts whose http(s) origins are the Panel itself (the loopback daemon,
 /// on whatever port) and thus safe to navigate the hosting webview to.
 const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "::1"];
+
+/// The currently-configured remote Gateway host, if any. `is_internal` treats
+/// it as internal so in-Panel navigations on the remote origin are not
+/// misrouted to the OS browser. Loopback is always internal regardless.
+static REMOTE_HOST: RwLock<Option<String>> = RwLock::new(None);
+
+/// Update the remote origin allow-list. Pass the remote target's URL when
+/// switching to a remote Gateway, or `None` when returning to Local.
+pub fn set_remote_host(url: Option<Url>) {
+    let host = url.and_then(|u| {
+        u.host_str()
+            .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
+    });
+    if let Ok(mut guard) = REMOTE_HOST.write() {
+        *guard = host;
+    }
+}
 
 /// Injected into every document: redirect `target="_blank"` anchor clicks
 /// into a top-level navigation so [`route`] can externalise them. Capture
@@ -63,7 +81,15 @@ pub fn is_internal(url: &Url) -> bool {
             Some(host) => {
                 // `host_str` brackets IPv6 literals (`[::1]`); normalise.
                 let host = host.trim_start_matches('[').trim_end_matches(']');
-                LOOPBACK_HOSTS.contains(&host) || host == "tauri.localhost"
+                if LOOPBACK_HOSTS.contains(&host) || host == "tauri.localhost" {
+                    return true;
+                }
+                // Allow the currently-configured remote Gateway origin.
+                REMOTE_HOST
+                    .read()
+                    .ok()
+                    .and_then(|g| g.clone())
+                    .is_some_and(|remote| remote == host)
             }
             None => false,
         },
@@ -148,5 +174,20 @@ mod tests {
         // during tests. The external (cancel) decision is covered by the
         // `is_internal` cases above — `route` simply negates it.
         assert!(route(&Url::parse("http://127.0.0.1:18790/chat").unwrap()));
+    }
+
+    #[test]
+    fn remote_origin_becomes_internal_when_set() {
+        // default: a LAN host is external
+        assert!(!internal("http://10.0.0.5:18790/chat"));
+        set_remote_host(Some(Url::parse("http://10.0.0.5:18790").unwrap()));
+        // now the configured remote host is internal, loopback still internal,
+        // and an unrelated origin stays external
+        assert!(internal("http://10.0.0.5:18790/chat"));
+        assert!(internal("http://127.0.0.1:18790/"));
+        assert!(!internal("https://github.com/aleph"));
+        // clearing reverts
+        set_remote_host(None);
+        assert!(!internal("http://10.0.0.5:18790/chat"));
     }
 }
