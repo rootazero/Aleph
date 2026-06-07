@@ -52,6 +52,18 @@ pub fn role_for_permissions(permissions: &[String]) -> &'static str {
     }
 }
 
+/// UI-facing tier label for a device holding `permissions`.
+/// `"config"` iff the wildcard is present, else `"chat"` (the default tier).
+/// Mirrors `role_for_permissions` but yields the label the Panel shows on a
+/// device card, decoupled from the connect-response role string.
+pub fn tier_for_permissions(permissions: &[String]) -> &'static str {
+    if permissions.iter().any(|p| p == WILDCARD) {
+        "config"
+    } else {
+        "chat"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -87,5 +99,23 @@ mod tests {
     #[test]
     fn empty_permissions_are_non_operator() {
         assert_eq!(role_for_permissions(&[]), "guest");
+    }
+
+    #[test]
+    fn tier_label_config_for_wildcard() {
+        assert_eq!(tier_for_permissions(&["*".to_string()]), "config");
+    }
+
+    #[test]
+    fn tier_label_chat_for_non_wildcard() {
+        assert_eq!(
+            tier_for_permissions(&["chat".to_string(), "read".to_string()]),
+            "chat"
+        );
+    }
+
+    #[test]
+    fn tier_label_chat_for_empty() {
+        assert_eq!(tier_for_permissions(&[]), "chat");
     }
 }

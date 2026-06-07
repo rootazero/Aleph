@@ -184,6 +184,8 @@ pub struct DeviceInfo {
     pub device_type: String,
     pub paired_at: String,
     pub last_seen: Option<String>,
+    /// UI tier label derived from the device permissions: `"chat"` | `"config"`.
+    pub tier: String,
 }
 
 /// Handle security_config.get request
@@ -376,6 +378,8 @@ pub async fn handle_list_devices(
     let device_infos: Vec<DeviceInfo> = devices
         .into_iter()
         .map(|d| DeviceInfo {
+            tier: crate::gateway::handlers::auth::tier::tier_for_permissions(&d.permissions)
+                .to_string(),
             device_id: d.device_id,
             device_name: d.device_name,
             device_type: d.device_type.unwrap_or_else(|| "unknown".to_string()),
