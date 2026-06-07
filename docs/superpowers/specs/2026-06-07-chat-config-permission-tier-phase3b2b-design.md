@@ -4,7 +4,7 @@
 
 **Goal:** chat 档设备触发的 config 工具进入「等审批」挂起时，发起者在自己的对话流里看到一条「等待授权」提示（替代当前"工具卡永远转圈、无任何说明"的体验）；批准后工具照跑，拒绝/超时走现有 PermissionDenied。
 
-**Architecture:** 提示复用**已存在的 `ResponseChunk` 流事件**（`is_intermediate:true`）——所有通道（Telegram/CLI/native）+ Panel 本就渲染它，故无需新事件变体、无需新通道/Panel 渲染代码。提示在唯一的阻塞层 `OperatorApprovalRequester::request_approval` 内发出（该层已持 `event_bus`、已读 turn context），自然只在真正阻塞等审批的路径触发。因 run 输出流按 `run_id` 定向而挂起点当前没有 run_id，给 `TurnContext` 加一个 `run_id` 字段把它接进来。
+**Architecture:** 提示复用**已存在的 `ResponseChunk` 流事件**（`is_intermediate:true`）——经 `event_bus.publish_frame` 直发到目标 run 的事件总线流，由 **event_bus 订阅端（chat 档设备经 `agent.run` RPC 订阅的 Panel/WS）** 渲染，故无需新事件变体、无需新渲染代码。（注：Telegram/Feishu 的 `ReplyEmitter` 只消费 run 自带 `EventEmitter` 的 `StreamEvent`、不订阅 event_bus 帧——但 channel-backed run 是本机 operator DM，`caller_role` 非 chat 档、不触发 config 门控、根本不走这条 notice 路径，故无影响。）提示在唯一的阻塞层 `OperatorApprovalRequester::request_approval` 内发出（该层已持 `event_bus`、已读 turn context），自然只在真正阻塞等审批的路径触发。因 run 输出流按 `run_id` 定向而挂起点当前没有 run_id，给 `TurnContext` 加一个 `run_id` 字段把它接进来。
 
 **Tech Stack:** Rust（`src/tools/turn_context.rs` + `src/approval/operator_requester.rs`）。零前端。
 
