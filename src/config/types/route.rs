@@ -9,6 +9,8 @@
 //! [`Auto`](RouteMode::Auto) (the default) is a no-op: candidates keep their
 //! configured order, byte-identical to pre-route failover.
 
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +64,30 @@ pub enum LoadBalanceStrategy {
     /// Prefer the fallback with the lowest observed EWMA latency (unsampled
     /// endpoints are tried first so they gain a measurement).
     LatencyAware,
+    /// Prefer the fallback with the most *remaining* rate headroom — the lowest
+    /// rpm/tpm utilisation against its configured [`ProviderRateLimit`]. Maps
+    /// LiteLLM `usage-based-routing-v2` (pick the least-used deployment) onto the
+    /// lock-free [`crate::providers::load_stats`] window counters. When no
+    /// `rate_limits` are configured every provider reads 0% utilisation, so this
+    /// degrades to [`Ordered`](LoadBalanceStrategy::Ordered).
+    UsageBased,
+}
+
+/// Per-provider rate ceiling for usage-aware routing.
+///
+/// Mirrors a LiteLLM deployment's `rpm`/`tpm`: a soft budget the
+/// [`UsageBased`](LoadBalanceStrategy::UsageBased) strategy spreads load under,
+/// and a hard ceiling above which the provider is deprioritised to the back of
+/// its tier (never dropped — the failover chain must never starve). Both fields
+/// are optional; an unset dimension is simply unbounded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderRateLimit {
+    /// Requests per rolling 60s window. `None` = unbounded request rate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<u32>,
+    /// Tokens (input + output) per rolling 60s window. `None` = unbounded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm: Option<u32>,
 }
 
 /// `[route]` section. Defaults to `Auto` + no escalation — fully
@@ -100,6 +126,16 @@ pub struct ModelRouteConfig {
     /// keeps the configured order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cloud_provider: Option<String>,
+
+    /// Per-provider rate ceilings (rpm/tpm), keyed by provider name from the
+    /// configured `[providers]` — same name-reference contract as
+    /// [`local_provider`](Self::local_provider). Consumed by
+    /// [`LoadBalanceStrategy::UsageBased`] (spread by headroom) and the
+    /// over-limit deprioritisation gate (any strategy). Empty (default) = no
+    /// rate awareness, byte-identical to pre-usage failover. `BTreeMap` keeps
+    /// serialisation deterministic.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub rate_limits: BTreeMap<String, ProviderRateLimit>,
 }
 
 #[cfg(test)]
@@ -189,5 +225,40 @@ mod tests {
         let c: ModelRouteConfig =
             toml::from_str("mode = \"auto\"\nload_balance = \"least_busy\"\n").unwrap();
         assert_eq!(c.load_balance, LoadBalanceStrategy::LeastBusy);
+    }
+
+    #[test]
+    fn usage_based_strategy_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&LoadBalanceStrategy::UsageBased).unwrap(),
+            "\"usage_based\""
+        );
+        let c: ModelRouteConfig =
+            toml::from_str("mode = \"auto\"\nload_balance = \"usage_based\"\n").unwrap();
+        assert_eq!(c.load_balance, LoadBalanceStrategy::UsageBased);
+    }
+
+    #[test]
+    fn rate_limits_default_empty_and_omitted_on_wire() {
+        let c = ModelRouteConfig::default();
+        assert!(c.rate_limits.is_empty());
+        // Empty map stays off the wire (backward-compatible).
+        let json = serde_json::to_string(&c).unwrap();
+        assert!(!json.contains("rate_limits"));
+    }
+
+    #[test]
+    fn rate_limits_round_trip_and_partial_dims() {
+        let toml_src = "mode = \"auto\"\n\
+            [rate_limits.anthropic]\nrpm = 60\ntpm = 90000\n\
+            [rate_limits.ollama]\nrpm = 1000\n";
+        let c: ModelRouteConfig = toml::from_str(toml_src).unwrap();
+        let a = c.rate_limits.get("anthropic").unwrap();
+        assert_eq!(a.rpm, Some(60));
+        assert_eq!(a.tpm, Some(90_000));
+        // tpm omitted → unbounded on that dimension.
+        let o = c.rate_limits.get("ollama").unwrap();
+        assert_eq!(o.rpm, Some(1000));
+        assert_eq!(o.tpm, None);
     }
 }

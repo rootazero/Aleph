@@ -51,7 +51,7 @@ use crate::providers::load_stats::LoadStats;
 use crate::providers::route_handle::RouteHandle;
 use crate::providers::route_policy::{
     classify_candidate, order_candidates, order_candidates_balanced, CandidateAction, EndpointTier,
-    RouteTargets,
+    RateLimits, RouteTargets,
 };
 use crate::providers::{AiProvider, DefaultProviderHandle};
 use crate::sandbox::exec_approval::gate::ApprovalRequester;
@@ -647,6 +647,17 @@ impl FailoverProvider {
         }
     }
 
+    /// The operator's per-provider rate ceilings to apply *now*: the live handle
+    /// if attached, else empty (no rate awareness). Limits only ever enter via
+    /// the boot-wired handle, so `new()`/tests see an empty set — byte-identical
+    /// to pre-usage ordering.
+    fn route_limits(&self) -> Arc<RateLimits> {
+        match &self.route_handle {
+            Some(h) => h.limits(),
+            None => Arc::new(RateLimits::default()),
+        }
+    }
+
     /// Whether a cloud-borrow escalation for `name` is authorised right now.
     ///
     /// Fails closed: no gate wired → denied (a warn is logged). Mirrors the
@@ -728,12 +739,16 @@ impl FailoverProvider {
             CandidateAction::Skip => {}
             action => out.push((primary_node, action)),
         }
-        // Order the fallback pool. With a load registry and a non-`Ordered`
-        // strategy, balance the same-tier group by the live runtime signals;
-        // otherwise take the configured-order path (byte-identical to before).
+        // Order the fallback pool. The balanced path runs when there is a load
+        // registry AND either a non-`Ordered` strategy (sort by live signals) or
+        // configured rate limits (the over-limit gate must deprioritise
+        // saturated providers even under `Ordered`); otherwise the
+        // configured-order path stays byte-identical to before.
         let strategy = self.route_load_balance();
+        let limits = self.route_limits();
+        let needs_balance = strategy != LoadBalanceStrategy::Ordered || !limits.is_empty();
         let ordered = match &self.load {
-            Some(load) if strategy != LoadBalanceStrategy::Ordered => {
+            Some(load) if needs_balance => {
                 // One rotation tick per request drives RoundRobin; the sort
                 // strategies ignore it.
                 let rr_base = load.next_round_robin();
@@ -746,7 +761,17 @@ impl FailoverProvider {
                     |n| n.name.as_str(),
                     strategy,
                     rr_base,
-                    |name| load.metric(name),
+                    // Fold each provider's live window counts against its
+                    // configured ceiling into the derived utilisation/over-limit
+                    // scalars. The ordering logic stays limit-blind (R7: pure
+                    // infrastructure) — the policy never sees the config.
+                    |name| {
+                        let mut m = load.metric(name);
+                        let (util, over) = limits.assess(name, m.rpm_used, m.tpm_used);
+                        m.utilization_permille = util;
+                        m.over_limit = over;
+                        m
+                    },
                 )
             }
             _ => order_candidates(
@@ -985,9 +1010,16 @@ impl AiProvider for FailoverProvider {
                         match cand.provider.process(inner).await {
                             Ok(resp) => {
                                 // Feed the successful round-trip into the EWMA so
-                                // LatencyAware ordering reflects reality.
+                                // LatencyAware ordering reflects reality, and the
+                                // token usage into the rolling rate window so
+                                // UsageBased / the over-limit gate see real TPM.
                                 if let Some(g) = &_load_guard {
                                     g.record_latency(started.elapsed());
+                                    if let Some(u) = &resp.usage {
+                                        g.record_tokens(
+                                            u.input_tokens as u64 + u.output_tokens as u64,
+                                        );
+                                    }
                                 }
                                 self.mark_healthy(&cand.name).await;
                                 return Ok(resp);
@@ -2060,6 +2092,53 @@ mod tests {
         let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
         assert_eq!(resp.text_content(), "fb_b");
         // fb_b (idle) was preferred → fb_a never dialed.
+        assert_eq!(fb_a.call_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn over_limit_provider_deprioritised_in_fallback_pool() {
+        use crate::config::types::{ModelRouteConfig, ProviderRateLimit};
+        // Primary fails; fb_a carries an rpm ceiling of 1 and is already at it,
+        // so the over-limit gate must deprioritise it behind fb_b even under the
+        // default Ordered strategy (configured order is fb_a, fb_b). Proves the
+        // rate-limit gate shapes ordering without any non-Ordered strategy.
+        let primary = ScriptProvider::err("primary", "HTTP 429 rate limit");
+        let fb_a = ScriptProvider::ok("fb_a");
+        let fb_b = ScriptProvider::ok("fb_b");
+        let stats = Arc::new(LoadStats::new());
+        let handle = Arc::new(RouteHandle::from_config(&ModelRouteConfig {
+            rate_limits: [(
+                "fb_a".to_string(),
+                ProviderRateLimit {
+                    rpm: Some(1),
+                    tpm: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Default::default()
+        }));
+        let fp = FailoverProvider::new(
+            Arc::new(StaticDefault::new(primary)),
+            vec![
+                tiered_node("fb_a", fb_a.clone(), EndpointTier::Cloud),
+                tiered_node("fb_b", fb_b.clone(), EndpointTier::Cloud),
+            ],
+            HashMap::new(),
+            FailoverHealth::default(),
+            FailoverConfig::default(),
+        )
+        .with_route_live(handle)
+        .with_load_stats(stats.clone());
+
+        // Saturate fb_a's rpm window (ceiling is 1). The guard's in-flight count
+        // drops on `drop`, but the window request count persists this minute.
+        drop(stats.begin("fb_a"));
+
+        let msgs = [UnifiedMessage::user("hi")];
+        let resp = fp.process(RequestPayload::new(&msgs)).await.unwrap();
+        // fb_b (fresh) preferred over the saturated fb_a → fb_a never dialed.
+        assert_eq!(resp.text_content(), "fb_b");
         assert_eq!(fb_a.call_count(), 0);
     }
 

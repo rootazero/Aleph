@@ -12,7 +12,9 @@
 //! never the prompt. The route decision still lives in
 //! [`route_policy`](crate::providers::route_policy).
 
-use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, RouteMode};
+use std::collections::BTreeMap;
+
+use crate::config::types::{LoadBalanceStrategy, ModelRouteConfig, ProviderRateLimit, RouteMode};
 use crate::config::Config;
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -39,11 +41,16 @@ struct RouteModePayload {
     #[serde(default)]
     cloud_provider: Option<String>,
     /// Load-balancing strategy for the same-tier fallback pool:
-    /// "ordered" | "round_robin" | "least_busy" | "latency_aware".
+    /// "ordered" | "round_robin" | "least_busy" | "latency_aware" | "usage_based".
     /// Absent → unchanged default ("ordered"), backward-compatible with the
     /// pre-balance payload.
     #[serde(default)]
     load_balance: Option<String>,
+    /// Per-provider rate ceilings (rpm/tpm), keyed by provider name. Absent →
+    /// no rate awareness (cleared), backward-compatible with the pre-usage
+    /// payload. Drives `usage_based` ordering and the over-limit gate.
+    #[serde(default)]
+    rate_limits: BTreeMap<String, ProviderRateLimit>,
 }
 
 /// Normalise a UI-supplied provider name: blank / whitespace-only → `None` so a
@@ -75,6 +82,7 @@ fn lb_to_str(s: LoadBalanceStrategy) -> &'static str {
         LoadBalanceStrategy::RoundRobin => "round_robin",
         LoadBalanceStrategy::LeastBusy => "least_busy",
         LoadBalanceStrategy::LatencyAware => "latency_aware",
+        LoadBalanceStrategy::UsageBased => "usage_based",
     }
 }
 
@@ -84,6 +92,7 @@ fn lb_from_str(raw: &str) -> Option<LoadBalanceStrategy> {
         "round_robin" => Some(LoadBalanceStrategy::RoundRobin),
         "least_busy" => Some(LoadBalanceStrategy::LeastBusy),
         "latency_aware" => Some(LoadBalanceStrategy::LatencyAware),
+        "usage_based" => Some(LoadBalanceStrategy::UsageBased),
         _ => None,
     }
 }
@@ -127,6 +136,7 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
             "load_balance": lb_to_str(cfg.route.load_balance),
             "local_provider": cfg.route.local_provider,
             "cloud_provider": cfg.route.cloud_provider,
+            "rate_limits": cfg.route.rate_limits,
             "providers": providers,
         }),
     )
@@ -179,7 +189,7 @@ pub async fn handle_update(
                     request.id,
                     INVALID_PARAMS,
                     format!(
-                        "load_balance must be one of ordered|round_robin|least_busy|latency_aware, got '{}'",
+                        "load_balance must be one of ordered|round_robin|least_busy|latency_aware|usage_based, got '{}'",
                         raw
                     ),
                 );
@@ -193,6 +203,7 @@ pub async fn handle_update(
         allow_cloud_escalation: payload.allow_cloud_escalation,
         local_provider: normalize_pin(payload.local_provider),
         cloud_provider: normalize_pin(payload.cloud_provider),
+        rate_limits: payload.rate_limits,
     };
 
     {
@@ -222,6 +233,7 @@ pub async fn handle_update(
             "load_balance": lb_to_str(new_route.load_balance),
             "local_provider": new_route.local_provider,
             "cloud_provider": new_route.cloud_provider,
+            "rate_limits": new_route.rate_limits,
         }),
         timestamp: chrono::Utc::now().timestamp_millis(),
     });
@@ -316,10 +328,30 @@ mod tests {
             LoadBalanceStrategy::RoundRobin,
             LoadBalanceStrategy::LeastBusy,
             LoadBalanceStrategy::LatencyAware,
+            LoadBalanceStrategy::UsageBased,
         ] {
             assert_eq!(lb_from_str(lb_to_str(s)), Some(s));
         }
         assert_eq!(lb_from_str("nope"), None);
+    }
+
+    #[test]
+    fn payload_parses_rate_limits_and_tolerates_absence() {
+        let p: RouteModePayload = serde_json::from_value(serde_json::json!({
+            "mode": "auto",
+            "load_balance": "usage_based",
+            "rate_limits": { "anthropic": { "rpm": 60, "tpm": 90000 } },
+        }))
+        .unwrap();
+        assert_eq!(p.load_balance.as_deref(), Some("usage_based"));
+        let a = p.rate_limits.get("anthropic").unwrap();
+        assert_eq!(a.rpm, Some(60));
+        assert_eq!(a.tpm, Some(90_000));
+
+        // Absent rate_limits → empty map (backward-compatible).
+        let p2: RouteModePayload =
+            serde_json::from_value(serde_json::json!({ "mode": "auto" })).unwrap();
+        assert!(p2.rate_limits.is_empty());
     }
 
     #[tokio::test]
