@@ -43,9 +43,7 @@ pub fn set_remote_host(url: Option<Url>) {
         u.host_str()
             .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
     });
-    if let Ok(mut guard) = REMOTE_HOST.write() {
-        *guard = host;
-    }
+    *REMOTE_HOST.write().unwrap_or_else(|e| e.into_inner()) = host;
 }
 
 /// Injected into every document: redirect `target="_blank"` anchor clicks
@@ -87,9 +85,9 @@ pub fn is_internal(url: &Url) -> bool {
                 // Allow the currently-configured remote Gateway origin.
                 REMOTE_HOST
                     .read()
-                    .ok()
-                    .and_then(|g| g.clone())
-                    .is_some_and(|remote| remote == host)
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_deref()
+                    == Some(host)
             }
             None => false,
         },
@@ -178,16 +176,18 @@ mod tests {
 
     #[test]
     fn remote_origin_becomes_internal_when_set() {
-        // default: a LAN host is external
-        assert!(!internal("http://10.0.0.5:18790/chat"));
-        set_remote_host(Some(Url::parse("http://10.0.0.5:18790").unwrap()));
+        // Use TEST-NET-3 (203.0.113.x) — not used in any other test,
+        // avoiding concurrent REMOTE_HOST pollution with outside_origins_are_external.
+        // default: a routable host is external
+        assert!(!internal("http://203.0.113.7:18790/chat"));
+        set_remote_host(Some(Url::parse("http://203.0.113.7:18790").unwrap()));
         // now the configured remote host is internal, loopback still internal,
         // and an unrelated origin stays external
-        assert!(internal("http://10.0.0.5:18790/chat"));
+        assert!(internal("http://203.0.113.7:18790/chat"));
         assert!(internal("http://127.0.0.1:18790/"));
         assert!(!internal("https://github.com/aleph"));
         // clearing reverts
         set_remote_host(None);
-        assert!(!internal("http://10.0.0.5:18790/chat"));
+        assert!(!internal("http://203.0.113.7:18790/chat"));
     }
 }
