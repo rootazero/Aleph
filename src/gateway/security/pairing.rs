@@ -411,7 +411,11 @@ impl PairingManager {
         self.gc_browser_state();
         self.approved_browser_sessions.insert(
             code.to_string(),
-            (token.to_string(), device_id.to_string(), current_timestamp_ms()),
+            (
+                token.to_string(),
+                device_id.to_string(),
+                current_timestamp_ms(),
+            ),
         );
     }
 
