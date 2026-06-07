@@ -967,6 +967,47 @@ model = "test"
     // PROBE 23 — Device registration via shared token sets correct permissions
     // =========================================================================
 
+    // =========================================================================
+    // PROBE 24 — Chat-tier permissions yield non-operator role; config-tier ⇒ operator
+    // =========================================================================
+
+    #[test]
+    fn chat_tier_permissions_yield_non_operator_role() {
+        use crate::gateway::handlers::auth::tier::{role_for_permissions, Tier};
+        let chat = Tier::Chat.permissions();
+        assert_eq!(role_for_permissions(&chat), "guest");
+        let cfg = Tier::Config.permissions();
+        assert_eq!(role_for_permissions(&cfg), "operator");
+    }
+
+    // =========================================================================
+    // PROBE 25 — Operator-only method blocks chat role, passes config role
+    // =========================================================================
+
+    #[test]
+    fn operator_only_method_blocks_chat_role() {
+        use crate::gateway::method_authz::{required_privilege, MethodPrivilege};
+        // The gate predicate the dispatch loop applies: an Operator method + a
+        // non-operator connection ⇒ denied. (handler.rs operator gate)
+        let method = "config.apply";
+        let denied =
+            required_privilege(method) == MethodPrivilege::Operator && !role_is_operator("guest");
+        assert!(denied, "chat-tier connection must be denied config.apply");
+
+        // Same method, operator connection ⇒ allowed.
+        let denied_for_op = required_privilege(method) == MethodPrivilege::Operator
+            && !role_is_operator("operator");
+        assert!(
+            !denied_for_op,
+            "config-tier connection must pass config.apply"
+        );
+    }
+
+    /// Mirror of `ConnectionState::is_operator` for the unit check above.
+    fn role_is_operator(role: &str) -> bool {
+        role == "operator"
+    }
+
     #[tokio::test]
     async fn probe_shared_token_device_gets_operator_permissions() {
         let (ctx, store, shared_mgr) = make_auth_context();
