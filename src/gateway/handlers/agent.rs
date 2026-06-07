@@ -205,6 +205,16 @@ impl AgentRunManager {
             metadata.insert("peer_id".to_string(), peer_id.clone());
         }
 
+        // Stamp the originating connection's authorization role (set by the
+        // gateway dispatch loop via CALLER_ROLE) so the tool-dispatch tier gate
+        // can reject config-mutating tools for chat-tier devices. Covers BOTH
+        // chat.send and agent.run since both reach here via start_run in the
+        // same task. Absent for non-gateway runs (cron/internal) and for the
+        // local no-auth daemon → the gate treats those as trusted.
+        if let Some(role) = crate::gateway::caller_identity::current_caller_role() {
+            metadata.insert("caller_role".to_string(), role);
+        }
+
         // Validate and resolve optional project_root. We refuse anything that
         // isn't an existing absolute directory so the rest of the engine can
         // assume the override is safe to chdir/scan into.

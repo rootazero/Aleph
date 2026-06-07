@@ -88,6 +88,7 @@ pub mod routing_config;
 
 pub mod agent_env;
 pub mod bootstrap;
+pub mod caller_identity;
 pub mod challenge;
 pub mod context;
 pub mod event_scope;

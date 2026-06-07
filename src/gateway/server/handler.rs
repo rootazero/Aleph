@@ -864,6 +864,20 @@ async fn handle_connection(
                                         }
                                     }
 
+                                    // Originating-connection role for the
+                                    // config-tier tool gate. ONLY in auth mode:
+                                    // a no-auth local daemon leaves this None so
+                                    // every run is trusted (zero regression —
+                                    // B1's role fallback can be "guest" even
+                                    // locally, which must NOT gate config here).
+                                    let caller_role: Option<String> =
+                                        if ctx.auth_mode.is_auth_required() {
+                                            let conns = ctx.connections.read().await;
+                                            conns.get(&conn_id).and_then(|s| s.role.clone())
+                                        } else {
+                                            None
+                                        };
+
                                     // Handle events.* methods specially (they need conn_id)
                                     if req.method == "events.subscribe" {
                                         let resp = handle_subscribe(req.clone(), &conn_id, ctx.subscription_manager.clone()).await;
@@ -918,10 +932,12 @@ async fn handle_connection(
                                         }
 
                                         // Helper closure: standard lane dispatch (no idempotency)
-                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass| async move {
+                                        let do_lane_dispatch = |text: String, lm: Arc<LaneManager>, mc: MiddlewareChain, method: String, req_id: Option<serde_json::Value>, class: ChannelClass, caller_role: Option<String>| async move {
                                             let lane_result = lm.acquire(&method, class).await;
                                             match lane_result {
-                                                Ok(_permit) => process_request(&text, &mc).await,
+                                                Ok(_permit) => crate::gateway::caller_identity::CALLER_ROLE
+                                                    .scope(caller_role, process_request(&text, &mc))
+                                                    .await,
                                                 Err(_) => serde_json::to_string(&JsonRpcResponse::error(
                                                     req_id,
                                                     INTERNAL_ERROR,
@@ -968,7 +984,9 @@ async fn handle_connection(
                                                         let lane_result = ctx.lane_manager.acquire(&req.method, ctx.channel_class).await;
                                                         match lane_result {
                                                             Ok(_permit) => {
-                                                                let resp = process_request(&text, &ctx.middleware_chain).await;
+                                                                let resp = crate::gateway::caller_identity::CALLER_ROLE
+                                                                    .scope(caller_role.clone(), process_request(&text, &ctx.middleware_chain))
+                                                                    .await;
                                                                 if let Ok(parsed) = serde_json::from_str::<JsonRpcResponse>(&resp) {
                                                                     if parsed.is_success() {
                                                                         if let Some(result) = parsed.result {
@@ -997,11 +1015,11 @@ async fn handle_connection(
                                                 }
                                             } else {
                                                 // Query lane — skip idempotency
-                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class).await
+                                                do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone()).await
                                             }
                                         } else {
                                             // No idempotency key — standard lane dispatch
-                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class).await
+                                            do_lane_dispatch(text.to_string(), ctx.lane_manager.clone(), ctx.middleware_chain.clone(), req.method.clone(), req.id.clone(), ctx.channel_class, caller_role.clone()).await
                                         };
                                         // --- End idempotency + lane block ---
 
