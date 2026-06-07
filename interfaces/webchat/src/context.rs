@@ -1,5 +1,6 @@
+use crate::api::ExecApprovalApi;
 use crate::components::sidebar::SystemAlert;
-use crate::state::notifications::IncomingPairing;
+use crate::state::notifications::{IncomingPairing, PendingApprovalView};
 use futures::channel::{mpsc, oneshot};
 use futures::{FutureExt, StreamExt};
 use gloo_timers::future::TimeoutFuture;
@@ -117,6 +118,15 @@ pub struct DashboardState {
     /// Pairing subscription ID for cleanup
     pairing_subscription_id: StoredValue<Option<usize>>,
 
+    /// Pending operator-approval requests rendered by the NotificationCenter
+    /// with inline allow-once / allow-session / deny buttons. Sourced from the
+    /// `exec.approvals.pending` RPC; `approval.**` events trigger a refetch
+    /// (see `setup_approval_subscriptions`).
+    pub pending_approvals: RwSignal<Vec<PendingApprovalView>>,
+
+    /// Approval subscription ID for cleanup.
+    approval_subscription_id: StoredValue<Option<usize>>,
+
     /// Feature flag: enable radial (TheBrain-style) navigation in the Canvas view.
     /// Initialized from localStorage; mutated by the Settings panel toggle.
     pub canvas_radial_navigation: RwSignal<bool>,
@@ -169,6 +179,8 @@ impl DashboardState {
             alert_subscription_id: StoredValue::new(None),
             incoming_pairings: RwSignal::new(Vec::new()),
             pairing_subscription_id: StoredValue::new(None),
+            pending_approvals: RwSignal::new(Vec::new()),
+            approval_subscription_id: StoredValue::new(None),
             canvas_radial_navigation: RwSignal::new(
                 crate::api::settings::load_canvas_radial_navigation(),
             ),
@@ -829,6 +841,38 @@ impl DashboardState {
         });
 
         self.pairing_subscription_id
+            .set_value(Some(subscription_id));
+        Ok(())
+    }
+
+    /// Subscribe to `approval.**` events so the NotificationCenter can render
+    /// inline operator approval cards. The ApprovalRequested event is sparse
+    /// (ids only), so `exec.approvals.pending` is the source of truth: any
+    /// approval event simply triggers a refetch.
+    pub async fn setup_approval_subscriptions(&self) -> Result<(), String> {
+        self.subscribe_topic("approval.**").await?;
+        web_sys::console::log_1(&"Subscribed to approval.** events".into());
+
+        // Seed with whatever is already pending at connect time.
+        if let Ok(list) = ExecApprovalApi::list_pending(self).await {
+            self.pending_approvals.set(list);
+        }
+
+        let state = *self;
+        let subscription_id = self.subscribe_events(move |event: GatewayEvent| {
+            match event.topic.as_str() {
+                "approval.requested" | "approval.resolved" | "approval.expired" => {
+                    spawn_local(async move {
+                        if let Ok(list) = ExecApprovalApi::list_pending(&state).await {
+                            state.pending_approvals.set(list);
+                        }
+                    });
+                }
+                _ => {}
+            }
+        });
+
+        self.approval_subscription_id
             .set_value(Some(subscription_id));
         Ok(())
     }

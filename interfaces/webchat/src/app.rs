@@ -106,6 +106,11 @@ fn AppContent() -> impl IntoView {
                             &format!("Failed to setup pairing subscriptions: {}", e).into(),
                         );
                     }
+                    if let Err(e) = state.setup_approval_subscriptions().await {
+                        web_sys::console::error_1(
+                            &format!("Failed to setup approval subscriptions: {}", e).into(),
+                        );
+                    }
                 }
                 Err(e) => {
                     web_sys::console::error_1(
