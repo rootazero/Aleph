@@ -232,7 +232,9 @@ impl AgentHarness {
                             change inputs or try a different tool"
                         .to_string(),
                 };
-                self.emit_tool_error(session_id, turn_id, &call, synthetic, started, iteration)
+                self.emit_tool_error(
+                    session_id, turn_id, &call, synthetic, started, iteration, callback,
+                )
                     .await;
                 if let Some(ref tracker) = self.stall_tracker {
                     tracker.record_activity().await;
@@ -259,6 +261,10 @@ impl AgentHarness {
                     .session
                     .emit_event(session_id, result_event)
                     .await?;
+                // Live "done" event for the memo-hit (no re-execution but the
+                // model observed a result). Keeps the broadcast stream's
+                // ToolStart↔ToolEnd symmetry intact for deduplicated calls.
+                callback.on_tool_call_done(&call.id, Some(&output_value), None);
                 self.emit(
                     || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                         iteration,
@@ -362,7 +368,9 @@ impl AgentHarness {
                     // set — the LLM has demonstrably pivoted to a working
                     // strategy.
                     self.clear_failures();
-                    self.emit_tool_success(session_id, turn_id, &call, output, started, iteration)
+                    self.emit_tool_success(
+                        session_id, turn_id, &call, output, started, iteration, callback,
+                    )
                         .await?;
                 }
                 Err(e) => {
@@ -370,7 +378,9 @@ impl AgentHarness {
                     // The error is persisted to session log; the next Think
                     // turn will see it as tool_result(is_error=true).
                     self.record_failure(call.name.clone(), cache_key.1.clone());
-                    self.emit_tool_error(session_id, turn_id, &call, e, started, iteration)
+                    self.emit_tool_error(
+                        session_id, turn_id, &call, e, started, iteration, callback,
+                    )
                         .await;
                 }
             }
@@ -587,6 +597,7 @@ impl AgentHarness {
                     synthetic,
                     started_at[idx],
                     iteration,
+                    callback,
                 )
                 .await;
                 if let Some(ref tracker) = self.stall_tracker {
@@ -739,7 +750,9 @@ impl AgentHarness {
                     // Cross-batch dedup: any success clears the failure set —
                     // the LLM has demonstrably pivoted to a working strategy.
                     self.clear_failures();
-                    self.emit_tool_success(session_id, turn_id, call, output, started, iteration)
+                    self.emit_tool_success(
+                        session_id, turn_id, call, output, started, iteration, callback,
+                    )
                         .await?;
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
@@ -749,7 +762,9 @@ impl AgentHarness {
                     // Cross-batch dedup: record the (tool, args) signature so
                     // the next turn refuses an identical repeat.
                     self.record_failure(call.name.clone(), canonical_args[idx].clone());
-                    self.emit_tool_error(session_id, turn_id, call, e, started, iteration)
+                    self.emit_tool_error(
+                        session_id, turn_id, call, e, started, iteration, callback,
+                    )
                         .await;
                     if let Some(ref tracker) = self.stall_tracker {
                         tracker.record_activity().await;
@@ -845,6 +860,7 @@ impl AgentHarness {
         output: ToolOutput,
         started: Instant,
         iteration: usize,
+        callback: &mut dyn HarnessCallback,
     ) -> Result<(), HarnessError> {
         let output_value = output.value.clone();
         let result_event = SessionEvent::ToolResult {
@@ -858,6 +874,12 @@ impl AgentHarness {
             .emit_event(session_id, result_event)
             .await?;
         let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
+        // Live "done" event — mirror of `on_tool_call_start`. Fired for every
+        // tool that produces a `ToolCallCompleted` persistence trace so the
+        // broadcast stream emits a `ToolCallDone` → `StreamEvent::ToolEnd`.
+        // Without it the live stream shows tool starts with no ends and
+        // `event_drain`'s `pending_tools` map leaks one entry per call.
+        callback.on_tool_call_done(&call.id, Some(&output_value), None);
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                 iteration,
@@ -887,6 +909,7 @@ impl AgentHarness {
         e: crate::tools::service::ToolError,
         started: Instant,
         iteration: usize,
+        callback: &mut dyn HarnessCallback,
     ) {
         let retryable = e.is_retryable();
         // Compose the LLM-facing error body: the upstream `to_string()`
@@ -916,6 +939,11 @@ impl AgentHarness {
         }
         let dur_ms: u64 = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
         let error_for_timeline = error_msg.clone();
+        // Live "done" event (error case) — paired with `on_tool_call_start`
+        // so the broadcast stream emits `ToolCallDone` → `StreamEvent::ToolEnd`
+        // with the error body. Fired before the persistence trace, mirroring
+        // the success path.
+        callback.on_tool_call_done(&call.id, None, Some(&error_msg));
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {
                 iteration,
