@@ -422,6 +422,7 @@ fn audit_identity_reads_agent_and_channel_from_turn_context() {
         session_key: SessionKey::task("research-agent", "cron", "daily"),
         channel_id: "slack".to_string(),
         conversation_id: "C123".to_string(),
+        caller_role: None,
     };
     let (agent_id, context) =
         TURN_CONTEXT.sync_scope(turn, || audit_identity("type_text", "hello"));
@@ -440,6 +441,7 @@ fn audit_identity_omits_origin_for_non_channel_turn() {
         session_key: SessionKey::task("cron-agent", "cron", "daily"),
         channel_id: String::new(),
         conversation_id: String::new(),
+        caller_role: None,
     };
     let (agent_id, context) =
         TURN_CONTEXT.sync_scope(turn, || audit_identity("click", "click(5,5)"));
@@ -466,6 +468,7 @@ async fn approval_request_carries_agent_id_from_turn_context() {
         session_key: SessionKey::task("desktop-agent", "cron", "daily"),
         channel_id: "telegram".to_string(),
         conversation_id: "user-1".to_string(),
+        caller_role: None,
     };
 
     let mut args = make_args("click");

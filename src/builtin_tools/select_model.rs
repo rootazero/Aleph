@@ -122,6 +122,7 @@ mod tests {
             session_key: sk.clone(),
             channel_id: String::new(),
             conversation_id: String::new(),
+            caller_role: None,
         };
         let out = TURN_CONTEXT
             .scope(ctx, async {

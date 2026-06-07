@@ -26,6 +26,11 @@ pub struct TurnContext {
     pub channel_id: String,
     /// Originating conversation id. Empty for non-channel turns.
     pub conversation_id: String,
+    /// Originating gateway connection's authorization role (`"operator"` /
+    /// `"guest"`), stamped at run start from `CALLER_ROLE`. `None` for
+    /// non-gateway runs (cron, internal) and for the local no-auth daemon —
+    /// both treated as trusted by the config-tier gate.
+    pub caller_role: Option<String>,
 }
 
 impl TurnContext {
@@ -33,6 +38,16 @@ impl TurnContext {
     /// HITL tools must deny / fail gracefully when this is false.
     pub fn is_channel_routable(&self) -> bool {
         !self.channel_id.is_empty() && !self.conversation_id.is_empty()
+    }
+
+    /// True when the originating connection may mutate Aleph's own config.
+    /// Absent role = trusted local/internal run; `"operator"` = config tier;
+    /// any other value (e.g. `"guest"`) = chat tier (gated).
+    pub fn caller_is_operator(&self) -> bool {
+        match self.caller_role.as_deref() {
+            None | Some("operator") => true,
+            Some(_) => false,
+        }
     }
 }
 
@@ -44,4 +59,30 @@ task_local! {
 /// Returns the current turn's routing context, or `None` outside a turn scope.
 pub fn current_turn_context() -> Option<TurnContext> {
     TURN_CONTEXT.try_with(|t| t.clone()).ok()
+}
+
+#[cfg(test)]
+mod caller_tier_tests {
+    use super::*;
+    use crate::routing::session_key::SessionKey;
+
+    fn ctx(role: Option<&str>) -> TurnContext {
+        TurnContext {
+            session_key: SessionKey::main("t"),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+            caller_role: role.map(String::from),
+        }
+    }
+
+    #[test]
+    fn operator_and_local_are_operator() {
+        assert!(ctx(Some("operator")).caller_is_operator());
+        assert!(ctx(None).caller_is_operator(), "no role = trusted local/internal run");
+    }
+
+    #[test]
+    fn chat_tier_is_not_operator() {
+        assert!(!ctx(Some("guest")).caller_is_operator());
+    }
 }

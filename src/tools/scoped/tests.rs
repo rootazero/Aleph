@@ -1156,6 +1156,7 @@ fn turn_ctx(agent: &str) -> crate::tools::turn_context::TurnContext {
         session_key: crate::routing::session_key::SessionKey::main(agent),
         channel_id: "test".to_string(),
         conversation_id: "conv".to_string(),
+        caller_role: None,
     }
 }
 
@@ -1316,6 +1317,7 @@ async fn execute_scopes_session_id_from_turn_context() {
         session_key: sid.clone(),
         channel_id: String::new(),
         conversation_id: String::new(),
+        caller_role: None,
     };
     let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(turn);
 

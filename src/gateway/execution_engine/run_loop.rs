@@ -488,6 +488,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .get("conversation_id")
                 .cloned()
                 .unwrap_or_default(),
+            caller_role: request.metadata.get("caller_role").cloned(),
         };
 
         loop {

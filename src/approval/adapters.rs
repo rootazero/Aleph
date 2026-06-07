@@ -136,6 +136,7 @@ mod tests {
             session_key: SessionKey::ephemeral("adapter-test"),
             channel_id: "telegram".to_string(),
             conversation_id: "user-1".to_string(),
+            caller_role: None,
         }
     }
 
@@ -202,6 +203,7 @@ mod tests {
             session_key: SessionKey::task("main", "cron", "daily"),
             channel_id: String::new(),
             conversation_id: String::new(),
+            caller_role: None,
         };
         let out = TURN_CONTEXT
             .scope(non_channel_turn, async {

@@ -237,6 +237,7 @@ mod tests {
             session_key: crate::routing::session_key::SessionKey::ephemeral("ask-user-test"),
             channel_id: "telegram".to_string(),
             conversation_id: "user-1".to_string(),
+            caller_role: None,
         }
     }
 
@@ -271,6 +272,7 @@ mod tests {
             session_key: crate::routing::session_key::SessionKey::task("main", "cron", "daily"),
             channel_id: String::new(),
             conversation_id: String::new(),
+            caller_role: None,
         };
         let err = TURN_CONTEXT
             .scope(non_channel_turn, async {
