@@ -258,10 +258,20 @@ mod tests {
     #[test]
     fn config_tools_require_operator() {
         for t in [
-            "self_config", "self_manage", "vault_store", "cron_manage",
-            "heartbeat_create", "heartbeat_update", "heartbeat_delete", "heartbeat_toggle",
-            "skill_install", "skill_manage", "agent_create", "agent_delete",
-            "channel_pairing", "clawhub",
+            "self_config",
+            "self_manage",
+            "vault_store",
+            "cron_manage",
+            "heartbeat_create",
+            "heartbeat_update",
+            "heartbeat_delete",
+            "heartbeat_toggle",
+            "skill_install",
+            "skill_manage",
+            "agent_create",
+            "agent_delete",
+            "channel_pairing",
+            "clawhub",
         ] {
             assert!(tool_requires_operator(t), "{t} must require operator");
         }
@@ -270,11 +280,23 @@ mod tests {
     #[test]
     fn chat_safe_tools_stay_open() {
         for t in [
-            "search", "web_fetch", "file_read", "config_audit", "gateway_route",
-            "heartbeat_list", "skill_list", "agent_list", "memory_search", "ask_user",
-            "bash", "code_exec",
+            "search",
+            "web_fetch",
+            "file_read",
+            "config_audit",
+            "gateway_route",
+            "heartbeat_list",
+            "skill_list",
+            "agent_list",
+            "memory_search",
+            "ask_user",
+            "bash",
+            "code_exec",
         ] {
-            assert!(!tool_requires_operator(t), "{t} must stay open to chat tier");
+            assert!(
+                !tool_requires_operator(t),
+                "{t} must stay open to chat tier"
+            );
         }
     }
 

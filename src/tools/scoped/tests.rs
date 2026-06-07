@@ -1367,13 +1367,14 @@ async fn execute_without_turn_context_leaves_session_unset() {
 async fn chat_tier_blocked_from_config_tool() {
     use crate::routing::session_key::SessionKey;
     let registry = make_registry(&["cron_manage"]);
-    let svc = ScopedToolService::new(registry, BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
+        crate::tools::turn_context::TurnContext {
             session_key: SessionKey::main("a"),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("guest".to_string()),
-        });
+        },
+    );
     let err = svc.execute("cron_manage", json!({})).await.unwrap_err();
     assert!(
         matches!(err, ToolError::PermissionDenied { .. }),
@@ -1385,13 +1386,14 @@ async fn chat_tier_blocked_from_config_tool() {
 async fn operator_tier_allowed_config_tool() {
     use crate::routing::session_key::SessionKey;
     let registry = make_registry(&["cron_manage"]);
-    let svc = ScopedToolService::new(registry, BTreeSet::new())
-        .with_turn_context(crate::tools::turn_context::TurnContext {
+    let svc = ScopedToolService::new(registry, BTreeSet::new()).with_turn_context(
+        crate::tools::turn_context::TurnContext {
             session_key: SessionKey::main("a"),
             channel_id: String::new(),
             conversation_id: String::new(),
             caller_role: Some("operator".to_string()),
-        });
+        },
+    );
     assert!(svc.execute("cron_manage", json!({})).await.is_ok());
 }
 

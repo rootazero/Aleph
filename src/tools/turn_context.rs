@@ -78,7 +78,10 @@ mod caller_tier_tests {
     #[test]
     fn operator_and_local_are_operator() {
         assert!(ctx(Some("operator")).caller_is_operator());
-        assert!(ctx(None).caller_is_operator(), "no role = trusted local/internal run");
+        assert!(
+            ctx(None).caller_is_operator(),
+            "no role = trusted local/internal run"
+        );
     }
 
     #[test]
