@@ -7,6 +7,97 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.7]
+
+### Added
+
+- **Usage / rate-aware provider routing** — a load-balancing layer that folds
+  per-provider RPM / TPM rate limits into routing decisions (LiteLLM
+  usage-based parity): a lock-free 60s usage window meters in-flight requests
+  and tokens, saturated providers are demoted toward the tail of their tier
+  (never starved), and `pin` still overrides the gate. Empty `rate_limits`
+  stays byte-identical to prior behavior.
+- **Panel chat sidebar wiring** — the left session list gained a working
+  client-side search filter, a live per-session "running" indicator driven by
+  run lifecycle events, and a bottom status bar showing gateway connection
+  state plus active-run count (reusing the existing `activity.stats` RPC).
+- **Workspace tool-card rich rendering** — tool invocations now render as
+  structured cards with per-kind bodies (diff / shell / write / patch / read /
+  search) in both the left chat and the right workspace panel, replacing the
+  flat activity rows; assistant turns are bubble-less for higher density with
+  only the final answer surfaced as a bubble.
+- **Workspace trace persistence** — a read-only `trace.by_runs` RPC plus a
+  panel `replay_run` path rehydrate a run's chat bubbles and workspace payloads
+  from persisted traces on reload, with a shared `apply_trace_event`
+  projection used by both the live and replay code paths.
+- **Cron agent selector & graceful degradation** — cron jobs can now be bound
+  to a specific agent via a Panel selector (with default-id fallback), display
+  their read-only delivery channel for awareness, and fall back to the `main`
+  agent — with a fallback note — when the bound agent has been deleted.
+- **Canvas hover & performance pass** — hover hysteresis with hover frozen
+  during tweens, `requestAnimationFrame` parking when the canvas is hidden
+  (resumed via `IntersectionObserver`), and a `ResizeObserver` replacing
+  per-frame layout reads.
+- **Session-end reflection & open-loop tracking** — a single session-end LLM
+  pass distills first-person lessons into the note layer and tracks unresolved
+  "open loops", injecting them back into later sessions; the `FileSessionStore`
+  backend now actually emits `session_end` raws (a 13-day-dormant path).
+- **Redundant-call loop guard** — a fourth sibling nudge that detects a
+  non-idempotent tool (bash / code_exec / write / MCP) repeating the identical
+  `(tool, args)` + byte-identical result ≥3 times and emits a soft
+  `system-reminder`, closing the alternating-tool bypass of the prior guards.
+- **Panel introspection & context tooling** — a context-budget gauge,
+  transcript export, and empty-state suggestions in the panel, plus an offline
+  `aleph-server prompt-size` subcommand that breaks down the system-prompt
+  pipeline by layer.
+- **Centralized injection threat library** — a single-source regex threat
+  library (exfiltration / role-hijack / C2-promptware / persistence) wired into
+  the external-content wrapping chokepoint so web / MCP / tool / browser content
+  gains detection automatically.
+- **Harness callback wiring** — `on_tool_call_start` and `on_tool_call_done`
+  now fire at the real tool start / completion sites, so live clients receive
+  matched tool-begin / tool-end events instead of a leaking pending-tool list.
+
+### Fixed
+
+- **Exec-class tools failing in Panel / cron sessions** — `code_exec` / `bash`
+  / `code_check` returned `no active session context` and the model retried
+  forever, because the dispatch chokepoint scoped only `TURN_CONTEXT` and never
+  `SESSION_ID`. The chokepoint now scopes `SESSION_ID` from the turn's session
+  key, fixing the WebChat exec infinite-loop class at its root.
+- **GUI-launched daemon reporting runtimes as "not installed"** — a daemon
+  started from the `.app` / launchd inherits a minimal `PATH`, so `fnm` /
+  `node` / `cargo` / `uv` probes failed. The runtime probe now searches known
+  install directories (cargo / local / homebrew / fnm alias bins) via a single
+  chokepoint, without mutating the global environment.
+- **Panel final answer trapped as a step + duplicated narration** — a
+  terminating turn that carried both text and a tool call rendered its summary
+  as a streamed step instead of a final bubble, and two async pipelines raced
+  the same bubble; the final answer is now authoritatively finalized and
+  narration de-duplicated.
+- **Memory panel correctness** — memory views are paginated, raw-memory delete
+  is fixed, and tool telemetry is hidden from the memory dashboard.
+- **Compound-ingest dropping knowledge** — the L0→L1 planner omitting the
+  `kind` discriminator no longer silently burns raws; ops recover their kind by
+  field shape and empty-plan batches defer young raws for retry instead of
+  marking them processed.
+- **Provider resilience under 429 / slow first byte** — Kimi 429s are now
+  ridden out in place with paced re-requests and same-protocol fallback
+  preference, a time-to-first-byte timeout bounds stalled LLM requests, and 429
+  is treated as transient with a two-tier tool-loop halt.
+- **Tool-loop halt salvages a deliverable** — hitting a loop halt now closes
+  the orphan `tool_use` and salvages a partial deliverable rather than aborting
+  empty, with added Tier-2 loop detection; a per-tool budget overrun is now a
+  recoverable tool error, not a whole-run abort.
+- **Run-failure & orphan-task receipts** — the gateway now surfaces
+  user-facing receipts for run failures and for tasks orphaned by a restart,
+  and round-trips provider `context_window` through the CRUD DTOs.
+- **Context compaction sizing** — the compaction budget is derived from the
+  active model's window (and the chain-minimum window across agents), instead
+  of a single primary, so large-context runs compact correctly.
+- **Status-bar reconnect leak** — the panel status-bar poll loop is guarded
+  against accumulating stale reconnect effects.
+
 ## [26.6.5]
 
 ### Added
