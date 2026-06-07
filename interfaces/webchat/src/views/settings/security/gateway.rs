@@ -180,12 +180,12 @@ pub(super) fn PairedDevices(
                             <div class="space-y-2">
                                 {device_list.into_iter().map(|device| {
                                     let device_id = device.device_id.clone();
-                                    let device_id_sl = device.device_id.clone();
+                                    let device_id_for_level = device.device_id.clone();
                                     view! {
                                         <DeviceCard
                                             device=device
                                             on_revoke=move || revoke_device(device_id.clone())
-                                            on_set_level=move |level: String| set_level(device_id_sl.clone(), level)
+                                            on_set_level=move |level: String| set_level(device_id_for_level.clone(), level)
                                         />
                                     }
                                 }).collect::<Vec<_>>()}
@@ -212,24 +212,29 @@ where
         .unwrap_or_else(|| t_string!(i18n, settings.security.never).to_string());
     let is_config = device.tier == "config";
     let target_level = if is_config { "chat" } else { "config" };
+    let badge_class = if is_config {
+        "text-xs px-1.5 py-0.5 rounded bg-indigo-600 text-white"
+    } else {
+        "text-xs px-1.5 py-0.5 rounded bg-surface-raised text-text-secondary"
+    };
+    let badge_label = if is_config {
+        t_string!(i18n, settings.security.tier_config).to_string()
+    } else {
+        t_string!(i18n, settings.security.tier_chat).to_string()
+    };
+    let toggle_label = if is_config {
+        t_string!(i18n, settings.security.downgrade_chat).to_string()
+    } else {
+        t_string!(i18n, settings.security.grant_config).to_string()
+    };
 
     view! {
         <div class="flex items-center justify-between p-4 bg-surface-sunken rounded border border-border">
             <div class="flex-1">
                 <div class="font-medium flex items-center gap-2">
                     {device.device_name}
-                    <span class=move || {
-                        if is_config {
-                            "text-xs px-1.5 py-0.5 rounded bg-indigo-600 text-white"
-                        } else {
-                            "text-xs px-1.5 py-0.5 rounded bg-surface-raised text-text-secondary"
-                        }
-                    }>
-                        {move || if is_config {
-                            t_string!(i18n, settings.security.tier_config).to_string()
-                        } else {
-                            t_string!(i18n, settings.security.tier_chat).to_string()
-                        }}
+                    <span class=badge_class>
+                        {badge_label}
                     </span>
                 </div>
                 <div class="text-sm text-text-tertiary">
@@ -244,11 +249,7 @@ where
                     on:click=move |_| on_set_level(target_level.to_string())
                     class="px-3 py-1 bg-surface-raised text-text-primary text-sm rounded hover:bg-surface-sunken border border-border"
                 >
-                    {move || if is_config {
-                        t_string!(i18n, settings.security.downgrade_chat).to_string()
-                    } else {
-                        t_string!(i18n, settings.security.grant_config).to_string()
-                    }}
+                    {toggle_label}
                 </button>
                 <button
                     on:click=move |_| on_revoke()
