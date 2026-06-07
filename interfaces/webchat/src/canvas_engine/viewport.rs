@@ -13,6 +13,16 @@ use super::types::{CanvasNode, Vec2};
 /// at any scale.
 const HIT_TOLERANCE_PX: f64 = 6.0;
 
+/// Screen-space half-extents of the hover-retention box around a held node's
+/// screen center, sized to cover the Full card footprint. The card is 280 px
+/// wide and positioned via `translate3d(x-140, y-60)`, with the excerpt
+/// extending downward — hence the asymmetric vertical extents. Used for hover
+/// *hysteresis*: entry uses the bare node circle, retention uses this larger
+/// region so a held node keeps hover while the pointer rests over its card.
+const RETAIN_HALF_W: f64 = 150.0;
+const RETAIN_UP: f64 = 70.0;
+const RETAIN_DOWN: f64 = 130.0;
+
 #[derive(Debug, Clone)]
 pub struct Viewport {
     pub offset: Vec2,
@@ -74,6 +84,25 @@ impl Viewport {
             .rev()
             .find(|(_, node)| world.distance_to(&node.position) <= node.radius + tol)
             .map(|(idx, _)| idx)
+    }
+
+    /// Hover hysteresis: returns true if `screen_point` still falls within the
+    /// retention region of the already-held node at `node_world`.
+    ///
+    /// `hit_test` (the bare circle) decides hover *entry*; this larger region
+    /// decides *retention*, so a held node keeps hover while the pointer rests
+    /// anywhere over its enlarged Full card — killing boundary flicker and
+    /// letting the user move onto the card to read it. Below the Dot zoom
+    /// threshold (`scale < 0.5`) the node renders as a dot with no enlarged
+    /// card, so retention degrades to the same forgiving circle as entry.
+    pub fn hover_retains(&self, screen_point: Vec2, node_world: Vec2, node_radius: f64) -> bool {
+        let center = self.world_to_screen(node_world);
+        if self.scale < 0.5 {
+            return screen_point.distance_to(&center) <= node_radius * self.scale + HIT_TOLERANCE_PX;
+        }
+        let dx = screen_point.x - center.x;
+        let dy = screen_point.y - center.y;
+        dx >= -RETAIN_HALF_W && dx <= RETAIN_HALF_W && dy >= -RETAIN_UP && dy <= RETAIN_DOWN
     }
 
     pub fn is_visible(&self, world_point: Vec2, margin: f64) -> bool {
@@ -288,5 +317,34 @@ mod hit_test_tests {
             v.hit_test(v.world_to_screen(Vec2::new(9.0, 0.0)), &nodes),
             None
         );
+    }
+
+    #[test]
+    fn hover_retains_inside_full_card_box() {
+        // scale 1.0, node at world origin → screen center (400,300).
+        let vp = Viewport::new(800.0, 600.0);
+        // A point over the card body (down-right of the node) but well outside
+        // the bare node circle still retains hover.
+        assert!(vp.hover_retains(Vec2::new(500.0, 350.0), Vec2::zero(), 10.0));
+    }
+
+    #[test]
+    fn hover_retains_false_outside_box() {
+        let vp = Viewport::new(800.0, 600.0);
+        // 200 px right of center exceeds RETAIN_HALF_W (150).
+        assert!(!vp.hover_retains(Vec2::new(600.0, 300.0), Vec2::zero(), 10.0));
+        // 140 px below center exceeds RETAIN_DOWN (130).
+        assert!(!vp.hover_retains(Vec2::new(400.0, 440.0), Vec2::zero(), 10.0));
+    }
+
+    #[test]
+    fn hover_retains_dot_mode_uses_circle() {
+        // Below the Dot threshold (scale < 0.5) there is no enlarged card, so
+        // retention degrades to the forgiving circle (radius*scale + tol).
+        let mut vp = Viewport::new(800.0, 600.0);
+        vp.scale = 0.4; // offset stays (400,300); world origin → screen (400,300)
+        // radius 10 → 10*0.4 + 6 = 10 px screen tolerance.
+        assert!(vp.hover_retains(Vec2::new(405.0, 300.0), Vec2::zero(), 10.0));
+        assert!(!vp.hover_retains(Vec2::new(420.0, 300.0), Vec2::zero(), 10.0));
     }
 }

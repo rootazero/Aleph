@@ -65,8 +65,6 @@ pub fn NodeCard(
     hovered_id: ReadSignal<Option<String>>,
     /// Reactive — id of the selected node (if any).
     selected_id: ReadSignal<Option<String>>,
-    /// Click handler — receives the node id.
-    on_click: Callback<String>,
 ) -> impl IntoView {
     let stripe_color = category_color(&category);
 
@@ -98,7 +96,6 @@ pub fn NodeCard(
             let name_v = name.clone();
             let excerpt = excerpt_html.clone();
             let tags_v = tags.clone();
-            let click_id = id.clone();
             let data_id = id.clone();
             let sel_id = id.clone();
 
@@ -131,7 +128,6 @@ pub fn NodeCard(
                     data-id=data_id
                     data-active=data_active.to_string()
                     data-selected=is_selected_attr
-                    on:click=move |_| on_click.run(click_id.clone())
                 >
                     // Category stripe (3px top bar)
                     <div style=stripe_bar_style />
@@ -162,7 +158,6 @@ pub fn NodeCard(
         CardMode::Mini => {
             let stripe = stripe_color.clone();
             let name_v = name.clone();
-            let click_id = id.clone();
             let data_id = id.clone();
             let sel_id = id.clone();
 
@@ -194,7 +189,6 @@ pub fn NodeCard(
                     data-id=data_id
                     data-active=data_active.to_string()
                     data-selected=is_selected_attr
-                    on:click=move |_| on_click.run(click_id.clone())
                 >
                     <div style=stripe_sq_style />
                     <span class="node-card-mini__name">{name_v}</span>
@@ -208,7 +202,6 @@ pub fn NodeCard(
         // ------------------------------------------------------------------
         CardMode::Dot => {
             let dot_color = stripe_color.clone();
-            let click_id = id.clone();
             let data_id = id.clone();
 
             let style_str = move || {
@@ -226,7 +219,6 @@ pub fn NodeCard(
                     class="node-card-dot"
                     style=style_str
                     data-id=data_id
-                    on:click=move |_| on_click.run(click_id.clone())
                 />
             }
             .into_any()

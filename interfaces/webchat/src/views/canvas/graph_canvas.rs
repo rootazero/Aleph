@@ -145,6 +145,7 @@ pub fn GraphCanvas(
     // `drag_state`, and `last_frame_ms` are all moved into the rAF Effect closure
     // below. (Effect::new takes `move ||`, which consumes its captures.)
     let nav_for_md = nav.clone();
+    let nav_for_mm = nav.clone();
     let nav_for_mu = nav.clone();
     let drag_state_for_md = drag_state.clone();
     let drag_state_for_mm = drag_state.clone();
@@ -173,6 +174,12 @@ pub fn GraphCanvas(
 
         let canvas: web_sys::HtmlCanvasElement = canvas_el;
 
+        // Park flag: set true when the rAF loop stops itself because the canvas
+        // is hidden. The IntersectionObserver callback clears it and re-kicks a
+        // frame when the canvas becomes visible again — so a hidden Memory tab
+        // costs zero CPU instead of rescheduling rAF ~60×/s just to re-check.
+        let parked: Rc<Cell<bool>> = Rc::new(Cell::new(false));
+
         // Attach IntersectionObserver to flip `is_visible` without forcing
         // synchronous layout. `offset_width`/`getBoundingClientRect` would
         // each trigger updateLayoutIfDimensionsOutOfDate → resolveStyle
@@ -180,13 +187,29 @@ pub fn GraphCanvas(
         // render loop it was supposed to skip. IntersectionObserver
         // dispatches asynchronously off the layout pipeline.
         let is_visible_obs = is_visible_for_effect.clone();
+        let parked_obs = parked.clone();
+        let raf_c_for_obs = raf_c.clone();
+        let raf_h_for_obs = raf_h.clone();
         let observer_cb: Closure<dyn FnMut(js_sys::Array)> =
             Closure::new(move |entries: js_sys::Array| {
                 if let Ok(entry_val) = entries
                     .get(0)
                     .dyn_into::<web_sys::IntersectionObserverEntry>()
                 {
-                    is_visible_obs.set(entry_val.is_intersecting());
+                    let vis = entry_val.is_intersecting();
+                    is_visible_obs.set(vis);
+                    // Resume a parked loop on becoming visible again.
+                    if vis && parked_obs.get() {
+                        parked_obs.set(false);
+                        if let Some(window) = web_sys::window() {
+                            if let Some(closure) = raf_c_for_obs.borrow().as_ref() {
+                                let id = window
+                                    .request_animation_frame(closure.as_ref().unchecked_ref())
+                                    .unwrap_or(0);
+                                *raf_h_for_obs.borrow_mut() = Some(id);
+                            }
+                        }
+                    }
                 }
             });
         if let Ok(observer) =
@@ -199,6 +222,30 @@ pub fn GraphCanvas(
         // (display:none keep-alive in MainContent), there is no cleanup
         // hook to disconnect cleanly.
         observer_cb.forget();
+
+        // Parent-size channel: the ResizeObserver writes the latest content-box
+        // size here; the rAF loop reads it (cheap) instead of calling
+        // get_bounding_client_rect every frame (which forces synchronous
+        // layout — the same reason visibility uses IntersectionObserver above).
+        let pending_size: Rc<Cell<Option<(f64, f64)>>> = Rc::new(Cell::new(None));
+        let pending_size_obs = pending_size.clone();
+        let resize_cb: Closure<dyn FnMut(js_sys::Array)> =
+            Closure::new(move |entries: js_sys::Array| {
+                if let Ok(entry) = entries.get(0).dyn_into::<web_sys::ResizeObserverEntry>() {
+                    let rect = entry.content_rect();
+                    let w = rect.width().max(1.0);
+                    let h = rect.height().max(1.0);
+                    pending_size_obs.set(Some((w, h)));
+                }
+            });
+        if let Ok(observer) = web_sys::ResizeObserver::new(resize_cb.as_ref().unchecked_ref()) {
+            if let Some(parent) = canvas.parent_element() {
+                observer.observe(&parent);
+            }
+        }
+        // Leak the resize callback for the panel's lifetime — same rationale as
+        // the IntersectionObserver and rAF closures (parent never unmounts us).
+        resize_cb.forget();
 
         // Initial canvas size — rAF loop will resize dynamically from parent
         let (w, h) = canvas
@@ -250,6 +297,8 @@ pub fn GraphCanvas(
 
         let canvas_for_resize = canvas.clone();
         let is_visible_for_raf = is_visible.clone();
+        let parked_for_raf = parked.clone();
+        let pending_size_for_raf = pending_size.clone();
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
             // Visibility pause: MainContent (app.rs) keeps every top-level
             // view mounted and toggles `display:none` for inactive tabs, so
@@ -261,14 +310,10 @@ pub fn GraphCanvas(
             // see the long comment there for why we don't poll layout
             // here.
             if !is_visible_for_raf.get() {
-                if let Some(window) = web_sys::window() {
-                    if let Some(closure) = raf_c_inner.borrow().as_ref() {
-                        let id = window
-                            .request_animation_frame(closure.as_ref().unchecked_ref())
-                            .unwrap_or(0);
-                        *raf_h_inner.borrow_mut() = Some(id);
-                    }
-                }
+                // Park: stop the rAF chain entirely (zero CPU while hidden).
+                // The IntersectionObserver callback re-kicks one frame when the
+                // canvas becomes visible again.
+                parked_for_raf.set(true);
                 return;
             }
 
@@ -277,11 +322,10 @@ pub fn GraphCanvas(
                 return;
             }
 
-            // Dynamic canvas resize: check parent size each frame
-            if let Some(parent) = canvas_for_resize.parent_element() {
-                let rect = parent.get_bounding_client_rect();
-                let pw = rect.width();
-                let ph = rect.height();
+            // Apply a pending resize from the ResizeObserver, if any. take()
+            // consumes the cell so we only resize when a new size actually
+            // arrived — no per-frame getBoundingClientRect layout read.
+            if let Some((pw, ph)) = pending_size_for_raf.take() {
                 if pw > 1.0 && ph > 1.0 {
                     let cur_w = canvas_for_resize.width() as f64 / dpr;
                     let cur_h = canvas_for_resize.height() as f64 / dpr;
@@ -669,13 +713,37 @@ pub fn GraphCanvas(
                 }
             }
         } else {
-            // Hover detection
-            let hit = state.viewport.hit_test(screen, &state.nodes);
-            let new_hovered = hit.and_then(|idx| state.nodes.get(idx).map(|n| n.id.clone()));
-            if new_hovered != state.hovered_node {
-                state.hovered_node = new_hovered.clone();
-                drop(state);
-                on_event.run(CanvasEvent::HoverNode(new_hovered));
+            // Freeze hover during a retarget/focus tween: hit-test reads target
+            // positions from state.nodes while the renderer draws interpolated
+            // positions, so updating hover mid-animation picks the wrong node.
+            if let Some(ref nav_rc) = nav_for_mm {
+                if nav_rc.borrow().is_animating() {
+                    return;
+                }
+            }
+
+            // Hover hysteresis: keep the held node while the pointer rests
+            // anywhere over its enlarged card footprint (hover_retains); only
+            // re-test for a new node once the pointer leaves that region. This
+            // kills the boundary flicker and lets the user move onto the card.
+            let retained = match state.hovered_node.as_deref() {
+                Some(hid) => state
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == hid)
+                    .map(|n| state.viewport.hover_retains(screen, n.position, n.radius))
+                    .unwrap_or(false),
+                None => false,
+            };
+
+            if !retained {
+                let hit = state.viewport.hit_test(screen, &state.nodes);
+                let new_hovered = hit.and_then(|idx| state.nodes.get(idx).map(|n| n.id.clone()));
+                if new_hovered != state.hovered_node {
+                    state.hovered_node = new_hovered.clone();
+                    drop(state);
+                    on_event.run(CanvasEvent::HoverNode(new_hovered));
+                }
             }
         }
     };
@@ -841,8 +909,8 @@ pub fn GraphCanvas(
     // The rAF chain is leaked on purpose: the parent <MainContent> keeps
     // <CanvasView /> mounted (only toggles display:none) so `on_cleanup`
     // does not fire on route change. The closure's own visibility guard
-    // (offset_width == 0 → return) does the heavy lifting: zero per-frame
-    // work when hidden, instant resume when shown.
+    // parks the loop when hidden — it stops rescheduling entirely (zero CPU)
+    // and the IntersectionObserver re-kicks one frame on resume.
     //
     // NB: wasm32 is single-threaded so on_cleanup IS available — the
     // historical `Send` excuse was wrong. The real reason we skip it is
@@ -871,21 +939,16 @@ pub fn GraphCanvas(
                 on:keydown=on_keydown
             />
             // DOM overlay: NodeCard components positioned over each visible node.
-            // pointer-events-none on the wrapper so mouse events fall through to the canvas;
-            // individual cards re-enable pointer events for click handling.
+            // pointer-events-none on the wrapper so all mouse events fall through
+            // to the canvas, which owns hit-testing, hover and click selection.
             <div class="absolute inset-0 pointer-events-none overflow-hidden">
                 {move || {
                     let nodes = overlay_nodes.get();
                     nodes.into_iter().map(|n| {
-                        let id_clone = n.id.clone();
                         // Get-or-create the per-node screen position signal.
                         let pos_sig: RwSignal<(f32, f32)> =
                             node_screen_pos.with(|m| m.get(&n.id).copied())
                                 .unwrap_or_else(|| RwSignal::new((0.0_f32, 0.0_f32)));
-
-                        let on_card_click = Callback::new(move |_id: String| {
-                            selected_id_sig.set(Some(id_clone.clone()));
-                        });
 
                         let id_lookup = n.id.clone();
                         let excerpt = excerpt_by_id
@@ -905,7 +968,6 @@ pub fn GraphCanvas(
                                 zoom=zoom_signal.read_only()
                                 hovered_id=hovered_id_sig.read_only()
                                 selected_id=selected_id_sig.read_only()
-                                on_click=on_card_click
                             />
                         }
                     }).collect_view()

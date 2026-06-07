@@ -37,6 +37,8 @@ web-sys = { version = "0.3", features = [
     "DragEvent", "DataTransfer", "Navigator", "Clipboard",
     # graph_canvas rAF visibility pause (async, no forced layout)
     "IntersectionObserver", "IntersectionObserverEntry",
+    # graph_canvas resize without per-frame getBoundingClientRect layout reads
+    "ResizeObserver", "ResizeObserverEntry", "DomRectReadOnly",
     # theme_toggle View Transition reveal — set --theme-x/--theme-y origin
     "CssStyleDeclaration",
     # composer voice button — mic capture via MediaRecorder → base64 → STT RPC
