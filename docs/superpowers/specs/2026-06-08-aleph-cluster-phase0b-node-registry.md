@@ -1,0 +1,143 @@
+# Spec · Aleph 集群 Phase 0b — NodeRegistry + role:node enroll + environments.list
+
+> 2026-06-08 · 状态：设计已批准，待 writing-plans
+> 母 spec：[2026-06-08-aleph-cluster-design.md](./2026-06-08-aleph-cluster-design.md)（集群总架构，定不变的红线与拓扑）
+> 前置：Phase 0a 反向 RPC 地基已完成（分支 `feat/cluster-phase0a-reverse-rpc`，未合并）。0b 在**同一 worktree/分支**上往下长。
+
+## 1. 范围与边界
+
+0b 是集群的**中心侧节点登记层**。中心能：
+
+1. 铸 node token（`cluster.enroll`）
+2. 接受 `role:node` 连接并登记进 `NodeRegistry`
+3. 把在线节点作为「环境」只读暴露给中心 LLM（`environments.list`）
+
+**明确挪走（不在 0b）**：
+
+- ❌ NodeClient 拨出端 → **0c**
+- ❌ `node_invoke` 写路径 + 节点上真正执行命令 → **0c**
+- ❌ 交互式 pairing enroll（节点发起的 6 位码流程）→ **0c**（有真 NodeClient 驱动时才测得实）
+- ❌ allowlist **强制**（默认 deny 门控）→ **0c**（强制点在 invoke；0b 只**存+显示**节点自声明的 command 目录）
+- ❌ `local` 环境、Panel 渲染 RPC、`cluster.list`（enrolled-but-offline 全量视图）→ 后续相位
+
+**为什么 enroll 只做 operator 铸券、不做交互式 pairing**：0b 没有 NodeClient，交互式 pairing（节点拨入→中心弹审批→节点收 token 落盘）的发起侧与落盘侧都在 0c。现在写交互式 pairing 的中心半边，等于造一条本相位**诚实测不了**的半截路径，且与 0c 的发起侧分两阶段拼接、接缝易漏。故 0b 采用 operator 主动铸券（pre-provision）这一条可独立闭环、可单测的纵切。交互式 pairing enroll 不是砍掉，是挪到 0c 与 NodeClient 同期落地。
+
+**怎么测（无 NodeClient）**：裸 `tokio-tungstenite` 客户端模拟节点——`cluster.enroll` 铸 token → 模拟节点持 token + 声明 commands 连入 → `environments.list` 断言该节点带目录出现 → 断开后从列表消失。延续 0a e2e 同款打法。
+
+## 2. 组件与物理落点（R10 不污染 harness）
+
+| 组件 | 位置 | 状态 | 职责 |
+|---|---|---|---|
+| `NodeRegistry` / `NodeSession` / `Environment` / `CommandDescriptor` | **`src/cluster/registry.rs`**（新，紧挨 0a 的 `reverse_rpc.rs`） | 净新增 | 双 Map（`nodes_by_id` / `nodes_by_conn`）、register/deregister、`list_environments()`、`get(node_id)` |
+| 共享态挂载 | `src/gateway/server/mod.rs`（+ `probe.rs` 测试构造点） | 复用 0a 套路 | `GatewaySharedState`+`GatewayServer` 加 `node_registry: Arc<NodeRegistry>`，`build_router` 共享同一 Arc |
+| `role:node` 登记分支 | `src/gateway/server/handler.rs` | 复用 0a 接缝 | connect 时 `role==Node`：拿已建好的 `ReverseRpcChannel` clone + 连接帧 commands → `register()`；断线清理块 `deregister()`（与 0a reverse_rpc 注销并排） |
+| `cluster.enroll` 工具 | **`src/builtin_tools/cluster_enroll.rs`**（新）+ 注册于 `mod.rs` + 加进 `OPERATOR_TOOLS` | 净新增 | operator 工具：`Args{node_name}` → 复用 device store + `issue_token(device_id, DeviceRole::Node, scopes)` 铸持久化 node 设备 → 返回 token 串 |
+| `environments.list` 工具 | **`src/builtin_tools/environments_list.rs`**（新）+ 注册于 `mod.rs` | 净新增 | read 档工具：`node_registry.list_environments()`。chat/guest 可读 |
+| 连接帧扩展 | connect params 加可选 `commands: [{name, schema}]` | 微调 | 节点自声明 command 目录，0b 只存只显 |
+
+**纪律**：`src/harness/` 一行不改；gateway 只动 handler.rs connect 分支 + server/mod.rs 挂 Arc（与 0a 同样最小侵入面）；gateway RPC 层 0b 不扩（R8——enroll/list 都是 builtin 工具，LLM 可对话驱动）。
+
+## 3. 数据模型
+
+```rust
+// src/cluster/registry.rs
+
+/// 一个已连入的节点会话（中心侧视图）。
+pub struct NodeSession {
+    pub node_id: String,            // = device_id，直接当环境 id
+    pub conn_id: String,            // 对应 0a reverse_rpc 表的键，断线清理对账
+    pub device_name: String,        // 人类可读名（connect 帧）
+    pub channel: ReverseRpcChannel, // 0a 通道 clone —— 0c 的 node_invoke 经它下发
+    pub declared_commands: Vec<CommandDescriptor>, // 节点自声明目录，0b 只存只显
+    pub connected_at: i64,          // Utc::now().timestamp()
+}
+
+/// 节点声明的一个 command（名字 + 自描述 schema）。0b 不解析 schema，原样透传。
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CommandDescriptor {
+    pub name: String,               // e.g. "bash"
+    pub schema: serde_json::Value,  // JSON Schema，节点提供，中心原样收下
+}
+
+/// environments.list 的对外序列化视图（薄渲染契约，R4）。
+#[derive(Serialize)]
+pub struct Environment {
+    pub id: String,                 // = node_id
+    pub name: String,               // = device_name
+    pub status: &'static str,       // 0b 恒 "online"（在线才在表里）
+    pub commands: Vec<CommandDescriptor>,
+    pub connected_at: i64,
+}
+
+pub struct NodeRegistry {
+    inner: RwLock<RegistryInner>,   // P7：lock 中毒 into_inner
+}
+struct RegistryInner {
+    nodes_by_id: HashMap<String, NodeSession>,   // node_id → session（权威）
+    nodes_by_conn: HashMap<String, String>,      // conn_id → node_id（断线反查）
+}
+```
+
+**方法面**：
+
+- `register(session)` → 双 Map 写入（同 node_id 重连=覆盖旧会话）
+- `deregister(conn_id)` → 经 `nodes_by_conn` 反查 node_id，两 Map 同删
+- `list_environments() -> Vec<Environment>` → 快照投影
+- `get(node_id) -> Option<...>` → 给 0c node_invoke 取 channel（0b 建好接口，自己不调）
+
+**两个细节决策**：
+
+1. **重连即覆盖**：同 node_id 再连入直接覆盖旧 session（旧 channel 句柄自然失效）。不做"拒绝重复连接"。
+2. **status 0b 恒 online**：离线节点不在表里（在线才登记）。enrolled-but-offline 全量视图（`cluster.list`）留后续。
+
+## 4. 生命周期（三步）
+
+```
+① 铸券 (enroll)              ② 连入登记 (connect)               ③ 列举 (list)
+operator 对中心说              模拟节点开 WS，connect 帧带:         中心 LLM/operator 调
+"加个节点叫 worker-1"          { role:"node", token:<上步铸>,      environments.list
+  → cluster.enroll{node_name}   device_name:"worker-1",            → list_environments()
+  → 复用 device store             commands:[{name,schema},…] }      → [{id,name,status:"online",
+    + issue_token(Node)         → handler.rs connect 分支              commands,connected_at}]
+  → 返回 token 串                  验 token → role==Node →           ← 节点带目录出现
+   (operator 拷到节点机)            register(NodeSession{channel.clone(),
+                                      commands,…})
+                                 断线 → deregister(conn_id) → 列表消失
+```
+
+**复用点**：①enroll 全走现有 device store + `issue_token`（和 pairing 审批铸设备同一套，role=Node、非交互）。②复用 0a 已建好的 per-connection `ReverseRpcChannel`，登记分支顺手 clone 一份进 NodeRegistry。
+
+## 5. 安全姿态（显式声明）
+
+- **`cluster.enroll` = operator-only**：铸 node token 是签发凭证的敏感操作，进 `OPERATOR_TOOLS`，受 Phase 2 tiering 门控。chat/guest 调不动。
+- **`environments.list` = read 档**：chat/guest 可读环境视图，但读不到 token、读不到任何凭证。
+- **⚠️ allowlist 强制本期不做（显式 deferral，非安全缺口）**：0b 只存+显示节点自声明 command 目录，不做"默认 deny + 只能调批准命令"的强制。强制点在 invoke，而 invoke 在 0c。**0b 落地后中心仍无法在节点上跑任何命令**（无 node_invoke），这条 RCE-by-design 通道在 0b 阶段**尚未打开**；allowlist 强制与 node_invoke 在 0c 同期落地、同期测。
+- **node token 隔离**：经 `issue_token` 独立签发，绝不复用本机/operator token。
+
+## 6. 测试策略（纯单元优先）
+
+| 层 | 测试 |
+|---|---|
+| `NodeRegistry` 单元 | register/deregister 双 Map 一致性；同 node_id 重连覆盖；deregister 经 conn_id 反查正确删；`list_environments` 快照投影；lock 中毒 into_inner 不 panic |
+| `CommandDescriptor`/`Environment` serde | 往返；schema `Value` 原样透传不丢字段 |
+| `cluster.enroll` 工具 | 铸出 DeviceRole::Node 设备 + 返回非空 token；持久化进 device store；operator 档可调、chat 档被 tiering 拒 |
+| `environments.list` 工具 | 空注册表返空；登记后返带目录节点；read 档可调 |
+| e2e（`tests/cluster_node_enroll.rs`） | 真 `GatewayServer` → enroll 铸 token → 裸 WS 模拟节点持 token + 声明 commands 连入 → `environments.list` 断言节点带目录 online 出现 → 断 WS → 断言从列表消失 |
+
+## 7. 红线对账
+
+| 红线 | 0b 落地 |
+|---|---|
+| R1 大脑/四肢分离 | 全 Rust，无平台 API |
+| R3 核心轻量化 | 零新重依赖，复用 WS/JSON-RPC/device store/issue_token |
+| R4 Interface 纯 I/O | `environments.list` 薄渲染契约（投影快照），NodeRegistry 不聚合不路由不持久化业务 |
+| R7 LLM 主权 | enroll/list 是工具，LLM 对话驱动；无意图分类/路由引擎 |
+| R8 一切皆工具 | cluster.enroll + environments.list 全是 builtin 工具 |
+| R10 薄 harness | `src/harness/` 一行不改；NodeRegistry 在 cluster/，工具在 builtin_tools/，gateway 只动 connect 分支 |
+
+## 8. 范围外（YAGNI）
+
+- node_invoke / 节点上执行 / allowlist 强制（→ 0c）
+- 交互式 pairing enroll（→ 0c）
+- `local` 环境、`cluster.list` 全量视图、Panel 渲染 RPC（→ 后续）
+- 节点心跳/健康监控、离线状态机（0b：在线才在表里）
