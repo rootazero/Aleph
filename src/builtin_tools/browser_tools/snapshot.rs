@@ -9,22 +9,12 @@ use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
-fn default_true() -> bool {
-    true
-}
-
 /// Arguments for the browser_snapshot tool.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserSnapshotArgs {
     /// Browser profile name (default: "default").
     #[serde(default = "crate::builtin_tools::browser_tools::default_profile")]
     pub profile: String,
-    /// Only include interactive elements (buttons, inputs, links).
-    #[serde(default)]
-    pub interactive_only: bool,
-    /// Skip unnamed structural elements (default: true).
-    #[serde(default = "default_true")]
-    pub compact: bool,
     /// Maximum output characters (default: 30000). Set higher for complex pages.
     pub max_chars: Option<usize>,
 }
@@ -61,25 +51,21 @@ impl AlephTool for BrowserSnapshotTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         // Text-first: backend.snapshot() returns raw YAML/indented-tree text already.
-        // `interactive_only` / `compact` are no-ops now since the CLI controls snapshot shape.
-        let max_chars = args.max_chars.unwrap_or(30_000);
+        let max_chars = args.max_chars.unwrap_or(super::DEFAULT_CONTENT_MAX_CHARS);
 
         match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.snapshot(&tab_id).await {
                 Ok(snap) => {
-                    let raw = snap.snapshot_text;
-                    let ref_count = raw.matches("[ref=").count();
-                    let (text, truncated) = if raw.chars().count() > max_chars {
-                        let truncated: String = raw.chars().take(max_chars).collect();
-                        (truncated, true)
-                    } else {
-                        (raw, false)
-                    };
+                    // Bound first (line-boundary, never splitting a `[ref=]` token),
+                    // then count refs on the EMITTED text so the reported count
+                    // matches exactly what the model can see and act on.
+                    let (text, truncated) = super::bound_content(&snap.snapshot_text, max_chars);
+                    let ref_count = text.matches("[ref=").count();
                     // Page-derived DOM text is untrusted external content: scrub
                     // embedded credentials, then wrap with the injection boundary
                     // so chat-template markers injected by a hostile page cannot
-                    // escape (see `redact_and_wrap`).
-                    let wrapped = super::redact_and_wrap(&self.manager, &text);
+                    // escape (see `redact_wrap`).
+                    let wrapped = super::redact_wrap(&self.manager, &text);
                     Ok(BrowserSnapshotOutput {
                         success: true,
                         snapshot: Some(wrapped),
@@ -121,8 +107,6 @@ mod tests {
         let result = tool
             .call(BrowserSnapshotArgs {
                 profile: "default".into(),
-                interactive_only: false,
-                compact: true,
                 max_chars: None,
             })
             .await
