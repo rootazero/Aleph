@@ -103,6 +103,9 @@ struct ConnectionContext {
     /// The connection registers its ReverseRpcChannel here on connect and
     /// removes it on cleanup, so reverse-RPC callers can reach this socket.
     reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
+    /// Cluster node registry (shared Arc). The connect handler registers a
+    /// `role:node` connection here and cleanup deregisters it.
+    node_registry: Arc<crate::cluster::NodeRegistry>,
 }
 
 /// Extract the `aleph_session` cookie value from a request's `Cookie` header.
@@ -379,6 +382,7 @@ pub(super) async fn ws_upgrade_handler(
             token_manager: state.token_manager.clone(),
             client_ip,
             reverse_rpc: state.reverse_rpc.clone(),
+            node_registry: state.node_registry.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -457,6 +461,9 @@ async fn handle_connection(
     let (rpc_out_tx, mut rpc_out_rx) = tokio::sync::mpsc::channel::<String>(64);
     let rpc_channel = crate::cluster::ReverseRpcChannel::new(rpc_out_tx);
     let rpc_pending = rpc_channel.pending();
+    // Clone kept in scope so a successful `role:node` connect can register this
+    // same channel into the NodeRegistry (cluster Phase 0b).
+    let rpc_channel_for_node = rpc_channel.clone();
     {
         let mut reg = ctx.reverse_rpc.write().await;
         reg.insert(conn_id.clone(), rpc_channel);
@@ -705,6 +712,7 @@ async fn handle_connection(
                                                     )
                                                 };
 
+                                                let is_node = role.as_deref() == Some("node");
                                                 let mut conns = ctx.connections.write().await;
                                                 if let Some(state) = conns.get_mut(&conn_id) {
                                                     state.authenticate(device_id.clone(), permissions, role);
@@ -750,6 +758,20 @@ async fn handle_connection(
                                                     ctx.presence.upsert(conn_id.clone(), presence_entry);
                                                     ctx.state_versions.bump_presence();
                                                     let _ = ctx.event_bus.publish_json(&TopicEvent::new("presence.joined", serde_json::json!({"conn_id": &conn_id})).with_state_version(ctx.state_versions.snapshot()));
+                                                }
+                                                drop(conns);
+                                                // Cluster Phase 0b: register a node-role connection so it
+                                                // surfaces in environments.list (and becomes node_invoke-reachable
+                                                // in 0c). Pure glue; no-op for non-node roles.
+                                                if is_node {
+                                                    crate::cluster::maybe_register_node(
+                                                        &ctx.node_registry,
+                                                        Some("node"),
+                                                        &device_id,
+                                                        &conn_id,
+                                                        req.params.as_ref(),
+                                                        &rpc_channel_for_node,
+                                                    );
                                                 }
                                             }
                                         }
@@ -1399,6 +1421,8 @@ async fn handle_connection(
         let mut reg = ctx.reverse_rpc.write().await;
         reg.remove(&conn_id);
     }
+    // Cluster Phase 0b: drop this connection's node session if it was a node.
+    ctx.node_registry.deregister(&conn_id);
 
     // Remove presence and emit departure event
     if let Some(_entry) = ctx.presence.remove(&conn_id) {
