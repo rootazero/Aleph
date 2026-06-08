@@ -326,12 +326,9 @@ impl PromptPipeline {
             Box::new(GenerationModelsLayer),
             Box::new(SkillInstructionsLayer),
             Box::new(SpecialActionsLayer),
-            // ResponseFormatLayer (deprecated 2026-05-10): mandated the legacy
-            // `{reasoning, action}` JSON envelope, which had no live consumer
-            // — the harness uses native `with_tools(tools_ref)` for dispatch.
-            // Unregistering eliminates the envelope at its source. The struct
-            // is kept temporarily for one observation cycle; safe to delete
-            // entirely after no regressions are observed.
+            // ResponseFormatLayer was removed (2026-05-10..06-08): it mandated
+            // the legacy `{reasoning, action}` JSON envelope, which had no live
+            // consumer once the harness moved to native `with_tools(...)`.
             Box::new(GuidelinesLayer),
             Box::new(ThinkingGuidanceLayer),
             Box::new(SkillModeLayer),

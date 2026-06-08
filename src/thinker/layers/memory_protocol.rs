@@ -59,23 +59,21 @@ impl PromptLayer for MemoryProtocolLayer {
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str(
             "\n\n## Memory Protocol\n\
-             You have three memory tools. Reach for the one that matches the question:\n\
+             Three memory tools — reach for the one matching the question:\n\
              - `memory_search` — hybrid retrieval over notes/facts (cross-session). \
-             Use when the user asks about prior decisions, preferences, or any fact \
-             you do not already see in `<CuratedMemory>` or `<memory>` blocks above.\n\
+             Use for prior decisions, preferences, or any fact not already in the \
+             `<CuratedMemory>`/`<memory>` blocks above.\n\
              - `session_search` — find a past session by topic and read its summarized \
-             facts (with evidence quotes). Use when the user references \"last time\", \
-             \"that bug we fixed\", or any past-conversation context.\n\
-             - `remember` — append/replace/remove the curated MEMORY.md hot zone. \
-             Use proactively when you learn a stable user preference, environment fact, \
-             or a correction the user wants you to honor next session. Do not store \
-             task progress, completed-work logs, or transient TODOs.\n\
+             facts (with evidence quotes). Use for \"last time\", \"that bug we fixed\", \
+             or any past-conversation reference.\n\
+             - `remember` — append/replace/remove the curated MEMORY.md hot zone. Use \
+             proactively for a stable preference, environment fact, or correction to \
+             honor next session; not for task progress, work logs, or transient TODOs.\n\
              \n\
-             What is already visible: `<CuratedMemory>` and any retrieved `<memory>` \
-             blocks are auto-injected — do not search for facts you can already read. \
-             Soft rejections from `remember` (duplicate, over-budget, no-match) come \
-             back as a tool result with `message: \"rejected: …\"`; recover by \
-             rephrasing or switching action, not by aborting the turn.\n",
+             `<CuratedMemory>` and retrieved `<memory>` blocks are auto-injected — don't \
+             search for facts you can already read. A soft rejection from `remember` \
+             (duplicate, over-budget, no-match) returns `message: \"rejected: …\"`; \
+             recover by rephrasing or switching action, not by aborting the turn.\n",
         );
     }
 }
