@@ -32,24 +32,15 @@ impl PromptLayer for RuntimeCapabilitiesLayer {
             output.push_str("You can execute code using these installed runtimes:\n\n");
             output.push_str(&runtimes);
             output.push_str(
-                "\n**IMPORTANT**: Runtimes are NOT tools. They describe execution environments.\n",
+                "\n**IMPORTANT**: Runtimes are NOT tools — they're execution environments. \
+                 To run Python/Node code, write a script with `file_ops`, then run it with \
+                 `bash`. Don't call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools.\n",
             );
-            output.push_str("- To execute Python code, use the `file_ops` tool to write a .py script, then use `bash` tool to run it\n");
-            output.push_str("- To execute Node.js code, use the `file_ops` tool to write a .js script, then use `bash` tool to run it\n");
             output.push_str(
-                "- Do NOT try to call runtime names (uv, fnm, ffmpeg, yt-dlp) as tools directly\n",
-            );
-            output.push_str("\n**CRITICAL - Use Aleph Runtimes**:\n");
-            output.push_str("When executing Python/Node.js scripts, ALWAYS use the full executable path from the runtimes above:\n");
-            output.push_str(
-                "- ✅ CORRECT: Use the exact \"Executable\" path shown in the runtime info\n",
-            );
-            output.push_str("- ✅ Example: If runtime shows \"Executable: /path/to/python\", use \"/path/to/python script.py\"\n");
-            output
-                .push_str("- ❌ WRONG: `python3 script.py` (system default may be incompatible)\n");
-            output.push_str("- ❌ WRONG: `python script.py` (may not exist)\n");
-            output.push_str(
-                "Aleph provides managed runtimes to ensure correct versions and dependencies.\n\n",
+                "\n**CRITICAL - Use Aleph Runtimes**: always invoke the full \"Executable\" path \
+                 shown above (e.g. `/path/to/python script.py`), never bare `python3` / `python` \
+                 — the system default may be missing or incompatible. Aleph's managed runtimes \
+                 guarantee the right versions and dependencies.\n\n",
             );
         }
     }

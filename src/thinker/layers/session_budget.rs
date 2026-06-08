@@ -67,25 +67,25 @@ impl PromptLayer for SessionBudgetLayer {
 
         output.push_str("## Session Budget\n\n");
         output.push_str(&format!(
-            "- **Iteration cap**: {} (the Think→Act loop is forced to wrap up after this many turns).\n",
+            "- **Iteration cap**: {} — the Think→Act loop is forced to wrap up after this many turns.\n",
             cap
         ));
         output.push_str(
-            "- Plan your tool calls so the most decisive action lands early — once the cap is reached, the harness emits a final reply regardless of progress.\n",
+            "- Front-load the most decisive action — at the cap the harness emits a final reply regardless of progress.\n",
         );
         output.push_str("\n### Self-pacing protocol\n\n");
         output.push_str(
-            "Count your own progress from the conversation history (each of your assistant messages is one turn). Apply these tiers:\n\n",
+            "Track your turn count from the conversation history (each assistant message = one turn):\n\n",
         );
         output.push_str(&format!(
-            "- **Turn ≤ {checkpoint_at} (≤ 75 %)** — exploratory phase. Branch on hypotheses, run tools that produce information.\n"
+            "- **Turn ≤ {checkpoint_at} (≤ 75 %)** — explore: branch on hypotheses, run tools that surface information.\n"
         ));
         output.push_str(&format!(
-            "- **Turn {} – {closure_at} (75 % – 90 %)** — checkpoint phase. Reconcile findings, drop branches that aren't converging, prefer tools that close gaps over tools that open new ones.\n",
+            "- **Turn {} – {closure_at} (75–90 %)** — checkpoint: reconcile findings, drop non-converging branches, prefer gap-closing tools over gap-opening ones.\n",
             checkpoint_at.saturating_add(1)
         ));
         output.push_str(&format!(
-            "- **Turn > {closure_at} (> 90 %)** — closure phase. No new exploration. Synthesize what you have and prepare a final reply on the next turn even if some items remain open — flag the unresolved items in the reply.\n"
+            "- **Turn > {closure_at} (> 90 %)** — closure: no new exploration; synthesize and deliver a final reply next turn, flagging any unresolved items.\n"
         ));
     }
 }
