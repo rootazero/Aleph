@@ -661,6 +661,23 @@ mod tests {
         let result = response.result.unwrap();
         assert!(result.get("token").is_some());
         assert!(result.get("device_id").is_some());
+        // Equivalence guard: no-auth (local-only) mode must always yield operator/["*"].
+        assert_eq!(result.get("role").and_then(|v| v.as_str()), Some("operator"));
+        assert_eq!(
+            result
+                .get("permissions")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
+            Some(1)
+        );
+        assert_eq!(
+            result
+                .get("permissions")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str()),
+            Some("*")
+        );
 
         // T1: HelloSnapshot is delivered inline so clients don't need to
         // fan out to `gateway.identity.get` + `presence.list` + `config.get`
