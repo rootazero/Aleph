@@ -99,6 +99,10 @@ struct ConnectionContext {
     /// identity, and auth-failure lockout so those abuse protections key off
     /// the actual client rather than a shared proxy address.
     client_ip: IpAddr,
+    /// Per-connection reverse-RPC registry (shared Arc with GatewayServer).
+    /// The connection registers its ReverseRpcChannel here on connect and
+    /// removes it on cleanup, so reverse-RPC callers can reach this socket.
+    reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
 }
 
 /// Extract the `aleph_session` cookie value from a request's `Cookie` header.
@@ -374,6 +378,7 @@ pub(super) async fn ws_upgrade_handler(
             bootstrap_shared_token,
             token_manager: state.token_manager.clone(),
             client_ip,
+            reverse_rpc: state.reverse_rpc.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -444,6 +449,19 @@ async fn handle_connection(
 
     tokio::spawn(forward_bus_to_client(ctx.event_bus.subscribe(), buffer));
 
+    // Reverse-RPC outbound channel for this connection. Frames pushed here are
+    // written verbatim to the socket by the dedicated select arm below (they
+    // bypass the EventBus topic/scope filtering, which would drop RPC frames).
+    // Registered under conn_id so reverse-RPC callers can reach this specific
+    // connection; deregistered on cleanup.
+    let (rpc_out_tx, mut rpc_out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    let rpc_channel = crate::cluster::ReverseRpcChannel::new(rpc_out_tx);
+    let rpc_pending = rpc_channel.pending();
+    {
+        let mut reg = ctx.reverse_rpc.write().await;
+        reg.insert(conn_id.clone(), rpc_channel);
+    }
+
     // Initialize connection state
     {
         let mut conns = ctx.connections.write().await;
@@ -478,6 +496,25 @@ async fn handle_connection(
                     Some(Ok(WsMessage::Text(text))) => {
                         let preview_end = text.char_indices().take_while(|(i, _)| *i < 200).last().map(|(i, c)| i + c.len_utf8()).unwrap_or(text.len());
                         debug!("WS recv from {}: {}", conn_id, &text[..preview_end]);
+
+                        // Reverse-RPC response interception: a frame that is a
+                        // JSON-RPC *response* (has `id` + `result`/`error`, no
+                        // `method`) is the reply to a server-initiated request.
+                        // Route it to the pending table and stop — do NOT treat
+                        // it as a client request (it would fail JsonRpcRequest
+                        // parsing, which requires `method`).
+                        if let Ok(maybe_resp) =
+                            serde_json::from_str::<JsonRpcResponse>(&text)
+                        {
+                            let looks_like_response = maybe_resp.id.is_some()
+                                && (maybe_resp.result.is_some() || maybe_resp.error.is_some());
+                            if looks_like_response {
+                                if let Some(id) = maybe_resp.id.clone() {
+                                    rpc_pending.resolve(&id, maybe_resp);
+                                }
+                                continue;
+                            }
+                        }
 
                         // Parse request to check method for auth gating
                         let request: Result<JsonRpcRequest, _> = serde_json::from_str(&text);
@@ -1240,6 +1277,23 @@ async fn handle_connection(
                     }
                 }
             }
+            // Reverse-RPC outbound: write server-initiated frames verbatim.
+            // Full JSON-RPC request strings produced by ReverseRpcChannel::call();
+            // no filtering, no wrapping.
+            frame = rpc_out_rx.recv() => {
+                match frame {
+                    Some(text) => {
+                        if let Err(e) = write.send(WsMessage::Text(text.into())).await {
+                            error!("Failed to send reverse-rpc frame to {}: {}", conn_id, e);
+                            break;
+                        }
+                    }
+                    None => {
+                        // All ReverseRpcChannel senders dropped (registry entry
+                        // removed). Nothing more to push; keep serving inbound.
+                    }
+                }
+            }
             // Server-initiated WS Ping + inbound idle watchdog
             _ = ping_timer.tick() => {
                 // Global-hop overflow watchdog. The bus->buffer forwarder drops
@@ -1335,6 +1389,11 @@ async fn handle_connection(
         }
 
         conns.remove(&conn_id);
+    }
+
+    {
+        let mut reg = ctx.reverse_rpc.write().await;
+        reg.remove(&conn_id);
     }
 
     // Remove presence and emit departure event
