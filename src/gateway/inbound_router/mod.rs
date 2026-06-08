@@ -1098,6 +1098,7 @@ mod tests {
         ApprovalCallbackResult, ApprovalCallbackSink,
     };
     use crate::gateway::pairing_store::SqlitePairingStore;
+    use crate::gateway::routing_config::DmScope;
 
     /// Sink stub —— 任何回调都拦截。
     struct AlwaysIntercept;
@@ -1177,6 +1178,94 @@ mod tests {
             ),
             "zero-config group message must resolve to a Group key; got: {key:?}",
         );
+    }
+
+    /// 单用户 owner：dm_scope=Main 时，零配置 fallback 路径的 DM 必须坍缩到
+    /// `agent:<id>:main`，使同一 agent 在不同 channel 的 DM 共享同一 Main 会话。
+    #[test]
+    fn dm_main_scope_collapses_to_main_session_key() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default().with_dm_scope(DmScope::Main),
+        );
+        let make = |channel: &str| InboundMessage {
+            id: MessageId::new("m1"),
+            channel_id: ChannelId::new(channel),
+            conversation_id: ConversationId::new("dm-conv"),
+            sender_id: UserId::new("owner"),
+            sender_name: None,
+            text: "hi".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        // 同一 agent、不同 channel → 同一 Main key（跨 channel 共享）。
+        let k_tg = router.resolve_session_key_with_agent(&make("telegram"), "main");
+        let k_sl = router.resolve_session_key_with_agent(&make("slack"), "main");
+        assert_eq!(k_tg.to_key_string(), "agent:main:main");
+        assert_eq!(k_sl.to_key_string(), "agent:main:main");
+        assert_eq!(k_tg.to_key_string(), k_sl.to_key_string());
+    }
+
+    /// 反向保护：默认 PerPeer 下 DM 仍按 peer 隔离（零回归）。
+    #[test]
+    fn dm_per_peer_scope_stays_isolated() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default(), // PerPeer
+        );
+        let msg = InboundMessage {
+            id: MessageId::new("m2"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("dm-conv"),
+            sender_id: UserId::new("owner"),
+            sender_name: None,
+            text: "hi".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        let key = router.resolve_session_key_with_agent(&msg, "main");
+        // Fallback uses SessionKey::peer(agent, "dm:{sender}") with empty channel →
+        // sanitize_component replaces ':' with '-' → "agent:main:peer:dm-owner".
+        assert_eq!(key.to_key_string(), "agent:main:peer:dm-owner");
+    }
+
+    /// 不同 agent 各自 Main，互不串味。
+    #[test]
+    fn dm_main_scope_different_agents_isolated() {
+        let router = InboundMessageRouter::new(
+            Arc::new(ChannelRegistry::new()),
+            Arc::new(SqlitePairingStore::in_memory().unwrap()),
+            RoutingConfig::default().with_dm_scope(DmScope::Main),
+        );
+        let msg = InboundMessage {
+            id: MessageId::new("m3"),
+            channel_id: ChannelId::new("telegram"),
+            conversation_id: ConversationId::new("dm-conv"),
+            sender_id: UserId::new("owner"),
+            sender_name: None,
+            text: "hi".to_string(),
+            attachments: vec![],
+            timestamp: chrono::Utc::now(),
+            reply_to: None,
+            is_group: false,
+            raw: None,
+            metadata: vec![],
+        };
+        let work = router.resolve_session_key_with_agent(&msg, "work");
+        let personal = router.resolve_session_key_with_agent(&msg, "personal");
+        assert_eq!(work.to_key_string(), "agent:work:main");
+        assert_eq!(personal.to_key_string(), "agent:personal:main");
+        assert_ne!(work.to_key_string(), personal.to_key_string());
     }
 
     fn bot_authored_msg(id: &str) -> InboundMessage {
