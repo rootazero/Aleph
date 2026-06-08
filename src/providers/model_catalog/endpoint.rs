@@ -62,7 +62,11 @@ pub fn endpoint_kind_for_base_url(base_url: Option<&str>) -> EndpointKind {
 }
 
 /// Pull the lowercase host out of a base URL, tolerating a missing scheme.
-fn extract_host(raw: &str) -> Option<String> {
+///
+/// `pub(crate)` so sibling normalization code (e.g. the OpenAI model-id
+/// canonicaliser) can make first-party-vs-aggregator host decisions without
+/// duplicating this scheme-tolerant parse.
+pub(crate) fn extract_host(raw: &str) -> Option<String> {
     // `Url::parse` requires a scheme; a bare `localhost:11434` parses with
     // `localhost` as the *scheme*, not the host. Prefix `http://` when the
     // input lacks a `://` separator so host extraction is reliable.
