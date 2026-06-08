@@ -683,6 +683,7 @@ mod tests {
                 &self,
                 _agent_id: &str,
                 raws: Vec<RawMemory>,
+                _extra_context: Option<&str>,
             ) -> Result<ApplyReport, AlephError> {
                 self.seen
                     .lock()
@@ -756,6 +757,7 @@ mod tests {
                 &self,
                 _agent_id: &str,
                 _raws: Vec<RawMemory>,
+                _extra_context: Option<&str>,
             ) -> Result<ApplyReport, AlephError> {
                 Ok(ApplyReport::default())
             }
@@ -792,6 +794,7 @@ mod tests {
                 &self,
                 _agent_id: &str,
                 _raws: Vec<RawMemory>,
+                _extra_context: Option<&str>,
             ) -> Result<ApplyReport, AlephError> {
                 Ok(ApplyReport::default())
             }
