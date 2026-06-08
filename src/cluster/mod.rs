@@ -6,6 +6,10 @@
 //!
 //! 红线：本模块不含任何 LLM 推理（R7），不进入 `src/harness/`（R10）。
 
+mod registry;
 mod reverse_rpc;
 
+pub use registry::{
+    maybe_register_node, CommandDescriptor, Environment, NodeRegistry, NodeSession,
+};
 pub use reverse_rpc::{PendingInvokes, ReverseRpcChannel, ReverseRpcError};
