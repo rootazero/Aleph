@@ -68,7 +68,11 @@ impl PromptLayer for MemoryProtocolLayer {
              or any past-conversation reference.\n\
              - `remember` — append/replace/remove the curated MEMORY.md hot zone. Use \
              proactively for a stable preference, environment fact, or correction to \
-             honor next session; not for task progress, work logs, or transient TODOs.\n\
+             honor next session; not for task progress, work logs, or transient TODOs. \
+             Phrase each entry as a declarative fact about the user or environment \
+             (\"User prefers X\"), not an imperative to yourself (\"Always do X\") — \
+             imperatives get re-read next session as standing orders and can override \
+             a later request.\n\
              \n\
              `<CuratedMemory>` and retrieved `<memory>` blocks are auto-injected — don't \
              search for facts you can already read. A soft rejection from `remember` \
@@ -120,6 +124,11 @@ mod tests {
         assert!(out.contains("session_search"));
         assert!(out.contains("remember"));
         assert!(out.contains("Memory Protocol"));
+        // Pass-3: `remember` entries must be phrased as declarative facts, not
+        // imperatives — an imperative re-read next session becomes a standing
+        // order that can override the user's current request.
+        assert!(out.contains("declarative fact"));
+        assert!(out.contains("imperative"));
     }
 
     #[test]
