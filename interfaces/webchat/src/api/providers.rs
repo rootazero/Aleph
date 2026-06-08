@@ -24,6 +24,8 @@ pub struct ProviderInfo {
     pub is_default: bool,
     #[serde(default)]
     pub verified: bool,
+    #[serde(default)]
+    pub has_api_key: bool,
 }
 
 fn default_provider_color() -> String {
