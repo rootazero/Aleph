@@ -79,6 +79,7 @@ pub mod exec;
 pub mod executor;
 pub mod extension;
 pub mod generation;
+pub mod goal;
 pub mod guardrails;
 mod init_unified;
 pub mod logging;
