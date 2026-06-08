@@ -166,6 +166,18 @@ impl SessionStore for SessionManager {
         self.get_history(key, limit).await.map_err(map_err)
     }
 
+    async fn get_history_before(
+        &self,
+        key: &SessionKey,
+        limit: Option<usize>,
+        before: Option<i64>,
+    ) -> Result<Vec<MessageRecord>, SessionStoreError> {
+        // Push the cursor into SQL rather than filtering in memory.
+        self.get_history_before(key, limit, before)
+            .await
+            .map_err(map_err)
+    }
+
     async fn search_messages(
         &self,
         query: &str,

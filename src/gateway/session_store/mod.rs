@@ -34,6 +34,28 @@ pub trait SessionStore: Send + Sync {
         limit: Option<usize>,
     ) -> Result<Vec<MessageRecord>, SessionStoreError>;
 
+    /// History with an optional `before` cursor (unix seconds): only messages
+    /// whose timestamp is *strictly older* than `before` are returned; with a
+    /// `limit`, the most recent `limit` of those, oldest-first. This is what
+    /// powers `chat.history` cursor pagination — fetching successively older
+    /// pages by passing the oldest timestamp of the previous page as `before`.
+    ///
+    /// The default impl fetches the full history once and filters in memory; it
+    /// is correct for every store. SQL-backed stores override it to push the
+    /// `timestamp <` predicate into the query (see `SessionManager`). When
+    /// `before` is `None` the result is identical to [`get_history`].
+    ///
+    /// [`get_history`]: SessionStore::get_history
+    async fn get_history_before(
+        &self,
+        key: &SessionKey,
+        limit: Option<usize>,
+        before: Option<i64>,
+    ) -> Result<Vec<MessageRecord>, SessionStoreError> {
+        let all = self.get_history(key, None).await?;
+        Ok(paginate_before(all, limit, before))
+    }
+
     async fn search_messages(
         &self,
         query: &str,
@@ -191,5 +213,88 @@ pub trait SessionStore: Send + Sync {
             pairs.push((msg.role, msg.content));
         }
         Ok(pairs)
+    }
+}
+
+/// Pure pagination core shared by [`SessionStore::get_history_before`]: given a
+/// chronological (oldest-first) message list, keep only messages strictly older
+/// than `before` (when set), then return the most recent `limit` of those still
+/// in oldest-first order.
+///
+/// Factored out so the predicate/window logic is unit-testable without a store
+/// or database, and so every default-impl backend shares one definition.
+pub(crate) fn paginate_before(
+    all: Vec<MessageRecord>,
+    limit: Option<usize>,
+    before: Option<i64>,
+) -> Vec<MessageRecord> {
+    let mut filtered: Vec<MessageRecord> = match before {
+        Some(ts) => all.into_iter().filter(|m| m.timestamp < ts).collect(),
+        None => all,
+    };
+    if let Some(n) = limit {
+        if filtered.len() > n {
+            // Keep the trailing (most-recent) `n`, preserving oldest-first order.
+            filtered = filtered.split_off(filtered.len() - n);
+        }
+    }
+    filtered
+}
+
+#[cfg(test)]
+mod paginate_before_tests {
+    use super::*;
+
+    fn rec(id: &str, ts: i64) -> MessageRecord {
+        MessageRecord {
+            id: id.to_string(),
+            role: "user".to_string(),
+            content: id.to_string(),
+            timestamp: ts,
+            metadata: None,
+            input_tokens: 0,
+            output_tokens: 0,
+            model: None,
+            model_provider: None,
+        }
+    }
+
+    fn sample() -> Vec<MessageRecord> {
+        vec![rec("a", 10), rec("b", 20), rec("c", 30), rec("d", 40)]
+    }
+
+    #[test]
+    fn none_before_none_limit_is_identity() {
+        let out = paginate_before(sample(), None, None);
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn before_keeps_only_strictly_older() {
+        // Cursor at 30 must exclude the message *at* 30 (strictly older).
+        let out = paginate_before(sample(), None, Some(30));
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["a", "b"]);
+    }
+
+    #[test]
+    fn before_with_limit_returns_most_recent_of_the_older_set() {
+        // Older-than-40 set is [a,b,c]; the trailing 2 are [b,c], oldest-first.
+        let out = paginate_before(sample(), Some(2), Some(40));
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["b", "c"]);
+    }
+
+    #[test]
+    fn limit_without_cursor_returns_trailing_window() {
+        let out = paginate_before(sample(), Some(2), None);
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["c", "d"]);
+    }
+
+    #[test]
+    fn cursor_older_than_everything_yields_empty() {
+        assert!(paginate_before(sample(), Some(10), Some(5)).is_empty());
     }
 }

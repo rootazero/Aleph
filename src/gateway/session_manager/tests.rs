@@ -49,6 +49,46 @@ async fn test_message_operations() {
 }
 
 #[tokio::test]
+async fn test_get_history_before_cursor_filters_by_timestamp() {
+    let temp = tempdir().unwrap();
+    let config = test_config(temp.path().join("test.db"));
+    let manager = SessionManager::new(config).unwrap();
+
+    let key = SessionKey::main("test");
+    manager.get_or_create(&key).await.unwrap();
+    manager.add_message(&key, "user", "one").await.unwrap();
+    manager.add_message(&key, "assistant", "two").await.unwrap();
+    manager.add_message(&key, "user", "three").await.unwrap();
+
+    let now = chrono::Utc::now().timestamp();
+
+    // No cursor → identical to plain get_history (all three).
+    let all = manager.get_history_before(&key, None, None).await.unwrap();
+    assert_eq!(all.len(), 3);
+
+    // Cursor in the future → every message is strictly older, so all survive.
+    let before_future = manager
+        .get_history_before(&key, None, Some(now + 3600))
+        .await
+        .unwrap();
+    assert_eq!(before_future.len(), 3);
+
+    // Cursor far in the past → nothing is older than it.
+    let before_past = manager
+        .get_history_before(&key, None, Some(now - 3600))
+        .await
+        .unwrap();
+    assert!(before_past.is_empty());
+
+    // Limit still windows the cursor-filtered set (most-recent `limit`).
+    let windowed = manager
+        .get_history_before(&key, Some(2), Some(now + 3600))
+        .await
+        .unwrap();
+    assert_eq!(windowed.len(), 2);
+}
+
+#[tokio::test]
 async fn test_session_reset() {
     let temp = tempdir().unwrap();
     let config = test_config(temp.path().join("test.db"));

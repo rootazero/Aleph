@@ -303,6 +303,77 @@ impl SessionManager {
         Ok(messages)
     }
 
+    /// History with an optional `before` cursor — the efficient, SQL-side
+    /// implementation of [`SessionStore::get_history_before`]. Only messages
+    /// with `timestamp < before` are scanned, then the most recent `limit` of
+    /// those are returned oldest-first (same windowing shape as [`get_history`]).
+    ///
+    /// When `before` is `None` this is exactly [`get_history`], so the plain
+    /// path stays the single source of SQL truth for the non-paginated case.
+    ///
+    /// [`SessionStore::get_history_before`]: crate::gateway::session_store::SessionStore::get_history_before
+    /// [`get_history`]: Self::get_history
+    pub async fn get_history_before(
+        &self,
+        key: &SessionKey,
+        limit: Option<usize>,
+        before: Option<i64>,
+    ) -> Result<Vec<MessageRecord>, SessionManagerError> {
+        // No cursor → reuse the plain path; avoids a second SQL variant.
+        let Some(before_ts) = before else {
+            return self.get_history(key, limit).await;
+        };
+
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        // Mirror `get_history`'s windowing: take the most-recent `limit` rows
+        // that satisfy the cursor (inner DESC LIMIT), then re-sort ASC for
+        // chronological display.
+        let query = match limit {
+            Some(n) => format!(
+                "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM (
+                    SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens
+                    FROM messages
+                    WHERE session_key = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT {}
+                ) ORDER BY timestamp ASC",
+                n
+            ),
+            None => "SELECT id, role, content, timestamp, metadata, input_tokens, output_tokens FROM messages
+                     WHERE session_key = ? AND timestamp < ? ORDER BY timestamp ASC"
+                .to_string(),
+        };
+
+        let mut stmt = conn
+            .prepare(&query)
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        let messages: Vec<MessageRecord> = stmt
+            .query_map(params![&key_str, before_ts], |row| {
+                Ok(MessageRecord {
+                    id: row.get::<_, i64>(0)?.to_string(),
+                    role: row.get(1)?,
+                    content: row.get(2)?,
+                    timestamp: row.get(3)?,
+                    metadata: row
+                        .get::<_, Option<String>>(4)?
+                        .and_then(|s| serde_json::from_str(&s).ok()),
+                    input_tokens: row.get(5)?,
+                    output_tokens: row.get(6)?,
+                    model: None,
+                    model_provider: None,
+                })
+            })
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(messages)
+    }
+
     /// Reset (clear) a session
     pub async fn reset_session(&self, key: &SessionKey) -> Result<bool, SessionManagerError> {
         let key_str = key.to_key_string();
