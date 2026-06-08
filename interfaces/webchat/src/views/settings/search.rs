@@ -7,6 +7,7 @@
 use crate::api::{SearchBackendEntry, SearchConfig, SearchConfigApi};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_key_field::ProviderKeyField;
+use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -710,7 +711,8 @@ fn ProviderDetailPanel(
         });
     };
 
-    let on_delete = move |_| {
+    let confirming = RwSignal::new(false);
+    let on_confirm_delete = move || {
         let sel = selected.get();
         if sel.is_none() {
             return;
@@ -1056,13 +1058,21 @@ fn ProviderDetailPanel(
                                                     }}
                                                     {if !is_active && is_custom {
                                                         Some(view! {
-                                                            <button
-                                                                on:click=on_delete
-                                                                prop:disabled=move || deleting.get()
-                                                                class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
-                                                            >
-                                                                {move || if deleting.get() { t_string!(i18n, settings.search.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
-                                                            </button>
+                                                            {move || if confirming.get() {
+                                                                view! {
+                                                                    <ConfirmButton confirming=confirming on_confirm=on_confirm_delete width_class="flex-1" />
+                                                                }.into_any()
+                                                            } else {
+                                                                view! {
+                                                                    <button
+                                                                        on:click=move |_| confirming.set(true)
+                                                                        prop:disabled=move || deleting.get()
+                                                                        class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
+                                                                    >
+                                                                        {move || if deleting.get() { t_string!(i18n, settings.search.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
+                                                                    </button>
+                                                                }.into_any()
+                                                            }}
                                                         })
                                                     } else {
                                                         None

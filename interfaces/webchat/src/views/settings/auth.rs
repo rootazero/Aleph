@@ -9,6 +9,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::{AuthTokenApi, AuthTokenInfo, SessionInfo};
+use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::views::devices::PairQr;
@@ -125,11 +126,10 @@ fn SharedTokenSection(
     let i18n = use_i18n();
     let visible = RwSignal::new(false);
     let regenerating = RwSignal::new(false);
-    let show_confirm = RwSignal::new(false);
+    let confirming = RwSignal::new(false);
     let copied = RwSignal::new(false);
 
-    let regenerate = move || {
-        show_confirm.set(false);
+    let on_confirm_regenerate = move || {
         regenerating.set(true);
         spawn_local(async move {
             match AuthTokenApi::reset_token(&state).await {
@@ -244,38 +244,18 @@ fn SharedTokenSection(
 
             // Regenerate token
             <div class="pt-4 border-t border-border">
-                {move || if show_confirm.get() {
+                {move || if confirming.get() {
                     view! {
-                        <div class="flex items-center gap-3 p-3 bg-warning-subtle border border-warning/20 rounded-lg">
-                            <svg class="w-5 h-5 text-warning flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
-                                <line x1="12" y1="9" x2="12" y2="13"/>
-                                <line x1="12" y1="17" x2="12.01" y2="17"/>
-                            </svg>
-                            <div class="flex-1">
-                                <p class="text-sm font-medium text-text-primary">{t!(i18n, settings.auth.regen_confirm_title)}</p>
-                                <p class="text-xs text-text-tertiary">{t!(i18n, settings.auth.regen_confirm_desc)}</p>
-                            </div>
-                            <div class="flex gap-2">
-                                <button
-                                    on:click=move |_| show_confirm.set(false)
-                                    class="px-3 py-1.5 text-sm bg-surface border border-border rounded-lg hover:bg-surface-raised"
-                                >
-                                    {t!(i18n, common.cancel)}
-                                </button>
-                                <button
-                                    on:click=move |_| regenerate()
-                                    class="px-3 py-1.5 text-sm bg-danger text-white rounded-lg hover:opacity-90"
-                                >
-                                    {t!(i18n, common.confirm)}
-                                </button>
-                            </div>
-                        </div>
+                        <ConfirmButton
+                            confirming=confirming
+                            on_confirm=on_confirm_regenerate
+                            label=Signal::derive(move || t_string!(i18n, common.confirm_regenerate).to_string())
+                        />
                     }.into_any()
                 } else {
                     view! {
                         <button
-                            on:click=move |_| show_confirm.set(true)
+                            on:click=move |_| confirming.set(true)
                             prop:disabled=move || regenerating.get()
                             class="flex items-center gap-2 px-4 py-2 text-sm bg-surface-sunken border border-border rounded-lg hover:bg-surface text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50"
                         >

@@ -5,6 +5,7 @@
 use crate::api::{EmbeddingProviderConfig, EmbeddingProviderEntry, EmbeddingProvidersApi};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_key_field::ProviderKeyField;
+use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -159,7 +160,8 @@ pub(super) fn ProviderDetailPanel(
 
     // Delete handler
     let provider_id_for_delete = provider_id.clone();
-    let handle_delete = move |_| {
+    let confirming = RwSignal::new(false);
+    let on_confirm_delete = move || {
         let id = provider_id_for_delete.clone();
         set_deleting.set(true);
         set_action_error.set(None);
@@ -363,13 +365,21 @@ pub(super) fn ProviderDetailPanel(
                         }}
                         {if is_custom {
                             Some(view! {
-                                <button
-                                    on:click=handle_delete
-                                    disabled=move || deleting.get()
-                                    class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50 transition-colors font-medium"
-                                >
-                                    {move || if deleting.get() { t_string!(i18n, settings.embedding.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
-                                </button>
+                                {move || if confirming.get() {
+                                    view! {
+                                        <ConfirmButton confirming=confirming on_confirm=on_confirm_delete.clone() width_class="flex-1" />
+                                    }.into_any()
+                                } else {
+                                    view! {
+                                        <button
+                                            on:click=move |_| confirming.set(true)
+                                            disabled=move || deleting.get()
+                                            class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50 transition-colors font-medium"
+                                        >
+                                            {move || if deleting.get() { t_string!(i18n, settings.embedding.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
+                                        </button>
+                                    }.into_any()
+                                }}
                             })
                         } else {
                             None

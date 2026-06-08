@@ -9,6 +9,7 @@ use crate::api::{
 };
 use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_key_field::ProviderKeyField;
+use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::i18n::*;
@@ -229,7 +230,8 @@ pub(super) fn ProviderDetailView(
 
     // Delete handler
     let provider_name_delete = provider_name.clone();
-    let handle_delete = move |_| {
+    let confirming = RwSignal::new(false);
+    let on_confirm_delete = move || {
         let name = provider_name_delete.clone();
         deleting.set(true);
         action_error.set(None);
@@ -580,16 +582,24 @@ pub(super) fn ProviderDetailView(
                 }
             }
 
-            // Delete button
+            // Delete button (two-step inline confirm)
             {if !is_preset {
                 view! {
-                    <button
-                        on:click=handle_delete
-                        disabled=move || deleting.get()
-                        class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
-                    >
-                        {move || if deleting.get() { t_string!(i18n, settings.generation.deleting).to_string() } else { t_string!(i18n, settings.generation.delete_provider).to_string() }}
-                    </button>
+                    {move || if confirming.get() {
+                        view! {
+                            <ConfirmButton confirming=confirming on_confirm=on_confirm_delete.clone() width_class="w-full" />
+                        }.into_any()
+                    } else {
+                        view! {
+                            <button
+                                on:click=move |_| confirming.set(true)
+                                disabled=move || deleting.get()
+                                class="w-full px-4 py-2.5 bg-danger-subtle text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors font-medium"
+                            >
+                                {move || if deleting.get() { t_string!(i18n, settings.generation.deleting).to_string() } else { t_string!(i18n, settings.generation.delete_provider).to_string() }}
+                            </button>
+                        }.into_any()
+                    }}
                 }.into_any()
             } else {
                 view! { <span></span> }.into_any()
