@@ -149,6 +149,9 @@ pub struct BuiltinToolRegistry {
     /// the registry is wrapped in `Arc` before the MCP is constructed.
     pub(crate) memory_context_provider:
         Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>>,
+    /// 集群节点登记表，启动后经 `set_node_registry` 注入；`node_invoke` 用它寻址。
+    pub(crate) node_registry:
+        Arc<tokio::sync::OnceCell<Arc<crate::cluster::NodeRegistry>>>,
     /// Memory browse tool instance (optional - requires memory_db)
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
     /// Memory explore tool instance (optional - requires memory_db + embedder)
@@ -465,6 +468,16 @@ impl BuiltinToolRegistry {
     pub fn set_memory_context_provider(&self, mcp: Arc<crate::thinker::MemoryContextProvider>) {
         if self.memory_context_provider.set(mcp).is_ok() {
             info!("MemoryContextProvider injected — `remember` tool now available");
+        }
+    }
+
+    /// 注入集群节点登记表，启用 `node_invoke` 工具。
+    ///
+    /// Takes `&self` so it works through `Arc` — the registry is wrapped in
+    /// `Arc::new` in `agent_init` before the gateway's `NodeRegistry` is wired.
+    pub fn set_node_registry(&self, registry: Arc<crate::cluster::NodeRegistry>) {
+        if self.node_registry.set(registry).is_ok() {
+            info!("NodeRegistry injected — `node_invoke` tool now available");
         }
     }
 
@@ -818,6 +831,17 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .await
                     .map_err(|e| AlephError::tool(format!("remember: {e}")))?;
                 let tool = crate::builtin_tools::RememberTool::new(store);
+                tool.call_json(arguments).await
+            }),
+
+            // Cluster fan-out tool — resolves the gateway's NodeRegistry
+            // (injected at boot via set_node_registry) and dispatches the
+            // command to a connected node over reverse RPC (cluster Phase 0c).
+            "node_invoke" => Box::pin(async move {
+                let reg = self.node_registry.get().ok_or_else(|| {
+                    AlephError::tool("node_invoke not available: NodeRegistry not injected")
+                })?;
+                let tool = crate::builtin_tools::NodeInvokeTool::new(reg.clone());
                 tool.call_json(arguments).await
             }),
 

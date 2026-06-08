@@ -754,6 +754,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let tool_registry = Arc::new(tool_registry);
         let tool_registry_for_heartbeat = tool_registry.clone();
 
+        // Cluster Phase 0c Task 5 — inject the gateway's NodeRegistry so the
+        // `node_invoke` tool can address connected nodes. The registry is the
+        // same Arc the auth layer threads into AuthContext (built once in the
+        // gateway server). Always available; unconditional unlike the MCP
+        // wiring which depends on a memory backend.
+        tool_registry.set_node_registry(server.node_registry.clone());
+
         // Capture default provider before provider_registry is moved into engine
         default_prov = Some(provider_registry.default_provider());
 

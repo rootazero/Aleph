@@ -132,6 +132,17 @@ impl BuiltinToolRegistry {
         );
         info!("Registered remember tool in BuiltinToolRegistry");
 
+        // node_invoke — cluster fan-out tool. Always exposed; its execution
+        // path resolves the gateway NodeRegistry via the deferred
+        // set_node_registry injection (mirrors the remember tool's pattern).
+        reg(
+            tools,
+            "node_invoke",
+            crate::builtin_tools::NodeInvokeTool::DESCRIPTION,
+            schema::<crate::builtin_tools::node_invoke::NodeInvokeArgs>("node_invoke"),
+        );
+        info!("Registered node_invoke tool in BuiltinToolRegistry");
+
         // Vault store tool
         if vault_store_tool.is_some() {
             reg(
