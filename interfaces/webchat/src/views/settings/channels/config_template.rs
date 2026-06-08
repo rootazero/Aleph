@@ -16,6 +16,7 @@ use crate::components::forms::{
 };
 use crate::components::ui::channel_status::{ChannelStatus, ChannelStatusBadge};
 use crate::components::ui::AgentBindingSelector;
+use crate::components::ui::ConfirmButton;
 use crate::components::ui::SecretInput;
 use crate::components::ui::TagListInput;
 use crate::context::DashboardState;
@@ -254,7 +255,8 @@ pub fn ChannelConfigTemplate(
     };
 
     // ---- Delete handler ----
-    let on_delete = move || {
+    let confirming = RwSignal::new(false);
+    let on_confirm_delete = move || {
         if !state.is_connected.get() {
             return;
         }
@@ -399,13 +401,21 @@ pub fn ChannelConfigTemplate(
                         on_click=move || on_save()
                         loading=saving.into()
                     />
-                    <button
-                        on:click=move |_| on_delete()
-                        disabled=move || deleting.get()
-                        class="px-4 py-2 text-sm border border-danger/30 text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors"
-                    >
-                        {move || if deleting.get() { t_string!(i18n, channel_config.deleting).to_string() } else { t_string!(i18n, channel_config.delete_instance).to_string() }}
-                    </button>
+                    {move || if confirming.get() {
+                        view! {
+                            <ConfirmButton confirming=confirming on_confirm=on_confirm_delete />
+                        }.into_any()
+                    } else {
+                        view! {
+                            <button
+                                on:click=move |_| confirming.set(true)
+                                disabled=move || deleting.get()
+                                class="px-4 py-2 text-sm border border-danger/30 text-danger rounded-lg hover:bg-danger-subtle disabled:opacity-50 transition-colors"
+                            >
+                                {move || if deleting.get() { t_string!(i18n, channel_config.deleting).to_string() } else { t_string!(i18n, channel_config.delete_instance).to_string() }}
+                            </button>
+                        }.into_any()
+                    }}
                 </div>
                 <a
                     href=docs_url

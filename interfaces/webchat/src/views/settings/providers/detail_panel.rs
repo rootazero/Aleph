@@ -8,6 +8,7 @@
 
 use crate::api::{OAuthStatus, ProviderConfig, ProviderInfo, ProvidersApi, TestResult};
 use crate::components::provider_key_field::ProviderKeyField;
+use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::preset_data::find_preset;
@@ -273,7 +274,8 @@ pub(super) fn ProviderDetailPanel(
         }
     };
 
-    let on_delete = move |_| {
+    let confirming = RwSignal::new(false);
+    let on_confirm_delete = move || {
         if let Some(name) = selected.get() {
             if name.starts_with("__") {
                 return;
@@ -748,13 +750,21 @@ pub(super) fn ProviderDetailPanel(
                                                             </button>
                                                             {if !is_preset {
                                                                 view! {
-                                                                    <button
-                                                                        on:click=on_delete
-                                                                        prop:disabled=move || saving.get()
-                                                                        class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
-                                                                    >
-                                                                        {t!(i18n, settings.providers.delete)}
-                                                                    </button>
+                                                                    {move || if confirming.get() {
+                                                                        view! {
+                                                                            <ConfirmButton confirming=confirming on_confirm=on_confirm_delete />
+                                                                        }.into_any()
+                                                                    } else {
+                                                                        view! {
+                                                                            <button
+                                                                                on:click=move |_| confirming.set(true)
+                                                                                prop:disabled=move || saving.get()
+                                                                                class="px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
+                                                                            >
+                                                                                {t!(i18n, settings.providers.delete)}
+                                                                            </button>
+                                                                        }.into_any()
+                                                                    }}
                                                                 }.into_any()
                                                             } else {
                                                                 view! { <span></span> }.into_any()

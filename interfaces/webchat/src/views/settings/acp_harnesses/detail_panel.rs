@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::{AcpApi, AcpHarnessConfig, AcpHarnessInfo, AcpPresetMeta};
+use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::*;
 
@@ -228,7 +229,8 @@ pub(super) fn HarnessDetailPanel(
 
     // Delete handler (custom only)
     let hid_delete = hid.clone();
-    let handle_delete = move |_| {
+    let confirming = RwSignal::new(false);
+    let on_confirm_delete = move || {
         set_deleting.set(true);
         set_action_error.set(None);
         let id = hid_delete.clone();
@@ -554,13 +556,21 @@ pub(super) fn HarnessDetailPanel(
 
                 {if !is_preset {
                     view! {
-                        <button
-                            on:click=handle_delete
-                            disabled=move || deleting.get()
-                            class="px-4 py-2.5 bg-danger/10 text-danger border border-danger/20 rounded-lg hover:bg-danger/20 transition-colors font-medium"
-                        >
-                            {move || if deleting.get() { t_string!(i18n, settings.acp.deleting).to_string() } else { t_string!(i18n, settings.acp.delete).to_string() }}
-                        </button>
+                        {move || if confirming.get() {
+                            view! {
+                                <ConfirmButton confirming=confirming on_confirm=on_confirm_delete.clone() />
+                            }.into_any()
+                        } else {
+                            view! {
+                                <button
+                                    on:click=move |_| confirming.set(true)
+                                    disabled=move || deleting.get()
+                                    class="px-4 py-2.5 bg-danger/10 text-danger border border-danger/20 rounded-lg hover:bg-danger/20 transition-colors font-medium"
+                                >
+                                    {move || if deleting.get() { t_string!(i18n, settings.acp.deleting).to_string() } else { t_string!(i18n, settings.acp.delete).to_string() }}
+                                </button>
+                            }.into_any()
+                        }}
                     }.into_any()
                 } else {
                     view! { <span></span> }.into_any()

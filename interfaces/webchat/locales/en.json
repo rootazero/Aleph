@@ -16,6 +16,9 @@
     "delete": "Delete",
     "retry": "Retry",
     "confirm": "Confirm",
+    "confirm_delete": "Confirm delete?",
+    "confirm_regenerate": "Confirm regenerate?",
+    "confirm_dissolve": "Confirm disband?",
     "error": "An error occurred",
     "no_data": "No data available",
     "connect": "Connect to Gateway",
@@ -234,8 +237,7 @@
     "saving": "Saving…",
     "cancel": "Cancel",
     "prev_page": "Previous",
-    "next_page": "Next",
-    "confirm_delete": "Confirm delete?"
+    "next_page": "Next"
   },
   "logs": {
     "title": "Server Logs",
@@ -1152,8 +1154,6 @@
       "show_token": "Show token",
       "copy_token_title": "Copy token",
       "regenerate_token": "Regenerate Token",
-      "regen_confirm_title": "Regenerate token?",
-      "regen_confirm_desc": "All API clients using the current token will lose access.",
       "token_revealed_warning": "New token generated — copy it now. For security it is shown only once.",
       "token_hidden_notice": "For security, the access token is not displayed here.",
       "token_remote_hint": "To sign in from another device, use the pairing code or QR below.",

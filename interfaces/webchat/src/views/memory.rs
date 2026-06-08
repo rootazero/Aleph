@@ -520,30 +520,10 @@ fn MemoryRow(
     date: String,
     on_delete: impl Fn(()) + Clone + Send + 'static,
 ) -> impl IntoView {
-    let i18n = use_i18n();
-    // Two-step delete confirmation: the first click arms the same button into a
-    // "确认删除？" state; the second click deletes. Mirrors the cron page pattern.
+    // Two-step delete confirmation: the trash icon arms an inline "确认删除？"
+    // button (shared ConfirmButton); clicking elsewhere reverts it.
     let confirm = RwSignal::new(false);
-
-    // Auto-disarm after 4s so a half-pressed row doesn't stay armed (mirrors the
-    // chat sidebar's delete-confirm auto-dismiss).
-    Effect::new(move || {
-        if confirm.get() {
-            leptos::task::spawn_local(async move {
-                gloo_timers::future::TimeoutFuture::new(4000).await;
-                confirm.set(false);
-            });
-        }
-    });
-
-    let on_click = move |_| {
-        if confirm.get_untracked() {
-            confirm.set(false);
-            on_delete(());
-        } else {
-            confirm.set(true);
-        }
-    };
+    let on_confirm_delete = move || on_delete(());
 
     view! {
         <tr class="group hover:bg-surface-sunken transition-colors">
@@ -574,16 +554,11 @@ fn MemoryRow(
                 }>
                     {move || if confirm.get() {
                         view! {
-                            <button
-                                class="px-2.5 py-1 text-xs font-medium rounded-md bg-danger hover:bg-danger/80 text-white ring-2 ring-danger/50 ring-offset-1 ring-offset-surface animate-pulse transition-colors"
-                                on:click=on_click.clone()
-                            >
-                                {t!(i18n, memory.confirm_delete)}
-                            </button>
+                            <ConfirmButton confirming=confirm on_confirm=on_confirm_delete.clone() size_class="px-2.5 py-1 text-xs" />
                         }.into_any()
                     } else {
                         view! {
-                            <Button variant=ButtonVariant::Destructive size=ButtonSize::Sm class="p-1.5 h-auto".to_string() on:click=on_click.clone()>
+                            <Button variant=ButtonVariant::Destructive size=ButtonSize::Sm class="p-1.5 h-auto".to_string() on:click=move |_| confirm.set(true)>
                                 <svg width="16" height="16" attr:class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="3 6 5 6 21 6" />
                                     <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
