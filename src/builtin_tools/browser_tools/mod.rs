@@ -163,25 +163,73 @@ pub(crate) async fn make_backend_and_tab_guarded(
     Ok((backend, tab_id))
 }
 
+/// Default per-read size budget (in characters) for page-derived text flowing
+/// back to the LLM. A large `console` / `network` dump or `evaluate` result would
+/// otherwise flood the model context window unbounded; this caps every content
+/// read at a sane ceiling. `browser_snapshot` overrides it via its `max_chars` arg.
+pub(crate) const DEFAULT_CONTENT_MAX_CHARS: usize = 30_000;
+
+/// Coherently truncate `text` to at most `max_chars` characters, returning
+/// `(text, truncated)`.
+///
+/// Cuts back to the last line boundary within the budget so a `[ref=eN]` token
+/// — which the model needs intact to act on the element — is never split
+/// mid-way. Char-safe: indexes only on `char_indices` boundaries, never raw byte
+/// slices (P7 UTF-8 safety).
+pub(crate) fn bound_content(text: &str, max_chars: usize) -> (String, bool) {
+    // Byte index where the (max_chars)-th char starts; `None` => already within budget.
+    let byte_cut = match text.char_indices().nth(max_chars) {
+        Some((idx, _)) => idx,
+        None => return (text.to_string(), false),
+    };
+    let head = &text[..byte_cut];
+    // Prefer the last newline so we never emit a half line; fall back to the
+    // char boundary when the budget contains no line break.
+    let cut = head.rfind('\n').map(|p| p + 1).unwrap_or(byte_cut);
+    (text[..cut].to_string(), true)
+}
+
+/// Redact embedded secrets, then fence the untrusted page content with the
+/// prompt-injection boundary, in that order.
+///
+/// Operates on already-bounded text. Callers that need a size budget use
+/// [`redact_and_wrap`] (default budget); `browser_snapshot` pairs
+/// [`bound_content`] (with its own `max_chars`) with this directly.
+pub(crate) fn redact_wrap(manager: &ProfileManager, text: &str) -> String {
+    let redacted = manager.redact_content(text);
+    wrap_external_content(&redacted, ContentSource::BrowserContent)
+}
+
 /// Single egress chokepoint for browser page content flowing back to the LLM.
 ///
-/// Composes the two content-boundary transforms that every page-derived text
+/// Composes the three content-boundary transforms that every page-derived text
 /// read must pass through, in order:
 ///
-/// 1. **Secret redaction** (`ProfileManager::redact_content`) — the OUT half of
+/// 1. **Size budget** ([`bound_content`]) — caps the read at
+///    [`DEFAULT_CONTENT_MAX_CHARS`] so an oversized console / network / eval
+///    payload cannot flood the model context. Truncation lands on a line boundary.
+/// 2. **Secret redaction** (`ProfileManager::redact_content`) — the OUT half of
 ///    the secret-egress boundary: scrubs embedded credentials so they cannot
 ///    leak into the model context, memory, or provider requests. Symmetric to
 ///    the navigation-time `check_navigation` guard (the IN half).
-/// 2. **Prompt-injection wrapping** (`wrap_external_content`) — fences the
+/// 3. **Prompt-injection wrapping** (`wrap_external_content`) — fences the
 ///    untrusted page content so chat-template markers injected by a hostile page
 ///    cannot escape the boundary.
 ///
-/// Used by `browser_snapshot` / `browser_console` / `browser_network` /
-/// `browser_evaluate`. Routing every content read through one function keeps the
-/// ordering correct and guarantees future content tools inherit both guards.
+/// Used by `browser_console` / `browser_network` / `browser_evaluate`. Routing
+/// every content read through one function keeps the ordering correct and
+/// guarantees future content tools inherit all three guards.
 pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
-    let redacted = manager.redact_content(text);
-    wrap_external_content(&redacted, ContentSource::BrowserContent)
+    let (bounded, truncated) = bound_content(text, DEFAULT_CONTENT_MAX_CHARS);
+    let wrapped = redact_wrap(manager, &bounded);
+    if truncated {
+        format!(
+            "{wrapped}\n[content truncated to {DEFAULT_CONTENT_MAX_CHARS} chars; \
+             refine the action or read the page in smaller sections]"
+        )
+    } else {
+        wrapped
+    }
 }
 
 pub use click::{BrowserClickArgs, BrowserClickOutput, BrowserClickTool};
@@ -254,6 +302,37 @@ mod tests {
             Some("http://10.0.0.1/x")
         );
         assert_eq!(extract_tab_url(text, "9"), None);
+    }
+
+    #[test]
+    fn bound_content_keeps_short_text_intact() {
+        let (out, truncated) = bound_content("a\nb\nc", 100);
+        assert_eq!(out, "a\nb\nc");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn bound_content_truncates_on_line_boundary_without_splitting_refs() {
+        // Three lines, each a snapshot element with a [ref=] token. A budget that
+        // lands mid-third-line must cut back to the line boundary so no ref splits.
+        let snap = "- button \"A\" [ref=e1]\n- button \"B\" [ref=e2]\n- button \"C\" [ref=e3]";
+        // 30 chars lands inside the second line; expect only the first whole line.
+        let (out, truncated) = bound_content(snap, 30);
+        assert!(truncated);
+        assert!(out.ends_with('\n'), "cut must land on a line boundary: {out:?}");
+        // Every emitted [ref=…] token is whole (balanced bracket).
+        assert_eq!(out.matches("[ref=").count(), out.matches(']').count());
+        // The ref count of the EMITTED text is what callers report to the model.
+        assert_eq!(out.matches("[ref=").count(), 1);
+    }
+
+    #[test]
+    fn bound_content_is_char_safe_on_multibyte() {
+        // Budget falling between multibyte chars must never panic on a byte slice.
+        let s = "héllo wörld 你好世界 café";
+        let (out, truncated) = bound_content(s, 5);
+        assert!(truncated);
+        assert!(s.starts_with(&out) || out.is_empty());
     }
 
     #[test]
