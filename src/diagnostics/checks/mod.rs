@@ -10,9 +10,11 @@ pub mod config_parse;
 pub mod data_dir;
 pub mod hooks_consent;
 pub mod stale_lock;
+pub mod vault;
 
 pub use browser_runtime::BrowserRuntimeCheck;
 pub use config_parse::ConfigParseCheck;
 pub use data_dir::DataDirCheck;
 pub use hooks_consent::HooksConsentCheck;
 pub use stale_lock::StaleLockCheck;
+pub use vault::VaultCheck;

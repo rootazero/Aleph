@@ -553,10 +553,18 @@ async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
 
 /// Compare the CLI's own version with the version reported by the running
 /// daemon. A mismatch is the classic "upgraded the binary but never restarted
-/// the daemon" footgun (the supervisor keeps the old process alive). The
-/// workspace pins one version across both crates, so equality is meaningful.
+/// the daemon" footgun (the supervisor keeps the old process alive).
+///
+/// Both sides MUST read the same authoritative source for the comparison to be
+/// meaningful: the daemon's `gateway.identity.get` reports `env!("ALEPH_VERSION")`
+/// (injected by `build.rs` from the `VERSION` file — the CalVer single source of
+/// truth), so the CLI compares against the same `ALEPH_VERSION` rather than
+/// `CARGO_PKG_VERSION`. The two coincide after `just release` (which mirrors
+/// VERSION into Cargo.toml) but diverge whenever VERSION is bumped ahead of the
+/// manifest — using CARGO_PKG_VERSION there would compare different sources and
+/// fire a spurious "restart the daemon" warning against an identical build.
 async fn check_daemon_version(server_url: &str) -> DoctorCheck {
-    let cli = env!("CARGO_PKG_VERSION");
+    let cli = env!("ALEPH_VERSION");
     match call_rpc(server_url, "gateway.identity.get").await {
         Ok(value) => {
             let daemon = value.get("version").and_then(|v| v.as_str()).unwrap_or("");
