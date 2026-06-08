@@ -986,9 +986,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             use alephcore::event::{
                 EventBus, EventContext, EventFilter, EventHandler, EventType, GlobalBus,
             };
+            use alephcore::teams::messages::{Aggregator, AggregatorConfig};
             use alephcore::teams::TeamNotifier;
 
-            let notifier = Arc::new(TeamNotifier::new(team_store, coord_store, msg_router));
+            // Wrap the router so concurrent task-completion / failure-storm
+            // notifications coalesce into a single leader delivery (see
+            // TeamNotifier module docs).
+            let sink = Aggregator::new(msg_router, AggregatorConfig::default());
+            let notifier = Arc::new(TeamNotifier::new(team_store, coord_store, sink));
             let dummy_bus = EventBus::new();
             let ctx = EventContext::new(dummy_bus);
 

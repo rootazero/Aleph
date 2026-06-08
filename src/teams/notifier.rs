@@ -9,13 +9,26 @@
 //! This is the "AI comes to you" wire (R5): autonomous team progress flows
 //! back through the team's own messaging system rather than requiring the user
 //! to poll a board.
+//!
+//! Outbound notifications go through the [`Aggregator`] rather than the raw
+//! router. The dispatcher runs team tasks **concurrently**, so the final batch
+//! of tasks can reach a terminal state within the same instant: every
+//! `TeamTaskCompleted` handler then observes `team_work_finished() == true` and
+//! a naive router send would deliver one "Team work complete" message *per*
+//! final task (and one alert per task in a failure storm). The aggregator keys
+//! by `(team_id, from, to, msg_type, subject)`, so those simultaneous,
+//! same-subject notifications coalesce into a single delivery inside the flush
+//! window — collapsing the burst to one leader notification without any
+//! per-notifier state. Decision-loaded traffic (approvals/shutdowns) bypasses
+//! batching automatically; the dispatcher only ever emits `SystemNotification`.
 
 use async_trait::async_trait;
 
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::event::{AlephEvent, EventContext, EventHandler, EventType, HandlerError};
 use crate::sync_primitives::Arc;
-use crate::teams::messages::router::{MessageRouter, SendRequest};
+use crate::teams::messages::aggregator::Aggregator;
+use crate::teams::messages::router::SendRequest;
 use crate::teams::messages::types::MessageType;
 use crate::teams::store::TeamStore;
 
@@ -26,19 +39,23 @@ const NOTIFIER_SENDER: &str = "team_dispatcher";
 pub struct TeamNotifier {
     team_store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
-    msg_router: Arc<MessageRouter>,
+    /// Batched outbound sink. Wraps the team
+    /// [`MessageRouter`](crate::teams::messages::MessageRouter) so that bursts
+    /// of same-subject notifications (concurrent task completions / failure
+    /// storms) coalesce into one leader delivery. See the module docs.
+    sink: Arc<Aggregator>,
 }
 
 impl TeamNotifier {
     pub fn new(
         team_store: Arc<dyn TeamStore>,
         coord_store: Arc<dyn CoordTaskStore>,
-        msg_router: Arc<MessageRouter>,
+        sink: Arc<Aggregator>,
     ) -> Self {
         Self {
             team_store,
             coord_store,
-            msg_router,
+            sink,
         }
     }
 
@@ -55,9 +72,11 @@ impl TeamNotifier {
                 return;
             }
         };
-        let send = self
-            .msg_router
-            .send(SendRequest {
+        // Batched, fire-and-forget: same-subject bursts collapse to one delivery
+        // inside the flush window. Errors during the deferred flush are logged
+        // by the aggregator itself (the caller has no thread to receive them).
+        self.sink
+            .send_batched(SendRequest {
                 team_id: team_id.to_string(),
                 from_agent: NOTIFIER_SENDER.to_string(),
                 to: vec![leader],
@@ -69,9 +88,6 @@ impl TeamNotifier {
                 attachments: vec![],
             })
             .await;
-        if let Err(e) = send {
-            tracing::debug!(team_id, error = %e, "TeamNotifier: leader notification failed");
-        }
     }
 
     /// Whether every task on the team has reached a terminal state.
