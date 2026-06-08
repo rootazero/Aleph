@@ -60,10 +60,7 @@ impl PromptLayer for ToolsLayer {
             if let Some(ref index) = input.config.tool_index {
                 output.push_str("### Additional Tools (use `get_tool_schema` to get parameters)\n");
                 output.push_str(
-                    "The following tools are available but not shown with full parameters.\n",
-                );
-                output.push_str(
-                    "Call `search_tools(query)` to find one by keyword, then `get_tool_schema(tool_name)` to get the complete parameter schema before using.\n\n",
+                    "Available but not shown with full parameters. Use `search_tools(query)` to find one, then `get_tool_schema(tool_name)` for its schema before use.\n\n",
                 );
                 output.push_str(index);
                 output.push('\n');

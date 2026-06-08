@@ -110,14 +110,10 @@ impl PromptLayer for ProviderGuidanceLayer {
 /// (see hermes-agent/agent/prompt_builder.py:254).
 const TOOL_USE_ENFORCEMENT: &str = "## Tool-Use Enforcement\n\
 \n\
-You MUST use your tools to take action — do not describe what you would do or plan to do \
-without actually doing it. When you say you will perform an action (\"I will run the tests\", \
-\"Let me check the file\"), you MUST immediately make the corresponding tool call in the same \
-response. Never end your turn with a promise of future action — execute it now.\n\
-\n\
-Keep working until the task is actually complete. Every response should either (a) contain tool \
-calls that make progress, or (b) deliver a final result. Responses that only describe intentions \
-without acting are not acceptable.";
+Use tools to act — never just describe or promise action. When you say you will do something \
+(\"I'll run the tests\", \"Let me check the file\"), make the tool call in the SAME response; \
+never end a turn on a promise. Keep going until the task is complete: every response either makes \
+progress via tool calls or delivers a final result.";
 
 /// Protocol-neutral persistence doctrine — emitted to every provider
 /// including Anthropic. Captures the "keep trying alternative tools and
@@ -139,19 +135,19 @@ verdict on the goal.\n\
 - Keep calling tools until (1) the task is complete AND (2) you have verified the result.\n\
 \n\
 **Web/external-data fallback ladder** — when fetching online content:\n\
-1. `search` with refined keywords (try synonyms, broader/narrower scope, different engines if configured).\n\
-2. `web_fetch` on a canonical URL of the same resource.\n\
-3. `web_fetch` on an alternate reputable source (BBC, AP, NYT, Wikipedia, mirrors, official feeds, etc.).\n\
-4. Browser-based tools (chrome-devtools MCP, playwright, or the `autocli` skill) for sites that gate API or headless access.\n\
-At least TWO rungs of this ladder must have been attempted before `fail`.\n\
+1. `search` with refined keywords (synonyms, broader/narrower scope, other engines).\n\
+2. `web_fetch` a canonical URL of the same resource.\n\
+3. `web_fetch` an alternate reputable source (BBC, AP, Wikipedia, mirrors, official feeds).\n\
+4. Browser tools (chrome-devtools MCP, playwright, `autocli` skill) for API-/headless-gated sites.\n\
+Climb at least TWO rungs before `fail`.\n\
 \n\
-**Ceiling** — when ~3 distinct routes for the same datum fail the same way (403/404/anti-bot/empty or JS-only bodies), it is gated; more same-class URLs are not progress. Escalate tool CLASS once (a browser/`autocli`/skill route on the user's logged-in session); if that is also blocked, deliver with the data you DID obtain and state the gap plainly. A blocked source is a method failure, never grounds to abandon the task or loop forever switching sources.\n\
+**Ceiling** — when ~3 distinct routes for the same datum fail the same way (403/404/anti-bot/JS-only), it is gated; more same-class URLs aren't progress. Escalate tool CLASS once (browser/`autocli`/skill on the user's logged-in session); if still blocked, deliver what you DID obtain and state the gap. A blocked source is method failure — never grounds to abandon the task or loop forever switching sources.\n\
 \n\
-**Mandatory tool use** — NEVER answer these from memory:\n\
-- Arithmetic / hashes / encodings → run them via a tool.\n\
-- Current time, date, timezone → query the system.\n\
+**Mandatory tool use** — NEVER answer from memory:\n\
+- Arithmetic / hashes / encodings → run via a tool.\n\
+- Time / date / timezone → query the system.\n\
 - File contents / sizes / line counts → read the files.\n\
-- System state (OS, CPU, processes, ports) → query the live system.\n\
+- System state (OS, CPU, processes, ports) → query live.\n\
 - Current facts (weather, news, versions) → search.";
 
 /// OpenAI / Codex / Grok — tail of the original execution-discipline block.
@@ -178,8 +174,7 @@ const GOOGLE_OPERATIONAL_DIRECTIVES: &str = "## Google Model Operational Directi
 contents.\n\
 - **Dependency checks**: never assume a library is available; check package.json / requirements.txt \
 / Cargo.toml first.\n\
-- **Conciseness**: keep explanatory text brief — a few sentences, not paragraphs. Still narrate \
-each step in one short line (what you're doing and why); just keep it tight.\n\
+- **Conciseness**: narrate each step in one short line (what + why); no paragraphs.\n\
 - **Parallel tool calls**: when independent operations are needed (reading several files, for \
 example), make all the calls in a single response rather than sequentially.\n\
 - **Non-interactive commands**: pass flags like `-y`, `--yes`, `--non-interactive` to prevent CLI \

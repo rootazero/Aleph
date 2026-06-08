@@ -46,10 +46,8 @@ impl PromptLayer for AgentCatalogLayer {
 
         output.push_str("## Available Agents\n\n");
         output.push_str(
-            "You can delegate tasks to specialized sub-agents using the `delegate` tool.\n",
-        );
-        output.push_str(
-            "Use `agent_info(agent_id)` to get detailed capabilities before delegating.\n\n",
+            "Delegate tasks to specialized sub-agents with the `delegate` tool; call \
+             `agent_info(agent_id)` first to see a candidate's full capabilities.\n\n",
         );
         output.push_str(&build_agent_catalog_xml(&visible));
         output.push_str("\n\n");
