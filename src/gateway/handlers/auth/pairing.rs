@@ -584,6 +584,67 @@ pub async fn handle_pairing_start_browser(
     )
 }
 
+/// Handle "pairing.start_node" — anonymous RPC from a tokenless
+/// `aleph-server node`. Creates a `node` pairing record and emits
+/// `PairingRequested` so the operator's Panel pops the approve card.
+/// Reachable without a token (see `allow_unauth_browser_pairing`); the
+/// security boundary is the operator's 1-click approve.
+pub async fn handle_pairing_start_node(
+    request: JsonRpcRequest,
+    ctx: Arc<AuthContext>,
+) -> JsonRpcResponse {
+    #[derive(Debug, Deserialize)]
+    struct StartNodeParams {
+        node_name: String,
+    }
+
+    let params: StartNodeParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let (code, expires_at) = match ctx.pairing_manager.request_node_pairing(&params.node_name) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "Failed to create node pairing");
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to create node pairing: {}", e),
+            );
+        }
+    };
+
+    if let Err(e) = ctx
+        .event_bus
+        .publish_frame(&GatewayEventFrame::PairingRequested {
+            device_name: params.node_name.clone(),
+        })
+    {
+        warn!(error = %e, "Failed to publish PairingRequested frame");
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let expires_in_secs = if expires_at > now_ms {
+        ((expires_at - now_ms) / 1000) as u64
+    } else {
+        0
+    };
+
+    info!(code = %code, node = %params.node_name, "Node pairing started");
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "code": code,
+            "expires_at": expires_at,
+            "expires_in_secs": expires_in_secs,
+        }),
+    )
+}
+
 /// Handle "pairing.poll" — anonymous polling RPC the `/pair` HTML page
 /// hits every ~2s. Returns one of:
 /// - `{"status": "pending"}` while the operator hasn't decided yet
@@ -938,6 +999,40 @@ mod tests {
             ctx.pairing_manager.poll_browser_pairing(&code),
             PollState::Expired,
             "second poll is single-use Expired"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_node_returns_six_digit_code() {
+        let ctx = super::super::tests::create_test_context();
+        let resp = handle_pairing_start_node(
+            JsonRpcRequest::new(
+                "pairing.start_node",
+                Some(json!({ "node_name": "worker-1" })),
+                Some(json!(1)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        assert!(
+            resp.is_success(),
+            "start_node should succeed: {:?}",
+            resp.error
+        );
+        let code = resp
+            .result
+            .unwrap()
+            .get("code")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+        // The pending row is a node row, pollable as Pending.
+        assert_eq!(
+            ctx.pairing_manager.poll_browser_pairing(&code),
+            crate::gateway::security::PollState::Pending
         );
     }
 
