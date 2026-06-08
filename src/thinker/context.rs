@@ -225,6 +225,11 @@ pub struct ResolvedContext {
     /// work, so the layer emits nothing and the prompt is byte-identical.
     #[serde(skip, default)]
     pub execution_plan: Option<String>,
+    /// Active standing-goal summary, rendered by `StandingGoalLayer`
+    /// (priority 1754) as `<standing_goal>`. Populated from `GoalStore` in
+    /// the harness bridge; `None` (no active goal) emits nothing.
+    #[serde(skip, default)]
+    pub standing_goal: Option<String>,
 }
 
 /// Context Aggregator for reconciling interaction and security layers
@@ -299,6 +304,7 @@ impl ContextAggregator {
             runtime_state_blocks: Vec::new(),
             sandbox_summary: None,
             execution_plan: None,
+            standing_goal: None,
         }
     }
 

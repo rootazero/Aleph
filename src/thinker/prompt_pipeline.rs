@@ -340,6 +340,7 @@ impl PromptPipeline {
             Box::new(MemoryAugmentationLayer),
             Box::new(MemoryProtocolLayer),
             Box::new(SessionContextGuideLayer),
+            Box::new(StandingGoalLayer),
             Box::new(ExecutionPlanLayer),
             Box::new(SessionResumeLayer),
             Box::new(LanguageLayer),
@@ -902,10 +903,12 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"chain_context"));
         // ExecutionPlanLayer re-surfaces the active scratchpad plan per turn.
         assert!(dynamic_names.contains(&"execution_plan"));
+        // StandingGoalLayer re-surfaces the active standing goal per turn.
+        assert!(dynamic_names.contains(&"standing_goal"));
         assert_eq!(
             dynamic_names.len(),
-            12,
-            "Exactly 12 dynamic layers expected"
+            13,
+            "Exactly 13 dynamic layers expected"
         );
     }
 
