@@ -12,9 +12,10 @@
 //! decide whether the predicate is static (`move || true`) or signal-driven
 //! (`move || providers.get().iter().any(...)`).
 //!
-//! Not used by the OAuth `SubscriptionLoginSection` row in `providers/list.rs` —
-//! that row has a `w-10 h-10` icon, a trailing arrow chevron, and a tri-state
-//! connected/verified badge sequence; structurally distinct enough to stay inline.
+//! Also supports OAuth-style rows (e.g. the `SubscriptionLoginSection` row in
+//! `providers/list.rs`) via the optional `large_icon` prop (`w-10 h-10` icon
+//! tile) and the optional `trailing` slot (a right-pushed element such as a
+//! chevron). Prefer these props over writing a new inline row.
 
 use leptos::prelude::*;
 

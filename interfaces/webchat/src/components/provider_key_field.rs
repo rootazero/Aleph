@@ -9,11 +9,6 @@ use crate::components::ui::secret_input::SecretInput;
 use crate::i18n::*;
 use leptos::prelude::*;
 
-/// Pure helper kept for unit testing the placeholder branch decision.
-fn key_placeholder_is_configured(has: bool) -> bool {
-    has
-}
-
 /// A provider API-key input that never pre-fills the stored secret.
 ///
 /// - `value` always starts empty; empty on save = keep existing key.
@@ -40,7 +35,7 @@ pub fn ProviderKeyField(
     view! {
         <div>
             {move || {
-                if key_placeholder_is_configured(has_api_key.get()) {
+                if has_api_key.get() {
                     view! {
                         <SecretInput
                             value=value.into()
@@ -72,16 +67,5 @@ pub fn ProviderKeyField(
                 }}
             </p>
         </div>
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn placeholder_branch_follows_has_key() {
-        assert!(key_placeholder_is_configured(true));
-        assert!(!key_placeholder_is_configured(false));
     }
 }
