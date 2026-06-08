@@ -113,7 +113,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 })
             }
 
-            "mcp" => self.execute_mcp_tool(run_id, &mode, request, emitter).await,
+            "mcp" => {
+                // MCP tools cannot run on the L0 fast path: it dispatches
+                // through `BuiltinToolRegistry`, which only knows builtin +
+                // plugin tools and holds no MCP client handle. The sole place an
+                // MCP tool actually executes is the full agent loop, where
+                // `McpToolAdapter` / `ScopedToolService` carry the live
+                // transport. So fall through — exactly like `skill` / `custom` —
+                // and let the LLM invoke the loop-visible MCP tool from the
+                // original `/<tool> <args>` input.
+                //
+                // (Previously this arm called a deterministic `execute_mcp_tool`
+                // that built a `mcp__<server>_<tool>` name and handed it to
+                // `BuiltinToolRegistry::execute_tool`, which has no MCP arm — so
+                // every MCP slash command hard-failed with "Unknown tool" and
+                // never reached the loop that could serve it.)
+                let server = mode["server_name"].as_str().unwrap_or("mcp");
+                Err(ExecutionError::Fallthrough {
+                    reason: format!("mcp command '{}'", server),
+                })
+            }
 
             "custom" => {
                 // Custom commands need LLM with a custom system prompt — fall through
@@ -204,71 +223,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         }
     }
 
-    /// Execute an MCP tool slash command.
-    async fn execute_mcp_tool<E: EventEmitter + Send + Sync + 'static>(
-        &self,
-        run_id: &str,
-        mode: &serde_json::Value,
-        request: &RunRequest,
-        emitter: Arc<E>,
-    ) -> Result<String, ExecutionError> {
-        let server_name = mode["server_name"].as_str().unwrap_or("");
-        let tool_name = mode["tool_name"].as_str();
-        let mcp_tool_id = if let Some(tn) = tool_name {
-            format!("mcp__{}_{}", server_name, tn)
-        } else {
-            format!("mcp__{}", server_name)
-        };
-        let args_str = mode["args"].as_str().unwrap_or("");
-
-        let arguments = serde_json::json!({
-            "input": args_str,
-            "args": args_str,
-            "input_text": request.input,
-        });
-
-        let _ = emitter
-            .emit(StreamEvent::Reasoning {
-                run_id: run_id.to_string(),
-                seq: 0,
-                content: format!("Executing MCP tool /{} ...", server_name),
-                is_complete: true,
-            })
-            .await;
-
-        match self
-            .tool_registry
-            .execute_tool(&mcp_tool_id, arguments)
-            .await
-        {
-            Ok(result) => {
-                let response = if let Some(s) = result.as_str() {
-                    s.to_string()
-                } else {
-                    serde_json::to_string_pretty(&result).unwrap_or_default()
-                };
-
-                let _ = emitter
-                    .emit(StreamEvent::ResponseChunk {
-                        run_id: run_id.to_string(),
-                        seq: 1,
-                        delta: response.clone(),
-                        content: response.clone(),
-                        full_text: String::new(),
-                        chunk_index: 0,
-                        is_final: true,
-                        is_intermediate: false,
-                    })
-                    .await;
-
-                Ok(response)
-            }
-            Err(e) => Err(ExecutionError::Failed(format!(
-                "MCP tool '{}' execution failed: {}",
-                mcp_tool_id, e
-            ))),
-        }
-    }
 }
 
 /// Build tool arguments from slash command args, mapping to the correct field
