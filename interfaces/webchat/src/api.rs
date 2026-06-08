@@ -16,6 +16,7 @@ pub mod acp;
 pub mod agent_config;
 pub mod agent_run;
 pub mod browser;
+pub mod tauri_bridge;
 pub mod config;
 pub mod discord;
 pub mod embedding;
