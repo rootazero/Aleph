@@ -1498,7 +1498,6 @@ impl BuiltinToolRegistry {
             if let Some(ref state_db) = config.state_db {
                 let handler = Arc::new(crate::memory::events::handler::MemoryCommandHandler::new(
                     Arc::clone(state_db),
-                    Some(db.clone()),
                 ));
                 tool = tool.with_command_handler(handler);
             }

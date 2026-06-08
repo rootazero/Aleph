@@ -14,7 +14,6 @@ use crate::memory::events::{EventActor, MemoryEvent, MemoryEventEnvelope};
 use crate::memory::notes::store::NoteStore;
 use crate::memory::notes::{sanitize_title, KnowledgeNote, NoteIndexer};
 use crate::memory::store::sqlite::SqliteMemoryBackend;
-use crate::memory::store::MemoryBackend;
 use crate::resilience::database::StateDatabase;
 use crate::routing::DEFAULT_AGENT_ID;
 
@@ -22,18 +21,15 @@ use super::commands::*;
 
 pub struct MemoryCommandHandler {
     db: Arc<StateDatabase>,
-    #[allow(dead_code)] // reserved: memory backend handle, not yet consumed
-    memory_store: Option<MemoryBackend>,
     /// NoteIndexer for the notes write path.
     /// When present, every create/update/delete also writes to the notes filesystem layer.
     note_indexer: Option<Arc<NoteIndexer<SqliteMemoryBackend>>>,
 }
 
 impl MemoryCommandHandler {
-    pub fn new(db: Arc<StateDatabase>, memory_store: Option<MemoryBackend>) -> Self {
+    pub fn new(db: Arc<StateDatabase>) -> Self {
         Self {
             db,
-            memory_store,
             note_indexer: None,
         }
     }
@@ -409,7 +405,7 @@ mod tests {
 
     fn make_handler() -> MemoryCommandHandler {
         let db = Arc::new(crate::resilience::database::StateDatabase::in_memory().unwrap());
-        MemoryCommandHandler::new(db, None)
+        MemoryCommandHandler::new(db)
     }
 
     /// Helper: create a fact and return (handler, fact_id)
