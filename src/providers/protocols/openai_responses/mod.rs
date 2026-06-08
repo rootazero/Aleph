@@ -248,10 +248,12 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
     }
 
     /// Share the Chat protocol's canonicalization (no-dash typos, `openai/`
-    /// prefix). Previously the Responses adapter used the trait default
-    /// pass-through, so aggregator-leaked ids reached `/v1/responses` raw.
+    /// prefix). Endpoint-blind hook (assumes first-party OpenAI); `build_request`
+    /// calls [`normalize_openai_model_id`] directly with the configured
+    /// `base_url` so the `openai/` slug survives on aggregators (OpenRouter,
+    /// which ships an `openai-responses` preset).
     fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
-        super::openai_common::model_id::normalize_openai_model_id(model_id)
+        super::openai_common::model_id::normalize_openai_model_id(model_id, None)
     }
 
     fn build_request(
@@ -268,7 +270,13 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             .model
             .as_deref()
             .unwrap_or_else(|| config.default_model());
-        let actual_model = self.normalize_model_id(raw_model);
+        // Endpoint-aware: keep the `openai/` slug on aggregators (OpenRouter),
+        // strip it on the first-party OpenAI Responses API. See `model_id`.
+        let actual_model =
+            super::openai_common::model_id::normalize_openai_model_id(
+                raw_model,
+                config.base_url.as_deref(),
+            );
         let request = Self::build_responses_request(payload, &actual_model, &self.variant, config);
 
         let api_key = config

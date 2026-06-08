@@ -40,7 +40,14 @@ impl ProtocolAdapter for OpenAiProtocol {
             .model
             .as_deref()
             .unwrap_or_else(|| config.default_model());
-        let model_name = self.normalize_model_id(raw_model).into_owned();
+        // Endpoint-aware: preserves the `openai/` slug on aggregators (OpenRouter)
+        // while stripping it on the first-party OpenAI API. See `model_id`.
+        let model_name =
+            crate::providers::protocols::openai_common::model_id::normalize_openai_model_id(
+                raw_model,
+                config.base_url.as_deref(),
+            )
+            .into_owned();
 
         // Build request body — always streaming (stream-first architecture).
         // `stream_options.include_usage` makes OpenAI emit a trailing chunk
@@ -457,10 +464,14 @@ impl ProtocolAdapter for OpenAiProtocol {
 
     /// Forgive common OpenAI model-id typos that production users hit.
     ///
-    /// Delegates to the shared [`normalize_openai_model_id`] so the Chat and
-    /// Responses protocols can never drift on canonicalization rules.
+    /// Endpoint-blind hook (the trait signature carries no `base_url`), so it
+    /// assumes the first-party OpenAI host. The hot path in `build_request`
+    /// instead calls [`normalize_openai_model_id`] directly with the configured
+    /// `base_url`, which preserves the `openai/` slug on aggregators.
     fn normalize_model_id<'a>(&self, model_id: &'a str) -> std::borrow::Cow<'a, str> {
-        crate::providers::protocols::openai_common::model_id::normalize_openai_model_id(model_id)
+        crate::providers::protocols::openai_common::model_id::normalize_openai_model_id(
+            model_id, None,
+        )
     }
 }
 
