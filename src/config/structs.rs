@@ -31,6 +31,10 @@ fn default_marketplace_type() -> String {
     "github".to_string()
 }
 
+fn is_default_session(s: &crate::routing::config::SessionConfig) -> bool {
+    s == &crate::routing::config::SessionConfig::default()
+}
+
 // =============================================================================
 // Config
 // =============================================================================
@@ -185,6 +189,11 @@ pub struct Config {
     /// Maps channel/peer patterns to specific agents using RouteBinding
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bindings: Vec<crate::routing::config::RouteBinding>,
+    /// 会话隔离策略（DM scope）。单用户 owner 设 `dm_scope = "main"`
+    /// 可让各 channel 的 DM 坍缩到同一 agent 的 Main 会话（一脑多端连续上下文）。
+    /// 默认 `per-peer`（多用户安全）。
+    #[serde(default, skip_serializing_if = "is_default_session")]
+    pub session: crate::routing::config::SessionConfig,
     /// Plugin marketplace registrations
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub plugin_marketplaces: HashMap<String, PluginMarketplaceEntry>,
@@ -411,6 +420,7 @@ impl Default for Config {
             execution: ExecutionConfig::default(),
             agents: AgentsConfig::default(),
             bindings: Vec::new(),
+            session: crate::routing::config::SessionConfig::default(),
             plugin_marketplaces: HashMap::new(),
             stop_hooks: Vec::new(),
             guardrails: None,
@@ -434,5 +444,37 @@ impl Config {
     /// Create a new config with default values
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+#[cfg(test)]
+mod session_block_tests {
+    use super::Config;
+    use crate::routing::session_key::DmScope;
+
+    #[test]
+    fn session_block_parses_main() {
+        let toml_str = r#"
+            [session]
+            dm_scope = "main"
+        "#;
+        let cfg: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.session.dm_scope, DmScope::Main);
+    }
+
+    #[test]
+    fn session_block_defaults_to_per_peer_when_absent() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert_eq!(cfg.session.dm_scope, DmScope::PerPeer);
+    }
+
+    #[test]
+    fn default_config_omits_session_block_when_serialized() {
+        let cfg = Config::default();
+        let toml_str = toml::to_string(&cfg).unwrap();
+        assert!(
+            !toml_str.contains("[session]"),
+            "default config should not emit a [session] block, got:\n{toml_str}"
+        );
     }
 }
