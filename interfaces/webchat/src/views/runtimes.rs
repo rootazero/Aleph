@@ -1,10 +1,13 @@
 //! Runtimes dashboard view — read-only runtime status + one-click install.
 
-use crate::api::runtimes::{RuntimeInfo, RuntimeStatus, RuntimesApi};
+use crate::api::runtimes::{
+    InstallProgress, RuntimeInfo, RuntimeStatus, RuntimesApi, RUNTIME_INSTALL_PROGRESS_TOPIC,
+};
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use std::collections::HashMap;
 
 #[component]
 pub fn RuntimesView() -> impl IntoView {
@@ -13,6 +16,9 @@ pub fn RuntimesView() -> impl IntoView {
     let runtimes = RwSignal::new(Vec::<RuntimeInfo>::new());
     let loading = RwSignal::new(true);
     let error_msg = RwSignal::new(Option::<String>::None);
+    // Live install progress, keyed by capability name. Fed by the
+    // `runtimes.install.progress` event stream below.
+    let progress = RwSignal::new(HashMap::<String, InstallProgress>::new());
 
     {
         spawn_local(async move {
@@ -24,6 +30,48 @@ pub fn RuntimesView() -> impl IntoView {
                 Err(e) => error_msg.set(Some(e)),
             }
             loading.set(false);
+        });
+    }
+
+    // Subscribe to live install progress and reflect it on the cards. The
+    // backend pushes `started`/`log`/`done`/`failed` events; on `done` we
+    // refresh the ledger so the card flips to its new (Ready/Stale) status.
+    {
+        let handler_id = state.subscribe_events(move |ev| {
+            if ev.topic != RUNTIME_INSTALL_PROGRESS_TOPIC {
+                return;
+            }
+            let Ok(p) = serde_json::from_value::<InstallProgress>(ev.data.clone()) else {
+                return;
+            };
+            match p.status.as_str() {
+                "done" => {
+                    progress.update(|m| {
+                        m.remove(&p.step);
+                    });
+                    spawn_local(async move {
+                        if let Ok(r) = RuntimesApi::list(&state).await {
+                            runtimes.set(r.runtimes);
+                        }
+                    });
+                }
+                _ => {
+                    progress.update(|m| {
+                        m.insert(p.step.clone(), p);
+                    });
+                }
+            }
+        });
+
+        spawn_local(async move {
+            let _ = state.subscribe_topic(RUNTIME_INSTALL_PROGRESS_TOPIC).await;
+        });
+
+        on_cleanup(move || {
+            state.unsubscribe_events(handler_id);
+            spawn_local(async move {
+                let _ = state.unsubscribe_topic(RUNTIME_INSTALL_PROGRESS_TOPIC).await;
+            });
         });
     }
 
@@ -76,7 +124,7 @@ pub fn RuntimesView() -> impl IntoView {
                             <For
                                 each=move || runtimes.get()
                                 key=|r| r.name.clone()
-                                children=move |r| view! { <RuntimeCard info=r runtimes=runtimes error_msg=error_msg /> }
+                                children=move |r| view! { <RuntimeCard info=r runtimes=runtimes error_msg=error_msg progress=progress /> }
                             />
                         </div>
                     }.into_any()
@@ -91,11 +139,26 @@ fn RuntimeCard(
     info: RuntimeInfo,
     runtimes: RwSignal<Vec<RuntimeInfo>>,
     error_msg: RwSignal<Option<String>>,
+    progress: RwSignal<HashMap<String, InstallProgress>>,
 ) -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let installing = RwSignal::new(false);
     let name = info.name.clone();
+
+    // This card's live install progress, if any.
+    let my_progress = {
+        let name = info.name.clone();
+        Signal::derive(move || progress.get().get(&name).cloned())
+    };
+    // An install is in flight while a non-terminal progress event is the latest
+    // one for this capability (or the click handler is mid-flight).
+    let is_active = Signal::derive(move || {
+        installing.get()
+            || my_progress
+                .get()
+                .is_some_and(|p| matches!(p.status.as_str(), "started" | "log"))
+    });
 
     let (icon, icon_class) = match info.status {
         RuntimeStatus::Ready => ("✓", "text-success"),
@@ -159,10 +222,10 @@ fn RuntimeCard(
                 {can_install.then(|| view! {
                     <button
                         on:click=install_handler
-                        disabled=move || installing.get()
+                        disabled=move || is_active.get()
                         class="px-3 py-1.5 bg-primary text-white rounded text-sm font-medium disabled:opacity-50"
                     >
-                        {move || if installing.get() {
+                        {move || if is_active.get() {
                             t_string!(i18n, runtimes.installing).to_string()
                         } else {
                             t_string!(i18n, runtimes.install).to_string()
@@ -174,6 +237,27 @@ fn RuntimeCard(
                     <span class="text-xs text-text-tertiary italic">{t!(i18n, runtimes.install_manually)}</span>
                 })}
             </div>
+            // Live install progress strip: an indeterminate bar + latest log line
+            // while running, or the real error/stderr on failure.
+            {move || my_progress.get().map(|p| {
+                if p.status == "failed" {
+                    let detail = p.error.clone().or(p.stderr.clone()).unwrap_or_default();
+                    view! {
+                        <div class="mt-3 text-xs text-danger break-words">{detail}</div>
+                    }.into_any()
+                } else {
+                    let line = p.log_line.clone()
+                        .unwrap_or_else(|| t_string!(i18n, runtimes.installing).to_string());
+                    view! {
+                        <div class="mt-3 space-y-1">
+                            <div class="h-1 w-full bg-surface-sunken rounded overflow-hidden">
+                                <div class="h-full w-1/3 bg-primary rounded animate-pulse"></div>
+                            </div>
+                            <div class="text-xs text-text-tertiary truncate">{line}</div>
+                        </div>
+                    }.into_any()
+                }
+            })}
         </div>
     }
 }

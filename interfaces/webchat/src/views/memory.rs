@@ -378,7 +378,7 @@ fn FactsTable(
             <table class="w-full text-left border-collapse">
                 <thead>
                     <tr class="bg-surface-sunken text-[10px] font-bold text-text-tertiary uppercase tracking-widest">
-                        <th class="p-4 pl-8">{t!(i18n, memory.col_content)}</th>
+                        <th class="p-4 pl-8">{t!(i18n, memory.col_title)}</th>
                         <th class="p-4">{t!(i18n, memory.col_agent)}</th>
                         <th class="p-4">{t!(i18n, memory.col_type)}</th>
                         <th class="p-4 pr-8">{t!(i18n, memory.col_date)}</th>
