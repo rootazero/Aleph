@@ -14,12 +14,10 @@ pub mod installer;
 pub mod manifest;
 pub mod preprocess;
 pub mod prompt;
-pub mod recaller;
 pub mod registry;
 mod shared;
 pub mod snapshot;
 pub mod status;
-pub mod tools;
 pub mod usage;
 
 pub use compat::SkillInfo;
@@ -208,6 +206,22 @@ impl SkillSystem {
             .collect()
     }
 
+    /// Whether the skill's primary API-key env var is present in the process
+    /// environment.
+    ///
+    /// Mirrors the `required_env` source-of-truth used by
+    /// [`crate::skill::eligibility::EligibilityService`] (which checks
+    /// `std::env::var`), so the status surface stays consistent with
+    /// eligibility instead of always reporting "key missing". Skills with no
+    /// `primary_env` declared have no key to set and return `false` (the
+    /// status builder only consults this flag when `primary_env` is `Some`).
+    fn api_key_present(manifest: &SkillManifest) -> bool {
+        manifest
+            .primary_env()
+            .map(|env| std::env::var(env).is_ok())
+            .unwrap_or(false)
+    }
+
     /// Build status entries for all registered skills.
     pub async fn skill_status(&self) -> Vec<SkillStatusEntry> {
         let config_value = crate::config::Config::load()
@@ -220,7 +234,7 @@ impl SkillSystem {
             .into_iter()
             .map(|m| {
                 let result = self.inner.eligibility.evaluate(m, &config_value);
-                SkillStatusEntry::build(m, &result, None, false, None)
+                SkillStatusEntry::build(m, &result, None, Self::api_key_present(m), None)
             })
             .collect();
         entries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
@@ -275,8 +289,7 @@ impl SkillSystem {
             .map(|manifest| {
                 let eligibility = self.inner.eligibility.evaluate(manifest, &config_value);
                 let entry_config = config.get_entry(manifest.id());
-                // Vault integration wired in RPC layer
-                let api_key_set = false;
+                let api_key_set = Self::api_key_present(manifest);
                 let usage = usage_index.get(manifest.id().as_str()).cloned();
                 SkillStatusEntry::build(manifest, &eligibility, entry_config, api_key_set, usage)
             })
@@ -640,60 +653,44 @@ fn guess_source(path: &Path) -> SkillSource {
     SkillSource::Bundled
 }
 
-// ---------------------------------------------------------------------------
-// Self-growth: learned-skill validation
-// ---------------------------------------------------------------------------
-
-/// Valid skill categories.
-pub const SKILL_CATEGORIES: &[&str] = &[
-    "coding",
-    "debugging",
-    "workflow",
-    "knowledge",
-    "communication",
-];
-
-/// Validate a skill category.
-pub fn is_valid_category(category: &str) -> bool {
-    SKILL_CATEGORIES.contains(&category)
-}
-
-/// Validate a skill name (kebab-case, non-empty, ASCII alphanumeric + hyphens).
-pub fn is_valid_skill_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-        && !name.starts_with('-')
-        && !name.ends_with('-')
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::skill::SkillSource;
 
     #[test]
-    fn valid_skill_names() {
-        assert!(is_valid_skill_name("rust-lifetime-debugging"));
-        assert!(is_valid_skill_name("git-rebase"));
-        assert!(is_valid_skill_name("a"));
-    }
+    fn api_key_present_reflects_env() {
+        use crate::domain::skill::SkillContent;
+        // Unique var name so concurrent tests never collide; removed at end.
+        let env_name = "ALEPH_SKILL_APIKEY_TEST_XZ42";
 
-    #[test]
-    fn invalid_skill_names() {
-        assert!(!is_valid_skill_name(""));
-        assert!(!is_valid_skill_name("-leading"));
-        assert!(!is_valid_skill_name("trailing-"));
-        assert!(!is_valid_skill_name("has spaces"));
-        assert!(!is_valid_skill_name("UpperCase"));
-    }
+        let mut with_key = SkillManifest::new(
+            "test:needs-key",
+            "Needs Key",
+            "Requires an API key",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+        with_key.set_primary_env(env_name.to_string());
 
-    #[test]
-    fn valid_categories() {
-        assert!(is_valid_category("coding"));
-        assert!(is_valid_category("debugging"));
-        assert!(!is_valid_category("invalid"));
+        // No env var → not set (the previously hardcoded `false` bug case).
+        std::env::remove_var(env_name);
+        assert!(!SkillSystem::api_key_present(&with_key));
+
+        // Env var present → reported as set.
+        std::env::set_var(env_name, "secret");
+        assert!(SkillSystem::api_key_present(&with_key));
+        std::env::remove_var(env_name);
+
+        // No primary_env declared → no key to set.
+        let no_key = SkillManifest::new(
+            "test:no-key",
+            "No Key",
+            "Needs nothing",
+            SkillContent::new("content"),
+            SkillSource::Bundled,
+        );
+        assert!(!SkillSystem::api_key_present(&no_key));
     }
 
     #[test]
