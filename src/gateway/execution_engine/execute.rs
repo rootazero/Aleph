@@ -586,9 +586,7 @@ where
                                                 );
                                                 return;
                                             };
-                                            use crate::gateway::event_emitter::{
-                                                CollectingEventEmitter, EventEmitter,
-                                            };
+                                            use crate::gateway::event_emitter::CollectingEventEmitter;
                                             let emitter: crate::sync_primitives::Arc<
                                                 dyn EventEmitter + Send + Sync,
                                             > = crate::sync_primitives::Arc::new(

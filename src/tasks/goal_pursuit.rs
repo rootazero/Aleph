@@ -1,12 +1,15 @@
 //! Goal pursuit — the R7/R10-safe autonomous continuation driver.
 //!
 //! When a gateway run finishes for a session whose standing goal is `Active`
-//! pursuit and still unfinished/under-caps, the gateway enqueues ONE more
-//! continuation run via the existing cron executor (see
-//! `src/gateway/execution_engine`). Completion is decided solely by the model
-//! calling `goal(update, complete)` (read here as plain state — no judgment);
-//! iteration/token caps are structural backstops. Lives in `src/tasks/`,
-//! never in `src/harness/` (R10 12-file redline).
+//! pursuit and still unfinished/under-caps, the gateway spawns ONE more
+//! continuation run for the SAME session via `ExecutionAdapter::execute`
+//! directly (see `src/gateway/execution_engine/execute.rs`). The cron
+//! executor is deliberately NOT used: it runs under a distinct
+//! `agent:<id>:cron:<job>` session key, so the goal — stored under the
+//! interactive session key — would never be found. Completion is decided
+//! solely by the model calling `goal(update, complete)` (read here as plain
+//! state — no judgment); iteration/token caps are structural backstops. Lives
+//! in `src/tasks/`, never in `src/harness/` (R10 12-file redline).
 
 use crate::goal::{Goal, GoalStatus, PursuitMode};
 
