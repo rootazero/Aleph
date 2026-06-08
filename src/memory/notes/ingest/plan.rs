@@ -236,6 +236,8 @@ mod tests {
         match op {
             PageOp::Append { new_relations, .. } => {
                 assert_eq!(new_relations.len(), 1);
+                assert_eq!(new_relations[0].rel_type, "colleague");
+                assert_eq!(new_relations[0].to, "entity/bob");
                 assert_eq!(new_relations[0].confidence, 1.0);
             }
             _ => panic!("expected append"),
