@@ -114,6 +114,16 @@ enum OutboundInteraction {
   - **brainstorming 二次确认的收窄**（父 spec 原表述过粗）：① Telegram 留在既有 `ChannelApprovalBridgeAdapter`（概念已对齐，**不**字面实现 `DeliverySurface`）；② **保留** in-band `ResponseChunk`「⏳ 等待管理员授权」（请求者反馈，正交，非投递面重复）；③ Panel 卡片 / `exec.approvals.pending` refetch / approve-deny RPC（入站能力）原样不动。
   - **验收**：桌面审批 banner 经投递面统一渲染；删除 `notify.rs` 重复审批 arm；operator 闸不放宽（guest/chat 桌面拿不到 `surface.approval`）；入站响应关联零改。
 
+- **Phase 3 · owner-身份隔离（2026-06-08 brainstorming 后整个推迟，YAGNI）**
+  - **动机**：Phase 2 收尾时记下「多 desktop 面各收全部审批/通知 banner，未按 owner 隔离」。本次 brainstorming 逐路径核查后判定：当前**没有值得建的东西**，整个 Phase 推迟，不建 per-install 身份基础设施。
+  - **核查链（三条结论）**：
+    1. **审批 banner 的 owner ≠ run 的 owner**。`OperatorApprovalRequester`（`src/approval/operator_requester.rs`）刻意把 config 工具审批路由给 **operator 角色**（Phase 2b sudo 特权升级闸：请求者故意不是审批者）。扇出到所有 operator 桌面是 **by-design 正确**，不是缺陷；按「发起 run 的设备」隔离反而会破坏模型（guest 发起的审批将无 operator 可落）。故审批 banner **保持 operator 扇出，不做 owner 隔离**。
+    2. **跨渠道 R5 噪音不存在**。执行/输出二分：路径 1（Panel `gui:chat` / `agent.run` / CLI）走 `GatewayEventEmitter`→**event_bus**→r5_router；路径 2（外部 bot 渠道 telegram/slack/discord/feishu/whatsapp）走 `ReplyEmitter`**直接回渠道**。`ReplyEmitter` 无 `event_bus` 字段，inbound/reply 路径 grep `event_bus` 为空——**外部渠道的 `RunComplete`/`AskUser` 从不进 event_bus**，r5_router 永不为其产桌面 banner。外部渠道**早已被 emitter 二分隔离**。
+    3. **单桌面零噪音**。路径 1 内，Panel 自己的长 run（`COMPLETION_NOTIFY_MIN_MS` 15s 闸）+ Panel 失焦（壳侧 focus-gate）才弹 banner = 正是 R5「你走开了，结果来了」的预期行为，非噪音。
+  - **唯一残留真缺口**：路径 1 内部的**多 gateway surface 互投**（本地桌面 Panel + 远程 operator 浏览器 Panel，A 的 run 弹 B 的桌面）。修它需要新的 **per-install owner 身份**：唯一持久 `install_id`，被同一 App 的 Panel + `notify.rs` 两条连接**共同声明**，再从 dispatch→run→R5 帧→forward-filter 穿线匹配。横跨 core + shell + panel，触 run 热路径与两个客户端 crate。
+  - **为何推迟**：① 该缺口仅在 **≥2 个 operator 桌面同时连接** 时显现，非当前个人部署的真实场景；② 现有身份不可用作 owner 键（`notify.rs` 硬编码 `device_id:"aleph-desktop-shell"` 每台机器相同；Panel 不发 device_id，核每次分配随机 UUID 且与本机 notify 连接无关联）；③ 即便多设备同属一人，「在自己任一设备看到完成提示」也可能是期望而非 bug。
+  - **重启条件**：当多 operator 桌面成为真实部署需求时，另立 `Phase 3b · per-install owner 身份` spec（brainstorming→spec→plan→实施）。
+
 ## 7. 安全
 
 - **凭证隔离不变**：沿用 Spec A 纪律——远程壳绝不拿本机 token；本机 token 只在 loopback 注入。
@@ -156,3 +166,4 @@ enum OutboundInteraction {
 - 不做多投递面聚合 / 一壳多核（已否决的 Model A）。
 - Phase 1/2 的壳侧渲染细节（卡片样式、banner 文案等）留各自 plan。
 - 远程通知凭证派生（沿用 Spec A：远程 notify 只降级）。
+- **owner-身份隔离（Phase 3）整个推迟**：审批 banner 的 operator 扇出 by-design 正确不动；跨渠道 R5 噪音经 emitter 二分早已隔离（不存在）；唯一残留的多 gateway surface 互投需 per-install 身份，待多 operator 桌面成真实需求再开（详见 §6 Phase 3 决策记录）。
