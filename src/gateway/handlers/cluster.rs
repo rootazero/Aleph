@@ -31,6 +31,7 @@ pub async fn handle_cluster_enroll(
     let device_id = uuid::Uuid::new_v4().to_string();
     let fingerprint: String = device_id.chars().take(16).collect();
 
+    // Placeholder identity material: server-provisioned nodes have no hardware key (mirrors connect.rs).
     if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
         device_id: &device_id,
         device_name: &params.node_name,
