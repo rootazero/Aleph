@@ -15,7 +15,11 @@ use crate::builtin_tools::error::ToolError;
 /// it and a leaf file (e.g. `~/.netrc`) covers exactly that file.
 ///
 /// The credential breadth here mirrors OpenSquilla's `sensitive_paths.py`
-/// (SSH/cloud/registry/secret stores) layered onto Aleph's stronger checker.
+/// (SSH/cloud/registry/secret stores) layered onto Aleph's stronger checker,
+/// and — like hermes-agent's `get_read_block_error` — extends the deny set to
+/// Aleph's *own* credential surface (the encrypted `secrets.vault` and the
+/// `data/` auth/device-pairing databases), which an agent must never read or
+/// clobber through its file tools.
 pub fn get_denied_paths() -> Vec<String> {
     let mut denied_paths = vec![
         // SSH / PGP / AWS — the original Unix credential directories.
@@ -47,6 +51,18 @@ pub fn get_denied_paths() -> Vec<String> {
         denied_paths.push(format!("{}/skills", config_dir.display()));
         denied_paths.push(format!("{}/plugins", config_dir.display()));
         denied_paths.push(format!("{}/mcp", config_dir.display()));
+        // Aleph's own credential / auth state — the crown jewels. `secrets.vault`
+        // is the encrypted credential store (`VaultStore::default_path()` =
+        // `<config_dir>/secrets.vault`); `data/` holds the device-pairing,
+        // session, security and devices databases plus the singleton
+        // `aleph.lock`. Denying the directory covers every current and future
+        // leaf beneath it via the canonicalizing prefix match. Without this the
+        // agent's own `file_read`/`file_write` could exfiltrate or corrupt the
+        // vault — a hole the OS `deny_globs` does not close because it only
+        // applies inside the sandboxed workspace root, not arbitrary reads.
+        denied_paths.push(format!("{}/secrets.vault", config_dir.display()));
+        denied_paths.push(format!("{}/secrets.vault.lock", config_dir.display()));
+        denied_paths.push(format!("{}/data", config_dir.display()));
         // Note: output directory is intentionally NOT denied
     }
 
@@ -237,4 +253,65 @@ fn safe_normalize(path: &Path) -> Result<PathBuf, String> {
         }
     }
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// The denylist must include Aleph's own encrypted vault and the `data/`
+    /// auth directory. Asserted by path *suffix* so the test stays hermetic and
+    /// independent of where `get_config_dir()` resolves in the test environment
+    /// (no `ALEPH_HOME`/`$HOME` mutation, hence no cross-test env leak).
+    #[test]
+    fn denied_paths_cover_aleph_credential_stores() {
+        let denied = get_denied_paths();
+        assert!(
+            denied.iter().any(|p| p.ends_with("/secrets.vault")),
+            "secrets.vault missing from denylist: {denied:?}"
+        );
+        assert!(
+            denied.iter().any(|p| p.ends_with("/data")),
+            "data/ auth dir missing from denylist: {denied:?}"
+        );
+    }
+
+    /// End-to-end enforcement: the vault leaf file is rejected, a file *inside*
+    /// the denied `data/` directory is rejected via the canonicalizing prefix
+    /// match, and an unrelated sibling under the same root is still allowed.
+    #[test]
+    fn check_path_blocks_vault_and_data_allows_sibling() {
+        let root = tempdir().unwrap();
+        let vault = root.path().join("secrets.vault");
+        fs::write(&vault, b"ENCRYPTED").unwrap();
+        let data = root.path().join("data");
+        fs::create_dir(&data).unwrap();
+        let pairing = data.join("pairing.db");
+        fs::write(&pairing, b"db").unwrap();
+        let allowed = root.path().join("output.txt");
+        fs::write(&allowed, b"ok").unwrap();
+
+        let denied = vec![
+            vault.to_string_lossy().to_string(),
+            data.to_string_lossy().to_string(),
+        ];
+
+        // Vault leaf file is denied.
+        assert!(
+            check_and_resolve_path(&vault, &denied, None).is_err(),
+            "vault read should be denied"
+        );
+        // A file inside the denied data/ dir is denied (directory-prefix match).
+        assert!(
+            check_and_resolve_path(&pairing, &denied, None).is_err(),
+            "data/pairing.db read should be denied"
+        );
+        // An unrelated sibling under the same root is allowed.
+        assert!(
+            check_and_resolve_path(&allowed, &denied, None).is_ok(),
+            "unrelated sibling should be allowed"
+        );
+    }
 }
