@@ -36,6 +36,71 @@ use crate::browser::playwright_cli_backend::PlaywrightCliBackend;
 use crate::browser::profile::BrowserDriver;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 
+use crate::approval::{ActionRequest, ActionType, ApprovalDecision, ApprovalPolicy};
+use crate::sync_primitives::Arc;
+
+/// Audit identity for a browser action, resolved from the agent-loop turn
+/// context. Mirrors `desktop::audit_identity` so approval-policy audit entries
+/// carry an accountable agent id + human-readable context instead of blanks.
+fn browser_audit_identity(action: &str, target: &str) -> (String, String) {
+    match crate::tools::turn_context::current_turn_context() {
+        Some(turn) => {
+            let agent_id = turn.session_key.agent_id().to_string();
+            let context = if turn.is_channel_routable() {
+                format!(
+                    "browser.{action} ({target}) via {}/{}",
+                    turn.channel_id, turn.conversation_id
+                )
+            } else {
+                format!("browser.{action} ({target})")
+            };
+            (agent_id, context)
+        }
+        None => ("main".to_string(), format!("browser.{action} ({target})")),
+    }
+}
+
+/// Consult the approval policy for a sensitive browser action.
+///
+/// Returns `None` when the action may proceed — either the policy allows it, or
+/// no policy is wired (byte-identical to the previous always-allow behavior, so
+/// tests constructing tools via `new()` are unaffected). Returns `Some(message)`
+/// when the action is denied or requires user confirmation; the caller surfaces
+/// it as a failed tool result so the model relays the prompt to the user
+/// (LLM-sovereign confirmation, R7 — the harness never blocks inline).
+///
+/// `Allow`/`Deny` decisions are recorded for the audit trail; `Ask` is left
+/// unrecorded until the user actually responds, matching `DesktopTool`.
+pub(crate) async fn check_browser_approval(
+    policy: Option<&Arc<dyn ApprovalPolicy>>,
+    action_type: ActionType,
+    action: &str,
+    target: &str,
+) -> Option<String> {
+    let policy = policy?;
+    let (agent_id, context) = browser_audit_identity(action, target);
+    let request = ActionRequest {
+        action_type,
+        target: target.to_string(),
+        agent_id,
+        context,
+        timestamp: chrono::Utc::now(),
+    };
+
+    let decision = policy.check(&request).await;
+    match decision {
+        ApprovalDecision::Allow => {
+            policy.record(&request, &decision).await;
+            None
+        }
+        ApprovalDecision::Deny { ref reason } => {
+            policy.record(&request, &decision).await;
+            Some(format!("Action denied by approval policy: {reason}"))
+        }
+        ApprovalDecision::Ask { ref prompt } => Some(format!("Approval required: {prompt}")),
+    }
+}
+
 /// Parse one `list_tabs` line into `(id, url)`.
 ///
 /// Handles both the Chrome DevTools MCP format `"N: URL"` and the Playwright

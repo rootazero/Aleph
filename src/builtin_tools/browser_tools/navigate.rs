@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -47,11 +48,23 @@ pub struct BrowserNavigateOutput {
 #[derive(Clone)]
 pub struct BrowserNavigateTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserNavigateTool {
     pub fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate navigation behind a user-defined approval policy (allow/deny/ask
+    /// per `~/.aleph/approval-policy.json`). With no policy wired the tool
+    /// behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -64,6 +77,29 @@ impl AlephTool for BrowserNavigateTool {
     type Output = BrowserNavigateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Approval policy gate (user-defined allow/deny/ask). Runs above the
+        // SSRF check below: SSRF is a fixed security floor, this is the user's
+        // configurable allow/blocklist (e.g. block `*://malicious.com/*`).
+        let nav_target = match &args.action {
+            NavigateAction::Goto { url } => url.as_str(),
+            NavigateAction::Back => "back",
+            NavigateAction::Forward => "forward",
+            NavigateAction::Refresh => "refresh",
+        };
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserNavigate,
+            "navigate",
+            nav_target,
+        )
+        .await
+        {
+            return Ok(BrowserNavigateOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
+
         // Goto navigates the current tab to a new URL — routed through the
         // backend's `navigate` (SSRF-checked) rather than a JS history call.
         if let NavigateAction::Goto { url } = &args.action {
@@ -205,6 +241,45 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.message.unwrap().contains("Blocked"));
+    }
+
+    #[tokio::test]
+    async fn test_navigate_blocked_by_approval_policy() {
+        use crate::approval::{ActionRequest, ApprovalDecision, ApprovalPolicy};
+        use async_trait::async_trait;
+
+        struct DenyAll;
+        #[async_trait]
+        impl ApprovalPolicy for DenyAll {
+            async fn check(&self, _req: &ActionRequest) -> ApprovalDecision {
+                ApprovalDecision::Deny {
+                    reason: "blocked in test".into(),
+                }
+            }
+            async fn record(&self, _req: &ActionRequest, _dec: &ApprovalDecision) {}
+        }
+
+        let config = BrowserSystemConfig::default();
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserNavigateTool::new(manager)
+            .with_approval_policy(Arc::new(DenyAll) as Arc<dyn ApprovalPolicy>);
+
+        let result = tool
+            .call(BrowserNavigateArgs {
+                profile: "default".into(),
+                action: NavigateAction::Goto {
+                    url: "https://example.com/".into(),
+                },
+            })
+            .await
+            .unwrap();
+
+        // The policy short-circuits before any browser/SSRF work runs.
+        assert!(!result.success);
+        assert!(result
+            .message
+            .unwrap()
+            .contains("denied by approval policy"));
     }
 
     #[tokio::test]

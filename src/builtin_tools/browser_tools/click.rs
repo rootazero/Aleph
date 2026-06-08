@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::browser::types::ActionTarget;
 use crate::error::{AlephError, Result};
@@ -39,11 +40,22 @@ pub struct BrowserClickOutput {
 #[derive(Clone)]
 pub struct BrowserClickTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserClickTool {
     pub fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate clicks behind a user-defined approval policy. With no policy wired
+    /// the tool behaves exactly as before.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -75,6 +87,19 @@ impl AlephTool for BrowserClickTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         let target = resolve_target(&args)?;
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserClick,
+            "click",
+            &format!("{target:?}"),
+        )
+        .await
+        {
+            return Ok(BrowserClickOutput {
+                success: false,
+                message: Some(message),
+            });
+        }
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.click(&tab_id, target).await {
                 Ok(()) => Ok(BrowserClickOutput {
