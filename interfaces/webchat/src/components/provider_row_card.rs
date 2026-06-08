@@ -50,6 +50,14 @@ pub fn ProviderRowCard(
     badge: impl Fn() -> AnyView + 'static + Send,
     /// Click handler.
     on_click: impl Fn() + 'static + Send,
+    /// Optional trailing element rendered after the name/subtitle block,
+    /// pushed to the right (e.g. a chevron for OAuth subscription rows).
+    #[prop(optional, into)]
+    trailing: Option<ViewFn>,
+    /// When true the icon tile uses `w-10 h-10` instead of `w-8 h-8`
+    /// (used by OAuth subscription rows).
+    #[prop(optional)]
+    large_icon: bool,
 ) -> impl IntoView {
     let first_char = name
         .chars()
@@ -75,7 +83,10 @@ pub fn ProviderRowCard(
             <div class="flex items-center gap-3">
                 <div class="relative shrink-0">
                     <div
-                        class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold"
+                        class=format!(
+                            "{} rounded-lg flex items-center justify-center text-white text-sm font-bold",
+                            if large_icon { "w-10 h-10" } else { "w-8 h-8" }
+                        )
                         style=format!("background-color: {}", icon_color)
                     >
                         {first_char}
@@ -101,6 +112,7 @@ pub fn ProviderRowCard(
                         {subtitle}
                     </div>
                 </div>
+                {trailing.map(|t| view! { <div class="ml-auto shrink-0">{t.run()}</div> })}
             </div>
         </button>
     }
