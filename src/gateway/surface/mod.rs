@@ -7,6 +7,7 @@
 
 pub mod delivery;
 pub mod desktop;
+pub mod r5_router;
 
 /// The kind of I/O surface a gateway connection presents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
