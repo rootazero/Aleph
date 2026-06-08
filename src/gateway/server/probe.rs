@@ -103,7 +103,7 @@ mod tests {
             trusted_proxies: Arc::new(TrustedProxies::default()),
             origin_policy: Arc::new(crate::gateway::origin_policy::OriginPolicy::loopback_only()),
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
-            node_registry: std::sync::Arc::new(crate::cluster::NodeRegistry::new()),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         })
     }
 
