@@ -49,7 +49,6 @@ pub mod error_class;
 pub mod external;
 pub mod jsonrpc;
 pub mod manager;
-mod notifications;
 mod preflight;
 mod prompts;
 pub mod protocol;
@@ -73,7 +72,6 @@ pub use external::{check_runtime, McpServerConnection, RuntimeKind};
 pub use jsonrpc::{
     IdGenerator, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
 };
-pub use notifications::{McpEvent, McpEventHandler, McpNotificationRouter};
 pub use preflight::preflight_remote_url;
 pub use prompts::{
     McpPrompt, McpPromptArgument, McpPromptManager, PromptContent, PromptMessage, PromptResult,
@@ -95,7 +93,7 @@ pub use transport::{
 pub use types::{
     McpEnvVar, McpRemoteServerConfig, McpResource, McpServerConfig, McpServerPermissions,
     McpServerStatus, McpServerStatusInfo, McpServerType, McpServiceInfo, McpSettingsConfig,
-    McpTool, McpToolCall, McpToolInfo, McpToolResult, TransportPreference,
+    McpTool, McpToolCall, McpToolFilter, McpToolInfo, McpToolResult, TransportPreference,
 };
 
 // Manager types (MCP orchestration layer)

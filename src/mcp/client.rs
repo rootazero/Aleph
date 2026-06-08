@@ -16,7 +16,9 @@ use crate::mcp::sampling::SamplingHandler;
 use crate::mcp::transport::{
     HttpTransport, HttpTransportConfig, McpTransport, SseTransport, SseTransportConfig,
 };
-use crate::mcp::types::{McpRemoteServerConfig, McpTool, McpToolResult, TransportPreference};
+use crate::mcp::types::{
+    McpRemoteServerConfig, McpTool, McpToolFilter, McpToolResult, TransportPreference,
+};
 
 /// MCP server startup report
 ///
@@ -71,6 +73,12 @@ pub struct McpClient {
     external_servers: tokio::sync::RwLock<HashMap<String, Arc<McpServerConnection>>>,
     /// Handler for sampling requests from servers
     sampling_handler: Arc<SamplingHandler>,
+    /// Optional per-server allow/deny filter over advertised tools. `None`
+    /// (the default) exposes every tool the connected server(s) advertise.
+    /// Set once at startup via [`Self::set_tool_filter`]; applied in
+    /// [`Self::list_tools`] so registration, aggregation, and counts all see
+    /// the same filtered set.
+    tool_filter: Option<McpToolFilter>,
 }
 
 impl McpClient {
@@ -79,7 +87,18 @@ impl McpClient {
         Self {
             external_servers: tokio::sync::RwLock::new(HashMap::new()),
             sampling_handler: Arc::new(SamplingHandler::new()),
+            tool_filter: None,
         }
+    }
+
+    /// Install a per-server tool filter before the client is shared.
+    ///
+    /// Called by the manager actor at server-start with the server's configured
+    /// filter; a noop filter is normalised to `None` so [`Self::list_tools`]
+    /// can skip the scan entirely. Takes `&mut self` because the filter is set
+    /// once, before the client is wrapped in an `Arc` and published.
+    pub fn set_tool_filter(&mut self, filter: Option<McpToolFilter>) {
+        self.tool_filter = filter.filter(|f| !f.is_noop());
     }
 
     /// Get the sampling handler
@@ -211,6 +230,12 @@ impl McpClient {
         let mut tools = Vec::new();
         for connection in &connections {
             tools.extend(connection.list_tools().await);
+        }
+        // Gate advertised tools through the per-server allow/deny filter. A
+        // dropped tool is therefore never registered, aggregated, counted, or
+        // shown to the model (catalog-time filtering, not call-time).
+        if let Some(filter) = &self.tool_filter {
+            tools.retain(|t| filter.allows(&t.name));
         }
         tools
     }

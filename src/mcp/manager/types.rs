@@ -15,7 +15,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::mcp::{McpClient, McpPrompt, McpResource, McpTool};
+use crate::mcp::{McpClient, McpPrompt, McpResource, McpTool, McpToolFilter};
 
 /// Transport type for MCP servers
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -74,6 +74,10 @@ pub struct McpManagerConfig {
     /// Request timeout in seconds
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u64>,
+    /// Optional allow/deny filter over the tools this server exposes.
+    /// Absent = expose every advertised tool (backward-compatible default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_filter: Option<McpToolFilter>,
 }
 
 fn default_true() -> bool {
@@ -98,6 +102,7 @@ impl McpManagerConfig {
             requires_runtime: None,
             auto_start: true,
             timeout_seconds: None,
+            tool_filter: None,
         }
     }
 
@@ -114,6 +119,7 @@ impl McpManagerConfig {
             requires_runtime: None,
             auto_start: true,
             timeout_seconds: None,
+            tool_filter: None,
         }
     }
 
@@ -130,6 +136,7 @@ impl McpManagerConfig {
             requires_runtime: None,
             auto_start: true,
             timeout_seconds: None,
+            tool_filter: None,
         }
     }
 
@@ -160,6 +167,12 @@ impl McpManagerConfig {
     /// Set timeout in seconds
     pub fn with_timeout(mut self, seconds: u64) -> Self {
         self.timeout_seconds = Some(seconds);
+        self
+    }
+
+    /// Set the per-server tool allow/deny filter.
+    pub fn with_tool_filter(mut self, filter: McpToolFilter) -> Self {
+        self.tool_filter = Some(filter);
         self
     }
 }
@@ -900,6 +913,33 @@ mod tests {
         let deserialized: McpManagerConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.id, config.id);
         assert_eq!(deserialized.transport, config.transport);
+    }
+
+    #[test]
+    fn tool_filter_builds_and_round_trips_serde() {
+        let cfg = McpManagerConfig::stdio("id", "name", "cmd").with_tool_filter(McpToolFilter {
+            allow: vec!["read_*".to_string()],
+            deny: vec!["*_delete".to_string()],
+        });
+        let filter = cfg.tool_filter.clone().expect("filter set");
+        assert!(filter.allows("read_file"));
+        assert!(!filter.allows("read_delete"));
+
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("tool_filter"));
+        let back: McpManagerConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.tool_filter, cfg.tool_filter);
+    }
+
+    #[test]
+    fn tool_filter_absent_deserializes_to_none() {
+        // Legacy config JSON without the field must still load (backward compat).
+        let json = r#"{"id":"x","name":"X","transport":"stdio","command":"cmd"}"#;
+        let cfg: McpManagerConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.tool_filter.is_none());
+        // And serializing a None filter omits the key entirely.
+        let out = serde_json::to_string(&cfg).unwrap();
+        assert!(!out.contains("tool_filter"));
     }
 
     #[test]

@@ -631,7 +631,12 @@ impl McpManagerActor {
     ///
     /// Creates an McpClient and connects using the appropriate transport.
     async fn start_server_internal(&mut self, config: &McpManagerConfig) -> Result<(), String> {
-        let client = Arc::new(McpClient::new());
+        // Install the per-server tool filter before the client is shared, so
+        // `list_tools` (and thus registration, aggregation, and counts) only
+        // ever surface the tools this server is allowed to expose.
+        let mut client = McpClient::new();
+        client.set_tool_filter(config.tool_filter.clone());
+        let client = Arc::new(client);
 
         // Start based on transport type
         match config.transport {
