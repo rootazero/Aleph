@@ -227,6 +227,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "heartbeat_report",
         ],
     },
+    ToolCategory {
+        id: "cluster",
+        name: "集群节点",
+        tools: &["node_invoke"],
+    },
 ];
 
 #[cfg(test)]

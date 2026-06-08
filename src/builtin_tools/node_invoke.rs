@@ -1,0 +1,223 @@
+//! `node_invoke`：中心侧 LLM 工具，向一个已连节点下发命令（经 0a 反向 RPC）。
+//!
+//! 寻址按 name 或 id；下发前 fail-fast 校验节点声明的命令（节点侧仍权威）。
+//! 红线：纯 I/O 翻译（R4），无推理（R7）；命令选择由 LLM 做。
+
+use crate::sync_primitives::Arc;
+
+use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+use crate::cluster::NodeRegistry;
+use crate::error::{AlephError, Result};
+use crate::tools::AlephTool;
+
+const DEFAULT_TIMEOUT_MS: u64 = 120_000;
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub struct NodeInvokeArgs {
+    /// Target node: its name (e.g. "worker-1") or id. Use `environments.list`
+    /// to see online nodes and the commands each declares.
+    pub node: String,
+    /// Command to run on the node (e.g. "bash"). Must be one the node declares.
+    pub command: String,
+    /// JSON arguments for the command, passed through to the node verbatim
+    /// (for "bash", e.g. {"cmd": "ls -la"}).
+    #[serde(default)]
+    pub args: Value,
+    /// Reverse-RPC timeout in ms (default 120000). Must exceed the node-side
+    /// command's own runtime or the channel times out while it still runs.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Clone)]
+pub struct NodeInvokeTool {
+    node_registry: Arc<NodeRegistry>,
+}
+
+impl NodeInvokeTool {
+    pub fn new(node_registry: Arc<NodeRegistry>) -> Self {
+        Self { node_registry }
+    }
+}
+
+#[async_trait]
+impl AlephTool for NodeInvokeTool {
+    const NAME: &'static str = "node_invoke";
+    const DESCRIPTION: &'static str = r#"Run a command on a connected cluster node (a remote execution arm).
+
+Address the node by its name or id (see `environments.list` for online nodes and
+the commands each declares). `command` must be one the node permits (e.g. "bash");
+`args` is that command's JSON payload, passed through verbatim — for bash:
+{"node": "worker-1", "command": "bash", "args": {"cmd": "uname -a"}}.
+
+The node runs it in ITS OWN sandboxed workspace and returns the result. Set
+`timeout_ms` (default 120000) above the expected runtime for long commands. If the
+node is offline or the command isn't permitted, you get a clear error."#;
+
+    type Args = NodeInvokeArgs;
+    type Output = Value;
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        let Some((channel, declared)) = self.node_registry.resolve(&args.node) else {
+            return Err(AlephError::tool(format!("node '{}' not online", args.node)));
+        };
+        // Center-side fail-fast: only reject when the node declared a non-empty
+        // catalog that excludes this command. Empty catalog → defer to node authority.
+        if !declared.is_empty() && !declared.iter().any(|c| c.name == args.command) {
+            return Err(AlephError::tool(format!(
+                "command '{}' not declared by node '{}'",
+                args.command, args.node
+            )));
+        }
+        let timeout = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+        let params = json!({ "tool": args.command, "args": args.args });
+        match channel.call("tool.call", params, timeout).await {
+            Ok(resp) if resp.is_success() => Ok(resp.result.unwrap_or(Value::Null)),
+            Ok(resp) => Err(AlephError::tool(format!(
+                "node '{}' returned error: {}",
+                args.node,
+                resp.error
+                    .map(|e| e.message)
+                    .unwrap_or_else(|| "unknown".to_string())
+            ))),
+            Err(e) => Err(AlephError::tool(format!(
+                "node '{}' reverse-rpc failed: {e}",
+                args.node
+            ))),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cluster::{CommandDescriptor, NodeRegistry, NodeSession, ReverseRpcChannel};
+    use crate::gateway::protocol::JsonRpcResponse;
+    use tokio::sync::mpsc;
+
+    /// 建一个登记好的节点会话，并返回中心可读的 channel + 后台"节点应答器"的
+    /// 出站接收端（扮演节点：收到 tool.call 帧就 resolve 回一条成功响应）。
+    fn registry_with_node(
+        node_id: &str,
+        name: &str,
+        commands: Vec<&str>,
+    ) -> (Arc<NodeRegistry>, mpsc::Receiver<String>, ReverseRpcChannel) {
+        let (tx, rx) = mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(tx);
+        let reg = Arc::new(NodeRegistry::new());
+        reg.register(NodeSession {
+            node_id: node_id.to_string(),
+            conn_id: "conn-1".to_string(),
+            device_name: name.to_string(),
+            channel: channel.clone(),
+            declared_commands: commands
+                .into_iter()
+                .map(|c| CommandDescriptor { name: c.to_string(), schema: json!({}) })
+                .collect(),
+            connected_at: 1,
+        });
+        (reg, rx, channel)
+    }
+
+    /// 后台扮节点：读出一帧请求 → 回成功响应（回显 tool）。
+    fn spawn_node_responder(mut rx: mpsc::Receiver<String>, channel: ReverseRpcChannel) {
+        let pending = channel.pending();
+        tokio::spawn(async move {
+            if let Some(frame) = rx.recv().await {
+                let req: Value = serde_json::from_str(&frame).unwrap();
+                let id = req["id"].clone();
+                let resp = JsonRpcResponse::success(
+                    Some(id.clone()),
+                    json!({"ran": req["params"]["tool"]}),
+                );
+                pending.resolve(&id, resp);
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn invokes_node_by_name_and_returns_result() {
+        let (reg, rx, ch) = registry_with_node("n-1", "worker-1", vec!["bash"]);
+        spawn_node_responder(rx, ch);
+        let tool = NodeInvokeTool::new(reg);
+        let out = tool
+            .call(NodeInvokeArgs {
+                node: "worker-1".to_string(),
+                command: "bash".to_string(),
+                args: json!({"cmd": "echo hi"}),
+                timeout_ms: Some(2_000),
+            })
+            .await
+            .expect("invoke resolves");
+        assert_eq!(out["ran"], "bash");
+    }
+
+    #[tokio::test]
+    async fn invokes_node_by_id() {
+        let (reg, rx, ch) = registry_with_node("n-1", "worker-1", vec!["bash"]);
+        spawn_node_responder(rx, ch);
+        let tool = NodeInvokeTool::new(reg);
+        let out = tool
+            .call(NodeInvokeArgs {
+                node: "n-1".to_string(),
+                command: "bash".to_string(),
+                args: json!({}),
+                timeout_ms: Some(2_000),
+            })
+            .await
+            .expect("invoke by id resolves");
+        assert_eq!(out["ran"], "bash");
+    }
+
+    #[tokio::test]
+    async fn offline_node_is_clear_error() {
+        let reg = Arc::new(NodeRegistry::new());
+        let tool = NodeInvokeTool::new(reg);
+        let err = tool
+            .call(NodeInvokeArgs {
+                node: "ghost".to_string(),
+                command: "bash".to_string(),
+                args: json!({}),
+                timeout_ms: Some(500),
+            })
+            .await
+            .expect_err("offline node errors");
+        assert!(err.to_string().contains("not online"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn fail_fast_rejects_undeclared_command() {
+        let (reg, _rx, _ch) = registry_with_node("n-1", "worker-1", vec!["bash"]);
+        let tool = NodeInvokeTool::new(reg);
+        let err = tool
+            .call(NodeInvokeArgs {
+                node: "worker-1".to_string(),
+                command: "python".to_string(),
+                args: json!({}),
+                timeout_ms: Some(500),
+            })
+            .await
+            .expect_err("undeclared command fails fast");
+        assert!(err.to_string().contains("not declared"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn timeout_is_surfaced() {
+        let (reg, _rx, _ch) = registry_with_node("n-1", "worker-1", vec!["bash"]);
+        let tool = NodeInvokeTool::new(reg);
+        let err = tool
+            .call(NodeInvokeArgs {
+                node: "worker-1".to_string(),
+                command: "bash".to_string(),
+                args: json!({}),
+                timeout_ms: Some(50),
+            })
+            .await
+            .expect_err("times out");
+        assert!(err.to_string().contains("reverse-rpc failed"), "{err}");
+    }
+}

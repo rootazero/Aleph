@@ -201,6 +201,19 @@ pub enum Command {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         command: Vec<String>,
     },
+    /// Run as a cluster node: dial out to a center, serve reverse-RPC tool.call,
+    /// run bash in a LOCAL sandbox. Pure execution arm (no DB/LLM).
+    Node {
+        /// Center WebSocket base URL, e.g. ws://127.0.0.1:18790
+        #[arg(long, value_name = "URL")]
+        center: String,
+        /// Node auth token (minted via center `cluster.enroll`).
+        #[arg(long, value_name = "TOKEN", env = "ALEPH_NODE_TOKEN")]
+        token: String,
+        /// Human-readable node name shown in `environments.list`.
+        #[arg(long, value_name = "NAME", default_value = "aleph-node")]
+        name: String,
+    },
     /// SP-3a internal: apply restricted token + Low IL then spawn target
     /// via CreateProcessAsUserW. Invoked by WindowsSandboxDriver; not
     /// for users.
@@ -737,6 +750,50 @@ mod tests {
         use clap::Parser;
         let args = Args::try_parse_from(["aleph-server", "bootstrap-url"]).unwrap();
         assert!(matches!(args.command, Some(Command::BootstrapUrl)));
+    }
+
+    #[test]
+    fn test_cli_parses_node_subcommand() {
+        let args = Args::try_parse_from([
+            "aleph-server",
+            "node",
+            "--center",
+            "ws://127.0.0.1:18790",
+            "--token",
+            "node-tok",
+            "--name",
+            "edge-1",
+        ])
+        .unwrap();
+        match args.command {
+            Some(Command::Node {
+                center,
+                token,
+                name,
+            }) => {
+                assert_eq!(center, "ws://127.0.0.1:18790");
+                assert_eq!(token, "node-tok");
+                assert_eq!(name, "edge-1");
+            }
+            _ => panic!("Expected Node command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_node_name_defaults() {
+        let args = Args::try_parse_from([
+            "aleph-server",
+            "node",
+            "--center",
+            "ws://127.0.0.1:18790",
+            "--token",
+            "node-tok",
+        ])
+        .unwrap();
+        match args.command {
+            Some(Command::Node { name, .. }) => assert_eq!(name, "aleph-node"),
+            _ => panic!("Expected Node command"),
+        }
     }
 
     #[test]

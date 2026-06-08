@@ -1678,6 +1678,7 @@ impl BuiltinToolRegistry {
             goal_tool: goal_tool.with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
+            node_registry: Arc::new(tokio::sync::OnceCell::new()),
             memory_browse_tool,
             memory_explore_tool,
             memory_timeline_tool: timeline_tool,
