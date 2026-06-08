@@ -169,47 +169,74 @@ fn RadialCanvasView() -> impl IntoView {
     let excerpt_by_id: RwSignal<HashMap<String, String>> = RwSignal::new(HashMap::new());
 
     // -----------------------------------------------------------------------
-    // Effect: lazy-fetch note detail when a card enters FULL mode
-    // (selected node wins; hovered node is the fallback via prefetch_request).
-    // Skips fetch if the excerpt is already cached or rendered.
+    // Effect: lazy-fetch note detail for cards that need a FULL-mode excerpt.
+    //
+    // BUG FIX (canvas hover markdown): this Effect previously resolved a single
+    // `target = selected_node.or_else(prefetch_request)`. Once any node was
+    // selected (the center stays selected after a click/navigation),
+    // `selected_node` is `Some` indefinitely and permanently SHADOWED the
+    // hover-driven `prefetch_request` — so hovering a neighbor while a node was
+    // focused never fetched that neighbor's excerpt, and its FULL card rendered
+    // title-only ("markdown often doesn't show on hover").
+    //
+    // Fix: subscribe to BOTH signals and fetch the *union* of {selected, hovered}
+    // (de-duplicated). Each fetch is idempotent — guarded by the raw-response
+    // cache and the rendered-excerpt map — so spawning per target is cheap.
     // -----------------------------------------------------------------------
     let detail_cache_eff = detail_cache.clone();
     Effect::new(move || {
-        // selected_node wins; prefetch_request (hover) is fallback
-        let target = selected_node.get().or_else(|| prefetch_request.get());
-        let Some(id) = target else { return };
+        // Read both signals unconditionally so the Effect subscribes to each;
+        // neither must shadow the other.
+        let selected = selected_node.get();
+        let hovered = prefetch_request.get();
+
+        // De-duplicate: hovering the already-selected node must not fan out
+        // into two identical RPCs (the async fetch hasn't populated the cache
+        // yet, so the per-id guards below can't catch the same-frame dup).
+        let mut targets: Vec<String> = Vec::with_capacity(2);
+        if let Some(s) = selected {
+            targets.push(s);
+        }
+        if let Some(h) = hovered {
+            if !targets.contains(&h) {
+                targets.push(h);
+            }
+        }
 
         let now = now_ms();
-        // Already in raw-response cache — skip if content is fresh
-        if detail_cache_eff.borrow().has(&id, now) {
-            return;
-        }
-        // Already rendered — nothing to do
-        if excerpt_by_id.with(|m| m.contains_key(&id)) {
-            return;
-        }
-
-        let detail_cache_spawn = detail_cache_eff.clone();
-        let agent = agent_id.get_untracked();
-        let id_spawn = id.clone();
-
-        spawn_local(async move {
-            match GraphApi::node_detail(&state, &agent, &id_spawn).await {
-                Ok(detail) => {
-                    let html = render_excerpt(&detail.content);
-                    excerpt_by_id.update(|m| {
-                        m.insert(id_spawn.clone(), html);
-                    });
-                    let now = now_ms();
-                    detail_cache_spawn.borrow_mut().put(id_spawn, detail, now);
-                }
-                Err(e) => {
-                    web_sys::console::warn_1(
-                        &format!("canvas: note_detail fetch failed for {id_spawn}: {e}").into(),
-                    );
-                }
+        for id in targets {
+            // Already in raw-response cache — skip if content is fresh.
+            if detail_cache_eff.borrow().has(&id, now) {
+                continue;
             }
-        });
+            // Already rendered — nothing to do.
+            if excerpt_by_id.with(|m| m.contains_key(&id)) {
+                continue;
+            }
+
+            let detail_cache_spawn = detail_cache_eff.clone();
+            let agent = agent_id.get_untracked();
+            let id_spawn = id.clone();
+
+            spawn_local(async move {
+                match GraphApi::node_detail(&state, &agent, &id_spawn).await {
+                    Ok(detail) => {
+                        let html = render_excerpt(&detail.content);
+                        excerpt_by_id.update(|m| {
+                            m.insert(id_spawn.clone(), html);
+                        });
+                        let now = now_ms();
+                        detail_cache_spawn.borrow_mut().put(id_spawn, detail, now);
+                    }
+                    Err(e) => {
+                        web_sys::console::warn_1(
+                            &format!("canvas: note_detail fetch failed for {id_spawn}: {e}")
+                                .into(),
+                        );
+                    }
+                }
+            });
+        }
     });
 
     // Non-reactive 60fps canvas state
@@ -454,28 +481,10 @@ fn RadialCanvasView() -> impl IntoView {
         });
     });
 
-    // -----------------------------------------------------------------------
-    // Effect 3: node detail — kept for side-effects (prefetch cache warm-up)
-    // when selected_node changes. DetailPanel has been removed; the sidebar's
-    // NodeDetailPanel reads from the excerpt cache populated by the lazy-fetch
-    // Effect above.
-    // -----------------------------------------------------------------------
-    Effect::new(move || {
-        let node_id = selected_node.get();
-        if let Some(id) = node_id {
-            let agent = agent_id.get();
-            spawn_local(async move {
-                match GraphApi::node_detail(&state, &agent, &id).await {
-                    Ok(_) => {}
-                    Err(e) => {
-                        web_sys::console::error_1(
-                            &format!("Failed to load node detail: {e}").into(),
-                        );
-                    }
-                }
-            });
-        }
-    });
+    // NOTE: a redundant "Effect 3" used to re-fetch `graph.node_detail` on every
+    // `selected_node` change and discard the result (`Ok(_) => {}`) — a duplicate
+    // RPC with no caching side-effect, since the lazy-fetch Effect above already
+    // fetches AND caches the selected node's detail. Removed (entropy reduction).
 
     // -----------------------------------------------------------------------
     // Hover debounce Effect: HOVER_DEBOUNCE_MS dwell gate.

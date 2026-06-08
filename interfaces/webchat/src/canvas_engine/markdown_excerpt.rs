@@ -1,8 +1,10 @@
 //! Convert a Markdown excerpt to a tightly-whitelisted HTML string.
 //!
-//! Supports: **bold**, `inline code`, [link](url), hard line breaks.
-//! Everything else (headers, lists, blockquotes, images, html) is
-//! stripped to plain text. Output is safe to feed into `inner_html=`.
+//! Supports: **bold**, `inline code`, [link](url), hard line breaks, and
+//! readable block separation — headings/paragraphs are split with `<br>` and
+//! list items are prefixed with a `•` bullet (instead of mashing every block's
+//! text into one run-on line). All other structure (blockquotes, images, raw
+//! html) is stripped to plain text. Output is safe to feed into `inner_html=`.
 
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
@@ -42,6 +44,22 @@ pub fn render_excerpt(src: &str) -> String {
             }
             Event::End(TagEnd::Link) => out.push_str("</a>"),
             Event::HardBreak | Event::SoftBreak => out.push_str("<br>"),
+            // Block boundaries: separate headings/paragraphs with a line break so
+            // multi-block notes read cleanly instead of running together. The
+            // leading separator is suppressed when `out` is still empty so a
+            // single-block note (the common case) is byte-identical to before.
+            Event::Start(Tag::Paragraph) | Event::Start(Tag::Heading { .. }) => {
+                if !out.is_empty() {
+                    out.push_str("<br>");
+                }
+            }
+            // List items get a bullet prefix in addition to the line break.
+            Event::Start(Tag::Item) => {
+                if !out.is_empty() {
+                    out.push_str("<br>");
+                }
+                out.push_str("\u{2022} ");
+            }
             Event::Html(h) => {
                 // Raw HTML is escaped and treated as plain text
                 chars_used += h.chars().count();
@@ -86,6 +104,24 @@ mod tests {
         assert!(!out.contains("<ul>"));
         assert!(out.contains("Title"));
         assert!(out.contains("item"));
+    }
+
+    #[test]
+    fn separates_blocks_for_readability() {
+        // Heading + two list items: blocks must not mash together. The heading
+        // is followed by a break; each item is bulleted on its own line.
+        let out = render_excerpt("# Title\n- item one\n- item two");
+        assert!(out.contains("Title<br>"));
+        assert!(out.contains("\u{2022} item one"));
+        assert!(out.contains("\u{2022} item two"));
+        // No leading separator before the first block.
+        assert!(!out.starts_with("<br>"));
+    }
+
+    #[test]
+    fn two_paragraphs_get_a_break() {
+        let out = render_excerpt("first para\n\nsecond para");
+        assert_eq!(out, "first para<br>second para");
     }
 
     #[test]
