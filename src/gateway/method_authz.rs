@@ -68,6 +68,8 @@ const OPERATOR_METHODS: &[&str] = &[
     "devices.set_level",
     "pairing.approve",
     "pairing.reject",
+    // Cluster node enrollment (mints a node token — credential issuance)
+    "cluster.enroll",
     // Plugin lifecycle
     "plugins.install",
     "plugins.uninstall",
@@ -306,6 +308,18 @@ mod tests {
         assert_eq!(
             required_privilege("devices.set_level"),
             MethodPrivilege::Operator
+        );
+    }
+
+    #[test]
+    fn cluster_enroll_requires_operator_but_environments_list_is_open() {
+        assert_eq!(
+            required_privilege("cluster.enroll"),
+            MethodPrivilege::Operator
+        );
+        assert_eq!(
+            required_privilege("environments.list"),
+            MethodPrivilege::Authenticated
         );
     }
 
