@@ -22,7 +22,7 @@
 
 **为什么 enroll 只做 operator 铸券、不做交互式 pairing**：0b 没有 NodeClient，交互式 pairing（节点拨入→中心弹审批→节点收 token 落盘）的发起侧与落盘侧都在 0c。现在写交互式 pairing 的中心半边，等于造一条本相位**诚实测不了**的半截路径，且与 0c 的发起侧分两阶段拼接、接缝易漏。故 0b 采用 operator 主动铸券（pre-provision）这一条可独立闭环、可单测的纵切。交互式 pairing enroll 不是砍掉，是挪到 0c 与 NodeClient 同期落地。
 
-**怎么测（无 NodeClient）**：裸 `tokio-tungstenite` 客户端模拟节点——`cluster.enroll` 铸 token → 模拟节点持 token + 声明 commands 连入 → `environments.list` 断言该节点带目录出现 → 断开后从列表消失。延续 0a e2e 同款打法。
+**怎么测（修正——不做重型全栈 WS e2e）**：`GatewayServer::with_config` 的 `token_manager` 默认 `None`（完整 token 鉴权栈只在 binary 的 subsystems builder 里组装），故全栈「裸 WS + node token」e2e 需要拉起整个鉴权子系统，代价过高。改为把 connect→register 接缝抽成**纯可测 helper** `maybe_register_node`，每条链路用单测覆盖（复用现有 `create_test_context()` AuthContext 测试夹具——它带真 `token_manager`）：①connect.rs 真 token 校验后发 `role:"node"`；②`maybe_register_node` 见 node 角色即登记；③NodeRegistry register/deregister/重连安全；④enroll/list handler。全栈 WS 冒烟留到 0c（有真 NodeClient 驱动时做）。
 
 ## 2. 组件与物理落点（R10 不污染 harness）
 
@@ -33,7 +33,7 @@
 | **connect role 发射** | `src/gateway/handlers/auth/connect.rs`（Case 1 token 路径，line ~382） | 微调 | **关键接缝**：connect 响应的 `role` 现从 scopes 经 `role_for_permissions` 推（只认 operator/guest）。加一句 `validation.role == DeviceRole::Node → role="node"`，否则 node-role token 永远拿不到 `role:"node"` |
 | `role:node` 登记分支 | `src/gateway/server/handler.rs`（ConnectionContext + connect-success 分支 + cleanup） | 复用 0a 接缝 | ConnectionContext 加 `node_registry`（镜像 `reverse_rpc`）；connect 成功且 `role=="node"`：拿 `ReverseRpcChannel` clone + 连接帧 commands → `register()`；断线清理块 `deregister()`（与 0a reverse_rpc 注销并排） |
 | AuthContext 挂 registry | `src/gateway/handlers/auth/mod.rs`（`AuthContext` 加字段）+ ~11 个构造点 | 复用 Phase 3a 套路 | 加 `node_registry: Arc<NodeRegistry>`（与 Phase 3a 加 `connections` 同法）。编译器强制更新所有字面构造点（生产 1 处 `subsystems.rs` + ~10 测试点） |
-| `cluster.enroll` RPC | **`src/gateway/handlers/cluster.rs`**（新）+ builder 注册 + 加进 `OPERATOR_METHODS` | 净新增 | operator-gated RPC `handle_cluster_enroll(req, ctx: Arc<AuthContext>)`：`Params{node_name, commands?}` → `token_manager.issue_token(device_id, DeviceRole::Node, vec!["node"])` → 返回 `{node_id, token, signature}`。**无需建 Device 行**（connect Case 1 token 路径不校验设备审批，仅 `update_last_seen` best-effort） |
+| `cluster.enroll` RPC | **`src/gateway/handlers/cluster.rs`**（新）+ builder 注册 + 加进 `OPERATOR_METHODS` | 净新增 | operator-gated RPC `handle_cluster_enroll(req, ctx: Arc<AuthContext>)`：`Params{node_name}` → `security_store.upsert_device(role=Node)`（**token 表对设备有 FK，必须先建设备行**，见 connect.rs:214）→ `token_manager.issue_token(device_id, DeviceRole::Node, vec!["node"])` → 返回 `{node_id, token, signature}` |
 | `environments.list` RPC | **同 `src/gateway/handlers/cluster.rs`** + builder 注册 | 净新增 | read RPC `handle_environments_list(req, ctx: Arc<AuthContext>)`：`node_registry.list_environments()`。chat/guest 可读 |
 | 连接帧扩展 | connect params 加可选 `commands: [{name, schema}]` | 微调 | 节点自声明 command 目录，0b 只存只显 |
 
@@ -122,11 +122,12 @@ operator 对中心说              模拟节点开 WS，connect 帧带:         
 
 | 层 | 测试 |
 |---|---|
-| `NodeRegistry` 单元 | register/deregister 双 Map 一致性；同 node_id 重连覆盖；deregister 经 conn_id 反查正确删；`list_environments` 快照投影；lock 中毒 into_inner 不 panic |
+| `NodeRegistry` 单元 | register/deregister 双 Map 一致性；同 node_id 重连覆盖；**重连后旧连接 cleanup 不误删新会话**；deregister 经 conn_id 反查正确删；`list_environments` 快照投影；lock 中毒 into_inner 不 panic |
 | `CommandDescriptor`/`Environment` serde | 往返；schema `Value` 原样透传不丢字段 |
-| `handle_cluster_enroll` | issue_token 铸 DeviceRole::Node token + 返回非空 `{node_id, token, signature}`；method_authz 认 `cluster.enroll` 为 operator-only |
-| `handle_environments_list` | 空注册表返空 `[]`；node_registry 登记后返带目录节点；响应不含凭证字段 |
-| e2e（`tests/cluster_node_enroll.rs`） | 真 `GatewayServer` → enroll 铸 token → 裸 WS 模拟节点持 token + 声明 commands 连入 → `environments.list` 断言节点带目录 online 出现 → 断 WS → 断言从列表消失 |
+| `maybe_register_node` glue | role=="node" → 登记带 channel+commands 的 session；role 非 node → 不登记；返回是否登记 |
+| `connect.rs` role 发射 | 经 `create_test_context()` 铸 Node token → `handle_connect` → 断言响应 `role=="node"`（真 token 校验，无 WS） |
+| `handle_cluster_enroll` | upsert_device(Node)+issue_token 铸 token；返回的 token 经 `validate_token` 验出 `DeviceRole::Node`；method_authz 认 `cluster.enroll` 为 operator-only |
+| `handle_environments_list` | 空注册表返空；node_registry 登记后返带目录节点；响应不含凭证字段 |
 
 ## 7. 红线对账
 
