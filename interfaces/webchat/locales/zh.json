@@ -475,6 +475,7 @@
       "display_name": "显示名称",
       "set_as_default": "设为默认",
       "setting_default": "设置中...",
+      "verify_before_default": "请先测试通过后再设为默认。",
       "test_connection": "测试连接",
       "testing": "测试中...",
       "deleting": "删除中...",

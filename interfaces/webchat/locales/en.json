@@ -475,6 +475,7 @@
       "display_name": "Display Name",
       "set_as_default": "Set as Default",
       "setting_default": "Setting default...",
+      "verify_before_default": "Test the connection before setting as default.",
       "test_connection": "Test Connection",
       "testing": "Testing...",
       "deleting": "Deleting...",
