@@ -53,6 +53,7 @@ pub mod browser_config;
 pub mod channel;
 pub mod chat;
 pub mod clawhub;
+pub mod cluster;
 pub mod commands;
 pub mod config;
 pub mod cron;
