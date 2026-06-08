@@ -26,7 +26,15 @@ impl PromptLayer for SpecialActionsLayer {
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str("## Special Actions\n");
-        output.push_str("- `complete`: Call when the task is fully done. The `summary` field MUST report: overview of what was accomplished, key results/findings (data, metrics), generated files and their purpose, notes/recommendations. **DO NOT** just say 'Task completed' — write a summary the user can act on directly.\n");
+        // `complete` carries a universal verification gate (pass-3 addition):
+        // openclaw's completion_contract makes "run the smallest meaningful
+        // gate before declaring done" apply to every model, with a concrete
+        // menu (test/build/lint/diff/re-read). Aleph previously had only the
+        // conceptual "verify before finalizing" line, and only in the
+        // OpenAI-family tail (provider_guidance.rs). Putting the actionable
+        // gate on the `complete` action makes it provider-agnostic without
+        // duplicating that conceptual line.
+        output.push_str("- `complete`: Call when the task is fully done — but FIRST run the smallest meaningful verification gate that fits the work (run the test/build/lint, re-read the file you wrote, diff your change, or sample the output); if no gate can run, say why in the summary. The `summary` field MUST report: overview of what was accomplished, key results/findings (data, metrics), generated files and their purpose, notes/recommendations. **DO NOT** just say 'Task completed' — write a summary the user can act on directly.\n");
         output.push_str("- `ask_user`: Call when you need clarification or a user decision.\n");
         output.push_str(
             "- `fail`: Call ONLY when the GOAL itself cannot be completed in this environment \
@@ -91,6 +99,10 @@ mod tests {
         assert!(out.contains("`ask_user`"));
         assert!(out.contains("`fail`"));
         assert!(out.contains("DO NOT"));
+        // Pass-3: `complete` must carry the universal verification gate so the
+        // model runs the smallest meaningful check (test/build/lint/diff/
+        // re-read) before declaring done — provider-agnostic, not OpenAI-only.
+        assert!(out.contains("smallest meaningful verification gate"));
         // `fail` must require alternative-method exhaustion + enumeration in
         // the summary. A single 401 from one source must NOT be enough to
         // justify the `fail` action.
