@@ -5,7 +5,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::{RerankConfig, RerankConfigApi, RerankProviderType};
-use crate::components::ui::SecretInput;
+use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::i18n::*;
 
@@ -39,6 +39,10 @@ pub(super) fn AddCustomProviderPanel(
             model: form_model.get(),
             timeout_ms: timeout_ms.get(),
             rerank_weight: rerank_weight.get(),
+            // verified is server-tracked; has_api_key is get-only. Both are
+            // ignored by the update handler — sent as defaults from the form.
+            verified: false,
+            has_api_key: false,
         }
     };
 
@@ -176,11 +180,10 @@ pub(super) fn AddCustomProviderPanel(
                     <label class="block text-sm font-medium text-text-secondary mb-1">
                         {t!(i18n, settings.reranking.api_key)}
                     </label>
-                    <SecretInput
-                        value=Signal::derive(move || api_key.get())
-                        on_change=move |v| api_key.set(v)
-                        placeholder=t_string!(i18n, settings.reranking.api_key_optional_placeholder).to_string()
-                        monospace=true
+                    <ProviderKeyField
+                        value=api_key
+                        has_api_key=Signal::derive(|| false)
+                        hint=t_string!(i18n, settings.reranking.api_key_optional_placeholder).to_string()
                     />
                 </div>
 

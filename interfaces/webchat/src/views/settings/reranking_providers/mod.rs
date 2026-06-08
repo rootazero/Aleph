@@ -12,6 +12,7 @@ use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::{RerankConfig, RerankConfigApi};
+use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
 use crate::i18n::*;
@@ -125,6 +126,7 @@ pub fn RerankingProvidersView() -> impl IntoView {
                                 .map(|c| c.provider.as_str().to_string())
                                 .unwrap_or_else(|| "jina".to_string());
                             let is_enabled = config.get().map(|c| c.enabled).unwrap_or(false);
+                            let is_verified = config.get().map(|c| c.verified).unwrap_or(false);
 
                             view! {
                                 <div class="p-6 space-y-4">
@@ -156,23 +158,12 @@ pub fn RerankingProvidersView() -> impl IntoView {
                                                         }
                                                         is_configured=move || is_active_provider
                                                         dot=|| RowDot::None
-                                                        badge=move || {
-                                                            if is_active_provider && is_enabled {
-                                                                view! {
-                                                                    <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                                        {t!(i18n, settings.reranking.active)}
-                                                                    </span>
-                                                                }.into_any()
-                                                            } else if is_active_provider {
-                                                                view! {
-                                                                    <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
-                                                                        {t!(i18n, settings.reranking.selected)}
-                                                                    </span>
-                                                                }.into_any()
-                                                            } else {
-                                                                view! { <span></span> }.into_any()
-                                                            }
-                                                        }
+                                                        badge=move || view! {
+                                                            <ProviderBadges state=BadgeState {
+                                                                is_default: is_active_provider && is_enabled,
+                                                                verified: is_active_provider && is_verified,
+                                                            } />
+                                                        }.into_any()
                                                         on_click=move || {
                                                             selected_provider.set(Some(key_click.clone()));
                                                             set_show_add_form.set(false);

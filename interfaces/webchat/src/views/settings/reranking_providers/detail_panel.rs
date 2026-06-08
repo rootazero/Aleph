@@ -1,13 +1,15 @@
 //! Right-pane editor for a selected preset reranker. Each preset shares the same
-//! form layout (API key, model, base URL, timeout, weight); the api_key is fetched
-//! from the vault per-provider via `RerankConfigApi::get_for_provider` and cleared
-//! locally after a successful save.
+//! form layout (API key, model, base URL, timeout, weight). The stored secret is
+//! never echoed back: the key field starts empty and `has_api_key` (reported by
+//! `RerankConfigApi::get_for_provider`) only drives a status hint. After a
+//! successful test/save the config is refetched to surface `verified`.
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 use crate::api::{RerankConfig, RerankConfigApi, RerankProviderType};
-use crate::components::ui::SecretInput;
+use crate::components::provider_badge::{BadgeState, ProviderBadges};
+use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::i18n::*;
 
@@ -22,6 +24,9 @@ pub(super) fn ProviderDetailPanel(
     let preset = RERANK_PRESETS.iter().find(|p| p.key == provider_key);
     let preset_name = preset.map(|p| p.name).unwrap_or("Custom").to_string();
     let preset_key = provider_key.clone();
+    let provider_key_for_badge = provider_key.clone();
+    let provider_key_for_test = provider_key.clone();
+    let provider_key_for_save = provider_key.clone();
     let default_api_base = preset.map(|p| p.default_api_base).unwrap_or("").to_string();
 
     // Initialize form state from config
@@ -35,16 +40,17 @@ pub(super) fn ProviderDetailPanel(
         String::new()
     });
     let api_key = RwSignal::new(String::new());
+    // Whether THIS provider already has a key in the vault. The secret is never
+    // echoed; the field starts empty and an empty value on save keeps the key.
+    let provider_has_key = RwSignal::new(false);
 
-    // Fetch this provider's API key from vault (each provider has its own key)
+    // Fetch this provider's key presence from the vault (no secret is returned).
     {
         let pk = provider_key.clone();
         let state = expect_context::<DashboardState>();
         spawn_local(async move {
             if let Ok(cfg) = RerankConfigApi::get_for_provider(&state, &pk).await {
-                if !cfg.api_key.is_empty() {
-                    api_key.set(cfg.api_key);
-                }
+                provider_has_key.set(cfg.has_api_key);
             }
         });
     }
@@ -86,6 +92,10 @@ pub(super) fn ProviderDetailPanel(
             model: form_model.get(),
             timeout_ms: timeout_ms.get(),
             rerank_weight: rerank_weight.get(),
+            // verified is server-tracked; has_api_key is get-only. Both are
+            // ignored by the update handler — sent as defaults from the form.
+            verified: false,
+            has_api_key: false,
         }
     };
 
@@ -102,6 +112,7 @@ pub(super) fn ProviderDetailPanel(
 
         let rerank = build_for_test();
         let state = test_state;
+        let pk_test = provider_key_for_test.clone();
         spawn_local(async move {
             match RerankConfigApi::test(&state, rerank).await {
                 Ok(resp) => {
@@ -113,6 +124,11 @@ pub(super) fn ProviderDetailPanel(
                                 resp.results_count, resp.top_score
                             ),
                         )));
+                        // Refetch to pick up verified=true and key presence.
+                        if let Ok(cfg) = RerankConfigApi::get_for_provider(&state, &pk_test).await {
+                            provider_has_key.set(cfg.has_api_key);
+                            config.set(Some(cfg));
+                        }
                     } else {
                         set_test_result.set(Some((
                             false,
@@ -140,15 +156,18 @@ pub(super) fn ProviderDetailPanel(
         set_saving.set(true);
 
         let rerank = build_for_save();
-        let rerank_clone = rerank.clone();
         let state = save_state;
+        let pk_save = provider_key_for_save.clone();
         spawn_local(async move {
-            match RerankConfigApi::update(&state, rerank_clone.clone()).await {
+            match RerankConfigApi::update(&state, rerank).await {
                 Ok(_) => {
-                    // Clear api_key from local signal (key lives in vault, not in memory)
-                    let mut saved = rerank_clone;
-                    saved.api_key = String::new();
-                    config.set(Some(saved));
+                    // Key now lives in the vault — clear the input so it shows the
+                    // "configured" hint, and refetch to surface verified + presence.
+                    api_key.set(String::new());
+                    if let Ok(cfg) = RerankConfigApi::get_for_provider(&state, &pk_save).await {
+                        provider_has_key.set(cfg.has_api_key);
+                        config.set(Some(cfg));
+                    }
                     set_save_success.set(true);
                     set_timeout(
                         move || set_save_success.set(false),
@@ -177,14 +196,15 @@ pub(super) fn ProviderDetailPanel(
                         </p>
                     </div>
                     <div class="flex gap-1">
-                        {if is_current_provider && rerank_cfg.enabled {
+                        {move || {
+                            let cfg = config.get().unwrap_or_default();
+                            let is_cur = cfg.provider.as_str() == provider_key_for_badge;
                             view! {
-                                <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-primary-subtle text-primary">
-                                    {t!(i18n, settings.reranking.active)}
-                                </span>
-                            }.into_any()
-                        } else {
-                            view! { <span></span> }.into_any()
+                                <ProviderBadges state=BadgeState {
+                                    is_default: is_cur && cfg.enabled,
+                                    verified: is_cur && cfg.verified,
+                                } />
+                            }
                         }}
                     </div>
                 </div>
@@ -202,11 +222,10 @@ pub(super) fn ProviderDetailPanel(
                     <label class="block text-sm font-medium text-text-secondary mb-1">
                         {t!(i18n, settings.reranking.api_key)}
                     </label>
-                    <SecretInput
-                        value=Signal::derive(move || api_key.get())
-                        on_change=move |v| api_key.set(v)
-                        placeholder=t_string!(i18n, settings.reranking.api_key_placeholder).to_string()
-                        monospace=true
+                    <ProviderKeyField
+                        value=api_key
+                        has_api_key=provider_has_key.into()
+                        hint=t_string!(i18n, settings.reranking.api_key_placeholder).to_string()
                     />
                 </div>
 

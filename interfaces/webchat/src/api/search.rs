@@ -11,6 +11,9 @@ pub struct SearchBackendEntry {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
+    /// A key is stored in the vault (reported by get; the secret is never echoed).
+    #[serde(default)]
+    pub has_api_key: bool,
     #[serde(default)]
     pub verified: bool,
 }

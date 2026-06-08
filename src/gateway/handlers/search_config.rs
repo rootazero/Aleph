@@ -22,6 +22,9 @@ pub struct SearchBackendDto {
     pub base_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engine_id: Option<String>,
+    /// Reported on get (never echoes the secret); ignored on update.
+    #[serde(default)]
+    pub has_api_key: bool,
     #[serde(default)]
     pub verified: bool,
 }
@@ -75,17 +78,19 @@ pub async fn handle_get(
             .backends
             .iter()
             .map(|(name, backend)| {
-                let key = resolve_api_key(name, &vault);
+                let has_api_key = resolve_api_key(name, &vault).is_some();
                 tracing::info!(
                     backend = %name,
-                    has_key = key.is_some(),
-                    "search_config.get: resolved API key"
+                    has_key = has_api_key,
+                    "search_config.get: resolved API key presence"
                 );
+                // Security (3def857c6): report presence only, never echo the secret.
                 SearchBackendDto {
                     name: name.clone(),
-                    api_key: key,
+                    api_key: None,
                     base_url: backend.base_url.clone(),
                     engine_id: backend.engine_id.clone(),
+                    has_api_key,
                     verified: backend.verified,
                 }
             })
@@ -630,4 +635,58 @@ pub async fn handle_delete_backend(
     let _ = event_bus.publish_json(&event);
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "success": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Security (3def857c6): get reports per-backend `has_api_key` from the vault
+    // but never echoes the secret back to the Panel.
+    #[tokio::test]
+    async fn test_handle_get_reports_has_api_key_without_echoing_secret() {
+        let mut base = Config::default();
+        base.search = Some(crate::config::types::SearchConfigInternal {
+            enabled: true,
+            default_provider: "brave".to_string(),
+            fallback_providers: None,
+            max_results: 5,
+            timeout_seconds: 10,
+            backends: std::collections::HashMap::from([(
+                "brave".to_string(),
+                crate::config::types::SearchBackendConfig {
+                    provider_type: "brave".to_string(),
+                    api_key: None,
+                    base_url: None,
+                    engine_id: None,
+                    engines: None,
+                    min_request_interval_ms: None,
+                    verified: true,
+                },
+            )]),
+            pii: Some(crate::config::types::PIIConfig::default()),
+            web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
+        });
+        let config = Arc::new(RwLock::new(base));
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_search_haskey.vault"));
+        let _ = vault.generate_token();
+        vault
+            .store_secret(&vault_key("brave"), "super-secret-key")
+            .unwrap();
+
+        let request = JsonRpcRequest::with_id("search_config.get", None, serde_json::json!(1));
+        let response = handle_get(request, config, vault).await;
+        assert!(response.is_success());
+
+        let result = response.result.unwrap();
+        let backend = &result["backends"][0];
+        assert_eq!(backend["name"].as_str(), Some("brave"));
+        assert_eq!(backend["has_api_key"].as_bool(), Some(true));
+        assert!(
+            backend.get("api_key").is_none(),
+            "stored secret must never be echoed back"
+        );
+        assert!(!result.to_string().contains("super-secret-key"));
+    }
 }
