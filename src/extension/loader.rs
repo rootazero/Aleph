@@ -30,7 +30,7 @@ use crate::extension::registry::PluginRegistry;
 use crate::extension::runtime::WasmRuntime;
 use crate::extension::types::{DirectCommandResult, PluginKind};
 use crate::mcp::McpManagerConfig;
-use crate::memory::extensions::{McpMemoryExtension, MemoryExtensionRegistry, UnboundMcpCaller};
+use crate::memory::extensions::{McpMemoryExtension, MemoryExtensionRegistry};
 
 /// Manages loading plugins into appropriate runtimes.
 pub struct PluginLoader {
@@ -194,7 +194,21 @@ impl PluginLoader {
         memory_registry: &Arc<MemoryExtensionRegistry>,
     ) -> ExtensionResult<()> {
         self.load_plugin(manifest, registry)?;
-        register_memory_extension_if_declared(manifest, memory_registry);
+        // Resolve the plugin's MCP server id (memory hooks route there). A
+        // memory plugin is expected to declare exactly one server; if it
+        // declares several, use the first and warn.
+        let server_id = self.mcp_configs.get(&manifest.id).and_then(|servers| {
+            let mut keys = servers.keys();
+            let first = keys.next().cloned();
+            if keys.next().is_some() {
+                warn!(
+                    plugin = %manifest.id,
+                    "plugin declares >1 MCP server; routing [memory] hooks to the first"
+                );
+            }
+            first
+        });
+        register_memory_extension_if_declared(manifest, server_id, memory_registry);
         Ok(())
     }
 
@@ -400,15 +414,15 @@ impl Default for PluginLoader {
 /// without constructing a full `PluginLoader`.
 pub(crate) fn register_memory_extension_if_declared(
     manifest: &PluginManifest,
+    server_id: Option<String>,
     registry: &Arc<MemoryExtensionRegistry>,
 ) {
     if manifest.memory_manifest.is_some() {
-        let caller = Arc::new(UnboundMcpCaller::new(manifest.name.clone()));
-        let ext = McpMemoryExtension::new(manifest.name.clone(), caller);
-        registry.register(Arc::new(ext));
+        let ext = McpMemoryExtension::new_unbound(manifest.name.clone(), server_id);
+        registry.register_mcp(Arc::new(ext));
         info!(
             plugin = %manifest.name,
-            "registered McpMemoryExtension (UnboundMcpCaller) for plugin with [memory] section"
+            "registered McpMemoryExtension (unbound) for plugin with [memory] section"
         );
     }
 }
@@ -555,7 +569,7 @@ mod tests {
         let registry = Arc::new(MemoryExtensionRegistry::new());
 
         assert_eq!(registry.len(), 0);
-        register_memory_extension_if_declared(&manifest, &registry);
+        register_memory_extension_if_declared(&manifest, Some("plugin:test/srv".to_string()), &registry);
         assert_eq!(registry.len(), 1, "should have registered one extension");
     }
 
@@ -564,7 +578,7 @@ mod tests {
         let manifest = make_manifest_no_memory();
         let registry = Arc::new(MemoryExtensionRegistry::new());
 
-        register_memory_extension_if_declared(&manifest, &registry);
+        register_memory_extension_if_declared(&manifest, Some("plugin:test/srv".to_string()), &registry);
         assert_eq!(
             registry.len(),
             0,
