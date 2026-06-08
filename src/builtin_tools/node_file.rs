@@ -101,14 +101,16 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                     None,
                 )
                 .map_err(|e| AlephError::tool(format!("local path rejected: {e}")))?;
-                let bytes = std::fs::read(&local)
-                    .map_err(|e| AlephError::tool(format!("read local '{}': {e}", local.display())))?;
-                if bytes.len() > MAX_FILE_BYTES {
+                let meta = std::fs::metadata(&local)
+                    .map_err(|e| AlephError::tool(format!("stat local '{}': {e}", local.display())))?;
+                if meta.len() > MAX_FILE_BYTES as u64 {
                     return Err(AlephError::tool(format!(
                         "{} bytes exceeds {MAX_FILE_BYTES} cap",
-                        bytes.len()
+                        meta.len()
                     )));
                 }
+                let bytes = std::fs::read(&local)
+                    .map_err(|e| AlephError::tool(format!("read local '{}': {e}", local.display())))?;
                 let sha = sha256_hex(&bytes);
                 let params = json!({
                     "tool": "file.write",
@@ -206,7 +208,6 @@ mod tests {
     use crate::cluster::{CommandDescriptor, NodeRegistry, NodeSession, ReverseRpcChannel};
     use crate::cluster::sha256_hex;
     use crate::gateway::protocol::JsonRpcResponse;
-    use base64::Engine as _;
     use serde_json::json;
     use tokio::sync::mpsc;
 
