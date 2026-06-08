@@ -78,13 +78,14 @@ pub fn tier_for_permissions(permissions: &[String]) -> &'static str {
 /// gives later phases one place to specialise.
 pub fn default_tier(channel_kind: crate::gateway::surface::SurfaceKind, is_loopback: bool) -> Tier {
     let _ = channel_kind; // carried for identity; not yet a tier input (see doc).
-    match is_loopback {
+    if is_loopback {
         // Same-machine attach: operator. Byte-equivalent to the legacy
         // `vec!["*"]` grant on the shared-token / no-auth loopback paths.
-        true => Tier::Config,
+        Tier::Config
+    } else {
         // Remote attach: chat by default (matches pairing's `Tier::from_level`
         // default; an operator raises it via `devices.set_level`).
-        false => Tier::Chat,
+        Tier::Chat
     }
 }
 

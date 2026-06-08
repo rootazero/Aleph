@@ -295,9 +295,9 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
 
     // If authentication is not required, allow any connection
     if !ctx.auth_mode.is_auth_required() {
-        // Tier source (SSOT): a shared-token connect is the loopback
-        // bootstrap path → operator. Byte-equivalent to the previous
-        // hardcoded `vec!["*"]` / `"operator"`.
+        // Tier source (SSOT): auth-not-required is a local-only mode →
+        // operator. Byte-equivalent to the previous hardcoded
+        // `vec!["*"]` / `"operator"`.
         let kind = crate::gateway::surface::SurfaceKind::from_opt_str(
             params.channel_kind.as_deref(),
         );
