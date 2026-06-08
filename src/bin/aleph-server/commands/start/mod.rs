@@ -1401,7 +1401,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 // 9. Create A2ASubAgent — the outbound delegation engine.
                 // Spec 1 G2: wire raw-memory writer so the delegation hook fires.
                 let a2a_sub_agent = Arc::new(
-                    A2ASubAgent::new(smart_router, client_pool)
+                    A2ASubAgent::new(smart_router, client_pool.clone())
                         .with_raw_memory_writer(memory_db.clone()
                             as Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>),
                 );
@@ -1429,6 +1429,23 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     card_registry.clone(),
                     a2a_sub_agent.clone(),
                 );
+
+                // 12. Optional periodic agent health monitor (opt-in via
+                // `a2a.health_check_interval_secs`). Probes registered agents
+                // on an interval and keeps their `health` field current so
+                // smart routing can avoid unreachable agents.
+                let health_interval = a2a_config.health_check_interval_secs;
+                if health_interval > 0 {
+                    alephcore::a2a::service::spawn_health_monitor(
+                        card_registry.clone(),
+                        client_pool.clone(),
+                        std::time::Duration::from_secs(health_interval),
+                    );
+                    tracing::info!(
+                        interval_secs = health_interval,
+                        "A2A agent health monitor enabled"
+                    );
+                }
 
                 if !args.daemon {
                     println!("A2A protocol: enabled");

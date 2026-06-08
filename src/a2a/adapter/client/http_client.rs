@@ -206,7 +206,7 @@ impl A2AClient {
 
     /// Send a message to a remote agent over the streaming endpoint.
     ///
-    /// POSTs `message/send` to `{base_url}/a2a/stream` and returns the parsed
+    /// POSTs `message/stream` to `{base_url}/a2a/stream` and returns the parsed
     /// SSE stream of `UpdateEvent`s. A non-2xx status (e.g. an agent with no
     /// streaming route) is returned as `Err` so the caller can fall back to
     /// the synchronous `send_message`.
@@ -226,7 +226,7 @@ impl A2AClient {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: uuid::Uuid::new_v4().to_string(),
-            method: "message/send".to_string(),
+            method: "message/stream".to_string(),
             params,
         };
 

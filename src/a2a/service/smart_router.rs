@@ -224,10 +224,6 @@ mod tests {
 
     #[async_trait::async_trait]
     impl AgentResolver for MockResolver {
-        async fn fetch_card(&self, _url: &str) -> A2AResult<AgentCard> {
-            Err(A2AError::InternalError("not implemented".into()))
-        }
-
         async fn register(
             &self,
             _card: AgentCard,
@@ -247,10 +243,6 @@ mod tests {
         }
 
         async fn resolve_by_id(&self, _agent_id: &str) -> A2AResult<Option<RegisteredAgent>> {
-            Ok(None)
-        }
-
-        async fn resolve_by_intent(&self, _intent: &str) -> A2AResult<Option<RegisteredAgent>> {
             Ok(None)
         }
     }
