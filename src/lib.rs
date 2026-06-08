@@ -63,6 +63,8 @@ pub mod bundled;
 pub mod canvas_io;
 pub mod clarification;
 pub mod cli;
+pub mod cluster;
+
 mod clipboard;
 pub mod command;
 pub mod components;
