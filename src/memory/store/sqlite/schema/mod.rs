@@ -81,6 +81,8 @@ pub fn init_schema(conn: &Connection) -> Result<(), AlephError> {
         .map_err(|e| AlephError::config(format!("Failed to create notes_links table: {e}")))?;
     migrations::migrate_notes_links_to_raw(conn)
         .map_err(|e| AlephError::config(format!("Failed to migrate notes_links: {e}")))?;
+    migrations::migrate_notes_links_relation(conn)
+        .map_err(|e| AlephError::config(format!("migrate notes_links.relation: {e}")))?;
 
     conn.execute_batch(ddl::NOTES_FTS_DDL)
         .map_err(|e| AlephError::config(format!("Failed to create notes_fts table: {e}")))?;
@@ -137,4 +139,4 @@ pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
 
 #[cfg(test)]
 pub(crate) use migrations::migrate_unify_default_to_main_agent;
-pub use migrations::{drop_obsolete_facts_tables, migrate_notes_links_to_raw};
+pub use migrations::{drop_obsolete_facts_tables, migrate_notes_links_relation, migrate_notes_links_to_raw};

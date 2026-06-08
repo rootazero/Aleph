@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::memory::store::sqlite::schema::{
-        ddl, drop_obsolete_facts_tables, init_schema, migrate_notes_links_to_raw,
-        migrate_unify_default_to_main_agent, migrations,
+        ddl, drop_obsolete_facts_tables, init_schema, migrate_notes_links_relation,
+        migrate_notes_links_to_raw, migrate_unify_default_to_main_agent, migrations,
     };
     use rusqlite::{Connection, OptionalExtension};
 
@@ -446,5 +446,32 @@ mod tests {
             0,
             "default links should be deleted"
         );
+    }
+
+    #[test]
+    fn migrate_notes_links_relation_is_idempotent() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE notes_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_id TEXT NOT NULL DEFAULT 'default',
+                from_note TEXT NOT NULL,
+                to_note TEXT NOT NULL,
+                to_raw TEXT NOT NULL,
+                UNIQUE(agent_id, from_note, to_note)
+            );",
+        )
+        .unwrap();
+        migrate_notes_links_relation(&conn).expect("first migration");
+        migrate_notes_links_relation(&conn).expect("second migration is a no-op");
+        let count = conn
+            .prepare("PRAGMA table_info(notes_links)")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .filter(|n| n == "relation")
+            .count();
+        assert_eq!(count, 1);
     }
 }

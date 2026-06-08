@@ -78,6 +78,9 @@ pub(super) struct Frontmatter {
     /// "permanent" core-knowledge tier). Absent in legacy notes → `false`.
     #[serde(default)]
     pub(super) permanent: bool,
+    /// Typed relation edges (Gap A). Absent in legacy notes → empty.
+    #[serde(default)]
+    pub(super) relations: Vec<super::relation::Relation>,
 }
 
 /// Accept a YAML date field as either a quoted string, a native YAML date

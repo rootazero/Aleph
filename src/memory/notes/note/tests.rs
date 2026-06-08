@@ -410,6 +410,53 @@ Related: [[Rust Learning]] [[Dev Environment]]
     }
 
     #[test]
+    fn relations_roundtrip_through_markdown() {
+        let note = KnowledgeNote {
+            title: "alice".to_string(),
+            category: "entity".to_string(),
+            relations: vec![
+                Relation { to: "entity/acme-corp".to_string(), rel_type: "works_at".to_string(), confidence: 0.9 },
+                Relation { to: "entity/bob".to_string(), rel_type: "colleague".to_string(), confidence: 0.7 },
+            ],
+            ..Default::default()
+        };
+        let md = note.to_markdown();
+        assert!(md.contains("relations:"));
+        assert!(md.contains("type: works_at"));
+        let parsed = KnowledgeNote::from_markdown("alice", &md).unwrap();
+        assert_eq!(parsed.relations, note.relations);
+    }
+
+    #[test]
+    fn legacy_note_without_relations_omits_block() {
+        let note = KnowledgeNote {
+            title: "x".to_string(),
+            category: "learning".to_string(),
+            ..Default::default()
+        };
+        let md = note.to_markdown();
+        assert!(!md.contains("relations:"), "no relations block when empty");
+        let parsed = KnowledgeNote::from_markdown("x", &md).unwrap();
+        assert!(parsed.relations.is_empty());
+    }
+
+    #[test]
+    fn relation_confidence_is_clamped_on_parse() {
+        let md = "---\ncategory: entity\nrelations:\n  - to: entity/bob\n    type: knows\n    confidence: 1.5\n---\n\n- hi\n";
+        let parsed = KnowledgeNote::from_markdown("a", md).unwrap();
+        assert_eq!(parsed.relations.len(), 1);
+        assert_eq!(parsed.relations[0].confidence, 1.0);
+        assert_eq!(parsed.relations[0].rel_type, "knows");
+    }
+
+    #[test]
+    fn relation_confidence_defaults_to_one_when_absent() {
+        let md = "---\ncategory: entity\nrelations:\n  - to: entity/bob\n    type: knows\n---\n\n- hi\n";
+        let parsed = KnowledgeNote::from_markdown("a", md).unwrap();
+        assert_eq!(parsed.relations[0].confidence, 1.0);
+    }
+
+    #[test]
     fn yaml_inline_array_quotes_leading_and_trailing_space() {
         let s = helpers::yaml_inline_array(&[
             " lead".to_string(),

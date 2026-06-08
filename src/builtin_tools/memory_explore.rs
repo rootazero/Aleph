@@ -57,6 +57,10 @@ pub struct ExploredFact {
     pub path: String,
     /// Relevance / similarity score
     pub relevance_score: f32,
+    /// Typed outgoing entity-graph edges, formatted "type→to_note" (Gap A).
+    /// Empty for notes with no typed relations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub relations: Vec<String>,
 }
 
 /// Output from memory_explore tool
@@ -170,15 +174,17 @@ impl MemoryExploreTool {
         }
 
         // Build output seed list before exploration (cloned for output)
-        let seed_output: Vec<ExploredFact> = seed_facts
-            .iter()
-            .map(|f| ExploredFact {
+        let mut seed_output: Vec<ExploredFact> = Vec::with_capacity(seed_facts.len());
+        for f in &seed_facts {
+            let relations = self.edge_labels(&f.id).await;
+            seed_output.push(ExploredFact {
                 id: f.id.clone(),
                 content: f.content.clone(),
                 path: f.path.clone(),
                 relevance_score: f.similarity_score.unwrap_or(0.0),
-            })
-            .collect();
+                relations,
+            });
+        }
 
         // Step 4: Create RippleTask and explore
         let config = RippleConfig {
@@ -195,16 +201,17 @@ impl MemoryExploreTool {
             .map_err(|e| ToolError::Execution(format!("Ripple explore failed: {}", e)))?;
 
         // Step 5: Convert expanded facts to output format
-        let expanded_output: Vec<ExploredFact> = result
-            .expanded_facts
-            .iter()
-            .map(|f| ExploredFact {
+        let mut expanded_output: Vec<ExploredFact> = Vec::with_capacity(result.expanded_facts.len());
+        for f in &result.expanded_facts {
+            let relations = self.edge_labels(&f.id).await;
+            expanded_output.push(ExploredFact {
                 id: f.id.clone(),
                 content: f.content.clone(),
                 path: f.path.clone(),
                 relevance_score: f.similarity_score.unwrap_or(0.0),
-            })
-            .collect();
+                relations,
+            });
+        }
 
         let hops_performed = result.total_hops;
         let summary = format!(
@@ -229,6 +236,18 @@ impl MemoryExploreTool {
             hops_performed,
             summary,
         })
+    }
+
+    /// Look up typed outgoing edges for a note path and format them as
+    /// "type→to_note" labels. Best-effort: a lookup error yields no labels.
+    async fn edge_labels(&self, note_path: &str) -> Vec<String> {
+        match self.database.get_typed_relations(note_path, &self.agent_id).await {
+            Ok(edges) => edges.into_iter().map(|(to, ty)| format!("{ty}→{to}")).collect(),
+            Err(e) => {
+                debug!(note_path = %note_path, error = %e, "edge_labels lookup failed");
+                Vec::new()
+            }
+        }
     }
 }
 
@@ -295,10 +314,34 @@ mod tests {
             content: "Test content".to_string(),
             path: "aleph://user/test/".to_string(),
             relevance_score: 0.85,
+            relations: vec![],
         };
         let json = serde_json::to_string(&fact).unwrap();
         assert!(json.contains("abc-123"));
         assert!(json.contains("0.85"));
+    }
+
+    #[test]
+    fn explored_fact_relations_default_empty_and_skipped_in_json() {
+        let fact = ExploredFact {
+            id: "entity/alice".to_string(),
+            content: "Alice".to_string(),
+            path: "entity/alice".to_string(),
+            relevance_score: 0.9,
+            relations: vec![],
+        };
+        let json = serde_json::to_string(&fact).unwrap();
+        assert!(!json.contains("relations"));
+
+        let fact2 = ExploredFact {
+            id: "entity/alice".to_string(),
+            content: "Alice".to_string(),
+            path: "entity/alice".to_string(),
+            relevance_score: 0.9,
+            relations: vec!["works_at→entity/acme".to_string()],
+        };
+        let json2 = serde_json::to_string(&fact2).unwrap();
+        assert!(json2.contains("works_at→entity/acme"));
     }
 
     #[test]

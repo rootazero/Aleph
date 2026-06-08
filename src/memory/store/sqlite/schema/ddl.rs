@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS notes_links (
     from_note   TEXT NOT NULL,
     to_note     TEXT NOT NULL,
     to_raw      TEXT NOT NULL,
+    relation    TEXT,
     UNIQUE(agent_id, from_note, to_note)
 );
 CREATE INDEX IF NOT EXISTS idx_notes_links_from ON notes_links(agent_id, from_note);

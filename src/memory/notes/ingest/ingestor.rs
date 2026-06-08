@@ -627,6 +627,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                         note_path: target,
                         new_facts: facts,
                         new_links: links,
+                        new_relations: vec![],
                     }
                 }
                 (_, op) => op,
@@ -1667,6 +1668,7 @@ mod plan_tests {
             facts: vec!["event loop".into()],
             links: vec!["learning/rust".into()],
             tags: vec![],
+            relations: vec![],
         }];
         let out = ing.dedup_redirect_creates("default", ops, &related).await;
         assert_eq!(out.len(), 1);
@@ -1675,6 +1677,7 @@ mod plan_tests {
                 note_path,
                 new_facts,
                 new_links,
+                ..
             } => {
                 assert_eq!(note_path, "learning/tokio");
                 assert!(new_facts.iter().any(|f| f.contains("event loop")));
@@ -1723,6 +1726,7 @@ mod plan_tests {
             facts: vec!["event loop".into()],
             links: vec!["learning/rust".into()],
             tags: vec![],
+            relations: vec![],
         }];
         let out = ing.dedup_redirect_creates("default", ops, &related).await;
         assert!(
@@ -1774,6 +1778,7 @@ mod plan_tests {
             facts: vec!["event loop".into()],
             links: vec!["learning/rust".into()],
             tags: vec![],
+            relations: vec![],
         }];
         let out = ing.dedup_redirect_creates("default", ops, &related).await;
         assert!(

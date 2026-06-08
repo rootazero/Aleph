@@ -1,5 +1,6 @@
 //! Data model for the compound-ingest plan and its outputs.
 
+use crate::memory::notes::note::Relation;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,6 +28,8 @@ pub enum PageOp {
         links: Vec<String>,
         #[serde(default)]
         tags: Vec<String>,
+        #[serde(default)]
+        relations: Vec<Relation>,
     },
     Append {
         note_path: String,
@@ -34,6 +37,8 @@ pub enum PageOp {
         new_facts: Vec<String>,
         #[serde(default)]
         new_links: Vec<String>,
+        #[serde(default)]
+        new_relations: Vec<Relation>,
     },
     Update {
         note_path: String,
@@ -129,11 +134,13 @@ mod tests {
                 facts: vec!["event-driven".into()],
                 links: vec!["learning/rust-async".into()],
                 tags: vec!["rust".into()],
+                relations: vec![],
             },
             PageOp::Append {
                 note_path: "learning/rust-async".into(),
                 new_facts: vec!["pin API".into()],
                 new_links: vec![],
+                new_relations: vec![],
             },
             PageOp::Update {
                 note_path: "preference/runtime".into(),
@@ -178,6 +185,7 @@ mod tests {
             facts: vec![],
             links: vec![],
             tags: vec![],
+            relations: vec![],
         };
         assert_eq!(p.primary_path(), "a/b");
 
@@ -200,5 +208,39 @@ mod tests {
         assert_eq!(r.created, 0);
         assert!(r.tx_id.is_empty());
         assert!(r.touched_paths.is_empty());
+    }
+
+    #[test]
+    fn create_op_parses_relations_and_defaults_when_absent() {
+        let j = r#"{"kind":"create","note_path":"entity/alice","title":"Alice","summary":"","facts":[],"links":[],"tags":[],"relations":[{"to":"entity/acme","type":"works_at","confidence":0.9}]}"#;
+        let op: PageOp = serde_json::from_str(j).unwrap();
+        match op {
+            PageOp::Create { relations, .. } => {
+                assert_eq!(relations.len(), 1);
+                assert_eq!(relations[0].rel_type, "works_at");
+            }
+            _ => panic!("expected create"),
+        }
+        let j2 = r#"{"kind":"create","note_path":"learning/x","title":"X","summary":"","facts":[],"links":[],"tags":[]}"#;
+        let op2: PageOp = serde_json::from_str(j2).unwrap();
+        match op2 {
+            PageOp::Create { relations, .. } => assert!(relations.is_empty()),
+            _ => panic!("expected create"),
+        }
+    }
+
+    #[test]
+    fn append_op_parses_new_relations() {
+        let j = r#"{"kind":"append","note_path":"entity/alice","new_facts":[],"new_links":[],"new_relations":[{"to":"entity/bob","type":"colleague"}]}"#;
+        let op: PageOp = serde_json::from_str(j).unwrap();
+        match op {
+            PageOp::Append { new_relations, .. } => {
+                assert_eq!(new_relations.len(), 1);
+                assert_eq!(new_relations[0].rel_type, "colleague");
+                assert_eq!(new_relations[0].to, "entity/bob");
+                assert_eq!(new_relations[0].confidence, 1.0);
+            }
+            _ => panic!("expected append"),
+        }
     }
 }

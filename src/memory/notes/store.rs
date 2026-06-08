@@ -97,6 +97,15 @@ pub trait NoteStore: Send + Sync {
         agent_id: &str,
     ) -> Result<Vec<String>, AlephError>;
 
+    /// Outgoing **typed** edges for a note: `(to_note, relation_type)` for every
+    /// row whose `relation` column is non-NULL. Untyped body wikilinks are
+    /// excluded. Used to surface entity-graph edge labels (Gap A).
+    async fn get_typed_relations(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Vec<(String, String)>, AlephError>;
+
     /// Full-text search over note content.
     async fn search_notes_fts(
         &self,
