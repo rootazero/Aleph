@@ -461,6 +461,9 @@ async fn handle_connection(
         let mut reg = ctx.reverse_rpc.write().await;
         reg.insert(conn_id.clone(), rpc_channel);
     }
+    // Disabled once the outbound channel closes so the select arm below stops
+    // being polled (a closed mpsc receiver is always-ready and would spin).
+    let mut rpc_open = true;
 
     // Initialize connection state
     {
@@ -1280,7 +1283,7 @@ async fn handle_connection(
             // Reverse-RPC outbound: write server-initiated frames verbatim.
             // Full JSON-RPC request strings produced by ReverseRpcChannel::call();
             // no filtering, no wrapping.
-            frame = rpc_out_rx.recv() => {
+            frame = rpc_out_rx.recv(), if rpc_open => {
                 match frame {
                     Some(text) => {
                         if let Err(e) = write.send(WsMessage::Text(text.into())).await {
@@ -1289,8 +1292,9 @@ async fn handle_connection(
                         }
                     }
                     None => {
-                        // All ReverseRpcChannel senders dropped (registry entry
-                        // removed). Nothing more to push; keep serving inbound.
+                        // All senders dropped; disable this arm so select stops
+                        // polling an always-ready closed receiver (no spin).
+                        rpc_open = false;
                     }
                 }
             }
