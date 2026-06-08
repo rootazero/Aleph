@@ -550,7 +550,16 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     dispatch_signal: Option<Arc<tokio::sync::Notify>>,
     daemon: bool,
 ) {
-    let routing_config = RoutingConfig::default();
+    // Single source of truth for dm_scope: the user's [session] block.
+    // Captured once and fed to BOTH routing paths — the zero-config fallback
+    // (RoutingConfig.dm_scope, below) and the configured-bindings path
+    // (with_route_bindings' SessionConfig, further down).
+    let session_cfg = if let Some(ref cfg_arc) = app_config {
+        cfg_arc.read().await.session.clone()
+    } else {
+        alephcore::routing::config::SessionConfig::default()
+    };
+    let routing_config = RoutingConfig::default().with_dm_scope(session_cfg.dm_scope.into());
 
     // Use full execution support when available, otherwise basic routing
     let mut inbound_router = match (execution_adapter, agent_registry) {
@@ -754,7 +763,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             drop(cfg);
             inbound_router = inbound_router.with_route_bindings(
                 bindings,
-                alephcore::routing::config::SessionConfig::default(),
+                session_cfg.clone(),
                 alephcore::routing::DEFAULT_AGENT_ID,
             );
             if !daemon {

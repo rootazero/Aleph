@@ -19,7 +19,7 @@ where
 }
 
 /// Session configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionConfig {
     /// DM isolation strategy
     #[serde(default)]

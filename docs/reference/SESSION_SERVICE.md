@@ -72,3 +72,32 @@ Gateway `session.*` RPC methods remain on `SessionManager` (`src/gateway/session
 - Deleting the legacy `messages` column (it remains the Gateway-read materialized view).
 - Snapshot-based `wake()` optimization — full replay is adequate in v1.
 - Changing `SessionKey` variants or routing semantics.
+
+## DM Scope —— 单用户「一脑多端」连续上下文
+
+`[session] dm_scope` 控制 DM 如何映射到会话：
+
+| 值 | 语义 |
+|---|---|
+| `per-peer`（默认） | 每个发送者独立会话（跨 channel 按 peer） |
+| `per-channel-peer` | 每个 channel × 发送者独立会话（多用户推荐） |
+| `main` | 所有 DM 坍缩到该 agent 的 `Main` 会话 |
+
+**单用户 owner**（只有你本人会 DM 这个 bot，由 allowlist/pairing 保证）建议设：
+
+```toml
+[session]
+dm_scope = "main"
+```
+
+效果：你在 Telegram / Slack / WebChat Panel 等各 channel 与**同一 agent** 的 DM 共享同一段
+`agent:<id>:main` 上下文——agent 记得你在任意 channel 说过的话；打开 Panel 即见完整历史。
+绑定到**不同 agent** 的 channel 各自 `agent:<id>:main` 隔离（工作 / 个人不串味）。回复仍只回到
+你发问的那个 channel（不向其他 channel 推送）。
+
+**注意事项**
+- **多用户警示**：若 owner 之外还有人被 allowlist 也能 DM，`main` 会把所有人并进同一会话。
+  多用户请用 `per-channel-peer`（owner 专属 Main 的判定本期未实现）。
+- **迁移断点**：从 `per-peer` 切到 `main` 后，旧的 `agent:<id>:dm:<peer>` 会话停在原地（不迁移），
+  新消息走 `agent:<id>:main`，会有一次性上下文断点。
+- 群组消息不受影响，始终按 `Group` 会话隔离。
