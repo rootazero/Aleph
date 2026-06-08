@@ -31,10 +31,6 @@ web-sys = { version = "0.3", optional = true, features = [
     "console"
 ] }
 
-# Native (for CLI/TUI)
-tokio = { version = "1.35", optional = true, features = ["full"] }
-tokio-tungstenite = { version = "0.21", optional = true, features = ["native-tls"] }
-
 [features]
 default = ["leptos", "wasm"]
 leptos = ["dep:leptos"]
@@ -42,9 +38,5 @@ wasm = [
     "dep:wasm-bindgen",
     "dep:wasm-bindgen-futures",
     "dep:web-sys"
-]
-native = [
-    "dep:tokio",
-    "dep:tokio-tungstenite"
 ]
 observability = []
