@@ -1657,7 +1657,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_pairing_bypass_admits_only_two_methods() {
+    fn browser_pairing_bypass_admits_anonymous_pairing_methods() {
         assert!(allow_unauth_browser_pairing("pairing.start_browser"));
         assert!(allow_unauth_browser_pairing("pairing.start_node"));
         assert!(allow_unauth_browser_pairing("pairing.poll"));
