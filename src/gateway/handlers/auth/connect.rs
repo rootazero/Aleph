@@ -212,6 +212,15 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 let device_name = params.device_name.as_deref().unwrap_or("Web Panel");
 
+                // Tier source (SSOT): a shared-token connect is the loopback
+                // bootstrap path → operator. Byte-equivalent to the previous
+                // hardcoded `vec!["*"]` / `"operator"`.
+                let kind = crate::gateway::surface::SurfaceKind::from_opt_str(
+                    params.channel_kind.as_deref(),
+                );
+                let perms = super::tier::default_tier(kind, true).permissions();
+                let role = super::tier::role_for_permissions(&perms).to_string();
+
                 // Register device in SecurityStore (required for FK constraint on tokens)
                 let device_fingerprint: String = device_id.chars().take(16).collect();
                 if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
@@ -221,7 +230,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     public_key: &[0u8; 32],
                     fingerprint: &device_fingerprint,
                     role: DeviceRole::Operator.as_str(),
-                    scopes: &["*".to_string()],
+                    scopes: &perms,
                 }) {
                     warn!(error = %e, "Failed to register device via shared token");
                     return JsonRpcResponse::error(
@@ -234,7 +243,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                 let signed_token = match ctx.token_manager.issue_token(
                     &device_id,
                     DeviceRole::Operator,
-                    vec!["*".to_string()],
+                    perms.clone(),
                 ) {
                     Ok(t) => t,
                     Err(e) => {
@@ -254,8 +263,8 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     json!(ConnectResult {
                         token: format!("{}:{}", signed_token.token, signed_token.signature),
                         device_id,
-                        permissions: vec!["*".to_string()],
-                        role: "operator".to_string(),
+                        permissions: perms,
+                        role,
                         expires_at: chrono::DateTime::from_timestamp_millis(
                             signed_token.expires_at
                         )
@@ -286,6 +295,15 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
 
     // If authentication is not required, allow any connection
     if !ctx.auth_mode.is_auth_required() {
+        // Tier source (SSOT): a shared-token connect is the loopback
+        // bootstrap path → operator. Byte-equivalent to the previous
+        // hardcoded `vec!["*"]` / `"operator"`.
+        let kind = crate::gateway::surface::SurfaceKind::from_opt_str(
+            params.channel_kind.as_deref(),
+        );
+        let perms = super::tier::default_tier(kind, true).permissions();
+        let role = super::tier::role_for_permissions(&perms).to_string();
+
         let device_id = params
             .device_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -300,7 +318,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             public_key: &[0u8; 32],           // Placeholder public key
             fingerprint: &device_fingerprint, // Use prefix as fingerprint
             role: DeviceRole::Operator.as_str(),
-            scopes: &["*".to_string()],
+            scopes: &perms,
         }) {
             warn!(error = %e, "Failed to register device");
             return JsonRpcResponse::error(
@@ -313,7 +331,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
         let signed_token = match ctx.token_manager.issue_token(
             &device_id,
             DeviceRole::Operator,
-            vec!["*".to_string()],
+            perms.clone(),
         ) {
             Ok(t) => t,
             Err(e) => {
@@ -333,8 +351,8 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             json!(ConnectResult {
                 token: format!("{}:{}", signed_token.token, signed_token.signature),
                 device_id,
-                permissions: vec!["*".to_string()],
-                role: "operator".to_string(),
+                permissions: perms,
+                role,
                 expires_at: chrono::DateTime::from_timestamp_millis(signed_token.expires_at)
                     .map(|dt| dt.to_rfc3339())
                     .unwrap_or_else(
@@ -759,6 +777,23 @@ mod tests {
         let result = response.result.unwrap();
         assert!(result.get("token").is_some());
         assert!(result.get("device_id").is_some());
+        // Equivalence guard: shared-token (loopback bootstrap) must always yield operator/["*"].
+        assert_eq!(result.get("role").and_then(|v| v.as_str()), Some("operator"));
+        assert_eq!(
+            result
+                .get("permissions")
+                .and_then(|v| v.as_array())
+                .map(|a| a.len()),
+            Some(1)
+        );
+        assert_eq!(
+            result
+                .get("permissions")
+                .and_then(|v| v.as_array())
+                .and_then(|a| a.first())
+                .and_then(|v| v.as_str()),
+            Some("*")
+        );
     }
 
     #[tokio::test]
