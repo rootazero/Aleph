@@ -9,11 +9,13 @@ use super::wikilink::extract_wikilinks;
 
 mod helpers;
 mod parsing;
+mod relation;
 #[cfg(test)]
 mod tests;
 pub mod types;
 
 pub use helpers::sanitize_title;
+pub use relation::Relation;
 pub use types::{FactProvenance, ProvenanceOrigin, Severity};
 
 use helpers::{sha256_hex, yaml_inline_array};
@@ -45,6 +47,9 @@ pub struct KnowledgeNote {
     pub facts: Vec<String>,
     /// Extracted `[[wikilinks]]` from the body
     pub links: Vec<String>,
+    /// Typed relation edges from frontmatter `relations:` (Gap A entity graph).
+    /// Empty for notes without a `relations:` block (legacy + non-entity notes).
+    pub relations: Vec<Relation>,
     /// Unix timestamp (seconds) — from frontmatter `created` date
     pub created_at: i64,
     /// Unix timestamp (seconds) — from frontmatter `updated` date
@@ -88,6 +93,7 @@ impl Default for KnowledgeNote {
             tags: Vec::new(),
             facts: Vec::new(),
             links: Vec::new(),
+            relations: Vec::new(),
             created_at: 0,
             updated_at: 0,
             content_hash: String::new(),
@@ -126,6 +132,11 @@ impl KnowledgeNote {
             tags: frontmatter.tags,
             facts,
             links,
+            relations: frontmatter
+                .relations
+                .into_iter()
+                .map(Relation::clamped)
+                .collect(),
             created_at,
             updated_at,
             content_hash,
@@ -190,6 +201,16 @@ impl KnowledgeNote {
             "superseded_by: {}\n",
             yaml_inline_array(&self.superseded_by)
         ));
+        // Only emit `relations:` when non-empty, so notes without typed edges
+        // serialize byte-for-byte as before this field existed (legacy parity).
+        if !self.relations.is_empty() {
+            out.push_str("relations:\n");
+            for r in &self.relations {
+                out.push_str(&format!("  - to: {}\n", r.to));
+                out.push_str(&format!("    type: {}\n", r.rel_type));
+                out.push_str(&format!("    confidence: {:.4}\n", r.confidence));
+            }
+        }
         // Only emit `permanent:` when set, so non-permanent notes serialize
         // byte-for-byte as before this field existed.
         if self.permanent {
