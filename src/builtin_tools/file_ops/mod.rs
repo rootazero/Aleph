@@ -9,6 +9,7 @@ pub(crate) mod edit;
 mod edit_match;
 mod ops;
 mod path_utils;
+pub(crate) use path_utils::{check_and_resolve_path, get_denied_paths};
 pub(crate) mod read;
 mod search;
 mod state;

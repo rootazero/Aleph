@@ -145,6 +145,13 @@ fn normalize_path(path: &std::path::Path, workspace_root: &std::path::Path) -> s
     normalized
 }
 
+/// Compute the per-session workspace directory the same way `WorkspaceSandbox`
+/// does, without instantiating one. Lets out-of-band consumers (cluster node
+/// file commands) jail to the exact dir the node's bash sandbox uses.
+pub fn session_workspace_dir(workspace_root: &std::path::Path, sid: &SessionId) -> PathBuf {
+    workspace_root.join(session_key_to_filename(sid))
+}
+
 /// Deterministic filesystem-safe directory name derived from a `SessionId`.
 ///
 /// Uses SHA-256 of the JSON-serialised key, truncated to 16 bytes (32 hex
