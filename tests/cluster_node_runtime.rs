@@ -57,7 +57,9 @@ async fn center_runs_bash_on_connected_node() {
     let _keepalive = &server;
 
     let url = format!("ws://{bound}/ws");
-    let (mut ws, _r) = tokio_tungstenite::connect_async(url.as_str()).await.unwrap();
+    let (mut ws, _r) = tokio_tungstenite::connect_async(url.as_str())
+        .await
+        .unwrap();
     ws.send(Message::Text(
         json!({"jsonrpc":"2.0","id":1,"method":"connect",
                "params":{"device_name":"itest-node","device_id":"node-itest"}})
@@ -114,4 +116,45 @@ async fn wait_for_one_channel(reg: &ReverseRpcRegistry) -> ReverseRpcChannel {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("no reverse_rpc channel registered within timeout");
+}
+
+#[tokio::test]
+async fn command_table_file_roundtrip() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut table = CommandTable::new();
+    table.register_file_commands(dir.path().to_path_buf());
+
+    let content = b"integration-bytes\x00\xff";
+    let sha = {
+        use sha2::{Digest, Sha256};
+        let mut h = Sha256::new();
+        h.update(content);
+        hex::encode(h.finalize())
+    };
+    let b64 = {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(content)
+    };
+
+    let write = table
+        .dispatch(
+            "tool.call",
+            &json!({ "tool": "file.write", "args": { "path": "round/trip.bin", "content_b64": b64, "sha256": sha } }),
+        )
+        .await
+        .expect("file.write dispatch ok");
+    assert_eq!(write["written"], content.len());
+
+    let read = table
+        .dispatch(
+            "tool.call",
+            &json!({ "tool": "file.read", "args": { "path": "round/trip.bin" } }),
+        )
+        .await
+        .expect("file.read dispatch ok");
+    use base64::Engine as _;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(read["content_b64"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(decoded, content);
 }

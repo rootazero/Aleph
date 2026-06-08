@@ -100,6 +100,17 @@ impl CommandTable {
         t.register("bash", Arc::new(BashNodeCommand::new(bash, session)));
         t
     }
+
+    /// 在已有命令之外注册 `file.read` / `file.write`，两者共享同一 jail 根
+    /// （应传入节点 bash 的同一 session workspace 目录）。
+    pub fn register_file_commands(&mut self, workspace_dir: std::path::PathBuf) {
+        use crate::cluster::{FileReadCommand, FileWriteCommand};
+        self.register(
+            "file.read",
+            Arc::new(FileReadCommand::new(workspace_dir.clone())),
+        );
+        self.register("file.write", Arc::new(FileWriteCommand::new(workspace_dir)));
+    }
 }
 
 #[cfg(test)]
@@ -118,7 +129,10 @@ mod tests {
             Ok(json!({"echoed": args}))
         }
         fn descriptor(&self) -> CommandDescriptor {
-            CommandDescriptor { name: "echo".to_string(), schema: json!({"type": "object"}) }
+            CommandDescriptor {
+                name: "echo".to_string(),
+                schema: json!({"type": "object"}),
+            }
         }
     }
 
@@ -158,7 +172,10 @@ mod tests {
     #[tokio::test]
     async fn dispatch_passes_through_command_error() {
         let err = table()
-            .dispatch("tool.call", &json!({"tool": "echo", "args": {"boom": true}}))
+            .dispatch(
+                "tool.call",
+                &json!({"tool": "echo", "args": {"boom": true}}),
+            )
             .await
             .expect_err("command error surfaces");
         assert!(err.contains("boom"), "{err}");
@@ -181,11 +198,17 @@ mod tests {
         let table = CommandTable::with_bash(bash, session);
 
         let out = table
-            .dispatch("tool.call", &json!({"tool": "bash", "args": {"cmd": "echo hi"}}))
+            .dispatch(
+                "tool.call",
+                &json!({"tool": "bash", "args": {"cmd": "echo hi"}}),
+            )
             .await
             .expect("bash runs under sandbox");
         // MockSandbox returns a structured CodeExecOutput; assert the envelope shape.
-        assert!(out.get("exit_code").is_some(), "bash output envelope: {out}");
+        assert!(
+            out.get("exit_code").is_some(),
+            "bash output envelope: {out}"
+        );
 
         // allowlist still authoritative: bash table denies a non-bash tool.
         let err = table

@@ -1,0 +1,279 @@
+//! 节点侧文件命令（执行臂）：`file.read` / `file.write`。
+//!
+//! 字节直接走 host-fs（节点是执行臂，R1 允许），jail 在节点 session
+//! workspace 目录内：相对路径 join workspace，绝对路径必须仍落在 workspace
+//! 之下，否则拒。两端硬 8MB 上限 + sha256 完整性。无 LLM 推理（R7）。
+
+use std::path::{Path, PathBuf};
+
+use async_trait::async_trait;
+use base64::Engine as _;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+use crate::builtin_tools::file_ops::{check_and_resolve_path, get_denied_paths};
+use crate::cluster::{CommandDescriptor, NodeCommand};
+
+/// 单文件硬上限（原始字节）。两端一致；超过即 fail-fast。
+pub const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
+
+const B64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
+
+/// 十六进制 sha256。两端用同一算法做完整性校验。
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+/// 把请求里的 `path` 解析进节点 workspace jail。相对路径 join workspace；
+/// 任何最终 canonical 路径必须仍在 workspace 之下（绝对路径越界 → 拒）。
+/// 复用 file_ops 的 canonicalize + deny-list，再补一道 containment 闸门
+/// （`check_and_resolve_path` 本身不强制 containment，只用 base 解析相对路径）。
+fn resolve_in_jail(path: &str, workspace_dir: &Path) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(workspace_dir)
+        .map_err(|e| format!("workspace dir unavailable: {e}"))?;
+    let root = workspace_dir
+        .canonicalize()
+        .map_err(|e| format!("workspace root unresolved: {e}"))?;
+    let resolved = check_and_resolve_path(Path::new(path), &get_denied_paths(), Some(&root))
+        .map_err(|e| format!("path rejected: {e}"))?;
+    if !resolved.starts_with(&root) {
+        return Err("path escapes node workspace".to_string());
+    }
+    Ok(resolved)
+}
+
+/// `file.write`：中心 push 的字节落到节点 workspace。
+pub struct FileWriteCommand {
+    workspace_dir: PathBuf,
+}
+
+impl FileWriteCommand {
+    pub fn new(workspace_dir: PathBuf) -> Self {
+        Self { workspace_dir }
+    }
+}
+
+#[async_trait]
+impl NodeCommand for FileWriteCommand {
+    async fn run(&self, args: Value) -> Result<Value, String> {
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or("file.write: missing string field `path`")?;
+        let content_b64 = args
+            .get("content_b64")
+            .and_then(|v| v.as_str())
+            .ok_or("file.write: missing string field `content_b64`")?;
+        let expected_sha = args
+            .get("sha256")
+            .and_then(|v| v.as_str())
+            .ok_or("file.write: missing string field `sha256`")?;
+        let overwrite = args
+            .get("overwrite")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let bytes = B64
+            .decode(content_b64)
+            .map_err(|e| format!("file.write: invalid base64: {e}"))?;
+        if bytes.len() > MAX_FILE_BYTES {
+            return Err(format!(
+                "file.write: {} bytes exceeds {MAX_FILE_BYTES} cap",
+                bytes.len()
+            ));
+        }
+        if sha256_hex(&bytes) != expected_sha {
+            return Err("file.write: sha256 mismatch".to_string());
+        }
+
+        let dest = resolve_in_jail(path, &self.workspace_dir)?;
+        if dest.exists() && !overwrite {
+            return Err("file.write: target exists (set overwrite)".to_string());
+        }
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("file.write: {e}"))?;
+        }
+        std::fs::write(&dest, &bytes).map_err(|e| format!("file.write: {e}"))?;
+        Ok(json!({ "written": bytes.len() }))
+    }
+
+    fn descriptor(&self) -> CommandDescriptor {
+        CommandDescriptor {
+            name: "file.write".to_string(),
+            schema: json!({"type": "object"}),
+        }
+    }
+}
+
+/// `file.read`：中心 pull 节点 workspace 里的字节。
+pub struct FileReadCommand {
+    workspace_dir: PathBuf,
+}
+
+impl FileReadCommand {
+    pub fn new(workspace_dir: PathBuf) -> Self {
+        Self { workspace_dir }
+    }
+}
+
+#[async_trait]
+impl NodeCommand for FileReadCommand {
+    async fn run(&self, args: Value) -> Result<Value, String> {
+        let path = args
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or("file.read: missing string field `path`")?;
+        let src = resolve_in_jail(path, &self.workspace_dir)?;
+        if !src.exists() {
+            return Err("file.read: not found".to_string());
+        }
+        let size = std::fs::metadata(&src)
+            .map_err(|e| format!("file.read: {e}"))?
+            .len() as usize;
+        if size > MAX_FILE_BYTES {
+            return Err(format!(
+                "file.read: {size} bytes exceeds {MAX_FILE_BYTES} cap"
+            ));
+        }
+        let bytes = std::fs::read(&src).map_err(|e| format!("file.read: {e}"))?;
+        Ok(json!({
+            "content_b64": B64.encode(&bytes),
+            "sha256": sha256_hex(&bytes),
+            "size": bytes.len(),
+        }))
+    }
+
+    fn descriptor(&self) -> CommandDescriptor {
+        CommandDescriptor {
+            name: "file.read".to_string(),
+            schema: json!({"type": "object"}),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::io::Write as _;
+
+    fn b64(bytes: &[u8]) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    #[tokio::test]
+    async fn file_write_then_read_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path().to_path_buf();
+        let writer = FileWriteCommand::new(ws.clone());
+        let reader = FileReadCommand::new(ws.clone());
+
+        let content = b"hello node bytes\x00\x01\x02";
+        let res = writer
+            .run(json!({
+                "path": "out/data.bin",
+                "content_b64": b64(content),
+                "sha256": sha256_hex(content),
+            }))
+            .await
+            .expect("write ok");
+        assert_eq!(res["written"], content.len());
+
+        let got = reader
+            .run(json!({ "path": "out/data.bin" }))
+            .await
+            .expect("read ok");
+        assert_eq!(got["size"], content.len());
+        assert_eq!(got["sha256"], sha256_hex(content));
+        use base64::Engine as _;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(got["content_b64"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(decoded, content);
+    }
+
+    #[tokio::test]
+    async fn file_write_rejects_oversize() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = FileWriteCommand::new(dir.path().to_path_buf());
+        let big = vec![0u8; MAX_FILE_BYTES + 1];
+        let err = writer
+            .run(json!({ "path": "big.bin", "content_b64": b64(&big), "sha256": sha256_hex(&big) }))
+            .await
+            .expect_err("oversize rejected");
+        assert!(err.contains("exceeds"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn file_write_rejects_sha_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = FileWriteCommand::new(dir.path().to_path_buf());
+        let err = writer
+            .run(json!({ "path": "x.bin", "content_b64": b64(b"abc"), "sha256": "deadbeef" }))
+            .await
+            .expect_err("sha mismatch rejected");
+        assert!(err.contains("sha256 mismatch"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn file_write_rejects_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = FileWriteCommand::new(dir.path().to_path_buf());
+        let err = writer
+            .run(json!({
+                "path": "../escape.bin",
+                "content_b64": b64(b"x"),
+                "sha256": sha256_hex(b"x"),
+            }))
+            .await
+            .expect_err("traversal rejected");
+        assert!(err.contains("escapes") || err.contains("rejected"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn file_write_respects_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = FileWriteCommand::new(dir.path().to_path_buf());
+        let args =
+            json!({ "path": "f.bin", "content_b64": b64(b"v1"), "sha256": sha256_hex(b"v1") });
+        writer.run(args.clone()).await.expect("first write ok");
+
+        let err = writer.run(args).await.expect_err("no overwrite by default");
+        assert!(err.contains("exists"), "{err}");
+
+        writer
+            .run(json!({ "path": "f.bin", "content_b64": b64(b"v2"), "sha256": sha256_hex(b"v2"), "overwrite": true }))
+            .await
+            .expect("overwrite ok");
+    }
+
+    #[tokio::test]
+    async fn file_read_rejects_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let reader = FileReadCommand::new(dir.path().to_path_buf());
+        let err = reader
+            .run(json!({ "path": "nope.bin" }))
+            .await
+            .expect_err("missing rejected");
+        assert!(err.contains("not found"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn file_read_rejects_oversize() {
+        let dir = tempfile::tempdir().unwrap();
+        let big_path = dir.path().join("big.bin");
+        let mut f = std::fs::File::create(&big_path).unwrap();
+        f.write_all(&vec![0u8; MAX_FILE_BYTES + 1]).unwrap();
+        drop(f);
+        let reader = FileReadCommand::new(dir.path().to_path_buf());
+        let err = reader
+            .run(json!({ "path": "big.bin" }))
+            .await
+            .expect_err("oversize read rejected");
+        assert!(err.contains("exceeds"), "{err}");
+    }
+}

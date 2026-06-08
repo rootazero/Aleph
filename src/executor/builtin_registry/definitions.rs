@@ -252,6 +252,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         description: "Run a command on a connected cluster node (a remote execution arm). Address the node by name or id; the command must be one the node declares (e.g. \"bash\"), and `args` is that command's JSON payload passed through verbatim.",
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
     },
+    BuiltinToolDefinition {
+        name: "node_file",
+        description: "Transfer a file between the center and a connected cluster node by path (push/pull). Bytes move host-to-host over the cluster channel and never enter the conversation; 8 MB cap; the node must declare file.read/file.write.",
+        requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
+    },
     // Memory lifecycle & knowledge-wiki tools — require a memory backend / wiki /
     // profile synthesizer; created dynamically in BuiltinToolRegistry::with_config().
     BuiltinToolDefinition {
@@ -851,6 +856,9 @@ pub fn create_tool_boxed(
         // node_invoke requires the gateway NodeRegistry, injected at boot via
         // set_node_registry; built fresh per call — same pattern as remember.
         "node_invoke" => None,
+        // node_file requires the gateway NodeRegistry, injected at boot via
+        // set_node_registry; built fresh per call — same pattern as node_invoke.
+        "node_file" => None,
         // Cron management tool requires SharedCronService at runtime
         "cron_manage" => None,
         // ask_user requires ChannelRegistry + ClarificationManager, injected

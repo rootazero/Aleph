@@ -143,6 +143,15 @@ impl BuiltinToolRegistry {
         );
         info!("Registered node_invoke tool in BuiltinToolRegistry");
 
+        // node_file — cluster file transfer. Same deferred NodeRegistry as node_invoke.
+        reg(
+            tools,
+            "node_file",
+            crate::builtin_tools::NodeFileTool::DESCRIPTION,
+            schema::<crate::builtin_tools::node_file::NodeFileArgs>("node_file"),
+        );
+        info!("Registered node_file tool in BuiltinToolRegistry");
+
         // Vault store tool
         if vault_store_tool.is_some() {
             reg(
