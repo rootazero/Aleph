@@ -10,6 +10,7 @@ use crate::memory::extensions::types::{
 };
 use crate::memory::store::raw_memory::RawMemory;
 use crate::sync_primitives::Arc;
+use arc_swap::ArcSwap;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
@@ -22,15 +23,47 @@ pub trait McpCaller: Send + Sync {
 
 pub struct McpMemoryExtension {
     name: String,
-    caller: Arc<dyn McpCaller>,
+    /// `Some` when created unbound by the plugin loader (drives the boot-time
+    /// rebind to a real `ManagerBackedMcpCaller`). `None` for test-constructed
+    /// extensions that are handed a concrete caller up front.
+    server_id: Option<String>,
+    /// Swappable so the boot-time bind can replace `UnboundMcpCaller` with the
+    /// real MCP-backed caller without re-registering. Dispatch reads via `.load()`.
+    caller: ArcSwap<dyn McpCaller>,
 }
 
 impl McpMemoryExtension {
+    /// Construct with a concrete caller (already bound). `server_id` is `None`,
+    /// so the boot-time bind pass skips it.
     pub fn new(name: impl Into<String>, caller: Arc<dyn McpCaller>) -> Self {
         Self {
             name: name.into(),
-            caller,
+            server_id: None,
+            caller: ArcSwap::from(caller),
         }
+    }
+
+    /// Construct unbound: backed by `UnboundMcpCaller` until `rebind` replaces
+    /// it. `server_id` (when `Some`) is the MCP server that
+    /// `bind_memory_callers` will route this plugin's hook calls to.
+    pub fn new_unbound(name: String, server_id: Option<String>) -> Self {
+        let caller: Arc<dyn McpCaller> = Arc::new(UnboundMcpCaller::new(name.clone()));
+        Self {
+            name,
+            server_id,
+            caller: ArcSwap::from(caller),
+        }
+    }
+
+    /// Swap the underlying caller. Visible to every subsequent hook dispatch.
+    pub fn rebind(&self, caller: Arc<dyn McpCaller>) {
+        self.caller.store(caller);
+    }
+
+    /// The MCP server id this extension's hooks route to, if resolved at
+    /// registration. `None` means "leave bound to whatever caller it has".
+    pub fn server_id(&self) -> Option<&str> {
+        self.server_id.as_deref()
     }
 }
 
@@ -51,7 +84,7 @@ impl MemoryExtension for McpMemoryExtension {
             "session_id": ctx.session_id,
             "envelope": envelope,
         });
-        let resp = self.caller.call("memory.on_retrieve", args).await?;
+        let resp = self.caller.load().call("memory.on_retrieve", args).await?;
         // Response shape: { "additions": [EnvelopeItem, ...] } — optional.
         if let Some(additions) = resp.get("additions").and_then(|v| v.as_array()) {
             for a in additions {
@@ -79,7 +112,7 @@ impl MemoryExtension for McpMemoryExtension {
             "source_hint": ctx.source_hint,
             "raw": raw,
         });
-        let resp = self.caller.call("memory.on_capture", args).await?;
+        let resp = self.caller.load().call("memory.on_capture", args).await?;
 
         // Optional modified raw: { "modified": RawMemory } — apply before
         // returning the decision so Allow+modified propagates through the chain.
@@ -107,7 +140,7 @@ impl MemoryExtension for McpMemoryExtension {
             "agent_id": ctx.agent_id,
             "tick": ctx.tick,
         });
-        let resp = self.caller.call("memory.produce", args).await?;
+        let resp = self.caller.load().call("memory.produce", args).await?;
         let raws = resp
             .get("raw_memories")
             .and_then(|v| v.as_array())
@@ -130,7 +163,7 @@ impl MemoryExtension for McpMemoryExtension {
             "reset": ctx.reset(),
         });
         // Acknowledge errors but don't try to parse — this is notify-only.
-        let _ = self.caller.call("memory.on_session_switch", args).await?;
+        let _ = self.caller.load().call("memory.on_session_switch", args).await?;
         Ok(())
     }
 
@@ -142,7 +175,7 @@ impl MemoryExtension for McpMemoryExtension {
             "oldest_at": ctx.oldest_at,
             "newest_at": ctx.newest_at,
         });
-        let resp = self.caller.call("memory.on_pre_compress", args).await?;
+        let resp = self.caller.load().call("memory.on_pre_compress", args).await?;
         // Response shape: { "text": "..." } — optional. Empty string ≡ no contribution.
         Ok(resp
             .get("text")
@@ -159,7 +192,7 @@ impl MemoryExtension for McpMemoryExtension {
             "task": ctx.task,
             "result_summary": ctx.result_summary,
         });
-        let _ = self.caller.call("memory.on_delegation", args).await?;
+        let _ = self.caller.load().call("memory.on_delegation", args).await?;
         Ok(())
     }
 }
@@ -192,6 +225,60 @@ impl McpCaller for UnboundMcpCaller {
              (method={method}); Task 11 will wire the real McpManager",
             self.plugin_name
         )))
+    }
+}
+
+/// Real `McpCaller` backed by the live MCP manager. Routes each hook method
+/// call to the plugin's MCP server via `McpManagerHandle::get_client` →
+/// `McpClient::call_tool`. Constructed at boot by `bind_memory_callers` once
+/// the manager handle is available.
+pub struct ManagerBackedMcpCaller {
+    handle: crate::mcp::McpManagerHandle,
+    server_id: String,
+}
+
+impl ManagerBackedMcpCaller {
+    pub fn new(handle: crate::mcp::McpManagerHandle, server_id: impl Into<String>) -> Self {
+        Self {
+            handle,
+            server_id: server_id.into(),
+        }
+    }
+
+    /// Map an `McpToolResult` to the inner JSON the hook adapters expect.
+    /// Success → the `content` Value; failure → an error. Extracted so the
+    /// mapping is unit-testable without a live handle.
+    pub(crate) fn map_result(
+        res: crate::mcp::types::McpToolResult,
+    ) -> Result<Value, AlephError> {
+        if res.success {
+            Ok(res.content)
+        } else {
+            Err(AlephError::other(
+                res.error.unwrap_or_else(|| "mcp memory tool call failed".to_string()),
+            ))
+        }
+    }
+}
+
+#[async_trait]
+impl McpCaller for ManagerBackedMcpCaller {
+    async fn call(&self, method: &str, args: Value) -> Result<Value, AlephError> {
+        let client = self
+            .handle
+            .get_client(&self.server_id)
+            .await?
+            .ok_or_else(|| {
+                AlephError::other(format!(
+                    "memory MCP server '{}' not running (method={method})",
+                    self.server_id
+                ))
+            })?;
+        let res = client
+            .call_tool(method, args)
+            .await
+            .map_err(|e| AlephError::other(format!("mcp call_tool '{method}' failed: {e}")))?;
+        Self::map_result(res)
     }
 }
 
@@ -397,5 +484,38 @@ mod tests {
             result_summary: "did thing".into(),
         };
         ext.on_delegation(&ctx).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rebind_swaps_caller_visible_to_hooks() {
+        // Starts unbound → on_capture errors. After rebind to a canned caller
+        // that allows, on_capture returns Allow. Proves ArcSwap visibility.
+        let ext = McpMemoryExtension::new_unbound("p".to_string(), Some("plugin:p/srv".to_string()));
+        let ctx = CaptureCtx {
+            agent_id: "a".into(),
+            namespace: NamespaceScope::Owner,
+            session_id: None,
+            source_hint: "transcript".into(),
+        };
+        let mut r = raw();
+        // Unbound: errors.
+        assert!(ext.on_capture(&ctx, &mut r).await.is_err());
+        // Rebind to a caller that returns empty (Allow).
+        let caller = Arc::new(CannedCaller::new(vec![("memory.on_capture", json!({}))]));
+        ext.rebind(caller);
+        let d = ext.on_capture(&ctx, &mut r).await.unwrap();
+        assert!(matches!(d, CaptureDecision::Allow));
+        assert_eq!(ext.server_id(), Some("plugin:p/srv"));
+    }
+
+    #[tokio::test]
+    async fn manager_backed_caller_maps_success_content() {
+        // ManagerBackedMcpCaller maps McpToolResult{success,content} → content Value.
+        // Uses a stub that bypasses the real handle by testing the mapping helper.
+        let ok = crate::mcp::types::McpToolResult::success(json!({"text": "hi"}));
+        let mapped = ManagerBackedMcpCaller::map_result(ok).unwrap();
+        assert_eq!(mapped, json!({"text": "hi"}));
+        let err = crate::mcp::types::McpToolResult::error("boom");
+        assert!(ManagerBackedMcpCaller::map_result(err).is_err());
     }
 }

@@ -15,7 +15,7 @@ pub mod types;
 pub use first_party::EnvelopeRelevanceFloorExtension;
 pub use insert_helper::insert_with_capture_filter;
 pub use manifest::{MemoryHook, MemoryManifestSection};
-pub use mcp_adapter::{McpCaller, McpMemoryExtension, UnboundMcpCaller};
+pub use mcp_adapter::{ManagerBackedMcpCaller, McpCaller, McpMemoryExtension, UnboundMcpCaller};
 pub use registry::{
     MemoryExtensionRegistry, ON_CAPTURE_TIMEOUT, ON_DELEGATION_TIMEOUT, ON_PRE_COMPRESS_TIMEOUT,
     ON_RETRIEVE_TIMEOUT, ON_SESSION_SWITCH_TIMEOUT, PRODUCE_TIMEOUT,
