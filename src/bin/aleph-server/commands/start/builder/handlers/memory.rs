@@ -244,6 +244,9 @@ pub(in crate::commands::start) fn init_compression_service(
     profile_synthesizer: Option<
         std::sync::Arc<dyn alephcore::memory::notes::profile::synthesizer::ProfileSynthesizer>,
     >,
+    extension_registry: Option<
+        std::sync::Arc<alephcore::memory::extensions::MemoryExtensionRegistry>,
+    >,
 ) -> std::sync::Arc<alephcore::memory::compression::CompressionService> {
     use alephcore::memory::compression::{CompressionConfig, CompressionService};
 
@@ -258,6 +261,11 @@ pub(in crate::commands::start) fn init_compression_service(
     // Spec 7 T9: inject profile synthesizer so SessionEnd triggers USER.md update.
     if let Some(ps) = profile_synthesizer {
         service = service.with_profile_synthesizer(ps);
+    }
+    // X1 C3: thread the memory-extension registry so compress_to_notes fires
+    // on_pre_compress before ingest.
+    if let Some(reg) = extension_registry {
+        service = service.with_extension_registry(reg);
     }
     let service = std::sync::Arc::new(service);
 

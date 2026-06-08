@@ -74,6 +74,9 @@ pub struct CompressionService {
     compound_ingestor: Option<Arc<dyn crate::memory::notes::ingest::CompoundIngestor>>,
     compound_enabled: bool,
     profile_synthesizer: Option<Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>>,
+    /// Optional memory-extension registry. When set, `compress_to_notes` fires
+    /// `on_pre_compress` and folds the contribution into the ingest prompt.
+    extension_registry: Option<Arc<crate::memory::extensions::MemoryExtensionRegistry>>,
     /// Hooks fired after `compress_default_notes` finishes successfully for an
     /// agent. Wrapped in `RwLock` so `add_post_hook(&self)` works through
     /// `Arc<CompressionService>` (the engine wraps the service in `Arc` before
@@ -114,6 +117,7 @@ impl CompressionService {
             compound_ingestor: None,
             compound_enabled: false,
             profile_synthesizer: None,
+            extension_registry: None,
             post_hooks: TokioRwLock::new(Vec::new()),
         }
     }
@@ -161,6 +165,16 @@ impl CompressionService {
         ps: Arc<dyn crate::memory::notes::profile::ProfileSynthesizer>,
     ) -> Self {
         self.profile_synthesizer = Some(ps);
+        self
+    }
+
+    /// Attach a memory-extension registry so `compress_to_notes` fires
+    /// `on_pre_compress` before ingest.
+    pub fn with_extension_registry(
+        mut self,
+        registry: Arc<crate::memory::extensions::MemoryExtensionRegistry>,
+    ) -> Self {
+        self.extension_registry = Some(registry);
         self
     }
 
@@ -273,7 +287,28 @@ impl CompressionService {
                     })
                     .cloned()
                     .collect();
-                let ingest_outcome = ing.ingest_batch(workspace_id, ingest_rows).await;
+                // X1 C3: let extensions contribute context before ingest.
+                let extra_context: Option<String> = if let Some(reg) = &self.extension_registry {
+                    let ctx = crate::memory::extensions::types::PreCompressCtx {
+                        agent_id: workspace_id.to_string(),
+                        namespace: crate::memory::namespace::NamespaceScope::Owner,
+                        session_id: None,
+                        messages_count: ingest_rows.len() as u32,
+                        oldest_at: None,
+                        newest_at: None,
+                    };
+                    let text = reg.dispatch_on_pre_compress(&ctx).await;
+                    if text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    }
+                } else {
+                    None
+                };
+                let ingest_outcome = ing
+                    .ingest_batch(workspace_id, ingest_rows, extra_context.as_deref())
+                    .await;
 
                 // ProfileSynthesizer fires INDEPENDENTLY of compound ingest
                 // result: a malformed LLM plan must not block USER.md updates.
@@ -812,6 +847,70 @@ mod tests {
             database.count_unprocessed("default").await.unwrap(),
             1,
             "young ingestable rows must be deferred for retry, not burned"
+        );
+    }
+
+    /// X1 C3: a registered `on_pre_compress` extension's contribution must reach
+    /// `ingest_batch` as `extra_context`.
+    #[tokio::test]
+    async fn pre_compress_contribution_reaches_ingest_extra_context() {
+        use crate::memory::extensions::types::PreCompressCtx;
+        use crate::memory::extensions::{MemoryExtension, MemoryExtensionRegistry};
+        use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
+
+        // Extension that contributes fixed text on pre-compress.
+        struct ContribExt;
+        #[async_trait::async_trait]
+        impl MemoryExtension for ContribExt {
+            fn name(&self) -> &str {
+                "test.contrib"
+            }
+            async fn on_pre_compress(
+                &self,
+                _ctx: &PreCompressCtx,
+            ) -> Result<String, AlephError> {
+                Ok("CONTRIB".to_string())
+            }
+        }
+
+        // Recording ingestor that captures the extra_context it receives.
+        let seen = Arc::new(crate::sync_primitives::Mutex::new(None::<String>));
+        struct RecordIngestor {
+            seen: Arc<crate::sync_primitives::Mutex<Option<String>>>,
+        }
+        #[async_trait::async_trait]
+        impl CompoundIngestor for RecordIngestor {
+            async fn ingest_batch(
+                &self,
+                _agent_id: &str,
+                _raws: Vec<RawMemory>,
+                extra_context: Option<&str>,
+            ) -> Result<ApplyReport, AlephError> {
+                *self.seen.lock().unwrap_or_else(|e| e.into_inner()) =
+                    extra_context.map(|s| s.to_string());
+                Ok(ApplyReport::default())
+            }
+        }
+
+        let reg = Arc::new(MemoryExtensionRegistry::new());
+        reg.register(Arc::new(ContribExt));
+
+        let (service, database, _tmp) = create_test_service_with_tempdir().await;
+        let service = service
+            .with_compound_ingestor(Arc::new(RecordIngestor { seen: seen.clone() }))
+            .with_extension_registry(reg);
+
+        let transcript =
+            RawMemory::new("real conversation".to_string(), RawMemorySource::Transcript);
+        database.insert_raw_memory(&transcript).await.unwrap();
+
+        service.compress_to_notes("default").await.unwrap();
+
+        let captured = seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        assert_eq!(
+            captured.as_deref(),
+            Some("CONTRIB"),
+            "the on_pre_compress contribution must reach ingest_batch as extra_context"
         );
     }
 

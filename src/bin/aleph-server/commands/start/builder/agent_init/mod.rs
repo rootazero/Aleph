@@ -902,6 +902,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     command_handler.clone(),
                     compound_ingestor,
                     profile_synth.clone(),
+                    Some(memory_ext_registry.clone()),
                 )
             })
         } else {
