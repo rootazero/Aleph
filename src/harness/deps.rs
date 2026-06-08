@@ -160,6 +160,10 @@ const DEFAULT_STALL_CHECK_INTERVAL_SECS: u64 = 30;
 #[derive(Debug, Clone)]
 pub struct StallConfig {
     pub timeout: Duration,
+    /// Advisory only: stored and threaded through `deps`, but `is_stalled`
+    /// reads `timeout` alone — stall detection runs at turn boundaries, not on
+    /// an independent poller. A poller would false-kill healthy long LLM
+    /// streams, since `record_activity` ticks per LLM call, not per delta.
     pub check_interval: Duration,
 }
 
