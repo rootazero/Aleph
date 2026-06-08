@@ -159,6 +159,9 @@ impl InboundMessageRouter {
                     }
                 }
             } else if is_telegram {
+                // Capture the global output_mode switch before reply_config is
+                // moved into the fallback ReplyEmitter below.
+                let stream_enabled = reply_config.stream_enabled;
                 // Try to create Telegram orchestrated emitter
                 match self
                     .try_create_telegram_emitter(
@@ -169,7 +172,19 @@ impl InboundMessageRouter {
                     )
                     .await
                 {
-                    Some(te) => Arc::new(te),
+                    Some(te) => {
+                        if stream_enabled {
+                            Arc::new(te)
+                        } else {
+                            // output_mode = "instant": the orchestrated emitter
+                            // streams independently of ReplyEmitter, so wrap it
+                            // to buffer chunks into a single final message —
+                            // keeping Telegram in sync with the global switch.
+                            Arc::new(
+                                crate::gateway::event_emitter::InstantBufferingEmitter::new(te),
+                            )
+                        }
+                    }
                     None => {
                         let re = ReplyEmitter::with_config(
                             self.channel_registry.clone(),

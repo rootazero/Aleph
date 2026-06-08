@@ -42,12 +42,17 @@ pub enum ReloadImpact {
     Inert,
 }
 
-/// Top-level sections applied live via explicit hot-swap wiring.
+/// Top-level sections applied live (effective on the next conversation turn)
+/// without a daemon restart.
 ///
-/// Keep in lock-step with the actual hot-apply call sites. Today the only one
-/// is `route` — `self_config::update_config` and the gateway `route_config`
-/// handler both call `route_handle.store(..)` after patching it.
-const LIVE_SECTIONS: &[&str] = &["route"];
+/// Keep in lock-step with the actual live-read / hot-apply call sites:
+/// - `route` — `self_config::update_config` and the gateway `route_config`
+///   handler both call `route_handle.store(..)` after patching it.
+/// - `behavior` — `output_mode` is re-read fresh from the shared config on
+///   every run by all channel paths (server_init, session_scheduler,
+///   inbound_router executor), so the typewriter/instant switch takes effect
+///   on the next turn. No restart is needed despite no explicit hot-swap call.
+const LIVE_SECTIONS: &[&str] = &["route", "behavior"];
 
 /// Legacy top-level sections that are parsed but inert (no runtime consumer).
 ///
@@ -117,6 +122,17 @@ mod tests {
         assert_eq!(ReloadImpact::classify("route.mode"), ReloadImpact::Live);
         assert_eq!(
             ReloadImpact::classify("route.allow_cloud_escalation"),
+            ReloadImpact::Live
+        );
+    }
+
+    #[test]
+    fn behavior_is_live() {
+        // output_mode (typewriter/instant) is re-read fresh per run by every
+        // channel path, so the switch takes effect next turn — not on restart.
+        assert_eq!(ReloadImpact::classify("behavior"), ReloadImpact::Live);
+        assert_eq!(
+            ReloadImpact::classify("behavior.output_mode"),
             ReloadImpact::Live
         );
     }
