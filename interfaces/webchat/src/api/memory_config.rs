@@ -10,47 +10,24 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub max_context_items: u32,
-    #[serde(default = "default_retention_days")]
-    pub retention_days: u32,
-    #[serde(default)]
     pub vector_db: String,
     #[serde(default)]
     pub similarity_threshold: f32,
+
+    // Compression scheduling — bridged from `policies.memory.compression` by the
+    // server handler (these knobs do not live in the backend `MemoryConfig`).
     #[serde(default)]
-    pub excluded_apps: Vec<String>,
-    #[serde(default)]
-    pub compression_enabled: bool,
-    #[serde(default)]
-    pub compression_idle_timeout_seconds: u32,
-    #[serde(default)]
-    pub compression_turn_threshold: u32,
-    #[serde(default)]
-    pub compression_interval_seconds: u32,
-    #[serde(default)]
-    pub compression_batch_size: u32,
-    #[serde(default)]
-    pub conflict_similarity_threshold: f32,
-    #[serde(default)]
-    pub max_facts_in_context: u32,
-    #[serde(default)]
-    pub raw_memory_fallback_count: u32,
+    pub compression: CompressionSettings,
 
     // Dreaming (DreamDaemon)
     #[serde(default)]
     pub dreaming: DreamingConfig,
 
-    // Graph Decay
-    #[serde(default)]
-    pub graph_decay: GraphDecayPolicy,
-
     // Memory Fact Decay
     #[serde(default)]
     pub memory_decay: MemoryDecayPolicy,
 
-    // Hybrid Retrieval & Reranking
-    #[serde(default)]
-    pub fusion_strategy: FusionStrategy,
+    // Hybrid Retrieval & Reranking (RRF fusion)
     #[serde(default = "default_rrf_k")]
     pub rrf_k: u32,
     #[serde(default = "default_bm25_bonus")]
@@ -68,28 +45,13 @@ pub struct MemoryConfig {
     #[serde(default)]
     pub reflection: ReflectionConfig,
 
-    // Storage
+    // Storage — write-time semantic dedup gate
     #[serde(default = "default_dedup_threshold")]
     pub dedup_similarity_threshold: f32,
-
-    // Backup
-    #[serde(default = "default_backup_enabled")]
-    pub backup_enabled: bool,
-    #[serde(default = "default_backup_max_files")]
-    pub backup_max_files: u32,
 }
 
-fn default_retention_days() -> u32 {
-    90
-}
 fn default_dedup_threshold() -> f32 {
     0.95
-}
-fn default_backup_enabled() -> bool {
-    true
-}
-fn default_backup_max_files() -> u32 {
-    7
 }
 fn default_rrf_k() -> u32 {
     60
@@ -98,27 +60,37 @@ fn default_bm25_bonus() -> f32 {
     0.15
 }
 
-/// Fusion strategy for hybrid retrieval
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum FusionStrategy {
-    #[default]
-    Rrf,
-    Weighted,
+/// Compression scheduling settings.
+///
+/// Mirrors the backend `policies.memory.compression` policy. The server's
+/// `memory_config.get` projects these under a `compression` key and
+/// `memory_config.update` routes them back to the policy section.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionSettings {
+    #[serde(default = "default_compression_idle_timeout")]
+    pub idle_timeout_seconds: u32,
+    #[serde(default = "default_compression_turn_threshold")]
+    pub turn_threshold: u32,
+    #[serde(default = "default_compression_background_interval")]
+    pub background_interval_seconds: u32,
 }
 
-impl FusionStrategy {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Self::Rrf => "rrf",
-            Self::Weighted => "weighted",
-        }
-    }
+fn default_compression_idle_timeout() -> u32 {
+    300
+}
+fn default_compression_turn_threshold() -> u32 {
+    20
+}
+fn default_compression_background_interval() -> u32 {
+    3600
+}
 
-    pub fn from_str_val(s: &str) -> Self {
-        match s {
-            "weighted" => Self::Weighted,
-            _ => Self::Rrf,
+impl Default for CompressionSettings {
+    fn default() -> Self {
+        Self {
+            idle_timeout_seconds: default_compression_idle_timeout(),
+            turn_threshold: default_compression_turn_threshold(),
+            background_interval_seconds: default_compression_background_interval(),
         }
     }
 }
@@ -326,12 +298,6 @@ pub struct DreamingConfig {
     pub weekly_enabled: bool,
     #[serde(default = "default_weekly_interval_days")]
     pub weekly_interval_days: u32,
-    #[serde(default = "default_cluster_dbscan_eps")]
-    pub cluster_dbscan_eps: f32,
-    #[serde(default = "default_cluster_dbscan_min_samples")]
-    pub cluster_dbscan_min_samples: usize,
-    #[serde(default = "default_drift_similarity_threshold")]
-    pub drift_similarity_threshold: f32,
     #[serde(default = "default_drift_max_pairs_per_run")]
     pub drift_max_pairs_per_run: usize,
     #[serde(default = "default_synthesis_min_cluster_size")]
@@ -361,15 +327,6 @@ fn default_weekly_enabled() -> bool {
 fn default_weekly_interval_days() -> u32 {
     7
 }
-fn default_cluster_dbscan_eps() -> f32 {
-    0.3
-}
-fn default_cluster_dbscan_min_samples() -> usize {
-    2
-}
-fn default_drift_similarity_threshold() -> f32 {
-    0.85
-}
 fn default_drift_max_pairs_per_run() -> usize {
     20
 }
@@ -378,26 +335,6 @@ fn default_synthesis_min_cluster_size() -> usize {
 }
 fn default_synthesis_max_insights() -> usize {
     10
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct GraphDecayPolicy {
-    #[serde(default = "default_graph_node_decay")]
-    pub node_decay_per_day: f32,
-    #[serde(default = "default_graph_edge_decay")]
-    pub edge_decay_per_day: f32,
-    #[serde(default = "default_graph_min_score")]
-    pub min_score: f32,
-}
-
-fn default_graph_node_decay() -> f32 {
-    0.02
-}
-fn default_graph_edge_decay() -> f32 {
-    0.03
-}
-fn default_graph_min_score() -> f32 {
-    0.1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

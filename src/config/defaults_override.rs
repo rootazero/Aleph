@@ -23,12 +23,6 @@ pub struct MemoryDefaultsOverride {
     /// Override the default similarity threshold for memory retrieval
     #[serde(default)]
     pub similarity_threshold: Option<f32>,
-    /// Override the default retention days for memory items
-    #[serde(default)]
-    pub retention_days: Option<u32>,
-    /// Override the default max context items returned from memory
-    #[serde(default)]
-    pub max_context_items: Option<u32>,
 }
 
 /// Provider defaults
@@ -136,16 +130,6 @@ impl DefaultsOverride {
         self.memory.as_ref()?.similarity_threshold
     }
 
-    /// Get the memory retention days override, if set.
-    pub fn memory_retention_days(&self) -> Option<u32> {
-        self.memory.as_ref()?.retention_days
-    }
-
-    /// Get the memory max-context-items override, if set.
-    pub fn memory_max_context_items(&self) -> Option<u32> {
-        self.memory.as_ref()?.max_context_items
-    }
-
     /// Get the generation timeout override, if set.
     pub fn generation_timeout_seconds(&self) -> Option<u64> {
         self.generation.as_ref()?.timeout_seconds
@@ -169,7 +153,6 @@ mod tests {
         // Accessors should all return None
         assert!(parsed.provider_timeout_seconds().is_none());
         assert!(parsed.memory_similarity_threshold().is_none());
-        assert!(parsed.memory_retention_days().is_none());
         assert!(parsed.generation_timeout_seconds().is_none());
     }
 
@@ -178,20 +161,14 @@ mod tests {
         let toml_str = r#"
 [memory]
 similarity_threshold = 0.75
-retention_days = 90
-max_context_items = 20
 "#;
         let parsed: DefaultsOverride = toml::from_str(toml_str).unwrap();
 
         let mem = parsed.memory.as_ref().unwrap();
         assert_eq!(mem.similarity_threshold, Some(0.75));
-        assert_eq!(mem.retention_days, Some(90));
-        assert_eq!(mem.max_context_items, Some(20));
 
         // Accessors
         assert_eq!(parsed.memory_similarity_threshold(), Some(0.75));
-        assert_eq!(parsed.memory_retention_days(), Some(90));
-        assert_eq!(parsed.memory_max_context_items(), Some(20));
     }
 
     #[test]
@@ -214,7 +191,6 @@ timeout_seconds = 600
         let toml_str = r#"
 [memory]
 similarity_threshold = 0.8
-# retention_days and max_context_items are not set
 
 [provider]
 timeout_seconds = 120
@@ -222,11 +198,9 @@ timeout_seconds = 120
 "#;
         let parsed: DefaultsOverride = toml::from_str(toml_str).unwrap();
 
-        // Memory: only similarity_threshold is set
+        // Memory: similarity_threshold is set
         let mem = parsed.memory.as_ref().unwrap();
         assert_eq!(mem.similarity_threshold, Some(0.8));
-        assert!(mem.retention_days.is_none());
-        assert!(mem.max_context_items.is_none());
 
         // Provider: timeout_seconds is set
         assert_eq!(parsed.provider_timeout_seconds(), Some(120));

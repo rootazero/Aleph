@@ -32,8 +32,6 @@ fn test_memory_config_serialization() {
 fn test_memory_config_deserialization() {
     let json = r#"{
         "enabled": false,
-        "max_context_items": 10,
-        "retention_days": 30,
         "vector_db": "sqlite-vec",
         "similarity_threshold": 0.8,
         "embedding": {
@@ -56,8 +54,6 @@ fn test_memory_config_deserialization() {
     let config: MemoryConfig = serde_json::from_str(json).unwrap();
     assert!(!config.enabled);
     assert_eq!(config.embedding.active_provider_id, "openai");
-    assert_eq!(config.max_context_items, 10);
-    assert_eq!(config.retention_days, 30);
     assert_eq!(config.vector_db, "sqlite-vec");
     assert_eq!(config.similarity_threshold, 0.8);
     assert!(!config.dreaming.enabled);
@@ -99,7 +95,6 @@ system_prompt = "You are a coding assistant."
 
 [memory]
 enabled = true
-max_context_items = 5
 "##;
 
     let config: Config = toml::from_str(toml_str).unwrap();
@@ -483,7 +478,7 @@ fn test_embedding_survives_save_incremental() {
     );
 
     // Now modify memory config (like memory_config.update would) but keep embedding
-    config.memory.max_context_items = 20;
+    config.memory.similarity_threshold = 0.5;
 
     // Simulate save_incremental: serialize to toml::Value and extract memory section
     let current: toml::Value = toml::Value::try_from(&config).unwrap();

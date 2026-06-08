@@ -240,13 +240,6 @@ impl Config {
         }
 
         // Validate memory config
-        if self.memory.max_context_items == 0 {
-            error!("Memory max_context_items is zero");
-            return Err(AlephError::invalid_config(
-                "memory.max_context_items must be greater than 0",
-            ));
-        }
-
         if !(0.0..=1.0).contains(&self.memory.similarity_threshold) {
             error!(
                 threshold = self.memory.similarity_threshold,
@@ -391,7 +384,6 @@ impl Config {
 
         debug!(
             memory_enabled = self.memory.enabled,
-            max_context_items = self.memory.max_context_items,
             similarity_threshold = self.memory.similarity_threshold,
             "Memory config validated"
         );
