@@ -188,6 +188,19 @@ pub enum GatewayEventFrame {
         /// Originating topic (e.g. `agent.run.complete`) — diagnostics only.
         source_topic: String,
     },
+    /// Core-decided approval banner addressed to one or more delivery surfaces.
+    /// The raw `approval.requested` frame stays operator-gated and drives the
+    /// Panel card; this is the *banner* leg, routed by the R5 router so the
+    /// shell renders it through the same unified path as `SurfaceNotify`. The
+    /// payload is intentionally sparse — approval detail lives in the Panel
+    /// card (via `exec.approvals.pending`); the banner only needs to get
+    /// attention. Gated operator-only by `event_scope` (`surface.approval`).
+    SurfaceApproval {
+        audience: Vec<String>,
+        approval_id: String,
+        title: String,
+        body: String,
+    },
 }
 
 /// Tagging value for the panel so it can pick the right local action
@@ -389,6 +402,7 @@ impl GatewayEventFrame {
             GatewayEventFrame::CronJobChanged { .. } => "cron.job.changed",
             GatewayEventFrame::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
             GatewayEventFrame::SurfaceNotify { .. } => "surface.notify",
+            GatewayEventFrame::SurfaceApproval { .. } => "surface.approval",
         }
         .to_string()
     }
@@ -458,5 +472,26 @@ mod surface_notify_tests {
         assert_eq!(v["audience"][0], "desktop");
         assert_eq!(v["title"], "Aleph finished");
         assert_eq!(v["source_topic"], "agent.run.complete");
+    }
+
+    #[test]
+    fn surface_approval_topic_and_wire_shape() {
+        let f = GatewayEventFrame::SurfaceApproval {
+            audience: vec!["desktop".to_string()],
+            approval_id: "a1".to_string(),
+            title: "Aleph needs your approval".to_string(),
+            body: "A tool call is waiting for you.".to_string(),
+        };
+        // Non-streaming → TopicEvent wire shape (topic + data), no stream method.
+        assert_eq!(f.topic_name(), "surface.approval");
+        assert!(f.stream_method().is_none());
+
+        // serde(tag = "type", rename_all = "snake_case")
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "surface_approval");
+        assert_eq!(v["audience"][0], "desktop");
+        assert_eq!(v["approval_id"], "a1");
+        assert_eq!(v["title"], "Aleph needs your approval");
+        assert_eq!(v["body"], "A tool call is waiting for you.");
     }
 }
