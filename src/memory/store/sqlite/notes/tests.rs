@@ -260,4 +260,57 @@ mod tests {
         assert_eq!(backend.tuning.rrf_k, 42);
         assert_eq!(backend.tuning.bm25_bonus_weight, 0.5);
     }
+
+    #[tokio::test]
+    async fn index_note_writes_typed_relation_column() {
+        use crate::memory::notes::Relation;
+
+        let backend = make_backend();
+        const AGENT: &str = "main";
+
+        // Seed target note first so resolution can find it.
+        let target = KnowledgeNote {
+            title: "bob".into(),
+            category: "entity".into(),
+            content_hash: "hash_bob".into(),
+            created_at: 1000,
+            updated_at: 1000,
+            ..Default::default()
+        };
+        backend.index_note(&target, AGENT, "entity").await.unwrap();
+
+        // Alice has both a plain body wikilink AND a typed frontmatter relation
+        // to the same target "entity/bob". The typed relation must win.
+        let mut alice = KnowledgeNote {
+            title: "alice".into(),
+            category: "entity".into(),
+            content_hash: "hash_alice".into(),
+            created_at: 1000,
+            updated_at: 1000,
+            ..Default::default()
+        };
+        alice.links = vec!["entity/bob".into()];
+        alice.relations = vec![Relation {
+            to: "entity/bob".into(),
+            rel_type: "colleague".into(),
+            confidence: 0.7,
+        }];
+        backend.index_note(&alice, AGENT, "entity").await.unwrap();
+
+        // Read the relation column directly via the test conn accessor.
+        let conn = backend.conn().lock().unwrap();
+        let relation: Option<String> = conn
+            .query_row(
+                "SELECT relation FROM notes_links \
+                 WHERE agent_id = ?1 AND from_note = ?2 AND to_note = ?3",
+                rusqlite::params![AGENT, "entity/alice", "entity/bob"],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            relation.as_deref(),
+            Some("colleague"),
+            "typed relation must override plain wikilink for the same target"
+        );
+    }
 }

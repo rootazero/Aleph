@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use rusqlite::params;
 use rusqlite::OptionalExtension;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::error::AlephError;
 use crate::memory::notes::store::{NoteIndexEntry, NoteStore, ReviewQueueRow};
@@ -123,78 +123,96 @@ impl NoteStore for SqliteMemoryBackend {
         )
         .map_err(|e| AlephError::config(format!("index_note insert: {e}")))?;
 
-        // Set-diff upsert for notes_links: only INSERT added pairs and DELETE
-        // removed pairs; the intersection stays untouched. This eliminates the
-        // per-reindex write storm where every link row was deleted + re-inserted
-        // even when nothing changed.
-        //
-        // Build the new (to_raw, to_note) pair set after wikilink resolution.
-        let new_pairs: HashSet<(String, String)> = {
-            let mut set = HashSet::with_capacity(note.links.len());
-            for raw_target in &note.links {
-                // Full paths (containing '/') are trusted as-is; bare filenames
-                // are looked up; ambiguous matches fall back to the raw form.
-                let resolved = if raw_target.contains('/') {
-                    raw_target.clone()
-                } else {
-                    let mut stmt = conn
-                        .prepare(
-                            "SELECT path FROM notes_index WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
-                        )
-                        .map_err(|e| AlephError::config(format!("resolve filename prep: {e}")))?;
-                    let paths: Vec<String> = stmt
-                        .query_map(params![agent_id, raw_target], |r| r.get::<_, String>(0))
-                        .map_err(|e| AlephError::config(format!("resolve filename query: {e}")))?
-                        .filter_map(|r| r.ok())
-                        .collect();
-                    if paths.len() == 1 {
-                        paths[0].clone()
-                    } else {
-                        raw_target.clone()
-                    }
-                };
-                set.insert((raw_target.clone(), resolved));
+        // Desired outgoing edges: to_note -> (to_raw, relation).
+        // Body wikilinks contribute relation = None; frontmatter `relations:`
+        // contribute relation = Some(type). When both target the same to_note,
+        // the typed relation wins. Keyed by to_note to match the table's
+        // UNIQUE(agent_id, from_note, to_note).
+        let resolve_target = |raw_target: &str| -> Result<String, AlephError> {
+            if raw_target.contains('/') {
+                return Ok(raw_target.to_string());
             }
-            set
-        };
-
-        // Read existing (to_raw, to_note) pairs for this from_note.
-        let existing: HashSet<(String, String)> = {
             let mut stmt = conn
                 .prepare(
-                    "SELECT to_raw, to_note FROM notes_links \
+                    "SELECT path FROM notes_index WHERE agent_id = ?1 AND filename = ?2 LIMIT 2",
+                )
+                .map_err(|e| AlephError::config(format!("resolve filename prep: {e}")))?;
+            let paths: Vec<String> = stmt
+                .query_map(params![agent_id, raw_target], |r| r.get::<_, String>(0))
+                .map_err(|e| AlephError::config(format!("resolve filename query: {e}")))?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(if paths.len() == 1 {
+                paths[0].clone()
+            } else {
+                raw_target.to_string()
+            })
+        };
+
+        let mut desired: HashMap<String, (String, Option<String>)> = HashMap::new();
+        for raw_target in &note.links {
+            let resolved = resolve_target(raw_target)?;
+            desired
+                .entry(resolved)
+                .or_insert_with(|| (raw_target.clone(), None));
+        }
+        for rel in &note.relations {
+            let resolved = resolve_target(&rel.to)?;
+            // Typed relation overrides a plain wikilink to the same target.
+            desired.insert(resolved, (rel.to.clone(), Some(rel.rel_type.clone())));
+        }
+
+        // Existing edges for this from_note: to_note -> (to_raw, relation).
+        let existing: HashMap<String, (String, Option<String>)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT to_note, to_raw, relation FROM notes_links \
                      WHERE agent_id = ?1 AND from_note = ?2",
                 )
                 .map_err(|e| AlephError::config(format!("index_note links scan prep: {e}")))?;
             let rows = stmt
                 .query_map(params![agent_id, path], |r| {
-                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
                 })
                 .map_err(|e| AlephError::config(format!("index_note links scan: {e}")))?;
-            rows.filter_map(|r| r.ok()).collect()
+            rows.filter_map(|r| r.ok())
+                .map(|(to_note, to_raw, relation)| (to_note, (to_raw, relation)))
+                .collect()
         };
 
-        // DELETE rows no longer present. Match on the full composite
-        // (agent_id, from_note, to_raw, to_note) so that distinct raw forms
-        // resolving to the same to_note do not accidentally remove each other.
-        for (to_raw, to_note) in existing.difference(&new_pairs) {
-            conn.execute(
-                "DELETE FROM notes_links \
-                 WHERE agent_id = ?1 AND from_note = ?2 AND to_raw = ?3 AND to_note = ?4",
-                params![agent_id, path, to_raw, to_note],
-            )
-            .map_err(|e| AlephError::config(format!("index_note links delete: {e}")))?;
+        // DELETE targets no longer desired.
+        for to_note in existing.keys() {
+            if !desired.contains_key(to_note) {
+                conn.execute(
+                    "DELETE FROM notes_links \
+                     WHERE agent_id = ?1 AND from_note = ?2 AND to_note = ?3",
+                    params![agent_id, path, to_note],
+                )
+                .map_err(|e| AlephError::config(format!("index_note links delete: {e}")))?;
+            }
         }
-        // INSERT rows newly added. The schema's UNIQUE(agent_id, from_note, to_note)
-        // makes INSERT OR IGNORE a safe no-op when two distinct raw forms resolve
-        // to the same target (matching the prior behaviour of the bulk path).
-        for (to_raw, to_note) in new_pairs.difference(&existing) {
+
+        // UPSERT new or changed targets; skip unchanged rows (no write storm).
+        for (to_note, (to_raw, relation)) in &desired {
+            let unchanged = existing
+                .get(to_note)
+                .map(|(er, erel)| er == to_raw && erel == relation)
+                .unwrap_or(false);
+            if unchanged {
+                continue;
+            }
             conn.execute(
-                "INSERT OR IGNORE INTO notes_links (agent_id, from_note, to_note, to_raw) \
-                 VALUES (?1, ?2, ?3, ?4)",
-                params![agent_id, path, to_note, to_raw],
+                "INSERT INTO notes_links (agent_id, from_note, to_note, to_raw, relation) \
+                 VALUES (?1, ?2, ?3, ?4, ?5) \
+                 ON CONFLICT(agent_id, from_note, to_note) \
+                 DO UPDATE SET to_raw = excluded.to_raw, relation = excluded.relation",
+                params![agent_id, path, to_note, to_raw, relation],
             )
-            .map_err(|e| AlephError::config(format!("index_note links insert: {e}")))?;
+            .map_err(|e| AlephError::config(format!("index_note links upsert: {e}")))?;
         }
 
         // Skip notes_fts rebuild when the body text is unchanged — frontmatter-only

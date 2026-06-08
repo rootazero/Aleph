@@ -118,6 +118,24 @@ pub(crate) fn migrate_dream_reports_drop_legacy_cols(conn: &Connection) -> Resul
     Ok(())
 }
 
+/// Add the nullable `relation` column to existing `notes_links` rows.
+///
+/// Pre-existing edges keep `relation = NULL` (untyped body wikilinks). Typed
+/// frontmatter relations populate it on the next reindex. Idempotent:
+/// re-running on a migrated table is a no-op (checks column existence first).
+pub fn migrate_notes_links_relation(conn: &rusqlite::Connection) -> rusqlite::Result<()> {
+    let has_col: bool = conn
+        .prepare("PRAGMA table_info(notes_links)")?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .any(|name| name == "relation");
+    if has_col {
+        return Ok(());
+    }
+    conn.execute_batch("ALTER TABLE notes_links ADD COLUMN relation TEXT;")?;
+    Ok(())
+}
+
 /// Add `to_raw` column to existing `notes_links` rows; backfill with `to_note` value.
 ///
 /// Idempotent: re-running on a migrated table is a no-op.
