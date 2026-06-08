@@ -440,6 +440,30 @@ impl NoteStore for SqliteMemoryBackend {
         Ok(links)
     }
 
+    async fn get_typed_relations(
+        &self,
+        path: &str,
+        agent_id: &str,
+    ) -> Result<Vec<(String, String)>, AlephError> {
+        let conn = lock_conn!(self)?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT to_note, relation FROM notes_links \
+                 WHERE from_note = ?1 AND agent_id = ?2 AND relation IS NOT NULL",
+            )
+            .map_err(|e| AlephError::config(format!("get_typed_relations prepare: {e}")))?;
+        let rows = stmt
+            .query_map(params![path, agent_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| AlephError::config(format!("get_typed_relations query: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AlephError::config(format!("get_typed_relations row: {e}")))?);
+        }
+        Ok(out)
+    }
+
     async fn search_notes_fts(
         &self,
         query: &str,
