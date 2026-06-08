@@ -43,7 +43,6 @@
 pub mod acp_config;
 pub mod activity;
 pub mod agent;
-pub mod agent_config;
 pub mod agents;
 pub mod arena;
 pub mod auth;

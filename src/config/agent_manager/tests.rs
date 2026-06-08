@@ -6,7 +6,7 @@ use tempfile::TempDir;
 use toml_edit::DocumentMut;
 
 use crate::config::types::agents_def::{
-    AgentDefinition, AgentIdentity, AgentModelRef, AgentParams, SubagentPolicy,
+    AgentDefinition, AgentIdentity, AgentModelRef, SubagentPolicy,
 };
 
 use super::{AgentManager, AgentPatch};
@@ -162,13 +162,6 @@ fn test_create_agent_with_all_fields() {
             emoji: Some("\u{1f916}".to_string()),
             description: Some("A full agent".to_string()),
             avatar: None,
-            theme: Some("dark".to_string()),
-        }),
-        params: Some(AgentParams {
-            temperature: Some(0.7),
-            max_tokens: Some(4096),
-            top_p: None,
-            top_k: None,
         }),
         skills: Some(vec!["code".to_string(), "search".to_string()]),
         subagents: Some(SubagentPolicy {
@@ -187,11 +180,6 @@ fn test_create_agent_with_all_fields() {
         agent.identity.as_ref().unwrap().emoji,
         Some("\u{1f916}".to_string())
     );
-    assert!(agent.params.is_some());
-    // f32 -> f64 conversion may lose precision, check approximately
-    let temp = agent.params.as_ref().unwrap().temperature.unwrap();
-    assert!((temp - 0.7).abs() < 0.01);
-    assert_eq!(agent.params.as_ref().unwrap().max_tokens, Some(4096));
     assert_eq!(
         agent.skills,
         Some(vec!["code".to_string(), "search".to_string()])
@@ -245,11 +233,6 @@ fn test_update_agent() {
 
     let patch = AgentPatch {
         name: Some("Updated Coder".to_string()),
-        params: Some(AgentParams {
-            temperature: Some(0.5),
-            max_tokens: Some(2048),
-            ..Default::default()
-        }),
         skills: Some(vec!["git".to_string(), "rust".to_string()]),
         ..Default::default()
     };
@@ -258,13 +241,53 @@ fn test_update_agent() {
 
     let agent = mgr.get("coder").unwrap();
     assert_eq!(agent.name, Some("Updated Coder".to_string()));
-    assert!(agent.params.is_some());
-    let temp = agent.params.as_ref().unwrap().temperature.unwrap();
-    assert!((temp - 0.5).abs() < 0.01);
-    assert_eq!(agent.params.as_ref().unwrap().max_tokens, Some(2048));
     assert_eq!(
         agent.skills,
         Some(vec!["git".to_string(), "rust".to_string()])
+    );
+}
+
+#[test]
+fn test_update_identity_preserves_unpatched_fields() {
+    let (_dir, mgr) = setup(base_config());
+
+    // Seed a full identity including an avatar.
+    mgr.update(
+        "coder",
+        AgentPatch {
+            identity: Some(AgentIdentity {
+                emoji: Some("\u{1f916}".to_string()),
+                description: Some("first".to_string()),
+                avatar: Some("avatar.png".to_string()),
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    // Patch identity with only emoji/description — mirrors the Overview tab,
+    // which never sends avatar. The avatar must survive (merge, not replace).
+    mgr.update(
+        "coder",
+        AgentPatch {
+            identity: Some(AgentIdentity {
+                emoji: Some("\u{1f980}".to_string()),
+                description: Some("second".to_string()),
+                avatar: None,
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let agent = mgr.get("coder").unwrap();
+    let identity = agent.identity.expect("identity present");
+    assert_eq!(identity.emoji.as_deref(), Some("\u{1f980}"));
+    assert_eq!(identity.description.as_deref(), Some("second"));
+    assert_eq!(
+        identity.avatar.as_deref(),
+        Some("avatar.png"),
+        "avatar must be preserved when a later identity patch omits it"
     );
 }
 

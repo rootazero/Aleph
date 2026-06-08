@@ -1,4 +1,11 @@
-// Skills Tab — per-agent skill toggles
+// Skills Tab — per-agent skill toggles.
+//
+// Semantics: every skill is enabled by default. Turning a skill OFF adds its id
+// to the agent's `skills_blacklist` (→ runtime `tool_blacklist`), which denies
+// just that skill-tool without touching the agent's tool whitelist. This is the
+// only non-destructive way to express "disable this one skill": writing the
+// `skills` whitelist instead would lock the agent to ONLY the listed ids and
+// silently strip every built-in / MCP tool.
 
 use crate::api::agents::AgentsApi;
 use crate::context::DashboardState;
@@ -25,13 +32,14 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
     let agent_id = StoredValue::new(agent_id);
 
     let all_skills = RwSignal::new(Vec::<SkillEntry>::new());
-    let agent_skills = RwSignal::new(Vec::<String>::new());
+    // The agent's skills_blacklist — skills explicitly turned OFF for this agent.
+    let disabled_skills = RwSignal::new(Vec::<String>::new());
     let filter = RwSignal::new(String::new());
     let is_loading = RwSignal::new(true);
     let is_saving = RwSignal::new(false);
     let save_message = RwSignal::new(Option::<(bool, String)>::None);
 
-    // Load available skills and agent's current skills
+    // Load available skills (skills.status) and the agent's current blacklist.
     let dash = state;
     Effect::new(move || {
         if !dash.is_connected.get() {
@@ -39,7 +47,7 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
         }
         let id = agent_id.get_value();
         spawn_local(async move {
-            if let Ok(result) = dash.rpc_call("skills.list", serde_json::Value::Null).await {
+            if let Ok(result) = dash.rpc_call("skills.status", serde_json::Value::Null).await {
                 if let Some(arr) = result.get("skills") {
                     if let Ok(skills) = serde_json::from_value::<Vec<SkillEntry>>(arr.clone()) {
                         all_skills.set(skills);
@@ -47,27 +55,32 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
                 }
             }
             if let Ok(detail) = AgentsApi::get(&dash, &id).await {
-                if let Some(skills) = detail.definition.get("skills").and_then(|v| v.as_array()) {
-                    let ids: Vec<String> = skills
+                if let Some(blacklist) = detail
+                    .definition
+                    .get("skills_blacklist")
+                    .and_then(|v| v.as_array())
+                {
+                    let ids: Vec<String> = blacklist
                         .iter()
                         .filter_map(|v| v.as_str().map(String::from))
                         .collect();
-                    agent_skills.set(ids);
+                    disabled_skills.set(ids);
                 }
             }
             is_loading.set(false);
         });
     });
 
-    // Toggle skill
+    // Toggle a skill: flip its presence in the blacklist.
     let toggle_skill = move |skill_id: String| {
-        let mut current = agent_skills.get();
+        let mut current = disabled_skills.get();
         if current.contains(&skill_id) {
             current.retain(|s| s != &skill_id);
         } else {
             current.push(skill_id);
         }
-        agent_skills.set(current);
+        disabled_skills.set(current);
+        save_message.set(None);
     };
 
     view! {
@@ -92,13 +105,13 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
                         <div class="bg-surface-raised border border-border rounded-xl divide-y divide-border">
                             {move || {
                                 let f = filter.get().to_lowercase();
-                                let current = agent_skills.get();
+                                let disabled = disabled_skills.get();
                                 all_skills.get().into_iter()
                                     .filter(|s| f.is_empty() || s.name.to_lowercase().contains(&f) || s.id.to_lowercase().contains(&f))
                                     .map(|skill| {
                                         let sid = skill.id.clone();
                                         let sid_toggle = sid.clone();
-                                        let is_enabled = current.contains(&sid);
+                                        let is_enabled = !disabled.contains(&sid);
                                         view! {
                                             <div class="flex items-center justify-between p-3">
                                                 <div>
@@ -132,10 +145,10 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
                                     is_saving.set(true);
                                     save_message.set(None);
                                     let id = agent_id.get_value();
-                                    let skills = agent_skills.get();
+                                    let blacklist = disabled_skills.get();
                                     let dash = state;
                                     spawn_local(async move {
-                                        match AgentsApi::update(&dash, &id, json!({"skills": skills})).await {
+                                        match AgentsApi::update(&dash, &id, json!({"skills_blacklist": blacklist})).await {
                                             Ok(()) => save_message.set(Some((true, t_string!(i18n, agents.skills.saved).to_string()))),
                                             Err(e) => save_message.set(Some((false, e))),
                                         }

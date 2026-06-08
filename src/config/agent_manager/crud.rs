@@ -276,37 +276,27 @@ impl AgentManager {
         }
 
         if let Some(identity) = &patch.identity {
-            let mut t = toml_edit::Table::new();
-            if let Some(ref emoji) = identity.emoji {
-                t["emoji"] = toml_edit::value(emoji.as_str());
+            // Merge field-by-field into the EXISTING identity table. A wholesale
+            // replace would wipe any field the patch omits — e.g. the Overview
+            // tab sends only {emoji, description}, so a replace silently drops a
+            // previously-set `avatar`.
+            let ident_item = agent_table
+                .entry("identity")
+                .or_insert(toml_edit::Item::Table(toml_edit::Table::new()));
+            if !ident_item.is_table() {
+                *ident_item = toml_edit::Item::Table(toml_edit::Table::new());
             }
-            if let Some(ref desc) = identity.description {
-                t["description"] = toml_edit::value(desc.as_str());
+            if let Some(t) = ident_item.as_table_mut() {
+                if let Some(ref emoji) = identity.emoji {
+                    t["emoji"] = toml_edit::value(emoji.as_str());
+                }
+                if let Some(ref desc) = identity.description {
+                    t["description"] = toml_edit::value(desc.as_str());
+                }
+                if let Some(ref avatar) = identity.avatar {
+                    t["avatar"] = toml_edit::value(avatar.as_str());
+                }
             }
-            if let Some(ref avatar) = identity.avatar {
-                t["avatar"] = toml_edit::value(avatar.as_str());
-            }
-            if let Some(ref theme) = identity.theme {
-                t["theme"] = toml_edit::value(theme.as_str());
-            }
-            agent_table["identity"] = toml_edit::Item::Table(t);
-        }
-
-        if let Some(params) = &patch.params {
-            let mut t = toml_edit::Table::new();
-            if let Some(temp) = params.temperature {
-                t["temperature"] = toml_edit::value(f64::from(temp));
-            }
-            if let Some(max_tok) = params.max_tokens {
-                t["max_tokens"] = toml_edit::value(i64::from(max_tok));
-            }
-            if let Some(top_p) = params.top_p {
-                t["top_p"] = toml_edit::value(f64::from(top_p));
-            }
-            if let Some(top_k) = params.top_k {
-                t["top_k"] = toml_edit::value(i64::from(top_k));
-            }
-            agent_table["params"] = toml_edit::Item::Table(t);
         }
 
         if let Some(skills) = &patch.skills {

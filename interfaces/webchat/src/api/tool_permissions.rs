@@ -1,4 +1,5 @@
-//! Panel API for tool permission management (config.* and agent_config.* RPC calls)
+//! Panel API for global tool permission management (config.* RPC calls).
+//! Used by the Settings → Policies page.
 
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
@@ -12,15 +13,6 @@ pub struct ToolPermissionsResponse {
     pub default: String,
     #[serde(default)]
     pub overrides: HashMap<String, String>,
-    /// Effective default after global policy merge (agent-level only)
-    #[serde(default)]
-    pub effective_default: Option<String>,
-    /// Effective per-tool permissions after global merge (agent-level only)
-    #[serde(default)]
-    pub effective: Option<HashMap<String, String>>,
-    /// Global overrides for reference (agent-level only)
-    #[serde(default)]
-    pub global_overrides: Option<HashMap<String, String>>,
 }
 
 // -- API --
@@ -48,36 +40,6 @@ impl ToolPermissionsApi {
         });
         state
             .rpc_call("config.update_tool_permissions", params)
-            .await?;
-        Ok(())
-    }
-
-    // Per-agent API
-
-    pub async fn get_agent(
-        state: &DashboardState,
-        agent_id: &str,
-    ) -> Result<ToolPermissionsResponse, String> {
-        let params = json!({ "agent_id": agent_id });
-        let result = state
-            .rpc_call("agent_config.get_tool_permissions", params)
-            .await?;
-        serde_json::from_value(result).map_err(|e| e.to_string())
-    }
-
-    pub async fn update_agent(
-        state: &DashboardState,
-        agent_id: &str,
-        default: &str,
-        overrides: &HashMap<String, String>,
-    ) -> Result<(), String> {
-        let params = json!({
-            "agent_id": agent_id,
-            "default": default,
-            "overrides": overrides,
-        });
-        state
-            .rpc_call("agent_config.update_tool_permissions", params)
             .await?;
         Ok(())
     }

@@ -128,25 +128,6 @@ pub struct AgentIdentity {
     pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
-}
-
-// =============================================================================
-// AgentParams
-// =============================================================================
-
-/// Per-agent inference parameters
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
-pub struct AgentParams {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_tokens: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub top_k: Option<u32>,
 }
 
 // =============================================================================
@@ -246,10 +227,6 @@ pub struct AgentDefinition {
     /// Agent identity (emoji, description, avatar, theme)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<AgentIdentity>,
-
-    /// Per-agent inference parameters
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub params: Option<AgentParams>,
 
     /// Sub-agent spawning policy
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -438,18 +415,6 @@ mod tests {
     }
 
     #[test]
-    fn test_agent_params_deserialize() {
-        let toml_str = r#"
-            temperature = 0.3
-            max_tokens = 8192
-        "#;
-        let params: AgentParams = toml::from_str(toml_str).unwrap();
-        assert_eq!(params.temperature, Some(0.3));
-        assert_eq!(params.max_tokens, Some(8192));
-        assert!(params.top_p.is_none());
-    }
-
-    #[test]
     fn test_agent_definition_with_new_fields() {
         let toml_str = r#"
             [[list]]
@@ -460,10 +425,6 @@ mod tests {
             [list.identity]
             emoji = "🧑‍💻"
             description = "Full-stack coding specialist"
-
-            [list.params]
-            temperature = 0.3
-            max_tokens = 8192
         "#;
         let config: AgentsConfig = toml::from_str(toml_str).unwrap();
         let agent = &config.list[0];
@@ -473,8 +434,6 @@ mod tests {
             agent.identity.as_ref().unwrap().emoji,
             Some("🧑‍💻".to_string())
         );
-        assert!(agent.params.is_some());
-        assert_eq!(agent.params.as_ref().unwrap().temperature, Some(0.3));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-// Files Tab — fixed 6 identity files with inline editor
+// Files Tab — fixed 5 identity files with inline editor
 
 use crate::api::agents::{AgentsApi, WorkspaceFile};
 use crate::context::DashboardState;

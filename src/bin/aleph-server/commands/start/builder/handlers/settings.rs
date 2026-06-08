@@ -182,7 +182,6 @@ pub(in crate::commands::start) fn register_config_handlers(
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     acp_manager: Option<Arc<alephcore::acp::manager::AcpAdapterManager>>,
 ) {
-    use alephcore::gateway::handlers::agent_config;
     use alephcore::gateway::handlers::behavior_config;
     use alephcore::gateway::handlers::browser_config;
     use alephcore::gateway::handlers::config::{handle_get_full_config, handle_patch_config};
@@ -606,55 +605,6 @@ pub(in crate::commands::start) fn register_config_handlers(
         server,
         "embedding_providers.presets",
         embedding_providers::handle_presets
-    );
-
-    // Agent config
-    register_handler!(server, "agent_config.get", agent_config::handle_get, config);
-    register_handler!(
-        server,
-        "agent_config.update",
-        agent_config::handle_update,
-        config,
-        event_bus
-    );
-    register_handler!(
-        server,
-        "agent_config.get_file_ops",
-        agent_config::handle_get_file_ops,
-        config
-    );
-    register_handler!(
-        server,
-        "agent_config.update_file_ops",
-        agent_config::handle_update_file_ops,
-        config,
-        event_bus
-    );
-    register_handler!(
-        server,
-        "agent_config.get_code_exec",
-        agent_config::handle_get_code_exec,
-        config
-    );
-    register_handler!(
-        server,
-        "agent_config.update_code_exec",
-        agent_config::handle_update_code_exec,
-        config,
-        event_bus
-    );
-    register_handler!(
-        server,
-        "agent_config.get_tool_permissions",
-        agent_config::handle_get_tool_permissions,
-        config
-    );
-    register_handler!(
-        server,
-        "agent_config.update_tool_permissions",
-        agent_config::handle_update_tool_permissions,
-        config,
-        event_bus
     );
 
     // General config
