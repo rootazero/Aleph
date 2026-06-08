@@ -203,13 +203,19 @@ pub struct HookResult {
     pub updated_input: Option<serde_json::Value>,
     /// Additional context strings to inject into next LLM turn (as system-reminders).
     pub additional_contexts: Vec<String>,
-    /// If true, agent loop should stop even if the tool succeeded.
+    /// If true, the agent run stops gracefully (Claude-Code `continue: false`).
+    /// Honored by the gateway run loop on the `BeforeAgentStart` and
+    /// `UserPromptSubmit` lifecycle interceptor seams (`run_loop.rs`): the run
+    /// returns the hook's message as its final output instead of proceeding.
     pub prevent_continuation: bool,
     /// If true, tool call is denied by policy (not retryable). Takes precedence over blocked.
     pub denied: bool,
     /// Reason for denial (if denied).
     pub deny_reason: Option<String>,
-    /// Replacement for tool output text (last-writer-wins). Only effective in AfterToolCall/AfterToolCallFailure.
+    /// Replacement for tool output text (last-writer-wins). Effective on the
+    /// `AfterToolCall` / `AfterToolCallFailure` interceptor path and on the
+    /// `AgentEnd` seam, where it rewrites the final assistant response
+    /// (hermes `transform_llm_output` parity).
     pub updated_output: Option<String>,
     /// Hook-emitted permission decision. Last writer wins across interceptor chain.
     /// Supersedes legacy `blocked`/`denied` fields (preserved for backward compat).
