@@ -152,6 +152,35 @@ impl ConfigBackup {
         Ok(())
     }
 
+    /// Resolve a restore target.
+    ///
+    /// Returns the snapshot whose timestamp suffix equals `timestamp`, or the
+    /// most recent snapshot when `timestamp` is `None`. This is the single
+    /// entry point used by config rollback, so it keeps `list()` (which would
+    /// otherwise be cleanup-only) on a live, agent-reachable path.
+    ///
+    /// # Errors
+    /// * The requested timestamp has no matching backup, or
+    /// * No backups exist at all (when `timestamp` is `None`).
+    pub fn resolve(&self, timestamp: Option<&str>) -> Result<BackupEntry> {
+        let entries = self.list()?;
+        match timestamp {
+            // `list()` is sorted ascending; an explicit timestamp matches exactly.
+            Some(ts) => entries.into_iter().find(|e| e.timestamp == ts).ok_or_else(|| {
+                AlephError::invalid_config(format!(
+                    "No config backup found with timestamp '{}'",
+                    ts
+                ))
+            }),
+            // Newest snapshot is last in the ascending list.
+            None => entries.into_iter().next_back().ok_or_else(|| {
+                AlephError::invalid_config(
+                    "No config backups available to roll back to".to_string(),
+                )
+            }),
+        }
+    }
+
     /// List all backup entries sorted by timestamp (ascending)
     ///
     /// Scans the backup directory for files matching `config.toml.*`
@@ -267,6 +296,39 @@ mod tests {
         assert_eq!(entries[0].timestamp, "20260301T120003");
         assert_eq!(entries[1].timestamp, "20260301T120004");
         assert_eq!(entries[2].timestamp, "20260301T120005");
+    }
+
+    #[test]
+    fn test_resolve_latest_and_by_timestamp() {
+        let tmp = TempDir::new().unwrap();
+        let backup_dir = tmp.path().join("backups");
+        fs::create_dir_all(&backup_dir).unwrap();
+
+        for i in 1..=3 {
+            let name = format!("config.toml.20260301T12000{}", i);
+            fs::write(backup_dir.join(&name), format!("backup {}", i)).unwrap();
+        }
+
+        let backup = ConfigBackup::new(backup_dir, 5);
+
+        // None -> newest (highest timestamp).
+        let latest = backup.resolve(None).unwrap();
+        assert_eq!(latest.timestamp, "20260301T120003");
+
+        // Exact timestamp -> that entry.
+        let pinned = backup.resolve(Some("20260301T120001")).unwrap();
+        assert_eq!(pinned.timestamp, "20260301T120001");
+
+        // Unknown timestamp -> error.
+        assert!(backup.resolve(Some("nope")).is_err());
+    }
+
+    #[test]
+    fn test_resolve_none_when_empty() {
+        let tmp = TempDir::new().unwrap();
+        let backup = ConfigBackup::new(tmp.path().join("backups"), 5);
+        let err = backup.resolve(None).unwrap_err().to_string();
+        assert!(err.contains("No config backups available"));
     }
 
     #[test]

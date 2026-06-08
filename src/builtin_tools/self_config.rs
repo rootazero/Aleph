@@ -67,6 +67,22 @@ pub enum SelfConfigArgs {
     /// `read_config` dot-path ergonomics can't express as nicely. To *change*
     /// the route, use `update_config` with `config_path: "route"`.
     RouteStatus,
+    /// List available config.toml backup snapshots (one is taken before every
+    /// applied config change), newest last. Each entry exposes a `timestamp`
+    /// usable as the `rollback_config` target.
+    ListBackups,
+    /// Roll config.toml back to a prior snapshot. Omit `timestamp` to restore
+    /// the most recent one. The current config is snapshotted first, so a
+    /// rollback can itself be rolled back. Use this to recover from a config
+    /// change that broke something.
+    RollbackConfig {
+        /// Snapshot timestamp from `list_backups`. Omit for the most recent.
+        #[serde(default)]
+        timestamp: Option<String>,
+        /// Preview the change without persisting (default: false).
+        #[serde(default)]
+        dry_run: bool,
+    },
 }
 
 // =============================================================================
@@ -419,6 +435,107 @@ impl SelfConfigTool {
             }),
         }
     }
+
+    /// List config.toml backup snapshots so the agent can pick a restore point.
+    async fn list_backups(&self) -> Result<SelfConfigOutput> {
+        let patcher = match &self.config_patcher {
+            Some(p) => p,
+            None => {
+                return Ok(SelfConfigOutput {
+                    success: false,
+                    message: "Config patcher not available".into(),
+                    data: None,
+                    preview_message: None,
+                });
+            }
+        };
+
+        let entries = patcher.list_backups()?;
+        let data: Vec<serde_json::Value> = entries
+            .iter()
+            .map(|e| {
+                serde_json::json!({
+                    "timestamp": e.timestamp,
+                    "path": e.path.display().to_string(),
+                })
+            })
+            .collect();
+
+        Ok(SelfConfigOutput {
+            success: true,
+            message: format!(
+                "{} config backup(s) available (newest last). Call rollback_config with a \
+                 timestamp, or omit it to restore the most recent.",
+                entries.len()
+            ),
+            data: Some(serde_json::Value::Array(data)),
+            preview_message: None,
+        })
+    }
+
+    /// Roll config.toml back to a prior snapshot via the ConfigPatcher pipeline.
+    async fn rollback_config(
+        &self,
+        timestamp: Option<String>,
+        dry_run: bool,
+    ) -> Result<SelfConfigOutput> {
+        let patcher = match &self.config_patcher {
+            Some(p) => p,
+            None => {
+                return Ok(SelfConfigOutput {
+                    success: false,
+                    message: "Config patcher not available".into(),
+                    data: None,
+                    preview_message: None,
+                });
+            }
+        };
+
+        match patcher.rollback(timestamp.as_deref(), dry_run).await {
+            Ok(result) => {
+                // A restored snapshot may carry a different route mode. Hot-apply
+                // it to the live failover chain exactly like update_config does,
+                // so a rollback of a route change takes effect on the next prompt.
+                if !dry_run && result.success {
+                    if let (Some(cfg), Some(handle)) = (
+                        self.config.as_ref(),
+                        crate::providers::route_handle::try_global_route_handle(),
+                    ) {
+                        handle.store(&cfg.read().await.route);
+                    }
+                }
+
+                let mode = if dry_run { "preview" } else { "applied" };
+                let preview_message = if dry_run && !result.diff.is_empty() {
+                    Some(generate_preview_message(
+                        &format!("rollback→{}", result.restored_from),
+                        &result.diff,
+                    ))
+                } else {
+                    None
+                };
+
+                Ok(SelfConfigOutput {
+                    success: result.success,
+                    message: format!(
+                        "Config rollback {} from snapshot '{}' ({} field change(s)). \
+                         Non-route sections take effect on the next daemon start.",
+                        mode,
+                        result.restored_from,
+                        result.diff.len()
+                    ),
+                    data: Some(serde_json::to_value(&result).unwrap_or_default()),
+                    preview_message,
+                })
+            }
+            Err(e) => Ok(SelfConfigOutput {
+                success: false,
+                message: format!("Config rollback failed: {}", e),
+                data: None,
+                preview_message: None,
+            }),
+        }
+    }
 }
 
 // =============================================================================
@@ -498,7 +615,7 @@ fn value_to_string(value: &serde_json::Value) -> String {
 #[async_trait]
 impl AlephTool for SelfConfigTool {
     const NAME: &'static str = "self_config";
-    const DESCRIPTION: &'static str = "Read and write Aleph identity files (SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md) and modify config.toml with validation. Identity files live in the agent directory and are injected into your context on each turn. For config updates, use dot-path syntax (e.g. 'memory', 'providers.openai').";
+    const DESCRIPTION: &'static str = "Read and write Aleph identity files (SOUL.md, AGENTS.md, IDENTITY.md, TOOLS.md, HEARTBEAT.md) and modify config.toml with validation. Identity files live in the agent directory and are injected into your context on each turn. For config updates, use dot-path syntax (e.g. 'memory', 'providers.openai'). You can also list config backups and roll config.toml back to a prior snapshot to recover from a bad change.";
 
     type Args = SelfConfigArgs;
     type Output = SelfConfigOutput;
@@ -523,6 +640,11 @@ impl AlephTool for SelfConfigTool {
                 notify_tool_start(Self::NAME, &format!("update_config:{}", config_path))
             }
             SelfConfigArgs::RouteStatus => notify_tool_start(Self::NAME, "route_status"),
+            SelfConfigArgs::ListBackups => notify_tool_start(Self::NAME, "list_backups"),
+            SelfConfigArgs::RollbackConfig { timestamp, .. } => notify_tool_start(
+                Self::NAME,
+                &format!("rollback_config:{}", timestamp.as_deref().unwrap_or("latest")),
+            ),
         }
 
         let result = match args {
@@ -541,6 +663,10 @@ impl AlephTool for SelfConfigTool {
                     .await
             }
             SelfConfigArgs::RouteStatus => self.route_status().await,
+            SelfConfigArgs::ListBackups => self.list_backups().await,
+            SelfConfigArgs::RollbackConfig { timestamp, dry_run } => {
+                self.rollback_config(timestamp, dry_run).await
+            }
         };
 
         match &result {
@@ -735,6 +861,30 @@ mod tests {
 
         assert!(!result.success);
         assert!(result.message.contains("Failed to read"));
+    }
+
+    #[tokio::test]
+    async fn test_backup_actions_without_patcher_report_unavailable() {
+        let tmp = TempDir::new().unwrap();
+        let tool = tool_with_dir(tmp.path()); // no patcher wired
+
+        let list = AlephTool::call(&tool, SelfConfigArgs::ListBackups)
+            .await
+            .unwrap();
+        assert!(!list.success);
+        assert!(list.message.contains("patcher not available"));
+
+        let rollback = AlephTool::call(
+            &tool,
+            SelfConfigArgs::RollbackConfig {
+                timestamp: None,
+                dry_run: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!rollback.success);
+        assert!(rollback.message.contains("patcher not available"));
     }
 
     #[tokio::test]
