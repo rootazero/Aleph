@@ -11,6 +11,9 @@ pub mod tool_permissions;
 // Graph visualization
 pub mod graph;
 
+// Cluster API
+pub mod cluster;
+
 // Split submodules
 pub mod acp;
 pub mod agent_config;
