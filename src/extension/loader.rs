@@ -184,9 +184,9 @@ impl PluginLoader {
     /// `memory_registry`.
     ///
     /// This is the preferred entry point when the `MemoryExtensionRegistry` is
-    /// available (e.g. after Task 11 threads it through the server context).
-    /// Existing callers that don't yet have the registry can keep using
-    /// `load_plugin` unchanged.
+    /// available (threaded through the server context at startup). Existing
+    /// callers that don't yet have the registry can keep using `load_plugin`
+    /// unchanged.
     pub fn load_plugin_with_memory(
         &mut self,
         manifest: &PluginManifest,
@@ -407,8 +407,8 @@ impl Default for PluginLoader {
 /// `[memory]` section.
 ///
 /// The extension is initially backed by `UnboundMcpCaller`, which returns a
-/// clear diagnostic error on every call. Task 11 replaces the caller with a
-/// real `McpManager` binding at server startup.
+/// clear diagnostic error on every call. `ExtensionManager::bind_memory_callers`
+/// replaces the caller with a real `McpManager` binding at server startup.
 ///
 /// This is extracted as a free function so it can be unit-tested directly
 /// without constructing a full `PluginLoader`.

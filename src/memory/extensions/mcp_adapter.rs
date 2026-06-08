@@ -202,9 +202,9 @@ impl MemoryExtension for McpMemoryExtension {
 /// The dispatch layer's per-extension timeout + warn-and-skip policy degrades
 /// gracefully, so an unbound plugin never panics or stalls the pipeline.
 ///
-/// Task 11 replaces this with a real binding at server startup by calling
-/// `MemoryExtensionRegistry::replace_caller` (or equivalent) once the
-/// `McpManager` is fully initialised.
+/// `ExtensionManager::bind_memory_callers` replaces this with a real binding
+/// at server startup (and on hot-load) by calling `McpMemoryExtension::rebind`
+/// once the `McpManager` handle is available.
 pub struct UnboundMcpCaller {
     plugin_name: String,
 }
@@ -222,7 +222,7 @@ impl McpCaller for UnboundMcpCaller {
     async fn call(&self, method: &str, _args: Value) -> Result<Value, AlephError> {
         Err(AlephError::other(format!(
             "memory plugin '{}' is registered but its MCP client is not yet bound \
-             (method={method}); Task 11 will wire the real McpManager",
+             (method={method}); bind_memory_callers wires the real McpManager",
             self.plugin_name
         )))
     }
