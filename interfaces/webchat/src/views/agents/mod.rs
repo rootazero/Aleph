@@ -10,6 +10,7 @@ pub mod teams;
 pub mod tools;
 
 use crate::api::agents::{AgentSummary, AgentsApi};
+use crate::components::ui::ConfirmButton;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -121,7 +122,8 @@ pub fn AgentsView() -> impl IntoView {
     });
 
     // Delete handler
-    let handle_delete = move |_: web_sys::MouseEvent| {
+    let confirming = RwSignal::new(false);
+    let on_confirm_delete = move || {
         let Some(ref id) = agent_id.get() else { return };
         let id = id.clone();
         let dash = state;
@@ -174,14 +176,22 @@ pub fn AgentsView() -> impl IntoView {
                                     <span class="px-2 py-0.5 bg-warning/10 text-warning text-xs rounded-full font-medium">{t!(i18n, agents.default_badge)}</span>
                                 })}
                             </div>
-                            <button
-                                on:click=handle_delete
-                                class="px-3 py-1.5 border border-danger/30 text-danger rounded-lg hover:bg-danger/10 text-sm transition-colors"
-                                disabled=move || agent.is_default
-                                title=move || if agent.is_default { t_string!(i18n, agents.cannot_delete_default).to_string() } else { t_string!(i18n, agents.delete_agent).to_string() }
-                            >
-                                {t!(i18n, agents.delete)}
-                            </button>
+                            {move || if confirming.get() {
+                                view! {
+                                    <ConfirmButton confirming=confirming on_confirm=on_confirm_delete size_class="px-3 py-1.5 text-sm" />
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <button
+                                        on:click=move |_| confirming.set(true)
+                                        class="px-3 py-1.5 border border-danger/30 text-danger rounded-lg hover:bg-danger/10 text-sm transition-colors"
+                                        disabled=move || agent.is_default
+                                        title=move || if agent.is_default { t_string!(i18n, agents.cannot_delete_default).to_string() } else { t_string!(i18n, agents.delete_agent).to_string() }
+                                    >
+                                        {t!(i18n, agents.delete)}
+                                    </button>
+                                }.into_any()
+                            }}
                         </div>
 
                         // Delete error

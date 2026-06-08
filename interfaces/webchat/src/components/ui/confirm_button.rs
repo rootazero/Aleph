@@ -25,9 +25,17 @@ pub fn ConfirmButton<F>(
     #[prop(optional)]
     label: Option<Signal<String>>,
     /// Width utility class to match the idle button it replaces
-    /// (e.g. `"w-full"`, `"flex-1"`, or `""` for natural width).
+    /// (e.g. `"w-full"`, `"flex-1"`, `"flex-shrink-0"`, or `""`).
     #[prop(into, optional)]
     width_class: String,
+    /// Padding/text-size classes, overriding the default medium button sizing
+    /// so the armed button matches a compact idle button (e.g. `"px-3 py-1 text-xs"`).
+    #[prop(into, optional)]
+    size_class: Option<String>,
+    /// Stop click propagation — set when the button sits inside a clickable
+    /// container (e.g. a click-to-expand row) that must not react to the confirm.
+    #[prop(optional)]
+    stop_propagation: bool,
 ) -> impl IntoView
 where
     F: Fn() + 'static,
@@ -48,18 +56,24 @@ where
         None => t_string!(i18n, common.confirm_delete).to_string(),
     };
 
+    let size = size_class.unwrap_or_else(|| "px-4 py-2.5 text-sm".to_string());
+    let class = format!(
+        "{width_class} {size} bg-danger text-text-inverse rounded-lg \
+         hover:brightness-95 disabled:opacity-50 transition-colors font-medium"
+    );
+
     view! {
         <button
             node_ref=btn_ref
-            on:click=move |_| {
+            on:click=move |ev| {
+                if stop_propagation {
+                    ev.stop_propagation();
+                }
                 confirming.set(false);
                 on_confirm();
             }
             on:blur=move |_| confirming.set(false)
-            class=format!(
-                "{width_class} px-4 py-2.5 bg-danger text-text-inverse rounded-lg \
-                 hover:brightness-95 disabled:opacity-50 transition-colors font-medium text-sm"
-            )
+            class=class
         >
             {label_text}
         </button>

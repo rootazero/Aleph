@@ -283,6 +283,7 @@ pub fn OverviewView() -> impl IntoView {
                                     let is_active = team.status == "active";
                                     let team_id_check = team_id.clone();
                                     let team_id_check2 = team_id.clone();
+                                    let confirming = RwSignal::new(false);
 
                                     view! {
                                         <div class="bg-surface-raised border border-border rounded-xl overflow-hidden transition-all">
@@ -321,30 +322,62 @@ pub fn OverviewView() -> impl IntoView {
                                                     {team.member_count.to_string()}{" "}{t!(i18n, teams.members)}
                                                 </span>
 
-                                                // Action button — stop propagation so click doesn't toggle expand
+                                                // Action button — two-step inline confirm; stop propagation
+                                                // so the click doesn't toggle the row's expand state.
                                                 {if is_active {
+                                                    let on_confirm_disband = move || handle_disband(team_id_disband.clone());
                                                     view! {
-                                                        <button
-                                                            class="px-3 py-1 rounded-lg text-xs font-medium bg-warning/10 text-warning hover:bg-warning/20 border border-warning/20 transition-all flex-shrink-0"
-                                                            on:click=move |ev| {
-                                                                ev.stop_propagation();
-                                                                handle_disband(team_id_disband.clone());
-                                                            }
-                                                        >
-                                                            {t!(i18n, teams.disband)}
-                                                        </button>
+                                                        {move || if confirming.get() {
+                                                            view! {
+                                                                <ConfirmButton
+                                                                    confirming=confirming
+                                                                    on_confirm=on_confirm_disband.clone()
+                                                                    label=Signal::derive(move || t_string!(i18n, common.confirm_dissolve).to_string())
+                                                                    width_class="flex-shrink-0"
+                                                                    size_class="px-3 py-1 text-xs"
+                                                                    stop_propagation=true
+                                                                />
+                                                            }.into_any()
+                                                        } else {
+                                                            view! {
+                                                                <button
+                                                                    class="px-3 py-1 rounded-lg text-xs font-medium bg-warning/10 text-warning hover:bg-warning/20 border border-warning/20 transition-all flex-shrink-0"
+                                                                    on:click=move |ev| {
+                                                                        ev.stop_propagation();
+                                                                        confirming.set(true);
+                                                                    }
+                                                                >
+                                                                    {t!(i18n, teams.disband)}
+                                                                </button>
+                                                            }.into_any()
+                                                        }}
                                                     }.into_any()
                                                 } else {
+                                                    let on_confirm_delete = move || handle_delete(team_id_delete.clone());
                                                     view! {
-                                                        <button
-                                                            class="px-3 py-1 rounded-lg text-xs font-medium bg-danger/10 text-danger hover:bg-danger/20 border border-danger/20 transition-all flex-shrink-0"
-                                                            on:click=move |ev| {
-                                                                ev.stop_propagation();
-                                                                handle_delete(team_id_delete.clone());
-                                                            }
-                                                        >
-                                                            {t!(i18n, teams.delete)}
-                                                        </button>
+                                                        {move || if confirming.get() {
+                                                            view! {
+                                                                <ConfirmButton
+                                                                    confirming=confirming
+                                                                    on_confirm=on_confirm_delete.clone()
+                                                                    width_class="flex-shrink-0"
+                                                                    size_class="px-3 py-1 text-xs"
+                                                                    stop_propagation=true
+                                                                />
+                                                            }.into_any()
+                                                        } else {
+                                                            view! {
+                                                                <button
+                                                                    class="px-3 py-1 rounded-lg text-xs font-medium bg-danger/10 text-danger hover:bg-danger/20 border border-danger/20 transition-all flex-shrink-0"
+                                                                    on:click=move |ev| {
+                                                                        ev.stop_propagation();
+                                                                        confirming.set(true);
+                                                                    }
+                                                                >
+                                                                    {t!(i18n, teams.delete)}
+                                                                </button>
+                                                            }.into_any()
+                                                        }}
                                                     }.into_any()
                                                 }}
                                             </div>

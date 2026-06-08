@@ -18,6 +18,7 @@
     "confirm": "Confirm",
     "confirm_delete": "Confirm delete?",
     "confirm_regenerate": "Confirm regenerate?",
+    "confirm_dissolve": "Confirm disband?",
     "error": "An error occurred",
     "no_data": "No data available",
     "connect": "Connect to Gateway",
@@ -236,8 +237,7 @@
     "saving": "Saving…",
     "cancel": "Cancel",
     "prev_page": "Previous",
-    "next_page": "Next",
-    "confirm_delete": "Confirm delete?"
+    "next_page": "Next"
   },
   "logs": {
     "title": "Server Logs",
