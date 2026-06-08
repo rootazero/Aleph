@@ -6,7 +6,8 @@
 //! by the tier the *server* assigned (local vs cloud), so the user sees exactly
 //! which endpoints each mode will target without re-deriving locality here.
 
-use crate::api::{RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
+use crate::api::{RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
+use std::collections::BTreeMap;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -27,6 +28,8 @@ pub fn RouteView() -> impl IntoView {
     let local_provider = RwSignal::new(String::new());
     let cloud_provider = RwSignal::new(String::new());
     let providers = RwSignal::new(Vec::<RouteProviderInfo>::new());
+    let load_balance = RwSignal::new(String::from("ordered"));
+    let rate_limits = RwSignal::new(BTreeMap::<String, RateLimit>::new());
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let saved = RwSignal::new(false);
@@ -42,6 +45,8 @@ pub fn RouteView() -> impl IntoView {
                     local_provider.set(view.local_provider.unwrap_or_default());
                     cloud_provider.set(view.cloud_provider.unwrap_or_default());
                     providers.set(view.providers);
+                    load_balance.set(view.load_balance.unwrap_or_else(|| "ordered".into()));
+                    rate_limits.set(view.rate_limits);
                     loading.set(false);
                 }
                 Err(e) => {
@@ -65,6 +70,8 @@ pub fn RouteView() -> impl IntoView {
                 allow_cloud_escalation: allow_escalation.get(),
                 local_provider: to_pin(local_provider.get()),
                 cloud_provider: to_pin(cloud_provider.get()),
+                load_balance: Some(load_balance.get()),
+                rate_limits: rate_limits.get(),
             };
             match RouteConfigApi::update(&state, update).await {
                 Ok(()) => {
@@ -255,5 +262,17 @@ fn ProviderTierSelect(
                 <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.route.no_providers)}</p>
             </Show>
         </div>
+    }
+}
+
+/// Parse a number-input string into an optional ceiling. Empty / non-numeric →
+/// `None` (that dimension is unbounded). Mirrors the backend's "omitted = no
+/// limit" contract.
+fn parse_limit(raw: &str) -> Option<u32> {
+    let t = raw.trim();
+    if t.is_empty() {
+        None
+    } else {
+        t.parse::<u32>().ok()
     }
 }
