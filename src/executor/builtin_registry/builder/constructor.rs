@@ -173,7 +173,10 @@ impl BuiltinToolRegistry {
         // `~/.aleph/approval-policy.json`; with no file present it falls back to
         // a permissive default (desktop actions Allow, shell Deny), so wiring
         // here is byte-identical to the previous unwired (allow-all) behavior
-        // until the user supplies a policy file. Shared by DesktopTool + PimTool.
+        // until the user supplies a policy file. Shared by DesktopTool + PimTool
+        // and the sensitive browser tools (navigate/click/type/fill_form/
+        // evaluate), whose `Browser*` action types the policy engine already
+        // models — previously advertised but never enforced.
         let approval_policy: Arc<dyn crate::approval::ApprovalPolicy> =
             Arc::new(crate::approval::ConfigApprovalPolicy::load());
 
@@ -218,8 +221,10 @@ impl BuiltinToolRegistry {
             ))
         });
         let browser_open_tool = BrowserOpenTool::new(Arc::clone(&browser_profile_manager));
-        let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager));
-        let browser_type_tool = BrowserTypeTool::new(Arc::clone(&browser_profile_manager));
+        let browser_click_tool = BrowserClickTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_type_tool = BrowserTypeTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         // Share the same TTL-cached vision bridge as the desktop screenshot tool
         // so `browser_screenshot {describe:true}` yields an OCR/scene-description
         // layer for text-only models (connect-first — no second pipeline).
@@ -227,11 +232,14 @@ impl BuiltinToolRegistry {
             BrowserScreenshotTool::new(Arc::clone(&browser_profile_manager))
                 .with_vision_bridge(Arc::clone(&vision_bridge));
         let browser_snapshot_tool = BrowserSnapshotTool::new(Arc::clone(&browser_profile_manager));
-        let browser_navigate_tool = BrowserNavigateTool::new(Arc::clone(&browser_profile_manager));
+        let browser_navigate_tool = BrowserNavigateTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_tabs_tool = BrowserTabsTool::new(Arc::clone(&browser_profile_manager));
         let browser_select_tool = BrowserSelectTool::new(Arc::clone(&browser_profile_manager));
-        let browser_evaluate_tool = BrowserEvaluateTool::new(Arc::clone(&browser_profile_manager));
-        let browser_fill_form_tool = BrowserFillFormTool::new(Arc::clone(&browser_profile_manager));
+        let browser_evaluate_tool = BrowserEvaluateTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
+        let browser_fill_form_tool = BrowserFillFormTool::new(Arc::clone(&browser_profile_manager))
+            .with_approval_policy(Arc::clone(&approval_policy));
         let browser_press_key_tool = BrowserPressKeyTool::new(Arc::clone(&browser_profile_manager));
         let browser_wait_for_tool = BrowserWaitForTool::new(Arc::clone(&browser_profile_manager));
         let browser_console_tool = BrowserConsoleTool::new(Arc::clone(&browser_profile_manager));

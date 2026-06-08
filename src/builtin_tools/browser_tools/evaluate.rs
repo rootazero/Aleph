@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
@@ -31,11 +32,24 @@ pub struct BrowserEvaluateOutput {
 #[derive(Clone)]
 pub struct BrowserEvaluateTool {
     manager: Arc<ProfileManager>,
+    approval_policy: Option<Arc<dyn ApprovalPolicy>>,
 }
 
 impl BrowserEvaluateTool {
     pub fn new(manager: Arc<ProfileManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            approval_policy: None,
+        }
+    }
+
+    /// Gate JavaScript execution behind a user-defined approval policy. With no
+    /// policy wired the tool behaves exactly as before. `browser_evaluate` is
+    /// the most powerful browser action (arbitrary JS), so a policy file may
+    /// reasonably default it to `ask`.
+    pub fn with_approval_policy(mut self, policy: Arc<dyn ApprovalPolicy>) -> Self {
+        self.approval_policy = Some(policy);
+        self
     }
 }
 
@@ -47,6 +61,20 @@ impl AlephTool for BrowserEvaluateTool {
     type Output = BrowserEvaluateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        if let Some(message) = super::check_browser_approval(
+            self.approval_policy.as_ref(),
+            ActionType::BrowserEvaluate,
+            "evaluate",
+            &args.script,
+        )
+        .await
+        {
+            return Ok(BrowserEvaluateOutput {
+                success: false,
+                result: None,
+                message: Some(message),
+            });
+        }
         match super::make_backend_and_tab_guarded(&self.manager, &args.profile).await {
             Ok((backend, tab_id)) => match backend.evaluate(&tab_id, &args.script).await {
                 Ok(value) => {
