@@ -22,10 +22,23 @@ pub struct SurfaceNotification {
     pub source_topic: String,
 }
 
+/// A core-decided approval banner ready to render. Like `SurfaceNotification`
+/// the interrupt-worthiness is already decided upstream (the R5 router). The
+/// payload is intentionally sparse — detail lives in the Panel card; the
+/// banner only carries `approval_id` (for diagnostics/correlation) + static
+/// title/body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SurfaceApproval {
+    pub approval_id: String,
+    pub title: String,
+    pub body: String,
+}
+
 /// An outbound interaction the core routes to a delivery surface.
 #[derive(Debug, Clone)]
 pub enum OutboundInteraction {
     Notify(SurfaceNotification),
+    ApprovalRequest(SurfaceApproval),
 }
 
 #[derive(Debug, thiserror::Error)]

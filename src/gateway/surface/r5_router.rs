@@ -172,8 +172,10 @@ mod tests {
                 SurfaceKind::Desktop
             }
             fn deliver(&self, outbound: OutboundInteraction) -> Result<(), DeliveryError> {
-                let OutboundInteraction::Notify(n) = outbound;
-                self.0.lock().unwrap().push(n);
+                match outbound {
+                    OutboundInteraction::Notify(n) => self.0.lock().unwrap().push(n),
+                    OutboundInteraction::ApprovalRequest(_) => {}
+                }
                 Ok(())
             }
         }
