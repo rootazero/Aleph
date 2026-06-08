@@ -1,6 +1,7 @@
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 // ============================================================================
 // User Preferences — client-side feature flags and UI preferences
@@ -164,6 +165,18 @@ pub struct RouteProviderInfo {
     pub enabled: bool,
 }
 
+/// Per-provider soft rate ceiling, mirroring the backend `ProviderRateLimit`
+/// (`[route.rate_limits.<provider>]`). `skip_serializing_if` matches the wire
+/// bytes exactly: an omitted dimension means "unbounded on that axis", so the
+/// `usage_based` strategy treats it as infinite headroom.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RateLimit {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rpm: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tpm: Option<u32>,
+}
+
 /// `route_config.get` response: current mode plus the tier-classified providers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RouteConfigView {
@@ -180,6 +193,14 @@ pub struct RouteConfigView {
     pub cloud_provider: Option<String>,
     #[serde(default)]
     pub providers: Vec<RouteProviderInfo>,
+    /// Active load-balancing strategy: "ordered" | "round_robin" | "least_busy"
+    /// | "latency_aware" | "usage_based". `None` from an older daemon → treated
+    /// as "ordered" by the view.
+    #[serde(default)]
+    pub load_balance: Option<String>,
+    /// Per-provider rpm/tpm ceilings keyed by provider name. Empty when unset.
+    #[serde(default)]
+    pub rate_limits: BTreeMap<String, RateLimit>,
 }
 
 /// `route_config.update` payload.
@@ -192,6 +213,14 @@ pub struct RouteConfigUpdate {
     pub local_provider: Option<String>,
     #[serde(default)]
     pub cloud_provider: Option<String>,
+    /// Chosen load-balancing strategy (same key set as the view). Sent on every
+    /// save so the backend full-replace does not reset it to `Ordered`.
+    #[serde(default)]
+    pub load_balance: Option<String>,
+    /// Per-provider rpm/tpm ceilings. Sent on every save so the backend
+    /// full-replace does not wipe configured limits.
+    #[serde(default)]
+    pub rate_limits: BTreeMap<String, RateLimit>,
 }
 
 pub struct RouteConfigApi;
@@ -206,5 +235,45 @@ impl RouteConfigApi {
         let params = serde_json::to_value(&update).map_err(|e| e.to_string())?;
         state.rpc_call("route_config.update", params).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod route_serde_tests {
+    use super::*;
+
+    #[test]
+    fn rate_limit_omits_none_dims_on_wire() {
+        let rl = RateLimit { rpm: Some(60), tpm: None };
+        assert_eq!(serde_json::to_value(&rl).unwrap(), serde_json::json!({ "rpm": 60 }));
+    }
+
+    #[test]
+    fn update_round_trips_strategy_and_limits() {
+        let mut rate_limits = BTreeMap::new();
+        rate_limits.insert("anthropic".to_string(), RateLimit { rpm: Some(60), tpm: Some(90_000) });
+        let u = RouteConfigUpdate {
+            mode: "auto".into(),
+            allow_cloud_escalation: false,
+            local_provider: None,
+            cloud_provider: None,
+            load_balance: Some("usage_based".into()),
+            rate_limits,
+        };
+        let j = serde_json::to_value(&u).unwrap();
+        assert_eq!(j["load_balance"], "usage_based");
+        assert_eq!(j["rate_limits"]["anthropic"]["rpm"], 60);
+        assert_eq!(j["rate_limits"]["anthropic"]["tpm"], 90_000);
+    }
+
+    #[test]
+    fn view_tolerates_absent_new_fields() {
+        // An older daemon response without the new keys must still parse — this
+        // is the backward-compatibility guarantee.
+        let v: RouteConfigView =
+            serde_json::from_value(serde_json::json!({ "mode": "auto" })).unwrap();
+        assert_eq!(v.mode, "auto");
+        assert!(v.load_balance.is_none());
+        assert!(v.rate_limits.is_empty());
     }
 }
