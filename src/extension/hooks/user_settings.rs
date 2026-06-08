@@ -226,11 +226,25 @@ fn load_into(path: &Path, source_label: &str, out: &mut Vec<HookConfig>) {
                 .map(HookPriority::from_str_or_default)
                 .unwrap_or_default();
 
+            let matcher = g.matcher.clone().filter(|s| !s.is_empty());
+            // Foot-gun guard: matchers test `tool_name` only, so a matcher on
+            // an event whose context has no tool name silently never fires.
+            // Warn at load time rather than leaving a mysteriously-dead hook.
+            if matcher.is_some() && !event_supports_matcher(event) {
+                warn!(
+                    path = %path.display(),
+                    event = %event_str,
+                    "Hook `matcher` set on an event with no tool name; matchers test \
+                     tool_name only, so this hook will never fire — drop the matcher \
+                     to fire on every occurrence of this event"
+                );
+            }
+
             out.push(HookConfig {
                 event,
                 kind,
                 priority,
-                matcher: g.matcher.clone().filter(|s| !s.is_empty()),
+                matcher,
                 actions,
                 plugin_name: source_label.to_string(),
                 plugin_root: plugin_root.clone(),
@@ -286,6 +300,24 @@ fn default_kind_for_event(event: HookEvent) -> HookKind {
     }
 }
 
+/// Whether an event's [`HookContext`] carries a `tool_name`, so a `matcher`
+/// regex can meaningfully select among invocations. The hook executor matches
+/// the `matcher` against `tool_name` only; on any other event the matcher can
+/// never match and the hook silently never fires. Used to surface that
+/// foot-gun as a load-time warning.
+fn event_supports_matcher(event: HookEvent) -> bool {
+    use HookEvent::*;
+    matches!(
+        event,
+        BeforeToolCall
+            | AfterToolCall
+            | AfterToolCallFailure
+            | ToolResultPersist
+            | PermissionRequest
+            | Notification
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -294,6 +326,49 @@ mod tests {
     fn write(path: &Path, contents: &str) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, contents).unwrap();
+    }
+
+    #[test]
+    fn event_supports_matcher_only_for_tool_name_events() {
+        // Tool-name-bearing events accept a matcher.
+        assert!(event_supports_matcher(HookEvent::BeforeToolCall));
+        assert!(event_supports_matcher(HookEvent::AfterToolCall));
+        assert!(event_supports_matcher(HookEvent::AfterToolCallFailure));
+        assert!(event_supports_matcher(HookEvent::ToolResultPersist));
+        assert!(event_supports_matcher(HookEvent::PermissionRequest));
+        assert!(event_supports_matcher(HookEvent::Notification));
+        // Lifecycle events have no tool name; a matcher there never fires.
+        assert!(!event_supports_matcher(HookEvent::SessionStart));
+        assert!(!event_supports_matcher(HookEvent::BeforeAgentStart));
+        assert!(!event_supports_matcher(HookEvent::UserPromptSubmit));
+        assert!(!event_supports_matcher(HookEvent::AgentEnd));
+    }
+
+    #[test]
+    fn matcher_on_non_tool_event_still_loads_but_is_a_footgun() {
+        // The hook still loads (back-compat); we only warn. The matcher is
+        // preserved so behavior is unchanged — it simply will not match.
+        let dir = tempdir().unwrap();
+        let cfg = dir.path().join(".aleph/hooks.json");
+        write(
+            &cfg,
+            r#"{
+                "hooks": {
+                    "SessionStart": [
+                        { "matcher": "anything",
+                          "hooks": [
+                            { "type": "command", "command": "echo hi" }
+                          ]
+                        }
+                    ]
+                }
+            }"#,
+        );
+        let mut out = Vec::new();
+        load_into(&cfg, "user:project", &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].event, HookEvent::SessionStart);
+        assert_eq!(out[0].matcher.as_deref(), Some("anything"));
     }
 
     #[test]

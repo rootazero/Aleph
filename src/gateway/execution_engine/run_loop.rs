@@ -85,6 +85,20 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         "BeforeAgentStart hook aborted the run: {reason}"
                     )));
                 }
+                // Graceful stop (Claude-Code `continue: false`): the hook
+                // decided the agent should not start, but this is NOT an error
+                // — the run did exactly what the hook asked. Surface the hook's
+                // message as the run output instead of failing.
+                Ok((_ctx, hr)) if hr.prevent_continuation => {
+                    let stop_msg = hr.messages.first().cloned().unwrap_or_else(|| {
+                        "Run halted by BeforeAgentStart hook (prevent_continuation).".to_string()
+                    });
+                    warn!(
+                        run_id = run_id,
+                        "BeforeAgentStart hook requested prevent_continuation; stopping run"
+                    );
+                    return Ok(stop_msg);
+                }
                 Ok(_) => {}
                 Err(e) => warn!(run_id = run_id, error = %e, "BeforeAgentStart hook failed"),
             }
@@ -95,7 +109,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // dispatcher worker tasks, etc.) inherit the project context.
         // `None` is also published explicitly so a nested run cannot leak
         // an outer scope's project into a non-project agent.
-        let result = crate::projects::with_project_root(
+        let mut result = crate::projects::with_project_root(
             request.workspace_override.clone(),
             self.run_agent_loop_inner(
                 run_id,
@@ -112,14 +126,29 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         )
         .await;
 
-        // AgentEnd — observers only; the run is already over, nothing to block.
+        // AgentEnd — observers witness the end; Interceptor-kind hooks may
+        // rewrite the final assistant text via `update_output:` (hermes
+        // `transform_llm_output` parity). This reuses the exact `updated_output`
+        // seam already honored on the AfterToolCall path — no new protocol.
+        // block / deny are meaningless post-hoc (the run is over) and ignored.
         if let Some(executor) = hook_executor.as_ref() {
             let mut ctx = lifecycle_hook_context(&hook_session_id, run_id, &agent);
             ctx = ctx.with_env("AGENT_OUTCOME", if result.is_ok() { "ok" } else { "error" });
-            if let Err(ref e) = result {
-                ctx = ctx.with_env("AGENT_ERROR", e.to_string());
+            match &result {
+                Ok(text) => ctx = ctx.with_tool_output(text.clone()),
+                Err(e) => ctx = ctx.with_env("AGENT_ERROR", e.to_string()),
             }
             executor.execute_observers(HookEvent::AgentEnd, &ctx).await;
+            // Only the success path carries a final text to transform.
+            if let Ok(ref mut text) = result {
+                if let Ok((_ctx, hr)) =
+                    executor.execute_interceptors(HookEvent::AgentEnd, ctx).await
+                {
+                    if let Some(new_text) = hr.updated_output {
+                        *text = new_text;
+                    }
+                }
+            }
         }
         result
     }
@@ -360,6 +389,26 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     )));
                 }
                 Ok((_ctx, hr)) => {
+                    // `prevent_continuation` (Claude-Code `continue: false`):
+                    // the hook handled this prompt out-of-band and the agent
+                    // must not run. Stop gracefully and surface the hook's
+                    // message/context as the run output (NOT an error).
+                    if hr.prevent_continuation {
+                        let stop_msg = hr
+                            .messages
+                            .first()
+                            .cloned()
+                            .or_else(|| hr.additional_contexts.first().cloned())
+                            .unwrap_or_else(|| {
+                                "Run halted by UserPromptSubmit hook (prevent_continuation)."
+                                    .to_string()
+                            });
+                        warn!(
+                            run_id = run_id,
+                            "UserPromptSubmit hook requested prevent_continuation; stopping run"
+                        );
+                        return Ok(stop_msg);
+                    }
                     if !hr.additional_contexts.is_empty() {
                         let reminders = hr
                             .additional_contexts
