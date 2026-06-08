@@ -57,6 +57,26 @@ pub fn ChatView() -> impl IntoView {
         });
     });
 
+    // Cross-surface scroll-focus: when a timeline step becomes focused (the
+    // sole writer is the right-pane step button → `WorkspaceState::focus_step`),
+    // bring its chat-bubble counterpart (`#step-{run}-{iteration}`, the id set
+    // in `messages.rs`) into view. The bubble already renders a highlight ring
+    // via `is_step_focused`; this completes the documented scroll-focus that
+    // was previously highlight-only (an off-screen counterpart was never
+    // revealed). `scroll_into_view` walks ancestor scroll containers, so it
+    // works inside the messages list without forcing a full-window scroll.
+    Effect::new(move |_| {
+        let Some((run_id, iteration)) = workspace.focused_step.get() else {
+            return;
+        };
+        let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+            return;
+        };
+        if let Some(el) = document.get_element_by_id(&format!("step-{run_id}-{iteration}")) {
+            el.scroll_into_view();
+        }
+    });
+
     // ---- G5: chat-surface drop zone ----
     // Listening on the root div so a Finder/Explorer drop anywhere over
     // the chat (messages list, composer, anywhere in between) routes the

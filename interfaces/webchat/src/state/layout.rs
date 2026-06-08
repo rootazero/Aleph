@@ -94,10 +94,6 @@ pub struct WorkspaceState {
     /// Split — drives the toggle button's unseen-activity dot (R5: we
     /// surface activity without force-opening the pane).
     pub unseen_activity: RwSignal<usize>,
-    /// A `tool_id` the user clicked from a chat chip — the timeline scrolls
-    /// to / expands it. Cleared once consumed.
-    /// TODO(phase-2): a scroll-into-view effect will read this; currently only set.
-    pub focus_tool: RwSignal<Option<String>>,
     /// Whether the bottom files drawer is expanded (Phase 2).
     pub files_drawer_open: RwSignal<bool>,
     /// Currently previewed file (Phase 2).
@@ -128,7 +124,6 @@ impl WorkspaceState {
             tool_payloads: RwSignal::new(HashMap::new()),
             expanded_events: RwSignal::new(HashSet::new()),
             unseen_activity: RwSignal::new(0),
-            focus_tool: RwSignal::new(None),
             files_drawer_open: RwSignal::new(false),
             selected_file: RwSignal::new(None),
             focused_step: RwSignal::new(None),
@@ -167,19 +162,6 @@ impl WorkspaceState {
         self.expanded_events.with(|set| set.contains(tool_id))
     }
 
-    /// Chat-chip click: focus a tool row in the timeline, expanding it and
-    /// opening Split if needed. Replaces the old `show_tool` single-view.
-    pub fn focus_tool_row(&self, _run_id: impl Into<String>, tool_id: impl Into<String>) {
-        let tool_id = tool_id.into();
-        self.expanded_events.update(|set| {
-            set.insert(tool_id.clone());
-        });
-        self.focus_tool.set(Some(tool_id));
-        if self.mode.get_untracked() != LayoutMode::Split {
-            self.set_layout(LayoutMode::Split);
-        }
-    }
-
     /// Record that a tool started. Bumps the unseen badge only when the
     /// pane is not already open (R5 — never force-open).
     pub fn note_activity(&self) {
@@ -205,7 +187,6 @@ impl WorkspaceState {
         self.tool_payloads.update(|m| m.clear());
         self.expanded_events.update(|s| s.clear());
         self.unseen_activity.set(0);
-        self.focus_tool.set(None);
         self.files_drawer_open.set(false);
         self.selected_file.set(None);
         self.focused_step.set(None);
@@ -242,7 +223,9 @@ impl WorkspaceState {
     }
 
     /// Focus a step for cross-highlight. Opens Split if not already (so a
-    /// chat-side click reveals the timeline group), mirroring `focus_tool_row`.
+    /// chat-side click reveals the timeline group). A scroll-into-view effect
+    /// in `ChatView` reads `focused_step` and brings the chat-bubble
+    /// counterpart (`#step-{run}-{iteration}`) into view.
     pub fn focus_step(&self, run_id: impl Into<String>, iteration: usize) {
         self.focused_step.set(Some((run_id.into(), iteration)));
         if self.mode.get_untracked() != LayoutMode::Split {
@@ -294,7 +277,6 @@ mod tests {
             tool_payloads: RwSignal::new(HashMap::new()),
             expanded_events: RwSignal::new(HashSet::new()),
             unseen_activity: RwSignal::new(0),
-            focus_tool: RwSignal::new(None),
             files_drawer_open: RwSignal::new(false),
             selected_file: RwSignal::new(None),
             focused_step: RwSignal::new(None),
@@ -343,7 +325,7 @@ mod tests {
         owner.set();
 
         let ws = test_ws(LayoutMode::Split);
-        ws.focus_tool_row("run-1", "tool-a");
+        ws.toggle_event("tool-a");
         ws.record_tool_args("run-1", "tool-a", serde_json::json!({"q": "x"}));
         ws.record_tool_result("run-1", "tool-a", serde_json::json!({"ok": true}));
         ws.toggle_files_drawer();
@@ -360,7 +342,6 @@ mod tests {
 
         assert!(ws.get_tool_payload("run-1", "tool-a").is_none());
         assert!(!ws.is_event_expanded("tool-a"));
-        assert_eq!(ws.focus_tool.get_untracked(), None);
         assert_eq!(ws.mode.get_untracked(), LayoutMode::Split);
         assert!(!ws.files_drawer_open.get_untracked());
         assert!(ws.selected_file.get_untracked().is_none());
