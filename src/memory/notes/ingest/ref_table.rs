@@ -242,6 +242,7 @@ mod tests {
                 note_path: "[P0]".into(),
                 new_facts: vec!["f".into()],
                 new_links: vec![],
+                new_relations: vec![],
             }],
             schema_proposals: vec![],
         };
@@ -264,6 +265,7 @@ mod tests {
                     note_path: "[P99]".into(), // hallucinated — only P0..P2 exist
                     new_facts: vec!["f".into()],
                     new_links: vec![],
+                    new_relations: vec![],
                 },
                 PageOp::Update {
                     note_path: "[P1]".into(),
@@ -293,6 +295,7 @@ mod tests {
                 note_path: "learning/rust-async".into(),
                 new_facts: vec!["f".into()],
                 new_links: vec!["learning/tokio".into()],
+                new_relations: vec![],
             }],
             schema_proposals: vec![],
         };
@@ -323,6 +326,7 @@ mod tests {
                 facts: vec![],
                 links: vec!["[P2]".into(), "[P50]".into(), "learning/raw".into()],
                 tags: vec![],
+                relations: vec![],
             }],
             schema_proposals: vec![],
         };
@@ -375,6 +379,7 @@ mod tests {
                 note_path: "learning/x".into(),
                 new_facts: vec!["f".into()],
                 new_links: vec![],
+                new_relations: vec![],
             }],
             schema_proposals: vec![],
         };

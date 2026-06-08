@@ -105,6 +105,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 facts,
                 links,
                 tags,
+                ..
             } => {
                 let (category, filename) = split_path(note_path)?;
                 let safe = sanitize_title(&filename)?;
@@ -134,6 +135,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 note_path,
                 new_facts,
                 new_links,
+                ..
             } => {
                 let (category, filename) = split_path(note_path)?;
                 let safe = sanitize_title(&filename)?;
@@ -476,6 +478,7 @@ mod tests {
             facts: vec!["event-driven".into()],
             links: vec!["learning/rust-async".into()],
             tags: vec!["rust".into()],
+            relations: vec![],
         })
         .await
         .unwrap();
@@ -500,6 +503,7 @@ mod tests {
                 facts: vec![],
                 links: vec!["learning/rust-async".into()],
                 tags: vec![],
+                relations: vec![],
             })
             .await
             .unwrap();
@@ -533,6 +537,7 @@ mod tests {
             facts: vec![],
             links: vec![],
             tags: vec![],
+            relations: vec![],
         })
         .await
         .unwrap();
@@ -554,6 +559,7 @@ mod tests {
             facts: vec!["fact-a".into()],
             links: vec!["learning/rust-async".into()],
             tags: vec![],
+            relations: vec![],
         })
         .await
         .unwrap();
@@ -564,6 +570,7 @@ mod tests {
             note_path: "learning/tokio".into(),
             new_facts: vec!["fact-a".into(), "fact-b".into()],
             new_links: vec![],
+            new_relations: vec![],
         })
         .await
         .unwrap();
@@ -591,12 +598,14 @@ mod tests {
                     facts: vec![],
                     links: vec!["seed/link".to_string()],
                     tags: vec![],
+                    relations: vec![],
                 })
             }),
             path.clone().prop_map(|p| PageOp::Append {
                 note_path: p,
                 new_facts: vec!["f".into()],
                 new_links: vec![],
+                new_relations: vec![],
             }),
             (path.clone(), path)
                 .prop_filter("distinct endpoints", |(a, b)| a != b)
