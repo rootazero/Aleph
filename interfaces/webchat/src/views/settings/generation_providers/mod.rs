@@ -14,7 +14,6 @@ mod settings_panel;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos::*;
 
 use crate::api::{GenerationProviderEntry, GenerationProvidersApi};
 use crate::components::provider_badge::{BadgeState, ProviderBadges};

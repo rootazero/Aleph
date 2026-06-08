@@ -50,18 +50,18 @@ fn test_thinking_guidance_enabled() {
 
     // Should contain thinking transparency section
     assert!(prompt.contains("## Thinking Transparency"));
-    assert!(prompt.contains("### Reasoning Flow"));
+    assert!(prompt.contains("Reasoning Flow"));
 
-    // Should contain the four phases
-    assert!(prompt.contains("**Observation**"));
-    assert!(prompt.contains("**Analysis**"));
-    assert!(prompt.contains("**Planning**"));
-    assert!(prompt.contains("**Decision**"));
+    // Should contain the four reasoning phases (inline in the flow bullet)
+    assert!(prompt.contains("Observation"));
+    assert!(prompt.contains("Analysis"));
+    assert!(prompt.contains("Planning"));
+    assert!(prompt.contains("Decision"));
 
     // Should contain uncertainty guidance
     assert!(prompt.contains("Expressing Uncertainty"));
-    assert!(prompt.contains("High confidence"));
-    assert!(prompt.contains("Low confidence"));
+    assert!(prompt.contains("I'm confident"));
+    assert!(prompt.contains("I'm not sure"));
 
     // Should contain alternatives guidance
     assert!(prompt.contains("Acknowledging Alternatives"));

@@ -527,12 +527,13 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        // 38 after ToolRuntimeStateLayer was added (Phase 5, 2026-05-21).
+        // 39 after StandingGoalLayer was added (2026-06-08).
         // Previous counts: 36 → 37 (SessionBudgetLayer, Phase 4, 2026-05-20)
         // → 38 (ToolRuntimeStateLayer) → 37 (McpToolIndexLayer removed as dead
         // code, 2026-05-31) → 38 (ExecutionPlanLayer re-surfaces the active
-        // scratchpad plan per turn). See `default_layers` for the full table.
-        assert_eq!(pipeline.layer_count(), 38);
+        // scratchpad plan per turn) → 39 (StandingGoalLayer re-surfaces the
+        // active standing goal per turn, 2026-06-08). See `default_layers`.
+        assert_eq!(pipeline.layer_count(), 39);
     }
 
     #[test]

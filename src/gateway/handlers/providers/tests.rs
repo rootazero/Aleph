@@ -205,8 +205,10 @@ async fn test_needs_setup_has_unverified_provider() {
     assert_eq!(result["has_verified"], false);
 }
 
+// Security (3def857c6): list/get report `has_api_key` from the vault but never
+// echo the plaintext secret back in the response.
 #[tokio::test]
-async fn test_handle_list_injects_api_key_from_vault() {
+async fn test_handle_list_reports_has_api_key_without_echoing_secret() {
     let config = Arc::new(RwLock::new(config_with_provider("toapis")));
     let vault = test_vault();
     vault
@@ -222,12 +224,13 @@ async fn test_handle_list_injects_api_key_from_vault() {
     assert_eq!(providers.len(), 1);
     let provider = &providers[0];
     assert_eq!(provider["name"], "toapis");
-    assert_eq!(provider["api_key"], "test-toapis-key");
+    // Plaintext key is never serialized into list responses.
+    assert!(provider.get("api_key").is_none() || provider["api_key"].is_null());
     assert_eq!(provider["has_api_key"], true);
 }
 
 #[tokio::test]
-async fn test_handle_get_injects_api_key_from_vault() {
+async fn test_handle_get_reports_has_api_key_without_echoing_secret() {
     let config = Arc::new(RwLock::new(config_with_provider("toapis")));
     let vault = test_vault();
     vault
@@ -242,7 +245,8 @@ async fn test_handle_get_injects_api_key_from_vault() {
     let result = response.result.unwrap();
     let provider = &result["provider"];
     assert_eq!(provider["name"], "toapis");
-    assert_eq!(provider["api_key"], "test-toapis-key");
+    // Plaintext key is never serialized into get responses.
+    assert!(provider.get("api_key").is_none() || provider["api_key"].is_null());
     assert_eq!(provider["has_api_key"], true);
 }
 

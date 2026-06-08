@@ -98,11 +98,12 @@ impl Viewport {
     pub fn hover_retains(&self, screen_point: Vec2, node_world: Vec2, node_radius: f64) -> bool {
         let center = self.world_to_screen(node_world);
         if self.scale < 0.5 {
-            return screen_point.distance_to(&center) <= node_radius * self.scale + HIT_TOLERANCE_PX;
+            return screen_point.distance_to(&center)
+                <= node_radius * self.scale + HIT_TOLERANCE_PX;
         }
         let dx = screen_point.x - center.x;
         let dy = screen_point.y - center.y;
-        dx >= -RETAIN_HALF_W && dx <= RETAIN_HALF_W && dy >= -RETAIN_UP && dy <= RETAIN_DOWN
+        (-RETAIN_HALF_W..=RETAIN_HALF_W).contains(&dx) && (-RETAIN_UP..=RETAIN_DOWN).contains(&dy)
     }
 
     pub fn is_visible(&self, world_point: Vec2, margin: f64) -> bool {
@@ -343,7 +344,7 @@ mod hit_test_tests {
         // retention degrades to the forgiving circle (radius*scale + tol).
         let mut vp = Viewport::new(800.0, 600.0);
         vp.scale = 0.4; // offset stays (400,300); world origin → screen (400,300)
-        // radius 10 → 10*0.4 + 6 = 10 px screen tolerance.
+                        // radius 10 → 10*0.4 + 6 = 10 px screen tolerance.
         assert!(vp.hover_retains(Vec2::new(405.0, 300.0), Vec2::zero(), 10.0));
         assert!(!vp.hover_retains(Vec2::new(420.0, 300.0), Vec2::zero(), 10.0));
     }

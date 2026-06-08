@@ -283,7 +283,7 @@ pub fn default_dedup_similarity_threshold() -> f32 {
 
 /// Cosine threshold at or above which a freshly-planned `Create` is treated as
 /// a NOOP and dropped (the note already exists, essentially verbatim). Must be
-/// >= `default_dedup_similarity_threshold`. `0.985` is deliberately very high:
+/// \>= `default_dedup_similarity_threshold`. `0.985` is deliberately very high:
 /// only near-identical title+summary+facts collapse to a no-op, so a Create
 /// carrying genuinely new facts (which embeds below this) is still merged via
 /// Append rather than dropped.

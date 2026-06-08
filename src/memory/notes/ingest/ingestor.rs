@@ -1129,7 +1129,13 @@ mod plan_tests {
         }];
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
-            .plan("default", &[raw], &related, &RawMemorySource::Transcript, None)
+            .plan(
+                "default",
+                &[raw],
+                &related,
+                &RawMemorySource::Transcript,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(plan.ops.len(), 1);
@@ -1172,7 +1178,13 @@ mod plan_tests {
         }];
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
-            .plan("default", &[raw], &related, &RawMemorySource::Transcript, None)
+            .plan(
+                "default",
+                &[raw],
+                &related,
+                &RawMemorySource::Transcript,
+                None,
+            )
             .await
             .unwrap();
         assert!(plan.ops.is_empty(), "hallucinated-token op must be dropped");
@@ -1393,10 +1405,7 @@ mod plan_tests {
         };
 
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-        let report = ing
-            .ingest_batch("default", vec![raw], None)
-            .await
-            .unwrap();
+        let report = ing.ingest_batch("default", vec![raw], None).await.unwrap();
         assert_eq!(report.created, 1);
 
         let index_md_path = memory_dir.join("default").join("index.md");
@@ -1512,10 +1521,7 @@ mod plan_tests {
         };
 
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-        let report = ing
-            .ingest_batch("default", vec![raw], None)
-            .await
-            .unwrap();
+        let report = ing.ingest_batch("default", vec![raw], None).await.unwrap();
         assert_eq!(report.created, 1);
         assert_eq!(report.touched_paths.len(), 1);
 
@@ -1659,7 +1665,7 @@ mod plan_tests {
         // Seed a MERGE-band embedding (cosine 0.9375 vs the candidate's
         // [0.1; 1024]) so the Create redirects to Append rather than dropping.
         let mut merge_vec = vec![0.1f32; 900];
-        merge_vec.extend(std::iter::repeat(0.0f32).take(124));
+        merge_vec.extend(std::iter::repeat_n(0.0f32, 124));
         backend
             .upsert_embedding("learning/tokio", "default", &merge_vec, 1024)
             .await
@@ -1822,7 +1828,7 @@ mod plan_tests {
     /// 1024 → 1.0 (NOOP).
     fn seed_with_cosine_entries(m: usize) -> Vec<f32> {
         let mut v = vec![0.1f32; m];
-        v.extend(std::iter::repeat(0.0f32).take(1024 - m));
+        v.extend(std::iter::repeat_n(0.0f32, 1024 - m));
         v
     }
 
@@ -1891,7 +1897,10 @@ mod plan_tests {
     #[tokio::test]
     async fn dedup_tier_noop_drops_create() {
         let out = run_dedup_tier(vec![0.1f32; 1024], budget_dedup_on()).await;
-        assert!(out.is_empty(), "near-identical Create must be dropped as NOOP");
+        assert!(
+            out.is_empty(),
+            "near-identical Create must be dropped as NOOP"
+        );
     }
 
     /// FLOOR: `dedup_noop_threshold` misconfigured BELOW `dedup_similarity_threshold`.

@@ -264,7 +264,7 @@ fn coerce_scalar_args(args: &Value, schema: &Value) -> Option<Value> {
         };
         out.insert(key.clone(), next);
     }
-    changed.then(|| Value::Object(out))
+    changed.then_some(Value::Object(out))
 }
 
 /// Declared scalar kind of a JSON-Schema property, if it is integer / number /
@@ -615,9 +615,11 @@ mod tests {
             "f": {"type": "number"},
             "b": {"type": "boolean"},
         }});
-        let out =
-            coerce_scalar_args(&serde_json::json!({"n": "7", "f": "2.5", "b": "false"}), &schema)
-                .unwrap();
+        let out = coerce_scalar_args(
+            &serde_json::json!({"n": "7", "f": "2.5", "b": "false"}),
+            &schema,
+        )
+        .unwrap();
         assert_eq!(out["n"], 7);
         assert_eq!(out["f"], 2.5);
         assert_eq!(out["b"], false);
