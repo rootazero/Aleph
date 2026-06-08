@@ -1182,12 +1182,17 @@ async fn handle_connection(
                                 .or_else(|| event_obj.get("method").and_then(|m| m.as_str()))
                                 .unwrap_or("");
 
-                            // Permission-based scope guard check
-                            let scope_allowed = {
+                            // Permission-based scope guard check + surface audience.
+                            // Both read the same ConnectionState under one lock.
+                            let (scope_allowed, channel_kind) = {
                                 let conns = ctx.connections.read().await;
-                                conns.get(&conn_id)
-                                    .map(|s| ctx.event_scope_guard.can_receive(topic, &s.permissions))
-                                    .unwrap_or(false)
+                                match conns.get(&conn_id) {
+                                    Some(s) => (
+                                        ctx.event_scope_guard.can_receive(topic, &s.permissions),
+                                        s.channel_kind,
+                                    ),
+                                    None => (false, None),
+                                }
                             };
 
                             // Extract payload data for field-level filter predicates.
@@ -1197,7 +1202,12 @@ async fn handle_connection(
                                 .get("data")
                                 .or_else(|| event_obj.get("params").and_then(|p| p.get("data")));
 
-                            scope_allowed && ctx.subscription_manager.should_receive(&conn_id, topic, event_data).await
+                            scope_allowed
+                                && crate::gateway::surface::delivery::audience_allows(
+                                    event_data,
+                                    channel_kind,
+                                )
+                                && ctx.subscription_manager.should_receive(&conn_id, topic, event_data).await
                         } else {
                             // Can't parse event, forward by default
                             true
