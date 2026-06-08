@@ -44,8 +44,9 @@ fn resolve_api_key(provider_name: &str, vault: &SharedTokenManager) -> Option<St
 
 /// Handle rerank_config.get request
 ///
-/// If params contains `"provider": "jina"`, returns config with that provider's vault key.
-/// Otherwise returns config with the active provider's key.
+/// If params contains `"provider": "jina"`, reports whether that provider has a
+/// vault key; otherwise checks the active provider. The stored secret is never
+/// echoed — only a `has_api_key` flag is returned (security: 3def857c6).
 pub async fn handle_get(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
@@ -64,10 +65,13 @@ pub async fn handle_get(
         .map(String::from)
         .unwrap_or_else(|| provider_name(&cfg.memory.rerank.provider));
 
-    if let Some(key) = resolve_api_key(&query_provider, &vault) {
-        if let Some(obj) = rerank.as_object_mut() {
-            obj.insert("api_key".into(), json!(key));
-        }
+    // Security (3def857c6): never echo the stored secret. Report presence only
+    // via `has_api_key` so the Panel can render its key-status hint; the editable
+    // field always starts empty and an empty value on save means "keep existing".
+    let has_api_key = resolve_api_key(&query_provider, &vault).is_some();
+    if let Some(obj) = rerank.as_object_mut() {
+        obj.remove("api_key");
+        obj.insert("has_api_key".into(), json!(has_api_key));
     }
 
     JsonRpcResponse::success(request.id, rerank)
@@ -240,6 +244,31 @@ mod tests {
 
         let result = response.result.unwrap();
         assert_eq!(result["enabled"].as_bool(), Some(false));
+    }
+
+    // Security (3def857c6): get reports `has_api_key` from the vault but never
+    // echoes the secret back to the Panel.
+    #[tokio::test]
+    async fn test_handle_get_reports_has_api_key_without_echoing_secret() {
+        let config = Arc::new(RwLock::new(Config::default()));
+        let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
+        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank_haskey.vault"));
+        let _ = vault.generate_token();
+        // Active provider defaults to "jina"; seed its vault key.
+        vault.store_secret(&vault_key("jina"), "super-secret-key").unwrap();
+
+        let request = JsonRpcRequest::with_id("rerank_config.get", None, serde_json::json!(1));
+        let response = handle_get(request, config, vault).await;
+        assert!(response.is_success());
+
+        let result = response.result.unwrap();
+        assert_eq!(result["has_api_key"].as_bool(), Some(true));
+        assert!(
+            result.get("api_key").is_none(),
+            "stored secret must never be echoed back"
+        );
+        // The serialized response must not contain the secret anywhere.
+        assert!(!result.to_string().contains("super-secret-key"));
     }
 
     #[tokio::test]

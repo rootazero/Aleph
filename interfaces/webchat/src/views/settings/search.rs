@@ -5,7 +5,8 @@
 //! - Right panel: Detail panel for selected provider
 
 use crate::api::{SearchBackendEntry, SearchConfig, SearchConfigApi};
-use crate::components::ui::SecretInput;
+use crate::components::provider_badge::{BadgeState, ProviderBadges};
+use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -302,20 +303,11 @@ fn PresetGrid(
                                             let cfg = config.get();
                                             let is_default = !cfg.default_provider.is_empty() && cfg.default_provider == name;
                                             let backend_verified = cfg.backends.iter().find(|b| b.name == name).is_some_and(|b| b.verified);
-                                            if is_default {
-                                                view! {
-                                                    <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                        "Default"
-                                                    </span>
-                                                }.into_any()
-                                            } else if backend_verified {
-                                                view! {
-                                                    <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                        "Verified"
-                                                    </span>
-                                                }.into_any()
-                                            } else {
-                                                view! { <span></span> }.into_any()
+                                            view! {
+                                                <ProviderBadges state=BadgeState {
+                                                    is_default,
+                                                    verified: backend_verified,
+                                                } />
                                             }
                                         }}
                                     </div>
@@ -397,21 +389,10 @@ fn CustomSearchProvidersList(
                                                     <span class="font-medium text-text-primary text-sm truncate">
                                                         {name}
                                                     </span>
-                                                    {if is_default {
-                                                        view! {
-                                                            <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                                "Default"
-                                                            </span>
-                                                        }.into_any()
-                                                    } else if verified {
-                                                        view! {
-                                                            <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                                "Verified"
-                                                            </span>
-                                                        }.into_any()
-                                                    } else {
-                                                        view! { <span></span> }.into_any()
-                                                    }}
+                                                    <ProviderBadges state=BadgeState {
+                                                        is_default,
+                                                        verified,
+                                                    } />
                                                 </div>
                                                 <div class="text-xs text-text-tertiary truncate">
                                                     {t!(i18n, settings.search.custom_search_provider)}
@@ -508,6 +489,9 @@ fn ProviderDetailPanel(
     let form_api_key = RwSignal::new(String::new());
     let form_base_url = RwSignal::new(String::new());
     let form_engine_id = RwSignal::new(String::new());
+    // Whether the selected backend already has a key in the vault. The secret is
+    // never echoed; the field starts empty and an empty value on save keeps it.
+    let provider_has_key = RwSignal::new(false);
 
     let saving = RwSignal::new(false);
     let save_success = RwSignal::new(false);
@@ -523,15 +507,18 @@ fn ProviderDetailPanel(
         form_max_results.set(cfg.max_results);
         form_timeout.set(cfg.timeout_seconds);
 
-        // Load per-provider backend fields
+        // Load per-provider backend fields. The secret is never echoed: the key
+        // field always starts empty; `has_api_key` only drives the status hint.
         if let Some(sel_name) = &sel {
             if let Some(backend) = find_backend(&cfg.backends, sel_name) {
-                form_api_key.set(backend.api_key.clone().unwrap_or_default());
+                form_api_key.set(String::new());
+                provider_has_key.set(backend.has_api_key);
                 form_base_url.set(backend.base_url.clone().unwrap_or_default());
                 form_engine_id.set(backend.engine_id.clone().unwrap_or_default());
             } else {
                 // No saved backend — use preset default base_url
                 form_api_key.set(String::new());
+                provider_has_key.set(false);
                 form_base_url.set(
                     find_preset(sel_name)
                         .map(|p| p.base_url.to_string())
@@ -572,6 +559,7 @@ fn ProviderDetailPanel(
             } else {
                 Some(engine_id)
             },
+            has_api_key: false,
             verified: false,
         });
         backends
@@ -800,24 +788,10 @@ fn ProviderDetailPanel(
                                         <h2 class="text-lg font-semibold text-text-primary">
                                             {preset.map(|p| p.display_name).unwrap_or(&sel_name)}
                                         </h2>
-                                        {if is_active {
-                                            view! {
-                                                <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded">
-                                                    "Default"
-                                                </span>
-                                            }.into_any()
-                                        } else {
-                                            view! { <span></span> }.into_any()
-                                        }}
-                                        {if is_verified {
-                                            view! {
-                                                <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded">
-                                                    "Verified"
-                                                </span>
-                                            }.into_any()
-                                        } else {
-                                            view! { <span></span> }.into_any()
-                                        }}
+                                        <ProviderBadges state=BadgeState {
+                                            is_default: is_active,
+                                            verified: is_verified,
+                                        } />
                                     </div>
                                     <p class="text-xs text-text-tertiary">
                                         {preset.map(|p| p.description).unwrap_or("Search provider")}
@@ -847,11 +821,10 @@ fn ProviderDetailPanel(
                                                     <label class="block text-sm font-medium text-text-secondary mb-1">
                                                         {t!(i18n, settings.search.api_key)}
                                                     </label>
-                                                    <SecretInput
-                                                        value=Signal::derive(move || form_api_key.get())
-                                                        on_change=move |v| form_api_key.set(v)
-                                                        placeholder=placeholder.to_string()
-                                                        monospace=true
+                                                    <ProviderKeyField
+                                                        value=form_api_key
+                                                        has_api_key=provider_has_key.into()
+                                                        hint=placeholder.to_string()
                                                     />
                                                 </div>
                                             }.into_any()
@@ -1066,33 +1039,38 @@ fn ProviderDetailPanel(
                                     let has_backend = config.get().backends.iter().any(|b| b.name == sel_name_for_row2);
                                     if has_backend {
                                         view! {
-                                            <div class="flex flex-row gap-3">
-                                                {if !is_active {
-                                                    Some(view! {
-                                                        <button
-                                                            on:click=on_set_active
-                                                            prop:disabled=move || saving.get()
-                                                            class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
-                                                        >
-                                                            {t!(i18n, settings.search.set_as_default)}
-                                                        </button>
-                                                    })
-                                                } else {
-                                                    None
-                                                }}
-                                                {if !is_active && is_custom {
-                                                    Some(view! {
-                                                        <button
-                                                            on:click=on_delete
-                                                            prop:disabled=move || deleting.get()
-                                                            class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
-                                                        >
-                                                            {move || if deleting.get() { t_string!(i18n, settings.search.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
-                                                        </button>
-                                                    })
-                                                } else {
-                                                    None
-                                                }}
+                                            <div class="flex flex-col gap-2">
+                                                <div class="flex flex-row gap-3">
+                                                    {if !is_active {
+                                                        Some(view! {
+                                                            <button
+                                                                on:click=on_set_active
+                                                                prop:disabled=move || saving.get() || !is_verified
+                                                                class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
+                                                            >
+                                                                {t!(i18n, settings.search.set_as_default)}
+                                                            </button>
+                                                        })
+                                                    } else {
+                                                        None
+                                                    }}
+                                                    {if !is_active && is_custom {
+                                                        Some(view! {
+                                                            <button
+                                                                on:click=on_delete
+                                                                prop:disabled=move || deleting.get()
+                                                                class="flex-1 px-4 py-2.5 bg-danger-subtle border border-danger/20 text-danger text-sm font-medium rounded-lg hover:bg-danger-subtle/80 disabled:opacity-50"
+                                                            >
+                                                                {move || if deleting.get() { t_string!(i18n, settings.search.deleting).to_string() } else { t_string!(i18n, common.delete).to_string() }}
+                                                            </button>
+                                                        })
+                                                    } else {
+                                                        None
+                                                    }}
+                                                </div>
+                                                {(!is_active && !is_verified).then(|| view! {
+                                                    <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.verify_before_default)}</p>
+                                                })}
                                             </div>
                                         }.into_any()
                                     } else {
@@ -1166,6 +1144,7 @@ fn AddCustomSearchProviderPanel(
                     Some(v)
                 }
             },
+            has_api_key: false,
             verified: false,
         });
 
@@ -1222,11 +1201,10 @@ fn AddCustomSearchProviderPanel(
                     // API Key
                     <div>
                         <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.search.api_key)}</label>
-                        <SecretInput
-                            value=Signal::derive(move || form_api_key.get())
-                            on_change=move |v| form_api_key.set(v)
-                            placeholder=t_string!(i18n, settings.search.optional_api_key).to_string()
-                            monospace=true
+                        <ProviderKeyField
+                            value=form_api_key
+                            has_api_key=Signal::derive(|| false)
+                            hint=t_string!(i18n, settings.search.optional_api_key).to_string()
                         />
                     </div>
 

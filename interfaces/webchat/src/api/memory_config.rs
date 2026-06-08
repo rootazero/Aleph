@@ -174,6 +174,12 @@ pub struct RerankConfig {
     pub timeout_ms: u64,
     #[serde(default = "default_rerank_weight")]
     pub rerank_weight: f32,
+    /// Connection has been verified by a successful test (server-tracked).
+    #[serde(default)]
+    pub verified: bool,
+    /// A key is stored in the vault (reported by get; the secret is never echoed).
+    #[serde(default)]
+    pub has_api_key: bool,
 }
 
 fn default_rerank_model() -> String {
@@ -196,6 +202,8 @@ impl Default for RerankConfig {
             model: default_rerank_model(),
             timeout_ms: default_rerank_timeout(),
             rerank_weight: default_rerank_weight(),
+            verified: false,
+            has_api_key: false,
         }
     }
 }
