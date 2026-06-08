@@ -29,12 +29,11 @@ pub struct RegisteredAgent {
 
 /// Port for discovering and managing remote A2A agents.
 ///
-/// Supports both explicit registration and intent-based smart routing.
+/// Provides explicit registration and lookup. Remote card fetching is handled
+/// directly by `A2AClient` (see `service::card_refresh`); intent-based routing
+/// is handled by `service::SmartRouter`.
 #[async_trait::async_trait]
 pub trait AgentResolver: Send + Sync {
-    /// Fetch an agent card from a remote URL (e.g. `/.well-known/agent-card.json`)
-    async fn fetch_card(&self, url: &str) -> A2AResult<AgentCard>;
-
     /// Register a remote agent with a trust level
     async fn register(
         &self,
@@ -51,7 +50,4 @@ pub trait AgentResolver: Send + Sync {
 
     /// Look up a registered agent by its ID
     async fn resolve_by_id(&self, agent_id: &str) -> A2AResult<Option<RegisteredAgent>>;
-
-    /// LLM smart routing: match best agent from natural language description
-    async fn resolve_by_intent(&self, intent: &str) -> A2AResult<Option<RegisteredAgent>>;
 }

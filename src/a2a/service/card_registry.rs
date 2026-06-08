@@ -7,9 +7,8 @@ use chrono::Utc;
 /// In-memory registry of known A2A agents.
 ///
 /// Stores `RegisteredAgent` entries and implements the `AgentResolver` trait
-/// for lookup operations. Network-dependent methods (`fetch_card`, `resolve_by_intent`)
-/// return stub results — they'll be properly wired when A2AClient and
-/// SmartRouter are integrated.
+/// for registration and lookup. Remote card fetching lives in
+/// `service::card_refresh`; intent routing lives in `service::SmartRouter`.
 pub struct CardRegistry {
     agents: AsyncRwLock<Vec<RegisteredAgent>>,
 }
@@ -128,13 +127,6 @@ fn slug_from_name(name: &str) -> String {
 
 #[async_trait::async_trait]
 impl AgentResolver for CardRegistry {
-    async fn fetch_card(&self, _url: &str) -> A2AResult<AgentCard> {
-        // Requires HTTP client — will be properly wired when A2AClient is integrated
-        Err(A2AError::InternalError(
-            "fetch_card requires HTTP client injection".into(),
-        ))
-    }
-
     async fn register(
         &self,
         card: AgentCard,
@@ -176,12 +168,6 @@ impl AgentResolver for CardRegistry {
     async fn resolve_by_id(&self, agent_id: &str) -> A2AResult<Option<RegisteredAgent>> {
         let agents = self.agents.read().await;
         Ok(agents.iter().find(|a| a.card.id == agent_id).cloned())
-    }
-
-    async fn resolve_by_intent(&self, _intent: &str) -> A2AResult<Option<RegisteredAgent>> {
-        // LLM-based routing will be implemented in SmartRouter (Task 12).
-        // CardRegistry only provides data storage.
-        Ok(None)
     }
 }
 

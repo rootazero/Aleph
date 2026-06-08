@@ -603,6 +603,77 @@ async fn test_routes_jsonrpc_sync_endpoint() {
 }
 
 // ============================================================
+// Test 10b: Streaming endpoint accepts canonical `message/stream`
+// (with `message/send` kept as a back-compat alias)
+// ============================================================
+
+async fn stream_endpoint_body(method: &str) -> (StatusCode, String) {
+    let state = test_server_state();
+    let app = a2a_routes(state);
+
+    let rpc_body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": {
+            "message": {
+                "messageId": "m-stream-1",
+                "role": "user",
+                "parts": [{"type": "text", "text": "stream please"}]
+            },
+            "taskId": "task-stream-1"
+        },
+        "id": 1
+    });
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/a2a/stream")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&rpc_body).unwrap()))
+        .unwrap();
+
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&body).to_string())
+}
+
+#[tokio::test]
+async fn test_stream_endpoint_accepts_message_stream() {
+    // Canonical A2A streaming method name must be dispatched to the
+    // stream handler, not rejected as unsupported.
+    let (status, body) = stream_endpoint_body("message/stream").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("does not support streaming"),
+        "message/stream must be accepted, got body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_stream_endpoint_accepts_message_send_alias() {
+    // Back-compat alias for older Aleph clients still streams.
+    let (status, body) = stream_endpoint_body("message/send").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        !body.contains("does not support streaming"),
+        "message/send alias must still be accepted, got body: {body}"
+    );
+}
+
+#[tokio::test]
+async fn test_stream_endpoint_rejects_unknown_method() {
+    // A non-streaming method belongs on the synchronous /a2a endpoint.
+    let (_status, body) = stream_endpoint_body("tasks/get").await;
+    assert!(
+        body.contains("does not support streaming"),
+        "non-streaming method must be rejected on /a2a/stream, got body: {body}"
+    );
+}
+
+// ============================================================
 // End-to-end routing chain tests
 // ============================================================
 
@@ -672,15 +743,6 @@ impl MockAgentResolver {
 
 #[async_trait::async_trait]
 impl AgentResolver for MockAgentResolver {
-    async fn fetch_card(
-        &self,
-        _url: &str,
-    ) -> crate::a2a::port::task_manager::A2AResult<crate::a2a::domain::AgentCard> {
-        Err(crate::a2a::domain::A2AError::InternalError(
-            "not implemented".into(),
-        ))
-    }
-
     async fn register(
         &self,
         _card: crate::a2a::domain::AgentCard,
@@ -702,13 +764,6 @@ impl AgentResolver for MockAgentResolver {
     async fn resolve_by_id(
         &self,
         _agent_id: &str,
-    ) -> crate::a2a::port::task_manager::A2AResult<Option<RegisteredAgent>> {
-        Ok(None)
-    }
-
-    async fn resolve_by_intent(
-        &self,
-        _intent: &str,
     ) -> crate::a2a::port::task_manager::A2AResult<Option<RegisteredAgent>> {
         Ok(None)
     }
