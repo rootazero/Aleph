@@ -7,16 +7,17 @@
 //! renders. The decisive focus-gate stays in the shell — the core cannot know
 //! window focus.
 //!
-//! Scope: Phase 1 routes `AskUser` + `RunComplete`. `approval.requested` stays
-//! on its existing operator-gated topic path until Phase 2 ("审批回投"), so a
-//! guest surface never starts seeing approvals it could not see before.
+//! Scope: Phase 1 routes `AskUser` + `RunComplete` (via `notification_for`).
+//! Phase 2 additionally routes `ApprovalRequested` (via `approval_for`) to a
+//! gated `surface.approval` frame; the raw `approval.requested` frame still
+//! drives the Panel card and the inbound `manager.resolve` correlation.
 
 use std::sync::Arc;
 
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
 
-use super::delivery::{OutboundInteraction, SurfaceNotification, SurfaceRegistry};
+use super::delivery::{OutboundInteraction, SurfaceApproval, SurfaceNotification, SurfaceRegistry};
 
 /// Minimum turn duration before a completed run is worth interrupting for.
 /// Mirrors the shell's former `COMPLETION_NOTIFY_MIN_MS` — the policy moved here.
@@ -54,12 +55,30 @@ pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification
                 source_topic: frame.topic_name(),
             })
         }
-        // Everything else stays silent — including `SurfaceNotify` itself.
-        // LOOP-SAFETY: `DesktopSurface::deliver` publishes `SurfaceNotify` back
-        // onto the same bus this router subscribes to. It MUST fall through to
-        // `None` here; adding a `SurfaceNotify` arm would re-deliver our own
-        // output and amplify infinitely. `ApprovalRequested` also stays here
-        // (operator-gated path until Phase 2).
+        // Everything else stays silent for *notifications* — including both
+        // surface frames (loop-safety) and `ApprovalRequested` (handled by
+        // `approval_for`, which delivers an `ApprovalRequest`, not a `Notify`).
+        _ => None,
+    }
+}
+
+/// Pure policy: map an `ApprovalRequested` frame to the approval banner the
+/// operator should be interrupted with. The raw frame is sparse (approval_id
+/// only) — detail lives in the Panel card; the banner carries static text.
+///
+/// Returns `None` for everything else, INCLUDING `SurfaceApproval` itself.
+/// LOOP-SAFETY: `DesktopSurface::deliver` publishes `SurfaceApproval` back onto
+/// the same bus this router subscribes to; it MUST fall through to `None` here
+/// or we re-deliver our own output and amplify infinitely. The operator-only
+/// gate is applied later, at the forward-filter (`event_scope` +
+/// `audience_allows`), not here.
+pub fn approval_for(frame: &GatewayEventFrame) -> Option<SurfaceApproval> {
+    match frame {
+        GatewayEventFrame::ApprovalRequested { approval_id, .. } => Some(SurfaceApproval {
+            approval_id: approval_id.clone(),
+            title: "Aleph needs your approval".to_string(),
+            body: "A tool call is waiting for you.".to_string(),
+        }),
         _ => None,
     }
 }
@@ -88,6 +107,15 @@ pub async fn run(event_bus: Arc<GatewayEventBus>, surfaces: SurfaceRegistry) {
                             surface.deliver(OutboundInteraction::Notify(note.clone()))
                         {
                             tracing::debug!(error = %e, "surface delivery failed");
+                        }
+                    }
+                }
+                if let Some(approval) = approval_for(&frame) {
+                    for surface in &surfaces {
+                        if let Err(e) =
+                            surface.deliver(OutboundInteraction::ApprovalRequest(approval.clone()))
+                        {
+                            tracing::debug!(error = %e, "surface approval delivery failed");
                         }
                     }
                 }
@@ -158,6 +186,91 @@ mod tests {
             conversation_id: String::new(),
         };
         assert!(notification_for(&f).is_none());
+    }
+
+    #[test]
+    fn approval_for_surfaces_the_request() {
+        let f = GatewayEventFrame::ApprovalRequested {
+            approval_id: "a1".to_string(),
+            session_key: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+        };
+        let a = approval_for(&f).expect("approval is surfaced");
+        assert_eq!(a.approval_id, "a1");
+        assert_eq!(a.title, "Aleph needs your approval");
+        assert_eq!(a.body, "A tool call is waiting for you.");
+    }
+
+    #[test]
+    fn approval_for_ignores_its_own_surface_frame() {
+        // LOOP-SAFETY: SurfaceApproval is this router's own output.
+        let f = GatewayEventFrame::SurfaceApproval {
+            audience: vec!["desktop".to_string()],
+            approval_id: "a1".to_string(),
+            title: "x".to_string(),
+            body: "y".to_string(),
+        };
+        assert!(approval_for(&f).is_none());
+    }
+
+    #[test]
+    fn approval_for_ignores_ask_user() {
+        let f = GatewayEventFrame::AskUser {
+            run_id: "r1".to_string(),
+            seq: 1,
+            question: "Proceed?".to_string(),
+            options: vec![],
+        };
+        assert!(approval_for(&f).is_none());
+    }
+
+    #[tokio::test]
+    async fn run_delivers_approval_to_registered_surface() {
+        use crate::gateway::surface::delivery::{
+            DeliveryError, DeliverySurface, SurfaceApproval,
+        };
+        use crate::gateway::surface::SurfaceKind;
+        use std::sync::Mutex;
+
+        struct ApprovalCapture(Arc<Mutex<Vec<SurfaceApproval>>>);
+        impl DeliverySurface for ApprovalCapture {
+            fn kind(&self) -> SurfaceKind {
+                SurfaceKind::Desktop
+            }
+            fn deliver(&self, outbound: OutboundInteraction) -> Result<(), DeliveryError> {
+                if let OutboundInteraction::ApprovalRequest(a) = outbound {
+                    self.0.lock().unwrap().push(a);
+                }
+                Ok(())
+            }
+        }
+
+        let bus = Arc::new(GatewayEventBus::new());
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let surfaces: SurfaceRegistry = vec![Arc::new(ApprovalCapture(seen.clone()))];
+        let task = tokio::spawn(run(bus.clone(), surfaces));
+
+        tokio::task::yield_now().await;
+        let _ = bus.publish_frame(&GatewayEventFrame::ApprovalRequested {
+            approval_id: "a1".to_string(),
+            session_key: String::new(),
+            channel_id: String::new(),
+            conversation_id: String::new(),
+        });
+
+        for _ in 0..50 {
+            if !seen.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        task.abort();
+
+        let got = seen.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].approval_id, "a1");
+        assert_eq!(got[0].title, "Aleph needs your approval");
     }
 
     #[tokio::test]
