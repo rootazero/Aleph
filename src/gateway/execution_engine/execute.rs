@@ -528,6 +528,103 @@ where
                         }
                     });
                 }
+
+                // Autonomous-continuation hook (R7/R10-safe, opt-in).
+                // Fires only when the session has a standing goal with
+                // `PursuitMode::Active` that still needs more work. Increments
+                // the counter BEFORE spawning so termination is guaranteed even
+                // if the continuation run crashes before re-entering this hook.
+                if let Some(cont_deps) = self.continuation_deps.get() {
+                    let goal_store = crate::goal::global();
+                    if let Some(store) = goal_store {
+                        let session_key_str = request.session_key.to_key_string();
+                        match store.get(&session_key_str) {
+                            Ok(Some(goal)) => {
+                                if crate::tasks::goal_pursuit::should_continue(&goal, 0) {
+                                    let now_ms = std::time::SystemTime::now()
+                                        .duration_since(std::time::UNIX_EPOCH)
+                                        .map(|d| d.as_millis() as u64)
+                                        .unwrap_or(0);
+                                    let bumped = goal.clone().spent_continuation(now_ms);
+                                    if let Err(e) = store.put(&bumped) {
+                                        warn!(
+                                            error = %e,
+                                            session = %session_key_str,
+                                            "goal pursuit: failed to persist continuation counter; skipping"
+                                        );
+                                    } else {
+                                        let prompt =
+                                            crate::tasks::goal_pursuit::continuation_prompt(&goal);
+                                        let cont_request = super::RunRequest {
+                                            run_id: uuid::Uuid::new_v4().to_string(),
+                                            input: prompt,
+                                            session_key: request.session_key.clone(),
+                                            timeout_secs: None,
+                                            metadata: std::collections::HashMap::new(),
+                                            attachments: Vec::new(),
+                                            pending_media: crate::sync_primitives::Arc::new(
+                                                tokio::sync::Mutex::new(Vec::new()),
+                                            ),
+                                            sandbox_override: None,
+                                            workspace_override: None,
+                                            max_iterations_override: None,
+                                            model_override: None,
+                                        };
+                                        let cont_agent_id =
+                                            request.session_key.agent_id().to_string();
+                                        let cont_registry = cont_deps.0.clone();
+                                        let cont_adapter = cont_deps.1.clone();
+                                        let cont_session = session_key_str.clone();
+                                        tokio::spawn(async move {
+                                            let resolved_agent =
+                                                cont_registry.get(&cont_agent_id).await;
+                                            let Some(cont_agent) = resolved_agent else {
+                                                warn!(
+                                                    agent_id = %cont_agent_id,
+                                                    session = %cont_session,
+                                                    "goal pursuit: agent not found, skipping continuation"
+                                                );
+                                                return;
+                                            };
+                                            use crate::gateway::event_emitter::{
+                                                CollectingEventEmitter, EventEmitter,
+                                            };
+                                            let emitter: crate::sync_primitives::Arc<
+                                                dyn EventEmitter + Send + Sync,
+                                            > = crate::sync_primitives::Arc::new(
+                                                CollectingEventEmitter::new(),
+                                            );
+                                            if let Err(e) = cont_adapter
+                                                .execute(cont_request, cont_agent, emitter)
+                                                .await
+                                            {
+                                                warn!(
+                                                    error = %e,
+                                                    session = %cont_session,
+                                                    "goal pursuit: continuation run failed"
+                                                );
+                                            }
+                                        });
+                                        info!(
+                                            session = %session_key_str,
+                                            continuations_used = bumped.continuations_used,
+                                            "goal pursuit: enqueued autonomous continuation"
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(None) => {} // No goal for this session — common path, silent.
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    session = %request.session_key.to_key_string(),
+                                    "goal pursuit: goal store lookup failed"
+                                );
+                            }
+                        }
+                    }
+                }
+
                 Ok(())
             }
             Err(e) => {

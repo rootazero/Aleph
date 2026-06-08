@@ -1153,6 +1153,9 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // can inject the orchestrator after initialize_orchestrator completes.
         let orch_cell = engine.orchestrator_cell();
         orch_cell_out = Some(orch_cell);
+        // Capture continuation-deps cell before Arc erasure (same pattern as
+        // orchestrator_cell). Populated below after engine_arc is available.
+        let continuation_cell = engine.continuation_cell();
         let engine = Arc::new(engine);
 
         // Reconcile agent tasks orphaned by a previous crash: a row still
@@ -1365,6 +1368,11 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         exec_adapter = Some(engine_arc.clone());
         agent_reg = Some(agent_registry.clone());
         tool_reg_out = Some(tool_registry_for_heartbeat);
+
+        // Wire goal-pursuit autonomous-continuation deps (opt-in, only fires
+        // for sessions whose goal has PursuitMode::Active). Idempotent: a
+        // second set is ignored by the OnceLock. Registry clone is cheap (Arc).
+        let _ = continuation_cell.set((agent_registry.clone(), engine_arc.clone()));
 
         // Create run_manager with real execution dependencies
         let real_run_manager = Arc::new(AgentRunManager::new(

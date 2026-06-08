@@ -59,6 +59,18 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// Orchestrator handle injected after boot assembly. Populated via
     /// `with_orchestrator` once `initialize_orchestrator` completes.
     pub(super) orchestrator: Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>>,
+    /// Continuation deps injected after boot assembly so the post-run hook
+    /// can enqueue an autonomous continuation in the SAME session when the
+    /// session's standing goal has `PursuitMode::Active` and `should_continue`.
+    /// Holds (AgentInstanceRegistry, self-as-ExecutionAdapter). `None` / empty
+    /// until populated via `continuation_cell()` + boot wiring; absent in all
+    /// tests and non-production paths, so the hook is a safe no-op by default.
+    pub(super) continuation_deps: Arc<
+        std::sync::OnceLock<(
+            Arc<crate::gateway::agent_instance::AgentRegistry>,
+            Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
+        )>,
+    >,
     /// Deferred channel-registry handle for the R5 progress side-channel.
     /// Shares the same `OnceCell` the boot path populates once channels are
     /// up (see `agent_init` / boot wiring); empty until then, so the progress
@@ -96,6 +108,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             message_router: None,
             inbox: None,
             orchestrator: Arc::new(std::sync::OnceLock::new()),
+            continuation_deps: Arc::new(std::sync::OnceLock::new()),
             channel_registry: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
@@ -118,6 +131,22 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         &self,
     ) -> Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>> {
         self.orchestrator.clone()
+    }
+
+    /// Return the continuation-deps OnceLock handle so boot code can inject
+    /// `(AgentRegistry, self-as-ExecutionAdapter)` after the engine is wrapped
+    /// in `Arc`. Enables the post-run autonomous-continuation hook in
+    /// `execute.rs` without storing a self-referential field at construction
+    /// time (same deferred-injection pattern as `orchestrator_cell`).
+    pub fn continuation_cell(
+        &self,
+    ) -> Arc<
+        std::sync::OnceLock<(
+            Arc<crate::gateway::agent_instance::AgentRegistry>,
+            Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
+        )>,
+    > {
+        self.continuation_deps.clone()
     }
 
     /// Set a compression service for automatic turn-based compression.
