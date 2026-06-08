@@ -25,11 +25,6 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                     errors.push((i, "danger".to_string(), e));
                 }
             }
-            for (i, p) in cfg.shell_security.custom_safe.iter().enumerate() {
-                if let Err(e) = validate_regex(&p.pattern) {
-                    errors.push((i, "safe".to_string(), e));
-                }
-            }
         }
         let is_valid = errors.is_empty();
         pattern_errors.set(errors);
@@ -45,7 +40,6 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
             match category {
                 "blocked" => cfg.shell_security.custom_blocked.push(new_pattern),
                 "danger" => cfg.shell_security.custom_danger.push(new_pattern),
-                "safe" => cfg.shell_security.custom_safe.push(new_pattern),
                 _ => {}
             }
             config.set(Some(cfg));
@@ -61,9 +55,6 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                 "danger" => {
                     cfg.shell_security.custom_danger.remove(index);
                 }
-                "safe" => {
-                    cfg.shell_security.custom_safe.remove(index);
-                }
                 _ => {}
             }
             config.set(Some(cfg));
@@ -77,7 +68,6 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                 let pattern = match category {
                     "blocked" => cfg.shell_security.custom_blocked.get_mut(index),
                     "danger" => cfg.shell_security.custom_danger.get_mut(index),
-                    "safe" => cfg.shell_security.custom_safe.get_mut(index),
                     _ => None,
                 };
                 if let Some(p) = pattern {
@@ -285,82 +275,6 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                         class="mt-2 px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded"
                     >
                         {t!(i18n, settings.security.shell_add_danger)}
-                    </button>
-                </div>
-
-                <div class="mt-4">
-                    <h3 class="text-sm font-semibold text-text-secondary mb-2">
-                        {t!(i18n, settings.security.shell_safe_title)}
-                    </h3>
-                    <div class="space-y-2">
-                        {move || {
-                            let patterns = config
-                                .get()
-                                .map(|c| c.shell_security.custom_safe.clone())
-                                .unwrap_or_default();
-                            patterns
-                                .into_iter()
-                                .enumerate()
-                                .map(|(i, p)| {
-                                    let has_err = has_error("safe", i);
-                                    view! {
-                                        <div class="flex gap-2 items-start">
-                                            <div class="flex-1 space-y-1">
-                                                <input
-                                                    type="text"
-                                                    prop:value=p.pattern.clone()
-                                                    on:input=move |ev| {
-                                                        update_pattern(
-                                                            "safe",
-                                                            i,
-                                                            "pattern",
-                                                            event_target_value(&ev),
-                                                        )
-                                                    }
-                                                    placeholder=move || t_string!(i18n, settings.security.shell_regex_placeholder).to_string()
-                                                    class=move || {
-                                                        format!(
-                                                            "w-full px-3 py-1 bg-surface-sunken border rounded text-sm text-text-primary {}",
-                                                            if has_err {
-                                                                "border-danger"
-                                                            } else {
-                                                                "border-border"
-                                                            }
-                                                        )
-                                                    }
-                                                />
-                                                <input
-                                                    type="text"
-                                                    prop:value=p.reason.clone().unwrap_or_default()
-                                                    on:input=move |ev| {
-                                                        update_pattern(
-                                                            "safe",
-                                                            i,
-                                                            "reason",
-                                                            event_target_value(&ev),
-                                                        )
-                                                    }
-                                                    placeholder=move || t_string!(i18n, settings.security.shell_reason_placeholder).to_string()
-                                                    class="w-full px-3 py-1 bg-surface-sunken border border-border rounded text-sm text-text-primary"
-                                                />
-                                            </div>
-                                            <button
-                                                on:click=move |_| remove_pattern("safe", i)
-                                                class="px-2 py-1 text-danger hover:bg-danger/10 rounded text-sm"
-                                            >
-                                                {t!(i18n, settings.security.shell_remove)}
-                                            </button>
-                                        </div>
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                        }}
-                    </div>
-                    <button
-                        on:click=move |_| add_pattern("safe")
-                        class="mt-2 px-3 py-1 text-sm text-primary hover:bg-primary/10 rounded"
-                    >
-                        {t!(i18n, settings.security.shell_add_safe)}
                     </button>
                 </div>
 

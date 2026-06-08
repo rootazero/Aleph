@@ -30,8 +30,6 @@ pub struct SecurityKernel {
     custom_blocked: Vec<Regex>,
     /// Custom danger patterns (in addition to defaults)
     custom_danger: Vec<Regex>,
-    /// Custom safe patterns (in addition to defaults)
-    custom_safe: Vec<Regex>,
 }
 
 impl SecurityKernel {
@@ -58,11 +56,6 @@ impl SecurityKernel {
                     .custom_danger
                     .push(crate::security::safe_regex::bounded_builder(&pattern.pattern).build()?);
             }
-            for pattern in &config.custom_safe {
-                kernel
-                    .custom_safe
-                    .push(crate::security::safe_regex::bounded_builder(&pattern.pattern).build()?);
-            }
         }
 
         Ok(kernel)
@@ -78,13 +71,6 @@ impl SecurityKernel {
     /// Add a custom danger pattern.
     pub fn add_danger_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
         self.custom_danger
-            .push(crate::security::safe_regex::bounded_builder(pattern).build()?);
-        Ok(())
-    }
-
-    /// Add a custom safe pattern.
-    pub fn add_safe_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
-        self.custom_safe
             .push(crate::security::safe_regex::bounded_builder(pattern).build()?);
         Ok(())
     }
@@ -114,7 +100,7 @@ impl SecurityKernel {
         }
 
         // 3. Check safe patterns
-        for pattern in self.custom_safe.iter().chain(SAFE_PATTERNS.iter()) {
+        for pattern in SAFE_PATTERNS.iter() {
             if pattern.is_match(cmd) {
                 return RiskLevel::Safe;
             }
@@ -138,9 +124,6 @@ impl SecurityKernel {
         }
         if self.custom_danger.iter().any(|p| p.is_match(cmd)) {
             return Some(RiskLevel::Danger);
-        }
-        if self.custom_safe.iter().any(|p| p.is_match(cmd)) {
-            return Some(RiskLevel::Safe);
         }
         None
     }
@@ -217,13 +200,6 @@ mod tests {
         let mut kernel = SecurityKernel::new();
         kernel.add_blocked_pattern(r"^danger-cmd").unwrap();
         assert_eq!(kernel.assess("danger-cmd arg"), RiskLevel::Blocked);
-    }
-
-    #[test]
-    fn test_custom_safe_pattern() {
-        let mut kernel = SecurityKernel::new();
-        kernel.add_safe_pattern(r"^my-safe-tool").unwrap();
-        assert_eq!(kernel.assess("my-safe-tool --help"), RiskLevel::Safe);
     }
 
     #[test]

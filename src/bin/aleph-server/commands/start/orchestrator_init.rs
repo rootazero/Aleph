@@ -285,8 +285,16 @@ fn build_guardrail_registry(
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
     security_store: Arc<alephcore::gateway::security::SecurityStore>,
 ) -> Option<Arc<alephcore::guardrails::GuardrailRegistry>> {
-    let g = config.guardrails.as_ref()?;
-    if !g.enabled {
+    // Build the registry when guardrails are explicitly enabled OR when the
+    // operator has configured secret/leak protection via the Panel Security
+    // page ([secrets_config].virtual_keys / custom_leak_patterns). The Panel
+    // does not expose [guardrails].enabled, so non-empty secrets protection
+    // must auto-activate the registry — otherwise Panel-configured virtual keys
+    // and custom leak patterns would be persisted but silently never enforced.
+    let guardrails_enabled = config.guardrails.as_ref().is_some_and(|g| g.enabled);
+    let has_secrets_protection = !config.secrets_config.virtual_keys.is_empty()
+        || !config.secrets_config.custom_leak_patterns.is_empty();
+    if !guardrails_enabled && !has_secrets_protection {
         return None;
     }
 
@@ -394,6 +402,21 @@ mod tests {
         let cfg = cfg_with_guardrails(Some(GuardrailsToml { enabled: false }));
         let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store());
         assert!(r.is_none(), "[guardrails] enabled=false should yield None");
+    }
+
+    #[tokio::test]
+    async fn guardrails_auto_enabled_by_secrets_protection() {
+        // Panel does not expose [guardrails].enabled; non-empty secrets
+        // protection must auto-activate the registry so it is actually enforced.
+        let mut cfg = Config::default();
+        cfg.secrets_config
+            .virtual_keys
+            .insert("MY_KEY".to_string(), "real_secret".to_string());
+        let r = build_guardrail_registry(&cfg, test_shared_token_mgr(), test_security_store());
+        assert!(
+            r.is_some(),
+            "non-empty secrets_config.virtual_keys should auto-enable the guardrail registry"
+        );
     }
 
     #[tokio::test]

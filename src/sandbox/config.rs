@@ -89,8 +89,6 @@ pub struct WindowConfigSchema {
 pub struct SandboxRateLimitConfigSchema {
     #[serde(default = "default_rate_limit_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_rate_limit_exempt_loopback")]
-    pub exempt_loopback: bool,
     #[serde(default = "default_rate_limit_read")]
     pub read: WindowConfigSchema,
     #[serde(default = "default_rate_limit_write")]
@@ -102,9 +100,6 @@ pub struct SandboxRateLimitConfigSchema {
 }
 
 fn default_rate_limit_enabled() -> bool {
-    true
-}
-fn default_rate_limit_exempt_loopback() -> bool {
     true
 }
 fn default_max_requests() -> u32 {
@@ -150,7 +145,6 @@ impl Default for SandboxRateLimitConfigSchema {
     fn default() -> Self {
         Self {
             enabled: default_rate_limit_enabled(),
-            exempt_loopback: default_rate_limit_exempt_loopback(),
             read: default_rate_limit_read(),
             write: default_rate_limit_write(),
             dangerous: default_rate_limit_dangerous(),
@@ -253,7 +247,6 @@ impl From<SandboxRateLimitConfigSchema> for SandboxRateLimitConfig {
         );
         Self {
             enabled: schema.enabled,
-            exempt_loopback: schema.exempt_loopback,
             per_category,
         }
     }
@@ -452,7 +445,6 @@ impl Default for SandboxConfig {
             windows: WindowsSandboxConfig::default(),
             rate_limit: SandboxRateLimitConfigSchema {
                 enabled: default_rate_limit_enabled(),
-                exempt_loopback: default_rate_limit_exempt_loopback(),
                 read: default_rate_limit_read(),
                 write: default_rate_limit_write(),
                 dangerous: default_rate_limit_dangerous(),

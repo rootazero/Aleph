@@ -104,7 +104,6 @@ mod tests {
                     reason: None,
                 })
                 .collect(),
-            custom_safe: vec![],
         };
         SecurityKernelHook::new(SecurityKernel::from_config(&config).unwrap())
     }

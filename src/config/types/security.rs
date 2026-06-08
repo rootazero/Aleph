@@ -49,10 +49,6 @@ pub struct CustomRiskPattern {
 /// [[security.shell.custom_danger]]
 /// pattern = "^custom_admin_cmd\\s+"
 /// reason = "Requires approval"
-///
-/// [[security.shell.custom_safe]]
-/// pattern = "^my_safe_script\\s+"
-/// reason = "Auto-approved"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ShellSecurityConfig {
@@ -67,10 +63,6 @@ pub struct ShellSecurityConfig {
     /// Custom danger patterns (additive to built-ins)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_danger: Vec<CustomRiskPattern>,
-
-    /// Custom safe patterns (additive to built-ins)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub custom_safe: Vec<CustomRiskPattern>,
 }
 
 fn default_false() -> bool {
@@ -97,7 +89,6 @@ impl ShellSecurityConfig {
         Ok(Some(CompiledCustomPatterns {
             blocked: compile(&self.custom_blocked)?,
             danger: compile(&self.custom_danger)?,
-            safe: compile(&self.custom_safe)?,
         }))
     }
 }
@@ -107,7 +98,6 @@ impl ShellSecurityConfig {
 pub struct CompiledCustomPatterns {
     pub blocked: Vec<Regex>,
     pub danger: Vec<Regex>,
-    pub safe: Vec<Regex>,
 }
 
 // =============================================================================
@@ -124,7 +114,6 @@ mod tests {
         assert!(!config.enable_custom_patterns);
         assert!(config.custom_blocked.is_empty());
         assert!(config.custom_danger.is_empty());
-        assert!(config.custom_safe.is_empty());
     }
 
     #[test]
@@ -145,13 +134,11 @@ mod tests {
                 pattern: r"^sudo\s+".to_string(),
                 reason: None,
             }],
-            custom_safe: vec![],
         };
 
         let compiled = config.compile_patterns().unwrap().unwrap();
         assert_eq!(compiled.blocked.len(), 1);
         assert_eq!(compiled.danger.len(), 1);
-        assert!(compiled.safe.is_empty());
 
         assert!(compiled.blocked[0].is_match("rm -rf /"));
         assert!(compiled.danger[0].is_match("sudo ls"));

@@ -115,7 +115,6 @@ pub fn audit_config(cfg: &Config) -> Vec<Finding> {
     let mut out = Vec::new();
     audit_ssrf(cfg, &mut out);
     audit_sandbox(cfg, &mut out);
-    audit_shell_security(cfg, &mut out);
     audit_privacy(cfg, &mut out);
     out
 }
@@ -172,26 +171,6 @@ pub fn audit_sandbox(cfg: &Config, out: &mut Vec<Finding>) {
             "sandbox",
             "Sandbox is disabled — code/shell execution (code_exec, bash) runs without isolation.",
             "Set sandbox.enabled = true so exec-class tools run inside the OS sandbox.",
-        ));
-    }
-}
-
-/// Shell command security posture. A non-empty custom safe-list is additive and
-/// auto-approves matching commands, so flag it for review.
-pub fn audit_shell_security(cfg: &Config, out: &mut Vec<Finding>) {
-    let s = &cfg.security;
-    if !s.enable_custom_patterns {
-        return;
-    }
-    if !s.custom_safe.is_empty() {
-        out.push(Finding::new(
-            SEV_WARN,
-            "shell_security",
-            format!(
-                "security.custom_safe contains {} pattern(s) — matching commands are auto-approved as safe.",
-                s.custom_safe.len()
-            ),
-            "Review security.custom_safe and remove any pattern that should not unconditionally auto-approve commands.",
         ));
     }
 }
@@ -380,36 +359,6 @@ mod tests {
         cfg.sandbox.enabled = true;
         let mut out = Vec::new();
         audit_sandbox(&cfg, &mut out);
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn shell_custom_safe_nonempty_is_warn() {
-        use crate::config::types::CustomRiskPattern;
-        let mut cfg = Config::default();
-        cfg.security.enable_custom_patterns = true;
-        cfg.security.custom_safe = vec![CustomRiskPattern {
-            pattern: "^my_safe_script".to_string(),
-            reason: None,
-        }];
-        let mut out = Vec::new();
-        audit_shell_security(&cfg, &mut out);
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].severity, SEV_WARN);
-        assert_eq!(out[0].area, "shell_security");
-    }
-
-    #[test]
-    fn shell_custom_safe_ignored_when_patterns_disabled() {
-        use crate::config::types::CustomRiskPattern;
-        let mut cfg = Config::default();
-        cfg.security.enable_custom_patterns = false;
-        cfg.security.custom_safe = vec![CustomRiskPattern {
-            pattern: "^my_safe_script".to_string(),
-            reason: None,
-        }];
-        let mut out = Vec::new();
-        audit_shell_security(&cfg, &mut out);
         assert!(out.is_empty());
     }
 

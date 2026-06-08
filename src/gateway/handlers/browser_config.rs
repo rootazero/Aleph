@@ -16,8 +16,6 @@ use tokio::sync::RwLock;
 pub(crate) struct BrowserConfigResponse {
     /// Default profile driver: "managed" (headless) or "existing_session" (Chrome DevTools)
     pub default_driver: String,
-    /// Browser engine for managed mode: "chromium", "chrome", "brave", "edge"
-    pub browser_engine: String,
     /// Whether Playwright CLI runs in headless mode
     pub headless: bool,
     /// DevTools profile: "user" (user's Chrome) or "managed" (Aleph-managed instance)
@@ -32,8 +30,6 @@ pub(crate) struct BrowserConfigResponse {
     pub nav_timeout_secs: u64,
     /// Timeout (seconds) for other actions (click/fill/type/etc)
     pub action_timeout_secs: u64,
-    /// Persist session profile to disk (`--persistent` flag)
-    pub persistent_sessions: bool,
 }
 
 // =============================================================================
@@ -56,19 +52,6 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
         .unwrap_or("managed")
         .to_string();
 
-    // Browser engine from the "default" profile
-    let browser_engine = browser
-        .profiles
-        .get("default")
-        .map(|p| match p.browser {
-            crate::browser::profile::BrowserType::Chromium => "chromium",
-            crate::browser::profile::BrowserType::Chrome => "chrome",
-            crate::browser::profile::BrowserType::Brave => "brave",
-            crate::browser::profile::BrowserType::Edge => "edge",
-        })
-        .unwrap_or("chromium")
-        .to_string();
-
     // Headless detection: read from playwright_cli.headless
     let headless = browser.playwright_cli.headless;
 
@@ -86,7 +69,6 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
 
     let response = BrowserConfigResponse {
         default_driver,
-        browser_engine,
         headless,
         devtools_profile,
         block_private: browser.policy.block_private,
@@ -94,7 +76,6 @@ pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) ->
         allowed_domains: browser.policy.allowed_domains.clone(),
         nav_timeout_secs: browser.playwright_cli.nav_timeout_secs,
         action_timeout_secs: browser.playwright_cli.action_timeout_secs,
-        persistent_sessions: browser.playwright_cli.persistent_sessions,
     };
 
     match serde_json::to_value(&response) {
@@ -142,24 +123,14 @@ pub async fn handle_update(
             BrowserDriver::Managed
         };
 
-        // Resolve browser engine
-        let browser_type = match update.browser_engine.as_str() {
-            "chrome" => crate::browser::profile::BrowserType::Chrome,
-            "brave" => crate::browser::profile::BrowserType::Brave,
-            "edge" => crate::browser::profile::BrowserType::Edge,
-            _ => crate::browser::profile::BrowserType::Chromium,
-        };
-
-        // Update or create the "default" profile with the chosen driver and engine
+        // Update or create the "default" profile with the chosen driver
         if let Some(profile) = browser.profiles.get_mut("default") {
             profile.driver = driver;
-            profile.browser = browser_type;
         } else {
             browser.profiles.insert(
                 "default".to_string(),
                 ProfileConfig {
                     driver,
-                    browser: browser_type,
                     ..Default::default()
                 },
             );
@@ -188,7 +159,6 @@ pub async fn handle_update(
         browser.playwright_cli.headless = update.headless;
         browser.playwright_cli.nav_timeout_secs = update.nav_timeout_secs;
         browser.playwright_cli.action_timeout_secs = update.action_timeout_secs;
-        browser.playwright_cli.persistent_sessions = update.persistent_sessions;
 
         // Update SSRF policy
         browser.policy.block_private = update.block_private;
@@ -234,6 +204,5 @@ mod tests {
         let v = resp.result.unwrap();
         assert_eq!(v["nav_timeout_secs"], 30);
         assert_eq!(v["action_timeout_secs"], 10);
-        assert_eq!(v["persistent_sessions"], false);
     }
 }

@@ -22,13 +22,6 @@ pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) 
         }
     };
 
-    let set_exempt_loopback = move |v: bool| {
-        if let Some(mut cfg) = config.get() {
-            cfg.sandbox_rate_limit.exempt_loopback = v;
-            config.set(Some(cfg));
-        }
-    };
-
     view! {
         <div class="bg-surface-raised rounded-lg border border-border p-6">
             <div class="flex items-center justify-between mb-4">
@@ -50,20 +43,6 @@ pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) 
             </div>
 
             <div class="space-y-4 ml-4">
-                <label class="flex items-center space-x-3 cursor-pointer">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || get_rl().exempt_loopback
-                        on:change=move |ev| set_exempt_loopback(event_target_checked(&ev))
-                        disabled=move || !get_rl().enabled
-                        class="w-4 h-4 text-primary focus:ring-primary/30 rounded disabled:opacity-50"
-                    />
-                    <div>
-                        <div class="text-sm font-medium text-text-primary">{t!(i18n, settings.security.sandbox_exempt_loopback)}</div>
-                        <div class="text-xs text-text-tertiary">{t!(i18n, settings.security.sandbox_exempt_loopback_desc)}</div>
-                    </div>
-                </label>
-
                 <div class="grid grid-cols-2 gap-4">
                     <RateLimitBucketCard config=config category="read" />
                     <RateLimitBucketCard config=config category="write" />

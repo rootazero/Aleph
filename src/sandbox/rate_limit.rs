@@ -43,7 +43,6 @@ impl Default for WindowConfig {
 #[derive(Debug, Clone)]
 pub struct SandboxRateLimitConfig {
     pub enabled: bool,
-    pub exempt_loopback: bool,
     pub per_category: HashMap<ToolCategory, WindowConfig>,
 }
 
@@ -84,7 +83,6 @@ impl Default for SandboxRateLimitConfig {
         );
         Self {
             enabled: true,
-            exempt_loopback: true,
             per_category,
         }
     }

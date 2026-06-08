@@ -13,8 +13,6 @@ pub struct ShellSecurityConfig {
     pub custom_blocked: Vec<CustomRiskPattern>,
     #[serde(default)]
     pub custom_danger: Vec<CustomRiskPattern>,
-    #[serde(default)]
-    pub custom_safe: Vec<CustomRiskPattern>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,8 +89,6 @@ fn default_burst_allow() -> u32 {
 pub struct SandboxRateLimitConfigSchema {
     #[serde(default = "default_rate_limit_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_rate_limit_exempt_loopback")]
-    pub exempt_loopback: bool,
     #[serde(default = "default_rate_limit_read")]
     pub read: WindowConfigSchema,
     #[serde(default = "default_rate_limit_write")]
@@ -104,9 +100,6 @@ pub struct SandboxRateLimitConfigSchema {
 }
 
 fn default_rate_limit_enabled() -> bool {
-    true
-}
-fn default_rate_limit_exempt_loopback() -> bool {
     true
 }
 fn default_rate_limit_read() -> WindowConfigSchema {

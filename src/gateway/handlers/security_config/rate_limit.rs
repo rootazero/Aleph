@@ -33,8 +33,6 @@ fn default_burst_allow() -> u32 {
 pub struct SandboxRateLimitConfigSchema {
     #[serde(default = "default_rate_limit_enabled")]
     pub enabled: bool,
-    #[serde(default = "default_rate_limit_exempt_loopback")]
-    pub exempt_loopback: bool,
     #[serde(default = "default_rate_limit_read")]
     pub read: WindowConfigSchema,
     #[serde(default = "default_rate_limit_write")]
@@ -46,9 +44,6 @@ pub struct SandboxRateLimitConfigSchema {
 }
 
 fn default_rate_limit_enabled() -> bool {
-    true
-}
-fn default_rate_limit_exempt_loopback() -> bool {
     true
 }
 fn default_rate_limit_read() -> WindowConfigSchema {
@@ -131,7 +126,6 @@ pub(super) fn read_sandbox_rate_limit_from_toml(
                     }
                     return SandboxRateLimitConfigSchema {
                         enabled: get_bool(rate_limit, "enabled", true),
-                        exempt_loopback: get_bool(rate_limit, "exempt_loopback", true),
                         read: get_window(rate_limit, "read"),
                         write: get_window(rate_limit, "write"),
                         dangerous: get_window(rate_limit, "dangerous"),
@@ -165,10 +159,9 @@ pub(super) fn write_sandbox_rate_limit_to_toml(
 
         if let toml::Value::Table(rl_table) = rate_limit {
             rl_table.insert("enabled".to_string(), toml::Value::Boolean(config.enabled));
-            rl_table.insert(
-                "exempt_loopback".to_string(),
-                toml::Value::Boolean(config.exempt_loopback),
-            );
+            // exempt_loopback was a no-op control (the sandbox limiter has no
+            // client-IP concept); strip any stale value left by older versions.
+            rl_table.remove("exempt_loopback");
 
             for (key, window) in [
                 ("read", &config.read),
