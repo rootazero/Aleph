@@ -369,11 +369,13 @@ fn ProviderCard(
     let color = preset.color.clone();
     let name = preset.name.clone();
     let model = preset.default_model.clone();
+    let icon = preset.icon.clone();
 
     view! {
         <ProviderRowCard
             name=name
             icon_color=color
+            icon_glyph=icon
             subtitle=model
             is_selected=move || is_selected
             is_configured=move || is_configured

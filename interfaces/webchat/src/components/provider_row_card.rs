@@ -2,7 +2,8 @@
 //!
 //! Five sites across `views/settings/{providers,embedding_providers,reranking_providers}/`
 //! render structurally-identical "card buttons" in left-panel lists. Each card has:
-//! - a coloured icon tile with the first character of the provider name
+//! - a coloured icon tile with the first character of the provider name, or an
+//!   optional `icon_glyph` (e.g. a generation-category emoji) when supplied
 //! - the provider name + an optional badge (e.g. "Default", "Verified", "Active")
 //! - a subtitle line (description, model, or `model · dims`)
 //! - a small verified dot on the icon corner (only some lists)
@@ -59,6 +60,11 @@ pub fn ProviderRowCard(
     /// (used by OAuth subscription rows).
     #[prop(optional)]
     large_icon: bool,
+    /// Optional glyph (e.g. an emoji) rendered in the icon tile instead of the
+    /// first character. Used by generation presets whose icons convey the
+    /// generation category (🖼️/🎬/🎤).
+    #[prop(optional, into)]
+    icon_glyph: Option<String>,
 ) -> impl IntoView {
     let first_char = name
         .chars()
@@ -66,6 +72,7 @@ pub fn ProviderRowCard(
         .unwrap_or('?')
         .to_uppercase()
         .to_string();
+    let icon_content = icon_glyph.unwrap_or(first_char);
     let name_for_view = name.clone();
     view! {
         <button
@@ -90,7 +97,7 @@ pub fn ProviderRowCard(
                         )
                         style=format!("background-color: {}", icon_color)
                     >
-                        {first_char}
+                        {icon_content}
                     </div>
                     {move || match dot() {
                         RowDot::Verified => view! {
