@@ -25,29 +25,31 @@ impl PromptLayer for GuidelinesLayer {
         ]
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
+        // Loop-mechanics doctrine only. Persistence, the external-data fallback
+        // ladder, and the method-vs-goal distinction live once in
+        // `ProviderGuidanceLayer`'s TOOL_PERSISTENCE_DOCTRINE (priority 810,
+        // emitted to every provider including Anthropic, always co-fires with
+        // this layer in Full mode) — they used to be duplicated here as rules
+        // 5/12/13/13b. `SpecialActionsLayer` owns the `fail` preconditions.
         output.push_str("## Guidelines\n");
-        output.push_str("1. Take ONE action at a time, observe the result, then decide next\n");
-        output.push_str("2. Use tool results to inform subsequent decisions\n");
+        output.push_str("1. One action per turn — observe its result before choosing the next.\n");
         output.push_str(
-            "3. Ask user when: multiple valid approaches, unclear requirements, need confirmation\n",
+            "2. Let tool results drive your next decision; never act against evidence you just saw.\n",
         );
+        output.push_str("3. Ask the user only when ambiguity changes what you'd do: rival approaches, unclear requirements, or a needed confirmation.\n");
         output.push_str(
-            "4. Complete when: task is done, or you've provided the requested information\n",
+            "4. Complete when the task is done or the requested information is delivered.\n",
         );
-        output.push_str("5. Fail ONLY when every reasonable alternative tool/source has been tried — a single 401/403/timeout/empty-result from one source is a routing signal, not a verdict. Switch tools or sources before invoking `fail`.\n");
-        output.push_str("6. Always close the loop — every turn ends with a reply to your caller; never finish on a tool call alone\n");
-        output.push_str("7. 2-strike rule — if the SAME tool with substantially equivalent arguments fails twice, stop that exact variant and SWITCH (different tool, different source, different parameters, different keywords). Switching counts as a fresh attempt; the goal is not blocked until every reasonable alternative is exhausted.\n");
-        output.push_str("8. Subagent error/timeout → report, never spawn replacement subagents on your own; summarize all sub-results (success + errors + timeouts) back to your caller\n");
-        output.push_str("9. Suspected typo > silent search — if a caller-supplied path/identifier doesn't exist on first lookup, list nearby candidates and ask, don't fan out tool calls guessing\n");
-        output.push_str("10. No-repeat rule — before issuing a tool call, scan THIS turn's tool_results for an identical (tool_name, arguments) pair; if you already have the answer in context, use it directly instead of re-calling. The harness will short-circuit duplicates anyway, so re-issuing wastes a turn\n");
-        output.push_str("11. Aggregate before iterating — for \"count lines / files / bytes in directory\" use `file_ops` operation `stats` (one call returns per-file + total); do NOT loop over `file_read` to count\n");
-        output.push_str("12. Goal vs method — the goal (e.g. \"get latest news on X\", \"summarize page Y\") is independent of any specific tool or source. When one source is blocked, refocus on the goal and pick another method that achieves it; do not mistake a method failure for a goal failure.\n");
-        output.push_str("13. Web/external-data fallback ladder — when one route to online content fails, escalate in order: (a) refine the `search` query (different keywords, narrower/broader scope, different engine if multiple are configured); (b) `web_fetch` a known canonical URL of the same resource; (c) `web_fetch` an alternate reputable source (BBC, AP, NYT, Wikipedia, Reuters mirrors, government feeds, etc.); (d) browser-based tools (chrome-devtools MCP, playwright, or the `autocli` skill, which drives the user's logged-in Chrome session — e.g. Xueqiu/雪球, SinaFinance, Yahoo-Finance for market data) for sites that gate API/headless access. At least TWO rungs of this ladder must have been attempted before `fail` is justified.\n");
-        output.push_str("13b. The ladder has a CEILING, not just a floor — if ~3 DISTINCT routes for the same datum all fail the same way — 403 / 404 / anti-bot walls / empty or JS-only bodies, or `search` keeps returning hits that never contain the exact figure you want — that datum is effectively gated (a 404 means that guessed URL does not exist; guessing yet another URL of the same kind is not progress): STOP fetching more alternate URLs of the same kind (a 6th blocked finance or stock-photo site is not progress, even though each URL differs). Instead escalate tool CLASS ONCE to a browser/`autocli`/skill route that uses the user's logged-in session; if that is also blocked, accept the datum is unavailable, PROCEED to the deliverable with the data you DID obtain (e.g. the `search` results that succeeded), and state the specific gap plainly (rule 16) — \"real-time index values could not be retrieved (sources blocked); trend analysis below is based on search results\". A blocked source is a METHOD failure, never a reason to abandon the whole task (rule 12) or to loop forever switching sources.\n");
-        output.push_str("14. Delegate heavy research to protect your own context — when a task needs many searches and page-fetches across multiple sources (multi-source research, surveys, \"gather/analyze everything about X\", long report-writing), running them all in your own loop piles every raw page into your context and starves the final synthesis (the longer your context, the worse your writing and the higher the risk of a turn timeout). Fan out instead: call the `subagent` tool with `batch_tasks` to run independent research threads in parallel; each sub-agent does its own searching/fetching and returns only a distilled digest, so your main context holds digests — not raw pages — when you write the answer.\n");
-        output.push_str("15. Converge — every loop must move toward a conclusion, not just accumulate. Gathering (searching, fetching, reading files, running diagnostics, grepping) is a means to an answer, never the goal itself. Watch for diminishing returns: once new iterations stop yielding materially new information, STOP gathering and commit to the deliverable — write the report, give the answer, state the bug's root cause, propose the fix. Announcing intent — \"now I'll write it up\", \"let me check one more file\" — is NOT progress: the moment you have what the task needs, your VERY NEXT action must be the delivering action (call the write/generate tool, or give the final reply), not another `search`/`web_fetch`/`file_read`. This applies to every open-ended task: a report once the core facts are in → produce it now and enrich later; a bug hunt once the cause is reproduced and located → report it, don't keep grepping; research once you can answer → synthesize. Shipping with what you have beats deferring for a nice-to-have. Reaching the iteration limit while still gathering is a FAILURE — you gathered too long and delivered too late.\n");
-        output.push_str("16. Never fabricate — every result you cite must be one you actually obtained. Do not invent file contents, command output, search hits, URLs, figures, or quotes; do not claim you performed an action (\"I ran the tests\", \"I saved the file\", \"I generated the chart\") unless the tool call actually executed and returned that result. If a tool failed, was unavailable, or returned nothing, SAY SO plainly and state what you will try instead — a stated failure or limitation is always more useful than a plausible-looking invention. Confabulating an excuse (e.g. \"the tool was disabled\") instead of reporting the real situation is itself a failure; the user needs the truth to decide the next move.\n");
-        output.push_str("17. Narrate each step as you work — before a tool call (or a batch of them) write ONE short natural-language line stating what you're about to do and why; when a key result lands, summarize it in a sentence; give a brief recap as you conclude. This running commentary is what makes your work readable as it streams (a line of intent → the action → what you learned). Keep every line substantive — it must carry a finding, a decision, or a reason. The anti-pattern is the EMPTY announcement: \"now I'll write the report\" with no report ever produced is noise that masquerades as progress (see rule 15) — state real intent and let your VERY NEXT action deliver on it.\n\n");
+        output.push_str("5. Close the loop — every turn ends with a reply to your caller; never finish on a bare tool call.\n");
+        output.push_str("6. 2-strike rule — if the SAME tool with equivalent arguments fails twice, stop that variant and SWITCH (different tool, source, parameters, or keywords). Switching counts as a fresh attempt.\n");
+        output.push_str("7. Subagent error/timeout → report it; never spawn a replacement subagent yourself. Summarize all sub-results (successes, errors, timeouts) to your caller.\n");
+        output.push_str("8. Suspected typo > silent search — if a caller-supplied path/identifier doesn't resolve, list near matches and ask; don't fan out guessing.\n");
+        output.push_str("9. No-repeat — before a tool call, scan THIS turn's results for an identical (tool, arguments) pair and reuse it. The harness short-circuits duplicates, so re-issuing wastes a turn.\n");
+        output.push_str("10. Aggregate before iterating — to count lines/files/bytes in a directory use `file_ops` `stats` (one call returns per-file + total); don't loop `file_read`.\n");
+        output.push_str("11. Delegate heavy research — multi-source research, surveys, and long reports flood your context with raw pages and starve synthesis. Fan out via `subagent` `batch_tasks`: each thread returns a digest, keeping your context lean for the answer.\n");
+        output.push_str("12. Converge — gathering is a means, never the goal. Once iterations stop yielding materially new information, STOP and deliver; the moment you have what the task needs, your VERY NEXT action is the delivering one (write/generate or final reply), not another search/fetch/read. Announcing intent isn't progress; reaching the iteration limit while still gathering is a failure.\n");
+        output.push_str("13. Never fabricate — cite only results you actually obtained; never invent file contents, output, hits, URLs, figures, or quotes, and never claim an action (\"I ran the tests\", \"I saved the file\") the tool didn't return. If a tool failed or returned nothing, say so and state your next move. Confabulating an excuse is itself a failure.\n");
+        output.push_str("14. Narrate as you work — before a tool call (or batch) write ONE short line of intent (what + why); summarize key results in a sentence; recap briefly at the end. Every line must carry a finding, decision, or reason; empty \"now I'll…\" announcements are noise (rule 12).\n\n");
     }
 }
 
@@ -66,57 +68,38 @@ mod tests {
         layer.inject(&mut out, &input);
 
         assert!(out.contains("## Guidelines"));
-        assert!(out.contains("Take ONE action at a time"));
-        // Rule 5: fail only after exhausting alternatives — the user-facing
-        // perseverance doctrine. A single 401/403/timeout is a routing
-        // signal, not a verdict.
-        assert!(out.contains("Fail ONLY when every reasonable alternative"));
-        // Fail-fast bullets (Phase-3): close-the-loop, 2-strike, subagent
-        // error escalation, typo-first. These extend the layer to make
-        // every agent's loop terminate with a user-visible reply instead
-        // of silently looping on bad input.
-        assert!(out.contains("Always close the loop"));
+        assert!(out.contains("One action per turn"));
+        // Loop-mechanics rules retained here: close-the-loop, 2-strike,
+        // subagent escalation, typo-first, no-repeat, aggregate.
+        assert!(out.contains("Close the loop"));
         assert!(out.contains("2-strike rule"));
-        // Rule 7 must teach switching, not just stopping.
+        // Rule 6 must teach switching, not just stopping.
         assert!(out.contains("SWITCH"));
         assert!(out.contains("Subagent error/timeout"));
         assert!(out.contains("Suspected typo"));
-        assert!(out.contains("No-repeat rule"));
+        assert!(out.contains("No-repeat"));
         assert!(out.contains("Aggregate before iterating"));
-        // Rules 12–13: goal/method separation + web-research fallback ladder.
-        assert!(out.contains("Goal vs method"));
-        assert!(out.contains("fallback ladder"));
-        assert!(out.contains("chrome-devtools"));
-        // Rule 13b: the ladder has a CEILING — when ~3 distinct routes for the
-        // same datum are all blocked (403/anti-bot/empty), stop switching
-        // sources (the varying-URL loop that dodges every structural guard),
-        // escalate tool CLASS once, then deliver with partial data + a stated
-        // gap instead of looping forever.
-        assert!(out.contains("13b. The ladder has a CEILING"));
-        assert!(out.contains("escalate tool CLASS"));
-        assert!(out.contains("METHOD failure"));
-        // Rule 14: delegate heavy multi-source research to parallel sub-agents
+        // Rule 11: delegate heavy multi-source research to parallel sub-agents
         // that return digests, so the main context stays lean for synthesis.
         assert!(out.contains("Delegate heavy research"));
         assert!(out.contains("batch_tasks"));
-        // Rule 15: converge — every open-ended task (report, bug hunt,
-        // research) must move toward a conclusion once returns diminish, not
-        // gather forever. Counters the "announce-then-gather-again" loop that
-        // burns the iteration budget without ever delivering.
-        assert!(out.contains("15. Converge"));
-        assert!(out.contains("VERY NEXT action must be the delivering action"));
-        // Rule 16: evidence integrity — never invent tool output or claim an
-        // action you didn't perform; report real failures/limitations instead
-        // of confabulating an excuse (the "tool was disabled" failure mode).
-        assert!(out.contains("16. Never fabricate"));
+        // Rule 12: converge — every open-ended task (report, bug hunt,
+        // research) must move toward a conclusion once returns diminish.
+        assert!(out.contains("12. Converge"));
+        assert!(out.contains("VERY NEXT action is the delivering one"));
+        // Rule 13: evidence integrity — never invent tool output or claim an
+        // action you didn't perform; report real failures/limitations.
+        assert!(out.contains("13. Never fabricate"));
         assert!(out.contains("Confabulating an excuse"));
-        // Rule 17: narrate each step — before a tool call write one short line
-        // of intent (what + why), summarize key results, recap at the end.
-        // Encourages the Claude-Code "⏺" cadence; the anti-pattern is empty
-        // "now I'll…" announcements that never deliver (see rule 15). The
-        // structural loop guard no longer depends on the ABSENCE of narration
-        // (see tool_loop_verifier), so encouraging narration is safe.
-        assert!(out.contains("17. Narrate each step as you work"));
+        // Rule 14: narrate each step — one short line of intent, summarize key
+        // results, recap at the end.
+        assert!(out.contains("14. Narrate as you work"));
+        // De-duplication guard: persistence / fallback-ladder / goal-vs-method
+        // doctrine now lives ONLY in ProviderGuidanceLayer's persistence block
+        // (always co-fires in Full mode). It must NOT reappear here.
+        assert!(!out.contains("fallback ladder"));
+        assert!(!out.contains("Goal vs method"));
+        assert!(!out.contains("Fail ONLY when every reasonable"));
     }
 
     #[test]

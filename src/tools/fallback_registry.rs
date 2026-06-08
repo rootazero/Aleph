@@ -2,8 +2,8 @@
 //! when a primary tool fails.
 //!
 //! This is the "tool ladder" the LLM is steered towards in
-//! `provider_guidance.rs::TOOL_PERSISTENCE_DOCTRINE` and rule 13 of
-//! `guidelines.rs`, made concrete as a lookup table the harness can
+//! `provider_guidance.rs::TOOL_PERSISTENCE_DOCTRINE`, made concrete as a
+//! lookup table the harness can
 //! consult at error-emission time. The harness DOES NOT auto-invoke
 //! alternatives (R7: LLM stays in control of tool selection); it only
 //! surfaces the suggestions as part of the structured error hint so
@@ -286,7 +286,7 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
 /// is omitted and the hint shrinks to the doctrine reminder. The hint
 /// is ALWAYS appended even when no suggestion is available — the
 /// `doctrine=ladder_must_be_climbed_before_fail` reminder keeps the
-/// LLM aligned with rules 12–13 in `guidelines.rs`.
+/// LLM aligned with the persistence doctrine in `provider_guidance.rs`.
 ///
 /// The output is intentionally compact (single line, ~200 chars typ.)
 /// so it doesn't dominate the tool_result body in the next prompt.

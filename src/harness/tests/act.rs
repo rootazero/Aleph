@@ -437,8 +437,8 @@ async fn act_tool_failure_returns_harness_tool_error() {
 /// routing signal in its next turn (same channel claude-code uses for
 /// `is_error: true` tool_results). The hint is single-line, names the
 /// classified error kind, recommends concrete alternative tools when
-/// available, and ends with the `doctrine=...` reminder anchoring
-/// rule 13 of `thinker::layers::guidelines`.
+/// available, and ends with the `doctrine=...` reminder anchoring the
+/// persistence doctrine in `thinker::layers::provider_guidance`.
 #[tokio::test]
 async fn act_tool_error_event_carries_persistence_hint() {
     let tool_calls = vec![NativeToolCall {
@@ -525,7 +525,7 @@ async fn act_tool_error_event_carries_persistence_hint() {
         recorded.contains("alternate source"),
         "registry suggestion missing: {recorded}"
     );
-    // Doctrine anchor — rule 13 reminder.
+    // Doctrine anchor — persistence-doctrine reminder.
     assert!(
         recorded.contains("doctrine=ladder_must_be_climbed_before_fail"),
         "doctrine reminder must be present: {recorded}"

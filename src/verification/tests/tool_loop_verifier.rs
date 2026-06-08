@@ -54,7 +54,7 @@ async fn at_threshold_with_no_text_vetoes() {
 
 #[tokio::test]
 async fn thinking_text_does_not_rescue_identical_loop() {
-    // Narration is now ENCOURAGED (guidelines rule 17), so it can no longer be
+    // Narration is now ENCOURAGED (guidelines rule 14), so it can no longer be
     // the signal that suppresses death-loop detection. Five identical
     // (name, args_hash) calls is a loop whether or not the model narrates —
     // the args_hash equality already excludes legitimate varied exploration.

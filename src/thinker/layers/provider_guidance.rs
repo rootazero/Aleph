@@ -145,6 +145,8 @@ verdict on the goal.\n\
 4. Browser-based tools (chrome-devtools MCP, playwright, or the `autocli` skill) for sites that gate API or headless access.\n\
 At least TWO rungs of this ladder must have been attempted before `fail`.\n\
 \n\
+**Ceiling** — when ~3 distinct routes for the same datum fail the same way (403/404/anti-bot/empty or JS-only bodies), it is gated; more same-class URLs are not progress. Escalate tool CLASS once (a browser/`autocli`/skill route on the user's logged-in session); if that is also blocked, deliver with the data you DID obtain and state the gap plainly. A blocked source is a method failure, never grounds to abandon the task or loop forever switching sources.\n\
+\n\
 **Mandatory tool use** — NEVER answer these from memory:\n\
 - Arithmetic / hashes / encodings → run them via a tool.\n\
 - Current time, date, timezone → query the system.\n\
@@ -246,6 +248,11 @@ mod tests {
         );
         assert!(out.contains("Tool persistence"));
         assert!(out.contains("fallback ladder"));
+        // Ceiling clause (moved here from GuidelinesLayer 13b): the ladder has
+        // a top, not just a floor — after ~3 same-class failures, escalate tool
+        // class once then deliver partial. Co-located with the ladder it bounds.
+        assert!(out.contains("**Ceiling**"));
+        assert!(out.contains("Escalate tool CLASS once"));
         assert!(
             !out.contains("## Tool-Use Enforcement"),
             "Anthropic should NOT get the heavy tool-use enforcement block"

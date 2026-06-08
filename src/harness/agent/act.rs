@@ -931,7 +931,8 @@ impl AgentHarness {
         // followed by a single-line persistence hint that names the
         // error kind, recommends concrete alternative tools, and
         // reminds the model the ladder must be climbed before invoking
-        // `fail` (rule 13 of `thinker::layers::guidelines`). The hint
+        // `fail` (the persistence doctrine in
+        // `thinker::layers::provider_guidance`). The hint
         // travels through `SessionEvent::ToolError.error` and is
         // surfaced to the model as `tool_result(is_error=true)` in the
         // very next Think turn — same channel claude-code uses, no

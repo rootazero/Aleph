@@ -67,7 +67,7 @@
 //! no progress — this holds even across different tools and even when you narrate
 //! between attempts. Stop repeating it: if the result is a failure, the method is
 //! blocked, so take a structurally different approach or deliver with what you
-//! have and state the blocker plainly (rule 16); if it already succeeded, act on
+//! have and state the blocker plainly (rule 13); if it already succeeded, act on
 //! the result you have instead of fetching it again.
 //! </system-reminder>
 //! ```
@@ -210,7 +210,7 @@ pub fn render_redundant_call_notice(events: &[SessionEventRecord]) -> Option<Str
          no progress — this holds even across different tools and even when you narrate \
          between attempts. Stop repeating it: if the result is a failure, the method is \
          blocked, so take a structurally different approach or deliver with what you have \
-         and state the blocker plainly (rule 16); if it already succeeded, act on the \
+         and state the blocker plainly (rule 13); if it already succeeded, act on the \
          result you have instead of fetching it again.\n",
     );
     out.push_str("</system-reminder>");
@@ -307,7 +307,7 @@ mod tests {
         assert!(s.starts_with("<system-reminder>"));
         assert!(s.contains("code_exec × 3 (same args, same result)"));
         assert!(s.contains("bash × 3 (same args, same result)"));
-        assert!(s.contains("rule 16"));
+        assert!(s.contains("rule 13"));
         assert!(s.ends_with("</system-reminder>"));
     }
 

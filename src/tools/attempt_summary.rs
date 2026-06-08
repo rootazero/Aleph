@@ -56,7 +56,7 @@ use crate::tools::error_kind::{classify_error_str, ToolErrorKind};
 /// (from `fallback_registry::render_persistence_hint`) is enough; the
 /// aggregate adds noise.
 ///
-/// Picked to match guidelines.rs rule 7's "≥3 attempts → switch family"
+/// Picked to match guidelines.rs rule 6's (2-strike) "switch family"
 /// wording so the summary fires exactly when the rule's threshold trips.
 pub const SUMMARY_THRESHOLD: usize = 3;
 
@@ -366,8 +366,8 @@ mod tests {
     #[test]
     fn default_default_for_threshold_constant() {
         // Sanity guard: changing SUMMARY_THRESHOLD silently breaks the
-        // rule 7 alignment in guidelines.rs. If you intentionally change
-        // it, update this assertion AND the rule wording together.
+        // rule 6 (2-strike) alignment in guidelines.rs. If you intentionally
+        // change it, update this assertion AND the rule wording together.
         assert_eq!(SUMMARY_THRESHOLD, 3);
     }
 }

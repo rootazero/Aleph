@@ -15,8 +15,8 @@
 //! successful over-gathering is invisible to all of them — bounded only by
 //! the interactive `max_iterations` cap (1000).
 //!
-//! Guidelines #15 ("Converge") and #13b ("the ladder has a CEILING") already
-//! say this in the static system prompt, but a constant prose rule gets tuned
+//! Guidelines #12 ("Converge") and the persistence-doctrine "Ceiling" clause
+//! already say this in the static system prompt, but a constant prose rule gets tuned
 //! out over a long run. This signal is *dynamic*: it surfaces the live call
 //! count ("you have made 47 search/web_fetch calls this run"), which is far
 //! harder to ignore than always-present prose — the same rationale that makes
@@ -48,7 +48,7 @@
 //! to surface new information. A specific datum you cannot retrieve (a precise
 //! real-time figure, a suitable image) is a GAP to note, not a reason to keep
 //! searching: stop gathering now, produce the deliverable with the data you
-//! already have, and state any missing datum plainly in the output (rule 16).
+//! already have, and state any missing datum plainly in the output (rule 13).
 //! Do not let one unobtainable sub-item block the whole task.
 //! </system-reminder>
 //! ```
@@ -58,7 +58,8 @@ use crate::session::events::{SessionEvent, SessionEventRecord};
 /// Tools whose invocation counts as "gathering". Kept tight: only the two
 /// external-information tools. Escalation tools (autocli, browser) are
 /// deliberately excluded — the doctrine pushes the model *toward* a one-shot
-/// class escalation (#13b), so counting them would punish the right move.
+/// class escalation (the persistence-doctrine "Ceiling" clause), so counting
+/// them would punish the right move.
 const GATHER_TOOLS: &[&str] = &["search", "web_fetch"];
 
 /// Number of gather-tool calls in the visible window before the convergence
@@ -114,7 +115,7 @@ pub fn render_gather_notice(events: &[SessionEventRecord]) -> Option<String> {
          surface new information. A specific datum you cannot retrieve (a precise \
          real-time figure, a suitable image) is a GAP to note, not a reason to keep \
          searching: stop gathering now, produce the deliverable with the data you \
-         already have, and state any missing datum plainly in the output (rule 16). \
+         already have, and state any missing datum plainly in the output (rule 13). \
          Do not let one unobtainable sub-item block the whole task.\n",
     );
     out.push_str("</system-reminder>");
@@ -173,7 +174,7 @@ mod tests {
         assert!(s.contains("stop gathering now"));
         assert!(s.contains("GAP to note"));
         assert!(s.contains("block the whole task"));
-        assert!(s.contains("rule 16"));
+        assert!(s.contains("rule 13"));
     }
 
     #[test]
@@ -203,8 +204,8 @@ mod tests {
 
     #[test]
     fn escalation_tools_excluded() {
-        // autocli/browser are the *right* one-shot escalation (#13b); counting
-        // them would punish the move the doctrine pushes toward.
+        // autocli/browser are the *right* one-shot escalation (doctrine
+        // "Ceiling" clause); counting them would punish the move it pushes toward.
         let mut events = gather_events(20, "autocli");
         events.extend(gather_events(20, "browser"));
         assert_eq!(count_gather_calls(&events), 0);

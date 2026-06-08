@@ -41,9 +41,8 @@ impl PromptLayer for SpecialActionsLayer {
         );
         output.push_str(
             "  1. You MUST have tried at least TWO distinct approaches (different tools, \
-             different sources, different parameters/keywords). For web research this means \
-             climbing the fallback ladder: `search` → `web_fetch` canonical URL → `web_fetch` \
-             alternate source → browser tooling (chrome-devtools / playwright / `autocli`).\n",
+             sources, or parameters/keywords) — for web research, climb the fallback ladder \
+             from the persistence doctrine above.\n",
         );
         output.push_str(
             "  2. The `summary` field MUST enumerate every method attempted and why each failed \
