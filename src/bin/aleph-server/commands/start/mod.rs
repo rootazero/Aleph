@@ -410,6 +410,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         &full_config.gateway.bootstrap,
         full_config.gateway.auth.session_expiry_hours,
         args.daemon,
+        server.node_registry.clone(),
     );
     register_auth_handlers(&mut server, &auth_bundle.auth_ctx);
     register_guest_handlers(

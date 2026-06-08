@@ -83,6 +83,7 @@ fn setup() -> (Arc<AuthContext>, Arc<AuthState>) {
         allow_guest: false,
         enable_pairing: true,
         connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        node_registry: Arc::new(alephcore::cluster::NodeRegistry::new()),
     });
 
     let auth_state = Arc::new(AuthState {
