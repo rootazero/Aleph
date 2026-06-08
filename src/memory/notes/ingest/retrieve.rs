@@ -20,6 +20,10 @@ pub struct RelatedBudget {
     /// Cosine threshold for the dedup gate; ignored when `dedup_enabled` is
     /// `false`. Clamped to `[0.0, 1.0]` at decision time.
     pub dedup_similarity_threshold: f32,
+    /// Cosine threshold at/above which a near-identical `Create` is dropped as a
+    /// NOOP (must be >= `dedup_similarity_threshold`; floored to it at decision
+    /// time). Only consulted when `dedup_enabled`.
+    pub dedup_noop_threshold: f32,
 }
 
 impl Default for RelatedBudget {
@@ -30,6 +34,7 @@ impl Default for RelatedBudget {
             total_byte_cap: 12 * 1024,
             dedup_enabled: false,
             dedup_similarity_threshold: 0.92,
+            dedup_noop_threshold: 0.985,
         }
     }
 }
