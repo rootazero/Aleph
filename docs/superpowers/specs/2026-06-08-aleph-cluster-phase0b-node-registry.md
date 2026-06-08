@@ -30,12 +30,16 @@
 |---|---|---|---|
 | `NodeRegistry` / `NodeSession` / `Environment` / `CommandDescriptor` | **`src/cluster/registry.rs`**（新，紧挨 0a 的 `reverse_rpc.rs`） | 净新增 | 双 Map（`nodes_by_id` / `nodes_by_conn`）、register/deregister、`list_environments()`、`get(node_id)` |
 | 共享态挂载 | `src/gateway/server/mod.rs`（+ `probe.rs` 测试构造点） | 复用 0a 套路 | `GatewaySharedState`+`GatewayServer` 加 `node_registry: Arc<NodeRegistry>`，`build_router` 共享同一 Arc |
-| `role:node` 登记分支 | `src/gateway/server/handler.rs` | 复用 0a 接缝 | connect 时 `role==Node`：拿已建好的 `ReverseRpcChannel` clone + 连接帧 commands → `register()`；断线清理块 `deregister()`（与 0a reverse_rpc 注销并排） |
-| `cluster.enroll` 工具 | **`src/builtin_tools/cluster_enroll.rs`**（新）+ 注册于 `mod.rs` + 加进 `OPERATOR_TOOLS` | 净新增 | operator 工具：`Args{node_name}` → 复用 device store + `issue_token(device_id, DeviceRole::Node, scopes)` 铸持久化 node 设备 → 返回 token 串 |
-| `environments.list` 工具 | **`src/builtin_tools/environments_list.rs`**（新）+ 注册于 `mod.rs` | 净新增 | read 档工具：`node_registry.list_environments()`。chat/guest 可读 |
+| **connect role 发射** | `src/gateway/handlers/auth/connect.rs`（Case 1 token 路径，line ~382） | 微调 | **关键接缝**：connect 响应的 `role` 现从 scopes 经 `role_for_permissions` 推（只认 operator/guest）。加一句 `validation.role == DeviceRole::Node → role="node"`，否则 node-role token 永远拿不到 `role:"node"` |
+| `role:node` 登记分支 | `src/gateway/server/handler.rs`（ConnectionContext + connect-success 分支 + cleanup） | 复用 0a 接缝 | ConnectionContext 加 `node_registry`（镜像 `reverse_rpc`）；connect 成功且 `role=="node"`：拿 `ReverseRpcChannel` clone + 连接帧 commands → `register()`；断线清理块 `deregister()`（与 0a reverse_rpc 注销并排） |
+| AuthContext 挂 registry | `src/gateway/handlers/auth/mod.rs`（`AuthContext` 加字段）+ ~11 个构造点 | 复用 Phase 3a 套路 | 加 `node_registry: Arc<NodeRegistry>`（与 Phase 3a 加 `connections` 同法）。编译器强制更新所有字面构造点（生产 1 处 `subsystems.rs` + ~10 测试点） |
+| `cluster.enroll` RPC | **`src/gateway/handlers/cluster.rs`**（新）+ builder 注册 + 加进 `OPERATOR_METHODS` | 净新增 | operator-gated RPC `handle_cluster_enroll(req, ctx: Arc<AuthContext>)`：`Params{node_name, commands?}` → `token_manager.issue_token(device_id, DeviceRole::Node, vec!["node"])` → 返回 `{node_id, token, signature}`。**无需建 Device 行**（connect Case 1 token 路径不校验设备审批，仅 `update_last_seen` best-effort） |
+| `environments.list` RPC | **同 `src/gateway/handlers/cluster.rs`** + builder 注册 | 净新增 | read RPC `handle_environments_list(req, ctx: Arc<AuthContext>)`：`node_registry.list_environments()`。chat/guest 可读 |
 | 连接帧扩展 | connect params 加可选 `commands: [{name, schema}]` | 微调 | 节点自声明 command 目录，0b 只存只显 |
 
-**纪律**：`src/harness/` 一行不改；gateway 只动 handler.rs connect 分支 + server/mod.rs 挂 Arc（与 0a 同样最小侵入面）；gateway RPC 层 0b 不扩（R8——enroll/list 都是 builtin 工具，LLM 可对话驱动）。
+**纪律**：`src/harness/` 一行不改；gateway 改动面 = server/mod.rs 挂 Arc + handler.rs connect 分支 + connect.rs role 发射 + AuthContext 字段 + 新 cluster.rs handler（与 devices.*/pairing.* 同模式）。
+
+**形态修正（planning 实测推翻 spec 初稿）**：enroll/list 初稿定为 builtin rig 工具（R8），但实测**无任何 builtin 工具持有 `TokenManager`**，而所有凭证/设备操作（devices.*/pairing.*）在现有代码里全是 operator-gated gateway RPC（handler 经 `AuthContext` 直接拿 `token_manager`）。故 0b 把 enroll/list 落为 **gateway RPC**（顺现有模式、布线最小、可立即单测）；**R8 的「LLM 可调用」面（environments 作工具/注入 prompt + node_invoke）挪到 0c 与 node_invoke 一起成体系地做**——那时 LLM 面整体一次成型，更诚实。
 
 ## 3. 数据模型
 
@@ -109,8 +113,8 @@ operator 对中心说              模拟节点开 WS，connect 帧带:         
 
 ## 5. 安全姿态（显式声明）
 
-- **`cluster.enroll` = operator-only**：铸 node token 是签发凭证的敏感操作，进 `OPERATOR_TOOLS`，受 Phase 2 tiering 门控。chat/guest 调不动。
-- **`environments.list` = read 档**：chat/guest 可读环境视图，但读不到 token、读不到任何凭证。
+- **`cluster.enroll` = operator-only**：铸 node token 是签发凭证的敏感操作，进 `method_authz::OPERATOR_METHODS`（与 `devices.set_level`/`pairing.approve` 同表门控）。chat/guest 调不动。
+- **`environments.list` = read（不进 OPERATOR_METHODS）**：chat/guest 可读环境视图，但响应只含 `id/name/status/commands/connected_at`，**绝不含 token 或任何凭证**。
 - **⚠️ allowlist 强制本期不做（显式 deferral，非安全缺口）**：0b 只存+显示节点自声明 command 目录，不做"默认 deny + 只能调批准命令"的强制。强制点在 invoke，而 invoke 在 0c。**0b 落地后中心仍无法在节点上跑任何命令**（无 node_invoke），这条 RCE-by-design 通道在 0b 阶段**尚未打开**；allowlist 强制与 node_invoke 在 0c 同期落地、同期测。
 - **node token 隔离**：经 `issue_token` 独立签发，绝不复用本机/operator token。
 
@@ -120,8 +124,8 @@ operator 对中心说              模拟节点开 WS，connect 帧带:         
 |---|---|
 | `NodeRegistry` 单元 | register/deregister 双 Map 一致性；同 node_id 重连覆盖；deregister 经 conn_id 反查正确删；`list_environments` 快照投影；lock 中毒 into_inner 不 panic |
 | `CommandDescriptor`/`Environment` serde | 往返；schema `Value` 原样透传不丢字段 |
-| `cluster.enroll` 工具 | 铸出 DeviceRole::Node 设备 + 返回非空 token；持久化进 device store；operator 档可调、chat 档被 tiering 拒 |
-| `environments.list` 工具 | 空注册表返空；登记后返带目录节点；read 档可调 |
+| `handle_cluster_enroll` | issue_token 铸 DeviceRole::Node token + 返回非空 `{node_id, token, signature}`；method_authz 认 `cluster.enroll` 为 operator-only |
+| `handle_environments_list` | 空注册表返空 `[]`；node_registry 登记后返带目录节点；响应不含凭证字段 |
 | e2e（`tests/cluster_node_enroll.rs`） | 真 `GatewayServer` → enroll 铸 token → 裸 WS 模拟节点持 token + 声明 commands 连入 → `environments.list` 断言节点带目录 online 出现 → 断 WS → 断言从列表消失 |
 
 ## 7. 红线对账
@@ -132,8 +136,8 @@ operator 对中心说              模拟节点开 WS，connect 帧带:         
 | R3 核心轻量化 | 零新重依赖，复用 WS/JSON-RPC/device store/issue_token |
 | R4 Interface 纯 I/O | `environments.list` 薄渲染契约（投影快照），NodeRegistry 不聚合不路由不持久化业务 |
 | R7 LLM 主权 | enroll/list 是工具，LLM 对话驱动；无意图分类/路由引擎 |
-| R8 一切皆工具 | cluster.enroll + environments.list 全是 builtin 工具 |
-| R10 薄 harness | `src/harness/` 一行不改；NodeRegistry 在 cluster/，工具在 builtin_tools/，gateway 只动 connect 分支 |
+| R8 一切皆工具 | 0b：enroll/list 为 operator/read gateway RPC（凭证操作的既有模式）。LLM-callable 工具面（environments 作工具/注入 prompt + node_invoke）随 0c 一起成体系落地 |
+| R10 薄 harness | `src/harness/` 一行不改；NodeRegistry 在 cluster/，RPC handler 在 gateway/handlers/cluster.rs，gateway 只动 connect/handler 接缝 |
 
 ## 8. 范围外（YAGNI）
 
