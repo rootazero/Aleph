@@ -800,6 +800,46 @@ pub fn compute_runtime_state_blocks(
 }
 
 impl AgentHarnessRunner {
+    /// Compute how many tokens the context window can spare for memory
+    /// injection this turn, or `None` when no `[context_budget]` is configured
+    /// (memory then uses its full configured budget — legacy behaviour).
+    ///
+    /// Memory is injected once, before the Think→Act loop, into the system
+    /// prompt — which the pressure sensor counts as `overhead` and which message
+    /// compaction can NOT reclaim. So an oversized recall silently forces the
+    /// in-loop compactor to over-trim recent history to make room. We cap memory
+    /// so existing history + memory stays under the compaction *warning* line,
+    /// leaving the rest of the window for the base system prompt, tool schemas,
+    /// and the model's reply. Reuses the exact estimator the in-loop budget uses
+    /// (`estimate_message_tokens_aware`) so the two views agree.
+    ///
+    /// No reference agent (hermes / openclaw / Pi / opensquilla) coordinates the
+    /// memory and history budgets — they inject memory at a fixed size
+    /// regardless of conversation pressure.
+    async fn memory_injection_headroom(&self, session_id: &SessionId) -> Option<u32> {
+        let cfg = self.context_budget_config.as_ref()?;
+        // Best-effort: a read failure must never block a turn — fall back to the
+        // full configured budget (None) just like a missing context budget.
+        let events = self
+            .session_service
+            .get_events(session_id, None, None)
+            .await
+            .ok()?;
+        let messages = crate::harness::agent::prompt::build_prompt(&events, events.len());
+        let history_tokens: usize = messages
+            .iter()
+            .map(|m| {
+                crate::context::budget::pressure::estimate_message_tokens_aware(
+                    m,
+                    cfg.token_estimate_ratio,
+                )
+            })
+            .sum();
+        let ceiling = (cfg.token_budget as f64 * cfg.warning_threshold).max(0.0) as usize;
+        let available = ceiling.saturating_sub(history_tokens);
+        Some(available.min(u32::MAX as usize) as u32)
+    }
+
     /// Assemble the per-turn system prompt with curated memory + hybrid
     /// retrieval. Returns `None` when no `MemoryContextProvider` is wired
     /// (test envs without a memory backend) or when both memory builders
@@ -852,7 +892,16 @@ impl AgentHarnessRunner {
             let memory_text: Option<String> = if user_query.is_empty() {
                 None
             } else {
-                match mcp.build_memory_user_message(agent_id, user_query).await {
+                // Coordinate the one-shot memory injection with the per-turn
+                // context budget so a large recall never forces the in-loop
+                // compactor to over-trim recent history (memory lands in the
+                // system prompt = un-compactable overhead). `None` when no
+                // `[context_budget]` is configured → full configured budget.
+                let headroom = self.memory_injection_headroom(session_id).await;
+                match mcp
+                    .build_memory_user_message(agent_id, user_query, headroom)
+                    .await
+                {
                     Ok(opt) => opt.as_ref().map(UnifiedMessage::text_content),
                     Err(e) => {
                         tracing::warn!(
