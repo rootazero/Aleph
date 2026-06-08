@@ -27,6 +27,12 @@ const RERANK_CANDIDATE_MULTIPLIER: usize = 3;
 /// remote rerank request cost regardless of the caller's `limit`.
 const RERANK_MAX_CANDIDATES: usize = 50;
 
+/// Channel label stamped on recall signals emitted automatically by the primary
+/// retrieval path. Kept distinct from explicit `memory_reflect` synthesis signals
+/// so the two dedup independently in `recall_signals`
+/// (`UNIQUE(note_path, query_hash, day_bucket, channel)`).
+const AUTO_RECALL_CHANNEL: &str = "auto-recall";
+
 /// Notes-based retrieval engine. Drop-in replacement for FactRetrieval.
 pub struct NoteFactRetrieval<S: NoteStore + Send + Sync + 'static> {
     indexer: Arc<NoteIndexer<S>>,
@@ -168,6 +174,31 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
             .unwrap_or_default()
     }
 
+    /// Producer half of the hot-floating loop: record recall signals for the
+    /// notes a retrieval actually surfaced, so frequently-recalled notes accrue
+    /// reinforcement salience ("热门记忆浮顶") that `fetch_reinforcement_counts`
+    /// later consumes. Best-effort — a write failure never breaks recall — and
+    /// gated on `reinforcement_enabled` so disabling hot-floating also stops
+    /// recording. The store dedups per `(note_path, query, day, channel)`, so a
+    /// note must surface across *distinct* queries/days to genuinely heat up.
+    async fn record_recall(&self, query: &str, namespace: &str, ranked: &[ScoredFact]) {
+        if !self.scoring.reinforcement_enabled || ranked.is_empty() {
+            return;
+        }
+        let hits: Vec<(String, f32)> = ranked
+            .iter()
+            .map(|f| (f.fact.id.clone(), f.score))
+            .collect();
+        if let Err(e) = self
+            .indexer
+            .store()
+            .record_recall_hits(query, AUTO_RECALL_CHANNEL, &hits, namespace)
+            .await
+        {
+            tracing::debug!(error = %e, "failed to record recall signals (non-fatal)");
+        }
+    }
+
     /// Apply the cross-encoder reranker to a candidate set, blending its scores
     /// with the original retrieval scores via `blend_scores`. Falls back to the
     /// original ordering on any reranker error (graceful degradation). The result
@@ -233,6 +264,8 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let counts = self.fetch_reinforcement_counts(&ranked).await;
         let mut ranked = self.apply_scoring(ranked, now_unix(), &counts);
         ranked.truncate(limit);
+        // Close the hot-floating loop: record the surfaced notes as recall hits.
+        self.record_recall(query, agent_id, &ranked).await;
         Ok(ranked)
     }
 
@@ -324,6 +357,11 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         let counts = self.fetch_reinforcement_counts(&ranked).await;
         let mut ranked = self.apply_scoring(ranked, now_unix(), &counts);
         ranked.truncate(limit);
+        // Close the hot-floating loop across the multi-agent ("smart recall")
+        // path too. `namespace` is signal metadata only (not part of the dedup
+        // key), so the first workspace id is a fine representative label.
+        let namespace = agent_ids.first().map(String::as_str).unwrap_or("owner");
+        self.record_recall(query, namespace, &ranked).await;
         Ok(ranked)
     }
 
@@ -421,6 +459,72 @@ mod tests {
             .await
             .unwrap();
         assert!(results.is_empty());
+    }
+
+    // --- Hot-floating recall-signal producer wiring ------------------------
+
+    #[tokio::test]
+    async fn record_recall_hits_roundtrips_to_hit_counts() {
+        // Producer (record_recall_hits) and consumer (recall_hit_counts) close
+        // the hot-floating loop: a recorded recall becomes a non-zero hit count.
+        let (retrieval, _dir) = create_retrieval().await;
+        let store = retrieval.indexer.store();
+        let hits = vec![("notes/a.md".to_string(), 0.9_f32), ("notes/b.md".to_string(), 0.7)];
+
+        let inserted = store
+            .record_recall_hits("hello world", AUTO_RECALL_CHANNEL, &hits, "default")
+            .await
+            .unwrap();
+        assert_eq!(inserted, 2);
+
+        // Same query + day + channel dedups to zero new rows.
+        let dup = store
+            .record_recall_hits("hello world", AUTO_RECALL_CHANNEL, &hits, "default")
+            .await
+            .unwrap();
+        assert_eq!(dup, 0);
+
+        let counts = store
+            .recall_hit_counts(&["notes/a.md".to_string(), "notes/b.md".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(counts.get("notes/a.md"), Some(&1));
+        assert_eq!(counts.get("notes/b.md"), Some(&1));
+
+        // A distinct query accrues an additional, independent hit.
+        store
+            .record_recall_hits("another query", AUTO_RECALL_CHANNEL, &hits, "default")
+            .await
+            .unwrap();
+        let counts2 = store
+            .recall_hit_counts(&["notes/a.md".to_string()])
+            .await
+            .unwrap();
+        assert_eq!(counts2.get("notes/a.md"), Some(&2));
+    }
+
+    #[tokio::test]
+    async fn record_recall_empty_or_disabled_writes_nothing() {
+        let (retrieval, _dir) = create_retrieval().await;
+        // Empty result set → no write, no panic (reinforcement default-on).
+        retrieval.record_recall("q", "default", &[]).await;
+
+        // Reinforcement disabled → recording is skipped even with surfaced notes.
+        let off = NoteFactRetrieval::new(
+            retrieval.indexer.clone(),
+            retrieval.embedder.clone(),
+        )
+        .with_scoring_config(&inactive_scoring());
+        off.record_recall("q", "default", &[scored("notes/x.md", "x", 0.9)])
+            .await;
+
+        let counts = retrieval
+            .indexer
+            .store()
+            .recall_hit_counts(&["notes/x.md".to_string()])
+            .await
+            .unwrap();
+        assert!(counts.is_empty(), "disabled reinforcement must not record signals");
     }
 
     #[tokio::test]

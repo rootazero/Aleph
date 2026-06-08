@@ -1197,6 +1197,28 @@ impl NoteStore for SqliteMemoryBackend {
             .map(|a| (a.note_path, a.signal_count))
             .collect())
     }
+
+    async fn record_recall_hits(
+        &self,
+        query: &str,
+        channel: &str,
+        hits: &[(String, f32)],
+        namespace: &str,
+    ) -> Result<usize, AlephError> {
+        if hits.is_empty() {
+            return Ok(0);
+        }
+        // Reuse the existing recall-signal writer; it dedups per
+        // (note_path, query_hash, day_bucket, channel) via INSERT OR IGNORE.
+        let recall_hits: Vec<super::recall_signals::RecallHit> = hits
+            .iter()
+            .map(|(note_path, score)| super::recall_signals::RecallHit {
+                note_path: note_path.clone(),
+                score: *score as f64,
+            })
+            .collect();
+        self.record_signals(query, channel, &recall_hits, None, namespace)
+    }
 }
 
 // ---------------------------------------------------------------------------

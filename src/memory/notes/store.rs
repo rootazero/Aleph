@@ -300,6 +300,28 @@ pub trait NoteStore: Send + Sync {
         let _ = note_paths;
         Ok(std::collections::HashMap::new())
     }
+
+    /// Record recall ("retrieval") hits for the notes a search actually surfaced,
+    /// so frequently-recalled notes accrue reinforcement salience ("热门记忆浮顶")
+    /// and bubble up via [`recall_hit_counts`](Self::recall_hit_counts). Each hit
+    /// is `(note_path, score)`. The backing store dedups per
+    /// `(note_path, query, day, channel)`, so repeated recalls of the same note
+    /// for the same query on the same day count once. Returns the number of newly
+    /// recorded (non-duplicate) signals.
+    ///
+    /// This is the producer half of the hot-floating loop; `recall_hit_counts` is
+    /// the consumer half. Default impl is a no-op returning `Ok(0)` so non-SQLite
+    /// stores and test mocks compile unchanged and simply record nothing.
+    async fn record_recall_hits(
+        &self,
+        query: &str,
+        channel: &str,
+        hits: &[(String, f32)],
+        namespace: &str,
+    ) -> Result<usize, AlephError> {
+        let _ = (query, channel, hits, namespace);
+        Ok(0)
+    }
 }
 
 #[cfg(test)]
