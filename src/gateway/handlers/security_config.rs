@@ -262,7 +262,44 @@ pub async fn handle_update(
     let auth_flags_changed = cur_require_auth != security_config.require_auth
         || cur_enable_pairing != security_config.enable_pairing
         || cur_allow_guest != security_config.allow_guest;
-    let needs_restart = host_changed || auth_flags_changed;
+
+    // SSRF / shell / secrets / sandbox-rate-limit are all captured by their
+    // consumers at boot (WebFetch clones the SsrfPolicy at construction,
+    // SecurityKernel/rate-limiter/leak-scanner are built once during startup)
+    // and there is no live-reload subscriber for them, so any change needs a
+    // restart to take effect. Detect changes by comparing the on-disk values
+    // we're about to overwrite against the incoming request. (Custom PII rules
+    // are intentionally excluded: the config file watcher hot-reloads PiiEngine
+    // on `[privacy]` changes, so they take effect without a restart.)
+    let (cur_ssrf_en, cur_ssrf_priv, cur_ssrf_redir, cur_ssrf_allowed, cur_ssrf_blocked) =
+        toml_io::read_ssrf_config_from_toml(&config_patcher);
+    let ssrf_changed = cur_ssrf_en != security_config.ssrf_enabled
+        || cur_ssrf_priv != security_config.ssrf_allow_private_network
+        || cur_ssrf_redir != security_config.ssrf_max_redirects
+        || cur_ssrf_allowed != security_config.ssrf_allowed_hosts
+        || cur_ssrf_blocked != security_config.ssrf_blocked_hosts;
+    let json_changed = |current: serde_json::Result<Value>, incoming: serde_json::Result<Value>| {
+        current.ok() != incoming.ok()
+    };
+    let shell_changed = json_changed(
+        serde_json::to_value(toml_io::read_shell_security_from_toml(&config_patcher)),
+        serde_json::to_value(&security_config.shell_security),
+    );
+    let secrets_changed = json_changed(
+        serde_json::to_value(toml_io::read_secrets_protection_from_toml(&config_patcher)),
+        serde_json::to_value(&security_config.secrets_protection),
+    );
+    let sandbox_changed = json_changed(
+        serde_json::to_value(rate_limit::read_sandbox_rate_limit_from_toml(&config_patcher)),
+        serde_json::to_value(&security_config.sandbox_rate_limit),
+    );
+
+    let needs_restart = host_changed
+        || auth_flags_changed
+        || ssrf_changed
+        || shell_changed
+        || secrets_changed
+        || sandbox_changed;
 
     let config_path = crate::config::Config::default_path();
 

@@ -1045,7 +1045,7 @@
       "all_networks": "All Networks (0.0.0.0)",
       "localhost_only_desc": "Most secure — only this machine can access Panel and API",
       "all_networks_desc": "Allow access from all network interfaces including LAN and public (Token auth required)",
-      "restart_required": "Network access scope changed. Restart Aleph to apply.",
+      "restart_required": "Settings saved. Some changes (network access, outbound/SSRF, shell, secrets, sandbox) require restarting Aleph to take effect.",
       "outbound_protection": "Outbound Request Protection",
       "outbound_protection_desc": "Control how Aleph validates URLs before making outbound HTTP requests. These settings protect against SSRF attacks.",
       "ssrf_enabled": "Enable SSRF Protection",

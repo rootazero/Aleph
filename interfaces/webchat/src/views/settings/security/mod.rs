@@ -80,6 +80,7 @@ pub fn SecurityView() -> impl IntoView {
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
+    let needs_restart = RwSignal::new(false);
 
     // Load config and devices on mount
     Effect::new(move || {
@@ -129,22 +130,31 @@ pub fn SecurityView() -> impl IntoView {
         let search_cfg = search_config.get();
         spawn_local(async move {
             saving.set(true);
+            needs_restart.set(false);
 
-            if let Some(cfg) = security_cfg {
-                match SecurityConfigApi::update(&state, cfg).await {
-                    Ok(_) => {
-                        error.set(None);
-                    }
-                    Err(e) => {
-                        error.set(Some(format!("Failed to save security config: {}", e)));
-                    }
-                }
-            }
-
+            // Order matters: the PII built-in toggles live under `[privacy]` and
+            // SearchConfigApi::update rewrites that whole table via
+            // `save_incremental(["privacy"])`. The custom PII rules also live
+            // under `[privacy]` but are written by SecurityConfigApi::update as a
+            // per-key `custom_rules` insert. We must run the whole-table rewrite
+            // FIRST and the per-key custom_rules write LAST, otherwise the search
+            // save clobbers the custom rules we just persisted.
             match SearchConfigApi::update(&state, search_cfg).await {
                 Ok(_) => {}
                 Err(e) => {
                     error.set(Some(format!("Failed to save PII config: {}", e)));
+                }
+            }
+
+            if let Some(cfg) = security_cfg {
+                match SecurityConfigApi::update(&state, cfg).await {
+                    Ok(restart) => {
+                        error.set(None);
+                        needs_restart.set(restart);
+                    }
+                    Err(e) => {
+                        error.set(Some(format!("Failed to save security config: {}", e)));
+                    }
                 }
             }
 
@@ -166,6 +176,12 @@ pub fn SecurityView() -> impl IntoView {
                                 {move || error.get().map(|e| view! {
                                     <div class="p-3 bg-danger-subtle text-danger rounded">
                                         {e}
+                                    </div>
+                                })}
+
+                                {move || needs_restart.get().then(|| view! {
+                                    <div class="p-3 bg-warning-subtle text-warning rounded">
+                                        {t!(i18n, settings.security.restart_required)}
                                     </div>
                                 })}
 

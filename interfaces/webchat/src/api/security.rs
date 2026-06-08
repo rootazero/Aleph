@@ -213,13 +213,19 @@ impl SecurityConfigApi {
             .map_err(|e| format!("Failed to parse security config: {}", e))
     }
 
-    /// Update security configuration
-    pub async fn update(state: &DashboardState, config: SecurityConfig) -> Result<(), String> {
+    /// Update security configuration. Returns `true` when the daemon reports
+    /// the change needs a restart to take effect (host / auth / SSRF / shell /
+    /// secrets / sandbox-rate-limit are all captured at boot).
+    pub async fn update(state: &DashboardState, config: SecurityConfig) -> Result<bool, String> {
         let params = serde_json::to_value(&config)
             .map_err(|e| format!("Failed to serialize config: {}", e))?;
 
-        state.rpc_call("security_config.update", params).await?;
-        Ok(())
+        let result = state.rpc_call("security_config.update", params).await?;
+        let needs_restart = result
+            .get("needs_restart")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        Ok(needs_restart)
     }
 
     /// List all paired devices

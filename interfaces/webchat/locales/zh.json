@@ -1045,7 +1045,7 @@
       "all_networks": "所有网络 (0.0.0.0)",
       "localhost_only_desc": "最安全，仅允许本机访问 Panel 和 API",
       "all_networks_desc": "允许所有网络接口访问（含局域网和公网），需确保 Token 认证已开启",
-      "restart_required": "网络访问范围已更改，需要重启 Aleph 服务才能生效",
+      "restart_required": "设置已保存。部分更改（网络访问、出站/SSRF、Shell、密钥、沙箱）需要重启 Aleph 服务才能生效。",
       "outbound_protection": "出站请求防护",
       "outbound_protection_desc": "控制 Aleph 在发起出站请求前如何验证 URL，防御 SSRF 攻击。",
       "ssrf_enabled": "启用 SSRF 防护",
