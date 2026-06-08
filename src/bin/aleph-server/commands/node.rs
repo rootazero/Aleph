@@ -184,7 +184,13 @@ fn build_command_table(name: &str) -> CommandTable {
     );
     let bash = alephcore::builtin_tools::BashExecTool::new().with_sandbox(sandbox);
     let session = SessionKey::ephemeral(format!("node-{name}"));
-    CommandTable::with_bash(bash, session)
+    // file.read/file.write jail to the SAME per-session workspace dir bash uses,
+    // so a pushed script can be bash-run and a bash-produced artifact pulled.
+    let workspace_dir =
+        alephcore::sandbox::workspace::session_workspace_dir(&cfg.workspace_root, &session);
+    let mut table = CommandTable::with_bash(bash, session);
+    table.register_file_commands(workspace_dir);
+    table
 }
 
 /// Interactive pairing: anonymous WS → `pairing.start_node` → print the code →

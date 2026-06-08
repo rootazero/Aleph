@@ -150,8 +150,7 @@ pub struct BuiltinToolRegistry {
     pub(crate) memory_context_provider:
         Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>>,
     /// 集群节点登记表，启动后经 `set_node_registry` 注入；`node_invoke` 用它寻址。
-    pub(crate) node_registry:
-        Arc<tokio::sync::OnceCell<Arc<crate::cluster::NodeRegistry>>>,
+    pub(crate) node_registry: Arc<tokio::sync::OnceCell<Arc<crate::cluster::NodeRegistry>>>,
     /// Memory browse tool instance (optional - requires memory_db)
     pub(crate) memory_browse_tool: Option<crate::builtin_tools::MemoryBrowseTool>,
     /// Memory explore tool instance (optional - requires memory_db + embedder)
@@ -842,6 +841,15 @@ impl ToolRegistry for BuiltinToolRegistry {
                     AlephError::tool("node_invoke not available: NodeRegistry not injected")
                 })?;
                 let tool = crate::builtin_tools::NodeInvokeTool::new(reg.clone());
+                tool.call_json(arguments).await
+            }),
+
+            // Cluster file-transfer tool — same injected NodeRegistry as node_invoke.
+            "node_file" => Box::pin(async move {
+                let reg = self.node_registry.get().ok_or_else(|| {
+                    AlephError::tool("node_file not available: NodeRegistry not injected")
+                })?;
+                let tool = crate::builtin_tools::NodeFileTool::new(reg.clone());
                 tool.call_json(arguments).await
             }),
 
