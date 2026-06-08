@@ -483,15 +483,21 @@ impl AgentHarness {
         // ToolError below alongside the normal request-event emission so the
         // session timeline stays linear. PASS 1 then dispatches ONLY the
         // surviving calls in parallel, preserving original input order.
+        //
+        // The `is_recent_failure` probe is deferred into PASS 0 (filled below)
+        // so it runs AFTER the tool-call guardrail may have rewritten the args.
+        // The serial path checks `is_recent_failure` against the *sanitised*
+        // `cache_key`, and `record_failure` likewise records the sanitised
+        // form, so the parallel path must dedup on the same post-sanitise
+        // signature. Probing the pre-guardrail args here would diverge from the
+        // serial path: a guardrail-rewritten call whose original matched a past
+        // failure would be wrongly skipped, and one whose sanitised form
+        // matches a past failure would be wrongly run.
         let mut canonical_args: Vec<String> = tool_calls
             .iter()
             .map(|c| super::canonical_json_string(&c.arguments))
             .collect();
-        let skip: Vec<bool> = tool_calls
-            .iter()
-            .zip(canonical_args.iter())
-            .map(|(c, args)| self.is_recent_failure(&c.name, args))
-            .collect();
+        let mut skip: Vec<bool> = vec![false; tool_calls.len()];
 
         // Per-index guardrail outcome, populated in PASS 0 (mirrors the serial
         // path's Stage 5b). `blocked[idx]` => the tool-call guardrail returned
@@ -577,6 +583,15 @@ impl AgentHarness {
                     }
                 }
             }
+
+            // Cross-batch dedup probe — evaluated here (post-guardrail) so it
+            // sees the same canonical signature the serial path and
+            // `record_failure` use: `canonical_args[idx]` reflects the
+            // guardrail-sanitised args (updated above) when the call was
+            // rewritten, the model's original otherwise. (A `Block` outcome
+            // `continue`s above, so blocked indices keep `skip == false` and
+            // are handled by the `blocked[idx]` plumbing instead.)
+            skip[idx] = self.is_recent_failure(&call.name, &canonical_args[idx]);
 
             if skip[idx] {
                 tracing::warn!(
