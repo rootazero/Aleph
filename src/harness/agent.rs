@@ -22,7 +22,7 @@
 //!   * `guardrails.rs` — `apply_input_guardrail`, `apply_tool_call_guardrail`
 //!   * `prompt.rs` — `build_prompt` (sync per-turn message assembler)
 
-use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, Mutex, Ordering};
+use crate::sync_primitives::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Mutex, Ordering};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -122,6 +122,22 @@ pub struct AgentHarness {
     /// summarisation indicate fundamentally oversized input rather than a
     /// recoverable burst. R10-safe: pure round scheduling, no policy choice.
     pub(super) reactive_compact_attempts: AtomicU32,
+    /// Persisted event-log length captured at the start of the most recent turn
+    /// (before that turn appended anything), i.e. the index boundary the turn's
+    /// prompt was built from. The follow-up boundary check
+    /// ([`AgentHarness::has_unanswered_user_message`]) treats any non-synthetic
+    /// `UserMessage` at or beyond this watermark as input the model never saw.
+    ///
+    /// Why a watermark and not "user after last assistant": a steering message
+    /// injected *while the final turn's LLM call is still streaming* lands in the
+    /// log *before* the assistant message that turn commits, so the positional
+    /// "is there a user after the last assistant" test silently misses it. The
+    /// watermark is set once per turn in `think.rs` (right after `get_events`),
+    /// so on a `Done` turn it holds that turn's pre-prompt boundary — late
+    /// arrivals sit at index >= watermark regardless of the assistant's position.
+    /// Mechanical (R10-safe): one store per turn, no decision. The loop runs one
+    /// turn at a time, so `Relaxed` ordering is sufficient.
+    pub(super) last_prompt_log_len: AtomicUsize,
 }
 
 impl AgentHarness {
@@ -142,6 +158,7 @@ impl AgentHarness {
             final_session_id: Mutex::new(None),
             recent_failures: Mutex::new(std::collections::HashSet::new()),
             reactive_compact_attempts: AtomicU32::new(0),
+            last_prompt_log_len: AtomicUsize::new(0),
         }
     }
 
@@ -377,13 +394,22 @@ impl AgentHarness {
             Ok(e) => e,
             Err(_) => return false,
         };
-        let Some(last_assistant) = events
+        // A follow-up only makes sense once at least one assistant turn has run;
+        // before that the leading prompt is the turn being processed, not a late
+        // arrival. (Also guards the cold default watermark of 0.)
+        if !events
             .iter()
-            .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
-        else {
+            .any(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
+        {
             return false;
-        };
-        events[last_assistant + 1..].iter().any(|r| {
+        }
+        // Any non-synthetic UserMessage at or beyond the last turn's prompt
+        // boundary arrived after that turn read the log, so the model never saw
+        // it — even if it landed *before* the assistant message the turn went on
+        // to commit (the during-final-turn injection race). Positional and
+        // watermark-bounded; R10-safe.
+        let watermark = self.last_prompt_log_len.load(Ordering::Relaxed);
+        events.iter().skip(watermark).any(|r| {
             matches!(
                 &r.event,
                 SessionEvent::UserMessage { synthetic, .. } if !*synthetic
@@ -619,15 +645,19 @@ impl Harness for AgentHarness {
                 }
                 Ok((TurnState::Done, _, _, _)) => {
                     // Pi `getFollowUpMessages` parity. A steering message that
-                    // landed during this run's final turn sits unanswered at the
-                    // tail of the event log (the documented boundary race in
+                    // landed during this run's final turn was not in that turn's
+                    // prompt (the boundary race in
                     // `gateway::execution_engine::steering`). Before handing
                     // control back, re-read the log: if a genuine user message
-                    // arrived *after* the model's last assistant turn, the model
-                    // has not seen it — continue the loop so it is answered in
-                    // this same run instead of waiting for the user to send a
-                    // second message. Purely positional (R10-safe) and bounded so
-                    // a pathological appender cannot spin forever.
+                    // arrived at or beyond the final turn's prompt boundary
+                    // (`last_prompt_log_len`), the model has not seen it —
+                    // continue the loop so it is answered in this same run
+                    // instead of waiting for the user to send a second message.
+                    // The watermark catches messages injected *during* the final
+                    // LLM call too, which land *before* the just-committed
+                    // assistant message and so escape a naive "user after last
+                    // assistant" test. Purely positional (R10-safe) and bounded
+                    // so a pathological appender cannot spin forever.
                     if followup_continuations < Self::MAX_FOLLOWUP_CONTINUATIONS
                         && self.has_unanswered_user_message(&current_session).await
                     {
@@ -1132,6 +1162,15 @@ mod tests {
             .unwrap();
     }
 
+    /// Set the per-turn prompt-boundary watermark the way `run_turn_internal`
+    /// would after reading a log of `len` events. Mirrors the production store so
+    /// the follow-up tests exercise the real watermark logic.
+    fn set_watermark(harness: &super::AgentHarness, len: usize) {
+        harness
+            .last_prompt_log_len
+            .store(len, crate::sync_primitives::Ordering::Relaxed);
+    }
+
     /// Normal completion: the model's last act is its assistant turn, so there
     /// is nothing to follow up on — the loop must be allowed to terminate.
     #[tokio::test]
@@ -1140,6 +1179,8 @@ mod tests {
         emit_user(&session, &sid, "do the thing", false).await;
         emit_assistant(&session, &sid, "done").await;
         let harness = followup_harness(session);
+        // Final turn built its prompt from the single leading user message.
+        set_watermark(&harness, 1);
         assert!(!harness.has_unanswered_user_message(&sid).await);
     }
 
@@ -1150,9 +1191,29 @@ mod tests {
         let (session, sid) = empty_session("fu-race");
         emit_user(&session, &sid, "do the thing", false).await;
         emit_assistant(&session, &sid, "done").await;
-        // Steering message injected during the closing turn.
+        // Steering message injected after the closing turn committed.
         emit_user(&session, &sid, "actually, also do this", false).await;
         let harness = followup_harness(session);
+        set_watermark(&harness, 1);
+        assert!(harness.has_unanswered_user_message(&sid).await);
+    }
+
+    /// The harder boundary race the watermark exists for: a steering message is
+    /// injected *while the final turn's LLM call is still streaming*, so it lands
+    /// in the log *before* the assistant message that turn goes on to commit.
+    /// A naive "is there a user after the last assistant" test misses it; the
+    /// watermark (the turn's pre-prompt boundary) catches it.
+    #[tokio::test]
+    async fn followup_when_user_injected_during_final_turn() {
+        let (session, sid) = empty_session("fu-during");
+        emit_user(&session, &sid, "do the thing", false).await;
+        // Final turn read the log here (len == 1) and started streaming.
+        emit_user(&session, &sid, "wait, also handle errors", false).await;
+        // ...then the turn commits its assistant message, now positioned *after*
+        // the injected steering message.
+        emit_assistant(&session, &sid, "done").await;
+        let harness = followup_harness(session);
+        set_watermark(&harness, 1);
         assert!(harness.has_unanswered_user_message(&sid).await);
     }
 
@@ -1166,6 +1227,7 @@ mod tests {
         emit_assistant(&session, &sid, "done").await;
         emit_user(&session, &sid, "[verifier veto] keep going", true).await;
         let harness = followup_harness(session);
+        set_watermark(&harness, 1);
         assert!(!harness.has_unanswered_user_message(&sid).await);
     }
 
