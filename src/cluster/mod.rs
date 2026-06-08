@@ -8,5 +8,4 @@
 
 mod reverse_rpc;
 
-pub use reverse_rpc::PendingInvokes;
-// Task 2 will add ReverseRpcChannel, ReverseRpcError
+pub use reverse_rpc::{PendingInvokes, ReverseRpcChannel, ReverseRpcError};

@@ -6,12 +6,13 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde_json::Value;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
-use crate::gateway::protocol::JsonRpcResponse;
+use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 
 /// 关联表：反向 RPC 请求 id → 等待其响应的 oneshot 发送端。
 ///
@@ -70,14 +71,77 @@ impl PendingInvokes {
     }
 
     /// 丢弃一个等待者（超时清理用）。返回是否确实移除了条目。
-    // used by ReverseRpcChannel in Task 2
-    #[allow(dead_code)]
     pub fn cancel(&self, id: &str) -> bool {
         self.waiters
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(id)
             .is_some()
+    }
+}
+
+/// 反向 RPC 调用失败原因。
+#[derive(Debug, thiserror::Error)]
+pub enum ReverseRpcError {
+    /// 出站通道已关闭（对端连接已断）。
+    #[error("reverse-rpc transport closed")]
+    TransportClosed,
+    /// 在超时内没等到响应。
+    #[error("reverse-rpc call timed out after {0}ms")]
+    Timeout(u64),
+    /// 等待端被丢弃（连接清理时取消了 pending）。
+    #[error("reverse-rpc call cancelled")]
+    Cancelled,
+}
+
+/// 绑定到**单条连接**的反向 RPC 通道：把请求帧写进该连接的出站 mpsc，
+/// 并通过共享的 [`PendingInvokes`] 等待相关响应。
+#[derive(Clone)]
+pub struct ReverseRpcChannel {
+    outbound: mpsc::Sender<String>,
+    pending: Arc<PendingInvokes>,
+}
+
+impl ReverseRpcChannel {
+    /// 用一条连接的出站发送端构造通道（新建独立的 pending 表）。
+    pub fn new(outbound: mpsc::Sender<String>) -> Self {
+        Self {
+            outbound,
+            pending: Arc::new(PendingInvokes::new()),
+        }
+    }
+
+    /// 拿到共享的 pending 表。连接的入站循环用它把响应帧 `resolve` 回来。
+    pub fn pending(&self) -> Arc<PendingInvokes> {
+        self.pending.clone()
+    }
+
+    /// 对连接发起一次反向 RPC 请求并等待响应。
+    ///
+    /// `timeout_ms` 到点仍无响应 → `Timeout`（并清理 pending 条目）。
+    pub async fn call(
+        &self,
+        method: &str,
+        params: Value,
+        timeout_ms: u64,
+    ) -> Result<JsonRpcResponse, ReverseRpcError> {
+        let (id, rx) = self.pending.register();
+        let req = JsonRpcRequest::with_id(method, Some(params), Value::String(id.clone()));
+        let frame = serde_json::to_string(&req).map_err(|_| ReverseRpcError::TransportClosed)?;
+
+        if self.outbound.send(frame).await.is_err() {
+            self.pending.cancel(&id);
+            return Err(ReverseRpcError::TransportClosed);
+        }
+
+        match tokio::time::timeout(Duration::from_millis(timeout_ms), rx).await {
+            Ok(Ok(resp)) => Ok(resp),
+            Ok(Err(_)) => Err(ReverseRpcError::Cancelled), // sender dropped
+            Err(_) => {
+                self.pending.cancel(&id);
+                Err(ReverseRpcError::Timeout(timeout_ms))
+            }
+        }
     }
 }
 
@@ -108,5 +172,37 @@ mod tests {
         let pending = PendingInvokes::new();
         let resp = JsonRpcResponse::success(Some(json!("rpc-999")), json!(null));
         assert!(!pending.resolve(&json!("rpc-999"), resp));
+    }
+
+    #[tokio::test]
+    async fn channel_call_sends_framed_request_and_returns_response() {
+        use serde_json::json;
+
+        // 出站接收端模拟"连接的 write 半边"：读到一帧就把它当请求，
+        // 解析出 id，构造响应回灌 resolve。
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(out_tx);
+        let pending = channel.pending();
+
+        // 在后台扮演"客户端"：收到出站帧→回一条成功响应。
+        let bg_pending = pending.clone();
+        tokio::spawn(async move {
+            let frame = out_rx.recv().await.expect("a frame should be sent");
+            let req: serde_json::Value = serde_json::from_str(&frame).unwrap();
+            assert_eq!(req["method"], "tool.call");
+            let id = req["id"].clone();
+            let resp = crate::gateway::protocol::JsonRpcResponse::success(
+                Some(id.clone()),
+                json!({"echoed": req["params"]["tool"]}),
+            );
+            bg_pending.resolve(&id, resp);
+        });
+
+        let resp = channel
+            .call("tool.call", json!({"tool": "bash"}), 1_000)
+            .await
+            .expect("call should resolve");
+        assert!(resp.is_success());
+        assert_eq!(resp.result.unwrap()["echoed"], "bash");
     }
 }
