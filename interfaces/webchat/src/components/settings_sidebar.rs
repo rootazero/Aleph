@@ -44,6 +44,9 @@ pub enum SettingsTab {
     Security,
     Auth,
     Execution,
+
+    // Network
+    Network,
 }
 
 impl SettingsTab {
@@ -75,6 +78,7 @@ impl SettingsTab {
             Self::Security => "/settings/security",
             Self::Auth => "/settings/auth",
             Self::Execution => "/settings/execution",
+            Self::Network => "/settings/network",
         }
     }
 
@@ -106,6 +110,7 @@ impl SettingsTab {
             Self::Security => t_string!(i18n, settings.tabs.security).to_string(),
             Self::Auth => t_string!(i18n, settings.tabs.auth).to_string(),
             Self::Execution => "Execution".to_string(),
+            Self::Network => "网络".to_string(),
         }
     }
 
@@ -181,6 +186,9 @@ impl SettingsTab {
             }
             Self::Auth => r#"<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>"#,
             Self::Execution => r#"<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>"#,
+            Self::Network => {
+                r#"<circle cx="5" cy="6" r="2"/><circle cx="5" cy="18" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 6h6a3 3 0 0 1 3 3v0M7 18h6a3 3 0 0 0 3-3v0"/>"#
+            }
         }
     }
 }
@@ -199,6 +207,7 @@ impl SettingsGroup {
             "Channels" => t_string!(i18n, settings.groups.channels).to_string(),
             "Extensions" => t_string!(i18n, settings.groups.extensions).to_string(),
             "Advanced" => t_string!(i18n, settings.groups.advanced).to_string(),
+            "Network" => "网络".to_string(),
             other => other.to_string(),
         }
     }
@@ -249,5 +258,9 @@ pub const SETTINGS_GROUPS: &[SettingsGroup] = &[
             SettingsTab::Auth,
             SettingsTab::Execution,
         ],
+    },
+    SettingsGroup {
+        label: "Network",
+        tabs: &[SettingsTab::Network],
     },
 ];
