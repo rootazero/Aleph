@@ -108,9 +108,7 @@ async fn a2a_stream_handler(
     match request.method.as_str() {
         // `message/stream` is the canonical A2A streaming method name
         // (SendStreamingMessage); `message/send` is a back-compat alias.
-        "message/stream" | "message/send" => {
-            stream_message_send(state, principal, request).await
-        }
+        "message/stream" | "message/send" => stream_message_send(state, principal, request).await,
         "tasks/resubscribe" => stream_resubscribe(state, principal, request).await,
         other => sse_error(JsonRpcResponse::error(
             request.id.clone(),

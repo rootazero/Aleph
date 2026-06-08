@@ -569,7 +569,11 @@ mod tests {
         let registry = Arc::new(MemoryExtensionRegistry::new());
 
         assert_eq!(registry.len(), 0);
-        register_memory_extension_if_declared(&manifest, Some("plugin:test/srv".to_string()), &registry);
+        register_memory_extension_if_declared(
+            &manifest,
+            Some("plugin:test/srv".to_string()),
+            &registry,
+        );
         assert_eq!(registry.len(), 1, "should have registered one extension");
     }
 
@@ -578,7 +582,11 @@ mod tests {
         let manifest = make_manifest_no_memory();
         let registry = Arc::new(MemoryExtensionRegistry::new());
 
-        register_memory_extension_if_declared(&manifest, Some("plugin:test/srv".to_string()), &registry);
+        register_memory_extension_if_declared(
+            &manifest,
+            Some("plugin:test/srv".to_string()),
+            &registry,
+        );
         assert_eq!(
             registry.len(),
             0,

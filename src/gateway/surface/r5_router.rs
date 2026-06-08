@@ -103,9 +103,7 @@ pub async fn run(event_bus: Arc<GatewayEventBus>, surfaces: SurfaceRegistry) {
             Ok(frame) => {
                 if let Some(note) = notification_for(&frame) {
                     for surface in &surfaces {
-                        if let Err(e) =
-                            surface.deliver(OutboundInteraction::Notify(note.clone()))
-                        {
+                        if let Err(e) = surface.deliver(OutboundInteraction::Notify(note.clone())) {
                             tracing::debug!(error = %e, "surface delivery failed");
                         }
                     }
@@ -171,7 +169,8 @@ mod tests {
     #[test]
     fn run_complete_is_gated_by_duration() {
         assert!(notification_for(&run_complete(COMPLETION_NOTIFY_MIN_MS - 1)).is_none());
-        let n = notification_for(&run_complete(COMPLETION_NOTIFY_MIN_MS)).expect("long run notifies");
+        let n =
+            notification_for(&run_complete(COMPLETION_NOTIFY_MIN_MS)).expect("long run notifies");
         assert_eq!(n.title, "Aleph finished");
         assert_eq!(n.body, "Your turn is complete.");
         assert_eq!(n.source_topic, "agent.run.complete");
@@ -227,9 +226,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_delivers_approval_to_registered_surface() {
-        use crate::gateway::surface::delivery::{
-            DeliveryError, DeliverySurface, SurfaceApproval,
-        };
+        use crate::gateway::surface::delivery::{DeliveryError, DeliverySurface, SurfaceApproval};
         use crate::gateway::surface::SurfaceKind;
         use std::sync::Mutex;
 

@@ -147,20 +147,36 @@ mod tests {
     #[test]
     fn loopback_attach_is_config_operator_for_every_kind() {
         use crate::gateway::surface::SurfaceKind;
-        for k in [SurfaceKind::Desktop, SurfaceKind::Browser, SurfaceKind::Cli, SurfaceKind::Unknown] {
+        for k in [
+            SurfaceKind::Desktop,
+            SurfaceKind::Browser,
+            SurfaceKind::Cli,
+            SurfaceKind::Unknown,
+        ] {
             assert_eq!(default_tier(k, true), Tier::Config);
             // Byte-equivalent to the legacy `vec!["*"]` loopback operator grant.
             assert_eq!(default_tier(k, true).permissions(), vec!["*".to_string()]);
-            assert_eq!(role_for_permissions(&default_tier(k, true).permissions()), "operator");
+            assert_eq!(
+                role_for_permissions(&default_tier(k, true).permissions()),
+                "operator"
+            );
         }
     }
 
     #[test]
     fn remote_attach_defaults_to_chat_for_every_kind() {
         use crate::gateway::surface::SurfaceKind;
-        for k in [SurfaceKind::Desktop, SurfaceKind::Browser, SurfaceKind::Cli, SurfaceKind::Unknown] {
+        for k in [
+            SurfaceKind::Desktop,
+            SurfaceKind::Browser,
+            SurfaceKind::Cli,
+            SurfaceKind::Unknown,
+        ] {
             assert_eq!(default_tier(k, false), Tier::Chat);
-            assert_eq!(role_for_permissions(&default_tier(k, false).permissions()), "guest");
+            assert_eq!(
+                role_for_permissions(&default_tier(k, false).permissions()),
+                "guest"
+            );
         }
     }
 }

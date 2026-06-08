@@ -51,7 +51,9 @@ mod tests {
     use crate::goal::{Goal, GoalStatus, PursuitMode};
 
     fn active_goal(max_iter: u32) -> Goal {
-        Goal::new("s", "obj", 0, 0).with_pursuit(PursuitMode::Active { max_iterations: max_iter })
+        Goal::new("s", "obj", 0, 0).with_pursuit(PursuitMode::Active {
+            max_iterations: max_iter,
+        })
     }
 
     #[test]

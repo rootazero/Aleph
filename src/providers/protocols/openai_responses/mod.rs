@@ -272,11 +272,10 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             .unwrap_or_else(|| config.default_model());
         // Endpoint-aware: keep the `openai/` slug on aggregators (OpenRouter),
         // strip it on the first-party OpenAI Responses API. See `model_id`.
-        let actual_model =
-            super::openai_common::model_id::normalize_openai_model_id(
-                raw_model,
-                config.base_url.as_deref(),
-            );
+        let actual_model = super::openai_common::model_id::normalize_openai_model_id(
+            raw_model,
+            config.base_url.as_deref(),
+        );
         let request = Self::build_responses_request(payload, &actual_model, &self.variant, config);
 
         let api_key = config

@@ -48,20 +48,20 @@ pub async fn handle_cluster_enroll(
         );
     }
 
-    let signed = match ctx.token_manager.issue_token(
-        &device_id,
-        DeviceRole::Node,
-        vec!["node".to_string()],
-    ) {
-        Ok(t) => t,
-        Err(e) => {
-            return JsonRpcResponse::error(
-                request.id,
-                INTERNAL_ERROR,
-                format!("failed to issue node token: {e}"),
-            )
-        }
-    };
+    let signed =
+        match ctx
+            .token_manager
+            .issue_token(&device_id, DeviceRole::Node, vec!["node".to_string()])
+        {
+            Ok(t) => t,
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INTERNAL_ERROR,
+                    format!("failed to issue node token: {e}"),
+                )
+            }
+        };
 
     JsonRpcResponse::success(
         request.id,
@@ -103,7 +103,10 @@ mod tests {
         let token = result["token"].as_str().unwrap().to_string();
         let signature = result["signature"].as_str().unwrap().to_string();
         assert!(!token.is_empty());
-        let v = ctx.token_manager.validate_token(&token, &signature).unwrap();
+        let v = ctx
+            .token_manager
+            .validate_token(&token, &signature)
+            .unwrap();
         assert_eq!(v.device_id, node_id);
         assert_eq!(v.role, crate::gateway::security::DeviceRole::Node);
     }
@@ -114,7 +117,13 @@ mod tests {
         let req = JsonRpcRequest::with_id("environments.list", None, serde_json::json!(1));
         let resp = handle_environments_list(req, ctx.clone()).await;
         assert!(resp.is_success());
-        assert_eq!(resp.result.unwrap()["environments"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            resp.result.unwrap()["environments"]
+                .as_array()
+                .unwrap()
+                .len(),
+            0
+        );
 
         let (tx, _rx) = tokio::sync::mpsc::channel::<String>(8);
         let ch = crate::cluster::ReverseRpcChannel::new(tx);
@@ -123,7 +132,9 @@ mod tests {
             Some("node"),
             "node-a",
             "conn-1",
-            Some(&serde_json::json!({"device_name": "worker-1", "commands": [{"name":"bash","schema":{}}]})),
+            Some(
+                &serde_json::json!({"device_name": "worker-1", "commands": [{"name":"bash","schema":{}}]}),
+            ),
             &ch,
         );
         let req = JsonRpcRequest::with_id("environments.list", None, serde_json::json!(2));

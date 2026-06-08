@@ -520,8 +520,13 @@ mod tests {
         let registry = ToolCatalog::new();
 
         // A tool restricted to Panel + CLI only.
-        let panel_only = UnifiedTool::new("builtin:danger", "danger", "Dangerous op", ToolSource::Builtin)
-            .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
+        let panel_only = UnifiedTool::new(
+            "builtin:danger",
+            "danger",
+            "Dangerous op",
+            ToolSource::Builtin,
+        )
+        .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
         registry.register_with_conflict_resolution(panel_only).await;
         // A tool visible everywhere (empty visible_channels).
         registry

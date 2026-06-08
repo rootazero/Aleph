@@ -107,7 +107,10 @@ mod tests {
     #[test]
     fn dedup_is_enabled_by_default() {
         assert!(super::super::defaults::default_dedup_enabled());
-        assert_eq!(super::super::defaults::default_dedup_noop_threshold(), 0.985);
+        assert_eq!(
+            super::super::defaults::default_dedup_noop_threshold(),
+            0.985
+        );
         let cfg = CompoundIngestConfig::default();
         assert!(cfg.dedup_enabled);
         assert_eq!(cfg.dedup_noop_threshold, 0.985);

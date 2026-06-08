@@ -180,9 +180,9 @@ impl InboundMessageRouter {
                             // streams independently of ReplyEmitter, so wrap it
                             // to buffer chunks into a single final message —
                             // keeping Telegram in sync with the global switch.
-                            Arc::new(
-                                crate::gateway::event_emitter::InstantBufferingEmitter::new(te),
-                            )
+                            Arc::new(crate::gateway::event_emitter::InstantBufferingEmitter::new(
+                                te,
+                            ))
                         }
                     }
                     None => {

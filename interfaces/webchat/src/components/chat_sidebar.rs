@@ -179,7 +179,9 @@ pub fn ChatSidebar() -> impl IntoView {
             }
             "run_complete" | "run_error" => {
                 let sk = run_to_session.with_untracked(|m| m.get(run_id).cloned());
-                run_to_session.update(|m| { m.remove(run_id); });
+                run_to_session.update(|m| {
+                    m.remove(run_id);
+                });
                 if let Some(sk) = sk {
                     running.update(|m| {
                         if let Some(n) = m.get_mut(&sk) {
@@ -216,11 +218,13 @@ pub fn ChatSidebar() -> impl IntoView {
         }
 
         // Run lifecycle topics drive the per-session running dot.
-        for topic in ["stream.run_accepted", "stream.run_complete", "stream.run_error"] {
+        for topic in [
+            "stream.run_accepted",
+            "stream.run_complete",
+            "stream.run_error",
+        ] {
             if let Err(e) = dash_for_topic.subscribe_topic(topic).await {
-                web_sys::console::error_1(
-                    &format!("Failed to subscribe to {topic}: {e}").into(),
-                );
+                web_sys::console::error_1(&format!("Failed to subscribe to {topic}: {e}").into());
             }
         }
     });

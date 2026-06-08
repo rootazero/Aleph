@@ -28,9 +28,7 @@ impl PromptLayer for ThinkingGuidanceLayer {
         }
 
         output.push_str("## Thinking Transparency\n\n");
-        output.push_str(
-            "Make your reasoning visible as you work so the user can follow it:\n\n",
-        );
+        output.push_str("Make your reasoning visible as you work so the user can follow it:\n\n");
         output.push_str(
             "- **Reasoning Flow**: progress through Observation (current state) → \
              Analysis (options and trade-offs) → Planning (your approach) → Decision \

@@ -616,12 +616,17 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let body =
-            tokio::fs::read_to_string(dir.path().join("note/default/entity/alice.md"))
-                .await
-                .unwrap();
-        assert!(body.contains("relations:"), "expected 'relations:' block in frontmatter");
-        assert!(body.contains("type: works_at"), "expected 'type: works_at' in frontmatter");
+        let body = tokio::fs::read_to_string(dir.path().join("note/default/entity/alice.md"))
+            .await
+            .unwrap();
+        assert!(
+            body.contains("relations:"),
+            "expected 'relations:' block in frontmatter"
+        );
+        assert!(
+            body.contains("type: works_at"),
+            "expected 'type: works_at' in frontmatter"
+        );
     }
 
     #[tokio::test]
@@ -677,16 +682,24 @@ mod tests {
             tx.commit().await.unwrap();
         }
 
-        let body =
-            tokio::fs::read_to_string(dir.path().join("note/default/entity/alice.md"))
-                .await
-                .unwrap();
+        let body = tokio::fs::read_to_string(dir.path().join("note/default/entity/alice.md"))
+            .await
+            .unwrap();
         // bob edge should be upgraded to "colleague"
-        assert!(body.contains("type: colleague"), "expected 'type: colleague' (bob edge upgraded)");
+        assert!(
+            body.contains("type: colleague"),
+            "expected 'type: colleague' (bob edge upgraded)"
+        );
         // old "knows" type should be gone (replaced by "colleague" for same `to`)
-        assert!(!body.contains("type: knows"), "old 'type: knows' should have been replaced");
+        assert!(
+            !body.contains("type: knows"),
+            "old 'type: knows' should have been replaced"
+        );
         // new acme edge should be present
-        assert!(body.contains("to: entity/acme"), "expected 'to: entity/acme' (new edge)");
+        assert!(
+            body.contains("to: entity/acme"),
+            "expected 'to: entity/acme' (new edge)"
+        );
     }
 
     use proptest::prelude::*;

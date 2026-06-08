@@ -117,7 +117,10 @@ mod tests {
         let findings = check.run(Posture::Inspect).await;
         assert_eq!(findings[0].severity, Severity::Error);
         assert!(findings[0].fix_hint.is_some());
-        assert!(!findings[0].repairable, "a corrupt vault must never auto-repair");
+        assert!(
+            !findings[0].repairable,
+            "a corrupt vault must never auto-repair"
+        );
     }
 
     #[tokio::test]

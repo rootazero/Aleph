@@ -300,7 +300,10 @@ impl ExtensionManager {
             }
         };
         let registry = {
-            let g = self.memory_registry.read().unwrap_or_else(|e| e.into_inner());
+            let g = self
+                .memory_registry
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
             match g.as_ref() {
                 Some(r) => r.clone(),
                 None => return,

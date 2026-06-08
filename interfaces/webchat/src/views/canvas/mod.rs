@@ -230,8 +230,7 @@ fn RadialCanvasView() -> impl IntoView {
                     }
                     Err(e) => {
                         web_sys::console::warn_1(
-                            &format!("canvas: note_detail fetch failed for {id_spawn}: {e}")
-                                .into(),
+                            &format!("canvas: note_detail fetch failed for {id_spawn}: {e}").into(),
                         );
                     }
                 }

@@ -390,11 +390,7 @@ impl ConfigPatcher {
     /// Reuses the same `config` Arc, `config_path`, `backup`, and mtime
     /// machinery as `apply`, so a restored config is installed live exactly
     /// like a normal patch.
-    pub async fn rollback(
-        &self,
-        timestamp: Option<&str>,
-        dry_run: bool,
-    ) -> Result<RollbackResult> {
+    pub async fn rollback(&self, timestamp: Option<&str>, dry_run: bool) -> Result<RollbackResult> {
         let mut warnings: Vec<String> = Vec::new();
 
         // 1. Locate the requested (or latest) snapshot.
@@ -1018,7 +1014,11 @@ mod tests {
 
         // list_backups should now surface the pre-patch snapshot.
         let backups = patcher.list_backups().unwrap();
-        assert_eq!(backups.len(), 1, "the apply() should have left one snapshot");
+        assert_eq!(
+            backups.len(),
+            1,
+            "the apply() should have left one snapshot"
+        );
 
         // Roll back to the latest snapshot (the pre-patch original).
         let result = patcher.rollback(None, false).await.unwrap();

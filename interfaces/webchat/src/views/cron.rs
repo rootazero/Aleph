@@ -6,7 +6,7 @@
 //! - View execution history for each job
 //! - Trigger immediate runs
 
-use crate::api::agents::{AgentsApi, AgentSummary};
+use crate::api::agents::{AgentSummary, AgentsApi};
 use crate::api::cron::{CreateCronJob, CronApi, CronJobInfo, JobRunInfo, UpdateCronJob};
 use crate::context::DashboardState;
 use crate::i18n::*;
@@ -292,7 +292,10 @@ fn parse_interval_to_ms(s: &str) -> Option<u64> {
 /// Returns the id to render as a "(deleted)" placeholder option when the job's
 /// currently-bound agent is no longer in the available list. `None` when the
 /// current id is empty or still present.
-fn stale_agent_option(current: &str, available: &[crate::api::agents::AgentSummary]) -> Option<String> {
+fn stale_agent_option(
+    current: &str,
+    available: &[crate::api::agents::AgentSummary],
+) -> Option<String> {
     if current.is_empty() || available.iter().any(|a| a.id == current) {
         None
     } else {

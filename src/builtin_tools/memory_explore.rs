@@ -201,7 +201,8 @@ impl MemoryExploreTool {
             .map_err(|e| ToolError::Execution(format!("Ripple explore failed: {}", e)))?;
 
         // Step 5: Convert expanded facts to output format
-        let mut expanded_output: Vec<ExploredFact> = Vec::with_capacity(result.expanded_facts.len());
+        let mut expanded_output: Vec<ExploredFact> =
+            Vec::with_capacity(result.expanded_facts.len());
         for f in &result.expanded_facts {
             let relations = self.edge_labels(&f.id).await;
             expanded_output.push(ExploredFact {
@@ -241,8 +242,15 @@ impl MemoryExploreTool {
     /// Look up typed outgoing edges for a note path and format them as
     /// "type→to_note" labels. Best-effort: a lookup error yields no labels.
     async fn edge_labels(&self, note_path: &str) -> Vec<String> {
-        match self.database.get_typed_relations(note_path, &self.agent_id).await {
-            Ok(edges) => edges.into_iter().map(|(to, ty)| format!("{ty}→{to}")).collect(),
+        match self
+            .database
+            .get_typed_relations(note_path, &self.agent_id)
+            .await
+        {
+            Ok(edges) => edges
+                .into_iter()
+                .map(|(to, ty)| format!("{ty}→{to}"))
+                .collect(),
             Err(e) => {
                 debug!(note_path = %note_path, error = %e, "edge_labels lookup failed");
                 Vec::new()

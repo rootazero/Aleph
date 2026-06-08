@@ -643,7 +643,10 @@ impl AlephTool for SelfConfigTool {
             SelfConfigArgs::ListBackups => notify_tool_start(Self::NAME, "list_backups"),
             SelfConfigArgs::RollbackConfig { timestamp, .. } => notify_tool_start(
                 Self::NAME,
-                &format!("rollback_config:{}", timestamp.as_deref().unwrap_or("latest")),
+                &format!(
+                    "rollback_config:{}",
+                    timestamp.as_deref().unwrap_or("latest")
+                ),
             ),
         }
 

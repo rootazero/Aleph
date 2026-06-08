@@ -859,8 +859,8 @@ impl DashboardState {
         }
 
         let state = *self;
-        let subscription_id = self.subscribe_events(move |event: GatewayEvent| {
-            match event.topic.as_str() {
+        let subscription_id =
+            self.subscribe_events(move |event: GatewayEvent| match event.topic.as_str() {
                 "approval.requested" | "approval.resolved" | "approval.expired" => {
                     spawn_local(async move {
                         if let Ok(list) = ExecApprovalApi::list_pending(&state).await {
@@ -869,8 +869,7 @@ impl DashboardState {
                     });
                 }
                 _ => {}
-            }
-        });
+            });
 
         self.approval_subscription_id
             .set_value(Some(subscription_id));

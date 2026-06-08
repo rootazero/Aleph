@@ -168,7 +168,11 @@ impl MemoryExtension for McpMemoryExtension {
             "reset": ctx.reset(),
         });
         // Acknowledge errors but don't try to parse — this is notify-only.
-        let _ = self.caller.load().call("memory.on_session_switch", args).await?;
+        let _ = self
+            .caller
+            .load()
+            .call("memory.on_session_switch", args)
+            .await?;
         Ok(())
     }
 
@@ -180,7 +184,11 @@ impl MemoryExtension for McpMemoryExtension {
             "oldest_at": ctx.oldest_at,
             "newest_at": ctx.newest_at,
         });
-        let resp = self.caller.load().call("memory.on_pre_compress", args).await?;
+        let resp = self
+            .caller
+            .load()
+            .call("memory.on_pre_compress", args)
+            .await?;
         // Response shape: { "text": "..." } — optional. Empty string ≡ no contribution.
         Ok(resp
             .get("text")
@@ -197,7 +205,11 @@ impl MemoryExtension for McpMemoryExtension {
             "task": ctx.task,
             "result_summary": ctx.result_summary,
         });
-        let _ = self.caller.load().call("memory.on_delegation", args).await?;
+        let _ = self
+            .caller
+            .load()
+            .call("memory.on_delegation", args)
+            .await?;
         Ok(())
     }
 }
@@ -253,15 +265,13 @@ impl ManagerBackedMcpCaller {
     /// Map an `McpToolResult` to the inner JSON the hook adapters expect.
     /// Success → the `content` Value; failure → an error. Extracted so the
     /// mapping is unit-testable without a live handle.
-    pub(crate) fn map_result(
-        res: crate::mcp::types::McpToolResult,
-    ) -> Result<Value, AlephError> {
+    pub(crate) fn map_result(res: crate::mcp::types::McpToolResult) -> Result<Value, AlephError> {
         if res.success {
             Ok(res.content)
         } else {
-            Err(AlephError::other(
-                res.error.unwrap_or_else(|| "mcp memory tool call failed".to_string()),
-            ))
+            Err(AlephError::other(res.error.unwrap_or_else(|| {
+                "mcp memory tool call failed".to_string()
+            })))
         }
     }
 }
@@ -495,7 +505,8 @@ mod tests {
     async fn rebind_swaps_caller_visible_to_hooks() {
         // Starts unbound → on_capture errors. After rebind to a canned caller
         // that allows, on_capture returns Allow. Proves ArcSwap visibility.
-        let ext = McpMemoryExtension::new_unbound("p".to_string(), Some("plugin:p/srv".to_string()));
+        let ext =
+            McpMemoryExtension::new_unbound("p".to_string(), Some("plugin:p/srv".to_string()));
         let ctx = CaptureCtx {
             agent_id: "a".into(),
             namespace: NamespaceScope::Owner,

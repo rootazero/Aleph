@@ -167,4 +167,3 @@ pub fn edit() -> CliResult<()> {
 
     Ok(())
 }
-

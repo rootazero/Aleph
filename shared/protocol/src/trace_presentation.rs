@@ -525,10 +525,7 @@ fn truncate(s: &str, limit: usize) -> String {
     if limit <= 3 {
         return s.chars().take(limit).collect();
     }
-    let boundary = s
-        .char_indices()
-        .nth(limit - 3)
-        .map_or(s.len(), |(i, _)| i);
+    let boundary = s.char_indices().nth(limit - 3).map_or(s.len(), |(i, _)| i);
     format!("{}...", &s[..boundary])
 }
 

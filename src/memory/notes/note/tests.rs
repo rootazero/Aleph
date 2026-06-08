@@ -415,8 +415,16 @@ Related: [[Rust Learning]] [[Dev Environment]]
             title: "alice".to_string(),
             category: "entity".to_string(),
             relations: vec![
-                Relation { to: "entity/acme-corp".to_string(), rel_type: "works_at".to_string(), confidence: 0.9 },
-                Relation { to: "entity/bob".to_string(), rel_type: "colleague".to_string(), confidence: 0.7 },
+                Relation {
+                    to: "entity/acme-corp".to_string(),
+                    rel_type: "works_at".to_string(),
+                    confidence: 0.9,
+                },
+                Relation {
+                    to: "entity/bob".to_string(),
+                    rel_type: "colleague".to_string(),
+                    confidence: 0.7,
+                },
             ],
             ..Default::default()
         };
@@ -451,7 +459,8 @@ Related: [[Rust Learning]] [[Dev Environment]]
 
     #[test]
     fn relation_confidence_defaults_to_one_when_absent() {
-        let md = "---\ncategory: entity\nrelations:\n  - to: entity/bob\n    type: knows\n---\n\n- hi\n";
+        let md =
+            "---\ncategory: entity\nrelations:\n  - to: entity/bob\n    type: knows\n---\n\n- hi\n";
         let parsed = KnowledgeNote::from_markdown("a", md).unwrap();
         assert_eq!(parsed.relations[0].confidence, 1.0);
     }

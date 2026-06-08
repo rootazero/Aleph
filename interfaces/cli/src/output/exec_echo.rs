@@ -140,11 +140,10 @@ pub fn tool_preview(tool_name: &str, input: &Value) -> String {
         "scratchpad" => return scratchpad_preview(input),
         _ => {
             // Generic: first string-valued field, else compact JSON.
-            if let Some(first) = input.as_object().and_then(|o| {
-                o.values()
-                    .find_map(Value::as_str)
-                    .filter(|v| !v.is_empty())
-            }) {
+            if let Some(first) = input
+                .as_object()
+                .and_then(|o| o.values().find_map(Value::as_str).filter(|v| !v.is_empty()))
+            {
                 first
             } else {
                 return truncate(&compact_json(input), PREVIEW_MAX);
@@ -193,7 +192,11 @@ fn scratchpad_preview(input: &Value) -> String {
 pub fn render_tool_start(tool_name: &str, input: &Value) -> String {
     let arrow = if use_unicode() { "▸" } else { ">" };
     let preview = tool_preview(tool_name, input);
-    let head = format!("{arrow} {} {}", tool_icon(tool_name), paint(Style::Bold, tool_name));
+    let head = format!(
+        "{arrow} {} {}",
+        tool_icon(tool_name),
+        paint(Style::Bold, tool_name)
+    );
     if preview.is_empty() {
         head
     } else {
@@ -214,7 +217,10 @@ pub fn render_tool_end(
     match result {
         AgentTraceToolResult::Error { error, .. } => {
             let mark = paint(Style::Error, mark_fail());
-            let msg = paint(Style::Error, &truncate(&error.replace('\n', " "), ERROR_MAX));
+            let msg = paint(
+                Style::Error,
+                &truncate(&error.replace('\n', " "), ERROR_MAX),
+            );
             Some(format!("  {mark} {msg}  {dur}"))
         }
         AgentTraceToolResult::Success { output } => {
@@ -288,7 +294,10 @@ pub fn render_tool_summary(summary: &str) -> Option<String> {
         return None;
     }
     let info = paint(Style::Info, super::icon::info());
-    Some(format!("  {info} {}", paint(Style::Muted, &truncate(txt, RESULT_MAX))))
+    Some(format!(
+        "  {info} {}",
+        paint(Style::Muted, &truncate(txt, RESULT_MAX))
+    ))
 }
 
 /// Closing footer rendered from the run summary — the "execution receipt".
@@ -562,11 +571,17 @@ mod tests {
     #[test]
     fn scratchpad_preview_is_action_aware() {
         assert_eq!(
-            tool_preview("scratchpad", &json!({"action": "set_plan", "items": ["a", "b", "c"]})),
+            tool_preview(
+                "scratchpad",
+                &json!({"action": "set_plan", "items": ["a", "b", "c"]})
+            ),
             "set_plan · 3 step(s)"
         );
         assert_eq!(
-            tool_preview("scratchpad", &json!({"action": "complete_item", "item_index": 2})),
+            tool_preview(
+                "scratchpad",
+                &json!({"action": "complete_item", "item_index": 2})
+            ),
             "complete_item #2"
         );
     }
@@ -664,14 +679,20 @@ mod tests {
             resolve_final_text("streamed answer", Some("summary answer")),
             "streamed answer"
         );
-        assert_eq!(resolve_final_text("streamed answer", None), "streamed answer");
+        assert_eq!(
+            resolve_final_text("streamed answer", None),
+            "streamed answer"
+        );
     }
 
     #[test]
     fn final_text_falls_back_when_stream_empty() {
         // The black-hole case: nothing streamed, but the summary carries the
         // authoritative final answer.
-        assert_eq!(resolve_final_text("", Some("summary answer")), "summary answer");
+        assert_eq!(
+            resolve_final_text("", Some("summary answer")),
+            "summary answer"
+        );
         assert_eq!(
             resolve_final_text("   \n ", Some("summary answer")),
             "summary answer"

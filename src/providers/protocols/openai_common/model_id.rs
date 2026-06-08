@@ -84,7 +84,11 @@ mod tests {
     // Typo repairs are endpoint-independent — assert on both host classes.
     #[test]
     fn rewrites_no_dash_variants() {
-        for base in [None, Some("https://api.openai.com/v1"), Some("https://openrouter.ai/api")] {
+        for base in [
+            None,
+            Some("https://api.openai.com/v1"),
+            Some("https://openrouter.ai/api"),
+        ] {
             assert_eq!(normalize_openai_model_id("gpt4o", base), "gpt-4o");
             assert_eq!(normalize_openai_model_id("gpt4omini", base), "gpt-4o-mini");
             assert_eq!(normalize_openai_model_id("o3mini", base), "o3-mini");
@@ -101,10 +105,7 @@ mod tests {
         );
         // Azure OpenAI is also first-party.
         assert_eq!(
-            normalize_openai_model_id(
-                "openai/gpt-4o",
-                Some("https://my-rsc.openai.azure.com")
-            ),
+            normalize_openai_model_id("openai/gpt-4o", Some("https://my-rsc.openai.azure.com")),
             "gpt-4o"
         );
     }

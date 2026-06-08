@@ -469,7 +469,10 @@ mod tests {
         // the hot-floating loop: a recorded recall becomes a non-zero hit count.
         let (retrieval, _dir) = create_retrieval().await;
         let store = retrieval.indexer.store();
-        let hits = vec![("notes/a.md".to_string(), 0.9_f32), ("notes/b.md".to_string(), 0.7)];
+        let hits = vec![
+            ("notes/a.md".to_string(), 0.9_f32),
+            ("notes/b.md".to_string(), 0.7),
+        ];
 
         let inserted = store
             .record_recall_hits("hello world", AUTO_RECALL_CHANNEL, &hits, "default")
@@ -510,11 +513,8 @@ mod tests {
         retrieval.record_recall("q", "default", &[]).await;
 
         // Reinforcement disabled → recording is skipped even with surfaced notes.
-        let off = NoteFactRetrieval::new(
-            retrieval.indexer.clone(),
-            retrieval.embedder.clone(),
-        )
-        .with_scoring_config(&inactive_scoring());
+        let off = NoteFactRetrieval::new(retrieval.indexer.clone(), retrieval.embedder.clone())
+            .with_scoring_config(&inactive_scoring());
         off.record_recall("q", "default", &[scored("notes/x.md", "x", 0.9)])
             .await;
 
@@ -524,7 +524,10 @@ mod tests {
             .recall_hit_counts(&["notes/x.md".to_string()])
             .await
             .unwrap();
-        assert!(counts.is_empty(), "disabled reinforcement must not record signals");
+        assert!(
+            counts.is_empty(),
+            "disabled reinforcement must not record signals"
+        );
     }
 
     #[tokio::test]

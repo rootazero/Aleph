@@ -141,8 +141,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             executor.execute_observers(HookEvent::AgentEnd, &ctx).await;
             // Only the success path carries a final text to transform.
             if let Ok(ref mut text) = result {
-                if let Ok((_ctx, hr)) =
-                    executor.execute_interceptors(HookEvent::AgentEnd, ctx).await
+                if let Ok((_ctx, hr)) = executor
+                    .execute_interceptors(HookEvent::AgentEnd, ctx)
+                    .await
                 {
                     if let Some(new_text) = hr.updated_output {
                         *text = new_text;

@@ -209,7 +209,10 @@ fn build_repair_brief(failing: &[&DoctorCheck]) -> String {
     out.push_str("Failing checks:\n");
     for c in failing {
         let sev = if c.required { "ERROR" } else { "WARN" };
-        out.push_str(&format!("- [{sev}] {}/{}: {}\n", c.category, c.name, c.message));
+        out.push_str(&format!(
+            "- [{sev}] {}/{}: {}\n",
+            c.category, c.name, c.message
+        ));
     }
     out
 }
@@ -635,7 +638,10 @@ fn provider_row_to_check(row: &Value) -> DoctorCheck {
     let row_name = format!("provider:{name}");
     let latency = row.get("latency_ms").and_then(|v| v.as_u64());
     let lat = latency.map(|m| format!(" ({m}ms)")).unwrap_or_default();
-    let skipped = row.get("skipped").and_then(|v| v.as_bool()).unwrap_or(false);
+    let skipped = row
+        .get("skipped")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let ok = row.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     let desc = "LLM provider connectivity";
 
@@ -648,7 +654,13 @@ fn provider_row_to_check(row: &Value) -> DoctorCheck {
             .get("error")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown error");
-        DoctorCheck::fail("runtime", &row_name, desc, false, format!("unreachable: {err}{lat}"))
+        DoctorCheck::fail(
+            "runtime",
+            &row_name,
+            desc,
+            false,
+            format!("unreachable: {err}{lat}"),
+        )
     }
 }
 
@@ -819,7 +831,10 @@ mod tests {
         let row = json!({ "name": "ollama", "enabled": true, "ok": false, "skipped": false, "error": "connection refused", "latency_ms": 30 });
         let check = provider_row_to_check(&row);
         assert!(!check.passed);
-        assert!(!check.required, "provider connectivity is a warning, not fatal");
+        assert!(
+            !check.required,
+            "provider connectivity is a warning, not fatal"
+        );
         assert!(check.message.contains("unreachable"));
         assert!(check.message.contains("connection refused"));
     }
@@ -836,8 +851,13 @@ mod tests {
     fn repair_brief_lists_failing_checks_with_severity() {
         let required =
             DoctorCheck::fail("config", "config.toml", "Aleph config", true, "parse error");
-        let optional =
-            DoctorCheck::fail("runtime", "vault", "Secret vault", false, "vault.status failed");
+        let optional = DoctorCheck::fail(
+            "runtime",
+            "vault",
+            "Secret vault",
+            false,
+            "vault.status failed",
+        );
         let failing = vec![&required, &optional];
 
         let brief = build_repair_brief(&failing);

@@ -136,10 +136,7 @@ impl AlephClient {
         // Truncate on a UTF-8 char boundary — a byte slice (`&text[..n]`) panics
         // when byte `n` lands inside a multi-byte char (common with CJK/emoji),
         // which would kill the read loop and silently hang every pending request.
-        let preview_end = text
-            .char_indices()
-            .nth(500)
-            .map_or(text.len(), |(i, _)| i);
+        let preview_end = text.char_indices().nth(500).map_or(text.len(), |(i, _)| i);
         debug!("Received raw message: {}", &text[..preview_end]);
 
         // Try to parse as response first (response to our request)

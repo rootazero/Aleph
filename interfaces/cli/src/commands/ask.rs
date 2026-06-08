@@ -90,7 +90,10 @@ pub async fn run(
                 match event {
                     AgentTraceEvent::ToolCallStarted { call, .. } => {
                         tool_count += 1;
-                        eprintln!("{}", exec_echo::render_tool_start(&call.tool_name, &call.input));
+                        eprintln!(
+                            "{}",
+                            exec_echo::render_tool_start(&call.tool_name, &call.input)
+                        );
                     }
                     AgentTraceEvent::ToolCallCompleted { call, result, .. } => {
                         if let Some(line) = exec_echo::render_tool_end(
@@ -154,11 +157,12 @@ pub async fn run(
                 }
             }
             StreamEvent::ReasoningBlock { content, .. }
-                if verbose && !agent_trace_seen && !json => {
-                    if let Some(line) = exec_echo::render_reasoning(&content) {
-                        eprintln!("{line}");
-                    }
+                if verbose && !agent_trace_seen && !json =>
+            {
+                if let Some(line) = exec_echo::render_reasoning(&content) {
+                    eprintln!("{line}");
                 }
+            }
             _ => {}
         }
     }
@@ -167,7 +171,8 @@ pub async fn run(
     // `final_response`. Streamed text wins when present (already shown inline);
     // otherwise fall back to the summary so a reasoning/tool-only run still
     // prints a body and writes a non-empty `-o` file instead of a black hole.
-    let final_text = exec_echo::resolve_final_text(&response_text, final_response_fallback.as_deref());
+    let final_text =
+        exec_echo::resolve_final_text(&response_text, final_response_fallback.as_deref());
 
     // Suppress human output when --json is active so the JSONL stream stays
     // machine-parseable on stdout. Render Markdown to ANSI for the human path;
@@ -294,9 +299,6 @@ mod tests {
 
     #[test]
     fn whitespace_is_trimmed() {
-        assert_eq!(
-            merge_prompt(Some("  hi  "), None).as_deref(),
-            Some("hi")
-        );
+        assert_eq!(merge_prompt(Some("  hi  "), None).as_deref(), Some("hi"));
     }
 }

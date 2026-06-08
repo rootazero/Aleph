@@ -28,9 +28,7 @@ struct PendingRecord {
 
 impl ExecApprovalApi {
     /// List pending operator approvals (the source of truth for the cards).
-    pub async fn list_pending(
-        state: &DashboardState,
-    ) -> Result<Vec<PendingApprovalView>, String> {
+    pub async fn list_pending(state: &DashboardState) -> Result<Vec<PendingApprovalView>, String> {
         let result = state
             .rpc_call("exec.approvals.pending", serde_json::Value::Null)
             .await?;
@@ -50,11 +48,7 @@ impl ExecApprovalApi {
 
     /// Resolve a pending approval. `decision` is the kebab-case wire value:
     /// "allow-once" | "allow-session" | "deny".
-    pub async fn resolve(
-        state: &DashboardState,
-        id: String,
-        decision: &str,
-    ) -> Result<(), String> {
+    pub async fn resolve(state: &DashboardState, id: String, decision: &str) -> Result<(), String> {
         let params = serde_json::json!({
             "id": id,
             "decision": decision,

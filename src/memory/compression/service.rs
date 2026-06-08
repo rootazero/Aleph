@@ -595,7 +595,11 @@ impl CompressionService {
                 }
             });
         } else if threshold_crossed {
-            tracing::info!(turns, threshold, "Turn threshold reached, triggering compression");
+            tracing::info!(
+                turns,
+                threshold,
+                "Turn threshold reached, triggering compression"
+            );
             let service = Arc::clone(self);
             tokio::spawn(async move {
                 match service.check_and_compress().await {
@@ -865,10 +869,7 @@ mod tests {
             fn name(&self) -> &str {
                 "test.contrib"
             }
-            async fn on_pre_compress(
-                &self,
-                _ctx: &PreCompressCtx,
-            ) -> Result<String, AlephError> {
+            async fn on_pre_compress(&self, _ctx: &PreCompressCtx) -> Result<String, AlephError> {
                 Ok("CONTRIB".to_string())
             }
         }

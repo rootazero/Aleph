@@ -52,8 +52,14 @@ mod tests {
 
     #[test]
     fn parses_known_kinds_case_insensitively() {
-        assert_eq!(SurfaceKind::from_opt_str(Some("desktop")), SurfaceKind::Desktop);
-        assert_eq!(SurfaceKind::from_opt_str(Some("  Browser ")), SurfaceKind::Browser);
+        assert_eq!(
+            SurfaceKind::from_opt_str(Some("desktop")),
+            SurfaceKind::Desktop
+        );
+        assert_eq!(
+            SurfaceKind::from_opt_str(Some("  Browser ")),
+            SurfaceKind::Browser
+        );
         assert_eq!(SurfaceKind::from_opt_str(Some("CLI")), SurfaceKind::Cli);
     }
 
@@ -61,12 +67,20 @@ mod tests {
     fn unknown_and_absent_map_to_unknown() {
         assert_eq!(SurfaceKind::from_opt_str(None), SurfaceKind::Unknown);
         assert_eq!(SurfaceKind::from_opt_str(Some("")), SurfaceKind::Unknown);
-        assert_eq!(SurfaceKind::from_opt_str(Some("telegram")), SurfaceKind::Unknown);
+        assert_eq!(
+            SurfaceKind::from_opt_str(Some("telegram")),
+            SurfaceKind::Unknown
+        );
     }
 
     #[test]
     fn as_str_round_trips() {
-        for k in [SurfaceKind::Desktop, SurfaceKind::Browser, SurfaceKind::Cli, SurfaceKind::Unknown] {
+        for k in [
+            SurfaceKind::Desktop,
+            SurfaceKind::Browser,
+            SurfaceKind::Cli,
+            SurfaceKind::Unknown,
+        ] {
             assert_eq!(SurfaceKind::from_opt_str(Some(k.as_str())), k);
         }
     }

@@ -298,9 +298,8 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
         // Tier source (SSOT): auth-not-required is a local-only mode →
         // operator. Byte-equivalent to the previous hardcoded
         // `vec!["*"]` / `"operator"`.
-        let kind = crate::gateway::surface::SurfaceKind::from_opt_str(
-            params.channel_kind.as_deref(),
-        );
+        let kind =
+            crate::gateway::surface::SurfaceKind::from_opt_str(params.channel_kind.as_deref());
         let perms = super::tier::default_tier(kind, true).permissions();
         let role = super::tier::role_for_permissions(&perms).to_string();
 
@@ -328,21 +327,21 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             );
         }
 
-        let signed_token = match ctx.token_manager.issue_token(
-            &device_id,
-            DeviceRole::Operator,
-            perms.clone(),
-        ) {
-            Ok(t) => t,
-            Err(e) => {
-                warn!(error = %e, "Failed to issue token");
-                return JsonRpcResponse::error(
-                    request.id,
-                    -32603,
-                    format!("Failed to issue token: {}", e),
-                );
-            }
-        };
+        let signed_token =
+            match ctx
+                .token_manager
+                .issue_token(&device_id, DeviceRole::Operator, perms.clone())
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = %e, "Failed to issue token");
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32603,
+                        format!("Failed to issue token: {}", e),
+                    );
+                }
+            };
 
         info!(device_id = %device_id, "Connection accepted (auth not required)");
 
@@ -670,7 +669,10 @@ mod tests {
         assert!(result.get("token").is_some());
         assert!(result.get("device_id").is_some());
         // Equivalence guard: no-auth (local-only) mode must always yield operator/["*"].
-        assert_eq!(result.get("role").and_then(|v| v.as_str()), Some("operator"));
+        assert_eq!(
+            result.get("role").and_then(|v| v.as_str()),
+            Some("operator")
+        );
         assert_eq!(
             result
                 .get("permissions")
@@ -804,7 +806,10 @@ mod tests {
         assert!(result.get("token").is_some());
         assert!(result.get("device_id").is_some());
         // Equivalence guard: shared-token (loopback bootstrap) must always yield operator/["*"].
-        assert_eq!(result.get("role").and_then(|v| v.as_str()), Some("operator"));
+        assert_eq!(
+            result.get("role").and_then(|v| v.as_str()),
+            Some("operator")
+        );
         assert_eq!(
             result
                 .get("permissions")
@@ -1046,8 +1051,7 @@ mod tests {
             "/tmp/aleph_test_node_role.vault",
         ));
         let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
-        let guest_session_manager =
-            Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let guest_session_manager = Arc::new(crate::gateway::security::GuestSessionManager::new());
         let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
 
         let ctx = Arc::new(AuthContext {

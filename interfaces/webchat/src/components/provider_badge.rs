@@ -54,7 +54,10 @@ mod tests {
 
     #[test]
     fn default_and_verified_coexist() {
-        let s = BadgeState { is_default: true, verified: true };
+        let s = BadgeState {
+            is_default: true,
+            verified: true,
+        };
         assert!(s.any());
         assert!(s.is_default);
         assert!(s.verified);
@@ -62,7 +65,15 @@ mod tests {
 
     #[test]
     fn single_badge_is_any() {
-        assert!(BadgeState { is_default: true, verified: false }.any());
-        assert!(BadgeState { is_default: false, verified: true }.any());
+        assert!(BadgeState {
+            is_default: true,
+            verified: false
+        }
+        .any());
+        assert!(BadgeState {
+            is_default: false,
+            verified: true
+        }
+        .any());
     }
 }

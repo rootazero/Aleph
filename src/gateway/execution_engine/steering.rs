@@ -126,9 +126,7 @@ pub(super) fn count_pending_steering(events: &[SessionEventRecord]) -> usize {
     };
     events[last_assistant + 1..]
         .iter()
-        .filter(
-            |r| matches!(&r.event, SessionEvent::UserMessage { synthetic, .. } if !*synthetic),
-        )
+        .filter(|r| matches!(&r.event, SessionEvent::UserMessage { synthetic, .. } if !*synthetic))
         .count()
 }
 

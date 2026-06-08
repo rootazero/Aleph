@@ -28,9 +28,10 @@ pub fn ProviderKeyField(
 
     // SecretInput's placeholder prop is a plain String (non-reactive), so we
     // render one of two SecretInputs reactively based on `has_api_key`.
-    let configured_placeholder = t_string!(i18n, settings.providers.key_configured_hint).to_string();
-    let unset_placeholder = hint
-        .unwrap_or_else(|| t_string!(i18n, settings.providers.key_unset_hint).to_string());
+    let configured_placeholder =
+        t_string!(i18n, settings.providers.key_configured_hint).to_string();
+    let unset_placeholder =
+        hint.unwrap_or_else(|| t_string!(i18n, settings.providers.key_unset_hint).to_string());
 
     view! {
         <div>

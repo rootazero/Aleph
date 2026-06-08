@@ -235,11 +235,32 @@ mod tests {
         let reg = NodeRegistry::new();
         let ch = test_channel();
         let params = json!({"device_name": "worker", "commands": [{"name": "bash", "schema": {}}]});
-        assert!(!maybe_register_node(&reg, Some("operator"), "d1", "c1", Some(&params), &ch));
+        assert!(!maybe_register_node(
+            &reg,
+            Some("operator"),
+            "d1",
+            "c1",
+            Some(&params),
+            &ch
+        ));
         assert!(reg.list_environments().is_empty());
-        assert!(!maybe_register_node(&reg, None, "d0", "c0", Some(&params), &ch));
+        assert!(!maybe_register_node(
+            &reg,
+            None,
+            "d0",
+            "c0",
+            Some(&params),
+            &ch
+        ));
         assert!(reg.list_environments().is_empty());
-        assert!(maybe_register_node(&reg, Some("node"), "d2", "c2", Some(&params), &ch));
+        assert!(maybe_register_node(
+            &reg,
+            Some("node"),
+            "d2",
+            "c2",
+            Some(&params),
+            &ch
+        ));
         let envs = reg.list_environments();
         assert_eq!(envs.len(), 1);
         assert_eq!(envs[0].id, "d2");

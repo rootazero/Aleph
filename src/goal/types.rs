@@ -44,7 +44,10 @@ pub struct Goal {
 
 impl Goal {
     pub fn new(session_id: &str, objective: &str, now_total_tokens: u64, now_ms: u64) -> Self {
-        let id = format!("goal-{:x}", fxhash_str(&format!("{session_id}:{objective}")));
+        let id = format!(
+            "goal-{:x}",
+            fxhash_str(&format!("{session_id}:{objective}"))
+        );
         Self {
             id,
             session_id: session_id.to_string(),
@@ -165,7 +168,11 @@ mod tests {
     fn tokens_used_saturates_on_counter_reset() {
         let g = sample();
         assert_eq!(g.tokens_used(1_750), 750);
-        assert_eq!(g.tokens_used(500), 0, "counter going backwards saturates to 0");
+        assert_eq!(
+            g.tokens_used(500),
+            0,
+            "counter going backwards saturates to 0"
+        );
     }
 
     #[test]

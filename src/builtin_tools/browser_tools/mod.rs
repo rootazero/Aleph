@@ -384,7 +384,10 @@ mod tests {
         // 30 chars lands inside the second line; expect only the first whole line.
         let (out, truncated) = bound_content(snap, 30);
         assert!(truncated);
-        assert!(out.ends_with('\n'), "cut must land on a line boundary: {out:?}");
+        assert!(
+            out.ends_with('\n'),
+            "cut must land on a line boundary: {out:?}"
+        );
         // Every emitted [ref=…] token is whole (balanced bracket).
         assert_eq!(out.matches("[ref=").count(), out.matches(']').count());
         // The ref count of the EMITTED text is what callers report to the model.

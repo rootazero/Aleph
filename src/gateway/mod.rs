@@ -46,9 +46,9 @@ pub mod router;
 pub mod runtime_footer;
 pub mod security;
 pub mod server;
-pub mod surface;
 pub mod session;
 pub mod shutdown_forensics;
+pub mod surface;
 pub mod tool_display;
 
 // ControlPlane: Embedded web UI

@@ -222,7 +222,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             ))),
         }
     }
-
 }
 
 /// Build tool arguments from slash command args, mapping to the correct field

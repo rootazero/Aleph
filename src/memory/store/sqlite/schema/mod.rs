@@ -139,4 +139,6 @@ pub fn init_notes_vec_tables(conn: &Connection) -> Result<(), AlephError> {
 
 #[cfg(test)]
 pub(crate) use migrations::migrate_unify_default_to_main_agent;
-pub use migrations::{drop_obsolete_facts_tables, migrate_notes_links_relation, migrate_notes_links_to_raw};
+pub use migrations::{
+    drop_obsolete_facts_tables, migrate_notes_links_relation, migrate_notes_links_to_raw,
+};

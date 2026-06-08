@@ -244,14 +244,26 @@ mod route_serde_tests {
 
     #[test]
     fn rate_limit_omits_none_dims_on_wire() {
-        let rl = RateLimit { rpm: Some(60), tpm: None };
-        assert_eq!(serde_json::to_value(&rl).unwrap(), serde_json::json!({ "rpm": 60 }));
+        let rl = RateLimit {
+            rpm: Some(60),
+            tpm: None,
+        };
+        assert_eq!(
+            serde_json::to_value(&rl).unwrap(),
+            serde_json::json!({ "rpm": 60 })
+        );
     }
 
     #[test]
     fn update_round_trips_strategy_and_limits() {
         let mut rate_limits = BTreeMap::new();
-        rate_limits.insert("anthropic".to_string(), RateLimit { rpm: Some(60), tpm: Some(90_000) });
+        rate_limits.insert(
+            "anthropic".to_string(),
+            RateLimit {
+                rpm: Some(60),
+                tpm: Some(90_000),
+            },
+        );
         let u = RouteConfigUpdate {
             mode: "auto".into(),
             allow_cloud_escalation: false,

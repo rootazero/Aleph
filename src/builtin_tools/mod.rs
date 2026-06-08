@@ -52,6 +52,7 @@ pub mod file_ops;
 pub mod flag_user_correction;
 pub mod gateway_route;
 pub mod generation;
+pub mod goal;
 pub mod google_meet;
 pub mod heartbeat_manage;
 pub mod invalid;
@@ -76,7 +77,6 @@ pub mod process_registry;
 pub mod recall_context;
 pub mod recall_events;
 pub mod remember;
-pub mod goal;
 pub mod scratchpad;
 pub mod scratchpad_registry;
 pub mod search;
@@ -155,6 +155,7 @@ pub use gateway_route::{GatewayRouteArgs, GatewayRouteOutput, GatewayRouteTool};
 pub use generation::{
     ImageGenerateArgs, ImageGenerateTool, SpeechGenerateArgs, SpeechGenerateTool,
 };
+pub use goal::{GoalAction, GoalArgs, GoalOutput, GoalTool};
 pub use google_meet::{
     GoogleMeetAction, GoogleMeetArgs, GoogleMeetBridge, GoogleMeetMode, GoogleMeetOutput,
     GoogleMeetTool, GoogleMeetTransport,
@@ -190,7 +191,6 @@ pub use pim::{PimArgs, PimOutput, PimTool};
 pub use recall_context::{RecallContextArgs, RecallContextResult, RecallContextTool};
 pub use recall_events::{RecallEventsArgs, RecallEventsOutput, RecallEventsTool};
 pub use remember::{RememberArgs, RememberOutput, RememberTool};
-pub use goal::{GoalAction, GoalArgs, GoalOutput, GoalTool};
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
 pub use search::{SearchArgs, SearchTool};
 pub use select_model::{SelectModelArgs, SelectModelOutput, SelectModelTool};

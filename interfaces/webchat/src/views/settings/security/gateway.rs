@@ -154,9 +154,7 @@ pub(super) fn PairedDevices(
                     }
                 }
                 Err(e) => {
-                    web_sys::console::error_1(
-                        &format!("Failed to set device level: {}", e).into(),
-                    );
+                    web_sys::console::error_1(&format!("Failed to set device level: {}", e).into());
                 }
             }
         });

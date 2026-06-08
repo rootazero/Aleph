@@ -166,12 +166,15 @@ impl ConfigBackup {
         let entries = self.list()?;
         match timestamp {
             // `list()` is sorted ascending; an explicit timestamp matches exactly.
-            Some(ts) => entries.into_iter().find(|e| e.timestamp == ts).ok_or_else(|| {
-                AlephError::invalid_config(format!(
-                    "No config backup found with timestamp '{}'",
-                    ts
-                ))
-            }),
+            Some(ts) => entries
+                .into_iter()
+                .find(|e| e.timestamp == ts)
+                .ok_or_else(|| {
+                    AlephError::invalid_config(format!(
+                        "No config backup found with timestamp '{}'",
+                        ts
+                    ))
+                }),
             // Newest snapshot is last in the ascending list.
             None => entries.into_iter().next_back().ok_or_else(|| {
                 AlephError::invalid_config(

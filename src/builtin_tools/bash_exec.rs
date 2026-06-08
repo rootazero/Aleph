@@ -619,10 +619,7 @@ mod tests {
                 let id = v["process_id"].as_u64().expect("process_id");
                 // Poll until the detached task has invoked the sandbox + finished.
                 for _ in 0..200 {
-                    let polled = tool
-                        .call(args_action("poll", Some(id)))
-                        .await
-                        .unwrap();
+                    let polled = tool.call(args_action("poll", Some(id))).await.unwrap();
                     if !polled.stdout.contains("\"status\":\"running\"") {
                         break;
                     }
@@ -642,7 +639,9 @@ mod tests {
         let t = background_sandbox_timeout(None).await;
         assert_eq!(
             t,
-            Some(std::time::Duration::from_secs(BACKGROUND_DEFAULT_TIMEOUT_SECS)),
+            Some(std::time::Duration::from_secs(
+                BACKGROUND_DEFAULT_TIMEOUT_SECS
+            )),
             "background default should be the generous ceiling, not 60s"
         );
     }

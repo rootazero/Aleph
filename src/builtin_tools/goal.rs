@@ -62,7 +62,10 @@ pub struct GoalTool {
 
 impl GoalTool {
     pub fn new(store: Arc<GoalStore>) -> Self {
-        Self { store, session_key: None }
+        Self {
+            store,
+            session_key: None,
+        }
     }
 
     pub fn with_session_key_handle(mut self, handle: Option<Arc<RwLock<String>>>) -> Self {
@@ -78,12 +81,17 @@ impl GoalTool {
     }
 
     fn render(goal: &Goal) -> String {
-        let mut s = format!("Standing goal: {}\nstatus={:?}", goal.objective, goal.status);
+        let mut s = format!(
+            "Standing goal: {}\nstatus={:?}",
+            goal.objective, goal.status
+        );
         if let Some(b) = goal.token_budget {
             s.push_str(&format!(", token_budget={b}"));
         }
         if let PursuitMode::Active { max_iterations } = goal.pursuit {
-            s.push_str(&format!(", pursuit=active(max_iterations={max_iterations})"));
+            s.push_str(&format!(
+                ", pursuit=active(max_iterations={max_iterations})"
+            ));
         }
         if let Some(note) = goal.note.as_deref() {
             if !note.is_empty() {
@@ -167,19 +175,26 @@ impl AlephTool for GoalTool {
                     goal = goal.with_pursuit(PursuitMode::Active { max_iterations });
                 }
                 self.store.put(&goal)?;
-                Ok(GoalOutput { success: true, message: format!("Set. {}", Self::render(&goal)) })
+                Ok(GoalOutput {
+                    success: true,
+                    message: format!("Set. {}", Self::render(&goal)),
+                })
             }
             GoalAction::Get => match self.store.get(&session)? {
-                Some(goal) => Ok(GoalOutput { success: true, message: Self::render(&goal) }),
+                Some(goal) => Ok(GoalOutput {
+                    success: true,
+                    message: Self::render(&goal),
+                }),
                 None => Ok(GoalOutput {
                     success: true,
                     message: "No standing goal set for this session.".to_string(),
                 }),
             },
             GoalAction::Update => {
-                let mut goal = self.store.get(&session)?.ok_or_else(|| {
-                    AlephError::tool("no standing goal to update".to_string())
-                })?;
+                let mut goal = self
+                    .store
+                    .get(&session)?
+                    .ok_or_else(|| AlephError::tool("no standing goal to update".to_string()))?;
                 if let Some(status) = args.status {
                     goal = goal.with_status(status, now);
                 }
@@ -194,7 +209,10 @@ impl AlephTool for GoalTool {
             }
             GoalAction::Clear => {
                 self.store.delete(&session)?;
-                Ok(GoalOutput { success: true, message: "Standing goal cleared.".to_string() })
+                Ok(GoalOutput {
+                    success: true,
+                    message: "Standing goal cleared.".to_string(),
+                })
             }
         }
     }
@@ -211,7 +229,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(GoalStore::open(&dir.path().join("g.db")).unwrap());
         let handle = Arc::new(RwLock::new(session.to_string()));
-        (GoalTool::new(store).with_session_key_handle(Some(handle)), dir)
+        (
+            GoalTool::new(store).with_session_key_handle(Some(handle)),
+            dir,
+        )
     }
 
     #[tokio::test]
@@ -220,14 +241,25 @@ mod tests {
         tool.call(GoalArgs {
             action: GoalAction::Set,
             objective: Some("Ship the goal feature".into()),
-            status: None, note: None, token_budget: Some(5000),
+            status: None,
+            note: None,
+            token_budget: Some(5000),
             pursuit_max_iterations: None,
-        }).await.unwrap();
+        })
+        .await
+        .unwrap();
 
-        let out = tool.call(GoalArgs {
-            action: GoalAction::Get, objective: None, status: None, note: None,
-            token_budget: None, pursuit_max_iterations: None,
-        }).await.unwrap();
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Get,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+            })
+            .await
+            .unwrap();
         assert!(out.success);
         assert!(out.message.contains("Ship the goal feature"));
     }
@@ -235,12 +267,27 @@ mod tests {
     #[tokio::test]
     async fn update_complete_marks_status() {
         let (tool, _d) = tool_with_session("sess-B");
-        tool.call(GoalArgs { action: GoalAction::Set, objective: Some("x".into()),
-            status: None, note: None, token_budget: None, pursuit_max_iterations: None })
-            .await.unwrap();
-        let out = tool.call(GoalArgs { action: GoalAction::Update, objective: None,
-            status: Some(GoalStatus::Complete), note: Some("done".into()),
-            token_budget: None, pursuit_max_iterations: None }).await.unwrap();
+        tool.call(GoalArgs {
+            action: GoalAction::Set,
+            objective: Some("x".into()),
+            status: None,
+            note: None,
+            token_budget: None,
+            pursuit_max_iterations: None,
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Update,
+                objective: None,
+                status: Some(GoalStatus::Complete),
+                note: Some("done".into()),
+                token_budget: None,
+                pursuit_max_iterations: None,
+            })
+            .await
+            .unwrap();
         assert!(out.success);
         assert!(out.message.to_lowercase().contains("complete"));
     }
@@ -248,22 +295,47 @@ mod tests {
     #[tokio::test]
     async fn pursuit_iterations_are_capped() {
         let (tool, _d) = tool_with_session("sess-cap");
-        tool.call(GoalArgs { action: GoalAction::Set, objective: Some("z".into()),
-            status: None, note: None, token_budget: None,
-            pursuit_max_iterations: Some(1_000_000) }).await.unwrap();
-        let out = tool.call(GoalArgs { action: GoalAction::Get, objective: None,
-            status: None, note: None, token_budget: None, pursuit_max_iterations: None })
-            .await.unwrap();
+        tool.call(GoalArgs {
+            action: GoalAction::Set,
+            objective: Some("z".into()),
+            status: None,
+            note: None,
+            token_budget: None,
+            pursuit_max_iterations: Some(1_000_000),
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Get,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+            })
+            .await
+            .unwrap();
         // Effective cap surfaced to the model, not the requested 1,000,000.
-        assert!(out.message.contains(&format!("max_iterations={MAX_PURSUIT_ITERATIONS}")));
+        assert!(out
+            .message
+            .contains(&format!("max_iterations={MAX_PURSUIT_ITERATIONS}")));
     }
 
     #[tokio::test]
     async fn get_with_no_goal_is_graceful() {
         let (tool, _d) = tool_with_session("sess-empty");
-        let out = tool.call(GoalArgs { action: GoalAction::Get, objective: None,
-            status: None, note: None, token_budget: None, pursuit_max_iterations: None })
-            .await.unwrap();
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Get,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+            })
+            .await
+            .unwrap();
         assert!(out.success);
         assert!(out.message.to_lowercase().contains("no standing goal"));
     }
@@ -271,8 +343,15 @@ mod tests {
     #[tokio::test]
     async fn set_requires_objective() {
         let (tool, _d) = tool_with_session("sess-C");
-        let err = tool.call(GoalArgs { action: GoalAction::Set, objective: None,
-            status: None, note: None, token_budget: None, pursuit_max_iterations: None })
+        let err = tool
+            .call(GoalArgs {
+                action: GoalAction::Set,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+            })
             .await;
         assert!(err.is_err(), "set without objective must error");
     }
@@ -280,14 +359,37 @@ mod tests {
     #[tokio::test]
     async fn clear_removes_goal() {
         let (tool, _d) = tool_with_session("sess-D");
-        tool.call(GoalArgs { action: GoalAction::Set, objective: Some("y".into()),
-            status: None, note: None, token_budget: None, pursuit_max_iterations: None })
-            .await.unwrap();
-        tool.call(GoalArgs { action: GoalAction::Clear, objective: None, status: None,
-            note: None, token_budget: None, pursuit_max_iterations: None }).await.unwrap();
-        let out = tool.call(GoalArgs { action: GoalAction::Get, objective: None,
-            status: None, note: None, token_budget: None, pursuit_max_iterations: None })
-            .await.unwrap();
+        tool.call(GoalArgs {
+            action: GoalAction::Set,
+            objective: Some("y".into()),
+            status: None,
+            note: None,
+            token_budget: None,
+            pursuit_max_iterations: None,
+        })
+        .await
+        .unwrap();
+        tool.call(GoalArgs {
+            action: GoalAction::Clear,
+            objective: None,
+            status: None,
+            note: None,
+            token_budget: None,
+            pursuit_max_iterations: None,
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Get,
+                objective: None,
+                status: None,
+                note: None,
+                token_budget: None,
+                pursuit_max_iterations: None,
+            })
+            .await
+            .unwrap();
         assert!(out.message.to_lowercase().contains("no standing goal"));
     }
 }
