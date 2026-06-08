@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::sync::RwLock;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -155,7 +156,6 @@ pub fn maybe_register_node(
 }
 
 fn now_unix() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -236,6 +236,8 @@ mod tests {
         let ch = test_channel();
         let params = json!({"device_name": "worker", "commands": [{"name": "bash", "schema": {}}]});
         assert!(!maybe_register_node(&reg, Some("operator"), "d1", "c1", Some(&params), &ch));
+        assert!(reg.list_environments().is_empty());
+        assert!(!maybe_register_node(&reg, None, "d0", "c0", Some(&params), &ch));
         assert!(reg.list_environments().is_empty());
         assert!(maybe_register_node(&reg, Some("node"), "d2", "c2", Some(&params), &ch));
         let envs = reg.list_environments();
