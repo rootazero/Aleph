@@ -1,14 +1,20 @@
-//! One-shot startup refresh of placeholder Agent Cards.
+//! One-shot startup refresh of placeholder Agent Cards, plus an optional
+//! periodic agent health monitor.
 //!
 //! `CardRegistry::load_from_config` seeds config-declared agents with
 //! placeholder cards (no skills/description, `version = "unknown"`). This
 //! module fetches each agent's real Agent Card once at startup and upserts it,
 //! so smart routing and `a2a_agents list` see real skill data.
+//!
+//! The health monitor (opt-in via `a2a.health_check_interval_secs > 0`) keeps
+//! each agent's `health` field current by probing reachability on an interval.
+
+use std::time::Duration;
 
 use crate::sync_primitives::Arc;
 
 use super::card_registry::CardRegistry;
-use crate::a2a::adapter::client::A2AClient;
+use crate::a2a::adapter::client::{A2AClient, A2AClientPool};
 use crate::a2a::port::{AgentHealth, AgentResolver, RegisteredAgent};
 use crate::a2a::sub_agent::A2ASubAgent;
 
@@ -79,6 +85,66 @@ pub fn spawn_card_refresh(registry: Arc<CardRegistry>, sub_agent: Arc<A2ASubAgen
             sub_agent.refresh_agent_names().await;
         }
         tracing::info!(refreshed = n, "A2A startup card refresh complete");
+    });
+}
+
+/// Probe every registered agent once and update its `health` + `last_seen`.
+///
+/// Reuses the connection pool (`get_or_create` warms the client so
+/// `health_check` can reach it) and the registry's `upsert`. The agent's card
+/// is left untouched — only liveness is refreshed. Returns the number of
+/// agents probed.
+pub async fn health_check_pass(registry: &CardRegistry, pool: &A2AClientPool) -> usize {
+    let agents = match registry.list_agents().await {
+        Ok(a) => a,
+        Err(e) => {
+            tracing::warn!(error = %e, "A2A health monitor: failed to list agents");
+            return 0;
+        }
+    };
+
+    let mut probed = 0usize;
+    for agent in agents {
+        // Ensure the client is in the pool so `health_check` can find it; a
+        // construction failure means the endpoint is effectively unreachable.
+        let health = match pool.get_or_create(&agent).await {
+            Ok(_) => pool.health_check(&agent.card.id).await,
+            Err(_) => AgentHealth::Unreachable,
+        };
+        registry
+            .upsert(RegisteredAgent {
+                card: agent.card.clone(),
+                trust_level: agent.trust_level,
+                base_url: agent.base_url.clone(),
+                last_seen: chrono::Utc::now(),
+                health,
+                auth_token: agent.auth_token.clone(),
+            })
+            .await;
+        probed += 1;
+    }
+    probed
+}
+
+/// Spawn the periodic agent health monitor.
+///
+/// Probes all registered agents every `interval` and updates their health.
+/// The caller is responsible for only invoking this when the configured
+/// interval is non-zero. Runs until the process exits.
+pub fn spawn_health_monitor(
+    registry: Arc<CardRegistry>,
+    pool: Arc<A2AClientPool>,
+    interval: Duration,
+) {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(interval);
+        // Skip the immediate first tick — startup card refresh already probed.
+        ticker.tick().await;
+        loop {
+            ticker.tick().await;
+            let n = health_check_pass(&registry, &pool).await;
+            tracing::debug!(probed = n, "A2A agent health monitor pass complete");
+        }
     });
 }
 
@@ -164,5 +230,57 @@ mod tests {
         assert_eq!(agents.len(), 1);
         assert_eq!(agents[0].card.version, "2.3.1");
         assert_eq!(agents[0].card.description.as_deref(), Some("Real card"));
+    }
+
+    #[tokio::test]
+    async fn health_pass_marks_reachable_agent_healthy() {
+        let server = MockServer::start().await;
+        let card = AgentCard {
+            id: "live-helper".to_string(),
+            name: "Helper".to_string(),
+            version: "1.0.0".to_string(),
+            description: None,
+            provider: None,
+            documentation_url: None,
+            interfaces: vec![],
+            skills: vec![],
+            security: vec![],
+            extensions: vec![],
+            default_input_modes: vec!["text".to_string()],
+            default_output_modes: vec!["text".to_string()],
+        };
+        Mock::given(method("GET"))
+            .and(path("/.well-known/agent-card.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&card))
+            .mount(&server)
+            .await;
+
+        let registry = CardRegistry::new();
+        registry
+            .load_from_config(&config_with_agent("Helper", &server.uri()))
+            .await;
+        let pool = A2AClientPool::new();
+
+        assert_eq!(health_check_pass(&registry, &pool).await, 1);
+
+        let agents = registry.list_agents().await.unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].health, AgentHealth::Healthy);
+    }
+
+    #[tokio::test]
+    async fn health_pass_marks_unreachable_agent_unreachable() {
+        let registry = CardRegistry::new();
+        // 127.0.0.1:1 — nothing listens there.
+        registry
+            .load_from_config(&config_with_agent("Ghost", "http://127.0.0.1:1"))
+            .await;
+        let pool = A2AClientPool::new();
+
+        assert_eq!(health_check_pass(&registry, &pool).await, 1);
+
+        let agents = registry.list_agents().await.unwrap();
+        assert_eq!(agents.len(), 1);
+        assert_eq!(agents[0].health, AgentHealth::Unreachable);
     }
 }

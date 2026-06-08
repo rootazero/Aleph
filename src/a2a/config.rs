@@ -20,6 +20,12 @@ pub struct A2AConfig {
     /// Pre-registered remote A2A agents
     #[serde(default)]
     pub agents: Vec<A2AAgentEntry>,
+
+    /// Interval (seconds) for the background agent health monitor that
+    /// periodically probes registered agents and updates their reachability.
+    /// `0` (default) disables the monitor.
+    #[serde(default)]
+    pub health_check_interval_secs: u64,
 }
 
 /// A2A server endpoint configuration
