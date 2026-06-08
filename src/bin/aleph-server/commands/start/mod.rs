@@ -52,13 +52,14 @@ use runtime_warmup::runtime_startup_warmup;
 fn build_task_delivery_engine(
     channel_cell: alephcore::tasks::shared::targets::ChannelRegistryCell,
     memory_store: Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>,
+    ssrf_policy: alephcore::security::ssrf::SsrfPolicy,
 ) -> Arc<alephcore::tasks::shared::delivery::DeliveryEngine> {
     use alephcore::tasks::shared::delivery::DeliveryEngine;
     use alephcore::tasks::shared::targets::{GatewayDeliveryTarget, MemoryDeliveryTarget};
 
     let mut engine = DeliveryEngine::new();
     engine.register(Arc::new(
-        alephcore::tasks::cron::webhook_target::WebhookTarget::new(),
+        alephcore::tasks::cron::webhook_target::WebhookTarget::new(ssrf_policy),
     ));
     engine.register(Arc::new(GatewayDeliveryTarget::new(channel_cell)));
     engine.register(Arc::new(MemoryDeliveryTarget::new(memory_store)));
@@ -609,6 +610,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         r.set_session_store(session_store.clone());
         Arc::new(r)
     };
+
+    // Capture the SSRF policy before the config is moved into the Arc, so the
+    // task delivery engine's webhook target can honor the user's `[ssrf]` config
+    // (mirrors how WebFetch is wired) instead of hardcoded defaults.
+    let webhook_ssrf_policy = loaded_app_config.ssrf.clone();
 
     // Wrap app config in Arc<RwLock> early so agent handlers can read output_mode dynamically
     let app_config = Arc::new(tokio::sync::RwLock::new(loaded_app_config));
@@ -1613,8 +1619,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Route cron failure alerts through the shared delivery engine so
             // Webhook / Memory alert targets work (not just Gateway). Same
             // engine wiring the heartbeat loop uses below.
-            let cron_delivery_engine =
-                build_task_delivery_engine(cron_channel_cell.clone(), memory_db.clone());
+            let cron_delivery_engine = build_task_delivery_engine(
+                cron_channel_cell.clone(),
+                memory_db.clone(),
+                webhook_ssrf_policy.clone(),
+            );
             let alert_dispatcher_fn =
                 alephcore::tasks::cron::executor::build_cron_alert_dispatcher_fn(
                     cron_delivery_engine,
@@ -1731,7 +1740,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 .channel_registry_cell
                 .clone()
                 .unwrap_or_else(|| Arc::new(tokio::sync::OnceCell::new()));
-            let delivery_engine = build_task_delivery_engine(hb_channel_cell, memory_db.clone());
+            let delivery_engine = build_task_delivery_engine(
+                hb_channel_cell,
+                memory_db.clone(),
+                webhook_ssrf_policy.clone(),
+            );
 
             let tick_ctx = Arc::new(TickContext {
                 probe_executor: Arc::new(DefaultProbeExecutor::new(Arc::clone(tool_reg))),

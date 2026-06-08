@@ -38,19 +38,23 @@ pub struct CustomRiskPattern {
 ///
 /// # Example (aleph.toml)
 ///
+/// This type is the flat `[security]` table on `Config` (`Config.security`),
+/// so the custom-pattern arrays live directly under `[security]` — not under a
+/// nested `[security.shell]` sub-table.
+///
 /// ```toml
-/// [security.shell]
+/// [security]
 /// enable_custom_patterns = true
 ///
-/// [[security.shell.custom_blocked]]
+/// [[security.custom_blocked]]
 /// pattern = "^dangerous_tool\\s+"
 /// reason = "Custom blocked tool"
 ///
-/// [[security.shell.custom_danger]]
+/// [[security.custom_danger]]
 /// pattern = "^custom_admin_cmd\\s+"
 /// reason = "Requires approval"
 ///
-/// [[security.shell.custom_safe]]
+/// [[security.custom_safe]]
 /// pattern = "^my_safe_script\\s+"
 /// reason = "Auto-approved"
 /// ```

@@ -13,17 +13,22 @@ use crate::tasks::shared::delivery::{
     DeliveryError, DeliveryOutcome, DeliveryPayload, DeliveryTarget, DeliveryTargetConfig,
 };
 
-pub struct WebhookTarget;
+pub struct WebhookTarget {
+    /// The user-configured SSRF policy (`[ssrf]`) — the same one the WebFetch
+    /// tool uses — so webhook delivery honors `allowed_hosts` / `enabled` /
+    /// `allow_private_network` instead of silently enforcing hardcoded defaults.
+    policy: SsrfPolicy,
+}
 
 impl Default for WebhookTarget {
     fn default() -> Self {
-        Self::new()
+        Self::new(SsrfPolicy::default())
     }
 }
 
 impl WebhookTarget {
-    pub fn new() -> Self {
-        Self
+    pub fn new(policy: SsrfPolicy) -> Self {
+        Self { policy }
     }
 }
 
@@ -92,7 +97,7 @@ impl DeliveryTarget for WebhookTarget {
             .with_method(http_method)
             .with_headers(header_map);
 
-        match safe_fetch(url, &SsrfPolicy::default(), fetch_request).await {
+        match safe_fetch(url, &self.policy, fetch_request).await {
             Ok(resp) if resp.status.is_success() => Ok(DeliveryOutcome {
                 target_kind: "webhook".to_string(),
                 success: true,
