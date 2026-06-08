@@ -176,6 +176,18 @@ pub enum GatewayEventFrame {
         task_id: String,
         change: ChangeKind,
     },
+    /// Core-decided R5 interrupt addressed to one or more delivery surfaces.
+    /// Unlike the raw agent-lifecycle frames, the "is this worth interrupting
+    /// the user" policy has already been applied by the core R5 router; the
+    /// shell only focus-gates and renders. `audience` lists the `SurfaceKind`
+    /// wire strings (e.g. `["desktop"]`) the gateway forward-filter routes to.
+    SurfaceNotify {
+        audience: Vec<String>,
+        title: String,
+        body: String,
+        /// Originating topic (e.g. `agent.run.complete`) — diagnostics only.
+        source_topic: String,
+    },
 }
 
 /// Tagging value for the panel so it can pick the right local action
@@ -376,6 +388,7 @@ impl GatewayEventFrame {
             GatewayEventFrame::AcpSessionsChanged => "acp.sessions.changed",
             GatewayEventFrame::CronJobChanged { .. } => "cron.job.changed",
             GatewayEventFrame::HeartbeatTaskChanged { .. } => "heartbeat.task.changed",
+            GatewayEventFrame::SurfaceNotify { .. } => "surface.notify",
         }
         .to_string()
     }
@@ -421,4 +434,29 @@ pub struct MessageSender {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
+}
+
+#[cfg(test)]
+mod surface_notify_tests {
+    use super::*;
+
+    #[test]
+    fn surface_notify_topic_and_wire_shape() {
+        let f = GatewayEventFrame::SurfaceNotify {
+            audience: vec!["desktop".to_string()],
+            title: "Aleph finished".to_string(),
+            body: "Your turn is complete.".to_string(),
+            source_topic: "agent.run.complete".to_string(),
+        };
+        // Non-streaming → TopicEvent wire shape (topic + data), no stream method.
+        assert_eq!(f.topic_name(), "surface.notify");
+        assert!(f.stream_method().is_none());
+
+        // serde(tag = "type", rename_all = "snake_case")
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "surface_notify");
+        assert_eq!(v["audience"][0], "desktop");
+        assert_eq!(v["title"], "Aleph finished");
+        assert_eq!(v["source_topic"], "agent.run.complete");
+    }
 }
