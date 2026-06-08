@@ -92,10 +92,30 @@ pub(crate) struct HistoryParams {
     /// Maximum number of messages to return
     #[serde(default)]
     pub limit: Option<usize>,
-    /// Get messages before this timestamp (ISO 8601 or Unix timestamp)
+    /// Cursor for pagination: return only messages strictly older than this
+    /// timestamp. Accepts an RFC 3339 / ISO 8601 string or a bare Unix-seconds
+    /// integer. Pass the oldest timestamp of the previous page to fetch the
+    /// next-older page. Unparseable values are treated as "no cursor".
     #[serde(default)]
-    #[allow(dead_code)] // deserialized request param, not yet consumed
     pub before: Option<String>,
+}
+
+/// Parse the `chat.history` `before` cursor into Unix seconds.
+///
+/// Accepts a bare integer (Unix seconds) or an RFC 3339 timestamp. Returns
+/// `None` for empty / unparseable input so a malformed cursor degrades to an
+/// un-paginated (most-recent) fetch rather than erroring the request.
+fn parse_before(raw: &str) -> Option<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(unix) = trimmed.parse::<i64>() {
+        return Some(unix);
+    }
+    chrono::DateTime::parse_from_rfc3339(trimmed)
+        .ok()
+        .map(|dt| dt.timestamp())
 }
 
 /// Parameters for chat.clear request
@@ -229,9 +249,13 @@ pub async fn handle_history(
         }
     };
 
-    // Get history from session manager
+    // Resolve the optional pagination cursor (degrades to None when absent
+    // or unparseable, yielding the most-recent window).
+    let before_ts = params.before.as_deref().and_then(parse_before);
+
+    // Get history from session manager, honoring the `before` cursor.
     match session_manager
-        .get_history(&session_key, params.limit)
+        .get_history_before(&session_key, params.limit, before_ts)
         .await
     {
         Ok(messages) => {
@@ -393,6 +417,22 @@ mod tests {
         assert_eq!(params.session_key, "agent:main:main");
         assert_eq!(params.limit, Some(50));
         assert_eq!(params.before, Some("2024-01-01T00:00:00Z".to_string()));
+    }
+
+    #[test]
+    fn test_parse_before_unix_and_rfc3339_agree() {
+        // 2021-01-01T00:00:00Z == 1609459200 Unix seconds.
+        assert_eq!(parse_before("1609459200"), Some(1609459200));
+        assert_eq!(parse_before("2021-01-01T00:00:00Z"), Some(1609459200));
+        // Surrounding whitespace is tolerated.
+        assert_eq!(parse_before("  1609459200  "), Some(1609459200));
+    }
+
+    #[test]
+    fn test_parse_before_rejects_garbage_and_empty() {
+        assert_eq!(parse_before(""), None);
+        assert_eq!(parse_before("   "), None);
+        assert_eq!(parse_before("not-a-timestamp"), None);
     }
 
     #[test]
