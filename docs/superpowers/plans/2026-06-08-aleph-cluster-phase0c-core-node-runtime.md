@@ -19,11 +19,13 @@ runs a generic dispatch table (allowlist = table keys) that delegates `bash` to
 
 **Spec:** `docs/superpowers/specs/2026-06-08-aleph-cluster-phase0c-core-node-runtime.md`
 
-**Base / branch:** NEW worktree + branch `feat/cluster-phase0c-core` cut from the
-0a+0b tip **`71566d0b6`** (0c hard-depends on 0a/0b types; main does not have them
-yet). 0a+0b are merged to main by a separate session; this branch merges later
-with `71566d0b6` as common ancestor. Do NOT touch `src/harness/` (R10). Commits
-append-only; stage explicit paths.
+**Base / branch:** NEW worktree + branch `feat/cluster-phase0c-core` cut from
+**`main`** — a separate session already merged 0a+0b into main (`--no-ff` merge
+`0d30b250b`), so main now carries the 0a/0b types 0c depends on (`src/cluster/`,
+`src/gateway/handlers/cluster.rs`). Branch from current main HEAD. Do NOT touch
+`src/harness/` (R10). Commits append-only; stage explicit paths. The old
+`Aleph-wt-cluster-phase0a` worktree is cleaned up by that other session — do not
+touch it.
 
 ---
 
