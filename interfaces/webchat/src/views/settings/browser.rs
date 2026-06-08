@@ -58,7 +58,6 @@ pub fn BrowserView() -> impl IntoView {
 
     let config = RwSignal::new(BrowserConfig {
         default_driver: "managed".to_string(),
-        browser_engine: "chromium".to_string(),
         headless: true,
         devtools_profile: "user".to_string(),
         block_private: true,
@@ -66,7 +65,6 @@ pub fn BrowserView() -> impl IntoView {
         allowed_domains: Vec::new(),
         nav_timeout_secs: 30,
         action_timeout_secs: 10,
-        persistent_sessions: false,
     });
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
@@ -94,6 +92,10 @@ pub fn BrowserView() -> impl IntoView {
             </div>
 
             <RuntimeSummaryBanner />
+
+            <div class="p-3 bg-info-subtle border border-info/20 rounded-lg text-info text-sm">
+                {t!(i18n, browser_settings.restart_hint)}
+            </div>
 
             {move || {
                 if loading.get() {
@@ -229,26 +231,6 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
             </p>
 
             <div class="space-y-5">
-                // Browser engine dropdown
-                <div>
-                    <label class="block text-sm font-medium text-text-primary mb-2">{t!(i18n, browser_settings.engine_label)}</label>
-                    <select
-                        on:change=move |ev| {
-                            let val = event_target_value(&ev);
-                            config.update(|c| c.browser_engine = val);
-                            save_fn.with_value(|f| f());
-                        }
-                        prop:value=move || config.get().browser_engine
-                        class="block w-full max-w-xs px-3 py-2 bg-surface border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
-                    >
-                        <option value="chromium" selected=move || config.get().browser_engine == "chromium">{t!(i18n, browser_settings.engine_chromium)}</option>
-                        <option value="chrome" selected=move || config.get().browser_engine == "chrome">"Google Chrome"</option>
-                        <option value="edge" selected=move || config.get().browser_engine == "edge">"Microsoft Edge"</option>
-                        <option value="brave" selected=move || config.get().browser_engine == "brave">"Brave"</option>
-                    </select>
-                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, browser_settings.engine_help)}</p>
-                </div>
-
                 // Headless toggle
                 <div class="flex items-center justify-between">
                     <div>
@@ -310,35 +292,6 @@ fn EngineSection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                         }
                         class="block w-32 px-3 py-2 bg-surface border border-border rounded-lg text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
                     />
-                </div>
-
-                // Persistent sessions toggle
-                <div class="flex items-center justify-between">
-                    <div>
-                        <div class="font-medium text-text-primary">{t!(i18n, browser_settings.persistent_label)}</div>
-                        <div class="text-sm text-text-tertiary">{t!(i18n, browser_settings.persistent_desc)}</div>
-                    </div>
-                    <button
-                        on:click=move |_| {
-                            config.update(|c| c.persistent_sessions = !c.persistent_sessions);
-                            save_fn.with_value(|f| f());
-                        }
-                        class=move || {
-                            if config.get().persistent_sessions {
-                                "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-primary transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/30"
-                            } else {
-                                "relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-surface-sunken transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary/30"
-                            }
-                        }
-                    >
-                        <span class=move || {
-                            if config.get().persistent_sessions {
-                                "pointer-events-none inline-block h-5 w-5 translate-x-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
-                            } else {
-                                "pointer-events-none inline-block h-5 w-5 translate-x-0 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
-                            }
-                        } />
-                    </button>
                 </div>
 
                 <SaveFeedback saving=saving save_error=save_error save_success=save_success />
@@ -465,10 +418,52 @@ fn SecuritySection(config: RwSignal<BrowserConfig>) -> impl IntoView {
                     </button>
                 </div>
 
+                // Blocked domains (one per line)
+                <div>
+                    <label class="block text-sm font-medium text-text-primary mb-1">{t!(i18n, browser_settings.blocked_domains_label)}</label>
+                    <p class="text-xs text-text-tertiary mb-2">{t!(i18n, browser_settings.blocked_domains_desc)}</p>
+                    <textarea
+                        rows="3"
+                        prop:value=move || config.get().blocked_domains.join("\n")
+                        on:change=move |ev| {
+                            let list = parse_domain_lines(&event_target_value(&ev));
+                            config.update(|c| c.blocked_domains = list);
+                            save_fn.with_value(|f| f());
+                        }
+                        placeholder=move || t_string!(i18n, browser_settings.domains_placeholder).to_string()
+                        class="block w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm font-mono text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                    />
+                </div>
+
+                // Allowed domains (allowlist mode — when non-empty, only these are reachable)
+                <div>
+                    <label class="block text-sm font-medium text-text-primary mb-1">{t!(i18n, browser_settings.allowed_domains_label)}</label>
+                    <p class="text-xs text-text-tertiary mb-2">{t!(i18n, browser_settings.allowed_domains_desc)}</p>
+                    <textarea
+                        rows="3"
+                        prop:value=move || config.get().allowed_domains.join("\n")
+                        on:change=move |ev| {
+                            let list = parse_domain_lines(&event_target_value(&ev));
+                            config.update(|c| c.allowed_domains = list);
+                            save_fn.with_value(|f| f());
+                        }
+                        placeholder=move || t_string!(i18n, browser_settings.domains_placeholder).to_string()
+                        class="block w-full px-3 py-2 bg-surface border border-border rounded-lg text-sm font-mono text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary"
+                    />
+                </div>
+
                 <SaveFeedback saving=saving save_error=save_error save_success=save_success />
             </div>
         </div>
     }
+}
+
+/// Split a textarea value into a trimmed, non-empty domain list (one per line).
+fn parse_domain_lines(raw: &str) -> Vec<String> {
+    raw.lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
 }
 
 // ============================================================================

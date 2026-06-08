@@ -9,7 +9,6 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserConfig {
     pub default_driver: String,
-    pub browser_engine: String,
     pub headless: bool,
     pub devtools_profile: String,
     pub block_private: bool,
@@ -17,7 +16,6 @@ pub struct BrowserConfig {
     pub allowed_domains: Vec<String>,
     pub nav_timeout_secs: u64,
     pub action_timeout_secs: u64,
-    pub persistent_sessions: bool,
 }
 
 pub struct BrowserConfigApi;

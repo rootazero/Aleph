@@ -254,33 +254,10 @@ pub(super) fn read_shell_security_from_toml(patcher: &ConfigPatcher) -> ShellSec
                         })
                         .unwrap_or_default();
 
-                    let safe = shell
-                        .get("custom_safe")
-                        .and_then(|v| v.as_array())
-                        .map(|a| {
-                            a.iter()
-                                .filter_map(|v| {
-                                    v.as_table().map(|t| CustomRiskPattern {
-                                        pattern: t
-                                            .get("pattern")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        reason: t
-                                            .get("reason")
-                                            .and_then(|v| v.as_str())
-                                            .map(String::from),
-                                    })
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-
                     return ShellSecurityConfig {
                         enable_custom_patterns: enable,
                         custom_blocked: blocked,
                         custom_danger: danger,
-                        custom_safe: safe,
                     };
                 }
             }
@@ -531,7 +508,6 @@ pub(super) fn write_shell_security_to_toml(
         for (key, patterns) in [
             ("custom_blocked", &shell_security.custom_blocked),
             ("custom_danger", &shell_security.custom_danger),
-            ("custom_safe", &shell_security.custom_safe),
         ] {
             let arr = pattern_array(patterns);
             if !arr.is_empty() {
@@ -540,6 +516,9 @@ pub(super) fn write_shell_security_to_toml(
                 sec_table.remove(key);
             }
         }
+        // custom_safe was a no-op control (the sandbox hook never honored a
+        // Safe verdict); strip any stale value left by older versions.
+        sec_table.remove("custom_safe");
     }
 
     let new_contents =

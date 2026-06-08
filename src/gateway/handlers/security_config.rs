@@ -57,8 +57,6 @@ pub struct ShellSecurityConfig {
     pub custom_blocked: Vec<CustomRiskPattern>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_danger: Vec<CustomRiskPattern>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub custom_safe: Vec<CustomRiskPattern>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
