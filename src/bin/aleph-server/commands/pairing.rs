@@ -66,6 +66,14 @@ pub async fn handle_pairing_list() -> Result<(), Box<dyn std::error::Error>> {
                         "browser", code, origin_label, remaining
                     );
                 }
+                PairingRequest::Node {
+                    code, node_name, ..
+                } => {
+                    println!(
+                        "{:<10} {:<8} {:<30} {}s",
+                        "node", code, node_name, remaining
+                    );
+                }
             }
         }
     }
@@ -138,6 +146,14 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
             eprintln!(
                 "Error: Browser pairing code '{}' must be approved from the Panel \
                  (notification bell), not from the CLI.",
+                code
+            );
+            std::process::exit(1);
+        }
+        PairingRequest::Node { code, .. } => {
+            eprintln!(
+                "Error: Node pairing code '{}' must be approved from the center \
+                 Panel notification card, not the CLI.",
                 code
             );
             std::process::exit(1);

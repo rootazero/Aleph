@@ -22,7 +22,7 @@ mod tests;
 pub use types::*;
 
 /// Schema version for migrations
-const SCHEMA_VERSION: i32 = 9;
+const SCHEMA_VERSION: i32 = 10;
 
 /// Unified security storage backed by SQLite
 pub struct SecurityStore {
@@ -177,6 +177,19 @@ impl SecurityStore {
             conn.execute_batch(SCHEMA_V9)?;
             drop(conn);
             self.set_schema_version(9)?;
+        }
+
+        if version < 10 {
+            info!(
+                from = version,
+                to = 10,
+                "Migrating security schema to v10 (cluster-node pairing variant)"
+            );
+
+            let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute_batch(SCHEMA_V10)?;
+            drop(conn);
+            self.set_schema_version(10)?;
         }
 
         // Final safety: ensure version is at latest
@@ -353,6 +366,36 @@ CREATE TABLE pairing_requests (
     user_agent      TEXT,
     peer_ip         TEXT,
     CHECK (pairing_type IN ('device', 'channel', 'browser'))
+);
+CREATE INDEX IF NOT EXISTS idx_pairing_code ON pairing_requests(code);
+CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_requests(expires_at);
+"#;
+
+/// Schema v10 SQL — cluster-node pairing variant.
+///
+/// Same rationale as v9: SQLite cannot edit a `CHECK` constraint in place, so
+/// to admit the new `'node'` value we rebuild the table. Pending pairings are
+/// short-lived (5min default) and never useful after a daemon restart, so
+/// dropping the table is the safe move.
+const SCHEMA_V10: &str = r#"
+DROP TABLE IF EXISTS pairing_requests;
+CREATE TABLE pairing_requests (
+    request_id      TEXT PRIMARY KEY,
+    code            TEXT NOT NULL UNIQUE,
+    pairing_type    TEXT NOT NULL,
+    device_name     TEXT,
+    device_type     TEXT,
+    public_key      BLOB,
+    channel         TEXT,
+    sender_id       TEXT,
+    remote_addr     TEXT,
+    metadata        TEXT,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL,
+    origin_label    TEXT,
+    user_agent      TEXT,
+    peer_ip         TEXT,
+    CHECK (pairing_type IN ('device', 'channel', 'browser', 'node'))
 );
 CREATE INDEX IF NOT EXISTS idx_pairing_code ON pairing_requests(code);
 CREATE INDEX IF NOT EXISTS idx_pairing_expires ON pairing_requests(expires_at);

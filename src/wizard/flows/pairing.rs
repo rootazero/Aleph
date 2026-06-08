@@ -111,6 +111,11 @@ impl WizardFlow for PairingFlow {
                     "PairingFlow expects a device request, got a browser request".to_string(),
                 ));
             }
+            PairingRequest::Node { .. } => {
+                return Err(WizardSessionError::FlowError(
+                    "PairingFlow expects a device request, got a node request".to_string(),
+                ));
+            }
         };
 
         let device_id = uuid::Uuid::new_v4().to_string();

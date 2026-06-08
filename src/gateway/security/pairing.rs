@@ -74,6 +74,17 @@ pub enum PairingRequest {
         created_at: i64,
         expires_at: i64,
     },
+    /// Cluster-node pairing: a tokenless `aleph-server node` dials the center
+    /// and requests a node-role credential the operator approves from the same
+    /// notification card as a browser. Mirrors `Browser` but the approval mints
+    /// a `DeviceRole::Node` token instead of a chat-tier device token.
+    Node {
+        request_id: String,
+        code: String,
+        node_name: String,
+        created_at: i64,
+        expires_at: i64,
+    },
 }
 
 impl PairingRequest {
@@ -83,6 +94,7 @@ impl PairingRequest {
             PairingRequest::Device { code, .. } => code,
             PairingRequest::Channel { code, .. } => code,
             PairingRequest::Browser { code, .. } => code,
+            PairingRequest::Node { code, .. } => code,
         }
     }
 
@@ -92,6 +104,7 @@ impl PairingRequest {
             PairingRequest::Device { expires_at, .. } => *expires_at,
             PairingRequest::Channel { expires_at, .. } => *expires_at,
             PairingRequest::Browser { expires_at, .. } => *expires_at,
+            PairingRequest::Node { expires_at, .. } => *expires_at,
         }
     }
 
@@ -135,6 +148,13 @@ impl From<PairingRequestRow> for PairingRequest {
                 origin_label: row.origin_label.unwrap_or_default(),
                 user_agent: row.user_agent.unwrap_or_default(),
                 peer_ip: row.peer_ip.unwrap_or_default(),
+                created_at: row.created_at,
+                expires_at: row.expires_at,
+            },
+            "node" => PairingRequest::Node {
+                request_id: row.request_id,
+                code: row.code,
+                node_name: row.device_name.unwrap_or_else(|| "aleph-node".into()),
                 created_at: row.created_at,
                 expires_at: row.expires_at,
             },
@@ -404,6 +424,39 @@ impl PairingManager {
         Ok((code, expires_at))
     }
 
+    /// Create a cluster-node pairing record and return `(code, expires_at_ms)`.
+    /// Mirrors `create_browser_pairing` but tags the row `pairing_type = "node"`
+    /// and stores the human node name in the `device_name` column. The code is
+    /// the same 6-digit numeric namespace (globally unique across pairing types).
+    pub fn request_node_pairing(&self, node_name: &str) -> Result<(String, i64), PairingError> {
+        let pending_count = self
+            .store
+            .count_pairing_requests()
+            .map_err(|e| PairingError::DatabaseError(e.to_string()))?;
+
+        if pending_count >= self.max_pending {
+            return Err(PairingError::TooManyPending(self.max_pending));
+        }
+
+        let request_id = Uuid::new_v4().to_string();
+        let code = self.generate_unique_browser_code()?;
+        let now = current_timestamp_ms();
+        let expires_at = now + self.expiry_ms;
+
+        self.store
+            .insert_pairing_request(&PairingRequestData {
+                request_id: &request_id,
+                code: &code,
+                pairing_type: "node",
+                device_name: Some(node_name),
+                expires_at,
+                ..PairingRequestData::default()
+            })
+            .map_err(|e| PairingError::DatabaseError(e.to_string()))?;
+
+        Ok((code, expires_at))
+    }
+
     /// Stash the chat-tier device token + device_id minted by the operator's
     /// `pairing.approve` for a Browser pairing, keyed by the pairing code.
     /// Drained single-use by the next approved `poll_browser_pairing`.
@@ -447,8 +500,13 @@ impl PairingManager {
         if self.rejected_browser_codes.remove(code).is_some() {
             return PollState::Rejected;
         }
+        // Shared by browser and cluster-node pairing: the approved/rejected
+        // side-tables are keyed by globally-unique code (type-agnostic), and
+        // `pairing.poll` dispatches both through this one method.
         match self.store.get_pairing_request(code) {
-            Ok(Some(row)) if row.pairing_type == "browser" => PollState::Pending,
+            Ok(Some(row)) if matches!(row.pairing_type.as_str(), "browser" | "node") => {
+                PollState::Pending
+            }
             _ => PollState::Expired,
         }
     }
@@ -670,6 +728,29 @@ mod tests {
         // Confirm should fail
         let result = manager.confirm_pairing(request.code());
         assert!(matches!(result, Err(PairingError::InvalidCode)));
+    }
+
+    #[test]
+    fn node_row_maps_to_node_variant() {
+        let row = PairingRequestRow {
+            request_id: "r1".into(),
+            code: "123456".into(),
+            pairing_type: "node".into(),
+            device_name: Some("worker-1".into()),
+            device_type: None,
+            public_key: None,
+            channel: None,
+            sender_id: None,
+            remote_addr: None,
+            metadata: None,
+            origin_label: None,
+            user_agent: None,
+            peer_ip: None,
+            created_at: 0,
+            expires_at: 9_999_999_999_999,
+        };
+        let req = PairingRequest::from(row);
+        assert!(matches!(req, PairingRequest::Node { node_name, .. } if node_name == "worker-1"));
     }
 
     #[test]
