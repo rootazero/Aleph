@@ -7,11 +7,11 @@
 //! which endpoints each mode will target without re-deriving locality here.
 
 use crate::api::{RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
-use std::collections::BTreeMap;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use std::collections::BTreeMap;
 
 /// The three selectable mode keys. Display copy is resolved per-locale from the
 /// `settings.route.*` translation table at render time.
