@@ -80,6 +80,13 @@ impl SubagentTool {
             runtime = runtime.with_trace_sink(wrapper);
         }
 
+        // X1 C2: capture on_delegation inputs before the task/registry are
+        // moved into the spawned future.
+        let deleg_registry = self.capture_registry.clone();
+        let deleg_parent_agent_id = self.parent_agent_id.clone();
+        let deleg_parent_session_id = self.parent_session_id.clone();
+        let deleg_task = task.clone();
+
         let tracker = self.background_tracker.clone();
         let rid = request_id.clone();
         tokio::spawn(async move {
@@ -103,6 +110,23 @@ impl SubagentTool {
                 Ok(Err(e)) => CompletedOutcome::Err(e),
                 Err(_panic) => CompletedOutcome::Err("Sub-agent panicked".to_string()),
             };
+            // X1 C2: notify memory extensions that a delegated child finished.
+            // Fire-and-forget; dispatch has its own per-hook timeout + warn.
+            if let Some(reg) = deleg_registry {
+                let result_summary = match &outcome {
+                    CompletedOutcome::Ok { final_text, .. } => final_text.clone(),
+                    CompletedOutcome::Err(e) => format!("(error) {e}"),
+                };
+                let ctx = crate::memory::extensions::types::DelegationCtx {
+                    agent_id: deleg_parent_agent_id,
+                    namespace: crate::memory::namespace::NamespaceScope::Owner,
+                    parent_session_id: deleg_parent_session_id.unwrap_or_default(),
+                    child_session_id: rid.clone(),
+                    task: deleg_task,
+                    result_summary,
+                };
+                reg.dispatch_on_delegation(&ctx).await;
+            }
             tracker.mark_completed(&rid, outcome);
         });
 

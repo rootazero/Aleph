@@ -36,6 +36,11 @@ pub const ON_DELEGATION_TIMEOUT: Duration = Duration::from_secs(3);
 pub struct MemoryExtensionRegistry {
     /// Extensions in registration order (for on_capture this is the chain order).
     extensions: RwLock<Vec<Arc<dyn MemoryExtension>>>,
+    /// Typed side-table of MCP-backed extensions, retained at their concrete
+    /// type so the boot-time bind pass can call `rebind`. Each entry is the
+    /// SAME `Arc` as the corresponding `dyn MemoryExtension` in `extensions`,
+    /// so a rebind is immediately visible to dispatch.
+    mcp_bindings: RwLock<Vec<Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>>>,
 }
 
 impl Clone for MemoryExtensionRegistry {
@@ -45,8 +50,14 @@ impl Clone for MemoryExtensionRegistry {
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
+        let mcp = self
+            .mcp_bindings
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         Self {
             extensions: RwLock::new(snapshot),
+            mcp_bindings: RwLock::new(mcp),
         }
     }
 }
@@ -55,6 +66,7 @@ impl MemoryExtensionRegistry {
     pub fn new() -> Self {
         Self {
             extensions: RwLock::new(Vec::new()),
+            mcp_bindings: RwLock::new(Vec::new()),
         }
     }
 
@@ -64,6 +76,35 @@ impl MemoryExtensionRegistry {
             .write()
             .unwrap_or_else(|e| e.into_inner())
             .push(ext);
+    }
+
+    /// Register an MCP-backed extension. It lands in BOTH the dispatch list
+    /// (as `dyn MemoryExtension`) and the typed side-table (as the concrete
+    /// `McpMemoryExtension`), sharing one `Arc` so a later `rebind` on the
+    /// side-table entry is visible to dispatch.
+    pub fn register_mcp(
+        &self,
+        ext: Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>,
+    ) {
+        self.extensions
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(ext.clone() as Arc<dyn MemoryExtension>);
+        self.mcp_bindings
+            .write()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(ext);
+    }
+
+    /// Snapshot the MCP-backed extensions for the boot-time bind pass. The
+    /// lock is released before the caller does any async work.
+    pub fn mcp_bindings_snapshot(
+        &self,
+    ) -> Vec<Arc<crate::memory::extensions::mcp_adapter::McpMemoryExtension>> {
+        self.mcp_bindings
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     pub fn len(&self) -> usize {
@@ -166,9 +207,12 @@ impl MemoryExtensionRegistry {
     /// on_session_switch: sequential broadcast. Failures and timeouts are
     /// logged and skipped — they never block a session rotation.
     ///
-    /// **Wire-point TODO**: `cli /resume`, `/branch`, `/reset`, `/new`, and
-    /// `session_compactor` should call this immediately after rewriting
-    /// `session_id`, so extensions can refresh cached per-session state.
+    /// **No Aleph-side producer (by design, X1).** Aleph sessions are created
+    /// fresh, compacted in place, or deleted — none rotate a session id
+    /// mid-process, so there is no event matching this hook's contract. The
+    /// hook stays part of the extension API surface (third-party MCP `[memory]`
+    /// plugins may implement `memory.on_session_switch`); wire an Aleph
+    /// producer here only if a real session-rotation event is introduced.
     pub async fn dispatch_on_session_switch(&self, ctx: &SessionSwitchCtx) {
         for ext in self.snapshot() {
             let name = ext.name().to_string();
@@ -666,5 +710,22 @@ mod tests {
             observed,
             vec![("ship it".to_string(), "shipped".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn register_mcp_appears_in_both_dispatch_and_snapshot() {
+        use crate::memory::extensions::mcp_adapter::McpMemoryExtension;
+        let reg = MemoryExtensionRegistry::new();
+        let ext = Arc::new(McpMemoryExtension::new_unbound(
+            "p".to_string(),
+            Some("plugin:p/srv".to_string()),
+        ));
+        reg.register_mcp(ext);
+        // Visible to dispatch (main list).
+        assert_eq!(reg.len(), 1);
+        // Visible to the typed side-table for binding.
+        let snap = reg.mcp_bindings_snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].server_id(), Some("plugin:p/srv"));
     }
 }

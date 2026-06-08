@@ -61,6 +61,7 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         raws: &[crate::memory::store::raw_memory::RawMemory],
         related: &[RelatedPage],
         source: &RawMemorySource,
+        extra_context: Option<&str>,
     ) -> Result<IngestPlan, AlephError> {
         if raws.is_empty() {
             return Ok(IngestPlan {
@@ -73,6 +74,14 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         let system = build_compound_system_prompt(source);
         let observation_date = chrono::Utc::now().format("%Y-%m-%d (%A)").to_string();
         let user = build_user_prompt(raws, related, &observation_date);
+        // X1 C3: fold extension-contributed pre-compress context into the
+        // planning prompt so extracted insights survive compression.
+        let user = match extra_context {
+            Some(extra) if !extra.trim().is_empty() => {
+                format!("Extension context (preserve relevant facts):\n{extra}\n\n{user}")
+            }
+            _ => user,
+        };
         let msgs = [UnifiedMessage::user(&user)];
         let resp = self
             .provider
@@ -297,6 +306,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
         &self,
         agent_id: &str,
         raws: Vec<crate::memory::store::raw_memory::RawMemory>,
+        extra_context: Option<&str>,
     ) -> Result<ApplyReport, AlephError> {
         if raws.is_empty() {
             return Ok(ApplyReport::default());
@@ -343,7 +353,9 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             }
         };
 
-        let mut plan = self.plan(agent_id, &raws, &related, &source).await?;
+        let mut plan = self
+            .plan(agent_id, &raws, &related, &source, extra_context)
+            .await?;
         if plan.ops.is_empty() {
             return Ok(ApplyReport::default());
         }
@@ -379,7 +391,9 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                         "\n\n[system] previous plan referenced {path} with a stale hash; actual hash is {actual}. Re-plan using fresh data."
                     ));
                 }
-                let mut plan2 = self.plan(agent_id, &augmented, &related, &source).await?;
+                let mut plan2 = self
+                    .plan(agent_id, &augmented, &related, &source, extra_context)
+                    .await?;
                 if plan2.ops.is_empty() {
                     return Ok(ApplyReport::default());
                 }
@@ -856,6 +870,7 @@ pub trait CompoundIngestor: Send + Sync {
         &self,
         agent_id: &str,
         raws: Vec<RawMemory>,
+        extra_context: Option<&str>,
     ) -> Result<ApplyReport, AlephError>;
 }
 
@@ -871,6 +886,7 @@ mod trait_tests {
             &self,
             _agent_id: &str,
             _raws: Vec<RawMemory>,
+            _extra_context: Option<&str>,
         ) -> Result<ApplyReport, AlephError> {
             Ok(ApplyReport {
                 tx_id: "stub".into(),
@@ -882,7 +898,7 @@ mod trait_tests {
     #[tokio::test]
     async fn trait_object_dispatch() {
         let ing: Box<dyn CompoundIngestor> = Box::new(StubIngestor);
-        let r = ing.ingest_batch("default", vec![]).await.unwrap();
+        let r = ing.ingest_batch("default", vec![], None).await.unwrap();
         assert_eq!(r.tx_id, "stub");
     }
 }
@@ -934,7 +950,7 @@ mod plan_tests {
         };
         let raw = RawMemory::new("some content".to_string(), RawMemorySource::Transcript);
         let plan = ing
-            .plan("default", &[raw], &[], &RawMemorySource::Transcript)
+            .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
             .await
             .unwrap();
         assert_eq!(plan.ops.len(), 1);
@@ -961,7 +977,7 @@ mod plan_tests {
         };
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
-            .plan("default", &[raw], &[], &RawMemorySource::Transcript)
+            .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
             .await
             .unwrap();
         assert!(plan.ops.is_empty());
@@ -989,7 +1005,7 @@ mod plan_tests {
         };
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
-            .plan("default", &[raw], &[], &RawMemorySource::Transcript)
+            .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
             .await
             .unwrap();
         // The no-slash create is dropped (malformed path); the linkless create
@@ -1041,7 +1057,7 @@ mod plan_tests {
         // No related pages (sparse wiki) → `[P3]` is out of range and stripped.
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
-            .plan("default", &[raw], &[], &RawMemorySource::Transcript)
+            .plan("default", &[raw], &[], &RawMemorySource::Transcript, None)
             .await
             .unwrap();
         assert_eq!(plan.ops.len(), 1, "seed create must survive stripped links");
@@ -1089,7 +1105,7 @@ mod plan_tests {
         }];
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
-            .plan("default", &[raw], &related, &RawMemorySource::Transcript)
+            .plan("default", &[raw], &related, &RawMemorySource::Transcript, None)
             .await
             .unwrap();
         assert_eq!(plan.ops.len(), 1);
@@ -1132,7 +1148,7 @@ mod plan_tests {
         }];
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
         let plan = ing
-            .plan("default", &[raw], &related, &RawMemorySource::Transcript)
+            .plan("default", &[raw], &related, &RawMemorySource::Transcript, None)
             .await
             .unwrap();
         assert!(plan.ops.is_empty(), "hallucinated-token op must be dropped");
@@ -1353,7 +1369,10 @@ mod plan_tests {
         };
 
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-        let report = ing.ingest_batch("default", vec![raw]).await.unwrap();
+        let report = ing
+            .ingest_batch("default", vec![raw], None)
+            .await
+            .unwrap();
         assert_eq!(report.created, 1);
 
         let index_md_path = memory_dir.join("default").join("index.md");
@@ -1421,7 +1440,7 @@ mod plan_tests {
 
         let raw = RawMemory::new("some content".to_string(), RawMemorySource::Transcript);
         let report = ing
-            .ingest_batch("default", vec![raw])
+            .ingest_batch("default", vec![raw], None)
             .await
             .expect("ingest must succeed despite embedding failure");
         assert_eq!(
@@ -1469,7 +1488,10 @@ mod plan_tests {
         };
 
         let raw = RawMemory::new("c".to_string(), RawMemorySource::Transcript);
-        let report = ing.ingest_batch("default", vec![raw]).await.unwrap();
+        let report = ing
+            .ingest_batch("default", vec![raw], None)
+            .await
+            .unwrap();
         assert_eq!(report.created, 1);
         assert_eq!(report.touched_paths.len(), 1);
 
@@ -1523,6 +1545,7 @@ mod plan_tests {
                     "seed".to_string(),
                     RawMemorySource::Transcript,
                 )],
+                None,
             )
             .await
             .unwrap();
@@ -1554,6 +1577,7 @@ mod plan_tests {
                     "body2".to_string(),
                     RawMemorySource::Transcript,
                 )],
+                None,
             )
             .await
             .unwrap();

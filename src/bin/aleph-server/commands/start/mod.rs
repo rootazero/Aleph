@@ -857,6 +857,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             tokio::spawn(async move {
                 em.set_mcp_handle(handle);
                 let n = em.sync_mcp_plugin_servers().await;
+                // X1: now that both the MCP handle and (from agent_init) the
+                // memory registry are set and plugins are loaded, bind every
+                // MCP-backed memory extension's caller to the live manager.
+                em.bind_memory_callers().await;
                 if n > 0 {
                     tracing::info!(count = n, "plugin MCP servers registered at boot");
                 }

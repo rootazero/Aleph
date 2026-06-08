@@ -63,6 +63,14 @@ impl ExtensionManager {
             plugin_id = plugin_id,
             "Auto-loaded plugin for tool execution"
         );
+        // Release the loader/registry write locks before the async bind so we
+        // never hold them across the await.
+        drop(registry);
+        drop(loader);
+
+        // X1: bind the just-loaded plugin's memory caller if the MCP handle is
+        // already live (idempotent for already-bound extensions).
+        self.bind_memory_callers().await;
         Ok(())
     }
 
@@ -132,6 +140,9 @@ impl ExtensionManager {
         if result.is_ok() {
             self.sync_runtime_snapshots().await;
         }
+
+        // X1: bind memory caller for the hot-loaded plugin (idempotent).
+        self.bind_memory_callers().await;
 
         result
     }
