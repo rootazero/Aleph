@@ -1457,6 +1457,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn proxy_injects_route_spec_and_host_bridge_on_linux() {
+        // The host bridge derives its UDS path from $HOME (via
+        // `create_proxy_socket_dir()` → `dirs::home_dir()`). Other tests mutate
+        // HOME to a long temp path; serialize against them so we bind under the
+        // real (short) HOME and never overflow the platform `SUN_LEN` limit.
+        let _home_guard = crate::runtimes::post_install::HomeEnvGuard::acquire();
         let tmp = tempfile::tempdir().unwrap();
         let driver = CapturingLinuxDriver::new();
         let driver_trait: Arc<dyn OsSandboxDriverTrait> = driver.clone();

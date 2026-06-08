@@ -156,14 +156,56 @@ async fn verify_or_repair(
 #[cfg(test)]
 pub(crate) static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// RAII guard for tests that read or mutate the process-global `$HOME`.
+///
+/// Acquiring it locks [`HOME_LOCK`] (serializing against all other HOME users)
+/// and snapshots the current `$HOME`. On drop it restores the snapshot *before*
+/// releasing the lock — a struct's `Drop::drop` runs ahead of its fields — so a
+/// waiting test always observes the restored value, never a leaked one. This
+/// closes the leak where a test set `$HOME` to a temp dir and left it dangling,
+/// which made unrelated tests (e.g. the sandbox UDS bridge, whose socket path
+/// is derived from `$HOME`) fail with `SUN_LEN` overflow.
+#[cfg(test)]
+pub(crate) struct HomeEnvGuard {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    prev: Option<std::ffi::OsString>,
+}
+
+#[cfg(test)]
+impl HomeEnvGuard {
+    /// Lock the HOME mutex and snapshot `$HOME`. Use for read-only tests that
+    /// transitively depend on `$HOME` and must not race a mutator.
+    pub(crate) fn acquire() -> Self {
+        let lock = HOME_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::var_os("HOME");
+        Self { _lock: lock, prev }
+    }
+
+    /// Lock, snapshot, then set `$HOME` to `value` for the guard's lifetime.
+    pub(crate) fn acquire_and_set(value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let guard = Self::acquire();
+        std::env::set_var("HOME", value);
+        guard
+    }
+}
+
+#[cfg(test)]
+impl Drop for HomeEnvGuard {
+    fn drop(&mut self) {
+        match &self.prev {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_expand_home_with_var() {
-        let _lock = HOME_LOCK.lock().unwrap();
-        std::env::set_var("HOME", "/tmp/fake-home");
+        let _home = HomeEnvGuard::acquire_and_set("/tmp/fake-home");
         let out = expand_home("$HOME/.aleph/skills").unwrap();
         assert_eq!(out, "/tmp/fake-home/.aleph/skills");
     }
@@ -176,8 +218,7 @@ mod tests {
 
     #[test]
     fn test_expand_home_multiple_placeholders() {
-        let _lock = HOME_LOCK.lock().unwrap();
-        std::env::set_var("HOME", "/tmp/fake-home");
+        let _home = HomeEnvGuard::acquire_and_set("/tmp/fake-home");
         let out = expand_home("$HOME/a/$HOME/b").unwrap();
         assert_eq!(out, "/tmp/fake-home/a/$HOME/b");
         // Only the first occurrence is replaced — caller should pass templates
@@ -190,9 +231,8 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use tempfile::TempDir;
 
-        let _lock = HOME_LOCK.lock().unwrap();
         let dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", dir.path());
+        let _home = HomeEnvGuard::acquire_and_set(dir.path());
 
         // Write a tiny shell script that creates a file at its first arg.
         let script_path = dir.path().join("touchit.sh");

@@ -365,13 +365,12 @@ mod tests {
     #[tokio::test]
     async fn test_uv_post_install_creates_venv_idempotently() {
         use crate::runtimes::post_install::run;
-        use crate::runtimes::post_install::HOME_LOCK;
+        use crate::runtimes::post_install::HomeEnvGuard;
         use std::os::unix::fs::PermissionsExt;
         use tempfile::TempDir;
 
-        let _lock = HOME_LOCK.lock().unwrap();
         let dir = TempDir::new().unwrap();
-        std::env::set_var("HOME", dir.path());
+        let _home = HomeEnvGuard::acquire_and_set(dir.path());
 
         // Fake uv: a shell script that responds to `venv <path>` by mkdir-ing the
         // expected layout, mimicking `uv venv` semantics.

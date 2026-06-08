@@ -358,6 +358,12 @@ mod tests {
     async fn host_bridge_forwards_bytes_uds_to_tcp() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+        // `create_proxy_socket_dir()` derives the UDS path from $HOME (via
+        // `dirs::home_dir()`). Other tests mutate HOME to a long temp path;
+        // serialize against them so we bind under the real (short) HOME and
+        // never overflow the platform `SUN_LEN` limit.
+        let _home_guard = crate::runtimes::post_install::HomeEnvGuard::acquire();
+
         // Upstream: a loopback TCP echo-once server standing in for the
         // managed proxy.
         let upstream = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
