@@ -985,6 +985,11 @@ pub fn create_tool_boxed(
                 crate::skill::shared_skill_system().clone(),
             ),
         )),
+        // Goal tool — backed by process-global GoalStore (init_global at boot).
+        // Returns None if called before the store is initialized (e.g. in tests
+        // that don't boot the full daemon).
+        "goal" => crate::goal::global()
+            .map(|store| Box::new(crate::builtin_tools::GoalTool::new(store)) as Box<dyn AlephToolDyn>),
         // Memory lifecycle & knowledge-wiki tools require a memory backend / wiki /
         // profile synthesizer + per-session context — built dynamically in
         // BuiltinToolRegistry::with_config(), same as note_manage below.

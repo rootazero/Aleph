@@ -211,6 +211,19 @@ impl BuiltinToolRegistry {
 
         let scratchpad_tool = ScratchpadTool::new();
 
+        // Standing-goal store: a session-keyed SQLite DB under the data dir.
+        // Initialize the process-global so the harness bridge + tool share it.
+        let goal_store = Arc::new(
+            crate::goal::GoalStore::open(
+                &crate::utils::paths::get_data_dir()
+                    .expect("open goal store: data dir unavailable")
+                    .join("goals.db"),
+            )
+            .expect("open goal store"),
+        );
+        crate::goal::init_global(goal_store.clone());
+        let goal_tool = crate::builtin_tools::GoalTool::new(goal_store);
+
         // Browser tools — always available, use ProfileManager from config or create default
         let browser_profile_manager = config.browser_profile_manager.clone().unwrap_or_else(|| {
             Arc::new(crate::browser::manager::ProfileManager::new(
@@ -1653,6 +1666,8 @@ impl BuiltinToolRegistry {
             // bind its project to the session for the goal-loop hook. When
             // memory is unconfigured the handle is None → hook stays dormant.
             scratchpad_tool: scratchpad_tool
+                .with_session_key_handle(memory_session_key_handle.clone()),
+            goal_tool: goal_tool
                 .with_session_key_handle(memory_session_key_handle.clone()),
             memory_search_tool,
             memory_context_provider: Arc::new(tokio::sync::OnceCell::new()),
