@@ -45,7 +45,7 @@ pub struct DoctorTool;
 #[async_trait]
 impl AlephTool for DoctorTool {
     const NAME: &'static str = "doctor";
-    const DESCRIPTION: &'static str = "Self-diagnose Aleph runtime health: data directory, instance lock, config.toml parse, and shell-hook consent registry. Returns structured findings with fix hints. Pass fix=true to apply safe, deterministic repairs (recreate a missing data dir, clear a stale lock). Use this to answer 'is something wrong with my setup?' — read-only by default.";
+    const DESCRIPTION: &'static str = "Self-diagnose Aleph runtime health: data directory, instance lock, config.toml parse, secret vault integrity, shell-hook consent registry, and browser runtime prerequisites. Returns structured findings with fix hints. Pass fix=true to apply safe, deterministic repairs (recreate a missing data dir, clear a stale lock). Use this to answer 'is something wrong with my setup?' — read-only by default.";
 
     type Args = DoctorArgs;
     type Output = DoctorOutput;

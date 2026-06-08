@@ -8,8 +8,9 @@
 use serde::Serialize;
 
 /// Severity ordering matters: `Error > Warning > Info`. The derived `Ord`
-/// lets the engine compute the worst finding and lets `--severity-min`
-/// filter by threshold without a hand-written comparator.
+/// backs the threshold comparison in [`Finding::is_problem`] (`severity > Info`)
+/// and lets callers sort or compare findings by severity without a hand-written
+/// comparator.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
