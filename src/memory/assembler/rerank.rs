@@ -78,9 +78,6 @@ fn slot_name(k: SlotKind) -> &'static str {
 pub(crate) struct RerankResponse {
     #[serde(default)]
     pub slots: Vec<RerankSlot>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub reasoning: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

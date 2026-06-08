@@ -99,7 +99,7 @@ mod event_sourcing {
     #[tokio::test]
     async fn test_event_sourcing_full_round_trip() {
         let db = Arc::new(StateDatabase::in_memory().unwrap());
-        let handler = MemoryCommandHandler::new(db.clone(), None);
+        let handler = MemoryCommandHandler::new(db.clone());
         let traveler = MemoryTimeTraveler::new(db.clone());
 
         // 1. Create a fact

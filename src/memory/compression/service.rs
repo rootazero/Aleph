@@ -7,7 +7,7 @@
 //! 4. Stores facts and updates compression state
 
 use super::scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
-use super::signal_detector::{CompressionPriority, SignalDetector};
+use super::signal_detector::SignalDetector;
 use crate::error::AlephError;
 use crate::memory::context::CompressionResult;
 use crate::memory::events::handler::MemoryCommandHandler;
@@ -429,54 +429,10 @@ impl CompressionService {
         }
     }
 
-    /// Check for signal-based compression trigger
-    ///
-    /// This method detects signals in the user message and triggers
-    /// compression based on priority:
-    /// - Immediate: Compress now (correction signals)
-    /// - Deferred: Record turn and check scheduler (learning signals)
-    /// - Batch: Just record activity (milestone signals)
-    pub async fn check_and_compress_with_signal(
-        &self,
-        user_message: &str,
-    ) -> Result<Option<CompressionResult>, AlephError> {
-        // Detect signals in message
-        let detection = self.signal_detector.detect(user_message);
-
-        if detection.should_compress {
-            tracing::info!(
-                signals = ?detection.signals,
-                priority = ?detection.priority,
-                "Signal-triggered compression"
-            );
-
-            match detection.priority {
-                CompressionPriority::Immediate => {
-                    // Compress immediately
-                    let result = self.compress().await?;
-                    Ok(Some(result))
-                }
-                CompressionPriority::Deferred => {
-                    // Record turn and let scheduler decide
-                    self.scheduler.increment_turns();
-                    self.check_and_compress().await
-                }
-                CompressionPriority::Batch => {
-                    // Just record activity, batch later
-                    self.scheduler.record_activity();
-                    Ok(None)
-                }
-            }
-        } else {
-            // Fall back to existing scheduler-based check
-            self.check_and_compress().await
-        }
-    }
-
     /// Start background compression task
     ///
     /// Runs periodically and compresses unconditionally (bypasses scheduler).
-    /// The scheduler-based triggers are handled separately via `record_turn_and_check()`.
+    /// The scheduler-based triggers are handled separately via `record_turn_and_check_signal()`.
     pub fn start_background_task(self: Arc<Self>) -> JoinHandle<()> {
         let interval_secs = self.config.background_interval_seconds;
 
@@ -567,45 +523,53 @@ impl CompressionService {
         self.scheduler.increment_turns();
     }
 
-    /// Record a conversation turn and trigger compression if threshold reached
+    /// Record a conversation turn and trigger compression — signal-aware.
     ///
-    /// This method checks if the turn threshold is reached after incrementing,
-    /// and if so, spawns a compression task immediately instead of waiting
-    /// for the next hourly background check.
-    pub fn record_turn_and_check(self: &Arc<Self>) {
-        // Use the return value of fetch_add to trigger exactly once when
-        // the threshold is crossed, avoiding race conditions.
+    /// Always counts the turn with exactly-once threshold-crossing semantics
+    /// (so the turn-threshold path keeps working). Additionally, if the user
+    /// message carries an `Immediate` signal (a correction like "不对/错了/
+    /// wrong"), compress NOW instead of waiting for the threshold. Learning
+    /// and milestone signals ride the normal turn-threshold cadence.
+    ///
+    /// Non-blocking: the actual compression runs in a spawned task.
+    pub fn record_turn_and_check_signal(self: &Arc<Self>, user_message: &str) {
+        let detection = self.signal_detector.detect(user_message);
+
+        // Count the turn exactly once at the threshold crossing.
         let old_turns = self
             .scheduler
             .pending_turns
             .fetch_add(1, crate::sync_primitives::Ordering::AcqRel);
         let turns = old_turns + 1;
         let threshold = self.config.scheduler.turn_threshold;
+        let threshold_crossed = old_turns < threshold && turns >= threshold;
 
-        if old_turns < threshold && turns >= threshold {
-            tracing::info!(
-                turns = turns,
-                threshold = threshold,
-                "Turn threshold reached, triggering immediate compression"
-            );
+        let immediate = detection.should_compress
+            && detection.priority == super::signal_detector::CompressionPriority::Immediate;
 
-            // Spawn compression task
+        if immediate {
+            tracing::info!(signals = ?detection.signals, "Signal-triggered compression (immediate)");
+            let service = Arc::clone(self);
+            tokio::spawn(async move {
+                match service.compress().await {
+                    Ok(result) => tracing::info!(
+                        facts = result.facts_extracted,
+                        "Immediate compression completed (signal)"
+                    ),
+                    Err(e) => tracing::error!(error = %e, "Immediate compression failed (signal)"),
+                }
+            });
+        } else if threshold_crossed {
+            tracing::info!(turns, threshold, "Turn threshold reached, triggering compression");
             let service = Arc::clone(self);
             tokio::spawn(async move {
                 match service.check_and_compress().await {
-                    Ok(Some(result)) => {
-                        tracing::info!(
-                            facts = result.facts_extracted,
-                            duration_ms = result.duration_ms,
-                            "Immediate compression completed (turn threshold)"
-                        );
-                    }
-                    Ok(None) => {
-                        tracing::debug!("Immediate compression: no action needed");
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Immediate compression failed");
-                    }
+                    Ok(Some(result)) => tracing::info!(
+                        facts = result.facts_extracted,
+                        "Immediate compression completed (turn threshold)"
+                    ),
+                    Ok(None) => tracing::debug!("Compression: no action needed"),
+                    Err(e) => tracing::error!(error = %e, "Compression failed (turn threshold)"),
                 }
             });
         }
@@ -686,22 +650,6 @@ mod tests {
         let config = CompressionConfig::default();
         assert_eq!(config.batch_size, 50);
         assert_eq!(config.background_interval_seconds, 3600);
-    }
-
-    #[tokio::test]
-    async fn test_signal_triggered_compression() {
-        let (service, _database, _temp_dir) = create_test_service_with_tempdir().await;
-
-        // With SessionStore removed, compression returns empty immediately.
-        // Verify it doesn't panic and handles signals gracefully.
-        let message = "记住，我喜欢用 Vim";
-        let result = service
-            .check_and_compress_with_signal(message)
-            .await
-            .unwrap();
-
-        // Without raw memories, compression always returns None or empty result
-        assert!(result.is_some() || result.is_none());
     }
 
     /// Empty database: compression returns an empty result without error.
@@ -913,5 +861,23 @@ mod tests {
             .unwrap();
 
         assert_eq!(backend.count_unprocessed("default").await.unwrap(), 0);
+    }
+
+    #[test]
+    fn correction_message_classifies_immediate() {
+        let detector = crate::memory::compression::signal_detector::SignalDetector::new();
+        let d = detector.detect("不对，我说的是 Rust");
+        assert!(d.should_compress);
+        assert_eq!(
+            d.priority,
+            crate::memory::compression::signal_detector::CompressionPriority::Immediate
+        );
+    }
+
+    #[test]
+    fn neutral_message_does_not_force_compression() {
+        let detector = crate::memory::compression::signal_detector::SignalDetector::new();
+        let d = detector.detect("帮我看一下这段代码");
+        assert!(!d.should_compress);
     }
 }

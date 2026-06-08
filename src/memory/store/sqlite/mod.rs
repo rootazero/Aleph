@@ -22,9 +22,32 @@ use crate::sync_primitives::Mutex;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
+/// Tunable knobs for hybrid (vector + FTS) retrieval fusion.
+///
+/// Defaults reproduce the historical hardcoded behaviour (RRF k=60,
+/// BM25 lift 0.15) so every construction site that does not override
+/// these is byte-for-byte unchanged.
+#[derive(Debug, Clone, Copy)]
+pub struct RetrievalTuning {
+    /// Reciprocal Rank Fusion constant.
+    pub rrf_k: u32,
+    /// Extra multiplicative lift applied to FTS (lexical) matches in fusion.
+    pub bm25_bonus_weight: f32,
+}
+
+impl Default for RetrievalTuning {
+    fn default() -> Self {
+        Self {
+            rrf_k: 60,
+            bm25_bonus_weight: 0.15,
+        }
+    }
+}
+
 /// SQLite-backed memory store using sqlite-vec for vector operations.
 pub struct SqliteMemoryBackend {
     conn: Mutex<Connection>,
+    tuning: RetrievalTuning,
 }
 
 impl SqliteMemoryBackend {
@@ -80,6 +103,7 @@ impl SqliteMemoryBackend {
 
         Ok(Self {
             conn: Mutex::new(conn),
+            tuning: RetrievalTuning::default(),
         })
     }
 
@@ -105,7 +129,19 @@ impl SqliteMemoryBackend {
 
         Ok(Self {
             conn: Mutex::new(conn),
+            tuning: RetrievalTuning::default(),
         })
+    }
+
+    /// Override retrieval fusion tuning. Consumes and returns `self` so it
+    /// can be chained right after `new()` at the live construction site,
+    /// before the backend is wrapped in `Arc` and shared.
+    pub fn with_retrieval_tuning(mut self, rrf_k: u32, bm25_bonus_weight: f32) -> Self {
+        self.tuning = RetrievalTuning {
+            rrf_k,
+            bm25_bonus_weight,
+        };
+        self
     }
 
     // ---- Dashboard helpers (raw_memories-based) -----------------------------

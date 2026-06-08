@@ -507,9 +507,11 @@ where
                         super::history::write_conversation_memory(mb, sk, agent_id, ui, ao).await;
                     });
                 }
-                // Record conversation turn for compression scheduling
+                // Record conversation turn for compression scheduling.
+                // Signal-aware: corrections compress immediately; other turns
+                // ride the turn-threshold cadence.
                 if let Some(ref cs) = self.compression_service {
-                    cs.record_turn_and_check();
+                    cs.record_turn_and_check_signal(&request.input);
                 }
 
                 // Async session compaction (hierarchical summarization)

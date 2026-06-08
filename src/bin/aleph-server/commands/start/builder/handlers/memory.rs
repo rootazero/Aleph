@@ -278,15 +278,12 @@ pub(in crate::commands::start) fn init_compression_service(
 
 pub(in crate::commands::start) async fn init_command_handler(
     state_db: &std::sync::Arc<alephcore::resilience::database::StateDatabase>,
-    memory_db: &alephcore::memory::store::MemoryBackend,
+    _memory_db: &alephcore::memory::store::MemoryBackend,
     _daemon: bool,
 ) -> std::sync::Arc<alephcore::memory::events::handler::MemoryCommandHandler> {
     use alephcore::memory::events::handler::MemoryCommandHandler;
 
-    std::sync::Arc::new(MemoryCommandHandler::new(
-        std::sync::Arc::clone(state_db),
-        Some(memory_db.clone()),
-    ))
+    std::sync::Arc::new(MemoryCommandHandler::new(std::sync::Arc::clone(state_db)))
 }
 
 // ─── init_memory_context_provider ────────────────────────────────────────────
