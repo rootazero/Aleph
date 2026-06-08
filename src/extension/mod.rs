@@ -284,6 +284,40 @@ impl ExtensionManager {
         *self.mcp_handle.write().unwrap_or_else(|e| e.into_inner()) = Some(handle);
     }
 
+    /// Bind every registered MCP-backed memory extension to the live MCP
+    /// manager. Idempotent: re-binding an already-bound extension just re-stores
+    /// the caller. No-op unless BOTH the MCP handle and the memory registry are
+    /// present (CLI/test paths leave them unset). Call once at boot after
+    /// `set_mcp_handle` + `set_memory_registry` + plugin load, and again after
+    /// hot-loading a plugin.
+    pub async fn bind_memory_callers(&self) {
+        use crate::memory::extensions::ManagerBackedMcpCaller;
+        let handle = {
+            let g = self.mcp_handle.read().unwrap_or_else(|e| e.into_inner());
+            match g.as_ref() {
+                Some(h) => h.clone(),
+                None => return,
+            }
+        };
+        let registry = {
+            let g = self.memory_registry.read().unwrap_or_else(|e| e.into_inner());
+            match g.as_ref() {
+                Some(r) => r.clone(),
+                None => return,
+            }
+        };
+        for ext in registry.mcp_bindings_snapshot() {
+            if let Some(server_id) = ext.server_id() {
+                let caller = crate::sync_primitives::Arc::new(ManagerBackedMcpCaller::new(
+                    handle.clone(),
+                    server_id.to_string(),
+                ));
+                ext.rebind(caller);
+                tracing::info!(server_id = %server_id, "bound memory MCP caller");
+            }
+        }
+    }
+
     /// Register every enabled MCP-kind plugin's `.mcp.json` servers with the
     /// attached MCP manager as **transient** (runtime-only) servers.
     ///
