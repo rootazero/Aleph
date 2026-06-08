@@ -72,6 +72,9 @@ libc = "0.2"
 # Plugin packaging
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# Base64 encoding for shipping local plugin zips to the daemon over JSON-RPC
+base64 = "0.22"
+
 [dev-dependencies]
 tempfile = "3.8"
 
