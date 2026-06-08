@@ -10,23 +10,31 @@
 //! back through the team's own messaging system rather than requiring the user
 //! to poll a board.
 //!
-//! Outbound notifications go through the [`Aggregator`] rather than the raw
-//! router. The dispatcher runs team tasks **concurrently**, so the final batch
-//! of tasks can reach a terminal state within the same instant: every
-//! `TeamTaskCompleted` handler then observes `team_work_finished() == true` and
-//! a naive router send would deliver one "Team work complete" message *per*
-//! final task (and one alert per task in a failure storm). The aggregator keys
-//! by `(team_id, from, to, msg_type, subject)`, so those simultaneous,
-//! same-subject notifications coalesce into a single delivery inside the flush
-//! window — collapsing the burst to one leader notification without any
-//! per-notifier state. Decision-loaded traffic (approvals/shutdowns) bypasses
-//! batching automatically; the dispatcher only ever emits `SystemNotification`.
+//! ## Once-only completion, coalesced failures
+//!
+//! The dispatcher runs team tasks **concurrently**, so the final batch of tasks
+//! can reach a terminal state within the same instant: every `TeamTaskCompleted`
+//! handler then observes `team_work_finished() == true`. Two layers guard the
+//! leader's inbox against the resulting burst:
+//!
+//! - **Completion is idempotent per team.** A `completed_teams` claim set lets
+//!   exactly one handler win the terminal "Team work complete" notification; the
+//!   rest short-circuit. This is true once-only delivery — the leader receives a
+//!   single message with a single task summary, not N near-identical blocks.
+//! - **Failure storms coalesce.** Outbound traffic still flows through the
+//!   [`Aggregator`] rather than the raw router. When N tasks fail in the same
+//!   instant the per-task alerts share the `(team_id, from, to, msg_type,
+//!   subject)` key, so they merge into one delivery inside the flush window
+//!   instead of N separate alerts. Decision-loaded traffic (approvals/shutdowns)
+//!   bypasses batching automatically; the dispatcher only ever emits
+//!   `SystemNotification`.
 
 use async_trait::async_trait;
+use std::collections::HashSet;
 
 use crate::agents::swarm::tasks::{CoordTaskFilter, CoordTaskStatus, CoordTaskStore};
 use crate::event::{AlephEvent, EventContext, EventHandler, EventType, HandlerError};
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 use crate::teams::messages::aggregator::Aggregator;
 use crate::teams::messages::router::SendRequest;
 use crate::teams::messages::types::MessageType;
@@ -40,10 +48,17 @@ pub struct TeamNotifier {
     team_store: Arc<dyn TeamStore>,
     coord_store: Arc<dyn CoordTaskStore>,
     /// Batched outbound sink. Wraps the team
-    /// [`MessageRouter`](crate::teams::messages::MessageRouter) so that bursts
-    /// of same-subject notifications (concurrent task completions / failure
-    /// storms) coalesce into one leader delivery. See the module docs.
+    /// [`MessageRouter`](crate::teams::messages::MessageRouter) so that a
+    /// failure storm (N tasks failing at once) coalesces into one leader
+    /// delivery. See the module docs.
     sink: Arc<Aggregator>,
+    /// Teams whose terminal "Team work complete" notification has already been
+    /// claimed. Guards the concurrent dispatcher from firing the completion
+    /// message once per simultaneously-finishing task; the first handler to
+    /// insert a team id wins, the rest short-circuit. Monotonic — a team id is
+    /// only ever inserted once, bounding growth by the number of distinct teams
+    /// that complete over the daemon's lifetime.
+    completed_teams: Mutex<HashSet<String>>,
 }
 
 impl TeamNotifier {
@@ -56,6 +71,7 @@ impl TeamNotifier {
             team_store,
             coord_store,
             sink,
+            completed_teams: Mutex::new(HashSet::new()),
         }
     }
 
@@ -153,6 +169,22 @@ impl EventHandler for TeamNotifier {
             }
                 // Only notify once the whole team's work is terminal.
                 if self.team_work_finished(team_id).await => {
+                    // Claim the terminal notification exactly once per team.
+                    // Under concurrent dispatch the final tasks finish in the
+                    // same instant and each observes `team_work_finished()`;
+                    // only the first handler to insert the id proceeds. The
+                    // guard is dropped before the await — no lock held across
+                    // `.await`.
+                    let first_claim = {
+                        let mut done = self
+                            .completed_teams
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        done.insert(team_id.clone())
+                    };
+                    if !first_claim {
+                        return Ok(vec![]);
+                    }
                     let summary = result_summary.as_deref().unwrap_or("");
                     self.notify_leader(
                         team_id,
