@@ -64,6 +64,30 @@ pub fn tier_for_permissions(permissions: &[String]) -> &'static str {
     }
 }
 
+/// Default permission tier for a freshly-attached connection, as a function of
+/// its surface identity and whether it attaches over loopback (same machine).
+///
+/// SSOT for the rule that used to live implicitly in the shared-token / no-auth
+/// operator grants: a same-machine attach is operator (the OS boundary is the
+/// trust boundary); a remote attach defaults to chat and must be raised
+/// explicitly (Spec B `devices.set_level`).
+///
+/// `channel_kind` is carried for identity and future per-kind refinement; today
+/// the tier is determined solely by the attach boundary, so every kind maps the
+/// same way. Keeping it in the signature makes the rule's shape explicit and
+/// gives later phases one place to specialise.
+pub fn default_tier(channel_kind: crate::gateway::surface::SurfaceKind, is_loopback: bool) -> Tier {
+    let _ = channel_kind; // carried for identity; not yet a tier input (see doc).
+    match is_loopback {
+        // Same-machine attach: operator. Byte-equivalent to the legacy
+        // `vec!["*"]` grant on the shared-token / no-auth loopback paths.
+        true => Tier::Config,
+        // Remote attach: chat by default (matches pairing's `Tier::from_level`
+        // default; an operator raises it via `devices.set_level`).
+        false => Tier::Chat,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -117,5 +141,25 @@ mod tests {
     #[test]
     fn tier_label_chat_for_empty() {
         assert_eq!(tier_for_permissions(&[]), "chat");
+    }
+
+    #[test]
+    fn loopback_attach_is_config_operator_for_every_kind() {
+        use crate::gateway::surface::SurfaceKind;
+        for k in [SurfaceKind::Desktop, SurfaceKind::Browser, SurfaceKind::Cli, SurfaceKind::Unknown] {
+            assert_eq!(default_tier(k, true), Tier::Config);
+            // Byte-equivalent to the legacy `vec!["*"]` loopback operator grant.
+            assert_eq!(default_tier(k, true).permissions(), vec!["*".to_string()]);
+            assert_eq!(role_for_permissions(&default_tier(k, true).permissions()), "operator");
+        }
+    }
+
+    #[test]
+    fn remote_attach_defaults_to_chat_for_every_kind() {
+        use crate::gateway::surface::SurfaceKind;
+        for k in [SurfaceKind::Desktop, SurfaceKind::Browser, SurfaceKind::Cli, SurfaceKind::Unknown] {
+            assert_eq!(default_tier(k, false), Tier::Chat);
+            assert_eq!(role_for_permissions(&default_tier(k, false).permissions()), "guest");
+        }
     }
 }
