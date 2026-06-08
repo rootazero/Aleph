@@ -219,11 +219,13 @@ impl ExtensionManager {
                 description: record.description.clone(),
                 enabled: record.status.is_active(),
                 path: record.root_dir.display().to_string(),
-                skills_count: 0,
-                commands_count: 0,
-                agents_count: 0,
+                skills_count: record.skill_count,
+                commands_count: record.command_count,
+                agents_count: record.agent_count,
                 hooks_count: record.hook_count,
-                mcp_servers_count: 0,
+                mcp_servers_count: record.mcp_server_count,
+                status: record.status.label().to_string(),
+                error: record.error.clone(),
             })
             .collect()
     }

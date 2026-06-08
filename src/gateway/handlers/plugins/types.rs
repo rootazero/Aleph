@@ -17,9 +17,15 @@ pub struct PluginInfoJson {
     pub enabled: bool,
     pub path: String,
     pub skills_count: u32,
+    pub commands_count: u32,
     pub agents_count: u32,
     pub hooks_count: u32,
     pub mcp_servers_count: u32,
+    /// Runtime status: "loaded" | "disabled" | "overridden" | "error".
+    pub status: String,
+    /// Error message when the plugin failed to load.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 impl From<PluginInfo> for PluginInfoJson {
@@ -31,9 +37,12 @@ impl From<PluginInfo> for PluginInfoJson {
             enabled: info.enabled,
             path: info.path,
             skills_count: info.skills_count as u32,
+            commands_count: info.commands_count as u32,
             agents_count: info.agents_count as u32,
             hooks_count: info.hooks_count as u32,
             mcp_servers_count: info.mcp_servers_count as u32,
+            status: info.status,
+            error: info.error,
         }
     }
 }
