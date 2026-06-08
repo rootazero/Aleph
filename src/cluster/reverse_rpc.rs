@@ -209,4 +209,30 @@ mod tests {
         assert!(resp.is_success());
         assert_eq!(resp.result.unwrap()["echoed"], "bash");
     }
+
+    #[tokio::test]
+    async fn call_times_out_when_no_response() {
+        // 出站接收端保活但永不回响应 → 必须超时（而非永久挂起）。
+        let (out_tx, _out_rx_keepalive) = tokio::sync::mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(out_tx);
+
+        let err = channel
+            .call("tool.call", json!({}), 50)
+            .await
+            .expect_err("must time out");
+        assert!(matches!(err, ReverseRpcError::Timeout(50)));
+    }
+
+    #[tokio::test]
+    async fn call_fails_when_transport_closed() {
+        let (out_tx, out_rx) = tokio::sync::mpsc::channel::<String>(8);
+        drop(out_rx); // 立刻关闭出站 → send 失败
+        let channel = ReverseRpcChannel::new(out_tx);
+
+        let err = channel
+            .call("tool.call", json!({}), 1_000)
+            .await
+            .expect_err("must fail closed");
+        assert!(matches!(err, ReverseRpcError::TransportClosed));
+    }
 }
