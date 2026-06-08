@@ -145,7 +145,7 @@ enum OutboundInteraction {
 2. **`channel_kind` 全构造点更新**：`ConnectionState` 新具名非 Default 字段会强制全部构造点更新（编译器即检查），需确认测试构造点数量（参考 Spec B AuthContext 经验：Explore 可能漏报）。
 3. **审批回投统一的等价性**：移除 in-band 文本特例后，必须验证桌面审批体验等价（Phase 3b-2a 卡片仍在）——不是删能力，是换路由。
 4. **投递面 vs channel 的边界拿捏**：`DeliverySurface` 只做出站投递，**绝不**滑向 inbound parse——一旦有人想给它加「解析壳消息」就是滑回 Approach B，需在 review 守住。
-5. **loopback-bot channel_kind 误标（Phase 0 已落、Phase 1 前必须解决）**：Phase 0 的身份推断对「未声明 kind + loopback」回退为 `Desktop`。但本机 Telegram/Slack bot adapter 也走 loopback，会被标成 `Desktop`。Phase 0 无害（`channel_kind` 仅作 identity，不参与 tier——tier 只由 is_loopback 决定）。**但 Phase 1 一旦用 `channel_kind` 做投递路由（如「只给 Desktop 面推桌面通知」），这些 bot 连接会被误投。** Phase 1 落地前必须让本机 bot 显式声明自己的 kind，或在路由处加 metadata 标记区分真桌面壳与同机 bot。
+5. **loopback-bot channel_kind 误标（Phase 0 已落、~~Phase 1 前必须解决~~ — 2026-06-08 代码核查后判定伪命题）**：Phase 0 的身份推断对「未声明 kind + loopback」回退为 `Desktop`。担心本机 Telegram/Slack bot adapter 也走 loopback 被标成 `Desktop` 而在 Phase 1 投递路由时被误投。**核查结论：不成立。** `src/gateway/interfaces/` 的 ~20 个 channel 无一回连自己的 WS——telegram(teloxide HTTP) / discord / slack / feishu / whatsapp… 全是 in-process 跑 HTTP/原生协议客户端，从不发 loopback `connect`。能走 loopback `connect` 的只有桌面壳 / 浏览器 Panel / CLI，三者都在首帧显式声明 `channel_kind`，撞不上 Desktop 回退。Phase 1 plan 进一步令 `notify.rs` 显式声明 `channel_kind:"desktop"`（远程桌面 client_ip 非 loopback，必须显式声明），回退仅作安全网。**此风险关闭。**
 
 ## 11. 范围外（YAGNI）
 
