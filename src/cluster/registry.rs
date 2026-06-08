@@ -119,6 +119,21 @@ impl NodeRegistry {
         let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
         inner.nodes_by_id.get(node_id).map(|s| s.channel.clone())
     }
+
+    /// 按 name 或 id 解析一个在线节点，返回其反向 RPC 通道 + 声明的命令目录。
+    /// 先按 node_id 精确命中，再按 device_name 命中。`node_invoke` 用它寻址 +
+    /// fail-fast 校验。
+    pub fn resolve(&self, name_or_id: &str) -> Option<(ReverseRpcChannel, Vec<CommandDescriptor>)> {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = inner.nodes_by_id.get(name_or_id) {
+            return Some((s.channel.clone(), s.declared_commands.clone()));
+        }
+        inner
+            .nodes_by_id
+            .values()
+            .find(|s| s.device_name == name_or_id)
+            .map(|s| (s.channel.clone(), s.declared_commands.clone()))
+    }
 }
 
 /// connect→register 接缝：仅当 `role == Some("node")` 时把这条连接登记进
@@ -228,6 +243,16 @@ mod tests {
         reg.register(session("node-a", "conn-1"));
         assert!(reg.get("node-a").is_some());
         assert!(reg.get("missing").is_none());
+    }
+
+    #[test]
+    fn resolve_by_id_then_by_name() {
+        let reg = NodeRegistry::new();
+        reg.register(session("node-a", "conn-1")); // device_name = "dev-node-a"
+        assert!(reg.resolve("node-a").is_some(), "by id");
+        let (_, cmds) = reg.resolve("dev-node-a").expect("by name");
+        assert_eq!(cmds[0].name, "bash");
+        assert!(reg.resolve("nope").is_none());
     }
 
     #[test]
