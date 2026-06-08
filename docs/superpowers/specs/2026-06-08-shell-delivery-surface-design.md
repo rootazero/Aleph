@@ -109,9 +109,10 @@ enum OutboundInteraction {
   - 引入 `DeliverySurface` + 桌面投递面注册为核侧可寻址目标；核侧 R5 决策定向投递；壳内 `notify.rs` 退化为纯渲染（保留 focus-gate）。
   - **验收**：核统一把 R5 投给桌面面，无并行 event_bus 重订阅逻辑；focus-gate 仍在壳内、行为不变。
 
-- **Phase 2 · 审批/交互回投走投递面**
-  - 审批请求经 `deliver(ApprovalRequest)` 投到 operator 的投递面，与 channel 审批同一路；消化 Panel 的 in-band / event_bus 审批特例。
-  - **验收**：桌面审批与 Telegram 审批共用一条回投抽象。
+- **Phase 2 · 审批 banner 走投递面（桌面腿）** — 精化设计见 [`2026-06-08-shell-delivery-surface-phase2-design.md`](./2026-06-08-shell-delivery-surface-phase2-design.md)
+  - 桌面审批的 **OS banner 出站腿**经 `deliver(ApprovalRequest)` 走投递面：`r5_router` 把 `ApprovalRequested` 映射为 `OutboundInteraction::ApprovalRequest`，`DesktopSurface` 发**新帧 `surface.approval`**（operator-gated + audience:[desktop]），`notify.rs` 删 bespoke `approval.requested` arm、改订阅 `surface.approval`。确立 `OutboundInteraction::ApprovalRequest` 为共享接缝。
+  - **brainstorming 二次确认的收窄**（父 spec 原表述过粗）：① Telegram 留在既有 `ChannelApprovalBridgeAdapter`（概念已对齐，**不**字面实现 `DeliverySurface`）；② **保留** in-band `ResponseChunk`「⏳ 等待管理员授权」（请求者反馈，正交，非投递面重复）；③ Panel 卡片 / `exec.approvals.pending` refetch / approve-deny RPC（入站能力）原样不动。
+  - **验收**：桌面审批 banner 经投递面统一渲染；删除 `notify.rs` 重复审批 arm；operator 闸不放宽（guest/chat 桌面拿不到 `surface.approval`）；入站响应关联零改。
 
 ## 7. 安全
 
@@ -143,7 +144,7 @@ enum OutboundInteraction {
 
 1. **R5 决策从壳搬到核的接缝**：focus 状态只有壳知道——核侧只能做「值不值得打扰 + 投给哪个面」，最终 gate 仍在壳。plan 阶段必须画清「核侧投递 vs 壳侧 focus-gate」的责任线，否则会出现「核以为投了、壳 focus-gate 吞了」的静默丢失。本 spec 最大真实改动面。
 2. **`channel_kind` 全构造点更新**：`ConnectionState` 新具名非 Default 字段会强制全部构造点更新（编译器即检查），需确认测试构造点数量（参考 Spec B AuthContext 经验：Explore 可能漏报）。
-3. **审批回投统一的等价性**：移除 in-band 文本特例后，必须验证桌面审批体验等价（Phase 3b-2a 卡片仍在）——不是删能力，是换路由。
+3. **审批回投统一的等价性**：~~移除 in-band 文本特例后~~（2026-06-08 二次确认：**in-band `ResponseChunk` 保留**，它是请求者反馈非投递面重复）。Phase 2 只换 **banner 出站腿**的路由（`approval.requested` arm → `surface.approval`），必须验证桌面审批 banner 体验等价（稀疏帧→静态文案 fallback 逐字等价）+ operator 闸不放宽（`surface.approval` 与 `approval.` 同谓词）——不是删能力，是换路由。Panel 卡片（入站 UI）不动。
 4. **投递面 vs channel 的边界拿捏**：`DeliverySurface` 只做出站投递，**绝不**滑向 inbound parse——一旦有人想给它加「解析壳消息」就是滑回 Approach B，需在 review 守住。
 5. **loopback-bot channel_kind 误标（Phase 0 已落、~~Phase 1 前必须解决~~ — 2026-06-08 代码核查后判定伪命题）**：Phase 0 的身份推断对「未声明 kind + loopback」回退为 `Desktop`。担心本机 Telegram/Slack bot adapter 也走 loopback 被标成 `Desktop` 而在 Phase 1 投递路由时被误投。**核查结论：不成立。** `src/gateway/interfaces/` 的 ~20 个 channel 无一回连自己的 WS——telegram(teloxide HTTP) / discord / slack / feishu / whatsapp… 全是 in-process 跑 HTTP/原生协议客户端，从不发 loopback `connect`。能走 loopback `connect` 的只有桌面壳 / 浏览器 Panel / CLI，三者都在首帧显式声明 `channel_kind`，撞不上 Desktop 回退。Phase 1 plan 进一步令 `notify.rs` 显式声明 `channel_kind:"desktop"`（远程桌面 client_ip 非 loopback，必须显式声明），回退仅作安全网。**此风险关闭。**
 
