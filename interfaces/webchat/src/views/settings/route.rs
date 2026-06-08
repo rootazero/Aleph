@@ -246,6 +246,12 @@ pub fn RouteView() -> impl IntoView {
                             />
                         </div>
                     </div>
+                    // Per-provider rpm/tpm ceilings (used by Usage-based).
+                    <RateLimitEditor
+                        providers=providers
+                        rate_limits=rate_limits
+                        saved=saved
+                    />
                 </div>
             </Show>
         </div>
@@ -303,6 +309,89 @@ fn ProviderTierSelect(
             <Show when=move || matching.get().is_empty()>
                 <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.route.no_providers)}</p>
             </Show>
+        </div>
+    }
+}
+
+/// Per-provider soft rate-limit editor. Iterates every configured provider and
+/// exposes two optional number inputs (rpm / tpm). An empty field clears that
+/// dimension; clearing both removes the provider's entry entirely, so the saved
+/// `rate_limits` map stays minimal and byte-identical to a hand-written
+/// `[route.rate_limits.*]` block.
+#[component]
+fn RateLimitEditor(
+    providers: RwSignal<Vec<RouteProviderInfo>>,
+    rate_limits: RwSignal<BTreeMap<String, RateLimit>>,
+    saved: RwSignal<bool>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    view! {
+        <div class="pt-2">
+            <h3 class="font-semibold text-text-primary mb-1">{t!(i18n, settings.route.rate_limits)}</h3>
+            <p class="text-sm text-text-secondary mb-3">
+                {t!(i18n, settings.route.rate_limits_desc)}
+            </p>
+            <div class="space-y-2">
+                {move || providers.get().into_iter().map(|p| {
+                    let name = p.name.clone();
+                    let name_rpm = name.clone();
+                    let name_tpm = name.clone();
+                    let rpm_val = {
+                        let name = name.clone();
+                        move || rate_limits.get().get(&name).and_then(|r| r.rpm)
+                            .map(|v| v.to_string()).unwrap_or_default()
+                    };
+                    let tpm_val = {
+                        let name = name.clone();
+                        move || rate_limits.get().get(&name).and_then(|r| r.tpm)
+                            .map(|v| v.to_string()).unwrap_or_default()
+                    };
+                    view! {
+                        <div class="flex items-center gap-3 bg-surface-raised rounded-lg border border-border p-3">
+                            <span class="flex-1 text-sm text-text-primary truncate">{p.name.clone()}</span>
+                            <input
+                                type="number"
+                                min="0"
+                                class="w-28 bg-surface border border-border rounded px-2 py-1 text-sm text-text-primary"
+                                title=move || t_string!(i18n, settings.route.rpm).to_string()
+                                placeholder=move || t_string!(i18n, settings.route.unlimited).to_string()
+                                prop:value=rpm_val
+                                on:input=move |ev| {
+                                    let v = parse_limit(&event_target_value(&ev));
+                                    let key = name_rpm.clone();
+                                    rate_limits.update(|m| {
+                                        let e = m.entry(key.clone()).or_default();
+                                        e.rpm = v;
+                                        if e.rpm.is_none() && e.tpm.is_none() { m.remove(&key); }
+                                    });
+                                    saved.set(false);
+                                }
+                            />
+                            <input
+                                type="number"
+                                min="0"
+                                class="w-28 bg-surface border border-border rounded px-2 py-1 text-sm text-text-primary"
+                                title=move || t_string!(i18n, settings.route.tpm).to_string()
+                                placeholder=move || t_string!(i18n, settings.route.unlimited).to_string()
+                                prop:value=tpm_val
+                                on:input=move |ev| {
+                                    let v = parse_limit(&event_target_value(&ev));
+                                    let key = name_tpm.clone();
+                                    rate_limits.update(|m| {
+                                        let e = m.entry(key.clone()).or_default();
+                                        e.tpm = v;
+                                        if e.rpm.is_none() && e.tpm.is_none() { m.remove(&key); }
+                                    });
+                                    saved.set(false);
+                                }
+                            />
+                        </div>
+                    }
+                }).collect::<Vec<_>>()}
+                <Show when=move || providers.get().is_empty()>
+                    <p class="text-xs text-text-tertiary">{t!(i18n, settings.route.no_providers)}</p>
+                </Show>
+            </div>
         </div>
     }
 }
