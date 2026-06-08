@@ -153,7 +153,7 @@ fn service_unavailable(req: JsonRpcRequest, reason: &'static str) -> JsonRpcResp
 /// Each call loads (or creates) the ledger from `~/.aleph/runtimes/ledger.json`.
 /// This avoids threading shared state through the registry while remaining correct —
 /// the ledger is persisted on disk, so concurrent callers see the same data.
-fn make_runtime_ledger(
+pub fn make_runtime_ledger(
 ) -> Result<std::sync::Arc<tokio::sync::RwLock<crate::runtimes::ledger::CapabilityLedger>>, String>
 {
     let dir = crate::runtimes::get_runtimes_dir().map_err(|e| format!("runtimes dir: {e}"))?;

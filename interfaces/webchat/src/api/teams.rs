@@ -452,6 +452,10 @@ pub struct UsageTotals {
     pub cache_creation_tokens: u64,
     #[serde(default)]
     pub reasoning_tokens: u64,
+    /// Cache read tokens as a fraction of total input (0.0–1.0); computed
+    /// server-side. `None` when the backend omitted it.
+    #[serde(default)]
+    pub cache_hit_ratio: Option<f64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]

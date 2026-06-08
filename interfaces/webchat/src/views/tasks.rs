@@ -293,9 +293,9 @@ fn HeartbeatListItem(
     let name = task.name.clone();
     let enabled = task.enabled;
     let interval_ms = task.interval_ms;
-    let next_due_ms = task.next_due_ms;
-    let has_errors = task.consecutive_errors > 0;
-    let last_l2 = task.last_l2_status.clone().unwrap_or_default();
+    let next_due_ms = task.state.next_due_ms;
+    let has_errors = task.state.consecutive_errors > 0;
+    let last_l2 = task.state.last_l2_status.clone().unwrap_or_default();
 
     let interval_str = format_interval(interval_ms);
 
@@ -412,8 +412,14 @@ fn HeartbeatEditor(
                 form_name.set(task.name.clone());
                 form_agent_id.set(task.agent_id.clone());
                 form_interval.set(format_interval(task.interval_ms));
-                form_probe_tool.set(task.probe_tool_name.clone());
-                form_trigger_condition.set(task.probe_trigger_condition.clone());
+                form_probe_tool.set(task.probe.tool_name.clone());
+                form_trigger_condition.set(
+                    task.probe
+                        .trigger_condition
+                        .as_ref()
+                        .map(crate::api::heartbeat::trigger_condition_to_form)
+                        .unwrap_or_default(),
+                );
                 form_enabled.set(task.enabled);
                 confirm_delete.set(false);
 

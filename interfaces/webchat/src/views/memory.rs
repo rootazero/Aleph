@@ -165,7 +165,7 @@ pub fn Memory() -> impl IntoView {
             }}
 
             // Memory Stats
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
                  <Card class="bg-primary-subtle border-primary/10 p-6 flex flex-col items-start".to_string()>
                     <span class="text-[10px] font-bold text-primary uppercase tracking-widest mb-1.5">{t!(i18n, memory.compressed_facts)}</span>
                     <span class="text-3xl font-bold font-mono">
@@ -192,6 +192,16 @@ pub fn Memory() -> impl IntoView {
                         {move || {
                             stats.get()
                                 .map(|s| s.total_graph_nodes.to_string())
+                                .unwrap_or_else(|| "\u{2014}".to_string())
+                        }}
+                    </span>
+                 </Card>
+                 <Card class="bg-success-subtle border-success/10 p-6 flex flex-col items-start".to_string()>
+                    <span class="text-[10px] font-bold text-success uppercase tracking-widest mb-1.5">{t!(i18n, memory.graph_edges)}</span>
+                    <span class="text-3xl font-bold font-mono">
+                        {move || {
+                            stats.get()
+                                .map(|s| s.total_graph_edges.to_string())
                                 .unwrap_or_else(|| "\u{2014}".to_string())
                         }}
                     </span>
@@ -371,7 +381,6 @@ fn FactsTable(
                         <th class="p-4 pl-8">{t!(i18n, memory.col_content)}</th>
                         <th class="p-4">{t!(i18n, memory.col_agent)}</th>
                         <th class="p-4">{t!(i18n, memory.col_type)}</th>
-                        <th class="p-4">{t!(i18n, memory.col_confidence)}</th>
                         <th class="p-4 pr-8">{t!(i18n, memory.col_date)}</th>
                     </tr>
                 </thead>
@@ -379,15 +388,15 @@ fn FactsTable(
                     {move || {
                         if !connected.get() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.connect_to_view_facts)}</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.connect_to_view_facts)}</td></tr>
                             }.into_any()
                         } else if !loaded.get() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, common.loading)}</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, common.loading)}</td></tr>
                             }.into_any()
                         } else if facts.get().is_empty() {
                             view! {
-                                <tr><td colspan="5" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.no_facts)}</td></tr>
+                                <tr><td colspan="4" class="p-8 text-center text-text-tertiary">{t!(i18n, memory.no_facts)}</td></tr>
                             }.into_any()
                         } else {
                             view! {
@@ -395,14 +404,16 @@ fn FactsTable(
                                     each=move || facts.get()
                                     key=|fact| fact.id.clone()
                                     children=move |fact| {
+                                        // Backend note categories are lowercase
+                                        // (src/memory/context/enums.rs NoteType::as_str).
                                         let badge_variant = match fact.fact_type.as_str() {
-                                            "Preference" => BadgeVariant::Indigo,
-                                            "Learning" => BadgeVariant::Emerald,
-                                            "Personal" => BadgeVariant::Amber,
+                                            "preference" | "personal" => BadgeVariant::Indigo,
+                                            "learning" | "lesson" | "skill" => BadgeVariant::Emerald,
+                                            "plan" | "project" => BadgeVariant::Amber,
+                                            "feedback" => BadgeVariant::Red,
                                             _ => BadgeVariant::Slate,
                                         };
                                         let agent_id = fact.agent_id.clone();
-                                        let confidence_pct = format!("{:.0}%", fact.confidence * 100.0);
                                         let date = format_ts(fact.created_at);
                                         view! {
                                             <tr class="group hover:bg-surface-sunken transition-colors">
@@ -415,9 +426,6 @@ fn FactsTable(
                                                 </td>
                                                 <td class="p-4">
                                                     <Badge variant=badge_variant>{fact.fact_type}</Badge>
-                                                </td>
-                                                <td class="p-4">
-                                                    <span class="text-sm font-mono text-text-secondary">{confidence_pct}</span>
                                                 </td>
                                                 <td class="p-4 pr-8">
                                                     <div class="flex items-center gap-2 text-xs text-text-tertiary font-mono">

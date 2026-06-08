@@ -280,8 +280,6 @@ pub struct FactEntry {
     pub content: String,
     #[serde(rename = "fact_type")]
     pub note_type: String,
-    pub confidence: f32,
-    pub is_valid: bool,
     pub created_at: i64,
     pub category: String,
     pub path: String,
@@ -313,8 +311,6 @@ pub async fn handle_list_facts(request: JsonRpcRequest, db: MemoryBackend) -> Js
                     agent_id: n.agent_id,
                     content: n.filename.clone(),
                     note_type: n.category.clone(),
-                    confidence: 1.0,
-                    is_valid: true,
                     created_at: n.created_at,
                     category: n.category,
                     path: n.path,
