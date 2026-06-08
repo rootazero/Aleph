@@ -6,6 +6,7 @@
 //! configured → real name).
 
 use crate::api::ProviderInfo;
+use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
 use crate::i18n::*;
@@ -59,7 +60,6 @@ pub(super) fn SubscriptionLoginSection(
                     let name = preset.name;
                     let description = preset.description;
                     let icon_color = preset.icon_color;
-                    let first_char = preset.name.chars().next().unwrap_or('?').to_uppercase().to_string();
                     let oauth_connected = oauth_statuses_view[idx].1;
 
                     // OAuth providers may be stored under canonical name (e.g. "chatgpt" for "codex")
@@ -69,7 +69,7 @@ pub(super) fn SubscriptionLoginSection(
                         providers.get().iter().any(|p| p.name == name || p.name == canonical)
                     };
 
-                    let on_click = move |_| {
+                    let on_click = move || {
                         if is_configured() {
                             // Select by the name that actually exists in providers list
                             let actual_name = providers.get().iter()
@@ -83,74 +83,48 @@ pub(super) fn SubscriptionLoginSection(
                     };
 
                     view! {
-                        <button
-                            on:click=on_click
-                            class=move || {
-                                let base = "w-full text-left p-4 rounded-xl border-2 transition-all";
+                        <ProviderRowCard
+                            name=name.to_string()
+                            icon_color=icon_color.to_string()
+                            subtitle=description.to_string()
+                            is_selected=move || {
                                 let sel = selected.get();
-                                let is_sel = sel.as_deref() == Some(name)
+                                sel.as_deref() == Some(name)
                                     || sel.as_deref() == Some(canonical)
-                                    || sel.as_deref() == Some(&format!("__preset__{}", name));
+                                    || sel.as_deref() == Some(&format!("__preset__{}", name))
+                            }
+                            is_configured=move || {
                                 let connected = oauth_connected.get().unwrap_or(false);
                                 let is_verified = providers.get().iter()
                                     .find(|p| p.name == name || p.name == canonical)
                                     .is_some_and(|p| p.verified);
-                                if is_sel {
-                                    format!("{} bg-primary-subtle border-primary", base)
-                                } else if connected || is_verified {
-                                    format!("{} bg-surface-raised border-success/30 hover:border-primary/40", base)
-                                } else {
-                                    format!("{} bg-surface-raised border-border hover:border-primary/40", base)
-                                }
+                                connected || is_verified
                             }
-                        >
-                            <div class="flex items-center gap-3">
-                                <div
-                                    class="w-10 h-10 rounded-xl flex items-center justify-center text-white text-sm font-bold shrink-0"
-                                    style=format!("background-color: {}", icon_color)
-                                >
-                                    {first_char}
-                                </div>
-                                <div class="flex-1 min-w-0">
-                                    <div class="flex items-center gap-2">
-                                        <span class="font-semibold text-text-primary text-sm capitalize">
-                                            {name}
-                                        </span>
-                                        {move || {
-                                            let connected = oauth_connected.get().unwrap_or(false);
-                                            let list = providers.get();
-                                            let provider = list.iter().find(|p| p.name == name || p.name == canonical);
-                                            let is_default = provider.is_some_and(|p| p.is_default);
-                                            let is_verified = provider.is_some_and(|p| p.verified);
-                                            if is_default {
-                                                view! {
-                                                    <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                        {t!(i18n, settings.providers.default)}
-                                                    </span>
-                                                }.into_any()
-                                            } else if connected || is_verified {
-                                                view! {
-                                                    <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                        {t!(i18n, settings.providers.connected)}
-                                                    </span>
-                                                }.into_any()
-                                            } else {
-                                                view! {
-                                                    <span class="px-1.5 py-0.5 bg-surface-sunken text-text-tertiary text-xs rounded shrink-0">
-                                                        {t!(i18n, settings.providers.not_connected)}
-                                                    </span>
-                                                }.into_any()
-                                            }
-                                        }}
-                                    </div>
-                                    <div class="text-xs text-text-tertiary">{description}</div>
-                                </div>
-                                // Arrow icon
-                                <svg class="w-4 h-4 text-text-tertiary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            dot=move || {
+                                let connected = oauth_connected.get().unwrap_or(false);
+                                let is_verified = providers.get().iter()
+                                    .find(|p| p.name == name || p.name == canonical)
+                                    .is_some_and(|p| p.verified);
+                                if connected || is_verified { RowDot::Verified } else { RowDot::None }
+                            }
+                            badge=move || {
+                                let connected = oauth_connected.get().unwrap_or(false);
+                                let list = providers.get();
+                                let provider = list.iter().find(|p| p.name == name || p.name == canonical);
+                                let state = BadgeState {
+                                    is_default: provider.is_some_and(|p| p.is_default),
+                                    verified: connected || provider.is_some_and(|p| p.verified),
+                                };
+                                view! { <ProviderBadges state=state /> }.into_any()
+                            }
+                            large_icon=true
+                            trailing=move || view! {
+                                <svg class="w-4 h-4 text-text-tertiary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
                                 </svg>
-                            </div>
-                        </button>
+                            }.into_any()
+                            on_click=on_click
+                        />
                     }
                 }).collect_view()}
             </div>
@@ -196,27 +170,13 @@ pub(super) fn PresetGrid(
                                 }
                             }
                             badge=move || {
-                                let list = providers.get();
-                                let provider = list.iter().find(|p| p.name == name);
-                                if let Some(p) = provider {
-                                    if p.is_default {
-                                        view! {
-                                            <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                {t!(i18n, settings.providers.default)}
-                                            </span>
-                                        }.into_any()
-                                    } else if p.verified {
-                                        view! {
-                                            <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                {t!(i18n, settings.providers.verified)}
-                                            </span>
-                                        }.into_any()
-                                    } else {
-                                        view! { <span></span> }.into_any()
-                                    }
-                                } else {
-                                    view! { <span></span> }.into_any()
-                                }
+                                let p = providers.get();
+                                let entry = p.iter().find(|p| p.name == name);
+                                let state = crate::components::provider_badge::BadgeState {
+                                    is_default: entry.map(|p| p.is_default).unwrap_or(false),
+                                    verified: entry.map(|p| p.verified).unwrap_or(false),
+                                };
+                                view! { <ProviderBadges state=state /> }.into_any()
                             }
                             on_click=move || {
                                 if providers.get().iter().any(|p| p.name == name) {
@@ -287,21 +247,11 @@ pub(super) fn CustomProvidersList(
                                         is_configured=|| true
                                         dot=move || if verified { RowDot::Verified } else { RowDot::Inactive }
                                         badge=move || {
-                                            if is_default {
-                                                view! {
-                                                    <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                        {t!(i18n, settings.providers.default)}
-                                                    </span>
-                                                }.into_any()
-                                            } else if verified {
-                                                view! {
-                                                    <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                        {t!(i18n, settings.providers.verified)}
-                                                    </span>
-                                                }.into_any()
-                                            } else {
-                                                view! { <span></span> }.into_any()
-                                            }
+                                            let state = crate::components::provider_badge::BadgeState {
+                                                is_default,
+                                                verified,
+                                            };
+                                            view! { <ProviderBadges state=state /> }.into_any()
                                         }
                                         on_click=move || selected.set(Some(name_click.clone()))
                                     />
