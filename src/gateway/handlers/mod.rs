@@ -251,7 +251,15 @@ impl HandlerRegistry {
         registry.register("logs.getDirectory", logs::handle_get_directory);
 
         // Commands handlers
-        registry.register("commands.list", commands::handle_list);
+        //
+        // This base registration is a ToolCatalog-less fallback: it is
+        // overridden at startup (see agent_init) with the registry-backed
+        // `handle_list_from_registry`. Without the registry we cannot enumerate
+        // commands, so return an empty list rather than phantom built-ins that
+        // would not actually resolve.
+        registry.register("commands.list", |req| async move {
+            JsonRpcResponse::success(req.id, serde_json::json!({ "commands": [] }))
+        });
         registry.register("command.execute", |req| async move {
             JsonRpcResponse::error(
                 req.id,
