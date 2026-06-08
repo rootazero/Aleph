@@ -2,13 +2,11 @@
 //! 仅桌面 Tauri shell 内可交互;纯浏览器内只读降级。
 
 use crate::api::tauri_bridge;
-use crate::context::DashboardState;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
 pub fn ConnectionSection() -> impl IntoView {
-    let _state = expect_context::<DashboardState>();
     let in_shell = tauri_bridge::is_shell();
 
     let current = RwSignal::new(String::new());
