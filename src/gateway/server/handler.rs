@@ -668,6 +668,20 @@ async fn handle_connection(
                                                 let mut conns = ctx.connections.write().await;
                                                 if let Some(state) = conns.get_mut(&conn_id) {
                                                     state.authenticate(device_id.clone(), permissions, role);
+                                                    // Record the surface identity: client-declared kind, else
+                                                    // inferred from loopback (same-machine attach ⇒ desktop-class).
+                                                    let declared = req
+                                                        .params
+                                                        .as_ref()
+                                                        .and_then(|p| p.get("channel_kind"))
+                                                        .and_then(|v| v.as_str());
+                                                    let kind = match crate::gateway::surface::SurfaceKind::from_opt_str(declared) {
+                                                        crate::gateway::surface::SurfaceKind::Unknown if ctx.client_ip.is_loopback() => {
+                                                            crate::gateway::surface::SurfaceKind::Desktop
+                                                        }
+                                                        other => other,
+                                                    };
+                                                    state.channel_kind = Some(kind);
                                                     state.guest_session_id = guest_session_id.clone();
                                                     state.first_message = false;
                                                     // Capture the device-token hash ONLY when this

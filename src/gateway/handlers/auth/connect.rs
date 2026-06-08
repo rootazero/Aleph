@@ -39,6 +39,7 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
             device_type: None,
             device_id: None,
             challenge: None,
+            channel_kind: None,
         },
     };
 

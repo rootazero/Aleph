@@ -82,6 +82,11 @@ pub struct ConnectParams {
     /// payload, hardening LAN/Tailnet bind modes against replay attacks.
     #[serde(default)]
     pub challenge: Option<ChallengeResponseParams>,
+    /// Surface identity the client declares: `"desktop"`, `"browser"`, `"cli"`.
+    /// Absent/unknown → treated as `SurfaceKind::Unknown` and the tier falls
+    /// back to loopback inference. Purely identity — does not grant anything.
+    #[serde(default)]
+    pub channel_kind: Option<String>,
 }
 
 /// Client-supplied challenge response. Both fields originate from a prior

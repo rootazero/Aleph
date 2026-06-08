@@ -78,6 +78,12 @@ pub struct ConnectionState {
     /// counts established connections by this value so it isolates real
     /// clients even when many share one reverse-proxy socket address.
     pub client_ip: std::net::IpAddr,
+    /// Surface identity declared by the client on `connect` (or inferred from
+    /// loopback when undeclared). Names *what kind of shell* this connection is
+    /// — desktop / browser / cli — for tiering and (Phase 1+) delivery routing.
+    /// Distinct from `ChannelClass` (lane priority). `None` before connect or
+    /// for legacy clients that declared nothing.
+    pub channel_kind: Option<crate::gateway::surface::SurfaceKind>,
 }
 
 impl ConnectionState {
@@ -96,6 +102,7 @@ impl ConnectionState {
             guest_session_id: None,
             device_token_hash: None,
             client_ip,
+            channel_kind: None,
         }
     }
 
@@ -828,5 +835,24 @@ mod tests {
         let config = GatewayConfig::default();
         assert_eq!(config.max_connections, 1000);
         assert_eq!(config.auth_mode, AuthMode::Token);
+    }
+}
+
+#[cfg(test)]
+mod channel_kind_tests {
+    use super::*;
+    use crate::gateway::surface::SurfaceKind;
+
+    #[test]
+    fn new_connection_has_no_channel_kind() {
+        let cs = ConnectionState::new("127.0.0.1".parse().unwrap());
+        assert_eq!(cs.channel_kind, None);
+    }
+
+    #[test]
+    fn channel_kind_is_settable() {
+        let mut cs = ConnectionState::new("127.0.0.1".parse().unwrap());
+        cs.channel_kind = Some(SurfaceKind::Desktop);
+        assert_eq!(cs.channel_kind, Some(SurfaceKind::Desktop));
     }
 }
