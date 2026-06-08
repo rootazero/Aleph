@@ -10,47 +10,9 @@ use serde_json::json;
 
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_PARAMS};
 use super::parse_params;
-use crate::command::{CommandContext, CommandNode, CommandParser, CommandType};
+use crate::command::{CommandContext, CommandParser};
 use crate::sync_primitives::Arc;
-use crate::tool_metadata::{ToolCatalog, ToolSourceType, UnifiedTool};
-
-/// Command info for JSON serialization (backward compat for flat lists)
-#[derive(Debug, Clone, Serialize)]
-pub struct CommandInfo {
-    /// Command key (e.g., "search", "webfetch")
-    pub key: String,
-    /// Human-readable description
-    pub description: String,
-    /// SF Symbol icon name
-    pub icon: String,
-    /// Short hint text
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hint: Option<String>,
-    /// Command type: "action", "prompt", "namespace"
-    pub command_type: String,
-    /// Whether this command has children
-    pub has_children: bool,
-    /// Source identifier
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source_id: Option<String>,
-    /// Source type: "builtin", "mcp", "skill", "custom"
-    pub source_type: String,
-}
-
-impl From<CommandNode> for CommandInfo {
-    fn from(node: CommandNode) -> Self {
-        Self {
-            key: node.key,
-            description: node.description,
-            icon: node.icon,
-            hint: node.hint,
-            command_type: node.node_type.as_str().to_string(),
-            has_children: node.has_children,
-            source_id: node.source_id,
-            source_type: source_type_to_string(node.source_type),
-        }
-    }
-}
+use crate::tool_metadata::{ChannelType, ToolCatalog, ToolSourceType, UnifiedTool};
 
 fn source_type_to_string(st: ToolSourceType) -> String {
     match st {
@@ -63,18 +25,17 @@ fn source_type_to_string(st: ToolSourceType) -> String {
     }
 }
 
-impl From<UnifiedTool> for CommandInfo {
-    fn from(tool: UnifiedTool) -> Self {
-        Self {
-            key: tool.name,
-            description: tool.description,
-            icon: tool.icon.unwrap_or_else(|| "bolt".to_string()),
-            hint: tool.usage,
-            command_type: "action".to_string(),
-            has_children: tool.has_subtools,
-            source_id: Some(tool.id),
-            source_type: tool.source.label().to_lowercase(),
-        }
+/// Map a client-supplied `interface` hint to a [`ChannelType`] for visibility
+/// filtering. Unknown or absent values yield `None`, meaning "no filter — list
+/// every active command" (backward compatible with clients that send no hint).
+fn channel_from_interface(interface: &str) -> Option<ChannelType> {
+    match interface.trim().to_lowercase().as_str() {
+        "panel" | "webchat" | "web" => Some(ChannelType::Panel),
+        "tui" | "cli" | "terminal" => Some(ChannelType::Cli),
+        "telegram" => Some(ChannelType::Telegram),
+        "discord" => Some(ChannelType::Discord),
+        "imessage" => Some(ChannelType::IMessage),
+        _ => None,
     }
 }
 
@@ -262,7 +223,23 @@ pub async fn handle_list_from_registry(
     request: JsonRpcRequest,
     tool_registry: &ToolCatalog,
 ) -> JsonRpcResponse {
-    let tools: Vec<UnifiedTool> = tool_registry.list_root_commands().await;
+    // Honor the optional `interface` hint that clients (TUI, Panel, …) already
+    // send: when it maps to a known channel, list only the commands visible to
+    // that channel; otherwise fall back to the full root listing. This wires the
+    // existing `visible_channels` / `list_for_channel` infrastructure (e.g.
+    // confirmation-requiring tools are hidden from channels lacking a
+    // confirmation UI) into the live `commands.list` RPC.
+    let channel = request
+        .params
+        .as_ref()
+        .and_then(|p| p.get("interface"))
+        .and_then(|v| v.as_str())
+        .and_then(channel_from_interface);
+
+    let tools: Vec<UnifiedTool> = match channel {
+        Some(ch) => tool_registry.list_for_channel(ch).await,
+        None => tool_registry.list_root_commands().await,
+    };
     let tree = build_command_tree(tools);
 
     JsonRpcResponse::success(
@@ -271,33 +248,6 @@ pub async fn handle_list_from_registry(
             "commands": tree
         }),
     )
-}
-
-/// List all registered commands (legacy builtin-only handler)
-pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
-    let commands = get_builtin_commands();
-    let command_infos: Vec<CommandInfo> = commands.into_iter().map(CommandInfo::from).collect();
-
-    JsonRpcResponse::success(
-        request.id,
-        json!({
-            "commands": command_infos
-        }),
-    )
-}
-
-/// Get builtin commands (system commands)
-fn get_builtin_commands() -> Vec<CommandNode> {
-    vec![
-        CommandNode::new_with_source("search", "Web search", ToolSourceType::Builtin)
-            .with_icon("magnifyingglass")
-            .with_hint("Search the web")
-            .with_node_type(CommandType::Action),
-        CommandNode::new_with_source("webfetch", "Fetch web page", ToolSourceType::Builtin)
-            .with_icon("globe")
-            .with_hint("Fetch and parse a URL")
-            .with_node_type(CommandType::Action),
-    ]
 }
 
 // ============================================================================
@@ -548,23 +498,68 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn test_channel_from_interface_mapping() {
+        assert_eq!(channel_from_interface("panel"), Some(ChannelType::Panel));
+        assert_eq!(channel_from_interface("WebChat"), Some(ChannelType::Panel));
+        assert_eq!(channel_from_interface("tui"), Some(ChannelType::Cli));
+        assert_eq!(channel_from_interface(" cli "), Some(ChannelType::Cli));
+        assert_eq!(
+            channel_from_interface("telegram"),
+            Some(ChannelType::Telegram)
+        );
+        // Unknown / empty hints fall back to "no filter".
+        assert_eq!(channel_from_interface("carrier-pigeon"), None);
+        assert_eq!(channel_from_interface(""), None);
+    }
+
     #[tokio::test]
-    async fn test_list_commands() {
-        let request = JsonRpcRequest::with_id("commands.list", None, json!(1));
-        let response = handle_list(request).await;
+    async fn test_list_from_registry_filters_by_channel() {
+        use crate::tool_metadata::ToolSource;
 
-        assert!(response.is_success());
-        let result = response.result.unwrap();
-        assert!(result["commands"].is_array());
+        let registry = ToolCatalog::new();
 
-        let commands = result["commands"].as_array().unwrap();
-        assert!(!commands.is_empty());
+        // A tool restricted to Panel + CLI only.
+        let panel_only = UnifiedTool::new("builtin:danger", "danger", "Dangerous op", ToolSource::Builtin)
+            .with_visible_channels(vec![ChannelType::Panel, ChannelType::Cli]);
+        registry.register_with_conflict_resolution(panel_only).await;
+        // A tool visible everywhere (empty visible_channels).
+        registry
+            .register_with_conflict_resolution(UnifiedTool::new(
+                "builtin:ping",
+                "ping",
+                "Ping",
+                ToolSource::Builtin,
+            ))
+            .await;
 
-        // Check first command structure
-        let first = &commands[0];
-        assert!(first["key"].is_string());
-        assert!(first["description"].is_string());
-        assert!(first["source_type"].is_string());
+        // Telegram hint should hide the Panel/CLI-only command.
+        let req = JsonRpcRequest::with_id(
+            "commands.list",
+            Some(json!({"interface": "telegram"})),
+            json!(1),
+        );
+        let resp = handle_list_from_registry(req, &registry).await;
+        let names: Vec<String> = resp.result.unwrap()["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"ping".to_string()));
+        assert!(!names.contains(&"danger".to_string()));
+
+        // No hint → no filter → both commands present.
+        let req_all = JsonRpcRequest::with_id("commands.list", None, json!(1));
+        let resp_all = handle_list_from_registry(req_all, &registry).await;
+        let names_all: Vec<String> = resp_all.result.unwrap()["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(names_all.contains(&"ping".to_string()));
+        assert!(names_all.contains(&"danger".to_string()));
     }
 
     #[tokio::test]
@@ -640,24 +635,6 @@ mod tests {
         // Find the standalone entry
         let search = commands.iter().find(|c| c["name"] == "search").unwrap();
         assert_eq!(search["is_namespace"], false);
-    }
-
-    #[test]
-    fn test_command_info_from_node() {
-        let node = CommandNode::new_with_source("test", "Test command", ToolSourceType::Builtin)
-            .with_node_type(CommandType::Action)
-            .with_icon("star")
-            .with_hint("Test hint")
-            .with_source_id("builtin:test");
-
-        let info = CommandInfo::from(node);
-
-        assert_eq!(info.key, "test");
-        assert_eq!(info.description, "Test command");
-        assert_eq!(info.icon, "star");
-        assert_eq!(info.hint, Some("Test hint".to_string()));
-        assert_eq!(info.command_type, "action");
-        assert_eq!(info.source_type, "builtin");
     }
 
     #[tokio::test]

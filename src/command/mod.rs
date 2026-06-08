@@ -7,8 +7,8 @@
 // - User prompts (from config.toml rules)
 // - Skills (from ~/.aleph/skills/)
 //
-// The command tree is exposed to UI clients as `CommandInfo` JSON over
-// JSON-RPC (see `gateway::handlers::commands`).
+// The command tree is exposed to UI clients as a hierarchical JSON tree over
+// JSON-RPC (`commands.list`; see `gateway::handlers::commands`).
 
 mod parser;
 mod types;

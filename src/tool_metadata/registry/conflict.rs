@@ -4,8 +4,36 @@
 
 use tracing::{debug, info};
 
-use super::super::types::{ConflictInfo, ConflictResolution, ToolSource, UnifiedTool};
+use super::super::types::{
+    ChannelType, ConflictInfo, ConflictResolution, ToolSafetyLevel, ToolSource, UnifiedTool,
+};
 use super::types::ToolStorage;
+
+/// Infer default `visible_channels` from a tool's safety profile.
+///
+/// Returns an empty vec ("visible to all channels") for ordinary tools, and a
+/// restricted set for risky ones — e.g. dangerous operations stay on Panel/CLI,
+/// and confirmation-requiring tools are excluded from channels without a
+/// confirmation UI (iMessage). Applied uniformly to every tool registered
+/// through [`ConflictResolver::register_with_conflict_resolution`].
+fn infer_visible_channels(tool: &UnifiedTool) -> Vec<ChannelType> {
+    match tool.safety_level {
+        ToolSafetyLevel::IrreversibleHighRisk => {
+            // Dangerous ops only via Panel and CLI
+            vec![ChannelType::Panel, ChannelType::Cli]
+        }
+        _ if tool.requires_confirmation => {
+            // Tools requiring confirmation excluded from iMessage (no confirmation UI)
+            vec![
+                ChannelType::Panel,
+                ChannelType::Telegram,
+                ChannelType::Discord,
+                ChannelType::Cli,
+            ]
+        }
+        _ => Vec::new(), // All channels
+    }
+}
 
 /// Conflict resolver for handling tool name conflicts
 pub struct ConflictResolver {
@@ -159,6 +187,13 @@ impl ConflictResolver {
     ///
     /// The final tool ID after registration (may differ from input if renamed)
     pub async fn register_with_conflict_resolution(&self, mut tool: UnifiedTool) -> String {
+        // Centralized channel-visibility inference: tools that don't declare an
+        // explicit `visible_channels` set inherit one derived from their safety
+        // profile. Explicit declarations are preserved.
+        if tool.visible_channels.is_empty() {
+            tool.visible_channels = infer_visible_channels(&tool);
+        }
+
         let mut tools = self.tools.write().await;
 
         // Inline conflict check under write lock (no TOCTOU race)

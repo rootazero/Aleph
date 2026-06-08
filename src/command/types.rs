@@ -100,33 +100,6 @@ pub struct CommandNode {
 }
 
 impl CommandNode {
-    /// Create a new command node
-    ///
-    /// **Deprecated**: The `source_type` defaults to `Custom`, which often leads to
-    /// incorrect UI categorization. Use [`CommandNode::new_with_source`] for proper
-    /// source type initialization, or chain `.with_source_type(...)` after this
-    /// constructor if you must use this method.
-    #[deprecated(
-        since = "26.5.30",
-        note = "Use `new_with_source` for explicit source type, or chain `.with_source_type()`"
-    )]
-    pub fn new(
-        key: impl Into<String>,
-        description: impl Into<String>,
-        node_type: CommandType,
-    ) -> Self {
-        Self {
-            key: key.into(),
-            description: description.into(),
-            icon: node_type.default_icon().to_string(),
-            hint: None,
-            node_type,
-            has_children: false, // Flat namespace: no children
-            source_id: None,
-            source_type: ToolSourceType::Custom,
-        }
-    }
-
     /// Create a new command node with source type (flat namespace mode)
     pub fn new_with_source(
         key: impl Into<String>,
@@ -225,13 +198,12 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_command_node_builder() {
-        let node = CommandNode::new("test", "Test command", CommandType::Action)
+        let node = CommandNode::new_with_source("test", "Test command", ToolSourceType::Builtin)
+            .with_node_type(CommandType::Action)
             .with_icon("star")
             .with_hint("测试")
-            .with_source_id("builtin:test")
-            .with_source_type(ToolSourceType::Builtin);
+            .with_source_id("builtin:test");
 
         assert_eq!(node.key, "test");
         assert_eq!(node.icon, "star");
@@ -271,10 +243,10 @@ mod tests {
     }
 
     #[test]
-    #[allow(deprecated)]
     fn test_flat_namespace_no_children() {
         // In flat namespace mode, all nodes have has_children = false
-        let node = CommandNode::new("test", "Test", CommandType::Prompt);
+        let node = CommandNode::new_with_source("test", "Test", ToolSourceType::Custom)
+            .with_node_type(CommandType::Prompt);
         assert!(!node.has_children);
 
         let node2 = CommandNode::new_with_source("test2", "Test2", ToolSourceType::Mcp);

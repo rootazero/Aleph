@@ -4,7 +4,6 @@
 //! eligibility evaluation, SKILL.md parsing, prompt injection, and a
 //! unified `SkillSystem` facade for the rest of the application.
 
-pub mod commands;
 pub mod compat;
 pub mod config;
 pub mod cooccurrence;
@@ -23,7 +22,6 @@ pub mod status;
 pub mod tools;
 pub mod usage;
 
-pub use commands::{list_available_commands, resolve_command, SkillCommandSpec};
 pub use compat::SkillInfo;
 pub use config::{
     InstallPreferences, NodeManager, SkillConfigUpdate, SkillEntryConfig, SkillsConfig,
@@ -227,12 +225,6 @@ impl SkillSystem {
             .collect();
         entries.sort_by(|a, b| a.id.as_str().cmp(b.id.as_str()));
         entries
-    }
-
-    /// Resolve a slash command name to a skill command spec.
-    pub async fn resolve_command(&self, name: &str) -> Option<SkillCommandSpec> {
-        let registry = self.inner.registry.read().await;
-        commands::resolve_command(name, &registry)
     }
 
     /// Register skills from external sources (plugins, markdown).
@@ -802,30 +794,6 @@ Content two."#,
         let names: Vec<&str> = skills.iter().map(|s| s.name()).collect();
         assert!(names.contains(&"Skill One"));
         assert!(names.contains(&"Skill Two"));
-    }
-
-    #[tokio::test]
-    async fn resolve_command_through_facade() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let skill_file = dir.path().join("SKILL.md");
-
-        std::fs::write(
-            &skill_file,
-            r#"---
-name: Git Commit
-description: Helps with git commits
----
-Git expert."#,
-        )
-        .unwrap();
-
-        let system = SkillSystem::new();
-        system.init(vec![dir.path().to_path_buf()]).await.unwrap();
-
-        // The ID will be "git-commit" (derived from name by parser)
-        let result = system.resolve_command("git-commit").await;
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().name, "Git Commit");
     }
 
     #[tokio::test]
