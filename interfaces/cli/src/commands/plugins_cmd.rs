@@ -8,6 +8,20 @@ use serde_json::Value;
 use crate::output;
 use aleph_client::{AlephClient, CliError, CliResult};
 
+/// Read a local plugin zip and wrap its bytes as base64 `data` params for
+/// `plugins.installFromZip`.
+///
+/// The daemon's `installFromZip` handler accepts base64-encoded zip *content*
+/// (not a filesystem path), so the same call works whether the daemon is local
+/// or remote. Keeping the encoding here keeps the interface a pure I/O shim (R4).
+fn zip_install_params(zip_path: &std::path::Path) -> CliResult<Value> {
+    use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+    let bytes = fs::read(zip_path).map_err(|e| {
+        CliError::Other(format!("Failed to read zip '{}': {e}", zip_path.display()))
+    })?;
+    Ok(serde_json::json!({ "data": BASE64.encode(bytes) }))
+}
+
 /// Download a file via curl to a local path
 fn download_file(url: &str, dest: &std::path::Path) -> CliResult<()> {
     let output = Command::new("curl")
@@ -140,10 +154,9 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
         }
         download_file(&download_url, &zip_path)?;
 
-        // Now install via the zip path
-        let zip_str = zip_path.to_string_lossy();
+        // Now install via the zip: the daemon expects base64-encoded content.
         let (client, _events) = AlephClient::connect(server_url).await?;
-        let params = serde_json::json!({ "path": &*zip_str });
+        let params = zip_install_params(&zip_path)?;
         let result: Value = client.call("plugins.installFromZip", Some(params)).await?;
 
         if json {
@@ -160,13 +173,16 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
 
     let (client, _events) = AlephClient::connect(server_url).await?;
 
+    // Field names must match the daemon's RPC param structs:
+    //   plugins.install        → InstallParams { url }
+    //   plugins.installFromZip → InstallFromZipParams { data: base64 }
     let (method, params) = if source.ends_with(".zip") {
         (
             "plugins.installFromZip",
-            serde_json::json!({ "path": source }),
+            zip_install_params(std::path::Path::new(source))?,
         )
     } else {
-        ("plugins.install", serde_json::json!({ "source": source }))
+        ("plugins.install", serde_json::json!({ "url": source }))
     };
 
     let result: Value = client.call(method, Some(params)).await?;

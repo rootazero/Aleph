@@ -649,17 +649,22 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
     match action {
         // Lifecycle (server-connected)
         PluginAction::List => plugins_cmd::list(server_url, json).await,
-        PluginAction::Install { source, .. } => {
+        PluginAction::Install { source, scope } => {
             // A bare plugin name routes to the marketplace; URLs, paths, and zip
             // refs go to the direct installer.
             let looks_like_marketplace =
                 !source.contains('/') && !source.contains('.') && !source.contains(':');
             if looks_like_marketplace {
+                // The marketplace handler honors an install scope
+                // ("user" | "project" | "local"); forward the CLI flag so
+                // `--scope` is no longer silently dropped. Direct git/zip
+                // installs always land in user scope (the daemon's install
+                // handlers take no scope), so the flag only applies here.
                 let (client, _events) = AlephClient::connect(server_url).await?;
                 let result: serde_json::Value = client
                     .call(
                         "plugin.marketplace.install",
-                        Some(serde_json::json!({ "name": source })),
+                        Some(serde_json::json!({ "name": source, "scope": scope })),
                     )
                     .await?;
                 if json {
