@@ -72,6 +72,7 @@ pub(in crate::commands::start) fn initialize_auth(
     bootstrap_cfg: &alephcore::gateway::config::BootstrapConfig,
     session_expiry_hours: u64,
     daemon: bool,
+    node_registry: Arc<alephcore::cluster::NodeRegistry>,
 ) -> AuthBundle {
     use alephcore::utils::paths;
     use tracing::{info, warn};
@@ -209,6 +210,7 @@ pub(in crate::commands::start) fn initialize_auth(
         bootstrap_mgr: bootstrap_mgr.clone(),
         session_mgr: session_mgr.clone(),
         bind_port: port,
+        node_registry,
     });
 
     if !daemon {

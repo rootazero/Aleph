@@ -241,6 +241,10 @@ pub struct AuthContext {
     /// connection(s) in place so a tier change takes effect on the next
     /// request without waiting for reconnect.
     pub connections: Arc<RwLock<HashMap<String, ConnectionState>>>,
+    /// Cluster node registry, shared with `GatewayServer`. Lets
+    /// `environments.list` enumerate connected nodes without a separate
+    /// dispatch path.
+    pub node_registry: Arc<crate::cluster::NodeRegistry>,
 }
 
 impl AuthContext {
@@ -352,6 +356,7 @@ mod connect_result_role_tests {
             session_mgr,
             bind_port: 18790,
             connections: Arc::new(RwLock::new(HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         }
     }
 }
@@ -416,6 +421,7 @@ pub(crate) mod tests {
             session_mgr,
             bind_port: 18790,
             connections: Arc::new(RwLock::new(HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         })
     }
 }

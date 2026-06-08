@@ -67,6 +67,23 @@ pub(in crate::commands::start) fn register_auth_handlers(
         auth_ctx
     );
 
+    // Cluster node enrollment + environment listing. `cluster.enroll` mints a
+    // node token (operator-gated in method_authz); `environments.list` is an
+    // open read of online nodes.
+    use alephcore::gateway::handlers::cluster as cluster_handlers;
+    register_handler!(
+        server,
+        "cluster.enroll",
+        cluster_handlers::handle_cluster_enroll,
+        auth_ctx
+    );
+    register_handler!(
+        server,
+        "environments.list",
+        cluster_handlers::handle_environments_list,
+        auth_ctx
+    );
+
     // Auth management tools (R9: Everything is a Tool)
     register_handler!(
         server,

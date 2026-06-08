@@ -399,7 +399,14 @@ pub async fn handle_connect(request: JsonRpcRequest, ctx: Arc<AuthContext>) -> J
                     info!(device_id = %device_id, "Connection authenticated via token");
 
                     let permissions = validation.scopes;
-                    let role = super::tier::role_for_permissions(&permissions).to_string();
+                    // A node-role token authenticates a cluster execution arm, not a
+                    // human tier. role_for_permissions() only maps operator/guest from
+                    // scopes, so surface "node" directly from the token's DeviceRole.
+                    let role = if validation.role == DeviceRole::Node {
+                        "node".to_string()
+                    } else {
+                        super::tier::role_for_permissions(&permissions).to_string()
+                    };
                     return JsonRpcResponse::success(
                         request.id,
                         json!(ConnectResult {
@@ -647,6 +654,7 @@ mod tests {
             )),
             bind_port: 18790,
             connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         });
 
         let request = JsonRpcRequest::new(
@@ -776,6 +784,7 @@ mod tests {
             )),
             bind_port: 18790,
             connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         });
 
         let request = JsonRpcRequest::new(
@@ -866,6 +875,7 @@ mod tests {
             )),
             bind_port: 18790,
             connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         });
 
         let request = JsonRpcRequest::new(
@@ -940,6 +950,7 @@ mod tests {
             )),
             bind_port: 18790,
             connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         });
 
         let request = JsonRpcRequest::new(
@@ -1009,6 +1020,7 @@ mod tests {
             )),
             bind_port: 18790,
             connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         });
 
         // Missing challenge → rejected, even though the shared_token is valid.
@@ -1024,6 +1036,84 @@ mod tests {
         );
         let err = response.error.unwrap();
         assert_eq!(err.message, "challenge_required");
+    }
+
+    #[tokio::test]
+    async fn connect_with_node_role_token_yields_role_node() {
+        let store = Arc::new(SecurityStore::in_memory().unwrap());
+        let shared_token_mgr = Arc::new(SharedTokenManager::new(
+            store.clone(),
+            "/tmp/aleph_test_node_role.vault",
+        ));
+        let invitation_manager = Arc::new(crate::gateway::security::InvitationManager::new());
+        let guest_session_manager =
+            Arc::new(crate::gateway::security::GuestSessionManager::new());
+        let event_bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+
+        let ctx = Arc::new(AuthContext {
+            token_manager: Arc::new(TokenManager::new(store.clone())),
+            pairing_manager: Arc::new(PairingManager::new(store.clone())),
+            device_store: Arc::new(DeviceStore::in_memory().unwrap()),
+            security_store: store.clone(),
+            shared_token_mgr,
+            invitation_manager,
+            guest_session_manager,
+            event_bus,
+            auth_mode: AuthMode::Token,
+            allow_guest: true,
+            enable_pairing: true,
+            state_versions: Arc::new(crate::gateway::state_version::StateVersionTracker::new()),
+            transport_policy: TransportPolicy::defaults(),
+            instance_id: "test-instance".to_string(),
+            started_at_unix: 1_700_000_000,
+            presence: Arc::new(crate::gateway::presence::PresenceTracker::new()),
+            max_connections: 1000,
+            challenge_manager: Arc::new(crate::gateway::challenge::ChallengeManager::new()),
+            require_challenge: false,
+            bootstrap_mgr: Arc::new(crate::gateway::bootstrap::BootstrapNonceManager::default()),
+            session_mgr: Arc::new(crate::gateway::session::HttpSessionManager::new(
+                Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+                24,
+            )),
+            bind_port: 18790,
+            connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
+        });
+
+        let device_id = "node-test-1";
+        let fingerprint: String = device_id.chars().take(16).collect();
+        store
+            .upsert_device(&DeviceUpsertData {
+                device_id,
+                device_name: "worker-1",
+                device_type: None,
+                public_key: &[0u8; 32],
+                fingerprint: &fingerprint,
+                role: DeviceRole::Node.as_str(),
+                scopes: &["node".to_string()],
+            })
+            .unwrap();
+        let tok = ctx
+            .token_manager
+            .issue_token(device_id, DeviceRole::Node, vec!["node".to_string()])
+            .unwrap();
+
+        let request = JsonRpcRequest::new(
+            "connect",
+            Some(json!({
+                "device_id": device_id,
+                "token": format!("{}:{}", tok.token, tok.signature),
+                "device_name": "worker-1",
+            })),
+            Some(json!(1)),
+        );
+        let resp = handle_connect(request, ctx).await;
+        let role = resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("role"))
+            .and_then(|v| v.as_str());
+        assert_eq!(role, Some("node"), "node-role token must yield role=node");
     }
 
     #[tokio::test]
@@ -1085,6 +1175,7 @@ mod tests {
             )),
             bind_port: 18790,
             connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         });
 
         let request = JsonRpcRequest::new(

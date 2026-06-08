@@ -82,6 +82,7 @@ mod tests {
             )),
             bind_port: 18790,
             connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         });
 
         (ctx, store, shared_token_mgr)
@@ -331,6 +332,7 @@ mod tests {
             )),
             bind_port: 18790,
             connections: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         });
 
         // Connect with no credentials at all
