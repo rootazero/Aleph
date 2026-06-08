@@ -12,7 +12,6 @@ pub fn ClusterSection() -> impl IntoView {
     let nodes = RwSignal::new(Vec::<Environment>::new());
     let error = RwSignal::new(Option::<String>::None);
     let loading = RwSignal::new(true);
-    let needs_operator = RwSignal::new(false);
 
     let show_enroll = RwSignal::new(false);
     let enroll_name = RwSignal::new(String::new());
@@ -27,22 +26,19 @@ pub fn ClusterSection() -> impl IntoView {
                     nodes.set(list);
                     error.set(None);
                 }
-                Err(e) => {
-                    let el = e.to_lowercase();
-                    if el.contains("operator")
-                        || el.contains("permission")
-                        || el.contains("unauth")
-                    {
-                        needs_operator.set(true);
-                    } else {
-                        error.set(Some(e));
-                    }
-                }
+                Err(e) => error.set(Some(e)),
             }
             loading.set(false);
         });
     };
-    load();
+    // Gate the list fetch on the operator role captured at connect time.
+    // `environments.list` is open-read on the backend, but the UI must not
+    // expose cluster topology to non-operators (R8 / spec §4 Section 2).
+    if state.is_operator() {
+        load();
+    } else {
+        loading.set(false);
+    }
 
     let submit_enroll = move |_| {
         let name = enroll_name.get();
@@ -66,7 +62,7 @@ pub fn ClusterSection() -> impl IntoView {
                 </div>
                 <button
                     class="px-4 py-2 bg-primary text-white rounded-lg disabled:opacity-50"
-                    disabled=move || needs_operator.get()
+                    disabled=move || !state.is_operator()
                     on:click=move |_| {
                         enroll_result.set(None);
                         enroll_err.set(None);
@@ -78,13 +74,13 @@ pub fn ClusterSection() -> impl IntoView {
                 </button>
             </div>
 
-            <Show when=move || needs_operator.get()>
+            <Show when=move || !state.is_operator()>
                 <div class="bg-surface-raised rounded-lg border border-border p-6">
                     <p class="text-sm text-text-secondary">"集群管理需要 operator 权限。"</p>
                 </div>
             </Show>
 
-            <Show when=move || !needs_operator.get()>
+            <Show when=move || state.is_operator()>
                 <div class="bg-surface-raised rounded-lg border border-border p-6">
                     <Show when=move || loading.get()>
                         <p class="text-text-secondary text-sm">"加载中…"</p>

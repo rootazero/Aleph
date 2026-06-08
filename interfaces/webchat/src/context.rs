@@ -82,6 +82,13 @@ pub struct GatewayEvent {
 // Event handler callback type
 type EventHandler = Arc<dyn Fn(GatewayEvent) + Send + Sync>;
 
+/// Pure predicate mirroring the gateway's `tier::role_for_permissions`
+/// classification: only the literal `"operator"` role (config tier) grants
+/// control-plane access. Extracted for host-side unit testing.
+pub(crate) fn role_is_operator(role: Option<&str>) -> bool {
+    role == Some("operator")
+}
+
 #[derive(Clone, Copy)]
 pub struct DashboardState {
     pub is_connected: RwSignal<bool>,
@@ -134,6 +141,12 @@ pub struct DashboardState {
     /// Set to Some(_) when auth.connect returns pairing_required.
     /// Cleared automatically after a successful reconnect.
     pub pairing_required: RwSignal<Option<PairingPrompt>>,
+
+    /// Connection role captured from the `connect` response: `Some("operator")`
+    /// (config tier) or `Some("guest")` (chat tier); `None` before the first
+    /// successful authenticate. Read by `is_operator()` to gate operator-only
+    /// settings surfaces (e.g. cluster management) client-side.
+    pub role: RwSignal<Option<String>>,
 }
 
 /// Derive the Gateway WebSocket URL from the current page location.
@@ -185,7 +198,24 @@ impl DashboardState {
                 crate::api::settings::load_canvas_radial_navigation(),
             ),
             pairing_required: RwSignal::new(None),
+            role: RwSignal::new(None),
         }
+    }
+
+    /// Reactive predicate: did this connection authenticate as `operator`
+    /// (config tier)? Consults the `role` captured from the `connect` response.
+    /// Returns false before the first successful authenticate. Used by
+    /// operator-only settings surfaces to gate UI up front.
+    pub fn is_operator(&self) -> bool {
+        role_is_operator(self.role.get().as_deref())
+    }
+
+    /// Capture the connection `role` from a `connect` response into the `role`
+    /// signal. No-op fields (missing `role`) reset to `None`, keeping the
+    /// signal consistent across reconnects.
+    fn capture_role(&self, resp: &Value) {
+        self.role
+            .set(resp.get("role").and_then(|r| r.as_str()).map(String::from));
     }
 
     /// Subscribe to Gateway events
@@ -327,6 +357,7 @@ impl DashboardState {
                 if let Some(new_token) = resp.get("token").and_then(|t| t.as_str()) {
                     set_local_storage("aleph_device_token", new_token);
                 }
+                self.capture_role(&resp);
                 return Ok(());
             }
             // Token invalid, clear it and try shared token
@@ -352,6 +383,7 @@ impl DashboardState {
                     if let Some(device_token) = resp.get("token").and_then(|t| t.as_str()) {
                         set_local_storage("aleph_device_token", device_token);
                     }
+                    self.capture_role(&resp);
                     return Ok(());
                 }
                 Err(e) => {
@@ -377,6 +409,7 @@ impl DashboardState {
                 if let Some(token) = resp.get("token").and_then(|t| t.as_str()) {
                     set_local_storage("aleph_device_token", token);
                 }
+                self.capture_role(&resp);
                 Ok(())
             }
             Err(e) if e == "pairing_required" => {
@@ -1013,5 +1046,30 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
         >
             {children()}
         </ErrorBoundary>
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::role_is_operator;
+
+    #[test]
+    fn operator_role_is_operator() {
+        assert!(role_is_operator(Some("operator")));
+    }
+
+    #[test]
+    fn guest_role_is_not_operator() {
+        assert!(!role_is_operator(Some("guest")));
+    }
+
+    #[test]
+    fn missing_role_is_not_operator() {
+        assert!(!role_is_operator(None));
+    }
+
+    #[test]
+    fn unknown_role_is_not_operator() {
+        assert!(!role_is_operator(Some("node")));
     }
 }
