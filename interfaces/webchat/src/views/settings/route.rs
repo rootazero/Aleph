@@ -6,15 +6,26 @@
 //! by the tier the *server* assigned (local vs cloud), so the user sees exactly
 //! which endpoints each mode will target without re-deriving locality here.
 
-use crate::api::{RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
+use crate::api::{RateLimit, RouteConfigApi, RouteConfigUpdate, RouteProviderInfo};
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use std::collections::BTreeMap;
 
 /// The three selectable mode keys. Display copy is resolved per-locale from the
 /// `settings.route.*` translation table at render time.
 const MODE_KEYS: &[&str] = &["auto", "always_local", "always_cloud"];
+
+/// Load-balancing strategy keys, matched 1:1 to the backend
+/// `LoadBalanceStrategy` serde names.
+const LB_KEYS: &[&str] = &[
+    "ordered",
+    "round_robin",
+    "least_busy",
+    "latency_aware",
+    "usage_based",
+];
 
 #[component]
 pub fn RouteView() -> impl IntoView {
@@ -27,6 +38,8 @@ pub fn RouteView() -> impl IntoView {
     let local_provider = RwSignal::new(String::new());
     let cloud_provider = RwSignal::new(String::new());
     let providers = RwSignal::new(Vec::<RouteProviderInfo>::new());
+    let load_balance = RwSignal::new(String::from("ordered"));
+    let rate_limits = RwSignal::new(BTreeMap::<String, RateLimit>::new());
     let loading = RwSignal::new(true);
     let saving = RwSignal::new(false);
     let saved = RwSignal::new(false);
@@ -42,6 +55,8 @@ pub fn RouteView() -> impl IntoView {
                     local_provider.set(view.local_provider.unwrap_or_default());
                     cloud_provider.set(view.cloud_provider.unwrap_or_default());
                     providers.set(view.providers);
+                    load_balance.set(view.load_balance.unwrap_or_else(|| "ordered".into()));
+                    rate_limits.set(view.rate_limits);
                     loading.set(false);
                 }
                 Err(e) => {
@@ -65,6 +80,8 @@ pub fn RouteView() -> impl IntoView {
                 allow_cloud_escalation: allow_escalation.get(),
                 local_provider: to_pin(local_provider.get()),
                 cloud_provider: to_pin(cloud_provider.get()),
+                load_balance: Some(load_balance.get()),
+                rate_limits: rate_limits.get(),
             };
             match RouteConfigApi::update(&state, update).await {
                 Ok(()) => {
@@ -128,6 +145,38 @@ pub fn RouteView() -> impl IntoView {
                                 </button>
                             }
                         }).collect::<Vec<_>>()}
+                    </div>
+
+                    // Load-balancing strategy — how same-tier providers are
+                    // ordered within the active route. Default "ordered" is a
+                    // no-op (configured order).
+                    <div class="bg-surface-raised rounded-lg border border-border p-4">
+                        <label class="block font-semibold text-text-primary mb-1">
+                            {t!(i18n, settings.route.load_balance)}
+                        </label>
+                        <p class="text-sm text-text-secondary mb-2">
+                            {t!(i18n, settings.route.load_balance_desc)}
+                        </p>
+                        <select
+                            class="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-primary"
+                            prop:value=move || load_balance.get()
+                            on:change=move |ev| {
+                                load_balance.set(event_target_value(&ev));
+                                saved.set(false);
+                            }
+                        >
+                            {LB_KEYS.iter().map(|key| {
+                                let key = *key;
+                                let label = move || match key {
+                                    "ordered" => t_string!(i18n, settings.route.lb_ordered),
+                                    "round_robin" => t_string!(i18n, settings.route.lb_round_robin),
+                                    "least_busy" => t_string!(i18n, settings.route.lb_least_busy),
+                                    "latency_aware" => t_string!(i18n, settings.route.lb_latency_aware),
+                                    _ => t_string!(i18n, settings.route.lb_usage_based),
+                                };
+                                view! { <option value=key>{label}</option> }
+                            }).collect::<Vec<_>>()}
+                        </select>
                     </div>
 
                     // Cloud-escalation toggle (only meaningful in Always Local)
@@ -197,6 +246,12 @@ pub fn RouteView() -> impl IntoView {
                             />
                         </div>
                     </div>
+                    // Per-provider rpm/tpm ceilings (used by Usage-based).
+                    <RateLimitEditor
+                        providers=providers
+                        rate_limits=rate_limits
+                        saved=saved
+                    />
                 </div>
             </Show>
         </div>
@@ -255,5 +310,100 @@ fn ProviderTierSelect(
                 <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.route.no_providers)}</p>
             </Show>
         </div>
+    }
+}
+
+/// Per-provider soft rate-limit editor. Iterates every configured provider and
+/// exposes two optional number inputs (rpm / tpm). An empty field clears that
+/// dimension; clearing both removes the provider's entry entirely, so the saved
+/// `rate_limits` map stays minimal and byte-identical to a hand-written
+/// `[route.rate_limits.*]` block.
+#[component]
+fn RateLimitEditor(
+    providers: RwSignal<Vec<RouteProviderInfo>>,
+    rate_limits: RwSignal<BTreeMap<String, RateLimit>>,
+    saved: RwSignal<bool>,
+) -> impl IntoView {
+    let i18n = use_i18n();
+    view! {
+        <div class="pt-2">
+            <h3 class="font-semibold text-text-primary mb-1">{t!(i18n, settings.route.rate_limits)}</h3>
+            <p class="text-sm text-text-secondary mb-3">
+                {t!(i18n, settings.route.rate_limits_desc)}
+            </p>
+            <div class="space-y-2">
+                {move || providers.get().into_iter().map(|p| {
+                    let name = p.name.clone();
+                    let name_rpm = name.clone();
+                    let name_tpm = name.clone();
+                    let rpm_val = {
+                        let name = name.clone();
+                        move || rate_limits.get().get(&name).and_then(|r| r.rpm)
+                            .map(|v| v.to_string()).unwrap_or_default()
+                    };
+                    let tpm_val = {
+                        let name = name.clone();
+                        move || rate_limits.get().get(&name).and_then(|r| r.tpm)
+                            .map(|v| v.to_string()).unwrap_or_default()
+                    };
+                    view! {
+                        <div class="flex items-center gap-3 bg-surface-raised rounded-lg border border-border p-3">
+                            <span class="flex-1 text-sm text-text-primary truncate">{p.name.clone()}</span>
+                            <input
+                                type="number"
+                                min="0"
+                                class="w-28 bg-surface border border-border rounded px-2 py-1 text-sm text-text-primary"
+                                title=move || t_string!(i18n, settings.route.rpm).to_string()
+                                placeholder=move || t_string!(i18n, settings.route.unlimited).to_string()
+                                prop:value=rpm_val
+                                on:input=move |ev| {
+                                    let v = parse_limit(&event_target_value(&ev));
+                                    let key = name_rpm.clone();
+                                    rate_limits.update(|m| {
+                                        let e = m.entry(key.clone()).or_default();
+                                        e.rpm = v;
+                                        if e.rpm.is_none() && e.tpm.is_none() { m.remove(&key); }
+                                    });
+                                    saved.set(false);
+                                }
+                            />
+                            <input
+                                type="number"
+                                min="0"
+                                class="w-28 bg-surface border border-border rounded px-2 py-1 text-sm text-text-primary"
+                                title=move || t_string!(i18n, settings.route.tpm).to_string()
+                                placeholder=move || t_string!(i18n, settings.route.unlimited).to_string()
+                                prop:value=tpm_val
+                                on:input=move |ev| {
+                                    let v = parse_limit(&event_target_value(&ev));
+                                    let key = name_tpm.clone();
+                                    rate_limits.update(|m| {
+                                        let e = m.entry(key.clone()).or_default();
+                                        e.tpm = v;
+                                        if e.rpm.is_none() && e.tpm.is_none() { m.remove(&key); }
+                                    });
+                                    saved.set(false);
+                                }
+                            />
+                        </div>
+                    }
+                }).collect::<Vec<_>>()}
+                <Show when=move || providers.get().is_empty()>
+                    <p class="text-xs text-text-tertiary">{t!(i18n, settings.route.no_providers)}</p>
+                </Show>
+            </div>
+        </div>
+    }
+}
+
+/// Parse a number-input string into an optional ceiling. Empty / non-numeric →
+/// `None` (that dimension is unbounded). Mirrors the backend's "omitted = no
+/// limit" contract.
+fn parse_limit(raw: &str) -> Option<u32> {
+    let t = raw.trim();
+    if t.is_empty() {
+        None
+    } else {
+        t.parse::<u32>().ok()
     }
 }
