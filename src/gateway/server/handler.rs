@@ -1526,16 +1526,20 @@ fn allow_unauth_loopback_wizard(peer: &SocketAddr, method: &str) -> bool {
 
 /// Cold-browser pairing bypass for the WS auth gate.
 ///
-/// Returns `true` for the two anonymous methods used by the `/pair` HTML
-/// page (`pairing.start_browser`, `pairing.poll`). Unlike the wizard
-/// bypass, this one is NOT loopback-gated — a remote LAN browser (mobile,
-/// other laptop) hitting `/pair` is the primary use case. The security
-/// boundary is the operator's 1-click approve from the already-
+/// Returns `true` for the anonymous pairing methods (`pairing.start_browser`,
+/// `pairing.start_node`, `pairing.poll`) used by the `/pair` HTML page and a
+/// tokenless `aleph-server node`. Unlike the wizard bypass, this one is NOT
+/// loopback-gated — a remote LAN browser (mobile, other laptop) hitting
+/// `/pair`, or a remote node dialing in to enroll, is the primary use case.
+/// The security boundary is the operator's 1-click approve from the already-
 /// authenticated Panel; rate limiting is the existing
 /// `PairingManager::MAX_PENDING_REQUESTS = 10` cap on pending pairing
 /// requests in the DB.
 fn allow_unauth_browser_pairing(method: &str) -> bool {
-    matches!(method, "pairing.start_browser" | "pairing.poll")
+    matches!(
+        method,
+        "pairing.start_browser" | "pairing.start_node" | "pairing.poll"
+    )
 }
 
 #[cfg(test)]
@@ -1653,8 +1657,9 @@ mod tests {
     }
 
     #[test]
-    fn browser_pairing_bypass_admits_only_two_methods() {
+    fn browser_pairing_bypass_admits_anonymous_pairing_methods() {
         assert!(allow_unauth_browser_pairing("pairing.start_browser"));
+        assert!(allow_unauth_browser_pairing("pairing.start_node"));
         assert!(allow_unauth_browser_pairing("pairing.poll"));
         // Everything else — including the existing authenticated pairing
         // methods — stays gated.

@@ -180,6 +180,60 @@ pub async fn handle_pairing_approve(
                 }),
             );
         }
+        PairingRequest::Node {
+            node_name, code, ..
+        } => {
+            // Mint a node-role credential (mirrors cluster.enroll) and stash the
+            // combined "token:signature" bearer keyed by the pairing code for the
+            // node's `pairing.poll` to drain single-use. Panel-only: the CLI
+            // approve path rejects node codes (in-process side-table).
+            let device_id = uuid::Uuid::new_v4().to_string();
+            let fingerprint: String = device_id.chars().take(16).collect();
+            if let Err(e) = ctx.security_store.upsert_device(&DeviceUpsertData {
+                device_id: &device_id,
+                device_name: node_name,
+                device_type: None,
+                public_key: &[0u8; 32],
+                fingerprint: &fingerprint,
+                role: DeviceRole::Node.as_str(),
+                scopes: &["node".to_string()],
+            }) {
+                warn!(error = %e, "Failed to register node device");
+                return JsonRpcResponse::error(
+                    request.id,
+                    -32603,
+                    format!("Failed to register node: {}", e),
+                );
+            }
+            let signed = match ctx.token_manager.issue_token(
+                &device_id,
+                DeviceRole::Node,
+                vec!["node".to_string()],
+            ) {
+                Ok(t) => t,
+                Err(e) => {
+                    warn!(error = %e, "Failed to issue node token");
+                    return JsonRpcResponse::error(
+                        request.id,
+                        -32603,
+                        format!("Failed to issue node token: {}", e),
+                    );
+                }
+            };
+            let bearer = format!("{}:{}", signed.token, signed.signature);
+            ctx.pairing_manager
+                .record_browser_credential(code, &bearer, &device_id);
+            info!(code = %code, node = %node_name, "Node pairing approved");
+            return JsonRpcResponse::success(
+                request.id,
+                json!({
+                    "code": code,
+                    "kind": "node",
+                    "device_id": device_id,
+                    "approved": true,
+                }),
+            );
+        }
     };
 
     // Determine tier permissions from the requested level.
@@ -272,18 +326,19 @@ pub async fn handle_pairing_reject(
         Err(e) => return e,
     };
 
-    // Peek at the row first so we can route a Browser reject to the
-    // side-table that `poll_browser_pairing` reads (`mark_browser_rejected`
-    // preserves the rejected state after `cancel_pairing` removes the
-    // DB row).
-    let is_browser = matches!(
+    // Browser and node rejects both need the side-table marker so
+    // `poll_browser_pairing` reports Rejected (not Expired) after the DB row
+    // is removed by `cancel_pairing`.
+    let needs_reject_marker = matches!(
         ctx.pairing_manager.get_request(&params.code),
-        Ok(Some(PairingRequest::Browser { .. }))
+        Ok(Some(
+            PairingRequest::Browser { .. } | PairingRequest::Node { .. }
+        ))
     );
 
     match ctx.pairing_manager.cancel_pairing(&params.code) {
         Ok(true) => {
-            if is_browser {
+            if needs_reject_marker {
                 ctx.pairing_manager.mark_browser_rejected(&params.code);
             }
             info!(code = %params.code, "Pairing rejected");
@@ -412,6 +467,33 @@ pub async fn handle_pairing_list(
                     "expires_in": remaining,
                 })
             }
+            PairingRequest::Node {
+                code,
+                node_name,
+                expires_at,
+                created_at,
+                ..
+            } => {
+                let remaining = if expires_at > created_at {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as i64;
+                    if expires_at > now {
+                        ((expires_at - now) / 1000) as u64
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+                json!({
+                    "type": "node",
+                    "code": code,
+                    "node_name": node_name,
+                    "expires_in": remaining,
+                })
+            }
         })
         .collect();
 
@@ -492,6 +574,67 @@ pub async fn handle_pairing_start_browser(
     };
 
     info!(code = %code, origin = %origin, "Browser pairing started");
+    JsonRpcResponse::success(
+        request.id,
+        json!({
+            "code": code,
+            "expires_at": expires_at,
+            "expires_in_secs": expires_in_secs,
+        }),
+    )
+}
+
+/// Handle "pairing.start_node" — anonymous RPC from a tokenless
+/// `aleph-server node`. Creates a `node` pairing record and emits
+/// `PairingRequested` so the operator's Panel pops the approve card.
+/// Reachable without a token (see `allow_unauth_browser_pairing`); the
+/// security boundary is the operator's 1-click approve.
+pub async fn handle_pairing_start_node(
+    request: JsonRpcRequest,
+    ctx: Arc<AuthContext>,
+) -> JsonRpcResponse {
+    #[derive(Debug, Deserialize)]
+    struct StartNodeParams {
+        node_name: String,
+    }
+
+    let params: StartNodeParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+
+    let (code, expires_at) = match ctx.pairing_manager.request_node_pairing(&params.node_name) {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(error = %e, "Failed to create node pairing");
+            return JsonRpcResponse::error(
+                request.id,
+                -32603,
+                format!("Failed to create node pairing: {}", e),
+            );
+        }
+    };
+
+    if let Err(e) = ctx
+        .event_bus
+        .publish_frame(&GatewayEventFrame::PairingRequested {
+            device_name: params.node_name.clone(),
+        })
+    {
+        warn!(error = %e, "Failed to publish PairingRequested frame");
+    }
+
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let expires_in_secs = if expires_at > now_ms {
+        ((expires_at - now_ms) / 1000) as u64
+    } else {
+        0
+    };
+
+    info!(code = %code, node = %params.node_name, "Node pairing started");
     JsonRpcResponse::success(
         request.id,
         json!({
@@ -812,6 +955,84 @@ mod tests {
         assert!(
             body.get("device_id").is_some(),
             "approved poll must include device_id"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_pairing_mints_node_role_token_single_use() {
+        use crate::gateway::security::PollState;
+        let ctx = super::super::tests::create_test_context();
+
+        // Create a node pairing record directly (start_node handler lands in a
+        // later task; this exercises approve + poll + token minting).
+        let (code, _expires) = ctx
+            .pairing_manager
+            .request_node_pairing("worker-1")
+            .expect("create node pairing");
+
+        let approve = handle_pairing_approve(
+            JsonRpcRequest::new(
+                "pairing.approve",
+                Some(json!({ "code": code.clone() })),
+                Some(json!(2)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        assert!(
+            approve.is_success(),
+            "approve should succeed: {:?}",
+            approve.error
+        );
+        assert_eq!(approve.result.unwrap().get("kind").unwrap(), "node");
+
+        // Poll drains the credential single-use; token validates as Node role.
+        match ctx.pairing_manager.poll_browser_pairing(&code) {
+            PollState::Approved { token, .. } => {
+                let (tok, sig) = token.split_once(':').expect("token:signature");
+                let v = ctx.token_manager.validate_token(tok, sig).unwrap();
+                assert_eq!(v.role, DeviceRole::Node);
+            }
+            other => panic!("expected Approved, got {other:?}"),
+        }
+        assert_eq!(
+            ctx.pairing_manager.poll_browser_pairing(&code),
+            PollState::Expired,
+            "second poll is single-use Expired"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_node_returns_six_digit_code() {
+        let ctx = super::super::tests::create_test_context();
+        let resp = handle_pairing_start_node(
+            JsonRpcRequest::new(
+                "pairing.start_node",
+                Some(json!({ "node_name": "worker-1" })),
+                Some(json!(1)),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        assert!(
+            resp.is_success(),
+            "start_node should succeed: {:?}",
+            resp.error
+        );
+        let code = resp
+            .result
+            .unwrap()
+            .get("code")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(code.len(), 6);
+        assert!(code.chars().all(|c| c.is_ascii_digit()));
+        // The pending row is a node row, pollable as Pending.
+        assert_eq!(
+            ctx.pairing_manager.poll_browser_pairing(&code),
+            crate::gateway::security::PollState::Pending
         );
     }
 

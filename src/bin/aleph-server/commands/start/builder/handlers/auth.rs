@@ -44,6 +44,12 @@ pub(in crate::commands::start) fn register_auth_handlers(
     );
     register_handler!(
         server,
+        "pairing.start_node",
+        auth_handlers::handle_pairing_start_node,
+        auth_ctx
+    );
+    register_handler!(
+        server,
         "pairing.poll",
         auth_handlers::handle_pairing_poll,
         auth_ctx
