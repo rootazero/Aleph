@@ -60,6 +60,17 @@ to them, emit an IngestPlan that updates the wiki.
 - `supersede` — older page is superseded by newer one. Fields:
   `old_path`, `new_path`.
 
+## Entities & relationships
+
+When the source names durable entities (people, organisations, projects,
+concepts), create or append `entity/<slug>` notes for them (category `entity`).
+Express relationships BETWEEN entities with the op's `relations` field — a list
+of `{ "to": "<entity path or [P<n>] token>", "type": "<snake_case verb>",
+"confidence": <0..1> }`. Choose a concise `type` yourself (e.g. `works_at`,
+`depends_on`, `colleague`, `part_of`); there is no fixed vocabulary. Reuse
+existing entity notes shown in "Related existing pages" — never duplicate an
+entity that already exists; append new relations to it instead.
+
 ## Output
 
 Valid JSON only. No prose, no markdown fences. Shape:
