@@ -9,7 +9,6 @@ pub mod preflight;
 pub mod pressure;
 
 use crate::context::budget::pressure::{estimate_message_tokens_aware, estimate_tokens_aware};
-use crate::context::compact::PressureLevel;
 use crate::providers::message::UnifiedMessage;
 
 // =============================================================================
@@ -341,6 +340,33 @@ impl ContextBudget {
         self.last_pressure.as_ref()
     }
 
+    /// Compute a read-only context pressure snapshot **without** mutating any
+    /// internal state (calibration, circuit breaker, `last_pressure`).
+    ///
+    /// [`ContextBudget::before_turn`] is the stateful path that issues
+    /// directives and records the snapshot; `peek_pressure` is for callers that
+    /// need the *current* fill ratio purely to gate a decision — e.g. the
+    /// preflight pipeline deciding whether pressure-sensitive cheap passes such
+    /// as `FileOpSupersedeStage` should fire. It applies the same content-aware
+    /// estimate and calibration factor as `before_turn`, so the ratio the
+    /// preflight gate sees matches the ratio the budget check computes moments
+    /// later on the (preflight-trimmed) message list.
+    pub fn peek_pressure(
+        &self,
+        messages: &[UnifiedMessage],
+        system_prompt: &str,
+        tool_schema_tokens: usize,
+    ) -> ContextPressure {
+        ContextPressure::compute(
+            messages,
+            system_prompt,
+            tool_schema_tokens,
+            self.token_budget,
+            self.token_estimate_ratio,
+        )
+        .calibrated(self.calibration.unwrap_or(1.0))
+    }
+
     /// Evaluate context pressure before a turn and return a directive.
     ///
     /// `tool_schema_tokens` is the token cost of the tool schema sent to the
@@ -509,15 +535,6 @@ impl ContextBudget {
     /// to `FinalReply`.
     pub fn record_split(&mut self) {
         self.split_count = self.split_count.saturating_add(1);
-    }
-
-    /// Returns current pressure level based on last computed pressure.
-    /// Call after before_turn() to get meaningful result.
-    pub fn sense_pressure_level(&self) -> PressureLevel {
-        match &self.last_pressure {
-            Some(p) => PressureLevel::from_ratio(p.ratio),
-            None => PressureLevel::Calm,
-        }
     }
 
     /// Record post-turn metrics and return a directive if diminishing returns detected.
@@ -1031,16 +1048,5 @@ mod tests {
             LoopDirective::CompactAndContinue,
             "calibration should surface true pressure the heuristic missed"
         );
-    }
-
-    #[test]
-    fn sense_pressure_returns_correct_level() {
-        use crate::context::compact::PressureLevel;
-        // Test that from_ratio mappings work correctly
-        assert_eq!(PressureLevel::from_ratio(0.50), PressureLevel::Calm);
-        assert_eq!(PressureLevel::from_ratio(0.65), PressureLevel::Preventive);
-        assert_eq!(PressureLevel::from_ratio(0.75), PressureLevel::Warning);
-        assert_eq!(PressureLevel::from_ratio(0.82), PressureLevel::High);
-        assert_eq!(PressureLevel::from_ratio(0.90), PressureLevel::Critical);
     }
 }
