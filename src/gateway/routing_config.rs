@@ -76,6 +76,21 @@ impl RoutingConfig {
     }
 }
 
+/// Bridge the routing-layer `SessionConfig` DM scope (`routing::session_key::DmScope`)
+/// into the gateway `RoutingConfig` DM scope used by the zero-config fallback path.
+/// The two enums are structurally identical but distinct types; this keeps a single
+/// user-facing `[session] dm_scope` value driving both routing paths.
+impl From<crate::routing::session_key::DmScope> for DmScope {
+    fn from(scope: crate::routing::session_key::DmScope) -> Self {
+        use crate::routing::session_key::DmScope as S;
+        match scope {
+            S::Main => DmScope::Main,
+            S::PerPeer => DmScope::PerPeer,
+            S::PerChannelPeer => DmScope::PerChannelPeer,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -103,5 +118,13 @@ mod tests {
 
         assert_eq!(config.default_agent, "custom-agent");
         assert_eq!(config.dm_scope, DmScope::Main);
+    }
+
+    #[test]
+    fn dm_scope_from_session_config_variant() {
+        use crate::routing::session_key::DmScope as Sk;
+        assert_eq!(DmScope::from(Sk::Main), DmScope::Main);
+        assert_eq!(DmScope::from(Sk::PerPeer), DmScope::PerPeer);
+        assert_eq!(DmScope::from(Sk::PerChannelPeer), DmScope::PerChannelPeer);
     }
 }
