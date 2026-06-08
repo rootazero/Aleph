@@ -203,6 +203,9 @@ pub struct GatewaySharedState {
     /// 循环登记，断开时注销。0b 的 NodeRegistry 经此对 node 连接发起
     /// `node.invoke`；本表本身不区分 node/非 node —— 仅是传输层注册表。
     pub reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
+    /// Cluster node registry (shared Arc with GatewayServer). Center-side view
+    /// of connected `role:node` peers; populated by the connect handler.
+    pub node_registry: Arc<crate::cluster::NodeRegistry>,
 }
 
 /// Configuration for the Gateway server
@@ -366,6 +369,9 @@ pub struct GatewayServer {
     /// 见 [`GatewaySharedState::reverse_rpc`]。`build_router` 把它 clone 进
     /// 共享状态，因此两侧指向同一张表。
     pub reverse_rpc: Arc<RwLock<HashMap<String, crate::cluster::ReverseRpcChannel>>>,
+    /// See [`GatewaySharedState::node_registry`]. `build_router` clones this Arc
+    /// into the shared state so both point at the same registry.
+    pub node_registry: Arc<crate::cluster::NodeRegistry>,
 }
 
 impl GatewayServer {
@@ -416,6 +422,7 @@ impl GatewayServer {
             shared_token_mgr: None,
             token_manager: None,
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         }
     }
 
@@ -467,6 +474,7 @@ impl GatewayServer {
             shared_token_mgr: None,
             token_manager: None,
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
+            node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
         }
     }
 
@@ -600,6 +608,7 @@ impl GatewayServer {
                 self.config.allowed_origins.clone(),
             )),
             reverse_rpc: self.reverse_rpc.clone(),
+            node_registry: self.node_registry.clone(),
         });
 
         let control_plane = create_control_plane_router();
@@ -845,5 +854,11 @@ mod tests {
         let addr = "127.0.0.1:0".parse().unwrap();
         let server = GatewayServer::new(addr);
         assert_eq!(server.reverse_rpc.read().await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn node_registry_is_empty_on_fresh_server() {
+        let server = GatewayServer::new("127.0.0.1:0".parse().unwrap());
+        assert!(server.node_registry.list_environments().is_empty());
     }
 }
