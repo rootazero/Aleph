@@ -8,7 +8,7 @@
 use crate::error::AlephError;
 use crate::memory::notes::indexer::NoteIndexer;
 use crate::memory::notes::ingest::plan::{ApplyReport, PageOp};
-use crate::memory::notes::note::{sanitize_title, KnowledgeNote};
+use crate::memory::notes::note::{sanitize_title, KnowledgeNote, Relation};
 use crate::memory::notes::store::NoteStore;
 use crate::sync_primitives::Arc;
 use std::collections::BTreeSet;
@@ -105,7 +105,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 facts,
                 links,
                 tags,
-                ..
+                relations,
             } => {
                 let (category, filename) = split_path(note_path)?;
                 let safe = sanitize_title(&filename)?;
@@ -117,6 +117,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                     tags: tags.clone(),
                     facts: facts.iter().map(|f| ensure_origin_marker(f)).collect(),
                     links: links.clone(),
+                    relations: relations.iter().cloned().map(Relation::clamped).collect(),
                     created_at: chrono::Utc::now().timestamp(),
                     updated_at: chrono::Utc::now().timestamp(),
                     content_hash: String::new(),
@@ -135,7 +136,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 note_path,
                 new_facts,
                 new_links,
-                ..
+                new_relations,
             } => {
                 let (category, filename) = split_path(note_path)?;
                 let safe = sanitize_title(&filename)?;
@@ -150,6 +151,16 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
                 for l in new_links {
                     if !merged.links.contains(l) {
                         merged.links.push(l.clone());
+                    }
+                }
+                // Upsert typed relation edges by target: re-stated relation replaces
+                // the existing one with the same `to`; new target is appended.
+                for r in new_relations {
+                    let r = r.clone().clamped();
+                    if let Some(existing) = merged.relations.iter_mut().find(|e| e.to == r.to) {
+                        *existing = r;
+                    } else {
+                        merged.relations.push(r);
                     }
                 }
                 merged.updated_at = chrono::Utc::now().timestamp();
@@ -581,6 +592,101 @@ mod tests {
             .unwrap();
         assert_eq!(body.matches("- fact-a").count(), 1);
         assert_eq!(body.matches("- fact-b").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn create_persists_frontmatter_relations() {
+        use crate::memory::notes::note::Relation;
+        let (dir, backend, indexer) = fresh().await;
+        let mut tx = CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default");
+        tx.stage(&PageOp::Create {
+            note_path: "entity/alice".into(),
+            title: "Alice".into(),
+            summary: "".into(),
+            facts: vec![],
+            links: vec![],
+            tags: vec![],
+            relations: vec![Relation {
+                to: "entity/acme".into(),
+                rel_type: "works_at".into(),
+                confidence: 0.9,
+            }],
+        })
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let body =
+            tokio::fs::read_to_string(dir.path().join("note/default/entity/alice.md"))
+                .await
+                .unwrap();
+        assert!(body.contains("relations:"), "expected 'relations:' block in frontmatter");
+        assert!(body.contains("type: works_at"), "expected 'type: works_at' in frontmatter");
+    }
+
+    #[tokio::test]
+    async fn append_merges_relations_by_target() {
+        use crate::memory::notes::note::Relation;
+        let (dir, backend, indexer) = fresh().await;
+
+        // Create with an initial relation: alice -knows-> bob.
+        {
+            let mut tx =
+                CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default");
+            tx.stage(&PageOp::Create {
+                note_path: "entity/alice".into(),
+                title: "Alice".into(),
+                summary: "".into(),
+                facts: vec![],
+                links: vec![],
+                tags: vec![],
+                relations: vec![Relation {
+                    to: "entity/bob".into(),
+                    rel_type: "knows".into(),
+                    confidence: 0.5,
+                }],
+            })
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        // Append: upgrade bob edge to "colleague" and add acme edge.
+        {
+            let mut tx =
+                CompoundApplyTx::new(&indexer, &backend, dir.path().join("note"), "default");
+            tx.stage(&PageOp::Append {
+                note_path: "entity/alice".into(),
+                new_facts: vec![],
+                new_links: vec![],
+                new_relations: vec![
+                    Relation {
+                        to: "entity/bob".into(),
+                        rel_type: "colleague".into(),
+                        confidence: 0.8,
+                    },
+                    Relation {
+                        to: "entity/acme".into(),
+                        rel_type: "works_at".into(),
+                        confidence: 0.9,
+                    },
+                ],
+            })
+            .await
+            .unwrap();
+            tx.commit().await.unwrap();
+        }
+
+        let body =
+            tokio::fs::read_to_string(dir.path().join("note/default/entity/alice.md"))
+                .await
+                .unwrap();
+        // bob edge should be upgraded to "colleague"
+        assert!(body.contains("type: colleague"), "expected 'type: colleague' (bob edge upgraded)");
+        // old "knows" type should be gone (replaced by "colleague" for same `to`)
+        assert!(!body.contains("type: knows"), "old 'type: knows' should have been replaced");
+        // new acme edge should be present
+        assert!(body.contains("to: entity/acme"), "expected 'to: entity/acme' (new edge)");
     }
 
     use proptest::prelude::*;
