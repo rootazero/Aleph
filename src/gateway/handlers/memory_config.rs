@@ -22,7 +22,19 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, 
 pub async fn handle_get(request: JsonRpcRequest, config: Arc<RwLock<Config>>) -> JsonRpcResponse {
     let cfg = config.read().await;
 
-    let memory_config = serde_json::to_value(&cfg.memory).unwrap_or_else(|_| serde_json::json!({}));
+    let mut memory_config =
+        serde_json::to_value(&cfg.memory).unwrap_or_else(|_| serde_json::json!({}));
+
+    // Bridge the compression scheduling policy into the memory payload. These
+    // knobs physically live in `policies.memory.compression` (not in
+    // `MemoryConfig`), but the panel surfaces them on the Memory & Knowledge
+    // page, so we project them under a `compression` key the panel reads/writes.
+    if let serde_json::Value::Object(ref mut map) = memory_config {
+        map.insert(
+            "compression".to_string(),
+            project_compression(&cfg.policies.memory.compression),
+        );
+    }
 
     JsonRpcResponse::success(request.id, memory_config)
 }
@@ -38,10 +50,17 @@ pub async fn handle_update(
     event_bus: Arc<GatewayEventBus>,
 ) -> JsonRpcResponse {
     // Parse params as raw JSON value
-    let incoming = match request.params {
+    let mut incoming = match request.params {
         Some(p) => p,
         None => return JsonRpcResponse::error(request.id, INVALID_PARAMS, "Missing params"),
     };
+
+    // Pull the bridged compression policy out before merging the remainder into
+    // `MemoryConfig` — it targets `policies.memory.compression`, not the memory
+    // section. Stripping keeps the memory merge clean.
+    let compression_update = incoming
+        .as_object_mut()
+        .and_then(|m| m.remove("compression"));
 
     // Merge: read existing config as JSON, overlay incoming fields, deserialize back
     {
@@ -77,8 +96,16 @@ pub async fn handle_update(
 
         cfg.memory = merged;
 
+        // Apply the bridged compression policy (partial-update tolerant) and
+        // mark its section for persistence alongside memory.
+        let mut sections: Vec<&str> = vec!["memory"];
+        if let Some(comp) = compression_update {
+            apply_compression_update(&mut cfg.policies.memory.compression, &comp);
+            sections.push("policies.memory.compression");
+        }
+
         // Save to file
-        if let Err(e) = cfg.save_incremental(&["memory"]) {
+        if let Err(e) = cfg.save_incremental(&sections) {
             return JsonRpcResponse::error(
                 request.id,
                 INTERNAL_ERROR,
@@ -146,5 +173,87 @@ fn json_merge(base: &mut serde_json::Value, overlay: &serde_json::Value) {
         (base, overlay) => {
             *base = overlay.clone();
         }
+    }
+}
+
+/// Project the compression scheduling policy into the JSON shape the panel
+/// reads under the `compression` key (see [`handle_get`]).
+fn project_compression(c: &crate::config::CompressionPolicy) -> serde_json::Value {
+    json!({
+        "idle_timeout_seconds": c.idle_timeout_seconds,
+        "turn_threshold": c.turn_threshold,
+        "background_interval_seconds": c.background_interval_seconds,
+    })
+}
+
+/// Apply a (possibly partial) `compression` payload from the panel back onto
+/// the compression policy. Missing or malformed fields are left untouched so
+/// the update is tolerant of partial payloads.
+fn apply_compression_update(
+    policy: &mut crate::config::CompressionPolicy,
+    comp: &serde_json::Value,
+) {
+    if let Some(v) = comp.get("idle_timeout_seconds").and_then(|x| x.as_u64()) {
+        policy.idle_timeout_seconds = v as u32;
+    }
+    if let Some(v) = comp.get("turn_threshold").and_then(|x| x.as_u64()) {
+        policy.turn_threshold = v as u32;
+    }
+    if let Some(v) = comp
+        .get("background_interval_seconds")
+        .and_then(|x| x.as_u64())
+    {
+        policy.background_interval_seconds = v as u32;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::CompressionPolicy;
+
+    #[test]
+    fn project_compression_emits_panel_shape() {
+        let policy = CompressionPolicy {
+            idle_timeout_seconds: 111,
+            turn_threshold: 7,
+            background_interval_seconds: 999,
+        };
+        let v = project_compression(&policy);
+        assert_eq!(v["idle_timeout_seconds"], 111);
+        assert_eq!(v["turn_threshold"], 7);
+        assert_eq!(v["background_interval_seconds"], 999);
+    }
+
+    #[test]
+    fn apply_compression_update_routes_all_fields() {
+        let mut policy = CompressionPolicy::default();
+        let comp = json!({
+            "idle_timeout_seconds": 222,
+            "turn_threshold": 9,
+            "background_interval_seconds": 4242,
+        });
+        apply_compression_update(&mut policy, &comp);
+        assert_eq!(policy.idle_timeout_seconds, 222);
+        assert_eq!(policy.turn_threshold, 9);
+        assert_eq!(policy.background_interval_seconds, 4242);
+    }
+
+    #[test]
+    fn apply_compression_update_is_partial_tolerant() {
+        let mut policy = CompressionPolicy {
+            idle_timeout_seconds: 10,
+            turn_threshold: 20,
+            background_interval_seconds: 30,
+        };
+        // Only one field present; the others must be preserved.
+        apply_compression_update(&mut policy, &json!({ "turn_threshold": 99 }));
+        assert_eq!(policy.idle_timeout_seconds, 10);
+        assert_eq!(policy.turn_threshold, 99);
+        assert_eq!(policy.background_interval_seconds, 30);
+
+        // Malformed (non-numeric) value is ignored, not panicked on.
+        apply_compression_update(&mut policy, &json!({ "idle_timeout_seconds": "oops" }));
+        assert_eq!(policy.idle_timeout_seconds, 10);
     }
 }

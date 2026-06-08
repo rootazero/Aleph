@@ -33,7 +33,7 @@ system_prompt = "Custom assistant"
 
 [memory]
 enabled = true
-max_context_items = 10
+similarity_threshold = 0.5
 "##;
 
     fs::write(&config_path, initial_toml).expect("Should write initial config");
@@ -93,7 +93,7 @@ max_context_items = 10
 
     // Verify memory config is preserved
     assert!(
-        final_content.contains("max_context_items = 10"),
+        final_content.contains("similarity_threshold = 0.5"),
         "Memory config should be preserved"
     );
 }

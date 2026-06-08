@@ -134,12 +134,6 @@ fn build_field_hints() -> std::collections::HashMap<String, FieldHint> {
             group: "memory",
             order: 1,
         },
-        "memory.max_context_items" => {
-            label: "Max Context Items",
-            help: "Maximum number of memory items to include",
-            group: "memory",
-            order: 2,
-        },
         "memory.similarity_threshold" => {
             label: "Similarity Threshold",
             help: "Minimum similarity score for memory retrieval (0.0-1.0)",

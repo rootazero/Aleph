@@ -39,29 +39,10 @@ pub enum MemoryInjectionMode {
 pub struct MemoryConfig {
     #[serde(default = "defaults::default_enabled")]
     pub enabled: bool,
-    #[serde(default = "defaults::default_max_context_items")]
-    pub max_context_items: u32,
-    #[serde(default = "defaults::default_retention_days")]
-    pub retention_days: u32,
     #[serde(default = "defaults::default_vector_db")]
     pub vector_db: String,
     #[serde(default = "defaults::default_similarity_threshold")]
     pub similarity_threshold: f32,
-
-    #[serde(default = "defaults::default_compression_enabled")]
-    pub compression_enabled: bool,
-    #[serde(default = "defaults::default_compression_idle_timeout")]
-    pub compression_idle_timeout_seconds: u32,
-    #[serde(default = "defaults::default_compression_turn_threshold")]
-    pub compression_turn_threshold: u32,
-    #[serde(default = "defaults::default_compression_interval")]
-    pub compression_interval_seconds: u32,
-    #[serde(default = "defaults::default_compression_batch_size")]
-    pub compression_batch_size: u32,
-    #[serde(default = "defaults::default_max_facts_in_context")]
-    pub max_facts_in_context: u32,
-    #[serde(default = "defaults::default_raw_memory_fallback_count")]
-    pub raw_memory_fallback_count: u32,
 
     #[serde(default)]
     pub embedding: EmbeddingSettings,
@@ -85,11 +66,6 @@ pub struct MemoryConfig {
 
     #[serde(default = "defaults::default_dedup_similarity_threshold")]
     pub dedup_similarity_threshold: f32,
-
-    #[serde(default = "defaults::default_backup_enabled")]
-    pub backup_enabled: bool,
-    #[serde(default = "defaults::default_backup_max_files")]
-    pub backup_max_files: usize,
 
     #[serde(default)]
     pub reflection: ReflectionConfig,
@@ -152,17 +128,8 @@ impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
             enabled: defaults::default_enabled(),
-            max_context_items: defaults::default_max_context_items(),
-            retention_days: defaults::default_retention_days(),
             vector_db: defaults::default_vector_db(),
             similarity_threshold: defaults::default_similarity_threshold(),
-            compression_enabled: defaults::default_compression_enabled(),
-            compression_idle_timeout_seconds: defaults::default_compression_idle_timeout(),
-            compression_turn_threshold: defaults::default_compression_turn_threshold(),
-            compression_interval_seconds: defaults::default_compression_interval(),
-            compression_batch_size: defaults::default_compression_batch_size(),
-            max_facts_in_context: defaults::default_max_facts_in_context(),
-            raw_memory_fallback_count: defaults::default_raw_memory_fallback_count(),
             embedding: EmbeddingSettings::default(),
             dreaming: DreamingConfig::default(),
             memory_decay: MemoryDecayPolicy::default(),
@@ -171,8 +138,6 @@ impl Default for MemoryConfig {
             rerank: crate::memory::rerank::RerankConfig::default(),
             retrieval_scoring: RetrievalScoringConfig::default(),
             dedup_similarity_threshold: defaults::default_dedup_similarity_threshold(),
-            backup_enabled: defaults::default_backup_enabled(),
-            backup_max_files: defaults::default_backup_max_files(),
             reflection: ReflectionConfig::default(),
             assembler: AssemblerConfig::default(),
             injection_mode: MemoryInjectionMode::Hybrid,

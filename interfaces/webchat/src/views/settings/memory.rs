@@ -9,7 +9,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{FusionStrategy, MemoryConfig, MemoryConfigApi, RetrieveWithTraceResponse};
+use crate::api::{MemoryConfig, MemoryConfigApi, RetrieveWithTraceResponse};
 use crate::context::DashboardState;
 use crate::i18n::*;
 
@@ -83,7 +83,6 @@ pub fn MemoryView() -> impl IntoView {
                                 <RetrievalPipelineSettings config=config />
                                 <SalienceScoringSettings config=config />
                                 <FactDecaySettings config=config />
-                                <GraphDecaySettings config=config />
                                 <DreamingSettings config=config />
                                 <ReflectionSettings config=config />
                                 <StorageBackupSettings config=config />
@@ -140,42 +139,6 @@ fn BasicSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                     <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.vector_db_hint)}</p>
                 </div>
 
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_context_items)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || config.get().map(|c| c.max_context_items).unwrap_or(5)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.max_context_items = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.retention_days)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || config.get().map(|c| c.retention_days).unwrap_or(90)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.retention_days = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-                </div>
-
                 <div>
                     <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.similarity_threshold)}</label>
                     <input
@@ -206,33 +169,20 @@ fn CompressionSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView 
     view! {
         <div class="bg-surface-raised p-6 rounded-lg border border-border">
             <h2 class="text-lg font-semibold mb-4">{t!(i18n, settings.memory.compression)}</h2>
+            <p class="text-xs text-text-tertiary mb-4">{t!(i18n, settings.memory.compression_hint)}</p>
 
             <div class="space-y-4">
-                <div class="flex items-center">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || config.get().map(|c| c.compression_enabled).unwrap_or(false)
-                        on:change=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.compression_enabled = event_target_checked(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="mr-2"
-                    />
-                    <label class="font-medium">{t!(i18n, settings.memory.enable_compression)}</label>
-                </div>
-
                 <div class="grid grid-cols-2 gap-4">
                     <div>
                         <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.idle_timeout_seconds)}</label>
                         <input
                             type="number"
-                            prop:value=move || config.get().map(|c| c.compression_idle_timeout_seconds).unwrap_or(300)
+                            min="1"
+                            prop:value=move || config.get().map(|c| c.compression.idle_timeout_seconds).unwrap_or(300)
                             on:input=move |ev| {
                                 if let Some(mut cfg) = config.get() {
                                     if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.compression_idle_timeout_seconds = val;
+                                        cfg.compression.idle_timeout_seconds = val;
                                         config.set(Some(cfg));
                                     }
                                 }
@@ -245,86 +195,12 @@ fn CompressionSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView 
                         <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.turn_threshold)}</label>
                         <input
                             type="number"
-                            prop:value=move || config.get().map(|c| c.compression_turn_threshold).unwrap_or(20)
+                            min="1"
+                            prop:value=move || config.get().map(|c| c.compression.turn_threshold).unwrap_or(20)
                             on:input=move |ev| {
                                 if let Some(mut cfg) = config.get() {
                                     if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.compression_turn_threshold = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.compression_interval_seconds)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || config.get().map(|c| c.compression_interval_seconds).unwrap_or(3600)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.compression_interval_seconds = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.batch_size)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || config.get().map(|c| c.compression_batch_size).unwrap_or(50)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.compression_batch_size = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.conflict_similarity_threshold)}</label>
-                        <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            max="1"
-                            prop:value=move || config.get().map(|c| c.conflict_similarity_threshold).unwrap_or(0.85)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.conflict_similarity_threshold = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_facts_in_context)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || config.get().map(|c| c.max_facts_in_context).unwrap_or(5)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.max_facts_in_context = val;
+                                        cfg.compression.turn_threshold = val;
                                         config.set(Some(cfg));
                                     }
                                 }
@@ -335,14 +211,15 @@ fn CompressionSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView 
                 </div>
 
                 <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.raw_memory_fallback_count)}</label>
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.compression_interval_seconds)}</label>
                     <input
                         type="number"
-                        prop:value=move || config.get().map(|c| c.raw_memory_fallback_count).unwrap_or(3)
+                        min="1"
+                        prop:value=move || config.get().map(|c| c.compression.background_interval_seconds).unwrap_or(3600)
                         on:input=move |ev| {
                             if let Some(mut cfg) = config.get() {
                                 if let Ok(val) = event_target_value(&ev).parse() {
-                                    cfg.raw_memory_fallback_count = val;
+                                    cfg.compression.background_interval_seconds = val;
                                     config.set(Some(cfg));
                                 }
                             }
@@ -448,84 +325,6 @@ fn FactDecaySettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
                     />
                     <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.protected_types_hint)}</p>
-                </div>
-            </div>
-        </div>
-    }
-}
-
-#[component]
-fn GraphDecaySettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoView {
-    let i18n = use_i18n();
-    view! {
-        <div class="bg-surface-raised p-6 rounded-lg border border-border">
-            <h2 class="text-lg font-semibold mb-2">{t!(i18n, settings.memory.graph_decay)}</h2>
-            <p class="text-sm text-text-tertiary mb-4">
-                {t!(i18n, settings.memory.graph_decay_desc)}
-            </p>
-
-            <div class="space-y-4">
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.node_decay_per_day)}</label>
-                        <input
-                            type="number"
-                            step="0.001"
-                            min="0"
-                            max="1"
-                            prop:value=move || config.get().map(|c| c.graph_decay.node_decay_per_day).unwrap_or(0.02)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.graph_decay.node_decay_per_day = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-
-                    <div>
-                        <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.edge_decay_per_day)}</label>
-                        <input
-                            type="number"
-                            step="0.001"
-                            min="0"
-                            max="1"
-                            prop:value=move || config.get().map(|c| c.graph_decay.edge_decay_per_day).unwrap_or(0.03)
-                            on:input=move |ev| {
-                                if let Some(mut cfg) = config.get() {
-                                    if let Ok(val) = event_target_value(&ev).parse() {
-                                        cfg.graph_decay.edge_decay_per_day = val;
-                                        config.set(Some(cfg));
-                                    }
-                                }
-                            }
-                            class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                        />
-                    </div>
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.min_score)}</label>
-                    <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        max="1"
-                        prop:value=move || config.get().map(|c| c.graph_decay.min_score).unwrap_or(0.1)
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                if let Ok(val) = event_target_value(&ev).parse() {
-                                    cfg.graph_decay.min_score = val;
-                                    config.set(Some(cfg));
-                                }
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.min_score_hint)}</p>
                 </div>
             </div>
         </div>
@@ -661,40 +460,6 @@ fn StorageBackupSettings(config: RwSignal<Option<MemoryConfig>>) -> impl IntoVie
                     />
                     <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.dedup_similarity_hint)}</p>
                 </div>
-
-                <div class="flex items-center">
-                    <input
-                        type="checkbox"
-                        prop:checked=move || config.get().map(|c| c.backup_enabled).unwrap_or(true)
-                        on:change=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                cfg.backup_enabled = event_target_checked(&ev);
-                                config.set(Some(cfg));
-                            }
-                        }
-                        class="mr-2"
-                    />
-                    <label class="font-medium">{t!(i18n, settings.memory.backup_enabled)}</label>
-                </div>
-
-                <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.max_backup_files)}</label>
-                    <input
-                        type="number"
-                        min="1"
-                        prop:value=move || config.get().map(|c| c.backup_max_files).unwrap_or(7)
-                        on:input=move |ev| {
-                            if let Some(mut cfg) = config.get() {
-                                if let Ok(val) = event_target_value(&ev).parse() {
-                                    cfg.backup_max_files = val;
-                                    config.set(Some(cfg));
-                                }
-                            }
-                        }
-                        class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    />
-                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.max_backup_files_hint)}</p>
-                </div>
             </div>
         </div>
     }
@@ -716,49 +481,23 @@ fn RetrievalPipelineSettings(config: RwSignal<Option<MemoryConfig>>) -> impl Int
 
             <div class="space-y-4">
                 <div>
-                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.fusion_strategy)}</label>
-                    <select
-                        prop:value=move || config.get().map(|c| c.fusion_strategy.as_str().to_string()).unwrap_or_else(|| "rrf".to_string())
-                        on:change=move |ev| {
+                    <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.rrf_k)}</label>
+                    <input
+                        type="number"
+                        min="1"
+                        prop:value=move || config.get().map(|c| c.rrf_k).unwrap_or(60)
+                        on:input=move |ev| {
                             if let Some(mut cfg) = config.get() {
-                                cfg.fusion_strategy = FusionStrategy::from_str_val(&event_target_value(&ev));
-                                config.set(Some(cfg));
+                                if let Ok(val) = event_target_value(&ev).parse() {
+                                    cfg.rrf_k = val;
+                                    config.set(Some(cfg));
+                                }
                             }
                         }
                         class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                    >
-                        <option value="rrf">{t!(i18n, settings.memory.rrf_option)}</option>
-                        <option value="weighted">{t!(i18n, settings.memory.weighted_option)}</option>
-                    </select>
+                    />
+                    <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.rrf_k_hint)}</p>
                 </div>
-
-                {move || {
-                    let is_rrf = config.get().map(|c| c.fusion_strategy == FusionStrategy::Rrf).unwrap_or(true);
-                    if is_rrf {
-                        Some(view! {
-                            <div>
-                                <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.rrf_k)}</label>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    prop:value=move || config.get().map(|c| c.rrf_k).unwrap_or(60)
-                                    on:input=move |ev| {
-                                        if let Some(mut cfg) = config.get() {
-                                            if let Ok(val) = event_target_value(&ev).parse() {
-                                                cfg.rrf_k = val;
-                                                config.set(Some(cfg));
-                                            }
-                                        }
-                                    }
-                                    class="w-full px-3 py-2 border border-border rounded bg-surface-raised"
-                                />
-                                <p class="text-xs text-text-tertiary mt-1">{t!(i18n, settings.memory.rrf_k_hint)}</p>
-                            </div>
-                        })
-                    } else {
-                        None
-                    }
-                }}
 
                 <div>
                     <label class="block text-sm font-medium mb-1">{t!(i18n, settings.memory.bm25_bonus_weight)}</label>

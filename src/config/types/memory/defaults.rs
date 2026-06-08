@@ -2,18 +2,6 @@ pub fn default_enabled() -> bool {
     true
 }
 
-pub fn default_max_context_items() -> u32 {
-    crate::config::defaults_override::get_defaults_override()
-        .memory_max_context_items()
-        .unwrap_or(5)
-}
-
-pub fn default_retention_days() -> u32 {
-    crate::config::defaults_override::get_defaults_override()
-        .memory_retention_days()
-        .unwrap_or(90)
-}
-
 pub fn default_vector_db() -> String {
     "sqlite-vec".to_string()
 }
@@ -22,34 +10,6 @@ pub fn default_similarity_threshold() -> f32 {
     crate::config::defaults_override::get_defaults_override()
         .memory_similarity_threshold()
         .unwrap_or(0.3)
-}
-
-pub fn default_compression_enabled() -> bool {
-    true
-}
-
-pub fn default_compression_idle_timeout() -> u32 {
-    300
-}
-
-pub fn default_compression_turn_threshold() -> u32 {
-    20
-}
-
-pub fn default_compression_interval() -> u32 {
-    3600
-}
-
-pub fn default_compression_batch_size() -> u32 {
-    50
-}
-
-pub fn default_max_facts_in_context() -> u32 {
-    5
-}
-
-pub fn default_raw_memory_fallback_count() -> u32 {
-    3
 }
 
 pub fn default_embedding_timeout_ms() -> u64 {
@@ -223,14 +183,6 @@ pub fn default_rrf_k() -> u32 {
 
 pub fn default_bm25_bonus() -> f32 {
     0.15
-}
-
-pub fn default_backup_enabled() -> bool {
-    true
-}
-
-pub fn default_backup_max_files() -> usize {
-    7
 }
 
 pub fn default_qf_enabled() -> bool {
