@@ -265,10 +265,12 @@ pub fn default_related_total_byte_cap() -> usize {
     12 * 1024
 }
 
-/// Write-time semantic dedup gate (mem0-style). Disabled by default so the
-/// ingest pipeline stays byte-identical unless an operator opts in.
+/// Write-time semantic dedup gate (mem0-style). Enabled by default so
+/// near-duplicate notes are collapsed at ingest instead of waiting for the
+/// offline dream consolidator. Operators can set `dedup_enabled = false` in
+/// `[memory.compound_ingest]` to restore byte-identical ingest.
 pub fn default_dedup_enabled() -> bool {
-    false
+    true
 }
 
 /// Cosine-similarity threshold above which a freshly-planned `Create` is
@@ -277,6 +279,16 @@ pub fn default_dedup_enabled() -> bool {
 /// genuinely distinct facts to spawn their own page.
 pub fn default_dedup_similarity_threshold() -> f32 {
     0.92
+}
+
+/// Cosine threshold at or above which a freshly-planned `Create` is treated as
+/// a NOOP and dropped (the note already exists, essentially verbatim). Must be
+/// >= `default_dedup_similarity_threshold`. `0.985` is deliberately very high:
+/// only near-identical title+summary+facts collapse to a no-op, so a Create
+/// carrying genuinely new facts (which embeds below this) is still merged via
+/// Append rather than dropped.
+pub fn default_dedup_noop_threshold() -> f32 {
+    0.985
 }
 
 pub fn default_replan_on_hash_conflict() -> u32 {

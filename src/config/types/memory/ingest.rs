@@ -27,6 +27,8 @@ pub struct CompoundIngestConfig {
     pub dedup_enabled: bool,
     #[serde(default = "super::defaults::default_dedup_similarity_threshold")]
     pub dedup_similarity_threshold: f32,
+    #[serde(default = "super::defaults::default_dedup_noop_threshold")]
+    pub dedup_noop_threshold: f32,
 }
 
 impl Default for CompoundIngestConfig {
@@ -39,8 +41,9 @@ impl Default for CompoundIngestConfig {
             replan_on_hash_conflict: 1,
             failure_cooldown_seconds: 300,
             tx_residue_gc_seconds: 3600,
-            dedup_enabled: false,
+            dedup_enabled: true,
             dedup_similarity_threshold: 0.92,
+            dedup_noop_threshold: 0.985,
         }
     }
 }
@@ -94,5 +97,27 @@ impl From<CuratedSection> for CuratedConfig {
             user_char_limit: s.user_char_limit,
             legacy_warn_threshold: s.legacy_warn_threshold,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CompoundIngestConfig;
+
+    #[test]
+    fn dedup_is_enabled_by_default() {
+        assert!(super::super::defaults::default_dedup_enabled());
+        assert_eq!(super::super::defaults::default_dedup_noop_threshold(), 0.985);
+        let cfg = CompoundIngestConfig::default();
+        assert!(cfg.dedup_enabled);
+        assert_eq!(cfg.dedup_noop_threshold, 0.985);
+    }
+
+    #[test]
+    fn compound_ingest_config_parses_without_dedup_noop_key() {
+        // Backward-compat: TOML lacking the new key falls back to the serde default.
+        let cfg: CompoundIngestConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.dedup_noop_threshold, 0.985);
+        assert!(cfg.dedup_enabled);
     }
 }
