@@ -244,4 +244,20 @@ mod tests {
         let h3 = body_text_sha256("different");
         assert_ne!(h1, h3);
     }
+
+    #[test]
+    fn retrieval_tuning_default_matches_legacy_constants() {
+        let t = crate::memory::store::sqlite::RetrievalTuning::default();
+        assert_eq!(t.rrf_k, 60);
+        assert_eq!(t.bm25_bonus_weight, 0.15);
+    }
+
+    #[test]
+    fn with_retrieval_tuning_overrides_fields() {
+        let backend = crate::memory::store::sqlite::SqliteMemoryBackend::in_memory()
+            .unwrap()
+            .with_retrieval_tuning(42, 0.5);
+        assert_eq!(backend.tuning.rrf_k, 42);
+        assert_eq!(backend.tuning.bm25_bonus_weight, 0.5);
+    }
 }

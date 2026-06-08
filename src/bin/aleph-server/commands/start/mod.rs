@@ -311,7 +311,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 if !args.daemon {
                     println!("Memory backend initialized (SQLite + sqlite-vec)");
                 }
-                Arc::new(backend)
+                Arc::new(backend.with_retrieval_tuning(
+                    loaded_app_config.memory.rrf_k,
+                    loaded_app_config.memory.bm25_bonus_weight,
+                ))
             }
             Err(e) => {
                 return Err(format!("Error: Failed to initialize memory backend: {}", e).into());

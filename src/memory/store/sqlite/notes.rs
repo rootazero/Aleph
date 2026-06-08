@@ -667,8 +667,11 @@ impl NoteStore for SqliteMemoryBackend {
             .search_notes_fts(query_text, agent_id, limit * 2)
             .await?;
 
-        // RRF fusion with k=60 (standard)
-        let k = 60.0_f32;
+        // RRF fusion. `rrf_k` is the standard Reciprocal Rank Fusion
+        // constant; FTS (lexical) matches get an extra `bm25_bonus_weight`
+        // multiplicative lift so operators can bias toward keyword hits.
+        let k = self.tuning.rrf_k as f32;
+        let bm25_lift = 1.0 + self.tuning.bm25_bonus_weight;
         let mut scores: HashMap<String, f32> = HashMap::new();
 
         for (rank, (path, _score)) in vec_results.iter().enumerate() {
@@ -677,7 +680,7 @@ impl NoteStore for SqliteMemoryBackend {
         }
 
         for (rank, entry) in fts_entries.iter().enumerate() {
-            let rrf = 1.0 / (k + (rank as f32) + 1.0);
+            let rrf = (1.0 / (k + (rank as f32) + 1.0)) * bm25_lift;
             *scores.entry(entry.path.clone()).or_insert(0.0) += rrf;
         }
 
