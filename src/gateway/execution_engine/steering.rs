@@ -109,10 +109,15 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
 /// # Boundary
 ///
 /// If injection lands during the running loop's *final* LLM call, the message
-/// sits at the tail of the event log unanswered until the next interaction,
-/// when `get_events` returns it alongside the next user turn. It is never
-/// dropped — only, in that one race, deferred. This is strictly better than the
-/// previous "blocked until the whole run finishes" behaviour.
+/// is appended to the log *before* the assistant message that turn commits.
+/// The harness still catches it: the outer loop's follow-up check compares the
+/// log against the final turn's prompt boundary watermark
+/// (`AgentHarness::last_prompt_log_len`), so a message at or beyond that
+/// boundary — including one wedged before the trailing assistant message —
+/// re-enters the loop and is answered in the same run. Only if the run has
+/// already torn down (no live loop to continue) does it defer to the next
+/// interaction, when `get_events` returns it alongside the next user turn. It
+/// is never dropped.
 pub(super) async fn try_inject_steering(
     enabled: bool,
     active_runs: &RwLock<HashMap<String, ActiveRun>>,
