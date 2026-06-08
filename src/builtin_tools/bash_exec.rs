@@ -24,6 +24,18 @@ use crate::sandbox::context::SESSION_ID;
 use crate::sandbox::{current_session, Sandbox};
 use crate::tools::AlephTool;
 
+/// Default wall-clock timeout (seconds) applied to a **background** job when
+/// the caller does not pass an explicit `timeout`.
+///
+/// Foreground calls default to 60s (`DEFAULT_CODE_EXEC_TIMEOUT`) and are capped
+/// at the 180s tool budget. Background calls escape that budget wrapper (they
+/// return a `process_id` immediately), so inheriting the 60s foreground default
+/// would SIGKILL a backgrounded `cargo build` / `pip install` long before it
+/// finishes — defeating the entire point of background mode. Give unspecified
+/// background jobs a generous one-hour ceiling instead; an explicit `timeout`
+/// still wins, and the job stays killable via `process_action: "kill"`.
+const BACKGROUND_DEFAULT_TIMEOUT_SECS: u64 = 3600;
+
 /// Arguments for bash execution tool
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct BashExecArgs {
@@ -138,7 +150,10 @@ human approver so they can decide.
 
 BACKGROUND MODE — for commands that outlive the 180s ceiling (builds, installs,
 long test runs). Set `background: true` and the call returns a `process_id`
-immediately instead of blocking. Manage it with `process_action`:
+immediately instead of blocking. Background jobs escape the 180s foreground
+ceiling: with no explicit `timeout` they get a generous 1-hour default (pass
+`timeout` to raise or lower it), and you can stop one anytime with
+`process_action: "kill"`. Manage it with `process_action`:
 - `{"process_action": "poll", "process_id": N}` → status while running, or the
   full {exit_code, stdout, stderr} once finished (output is captured, not
   streamed mid-run — poll again until done).
@@ -181,7 +196,7 @@ Examples:
             ));
         }
 
-        let code_exec_args = CodeExecArgs {
+        let mut code_exec_args = CodeExecArgs {
             language: Language::Shell,
             code: args.cmd,
             working_dir: args.working_dir,
@@ -193,6 +208,13 @@ Examples:
         };
 
         if args.background {
+            // Background escapes the 180s foreground budget wrapper, so the
+            // foreground 60s default would prematurely SIGKILL long builds.
+            // Substitute a generous default only when the caller left `timeout`
+            // unset; an explicit value (longer or shorter) is always honoured.
+            if code_exec_args.timeout.is_none() {
+                code_exec_args.timeout = Some(BACKGROUND_DEFAULT_TIMEOUT_SECS);
+            }
             return Ok(self.spawn_background(code_exec_args));
         }
 
@@ -404,6 +426,10 @@ mod tests {
             d.contains("\"poll\"") && d.contains("\"kill\"") && d.contains("\"list\""),
             "should enumerate poll/kill/list"
         );
+        assert!(
+            d.contains("1-hour"),
+            "should teach the generous background timeout default"
+        );
     }
 
     fn bash(args: BashExecArgs) -> impl std::future::Future<Output = CodeExecOutput> {
@@ -553,5 +579,78 @@ mod tests {
             "poll should surface the captured task output verbatim: {}",
             out.stderr
         );
+    }
+
+    /// Drive one background job (with the given explicit `timeout`) to
+    /// completion through a `MockSandbox` and report the wall-clock timeout
+    /// the inner `CodeExecTool` actually handed to the sandbox.
+    async fn background_sandbox_timeout(explicit: Option<u64>) -> Option<std::time::Duration> {
+        use crate::sandbox::test_util::MockSandbox;
+        use crate::sandbox::{Sandbox, SandboxOutput};
+
+        let mock = MockSandbox::new(SandboxOutput {
+            stdout: b"ok\n".to_vec(),
+            exit_code: Some(0),
+            duration_ms: 1,
+            ..Default::default()
+        });
+        let sandbox: crate::sync_primitives::Arc<dyn Sandbox> = mock.clone();
+        let tool = BashExecTool::new().with_sandbox(sandbox);
+        let session = crate::routing::session_key::SessionKey::ephemeral("bash-bg-timeout");
+
+        SESSION_ID
+            .scope(session, async {
+                let spawn = tool
+                    .call(BashExecArgs {
+                        cmd: "echo ok".to_string(),
+                        working_dir: None,
+                        timeout: explicit,
+                        allow_network: false,
+                        allow_subprocess: false,
+                        extra_writable_paths: Vec::new(),
+                        background: true,
+                        process_action: None,
+                        process_id: None,
+                        justification: None,
+                    })
+                    .await
+                    .unwrap();
+                let v: serde_json::Value = serde_json::from_str(&spawn.stdout).unwrap();
+                let id = v["process_id"].as_u64().expect("process_id");
+                // Poll until the detached task has invoked the sandbox + finished.
+                for _ in 0..200 {
+                    let polled = tool
+                        .call(args_action("poll", Some(id)))
+                        .await
+                        .unwrap();
+                    if !polled.stdout.contains("\"status\":\"running\"") {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await;
+
+        let calls = mock.calls.lock().await;
+        calls.first().and_then(|c| c.timeout)
+    }
+
+    #[tokio::test]
+    async fn background_without_timeout_gets_generous_default() {
+        // Regression: a backgrounded build with no explicit timeout must NOT
+        // inherit the 60s foreground default (which would SIGKILL it early).
+        let t = background_sandbox_timeout(None).await;
+        assert_eq!(
+            t,
+            Some(std::time::Duration::from_secs(BACKGROUND_DEFAULT_TIMEOUT_SECS)),
+            "background default should be the generous ceiling, not 60s"
+        );
+    }
+
+    #[tokio::test]
+    async fn background_honours_explicit_timeout() {
+        // An explicit `timeout` always wins over the background default.
+        let t = background_sandbox_timeout(Some(30)).await;
+        assert_eq!(t, Some(std::time::Duration::from_secs(30)));
     }
 }
