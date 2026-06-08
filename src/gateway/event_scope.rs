@@ -28,6 +28,7 @@ impl EventScopeGuard {
     /// | `guest.` | admin, guest.manager |
     /// | `exec.approval.` | admin, exec.approver |
     /// | `config.changed` | admin, config.viewer |
+    /// | `surface.approval` | admin, exec.approver |
     pub fn default_rules() -> Self {
         Self {
             rules: vec![
@@ -41,6 +42,10 @@ impl EventScopeGuard {
                 ),
                 (
                     "approval.".to_string(),
+                    vec!["admin".to_string(), "exec.approver".to_string()],
+                ),
+                (
+                    "surface.approval".to_string(),
                     vec!["admin".to_string(), "exec.approver".to_string()],
                 ),
                 (
@@ -159,6 +164,31 @@ mod tests {
         assert!(
             g.can_receive("agent.run.started", &chat),
             "unguarded topics still flow"
+        );
+    }
+
+    #[test]
+    fn surface_approval_is_operator_gated() {
+        let g = EventScopeGuard::default_rules();
+
+        // chat / guest tier and no-perms must NOT receive approval banners.
+        let chat = vec!["chat".to_string(), "read".to_string()];
+        assert!(
+            !g.can_receive("surface.approval", &chat),
+            "chat tier must NOT see surface.approval banners"
+        );
+        assert!(!g.can_receive("surface.approval", &[]));
+        assert!(!g.can_receive("surface.approval", &["viewer".to_string()]));
+
+        // operator [*] / exec.approver / admin must.
+        assert!(g.can_receive("surface.approval", &["*".to_string()]));
+        assert!(g.can_receive("surface.approval", &["exec.approver".to_string()]));
+        assert!(g.can_receive("surface.approval", &["admin".to_string()]));
+
+        // surface.notify stays unguarded (R5 to any desktop, not approval).
+        assert!(
+            g.can_receive("surface.notify", &chat),
+            "surface.notify must stay unguarded"
         );
     }
 }

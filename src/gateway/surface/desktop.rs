@@ -28,14 +28,22 @@ impl DeliverySurface for DesktopSurface {
     }
 
     fn deliver(&self, outbound: OutboundInteraction) -> Result<(), DeliveryError> {
-        let OutboundInteraction::Notify(n) = outbound;
-        self.event_bus
-            .publish_frame(&GatewayEventFrame::SurfaceNotify {
+        let frame = match outbound {
+            OutboundInteraction::Notify(n) => GatewayEventFrame::SurfaceNotify {
                 audience: vec![SurfaceKind::Desktop.as_str().to_string()],
                 title: n.title,
                 body: n.body,
                 source_topic: n.source_topic,
-            })
+            },
+            OutboundInteraction::ApprovalRequest(a) => GatewayEventFrame::SurfaceApproval {
+                audience: vec![SurfaceKind::Desktop.as_str().to_string()],
+                approval_id: a.approval_id,
+                title: a.title,
+                body: a.body,
+            },
+        };
+        self.event_bus
+            .publish_frame(&frame)
             .map(|_| ())
             .map_err(|e| DeliveryError::Publish(e.to_string()))
     }
@@ -74,6 +82,38 @@ mod tests {
                 assert_eq!(source_topic, "agent.run.complete");
             }
             other => panic!("expected SurfaceNotify, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn deliver_publishes_surface_approval_to_desktop_audience() {
+        use crate::gateway::surface::delivery::SurfaceApproval;
+
+        let bus = Arc::new(GatewayEventBus::new());
+        let mut rx = bus.subscribe_typed();
+        let surface = DesktopSurface::new(bus.clone());
+
+        surface
+            .deliver(OutboundInteraction::ApprovalRequest(SurfaceApproval {
+                approval_id: "a1".to_string(),
+                title: "Aleph needs your approval".to_string(),
+                body: "A tool call is waiting for you.".to_string(),
+            }))
+            .unwrap();
+
+        match rx.recv().await.unwrap() {
+            GatewayEventFrame::SurfaceApproval {
+                audience,
+                approval_id,
+                title,
+                body,
+            } => {
+                assert_eq!(audience, vec!["desktop".to_string()]);
+                assert_eq!(approval_id, "a1");
+                assert_eq!(title, "Aleph needs your approval");
+                assert_eq!(body, "A tool call is waiting for you.");
+            }
+            other => panic!("expected SurfaceApproval, got {other:?}"),
         }
     }
 }

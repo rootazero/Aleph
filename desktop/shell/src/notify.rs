@@ -28,10 +28,11 @@ const WS_URL: &str = "ws://127.0.0.1:18790/ws";
 const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-/// A tool call is waiting for approval. A topic event (`approval.requested`).
-/// Phase 1 leaves approval on its existing operator-gated path; Phase 2 folds
-/// it into the delivery surface.
-const TOPIC_APPROVAL: &str = "approval.requested";
+/// Core-decided approval banner, already gated operator-only by the gateway
+/// (`event_scope` `surface.approval`) and addressed to this desktop surface.
+/// The raw `approval.requested` frame still drives the Panel card; the shell
+/// only focus-gates and renders the core-supplied title/body for the banner.
+const TOPIC_SURFACE_APPROVAL: &str = "surface.approval";
 
 /// Core-decided R5 interrupt, already gated for interrupt-worthiness by the
 /// gateway's R5 router and addressed to this desktop surface. The shell only
@@ -41,7 +42,7 @@ const TOPIC_SURFACE_NOTIFY: &str = "surface.notify";
 /// Topics this bridge subscribes to. The interrupt-worthiness policy for
 /// run-completion / questions now lives in the core (it publishes
 /// `surface.notify`); the shell no longer self-decides those.
-const NOTIFY_TOPICS: &[&str] = &[TOPIC_SURFACE_NOTIFY, TOPIC_APPROVAL];
+const NOTIFY_TOPICS: &[&str] = &[TOPIC_SURFACE_NOTIFY, TOPIC_SURFACE_APPROVAL];
 
 /// Run the bridge forever, reconnecting with exponential backoff.
 pub async fn run_notification_bridge(app: AppHandle) {
@@ -241,15 +242,23 @@ fn decide_notification(topic: &str, data: &Value, focused: bool) -> Option<Prepa
                 .unwrap_or("Aleph needs you.")
                 .to_string(),
         }),
-        // Approval stays shell-rendered until Phase 2 routes it through the
-        // delivery surface too.
-        // TODO(Phase 2): once the core r5_router routes ApprovalRequested →
-        // surface.notify, REMOVE this arm — keeping it alongside core routing
-        // would fire a second, duplicate OS banner for every approval.
-        TOPIC_APPROVAL => Some(PreparedNotification {
-            title: "Aleph needs your approval".to_string(),
-            body: extract_text(data)
-                .unwrap_or_else(|| "A tool call is waiting for you.".to_string()),
+        // Approval banner now arrives via the gated delivery surface
+        // (surface.approval). The core supplies title/body; the shell renders
+        // it through the same path as surface.notify (Phase 2). The Panel card
+        // still listens on approval.requested for the inbound approve/deny UI.
+        TOPIC_SURFACE_APPROVAL => Some(PreparedNotification {
+            title: data
+                .get("title")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("Aleph needs your approval")
+                .to_string(),
+            body: data
+                .get("body")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("A tool call is waiting for you.")
+                .to_string(),
         }),
         _ => None,
     }
@@ -276,36 +285,6 @@ fn emit_notification(app: &AppHandle, note: &PreparedNotification) {
     {
         tracing::debug!("failed to show notification: {e}");
     }
-}
-
-/// Pull a human-readable line out of an arbitrary event payload.
-fn extract_text(data: &Value) -> Option<String> {
-    for key in [
-        "message",
-        "question",
-        "text",
-        "summary",
-        "description",
-        "prompt",
-    ] {
-        if let Some(s) = data.get(key).and_then(Value::as_str) {
-            let trimmed = s.trim();
-            if !trimmed.is_empty() {
-                return Some(truncate(trimmed, 180));
-            }
-        }
-    }
-    None
-}
-
-/// Truncate to `max` characters on a char boundary, appending an ellipsis.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        return s.to_string();
-    }
-    let mut out: String = s.chars().take(max).collect();
-    out.push('…');
-    out
 }
 
 #[cfg(test)]
@@ -357,7 +336,10 @@ mod tests {
         let topics = v["params"]["topics"].as_array().unwrap();
         let names: Vec<&str> = topics.iter().filter_map(Value::as_str).collect();
         assert!(names.contains(&TOPIC_SURFACE_NOTIFY));
-        assert!(names.contains(&TOPIC_APPROVAL));
+        assert!(names.contains(&TOPIC_SURFACE_APPROVAL));
+        // Banner leg moved to the gated surface.approval; the shell no longer
+        // subscribes the raw approval.requested (the Panel card still does).
+        assert!(!names.contains(&"approval.requested"));
         // The raw stream topics moved to the core; the shell no longer subscribes.
         assert!(!names.contains(&"stream.run_complete"));
         assert!(!names.contains(&"stream.ask_user"));
@@ -409,13 +391,6 @@ mod tests {
     }
 
     #[test]
-    fn approval_notifies_when_unfocused() {
-        let note = decide_notification(TOPIC_APPROVAL, &json!({}), false).expect("approval fires");
-        assert_eq!(note.title, "Aleph needs your approval");
-        assert_eq!(note.body, "A tool call is waiting for you.");
-    }
-
-    #[test]
     fn surface_notify_renders_core_supplied_title_body() {
         let data = json!({
             "type": "surface_notify",
@@ -437,18 +412,31 @@ mod tests {
     }
 
     #[test]
-    fn extract_text_prefers_message_then_falls_back() {
-        let data = json!({ "message": "needs approval", "text": "ignored" });
-        assert_eq!(extract_text(&data).as_deref(), Some("needs approval"));
-        assert_eq!(extract_text(&json!({})), None);
+    fn surface_approval_renders_core_supplied_title_body() {
+        let data = json!({
+            "type": "surface_approval",
+            "audience": ["desktop"],
+            "approval_id": "a1",
+            "title": "Aleph needs your approval",
+            "body": "A tool call is waiting for you."
+        });
+        let note = decide_notification(TOPIC_SURFACE_APPROVAL, &data, false)
+            .expect("surface.approval fires when unfocused");
+        assert_eq!(note.title, "Aleph needs your approval");
+        assert_eq!(note.body, "A tool call is waiting for you.");
     }
 
     #[test]
-    fn truncate_respects_char_boundaries() {
-        assert_eq!(truncate("hello", 10), "hello");
-        assert_eq!(truncate("hello", 3), "hel…");
-        // Multi-byte characters must not be split mid-codepoint.
-        assert_eq!(truncate("日本語テスト", 3), "日本語…");
+    fn surface_approval_falls_back_on_missing_fields() {
+        let note = decide_notification(TOPIC_SURFACE_APPROVAL, &json!({}), false).unwrap();
+        assert_eq!(note.title, "Aleph needs your approval");
+        assert_eq!(note.body, "A tool call is waiting for you.");
+    }
+
+    #[test]
+    fn surface_approval_suppressed_when_focused() {
+        let data = json!({ "title": "Aleph needs your approval", "body": "x" });
+        assert!(decide_notification(TOPIC_SURFACE_APPROVAL, &data, true).is_none());
     }
 
     #[test]
