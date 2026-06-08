@@ -239,11 +239,15 @@ fn UsagePanel(usage: TeamUsageDto) -> impl IntoView {
     view! {
         <Card class="p-6 space-y-6">
             // Top stat row
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div class="grid grid-cols-2 md:grid-cols-5 gap-6">
                 <StatTile label={t_string!(i18n, usage.stat_calls).to_string()} value={format_thousands(total.call_count)} />
                 <StatTile label={t_string!(i18n, usage.stat_input_tokens).to_string()} value={format_thousands(total.input_tokens)} />
                 <StatTile label={t_string!(i18n, usage.stat_output_tokens).to_string()} value={format_thousands(total.output_tokens)} />
                 <StatTile label={t_string!(i18n, usage.stat_members).to_string()} value={format_thousands(member_count)} />
+                <StatTile
+                    label={t_string!(i18n, usage.stat_cache_hit).to_string()}
+                    value={total.cache_hit_ratio.map(|r| format!("{:.0}%", r * 100.0)).unwrap_or_else(|| "\u{2014}".to_string())}
+                />
             </div>
 
             // Detail breakdown

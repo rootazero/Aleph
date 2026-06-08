@@ -91,10 +91,13 @@ pub enum StreamEvent {
     },
 
     /// Structured execution trace emitted directly by the agent loop.
+    /// Carried as the protocol `AgentTraceEvent` (serde tag `kind`) so the
+    /// wire payload matches what the panel and the persisted replay store
+    /// deserialize. Converted from `LoopTraceEvent` at the emit boundary.
     AgentTrace {
         run_id: String,
         seq: u64,
-        event: crate::harness::trace::LoopTraceEvent,
+        event: aleph_protocol::AgentTraceEvent,
     },
 
     /// Response text chunk (streaming output)
@@ -281,7 +284,7 @@ impl StreamEvent {
         Self::AgentTrace {
             run_id: run_id.into(),
             seq,
-            event,
+            event: event.into(),
         }
     }
 }

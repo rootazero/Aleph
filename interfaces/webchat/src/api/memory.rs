@@ -23,8 +23,6 @@ pub struct CompressedFact {
     pub agent_id: String,
     pub content: String,
     pub fact_type: String,
-    pub confidence: f32,
-    pub is_valid: bool,
     pub created_at: i64,
     pub category: String,
     pub path: String,

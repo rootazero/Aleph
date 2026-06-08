@@ -100,7 +100,7 @@ pub trait EventEmitter: Send + Sync {
             .emit(StreamEvent::AgentTrace {
                 run_id: run_id.to_string(),
                 seq,
-                event,
+                event: event.into(),
             })
             .await;
     }

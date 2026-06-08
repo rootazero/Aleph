@@ -103,7 +103,6 @@ pub async fn handle_logs(request: JsonRpcRequest) -> JsonRpcResponse {
                     json!({
                         "logs": result,
                         "file": path.display().to_string(),
-                        "total_lines": result.len(),
                     }),
                 )
             }

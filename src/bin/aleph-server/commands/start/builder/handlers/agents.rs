@@ -68,6 +68,33 @@ pub(in crate::commands::start) fn register_agents_handlers(
         .register("agents.tools_schema", |req| async move {
             agents::handle_tools_schema(req).await
         });
+
+    // runtimes.install — overrides the event_bus-less placeholder in
+    // handlers/mod.rs (which always errors). Wired here because the install
+    // progress stream needs the GatewayEventBus. The capability ledger is
+    // rebuilt per call from disk, mirroring runtimes.list / runtimes.refresh.
+    {
+        let event_bus = Arc::clone(event_bus);
+        server
+            .handlers_mut()
+            .register("runtimes.install", move |req| {
+                let event_bus = Arc::clone(&event_bus);
+                async move {
+                    use alephcore::gateway::handlers::{make_runtime_ledger, runtimes};
+                    let ledger = match make_runtime_ledger() {
+                        Ok(l) => l,
+                        Err(e) => {
+                            return alephcore::gateway::protocol::JsonRpcResponse::error(
+                                req.id,
+                                alephcore::gateway::protocol::INTERNAL_ERROR,
+                                e,
+                            )
+                        }
+                    };
+                    runtimes::handle_install(req, ledger, event_bus).await
+                }
+            });
+    }
 }
 
 // ─── register_cron_handlers ─────────────────────────────────────────────────

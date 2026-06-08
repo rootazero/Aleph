@@ -7,8 +7,6 @@ pub struct LogsResponse {
     pub logs: Vec<String>,
     #[serde(default)]
     pub file: Option<String>,
-    #[serde(default)]
-    pub total_lines: usize,
 }
 
 pub struct LogsApi;

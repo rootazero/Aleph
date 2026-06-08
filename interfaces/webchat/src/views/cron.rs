@@ -606,7 +606,9 @@ fn JobListItem(
                     }.into_any()
                 } else if let Some(ts) = next_run_at {
                     let overdue_label = t_string!(i18n, cron.overdue).to_string();
-                    let relative = format_relative_time(ts, &overdue_label);
+                    // next_run_at is epoch ms (backend state.next_run_at_ms);
+                    // format_relative_time expects epoch seconds.
+                    let relative = format_relative_time(ts / 1000, &overdue_label);
                     let next_prefix = t_string!(i18n, cron.next).to_string();
                     view! {
                         <div class="ml-4 mt-1 text-xs text-text-tertiary">
@@ -1515,9 +1517,11 @@ fn RunHistory(runs: RwSignal<Vec<JobRunInfo>>) -> impl IntoView {
                             <div class="flex items-center gap-0.5"
                                  title="Recent runs — newest on right (green=ok, red=failed, yellow=timeout, gray=other)">
                                 {window.into_iter().map(|run| {
+                                    // Backend persists RunStatus Debug-lowercased:
+                                    // ok / error / skipped / timeout (config.rs RunStatus).
                                     let cls = match run.status.as_str() {
-                                        "success" => "w-1.5 h-4 rounded-sm bg-success",
-                                        "failed"  => "w-1.5 h-4 rounded-sm bg-danger",
+                                        "ok"      => "w-1.5 h-4 rounded-sm bg-success",
+                                        "error"   => "w-1.5 h-4 rounded-sm bg-danger",
                                         "timeout" => "w-1.5 h-4 rounded-sm bg-warning",
                                         _         => "w-1.5 h-4 rounded-sm bg-text-tertiary opacity-40",
                                     };
@@ -1552,10 +1556,10 @@ fn RunHistory(runs: RwSignal<Vec<JobRunInfo>>) -> impl IntoView {
                             <tbody>
                                 {run_list.into_iter().map(|run| {
                                     let (icon, color) = match run.status.as_str() {
-                                        "success" => ("\u{2713}", "text-success"),
-                                        "failed" => ("\u{2717}", "text-danger"),
+                                        "ok" => ("\u{2713}", "text-success"),
+                                        "error" => ("\u{2717}", "text-danger"),
                                         "timeout" => ("\u{23F1}", "text-warning"),
-                                        "running" => ("\u{23F1}", "text-primary"),
+                                        "skipped" => ("\u{2014}", "text-text-tertiary"),
                                         _ => ("?", "text-text-tertiary"),
                                     };
                                     let time_str = format_timestamp(run.started_at);
@@ -1563,10 +1567,12 @@ fn RunHistory(runs: RwSignal<Vec<JobRunInfo>>) -> impl IntoView {
 
                                     // Delivery status with icon
                                     let delivery_str = run.delivery_status.clone().unwrap_or_default();
+                                    // Backend persists DeliveryStatus Debug-lowercased:
+                                    // delivered / notdelivered / alreadysentbyagent / notrequested.
                                     let delivery_icon = match delivery_str.as_str() {
                                         "delivered" => "\u{2713}",
-                                        "deduped" => "\u{2261}",
-                                        "failed" => "\u{2717}",
+                                        "alreadysentbyagent" => "\u{2261}",
+                                        "notdelivered" => "\u{2717}",
                                         _ => "",
                                     };
 

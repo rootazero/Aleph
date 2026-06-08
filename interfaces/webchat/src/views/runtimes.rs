@@ -76,7 +76,7 @@ pub fn RuntimesView() -> impl IntoView {
                             <For
                                 each=move || runtimes.get()
                                 key=|r| r.name.clone()
-                                children=move |r| view! { <RuntimeCard info=r /> }
+                                children=move |r| view! { <RuntimeCard info=r runtimes=runtimes error_msg=error_msg /> }
                             />
                         </div>
                     }.into_any()
@@ -87,7 +87,11 @@ pub fn RuntimesView() -> impl IntoView {
 }
 
 #[component]
-fn RuntimeCard(info: RuntimeInfo) -> impl IntoView {
+fn RuntimeCard(
+    info: RuntimeInfo,
+    runtimes: RwSignal<Vec<RuntimeInfo>>,
+    error_msg: RwSignal<Option<String>>,
+) -> impl IntoView {
     let i18n = use_i18n();
     let state = expect_context::<DashboardState>();
     let installing = RwSignal::new(false);
@@ -108,10 +112,20 @@ fn RuntimeCard(info: RuntimeInfo) -> impl IntoView {
         let name_clone = name.clone();
         move |_| {
             installing.set(true);
+            error_msg.set(None);
             let state = state;
             let n = name_clone.clone();
             spawn_local(async move {
-                let _ = RuntimesApi::install(&state, &n).await;
+                // The install runs in the background on the server; this call
+                // returns once it's accepted. Refresh the ledger so the card
+                // reflects the new status (Bootstrapping → Ready / Stale).
+                match RuntimesApi::install(&state, &n).await {
+                    Ok(_) => match RuntimesApi::list(&state).await {
+                        Ok(r) => runtimes.set(r.runtimes),
+                        Err(e) => error_msg.set(Some(e)),
+                    },
+                    Err(e) => error_msg.set(Some(e)),
+                }
                 installing.set(false);
             });
         }
