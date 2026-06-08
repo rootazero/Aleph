@@ -35,6 +35,11 @@ pub struct Goal {
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub note: Option<String>,
+    /// Autonomous continuations already spent on this goal (the `Active`
+    /// pursuit backstop counter). `#[serde(default)]` so goals persisted
+    /// before this field deserialize as 0.
+    #[serde(default)]
+    pub continuations_used: u32,
 }
 
 impl Goal {
@@ -51,7 +56,16 @@ impl Goal {
             created_at_ms: now_ms,
             updated_at_ms: now_ms,
             note: None,
+            continuations_used: 0,
         }
+    }
+
+    /// Record that one autonomous continuation was enqueued for this goal.
+    /// Bumps `updated_at_ms` since this is a lifecycle event.
+    pub fn spent_continuation(mut self, now_ms: u64) -> Self {
+        self.continuations_used = self.continuations_used.saturating_add(1);
+        self.updated_at_ms = now_ms;
+        self
     }
 
     pub fn with_status(mut self, status: GoalStatus, now_ms: u64) -> Self {
@@ -122,7 +136,19 @@ mod tests {
         assert_eq!(g.token_budget, None);
         assert_eq!(g.created_at_ms, 5_000);
         assert_eq!(g.updated_at_ms, 5_000);
+        assert_eq!(g.continuations_used, 0);
         assert!(!g.id.is_empty());
+    }
+
+    #[test]
+    fn spent_continuation_increments_and_bumps_updated_at() {
+        let g = sample();
+        let after = g.clone().spent_continuation(9_000);
+        assert_eq!(after.continuations_used, 1);
+        assert_eq!(after.updated_at_ms, 9_000);
+        assert_eq!(g.continuations_used, 0, "original unchanged");
+        let after2 = after.spent_continuation(9_500);
+        assert_eq!(after2.continuations_used, 2);
     }
 
     #[test]
