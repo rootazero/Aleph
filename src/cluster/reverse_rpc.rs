@@ -90,6 +90,8 @@ pub enum ReverseRpcError {
     #[error("reverse-rpc call timed out after {0}ms")]
     Timeout(u64),
     /// 等待端被丢弃（连接清理时取消了 pending）。
+    /// 现仅在 Phase 0b 把 `cancel` 接到连接断开后才可达；Phase 0a 内不会触发。
+    /// Reachable once Phase 0b wires `cancel` on disconnect; inert in 0a.
     #[error("reverse-rpc call cancelled")]
     Cancelled,
 }
@@ -127,7 +129,11 @@ impl ReverseRpcChannel {
     ) -> Result<JsonRpcResponse, ReverseRpcError> {
         let (id, rx) = self.pending.register();
         let req = JsonRpcRequest::with_id(method, Some(params), Value::String(id.clone()));
-        let frame = serde_json::to_string(&req).map_err(|_| ReverseRpcError::TransportClosed)?;
+        // JsonRpcRequest is a plain struct (String + two Option<Value>) — serialization
+        // cannot fail. expect() makes that invariant explicit instead of inventing a
+        // misleading transport error.
+        let frame =
+            serde_json::to_string(&req).expect("JsonRpcRequest serialization is infallible");
 
         if self.outbound.send(frame).await.is_err() {
             self.pending.cancel(&id);
@@ -176,8 +182,6 @@ mod tests {
 
     #[tokio::test]
     async fn channel_call_sends_framed_request_and_returns_response() {
-        use serde_json::json;
-
         // 出站接收端模拟"连接的 write 半边"：读到一帧就把它当请求，
         // 解析出 id，构造响应回灌 resolve。
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(8);
