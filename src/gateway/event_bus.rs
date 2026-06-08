@@ -31,10 +31,16 @@ pub struct ConfigChangedEvent {
     pub timestamp: i64,
 }
 
+/// Topic on which `runtimes.install` progress events are published. The Panel
+/// subscribes to this (`events.subscribe`) and renders a live install status
+/// per runtime card.
+pub const RUNTIME_INSTALL_PROGRESS_TOPIC: &str = "runtimes.install.progress";
+
 /// Runtime install progress event.
 ///
-/// Published during `runtimes.install` to stream step-by-step progress
-/// to the Panel UI.
+/// Published during `runtimes.install` (wrapped in a [`TopicEvent`] on
+/// [`RUNTIME_INSTALL_PROGRESS_TOPIC`]) to stream step-by-step progress to the
+/// Panel UI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeInstallProgressEvent {
     /// Install step: capability name being installed (e.g. "fnm", "node", "playwright-cli")
@@ -58,7 +64,6 @@ pub struct RuntimeInstallProgressEvent {
 #[serde(tag = "type")]
 pub enum GatewayEvent {
     ConfigChanged(ConfigChangedEvent),
-    RuntimeInstallProgress(RuntimeInstallProgressEvent),
 }
 
 /// A topic-aware event that can be filtered by subscribers

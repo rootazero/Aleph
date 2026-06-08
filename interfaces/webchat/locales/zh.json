@@ -216,6 +216,7 @@
     "graph_edges": "图边",
     "search_placeholder": "搜索原始记忆...",
     "col_content": "内容",
+    "col_title": "标题",
     "col_agent": "智能体",
     "col_type": "类型",
     "col_confidence": "置信度",
@@ -1294,10 +1295,8 @@
     "delete_agent": "删除智能体",
     "tabs": {
       "overview": "概览",
-      "behavior": "行为",
       "files": "文件",
       "skills": "技能",
-      "tools": "工具",
       "channels": "频道",
       "teams": "团队"
     },
@@ -1307,49 +1306,12 @@
       "emoji": "表情",
       "display_name": "显示名称",
       "description": "描述",
-      "theme": "主题 / 标语",
       "emoji_placeholder": "🤖",
       "name_placeholder": "智能体名称",
       "description_placeholder": "此智能体擅长的领域...",
-      "theme_placeholder": "编写简洁高效的代码",
       "model_config": "模型配置",
       "primary_model": "主要模型",
-      "inference_params": "推理参数",
-      "temperature": "温度",
-      "max_tokens": "最大 Token 数",
-      "top_p": "Top P",
-      "top_k": "Top K",
       "saved": "保存成功"
-    },
-    "behavior": {
-      "loading": "加载配置...",
-      "no_config": "暂无配置",
-      "config_saved": "配置已保存",
-      "save_config": "保存配置",
-      "file_ops": {
-        "title": "文件操作",
-        "enable": "启用文件操作",
-        "max_file_size": "最大文件大小（字节）",
-        "confirm_writes": "写入需确认",
-        "confirm_deletes": "删除需确认"
-      },
-      "code_exec": {
-        "title": "代码执行",
-        "enable": "启用代码执行",
-        "sandbox_mode": "沙箱模式",
-        "allow_network": "允许网络访问",
-        "timeout": "超时（秒）",
-        "default_runtime": "默认运行时"
-      },
-      "general": {
-        "title": "常规设置",
-        "web_browsing": "网页浏览",
-        "max_iterations": "最大迭代次数",
-        "auto_execute_threshold": "自动执行阈值",
-        "max_tasks_per_graph": "每图最大任务数",
-        "task_timeout": "任务超时（秒）",
-        "sandbox_enabled": "启用沙箱"
-      }
     },
     "channels": {
       "title": "频道绑定",
@@ -1369,21 +1331,6 @@
       "loading": "加载技能...",
       "saved": "技能已保存",
       "save": "保存技能"
-    },
-    "tools": {
-      "default_permission": "默认权限",
-      "default_permission_hint": "应用于未设置特定覆盖的工具",
-      "allow": "允许",
-      "ask": "询问",
-      "deny": "拒绝",
-      "globally_denied_title": "已在策略中全局拒绝",
-      "cannot_exceed_global_ask": "不能超过全局询问策略",
-      "allow_tool_title": "允许此工具",
-      "ask_tool_title": "使用前询问",
-      "deny_tool_title": "拒绝此工具",
-      "reset": "重置",
-      "save": "保存",
-      "saved": "已保存"
     },
     "files": {
       "identity_files": "身份文件",

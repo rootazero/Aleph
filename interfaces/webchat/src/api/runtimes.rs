@@ -30,6 +30,26 @@ pub struct RuntimesListResponse {
     pub runtimes: Vec<RuntimeInfo>,
 }
 
+/// Topic carrying live `runtimes.install` progress. Must match
+/// `RUNTIME_INSTALL_PROGRESS_TOPIC` in the core (src/gateway/event_bus.rs).
+pub const RUNTIME_INSTALL_PROGRESS_TOPIC: &str = "runtimes.install.progress";
+
+/// One progress event streamed during an install. The Panel subscribes to
+/// [`RUNTIME_INSTALL_PROGRESS_TOPIC`] and renders this per runtime card.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct InstallProgress {
+    /// Capability being installed (matches `RuntimeInfo::name`).
+    pub step: String,
+    /// "started" | "log" | "done" | "failed".
+    pub status: String,
+    #[serde(default)]
+    pub log_line: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub stderr: Option<String>,
+}
+
 pub struct RuntimesApi;
 
 impl RuntimesApi {

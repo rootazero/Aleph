@@ -4,7 +4,9 @@ use crate::sync_primitives::Arc;
 
 use serde::Serialize;
 
-use crate::gateway::event_bus::{GatewayEvent, GatewayEventBus, RuntimeInstallProgressEvent};
+use crate::gateway::event_bus::{
+    GatewayEventBus, RuntimeInstallProgressEvent, TopicEvent, RUNTIME_INSTALL_PROGRESS_TOPIC,
+};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use crate::runtimes::ledger::{CapabilityLedger, CapabilityStatus};
 use crate::runtimes::{ensure_capability, find_spec, supported_on_current_os, SPECS};
@@ -139,7 +141,8 @@ pub async fn handle_install(
     let bus = event_bus.clone();
 
     tokio::spawn(async move {
-        let _ = bus.publish_json(&GatewayEvent::RuntimeInstallProgress(
+        publish_progress(
+            &bus,
             RuntimeInstallProgressEvent {
                 step: cap_for_event.clone(),
                 status: "started".into(),
@@ -148,9 +151,8 @@ pub async fn handle_install(
                 stderr: None,
                 timestamp: chrono::Utc::now().timestamp_millis(),
             },
-        ));
+        );
         let result = ensure_capability(&cap, &ledger).await;
-        let bus2 = bus.clone();
         let event = match result {
             Ok(_) => RuntimeInstallProgressEvent {
                 step: cap_for_event,
@@ -178,10 +180,19 @@ pub async fn handle_install(
                 }
             }
         };
-        let _ = bus2.publish_json(&GatewayEvent::RuntimeInstallProgress(event));
+        publish_progress(&bus, event);
     });
 
     JsonRpcResponse::success(request.id, serde_json::json!({ "accepted": true }))
+}
+
+/// Publish one [`RuntimeInstallProgressEvent`] wrapped in a [`TopicEvent`] on
+/// [`RUNTIME_INSTALL_PROGRESS_TOPIC`] so the Panel receives it through the
+/// standard `events.subscribe` pipeline (the raw `GatewayEvent` envelope is not
+/// dispatched by the Panel's event parser).
+fn publish_progress(bus: &Arc<GatewayEventBus>, event: RuntimeInstallProgressEvent) {
+    let data = serde_json::to_value(&event).unwrap_or_default();
+    let _ = bus.publish_json(&TopicEvent::new(RUNTIME_INSTALL_PROGRESS_TOPIC, data));
 }
 
 #[cfg(test)]
@@ -247,15 +258,23 @@ mod tests {
             {
                 let evt_json: serde_json::Value =
                     serde_json::from_str(&json_str).expect("event must be valid JSON");
-                let status = evt_json["status"].as_str().unwrap_or("");
+                // Progress events are published as a `TopicEvent` envelope; the
+                // payload fields live under `data`.
+                assert_eq!(
+                    evt_json["topic"].as_str(),
+                    Some(RUNTIME_INSTALL_PROGRESS_TOPIC),
+                    "event must be published on the install-progress topic, got: {evt_json}",
+                );
+                let data = &evt_json["data"];
+                let status = data["status"].as_str().unwrap_or("");
                 assert!(
-                    evt_json.get("stderr").is_some(),
+                    data.get("stderr").is_some(),
                     "event must have a `stderr` key (null allowed), got: {evt_json}",
                 );
                 if status == "failed" {
                     // On the failure path stderr must be a non-null string.
                     assert!(
-                        evt_json["stderr"].is_string(),
+                        data["stderr"].is_string(),
                         "failed event `stderr` must be a string, got: {evt_json}",
                     );
                     saw_terminal = true;
