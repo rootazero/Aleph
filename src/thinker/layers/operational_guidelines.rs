@@ -44,7 +44,9 @@ impl PromptLayer for OperationalGuidelinesLayer {
         output.push_str("You can monitor your own runtime proactively.\n\n");
 
         output.push_str("### Diagnostics (read-only, always allowed)\n");
-        output.push_str("- Disk: `df -h` · Memory: `vm_stat` / `free -h` · Processes: `ps aux | grep aleph`\n");
+        output.push_str(
+            "- Disk: `df -h` · Memory: `vm_stat` / `free -h` · Processes: `ps aux | grep aleph`\n",
+        );
         output.push_str(
             "- Config validity, desktop-capability availability (startup logs / OS permissions), SQLite accessibility\n\n",
         );

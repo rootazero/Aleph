@@ -1,9 +1,9 @@
-pub mod connection;
-pub mod protocol;
-pub mod state;
 pub mod api;
+pub mod connection;
 pub mod observability;
+pub mod protocol;
 pub mod safety;
+pub mod state;
 
 pub use connection::connector::{AlephConnector, ConnectionError};
 pub use protocol::rpc::RpcClient;

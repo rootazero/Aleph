@@ -1,7 +1,7 @@
 use super::connector::{AlephConnector, ConnectionError};
 use async_trait::async_trait;
-use futures::Stream;
 use futures::channel::{mpsc, oneshot};
+use futures::Stream;
 use serde_json::Value;
 use std::cell::RefCell;
 use std::pin::Pin;
@@ -25,7 +25,8 @@ impl WasmConnector {
 #[async_trait(?Send)]
 impl AlephConnector for WasmConnector {
     async fn connect(&mut self, url: &str) -> Result<(), ConnectionError> {
-        let ws = WebSocket::new(url).map_err(|e| ConnectionError::ConnectFailed(format!("{:?}", e)))?;
+        let ws =
+            WebSocket::new(url).map_err(|e| ConnectionError::ConnectFailed(format!("{:?}", e)))?;
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
 
         let (tx, rx) = mpsc::unbounded();
@@ -63,9 +64,9 @@ impl AlephConnector for WasmConnector {
         self.receiver = Some(rx);
 
         // Wait for WebSocket to reach OPEN state before returning
-        open_rx.await.map_err(|_| ConnectionError::ConnectFailed(
-            "WebSocket onopen signal dropped".to_string(),
-        ))?;
+        open_rx.await.map_err(|_| {
+            ConnectionError::ConnectFailed("WebSocket onopen signal dropped".to_string())
+        })?;
 
         self.is_connected = true;
         Ok(())
@@ -81,8 +82,10 @@ impl AlephConnector for WasmConnector {
 
     async fn send(&mut self, message: Value) -> Result<(), ConnectionError> {
         if let Some(ws) = &self.ws {
-            let txt = serde_json::to_string(&message).map_err(|e| ConnectionError::SendFailed(e.to_string()))?;
-            ws.send_with_str(&txt).map_err(|e| ConnectionError::SendFailed(format!("{:?}", e)))?;
+            let txt = serde_json::to_string(&message)
+                .map_err(|e| ConnectionError::SendFailed(e.to_string()))?;
+            ws.send_with_str(&txt)
+                .map_err(|e| ConnectionError::SendFailed(format!("{:?}", e)))?;
             Ok(())
         } else {
             Err(ConnectionError::SendFailed("Not connected".into()))

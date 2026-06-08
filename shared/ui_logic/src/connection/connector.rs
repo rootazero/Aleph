@@ -1,8 +1,8 @@
 use async_trait::async_trait;
-use serde_json::Value;
-use thiserror::Error;
 use futures::Stream;
+use serde_json::Value;
 use std::pin::Pin;
+use thiserror::Error;
 
 #[derive(Error, Debug, Clone)]
 pub enum ConnectionError {
