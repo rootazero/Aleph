@@ -476,7 +476,7 @@ impl BuiltinToolRegistry {
     /// `Arc::new` in `agent_init` before the gateway's `NodeRegistry` is wired.
     pub fn set_node_registry(&self, registry: Arc<crate::cluster::NodeRegistry>) {
         if self.node_registry.set(registry).is_ok() {
-            info!("NodeRegistry injected — `node_invoke` tool now available");
+            info!("NodeRegistry injected — `node_invoke` and `node_file` tools now available");
         }
     }
 
