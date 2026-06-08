@@ -4,7 +4,7 @@
 
 use async_trait::async_trait;
 use schemars::{schema_for, JsonSchema};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
 use std::pin::Pin;
@@ -193,17 +193,119 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     /// `AlephError::Validation(<format_validation_error output>)` so the
     /// `BuiltinHandler` can map them to `ToolError::ValidationFailed` (which
     /// the harness exposes as a fixable, non-execution failure).
+    ///
+    /// Before giving up on a deserialization failure, a best-effort
+    /// scalar-coercion pass is retried once: the model frequently emits a
+    /// JSON string where the schema declares a scalar (`{"count": "5"}` for
+    /// an integer field), which would otherwise burn a whole turn on an
+    /// otherwise-correct call. See [`coerce_scalar_args`] for the (deliberately
+    /// conservative) recovery rules. The borrowed `&args` deserialize keeps the
+    /// happy path allocation-free while leaving `args` available for recovery.
     async fn call_json(&self, args: Value) -> Result<Value> {
-        let typed: Self::Args = match serde_json::from_value(args) {
+        let typed: Self::Args = match Self::Args::deserialize(&args) {
             Ok(v) => v,
             Err(err) => {
-                return Err(crate::error::AlephError::Validation(
-                    Self::format_validation_error(&err),
-                ));
+                // Recovery: coerce top-level string→scalar fields against this
+                // tool's own schema and retry once. Falls back to the original
+                // validation error so genuinely malformed input still reaches
+                // the model unchanged.
+                match coerce_scalar_args(&args, &self.definition().parameters)
+                    .and_then(|coerced| serde_json::from_value::<Self::Args>(coerced).ok())
+                {
+                    Some(v) => v,
+                    None => {
+                        return Err(crate::error::AlephError::Validation(
+                            Self::format_validation_error(&err),
+                        ));
+                    }
+                }
             }
         };
         let output = self.call(typed).await?;
         Ok(serde_json::to_value(&output)?)
+    }
+}
+
+// =============================================================================
+// Argument coercion (model type-confusion recovery)
+// =============================================================================
+
+/// Best-effort recovery for model type-confusion in tool arguments.
+///
+/// When strict deserialization of `args` fails, the model has often sent a JSON
+/// string where the schema declares a scalar (`{"count": "5"}` for an integer
+/// field, `{"enabled": "true"}` for a boolean). This walks the **top-level**
+/// properties of `schema` and, for each arg value that is a string but whose
+/// declared type is integer / number / boolean, parses the string into that
+/// scalar. Returns `Some(coerced)` only when at least one field actually
+/// changed, so the caller can retry deserialization; `None` means there was
+/// nothing safe to coerce (preserve the original validation error).
+///
+/// Conservative by construction — it never touches string-typed fields, nested
+/// objects / arrays, or fields without an explicit scalar type. A successful
+/// re-parse of the result against the concrete `Args` type is therefore the
+/// real safety gate: if coercion produced a shape the type rejects, the caller
+/// discards it and reports the original error.
+fn coerce_scalar_args(args: &Value, schema: &Value) -> Option<Value> {
+    let obj = args.as_object()?;
+    let props = schema.get("properties")?.as_object()?;
+    let mut changed = false;
+    let mut out = serde_json::Map::with_capacity(obj.len());
+    for (key, val) in obj {
+        let next = match (val.as_str(), props.get(key).and_then(scalar_schema_type)) {
+            (Some(s), Some(ty)) => match coerce_str_to_scalar(s, ty) {
+                Some(coerced) => {
+                    changed = true;
+                    coerced
+                }
+                None => val.clone(),
+            },
+            _ => val.clone(),
+        };
+        out.insert(key.clone(), next);
+    }
+    changed.then(|| Value::Object(out))
+}
+
+/// Declared scalar kind of a JSON-Schema property, if it is integer / number /
+/// boolean. Handles both `"type": "integer"` and the nullable
+/// `"type": ["integer", "null"]` shape schemars emits for `Option<T>`.
+fn scalar_schema_type(prop: &Value) -> Option<&'static str> {
+    fn pick(s: &str) -> Option<&'static str> {
+        match s {
+            "integer" => Some("integer"),
+            "number" => Some("number"),
+            "boolean" => Some("boolean"),
+            _ => None,
+        }
+    }
+    match prop.get("type")? {
+        Value::String(s) => pick(s),
+        Value::Array(items) => items.iter().filter_map(Value::as_str).find_map(pick),
+        _ => None,
+    }
+}
+
+/// Parse a string into the requested scalar JSON value, or `None` if it does
+/// not cleanly represent that scalar (leaving the original string in place).
+fn coerce_str_to_scalar(s: &str, ty: &str) -> Option<Value> {
+    let t = s.trim();
+    match ty {
+        "integer" => t
+            .parse::<i64>()
+            .map(Value::from)
+            .ok()
+            .or_else(|| t.parse::<u64>().map(Value::from).ok()),
+        "number" => t
+            .parse::<f64>()
+            .ok()
+            .and_then(|f| serde_json::Number::from_f64(f).map(Value::Number)),
+        "boolean" => match t {
+            "true" => Some(Value::Bool(true)),
+            "false" => Some(Value::Bool(false)),
+            _ => None,
+        },
+        _ => None,
     }
 }
 
@@ -397,5 +499,144 @@ mod tests {
 
         assert_eq!(def.name, "test_tool");
         assert!(def.llm_context.is_none());
+    }
+
+    // -- Argument coercion (model type-confusion recovery) --------------------
+
+    #[derive(Clone)]
+    struct CoerceTool;
+
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    struct CoerceArgs {
+        count: u32,
+        ratio: f64,
+        enabled: bool,
+        label: String,
+        note: Option<i64>,
+        flexible: serde_json::Value,
+    }
+
+    #[derive(Serialize)]
+    struct CoerceOutput {
+        count: u32,
+        ratio: f64,
+        enabled: bool,
+        label: String,
+        note: Option<i64>,
+        flexible: serde_json::Value,
+    }
+
+    #[async_trait]
+    impl AlephTool for CoerceTool {
+        const NAME: &'static str = "coerce_tool";
+        const DESCRIPTION: &'static str = "A tool with scalar args";
+
+        type Args = CoerceArgs;
+        type Output = CoerceOutput;
+
+        async fn call(&self, a: Self::Args) -> Result<Self::Output> {
+            Ok(CoerceOutput {
+                count: a.count,
+                ratio: a.ratio,
+                enabled: a.enabled,
+                label: a.label,
+                note: a.note,
+                flexible: a.flexible,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn call_json_coerces_string_scalars_but_protects_strings_and_untyped() {
+        // Model sent every scalar as a JSON string. `label` is schema-typed
+        // `string` and `flexible` is untyped `Value`; both must survive as the
+        // literal string "…", while count/ratio/enabled/note coerce.
+        let args = serde_json::json!({
+            "count": "5",
+            "ratio": "1.5",
+            "enabled": "true",
+            "label": "7",
+            "note": "3",
+            "flexible": "123",
+        });
+        let r = AlephTool::call_json(&CoerceTool, args).await.unwrap();
+        assert_eq!(r["count"], 5);
+        assert_eq!(r["ratio"], 1.5);
+        assert_eq!(r["enabled"], true);
+        assert_eq!(r["label"], "7"); // string field never coerced
+        assert_eq!(r["note"], 3);
+        assert_eq!(r["flexible"], "123"); // untyped Value never coerced
+    }
+
+    #[tokio::test]
+    async fn call_json_happy_path_is_unchanged() {
+        let args = serde_json::json!({
+            "count": 5,
+            "ratio": 1.5,
+            "enabled": true,
+            "label": "x",
+            "note": null,
+            "flexible": 1,
+        });
+        let r = AlephTool::call_json(&CoerceTool, args).await.unwrap();
+        assert_eq!(r["count"], 5);
+        assert_eq!(r["note"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn call_json_uncoercible_input_returns_validation_error() {
+        // "abc" cannot become an integer → coercion finds nothing safe to
+        // change and the original validation error is preserved.
+        let args = serde_json::json!({
+            "count": "abc",
+            "ratio": 1.5,
+            "enabled": true,
+            "label": "x",
+            "note": null,
+            "flexible": 1,
+        });
+        assert!(AlephTool::call_json(&CoerceTool, args).await.is_err());
+    }
+
+    #[test]
+    fn coerce_returns_none_when_nothing_to_change() {
+        let schema = serde_json::json!({"properties": {"count": {"type": "integer"}}});
+        // already an integer → not a string → no change.
+        assert!(coerce_scalar_args(&serde_json::json!({"count": 5}), &schema).is_none());
+        // string value whose schema type is string → never coerced.
+        let schema2 = serde_json::json!({"properties": {"label": {"type": "string"}}});
+        assert!(coerce_scalar_args(&serde_json::json!({"label": "5"}), &schema2).is_none());
+    }
+
+    #[test]
+    fn coerce_handles_nullable_and_scalars() {
+        let schema = serde_json::json!({"properties": {
+            "n": {"type": ["integer", "null"]},
+            "f": {"type": "number"},
+            "b": {"type": "boolean"},
+        }});
+        let out =
+            coerce_scalar_args(&serde_json::json!({"n": "7", "f": "2.5", "b": "false"}), &schema)
+                .unwrap();
+        assert_eq!(out["n"], 7);
+        assert_eq!(out["f"], 2.5);
+        assert_eq!(out["b"], false);
+    }
+
+    #[test]
+    fn scalar_schema_type_reads_array_and_string() {
+        assert_eq!(
+            scalar_schema_type(&serde_json::json!({"type": "integer"})),
+            Some("integer")
+        );
+        assert_eq!(
+            scalar_schema_type(&serde_json::json!({"type": ["number", "null"]})),
+            Some("number")
+        );
+        assert_eq!(
+            scalar_schema_type(&serde_json::json!({"type": "string"})),
+            None
+        );
+        assert_eq!(scalar_schema_type(&serde_json::json!({})), None);
     }
 }
