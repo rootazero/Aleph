@@ -422,7 +422,16 @@ Explainability is served by two derived views. `FactExplanation { fact_id, conte
 2. returns a stub `Synthesis { text: "No relevant memories found.", sources: [] }` immediately if the envelope has zero items (no LLM cost)
 3. otherwise formats the envelope into a user prompt via `envelope_to_synthesis_context`, calls the LLM with `PROMPT_SYNTHESIS`, parses the JSON response, **overlays canonical titles from the lookup** (so LLM-fabricated paths are dropped and titles cannot be hallucinated), and returns a `Synthesis { text, sources }` where each `NoteRef = { path, title, relevance }`.
 
-Side effect: one `recall_signals` row per note in the synthesis context, `channel = "reflect"`. Failures are logged but swallowed — recall-signal write errors must never fail a `reflect()` call. The dream-daemon decay logic observes these signals and treats reflect-touched notes as active memory on par with `memory_search` hits.
+Side effect: one `recall_signals` row per note in the synthesis context, `channel = "reflect"`. Failures are logged but swallowed — recall-signal write errors must never fail a `reflect()` call. The dream-daemon decay logic observes these signals and treats reflect-touched notes as active memory on par with the primary-path recall hits described in §14.1.
+
+### 14.1 Hot-floating recall loop (`recall_signals` producer + consumer)
+
+The "热门记忆浮顶" / reinforcement-salience behaviour is a closed producer→consumer loop over the `recall_signals` table:
+
+- **Consumer** — `NoteFactRetrieval::fetch_reinforcement_counts` reads `NoteStore::recall_hit_counts` (SQLite `aggregate_for_facts`, `signal_count` per note) and `scoring::apply_reinforcement` boosts each candidate by `1 + w·ln(1 + hits)` (default `reinforcement_weight = 0.3`, default-on). This was always wired.
+- **Producer** — every primary retrieval (`NoteFactRetrieval::retrieve` and `retrieve_multi_agent`, used by the `memory_search` tool *and* the proactive `MemoryContextProvider` injection) records the *surfaced* notes (after rerank/scoring/truncation) via `NoteStore::record_recall_hits` → the existing `record_signals` writer, `channel = "auto-recall"`. Best-effort (write failures are logged at `debug` and never break recall) and gated on `reinforcement_enabled`, so disabling hot-floating also stops recording.
+
+Both halves dedup on `UNIQUE(note_path, query_hash, day_bucket, channel)`, so a note must surface across **distinct queries / days** to genuinely heat up — repeated recalls of the same note for the same query on the same day count once, which bounds the rich-get-richer feedback. The `auto-recall` channel is kept distinct from `reflect` so the two producers dedup independently. Prior to this wiring the boost was effectively inert: only the narrow `memory_reflect` synthesis path wrote signals, so notes recalled through the primary paths never accrued hotness.
 
 LLM-facing entry: the `memory_reflect` builtin tool (`src/builtin_tools/memory_reflect.rs`), schema `{ "query": string }`, returns `Synthesis` as JSON.
 
