@@ -739,6 +739,23 @@ pub async fn active_execution_plan(session_key: &str) -> Option<String> {
         .then(|| snapshot.render_progress())
 }
 
+/// Fetch the session's active standing goal as a compact, judgment-free
+/// summary for `StandingGoalLayer`. Returns `None` (→ layer emits nothing)
+/// when the goal subsystem is uninitialized, the session has no goal, or the
+/// goal is not `Active`. Fail-soft on store error. Mirrors `active_execution_plan`.
+pub async fn active_standing_goal(session_key: &str) -> Option<String> {
+    let store = crate::goal::global()?;
+    let goal = store.get(session_key).ok().flatten()?;
+    if !goal.is_active() {
+        return None;
+    }
+    let budget = match goal.token_budget {
+        Some(b) => format!(", budget={b}"),
+        None => String::new(),
+    };
+    Some(format!("{} (status=active{budget})", goal.objective))
+}
+
 /// Snapshot the tool catalog's `ToolHealthCache` and convert every
 /// currently-cached `Unhealthy` entry into a `RuntimeStateFragment` for
 /// `ToolRuntimeStateLayer` to render. Returns `vec![]` when
@@ -1013,6 +1030,7 @@ impl AgentHarnessRunner {
         // active plan with pending work) leaves the prompt byte-identical;
         // `ExecutionPlanLayer` @1755 renders it as `<execution_plan>`.
         resolved_context.execution_plan = active_execution_plan(&session_key_str).await;
+        resolved_context.standing_goal = active_standing_goal(&session_key_str).await;
         builder = builder.with_resolved_context(resolved_context);
         // Phase 3: thread the provider's wire-protocol family so
         // `ProviderGuidanceLayer` can pick the right per-family

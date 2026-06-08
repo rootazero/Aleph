@@ -140,6 +140,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) desktop_platform: crate::sync_primitives::Arc<dyn aleph_desktop::DesktopPlatform>,
     /// Scratchpad tool instance (project working memory)
     pub(crate) scratchpad_tool: crate::builtin_tools::ScratchpadTool,
+    /// Standing-goal tool instance (persistent objective, R8).
+    pub(crate) goal_tool: crate::builtin_tools::GoalTool,
     /// Memory search tool instance (optional - requires memory_db + embedder)
     pub(crate) memory_search_tool: Option<crate::builtin_tools::MemorySearchTool>,
     /// Memory context provider — used by the `remember` tool to resolve the
@@ -765,6 +767,7 @@ impl ToolRegistry for BuiltinToolRegistry {
             "scratchpad" => {
                 Box::pin(async move { self.scratchpad_tool.call_json(arguments).await })
             }
+            "goal" => Box::pin(async move { self.goal_tool.call_json(arguments).await }),
 
             // Memory tools - search and browse personal memory
             "memory_search" => Box::pin(async move {

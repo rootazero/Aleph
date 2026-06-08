@@ -38,6 +38,10 @@ pub use tool_runtime_state::ToolRuntimeStateLayer;
 mod execution_plan;
 pub use execution_plan::ExecutionPlanLayer;
 
+// --- Standing-goal layer (active goal objective, re-surfaced per turn) ---
+mod standing_goal;
+pub use standing_goal::StandingGoalLayer;
+
 // --- Context layers ---
 mod chain_context;
 mod environment;

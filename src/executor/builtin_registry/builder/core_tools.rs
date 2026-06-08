@@ -182,6 +182,12 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "goal",
+            crate::builtin_tools::GoalTool::DESCRIPTION,
+            schema::<crate::builtin_tools::goal::GoalArgs>("goal"),
+        );
+        reg(
+            tools,
             "clawhub",
             crate::builtin_tools::clawhub::ClawHubTool::DESCRIPTION,
             schema::<crate::builtin_tools::clawhub::ClawHubArgs>("clawhub"),
