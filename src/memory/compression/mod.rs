@@ -13,11 +13,9 @@ mod scheduler;
 mod service;
 pub mod signal_detector;
 pub mod source_prompts;
-mod trigger;
 
 pub use scheduler::{CompressionScheduler, CompressionTrigger, SchedulerConfig};
 pub use service::{CompressionConfig, CompressionService, PostCompressionHook};
 pub use signal_detector::{
     CompressionPriority, CompressionSignal, DetectionResult, SignalDetector, SignalKeywords,
 };
-pub use trigger::{CompressionAggressiveness, HybridTrigger, TriggerConfig, TriggerReason};
