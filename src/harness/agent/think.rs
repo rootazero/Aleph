@@ -412,36 +412,51 @@ impl AgentHarness {
         //    resolve tool names for tool_result messages.
         let mut messages = super::prompt::build_prompt(&events, tail_start);
 
+        // Fetch the cached metadata-form tool schema once. O(1) `Arc::clone`
+        // on the steady-state path. Hoisted above BOTH the preflight pass and
+        // the budget check so the preflight pressure gate and the budget sensor
+        // account for the real tool-schema overhead.
+        let metadata_tools = self.deps.tools.metadata_schema();
+        let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
+
         // 2a. Preflight cheap passes (hermes-inspired). Run BEFORE the budget
         // check so token-saving transforms — tool_result pruning + historical
-        // image stripping — happen unconditionally, even if the compactor's
-        // side-channel LLM call later fails. No LLM cost in this step.
+        // image stripping — happen even if the compactor's side-channel LLM
+        // call later fails. No LLM cost in this step.
         if let Some(pipeline) = self.deps.preflight_pipeline.as_ref() {
-            // Stages mostly key off `fresh_tail_count`; the pressure ratio is
-            // not currently consulted by the three shipped stages. Pass a max-
-            // pressure placeholder so any future pressure-gated stage still
-            // fires when wired in.
-            let placeholder_pressure = crate::context::budget::ContextPressure {
-                used_tokens: 0,
-                budget_tokens: 0,
-                ratio: 1.0,
-                overhead_tokens: 0,
-                available_for_messages: 0,
+            // Compute the REAL pressure snapshot (read-only via `peek_pressure`
+            // — no calibration or circuit-breaker mutation) so pressure-gated
+            // stages such as `FileOpSupersedeStage` (gate:
+            // `pressure.ratio >= min_pressure_ratio`, default 0.60) fire only
+            // when the context is actually full. The old `ratio: 1.0`
+            // placeholder kept that gate permanently open, so file-op
+            // supersession ran on every turn even on a near-empty context —
+            // contradicting its own "calm runs pay nothing" contract.
+            // `fresh_tail` comes from the same `ContextBudget` the compactor
+            // consults, keeping the protected-tail invariant intact. Falls back
+            // to a max-pressure placeholder + `CompactorConfig::default` tail of
+            // 6 only when no budget is wired (degenerate config), preserving the
+            // previous always-on behaviour there.
+            let (pressure, fresh_tail) = match self.deps.context_budget.as_ref() {
+                Some(budget) => {
+                    let guard = budget.lock().await;
+                    let tool_tokens =
+                        estimate_tool_schema_tokens(&metadata_tools, guard.token_estimate_ratio());
+                    let pressure = guard.peek_pressure(&messages, system_prompt, tool_tokens);
+                    (pressure, guard.fresh_tail_count())
+                }
+                None => (
+                    crate::context::budget::ContextPressure {
+                        used_tokens: 0,
+                        budget_tokens: 0,
+                        ratio: 1.0,
+                        overhead_tokens: 0,
+                        available_for_messages: 0,
+                    },
+                    6usize,
+                ),
             };
-            // Protect exactly the same recent window the budget sensor and the
-            // compactor treat as untouchable. Sourcing this from the live
-            // `ContextBudget` (rather than a magic `6`) keeps the fresh-tail
-            // invariant intact if `fresh_tail_count` is ever retuned or exposed
-            // as a knob — otherwise preflight could prune/strip messages inside
-            // the tail the compactor still considers verbatim. Falls back to the
-            // `CompactorConfig::default` of 6 only when no budget is wired.
-            let fresh_tail = match self.deps.context_budget.as_ref() {
-                Some(budget) => budget.lock().await.fresh_tail_count(),
-                None => 6usize,
-            };
-            let freed = pipeline
-                .run(&mut messages, &placeholder_pressure, fresh_tail)
-                .await;
+            let freed = pipeline.run(&mut messages, &pressure, fresh_tail).await;
             if freed > 0 {
                 tracing::debug!(
                     ?session_id,
@@ -450,11 +465,6 @@ impl AgentHarness {
                 );
             }
         }
-
-        // Fetch the cached metadata-form tool schema once. O(1) `Arc::clone`
-        // on the steady-state path. Hoisted above the budget check so the
-        // pressure sensor accounts for the real tool-schema overhead.
-        let metadata_tools = self.deps.tools.metadata_schema();
 
         // 2b. Task-10 budget check: evaluate context pressure before issuing
         // the LLM call. The sensor now sees the real system prompt and
@@ -465,7 +475,6 @@ impl AgentHarness {
                 let mut guard = budget.lock().await;
                 let tool_tokens =
                     estimate_tool_schema_tokens(&metadata_tools, guard.token_estimate_ratio());
-                let system_prompt = self.deps.system_prompt.as_deref().unwrap_or("");
                 let directive = guard.before_turn(&messages, system_prompt, tool_tokens);
                 (Some(directive), tool_tokens)
             } else {

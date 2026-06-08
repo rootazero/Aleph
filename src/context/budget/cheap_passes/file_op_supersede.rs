@@ -42,9 +42,11 @@ use crate::context::budget::preflight::PreflightStage;
 use crate::context::budget::ContextPressure;
 use crate::providers::message::{ContentBlock, UnifiedMessage};
 
-/// Default fill-ratio gate (60%) below which the stage is a no-op. Matches
-/// the `PressureLevel::Preventive` threshold used elsewhere in the budget
-/// subsystem — at calm pressure the byte savings aren't worth the diff.
+/// Default fill-ratio gate (60%) below which the stage is a no-op — the
+/// "preventive" band of the budget subsystem. At calm pressure the byte
+/// savings aren't worth the diff, so the preflight pipeline must hand this
+/// stage the *real* `ContextPressure` (see `ContextBudget::peek_pressure`),
+/// not a placeholder, for the gate to mean anything.
 const DEFAULT_MIN_PRESSURE_RATIO: f64 = 0.60;
 
 /// File-op last-write-wins preflight stage.
