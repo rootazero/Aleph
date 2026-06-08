@@ -326,18 +326,19 @@ pub async fn handle_pairing_reject(
         Err(e) => return e,
     };
 
-    // Peek at the row first so we can route a Browser reject to the
-    // side-table that `poll_browser_pairing` reads (`mark_browser_rejected`
-    // preserves the rejected state after `cancel_pairing` removes the
-    // DB row).
-    let is_browser = matches!(
+    // Browser and node rejects both need the side-table marker so
+    // `poll_browser_pairing` reports Rejected (not Expired) after the DB row
+    // is removed by `cancel_pairing`.
+    let needs_reject_marker = matches!(
         ctx.pairing_manager.get_request(&params.code),
-        Ok(Some(PairingRequest::Browser { .. }))
+        Ok(Some(
+            PairingRequest::Browser { .. } | PairingRequest::Node { .. }
+        ))
     );
 
     match ctx.pairing_manager.cancel_pairing(&params.code) {
         Ok(true) => {
-            if is_browser {
+            if needs_reject_marker {
                 ctx.pairing_manager.mark_browser_rejected(&params.code);
             }
             info!(code = %params.code, "Pairing rejected");
