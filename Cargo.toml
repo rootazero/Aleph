@@ -224,7 +224,7 @@ x509-parser = "0.17"
 include_dir = "0.7"
 tokio-tungstenite = "0.26"
 futures-util = "0.3"
-clap = { version = "4.4", features = ["derive"] }
+clap = { version = "4.4", features = ["derive", "env"] }
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 axum = { version = "0.8", features = ["ws"] }
 tower = "0.5"

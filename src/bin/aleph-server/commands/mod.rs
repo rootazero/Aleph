@@ -10,6 +10,7 @@ pub mod devices;
 pub mod doctor;
 pub mod gateway;
 pub mod hooks;
+pub mod node;
 pub mod pairing;
 pub mod plugins;
 pub mod prompt_size;

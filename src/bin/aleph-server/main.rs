@@ -247,6 +247,13 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         Some(Command::BootstrapUrl) => {
             return commands::handle_bootstrap_url().await;
         }
+        Some(Command::Node {
+            center,
+            token,
+            name,
+        }) => {
+            return commands::node::handle_node(center, token, name).await;
+        }
         Some(Command::SandboxDebug {
             network,
             fs_write,
