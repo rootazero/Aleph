@@ -69,6 +69,41 @@ pub fn inject_channel_secrets(channel_id: &str, config: &mut Value, vault: &Shar
     }
 }
 
+/// Report channel secret *presence* without echoing the secret (security).
+///
+/// Mirrors the provider `has_api_key` pattern (3def857c6): for each known
+/// secret field that is stored in the vault, add a `has_<field>: true` flag so
+/// the Panel can show a "key configured" hint, and strip any plaintext secret
+/// that might be present. The editable field then always starts empty, and an
+/// empty value on save means "keep existing".
+///
+/// This is the `config.get` counterpart to `inject_channel_secrets` (which is
+/// for runtime channel construction and intentionally still returns plaintext).
+pub fn report_channel_secret_presence(
+    channel_id: &str,
+    config: &mut Value,
+    vault: &SharedTokenManager,
+) {
+    let obj = match config.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    for &field in CHANNEL_SECRET_FIELDS {
+        // Never echo a plaintext secret, even if one leaked into config.
+        obj.remove(field);
+        let key = channel_vault_key(channel_id, field);
+        match vault.get_secret(&key) {
+            Ok(Some(_)) => {
+                obj.insert(format!("has_{}", field), Value::Bool(true));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(channel = %channel_id, field, error = %e, "Failed to read channel secret presence from vault");
+            }
+        }
+    }
+}
+
 /// Extract secret fields from config, store them in vault, and remove from config.
 /// Returns the number of secrets migrated.
 pub fn store_and_strip_channel_secrets(
@@ -858,5 +893,30 @@ mod tests {
             "disconnected"
         );
         assert_eq!(status_to_string(ChannelStatus::Error), "error");
+    }
+
+    #[test]
+    fn test_report_channel_secret_presence_reports_flag_without_echoing_secret() {
+        let vault = SharedTokenManager::new(
+            Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap()),
+            "/tmp/aleph_channel_secret_test.vault",
+        );
+        // A shared token must exist before the vault can encrypt/store secrets.
+        vault.generate_token().unwrap();
+        vault
+            .store_secret(&channel_vault_key("telegram", "bot_token"), "super-secret-bot-token")
+            .unwrap();
+
+        // Config as it would be after secrets were stripped to the vault on save.
+        let mut config = json!({ "bot_username": "my_bot" });
+        report_channel_secret_presence("telegram", &mut config, &vault);
+
+        // Presence flag is set, the plaintext secret is never present, and the
+        // serialized form does not leak the stored secret.
+        assert_eq!(config.get("has_bot_token"), Some(&Value::Bool(true)));
+        assert!(config.get("bot_token").is_none());
+        assert!(!config.to_string().contains("super-secret-bot-token"));
+        // A field with no stored secret gets no flag.
+        assert!(config.get("has_app_secret").is_none());
     }
 }

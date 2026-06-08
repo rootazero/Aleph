@@ -423,11 +423,13 @@ pub async fn handle_get_full_config(
         }
     };
 
-    // Inject vault secrets into channels so the panel can display masked values
+    // Report channel secret *presence* (has_<field>) without echoing the stored
+    // secret (3def857c6). Runtime channel construction still uses
+    // inject_channel_secrets; config.get must never return plaintext to the Panel.
     if let Some(channels) = config_json.get_mut("channels") {
         if let Some(channels_map) = channels.as_object_mut() {
             for (channel_id, channel_config) in channels_map.iter_mut() {
-                super::channel::inject_channel_secrets(channel_id, channel_config, &vault);
+                super::channel::report_channel_secret_presence(channel_id, channel_config, &vault);
             }
         }
     }

@@ -137,9 +137,27 @@ pub fn ChannelConfigTemplate(
         let values = field_values.get();
         let section = config_section_for_save.clone();
 
+        // Secret fields use stable-echo semantics (matches provider panels): the
+        // input starts empty, an empty value means "keep existing key", and the
+        // `has_<field>` presence flags from config.get must never be persisted.
+        let secret_keys: std::collections::HashSet<&'static str> = definition
+            .fields
+            .iter()
+            .filter(|f| matches!(f.kind, FieldKind::Secret))
+            .map(|f| f.key)
+            .collect();
+
         spawn_local(async move {
             let mut patch_obj = serde_json::Map::new();
             for (key, value) in values.iter() {
+                if key.starts_with("has_") {
+                    continue; // presence flag, never persisted
+                }
+                if secret_keys.contains(key.as_str())
+                    && value.as_str().map(|s| s.is_empty()).unwrap_or(false)
+                {
+                    continue; // empty secret = keep existing key
+                }
                 patch_obj.insert(key.clone(), value.clone());
             }
 
@@ -486,8 +504,18 @@ fn render_field(
             .into_any()
         }
 
-        // -- Secret --
+        // -- Secret (stable-echo: never pre-fills the stored secret) --
         FieldKind::Secret => {
+            let i18n = use_i18n();
+            // config.get reports `has_<key>` instead of the plaintext secret.
+            let has_key = move || -> bool {
+                field_values
+                    .get()
+                    .get(&format!("has_{}", key))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
+            };
+            // Editable value always starts empty; empty on save = keep existing.
             let get_val = move || -> String {
                 field_values
                     .get()
@@ -496,14 +524,34 @@ fn render_field(
                     .unwrap_or("")
                     .to_string()
             };
+            let configured_ph =
+                t_string!(i18n, settings.providers.key_configured_hint).to_string();
+            let unset_ph = if placeholder.is_empty() {
+                t_string!(i18n, settings.providers.key_unset_hint).to_string()
+            } else {
+                placeholder.to_string()
+            };
             view! {
                 <FormField label=label help_text=help>
-                    <SecretInput
-                        value=Signal::derive(get_val)
-                        on_change=move |v: String| set_value(Value::String(v))
-                        placeholder=placeholder.to_string()
-                        monospace=true
-                    />
+                    // SecretInput's placeholder is non-reactive, so re-render on has_key.
+                    {move || {
+                        let ph = if has_key() { configured_ph.clone() } else { unset_ph.clone() };
+                        view! {
+                            <SecretInput
+                                value=Signal::derive(get_val)
+                                on_change=move |v: String| set_value(Value::String(v))
+                                placeholder=ph
+                                monospace=true
+                            />
+                        }
+                    }}
+                    <p class="mt-1 text-xs text-text-tertiary">
+                        {move || if has_key() {
+                            t_string!(i18n, settings.providers.key_status_configured).to_string()
+                        } else {
+                            t_string!(i18n, settings.providers.key_status_unset).to_string()
+                        }}
+                    </p>
                 </FormField>
             }
             .into_any()
