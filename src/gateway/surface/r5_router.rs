@@ -54,6 +54,12 @@ pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification
                 source_topic: frame.topic_name(),
             })
         }
+        // Everything else stays silent — including `SurfaceNotify` itself.
+        // LOOP-SAFETY: `DesktopSurface::deliver` publishes `SurfaceNotify` back
+        // onto the same bus this router subscribes to. It MUST fall through to
+        // `None` here; adding a `SurfaceNotify` arm would re-deliver our own
+        // output and amplify infinitely. `ApprovalRequested` also stays here
+        // (operator-gated path until Phase 2).
         _ => None,
     }
 }
