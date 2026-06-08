@@ -8,7 +8,7 @@
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
-use crate::api::{AuthTokenApi, AuthTokenInfo, SessionInfo};
+use crate::api::{AuthTokenApi, SessionInfo};
 use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::views::devices::PairQr;
@@ -18,24 +18,20 @@ pub fn AuthView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
 
-    let token_info = RwSignal::new(Option::<AuthTokenInfo>::None);
     let sessions = RwSignal::new(Vec::<SessionInfo>::new());
     let session_count = RwSignal::new(0u64);
     let loading = RwSignal::new(true);
     let error = RwSignal::new(Option::<String>::None);
 
-    // Load data on mount / reconnect
+    // Load data on mount / reconnect. The shared token is intentionally NOT
+    // fetched: it is never echoed to the Panel (security). Remote sign-in uses
+    // the pairing code / QR below; the raw token is available via the CLI
+    // break-glass `aleph auth debug show-token`.
     Effect::new(move || {
         if state.is_connected.get() {
             spawn_local(async move {
                 loading.set(true);
                 error.set(None);
-
-                // Load token info
-                match AuthTokenApi::show_token(&state).await {
-                    Ok(info) => token_info.set(Some(info)),
-                    Err(e) => error.set(Some(format!("Failed to load token: {}", e))),
-                }
 
                 // Load sessions
                 match AuthTokenApi::list_sessions(&state).await {
@@ -88,7 +84,6 @@ pub fn AuthView() -> impl IntoView {
                                 })}
 
                                 <SharedTokenSection
-                                    token_info=token_info
                                     error=error
                                 />
                                 <ActiveSessionsSection
@@ -117,16 +112,15 @@ pub fn AuthView() -> impl IntoView {
 // =============================================================================
 
 #[component]
-fn SharedTokenSection(
-    token_info: RwSignal<Option<AuthTokenInfo>>,
-    error: RwSignal<Option<String>>,
-) -> impl IntoView {
+fn SharedTokenSection(error: RwSignal<Option<String>>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
-    let visible = RwSignal::new(false);
     let regenerating = RwSignal::new(false);
     let show_confirm = RwSignal::new(false);
     let copied = RwSignal::new(false);
+    // The freshly-generated token, shown exactly once right after regeneration.
+    // It is never re-fetched: the stored token is not echoed to the Panel.
+    let new_token = RwSignal::new(Option::<String>::None);
 
     let regenerate = move || {
         show_confirm.set(false);
@@ -134,8 +128,9 @@ fn SharedTokenSection(
         spawn_local(async move {
             match AuthTokenApi::reset_token(&state).await {
                 Ok(info) => {
-                    token_info.set(Some(info));
-                    visible.set(true); // Show the new token
+                    // reset_token always returns the new token — the one moment
+                    // we surface plaintext, for immediate copy.
+                    new_token.set(info.token);
                     error.set(None);
                 }
                 Err(e) => {
@@ -147,17 +142,15 @@ fn SharedTokenSection(
     };
 
     let copy_token = move || {
-        if let Some(info) = token_info.get() {
-            if let Some(token) = info.token {
-                // Use js_sys::eval for clipboard access to avoid extra web-sys features
-                let js = format!(
-                    "navigator.clipboard.writeText('{}')",
-                    token.replace('\'', "\\'")
-                );
-                let _ = js_sys::eval(&js);
-                copied.set(true);
-                set_timeout(move || copied.set(false), std::time::Duration::from_secs(2));
-            }
+        if let Some(token) = new_token.get() {
+            // Use js_sys::eval for clipboard access to avoid extra web-sys features
+            let js = format!(
+                "navigator.clipboard.writeText('{}')",
+                token.replace('\'', "\\'")
+            );
+            let _ = js_sys::eval(&js);
+            copied.set(true);
+            set_timeout(move || copied.set(false), std::time::Duration::from_secs(2));
         }
     };
 
@@ -178,68 +171,55 @@ fn SharedTokenSection(
                 </div>
             </div>
 
-            // Token display
+            // Token body: a freshly regenerated token is revealed exactly once
+            // for immediate copy; otherwise the token is never echoed (security).
             <div class="mb-4">
-                <label class="block text-sm font-medium text-text-secondary mb-2">{t!(i18n, settings.auth.current_token)}</label>
-                <div class="flex items-center gap-2">
-                    <div class="flex-1 px-4 py-2.5 bg-surface-sunken border border-border rounded-lg font-mono text-sm select-all">
-                        {move || {
-                            match token_info.get() {
-                                Some(info) => match info.token {
-                                    Some(t) if visible.get() => t,
-                                    Some(_) => "••••••••••••••••••••••••••••••••••••••••••".to_string(),
-                                    None => "Token not in memory — check ~/.aleph/data/.shared_token".to_string(),
-                                },
-                                None => t_string!(i18n, common.loading).to_string(),
-                            }
-                        }}
-                    </div>
-
-                    // Toggle visibility
-                    <button
-                        on:click=move |_| visible.update(|v| *v = !*v)
-                        class="p-2.5 bg-surface-sunken border border-border rounded-lg hover:bg-surface text-text-secondary hover:text-text-primary transition-colors"
-                        title=move || if visible.get() { t_string!(i18n, settings.auth.hide_token).to_string() } else { t_string!(i18n, settings.auth.show_token).to_string() }
-                    >
-                        {move || if visible.get() {
-                            view! {
-                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-                                    <line x1="1" y1="1" x2="23" y2="23"/>
+                {move || match new_token.get() {
+                    Some(token) => view! {
+                        <div class="space-y-2">
+                            <div class="flex items-center gap-2 p-3 bg-warning-subtle border border-warning/20 rounded-lg">
+                                <svg class="w-4 h-4 text-warning flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                                    <line x1="12" y1="9" x2="12" y2="13"/>
+                                    <line x1="12" y1="17" x2="12.01" y2="17"/>
                                 </svg>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                                    <circle cx="12" cy="12" r="3"/>
-                                </svg>
-                            }.into_any()
-                        }}
-                    </button>
-
-                    // Copy button
-                    <button
-                        on:click=move |_| copy_token()
-                        class="p-2.5 bg-surface-sunken border border-border rounded-lg hover:bg-surface text-text-secondary hover:text-text-primary transition-colors"
-                        title=t_string!(i18n, settings.auth.copy_token_title).to_string()
-                    >
-                        {move || if copied.get() {
-                            view! {
-                                <svg class="w-4 h-4 text-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <polyline points="20 6 9 17 4 12"/>
-                                </svg>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="9" y="9" width="13" height="13" rx="2"/>
-                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                                </svg>
-                            }.into_any()
-                        }}
-                    </button>
-                </div>
+                                <p class="text-xs text-text-secondary">{t!(i18n, settings.auth.token_revealed_warning)}</p>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <div class="flex-1 px-4 py-2.5 bg-surface-sunken border border-border rounded-lg font-mono text-sm select-all break-all">
+                                    {token}
+                                </div>
+                                <button
+                                    on:click=move |_| copy_token()
+                                    class="p-2.5 bg-surface-sunken border border-border rounded-lg hover:bg-surface text-text-secondary hover:text-text-primary transition-colors"
+                                    title=t_string!(i18n, settings.auth.copy_token_title).to_string()
+                                >
+                                    {move || if copied.get() {
+                                        view! {
+                                            <svg class="w-4 h-4 text-success" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <polyline points="20 6 9 17 4 12"/>
+                                            </svg>
+                                        }.into_any()
+                                    } else {
+                                        view! {
+                                            <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                                <rect x="9" y="9" width="13" height="13" rx="2"/>
+                                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                                            </svg>
+                                        }.into_any()
+                                    }}
+                                </button>
+                            </div>
+                        </div>
+                    }.into_any(),
+                    None => view! {
+                        <div class="p-4 bg-surface-sunken border border-border rounded-lg space-y-1.5">
+                            <p class="text-sm text-text-secondary">{t!(i18n, settings.auth.token_hidden_notice)}</p>
+                            <p class="text-xs text-text-tertiary">{t!(i18n, settings.auth.token_remote_hint)}</p>
+                            <p class="text-xs text-text-tertiary font-mono">{t!(i18n, settings.auth.token_cli_hint)}</p>
+                        </div>
+                    }.into_any(),
+                }}
             </div>
 
             // Regenerate token
