@@ -2,7 +2,7 @@
 //! `EmbeddingProviderConfig` from scratch; ID + Name + API base + model are required.
 
 use crate::api::{EmbeddingProviderConfig, EmbeddingProvidersApi};
-use crate::components::ui::SecretInput;
+use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -152,11 +152,9 @@ pub(super) fn AddProviderPanel(
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.embedding.api_key)}</label>
-                    <SecretInput
-                        value=Signal::derive(move || api_key.get())
-                        on_change=move |v| api_key.set(v)
-                        placeholder="sk-...".to_string()
-                        monospace=true
+                    <ProviderKeyField
+                        value=api_key
+                        has_api_key=Signal::derive(|| false)
                     />
                 </div>
 

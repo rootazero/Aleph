@@ -7,7 +7,7 @@
 //!   `auth_type == "oauth"` presets such as Codex/ChatGPT)
 
 use crate::api::{OAuthStatus, ProviderConfig, ProviderInfo, ProvidersApi, TestResult};
-use crate::components::api_key_input::ApiKeyInput;
+use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::preset_data::find_preset;
@@ -78,8 +78,11 @@ pub(super) fn ProviderDetailPanel(
                     form_temperature.set(String::new());
                 }
             } else {
-                // Existing provider — populate form with actual values
-                if let Some(provider) = providers.get().iter().find(|p| p.name == sel) {
+                // Existing provider — populate form with actual values.
+                // Read untracked so a background `providers.set(list)` refresh does
+                // not re-run this Effect and clobber in-progress edits; the Effect
+                // only re-hydrates when the SELECTED identity changes.
+                if let Some(provider) = providers.get_untracked().iter().find(|p| p.name == sel) {
                     form_name.set(provider.name.clone());
                     form_protocol.set(
                         provider
@@ -88,7 +91,8 @@ pub(super) fn ProviderDetailPanel(
                             .unwrap_or_else(|| provider.name.clone()),
                     );
                     form_model.set(provider.model.clone());
-                    form_api_key.set(provider.api_key.clone().unwrap_or_default());
+                    // Never pre-fill the stored secret; empty submit = keep existing key.
+                    form_api_key.set(String::new());
                     form_enabled.set(provider.enabled);
                     form_base_url.set(provider.base_url.clone().unwrap_or_default());
                     form_timeout.set(provider.timeout_seconds);
@@ -235,7 +239,14 @@ pub(super) fn ProviderDetailPanel(
 
         spawn_local(async move {
             match ProvidersApi::test_connection(&state, provider_name.as_deref(), config).await {
-                Ok(r) => test_result.set(Some(r)),
+                Ok(r) => {
+                    test_result.set(Some(r));
+                    // Refetch so a persisted `verified` flip lights the badge
+                    // without a manual reload.
+                    if let Ok(list) = ProvidersApi::list(&state).await {
+                        providers.set(list);
+                    }
+                }
                 Err(e) => error.set(Some(format!("Test failed: {}", e))),
             }
             testing.set(false);
@@ -529,11 +540,21 @@ pub(super) fn ProviderDetailPanel(
                                                     view! {
                                                         <button
                                                             on:click=on_set_default
-                                                            prop:disabled=move || saving.get()
+                                                            prop:disabled=move || saving.get() || !selected.get()
+                                                                .and_then(|s| providers.get().into_iter().find(|p| p.name == s))
+                                                                .map(|p| p.verified).unwrap_or(false)
                                                             class="w-full px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
                                                         >
                                                             {t!(i18n, settings.providers.set_default)}
                                                         </button>
+                                                        {move || {
+                                                            let not_verified = !selected.get()
+                                                                .and_then(|s| providers.get().into_iter().find(|p| p.name == s))
+                                                                .map(|p| p.verified).unwrap_or(false);
+                                                            not_verified.then(|| view! {
+                                                                <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.verify_before_default)}</p>
+                                                            })
+                                                        }}
                                                     }.into_any()
                                                 } else {
                                                     view! { <div></div> }.into_any()
@@ -588,10 +609,22 @@ pub(super) fn ProviderDetailPanel(
                                             // API Key
                                             <div>
                                                 <label class="block text-sm text-text-secondary mb-1">{t!(i18n, settings.providers.api_key)}</label>
-                                                <ApiKeyInput
-                                                    value=form_api_key
-                                                    placeholder=preset_info.map(|p| p.api_key_placeholder).unwrap_or("sk-...").to_string()
-                                                />
+                                                {
+                                                    let has_api_key = Signal::derive(move || {
+                                                        selected.get()
+                                                            .and_then(|s| providers.get().into_iter().find(|p| p.name == s))
+                                                            .map(|p| p.has_api_key)
+                                                            .unwrap_or(false)
+                                                    });
+                                                    match preset_info.map(|p| p.api_key_placeholder.to_string()) {
+                                                        Some(hint) => view! {
+                                                            <ProviderKeyField value=form_api_key has_api_key=has_api_key hint=hint />
+                                                        }.into_any(),
+                                                        None => view! {
+                                                            <ProviderKeyField value=form_api_key has_api_key=has_api_key />
+                                                        }.into_any(),
+                                                    }
+                                                }
                                                 {move || if preset_info.map(|p| !p.needs_api_key).unwrap_or(false) {
                                                     view! {
                                                         <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.providers.no_api_key_needed)}</p>
@@ -706,7 +739,9 @@ pub(super) fn ProviderDetailPanel(
                                                         <div class="flex gap-2">
                                                             <button
                                                                 on:click=on_set_default
-                                                                prop:disabled=move || saving.get()
+                                                                prop:disabled=move || saving.get() || !selected.get()
+                                                                    .and_then(|s| providers.get().into_iter().find(|p| p.name == s))
+                                                                    .map(|p| p.verified).unwrap_or(false)
                                                                 class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success text-sm font-medium rounded-lg hover:bg-success-subtle/80 disabled:opacity-50"
                                                             >
                                                                 {t!(i18n, settings.providers.set_default)}
@@ -725,6 +760,14 @@ pub(super) fn ProviderDetailPanel(
                                                                 view! { <span></span> }.into_any()
                                                             }}
                                                         </div>
+                                                        {move || {
+                                                            let not_verified = !selected.get()
+                                                                .and_then(|s| providers.get().into_iter().find(|p| p.name == s))
+                                                                .map(|p| p.verified).unwrap_or(false);
+                                                            not_verified.then(|| view! {
+                                                                <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.verify_before_default)}</p>
+                                                            })
+                                                        }}
                                                     }.into_any()
                                                 } else {
                                                     view! { <div></div> }.into_any()

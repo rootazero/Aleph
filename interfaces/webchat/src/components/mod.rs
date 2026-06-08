@@ -1,7 +1,6 @@
 //! Component modules
 
 pub mod agents_sidebar;
-pub mod api_key_input;
 pub mod boot_check_gate;
 pub mod chat_sidebar;
 pub mod command_palette;
@@ -17,6 +16,8 @@ pub mod mode_sidebar;
 pub mod model_picker;
 pub mod nav_menu;
 pub mod notification_center;
+pub mod provider_badge;
+pub mod provider_key_field;
 pub mod provider_row_card;
 pub mod service_blocking_gate;
 pub mod session_tabs;

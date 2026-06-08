@@ -7,7 +7,8 @@ use std::rc::Rc;
 use crate::api::{
     GenerationProviderConfig, GenerationProviderEntry, GenerationProvidersApi, VoiceInfo,
 };
-use crate::components::ui::SecretInput;
+use crate::components::provider_badge::{BadgeState, ProviderBadges};
+use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::i18n::*;
@@ -28,7 +29,7 @@ pub(super) fn ProviderDetailView(
     let is_default_for = provider.is_default_for.clone();
 
     // Editable form signals
-    let form_api_key = RwSignal::new(provider.config.api_key.clone().unwrap_or_default());
+    let form_api_key = RwSignal::new(String::new());
     let form_base_url = RwSignal::new(provider.config.base_url.clone().unwrap_or_default());
     let form_edit_url = RwSignal::new(provider.config.edit_url.clone().unwrap_or_default());
     let form_model = RwSignal::new(provider.config.models.join(","));
@@ -91,6 +92,7 @@ pub(super) fn ProviderDetailView(
     let display_provider_type = provider.config.provider_type.clone();
     let config_color = provider.config.color.clone();
     let config_verified = provider.config.verified;
+    let provider_has_api_key = provider.has_api_key;
 
     let build_config = {
         let existing_defaults = existing_defaults.clone();
@@ -213,6 +215,9 @@ pub(super) fn ProviderDetailView(
                 Ok(result) => {
                     testing.set(false);
                     test_result.set(Some((result.success, result.message)));
+                    if result.success {
+                        on_reload();
+                    }
                 }
                 Err(e) => {
                     testing.set(false);
@@ -281,6 +286,10 @@ pub(super) fn ProviderDetailView(
                         <p class="text-sm text-text-tertiary mt-0.5">
                             {display_provider_type.clone()}
                         </p>
+                        <ProviderBadges state=BadgeState {
+                            is_default: !is_default_for.is_empty(),
+                            verified: config_verified,
+                        } />
                     </div>
                     <label class="flex items-center gap-2 cursor-pointer">
                         <input
@@ -304,13 +313,10 @@ pub(super) fn ProviderDetailView(
                 // API Key
                 <div>
                     <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, settings.generation.api_key_label)}</label>
-                    <SecretInput
-                        value=Signal::derive(move || form_api_key.get())
-                        on_change=move |v| form_api_key.set(v)
-                        placeholder=t_string!(i18n, settings.generation.api_key_placeholder).to_string()
-                        monospace=true
+                    <ProviderKeyField
+                        value=form_api_key
+                        has_api_key=Signal::derive(move || provider_has_api_key)
                     />
-                    <p class="mt-1 text-xs text-text-tertiary">{t!(i18n, settings.generation.api_key_hint)}</p>
                 </div>
 
                 // Model
@@ -554,7 +560,7 @@ pub(super) fn ProviderDetailView(
                         <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">"SET AS DEFAULT"</h3>
                         <button
                             on:click=move |_| set_default(effective_gen_type)
-                            disabled=move || setting_default.get() || is_default
+                            disabled=move || setting_default.get() || is_default || !config_verified
                             class=move || {
                                 let base = "w-full px-4 py-2.5 rounded-lg transition-colors font-medium text-sm";
                                 if is_default {
@@ -567,6 +573,9 @@ pub(super) fn ProviderDetailView(
                             {effective_gen_type.display_name()}
                             {if is_default { format!(" {}", t_string!(i18n, settings.generation.current_suffix)) } else { String::new() }}
                         </button>
+                        {(!config_verified).then(|| view! {
+                            <p class="text-xs text-text-tertiary">{t!(i18n, settings.providers.verify_before_default)}</p>
+                        })}
                     </div>
                 }
             }

@@ -24,7 +24,7 @@ pub async fn handle_list(
 ) -> JsonRpcResponse {
     let cfg = config.read().await;
 
-    let mut providers: Vec<(GenerationProviderEntry, GenerationType)> = cfg
+    let mut providers: Vec<(GenerationProviderEntry, GenerationType, bool)> = cfg
         .generation
         .merged_providers()
         .into_iter()
@@ -47,8 +47,9 @@ pub async fn handle_list(
                 is_default_for.push(GenerationType::Transcription);
             }
 
+            let has_api_key = resolve_api_key(&name, &vault).is_some();
             let mut cfg_clone = provider_config;
-            cfg_clone.api_key = resolve_api_key(&name, &vault);
+            cfg_clone.api_key = None;
             (
                 GenerationProviderEntry {
                     name,
@@ -56,6 +57,7 @@ pub async fn handle_list(
                     is_default_for,
                 },
                 gen_type,
+                has_api_key,
             )
         })
         .collect();
@@ -63,19 +65,13 @@ pub async fn handle_list(
     // Sort by name for consistent ordering
     providers.sort_by(|a, b| a.0.name.cmp(&b.0.name));
 
-    // Serialize and inject api_key (which is #[serde(skip)] on the config struct)
-    // Also inject generation_type field
+    // Serialize and inject has_api_key and generation_type field
     let json_arr: Vec<serde_json::Value> = providers
         .iter()
-        .map(|(entry, gen_type)| {
+        .map(|(entry, gen_type, has_api_key)| {
             let mut val = serde_json::to_value(entry).unwrap_or_default();
-            if let Some(ref key) = entry.config.api_key {
-                if let Some(obj) = val.get_mut("config").and_then(|c| c.as_object_mut()) {
-                    obj.insert("api_key".into(), serde_json::json!(key));
-                }
-            }
-            // Add generation_type to the response
             if let Some(obj) = val.as_object_mut() {
+                obj.insert("has_api_key".into(), serde_json::json!(has_api_key));
                 obj.insert(
                     "generation_type".into(),
                     serde_json::Value::String(format!("{:?}", gen_type).to_lowercase()),
@@ -133,24 +129,19 @@ pub async fn handle_get(
                 is_default_for.push(GenerationType::Transcription);
             }
 
+            let has_api_key = resolve_api_key(&name, &vault).is_some();
             let mut cfg_clone = provider_config;
-            cfg_clone.api_key = resolve_api_key(&name, &vault);
-            let api_key_copy = cfg_clone.api_key.clone();
+            cfg_clone.api_key = None;
             let entry = GenerationProviderEntry {
                 name,
                 config: cfg_clone,
                 is_default_for,
             };
 
-            // Serialize and inject api_key (which is #[serde(skip)] on the config struct)
+            // Serialize and inject has_api_key and generation_type field
             let mut val = serde_json::to_value(entry).unwrap_or_default();
-            if let Some(ref key) = api_key_copy {
-                if let Some(obj) = val.get_mut("config").and_then(|c| c.as_object_mut()) {
-                    obj.insert("api_key".into(), serde_json::json!(key));
-                }
-            }
-            // Add generation_type to the response
             if let Some(obj) = val.as_object_mut() {
+                obj.insert("has_api_key".into(), serde_json::json!(has_api_key));
                 obj.insert(
                     "generation_type".into(),
                     serde_json::Value::String(format!("{:?}", gen_type).to_lowercase()),

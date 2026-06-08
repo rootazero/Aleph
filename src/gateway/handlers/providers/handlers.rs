@@ -32,7 +32,7 @@ pub async fn handle_list(
         .providers
         .iter()
         .map(|(name, cfg)| {
-            let api_key = resolve_api_key(name, &vault);
+            let has_api_key = resolve_api_key(name, &vault).is_some();
             ProviderInfo {
                 name: name.clone(),
                 enabled: cfg.enabled,
@@ -45,8 +45,8 @@ pub async fn handle_list(
                 max_tokens: cfg.max_tokens,
                 context_window: cfg.context_window,
                 temperature: cfg.temperature,
-                has_api_key: api_key.is_some(),
-                api_key,
+                has_api_key,
+                api_key: None,
                 is_default: default_provider.as_ref() == Some(name),
                 verified: cfg.verified,
             }
@@ -75,7 +75,6 @@ pub async fn handle_get(
     match config.providers.get(&params.name) {
         Some(cfg) => {
             let default_provider = config.general.default_provider.clone();
-            let api_key = resolve_api_key(&params.name, &vault);
             let info = ProviderInfo {
                 name: params.name.clone(),
                 enabled: cfg.enabled,
@@ -88,8 +87,8 @@ pub async fn handle_get(
                 max_tokens: cfg.max_tokens,
                 context_window: cfg.context_window,
                 temperature: cfg.temperature,
-                has_api_key: api_key.is_some(),
-                api_key,
+                has_api_key: resolve_api_key(&params.name, &vault).is_some(),
+                api_key: None,
                 is_default: default_provider.as_ref() == Some(&params.name),
                 verified: cfg.verified,
             };

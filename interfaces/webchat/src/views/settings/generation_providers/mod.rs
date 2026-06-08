@@ -17,6 +17,8 @@ use leptos::task::spawn_local;
 use leptos::*;
 
 use crate::api::{GenerationProviderEntry, GenerationProvidersApi};
+use crate::components::provider_badge::{BadgeState, ProviderBadges};
+use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
 use crate::generation::GenerationType;
 use crate::i18n::*;
@@ -199,7 +201,7 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                                     is_configured=configured
                                                     entry=entry
                                                     is_selected=is_selected
-                                                    on_click=move |_| {
+                                                    on_click=move || {
                                                         // Configured preset → show detail; unconfigured → show setup form
                                                         if configured {
                                                             set_selected_provider_id.set(Some(preset_id.clone()));
@@ -242,58 +244,26 @@ pub fn GenerationProvidersView() -> impl IntoView {
                                                             let cp_color = cp.config.color.clone();
                                                             let is_default = !cp.is_default_for.is_empty();
                                                             let verified = cp.config.verified;
-                                                            let first_char = cp_name.chars().next().unwrap_or('?').to_uppercase().to_string();
 
                                                             view! {
-                                                                <button
-                                                                    on:click=move |_| {
+                                                                <ProviderRowCard
+                                                                    name=cp_name
+                                                                    icon_color=cp_color
+                                                                    subtitle=cp_model
+                                                                    is_selected=move || {
+                                                                        selected_provider_id.get().as_deref() == Some(&cp_name_check)
+                                                                    }
+                                                                    is_configured=|| true
+                                                                    dot=move || if verified { RowDot::Verified } else { RowDot::None }
+                                                                    badge=move || {
+                                                                        let state = BadgeState { is_default, verified };
+                                                                        view! { <ProviderBadges state=state /> }.into_any()
+                                                                    }
+                                                                    on_click=move || {
                                                                         set_selected_provider_id.set(Some(cp_name_click.clone()));
                                                                         set_show_add_form.set(false);
                                                                     }
-                                                                    class=move || {
-                                                                        let base = "text-left p-3 rounded-lg border transition-all";
-                                                                        let is_sel = selected_provider_id.get().as_deref() == Some(&cp_name_check);
-                                                                        if is_sel {
-                                                                            format!("{} bg-primary-subtle border-primary", base)
-                                                                        } else {
-                                                                            format!("{} bg-surface-raised border-border hover:border-primary/40", base)
-                                                                        }
-                                                                    }
-                                                                >
-                                                                    <div class="flex items-center gap-3">
-                                                                        <div
-                                                                            class="w-8 h-8 rounded-lg flex items-center justify-center text-white text-sm font-bold shrink-0"
-                                                                            style=format!("background-color: {}", cp_color)
-                                                                        >
-                                                                            {first_char}
-                                                                        </div>
-                                                                        <div class="min-w-0">
-                                                                            <div class="flex items-center gap-2">
-                                                                                <span class="font-medium text-text-primary text-sm truncate">
-                                                                                    {cp_name}
-                                                                                </span>
-                                                                                {if is_default {
-                                                                                    view! {
-                                                                                        <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                                                            {t!(i18n, settings.generation.default)}
-                                                                                        </span>
-                                                                                    }.into_any()
-                                                                                } else if verified {
-                                                                                    view! {
-                                                                                        <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                                                            {t!(i18n, settings.generation.active)}
-                                                                                        </span>
-                                                                                    }.into_any()
-                                                                                } else {
-                                                                                    view! { <span></span> }.into_any()
-                                                                                }}
-                                                                            </div>
-                                                                            <div class="text-xs text-text-tertiary truncate">
-                                                                                {cp_model}
-                                                                            </div>
-                                                                        </div>
-                                                                    </div>
-                                                                </button>
+                                                                />
                                                             }
                                                         }).collect_view()}
                                                     </div>
@@ -391,74 +361,32 @@ fn ProviderCard(
     is_configured: bool,
     entry: Option<GenerationProviderEntry>,
     is_selected: bool,
-    on_click: impl Fn(ev::MouseEvent) + 'static,
+    on_click: impl Fn() + 'static + Send,
 ) -> impl IntoView {
-    let i18n = use_i18n();
     let is_verified = entry.as_ref().is_some_and(|e| e.config.verified);
+    let is_default = entry.as_ref().is_some_and(|e| !e.is_default_for.is_empty());
 
-    let is_default = move || {
-        if let Some(ref e) = entry {
-            !e.is_default_for.is_empty()
-        } else {
-            false
-        }
-    };
-
-    let icon = preset.icon.clone();
     let color = preset.color.clone();
     let name = preset.name.clone();
     let model = preset.default_model.clone();
 
     view! {
-        <button
-            on:click=on_click
-            class=move || {
-                let base = "text-left p-3 rounded-lg border transition-all";
-                if is_selected {
-                    format!("{} bg-primary-subtle border-primary", base)
-                } else if is_configured {
-                    format!("{} bg-surface-raised border-border hover:border-primary/40", base)
-                } else {
-                    format!("{} bg-surface-sunken border-border hover:border-border-strong", base)
-                }
+        <ProviderRowCard
+            name=name
+            icon_color=color
+            subtitle=model
+            is_selected=move || is_selected
+            is_configured=move || is_configured
+            dot=move || if is_configured && is_verified { RowDot::Verified } else { RowDot::None }
+            badge=move || {
+                let state = BadgeState {
+                    is_default: is_configured && is_default,
+                    verified: is_configured && is_verified,
+                };
+                view! { <ProviderBadges state=state /> }.into_any()
             }
-        >
-            <div class="flex items-center gap-3">
-                <div
-                    class="w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0"
-                    style=format!("background-color: {}", color)
-                >
-                    {icon}
-                </div>
-                <div class="min-w-0">
-                    <div class="flex items-center gap-2">
-                        <span class="font-medium text-text-primary text-sm truncate">
-                            {name}
-                        </span>
-                        {move || {
-                            if is_configured && is_default() {
-                                view! {
-                                    <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                        {t!(i18n, settings.generation.default)}
-                                    </span>
-                                }.into_any()
-                            } else if is_configured && is_verified {
-                                view! {
-                                    <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                        {t!(i18n, settings.generation.active)}
-                                    </span>
-                                }.into_any()
-                            } else {
-                                view! { <span></span> }.into_any()
-                            }
-                        }}
-                    </div>
-                    <div class="text-xs text-text-tertiary truncate">
-                        {model}
-                    </div>
-                </div>
-            </div>
-        </button>
+            on_click=on_click
+        />
     }
 }
 

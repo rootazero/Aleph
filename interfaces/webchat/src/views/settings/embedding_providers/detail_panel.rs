@@ -3,7 +3,8 @@
 //! the (Provider-agnostic) reembed migration UI.
 
 use crate::api::{EmbeddingProviderConfig, EmbeddingProviderEntry, EmbeddingProvidersApi};
-use crate::components::ui::SecretInput;
+use crate::components::provider_badge::{BadgeState, ProviderBadges};
+use crate::components::provider_key_field::ProviderKeyField;
 use crate::context::DashboardState;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -22,6 +23,8 @@ pub(super) fn ProviderDetailPanel(
     let provider_id = provider.id.clone();
     let is_active = provider.is_active;
     let is_custom = provider.preset == "custom";
+    let provider_has_api_key = provider.has_api_key;
+    let provider_verified = provider.verified;
 
     // Clone fields needed in multiple closures and the view
     let provider_name = provider.name.clone();
@@ -32,7 +35,7 @@ pub(super) fn ProviderDetailPanel(
 
     // Editable fields
     let api_base = RwSignal::new(provider.api_base.clone());
-    let api_key = RwSignal::new(provider.api_key.clone().unwrap_or_default());
+    let api_key = RwSignal::new(String::new());
     let form_model = RwSignal::new(provider.model.clone());
     let dimensions = RwSignal::new(provider.dimensions);
     let enabled = RwSignal::new(provider.enabled);
@@ -92,6 +95,9 @@ pub(super) fn ProviderDetailPanel(
                 Ok(result) => {
                     set_testing.set(false);
                     set_test_result.set(Some((result.success, result.message)));
+                    if result.success {
+                        on_reload();
+                    }
                 }
                 Err(e) => {
                     set_testing.set(false);
@@ -186,24 +192,7 @@ pub(super) fn ProviderDetailPanel(
                         </p>
                     </div>
                     <div class="flex gap-1">
-                        {if is_active {
-                            view! {
-                                <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-primary-subtle text-primary">
-                                    "Default"
-                                </span>
-                            }.into_any()
-                        } else {
-                            view! { <span></span> }.into_any()
-                        }}
-                        {if provider.verified {
-                            view! {
-                                <span class="px-2.5 py-1 rounded-full text-xs font-medium bg-success-subtle text-success">
-                                    "Verified"
-                                </span>
-                            }.into_any()
-                        } else {
-                            view! { <span></span> }.into_any()
-                        }}
+                        <ProviderBadges state=BadgeState { is_default: is_active, verified: provider_verified } />
                     </div>
                 </div>
             </div>
@@ -220,11 +209,9 @@ pub(super) fn ProviderDetailPanel(
                     <label class="block text-sm font-medium text-text-secondary mb-1">
                         {t!(i18n, settings.embedding.api_key)}
                     </label>
-                    <SecretInput
-                        value=Signal::derive(move || api_key.get())
-                        on_change=move |v| api_key.set(v)
-                        placeholder=t_string!(i18n, settings.embedding.api_key_placeholder).to_string()
-                        monospace=true
+                    <ProviderKeyField
+                        value=api_key
+                        has_api_key=Signal::derive(move || provider_has_api_key)
                     />
                     {provider_api_key_env.clone().map(|env_var| view! {
                         <p class="mt-1 text-xs text-text-tertiary">
@@ -358,13 +345,18 @@ pub(super) fn ProviderDetailPanel(
                     <div class="flex flex-row gap-3">
                         {if !is_active {
                             Some(view! {
-                                <button
-                                    on:click=handle_activate
-                                    disabled=move || activating.get()
-                                    class="flex-1 px-4 py-2.5 bg-success-subtle border border-success/20 text-success rounded-lg hover:bg-success-subtle/80 disabled:opacity-50 transition-colors font-medium"
-                                >
-                                    {move || if activating.get() { t_string!(i18n, settings.embedding.setting_default).to_string() } else { t_string!(i18n, settings.embedding.set_as_default).to_string() }}
-                                </button>
+                                <div class="flex-1 flex flex-col gap-1">
+                                    <button
+                                        on:click=handle_activate
+                                        disabled=move || activating.get() || !provider_verified
+                                        class="w-full px-4 py-2.5 bg-success-subtle border border-success/20 text-success rounded-lg hover:bg-success-subtle/80 disabled:opacity-50 transition-colors font-medium"
+                                    >
+                                        {move || if activating.get() { t_string!(i18n, settings.embedding.setting_default).to_string() } else { t_string!(i18n, settings.embedding.set_as_default).to_string() }}
+                                    </button>
+                                    {(!provider_verified).then(|| view! {
+                                        <p class="text-xs text-text-tertiary">{t!(i18n, settings.embedding.verify_before_default)}</p>
+                                    })}
+                                </div>
                             })
                         } else {
                             None

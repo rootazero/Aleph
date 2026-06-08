@@ -13,6 +13,7 @@ mod reembed_card;
 use crate::api::{
     EmbeddingPresetEntry, EmbeddingProviderConfig, EmbeddingProviderEntry, EmbeddingProvidersApi,
 };
+use crate::components::provider_badge::{BadgeState, ProviderBadges};
 use crate::components::provider_row_card::{ProviderRowCard, RowDot};
 use crate::context::DashboardState;
 use crate::i18n::*;
@@ -169,23 +170,9 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                             }
                                                             is_configured=move || is_configured
                                                             dot=|| RowDot::None
-                                                            badge=move || {
-                                                                if is_active {
-                                                                    view! {
-                                                                        <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                                            "Default"
-                                                                        </span>
-                                                                    }.into_any()
-                                                                } else if is_verified {
-                                                                    view! {
-                                                                        <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                                            "Verified"
-                                                                        </span>
-                                                                    }.into_any()
-                                                                } else {
-                                                                    view! { <span></span> }.into_any()
-                                                                }
-                                                            }
+                                                            badge=move || view! {
+                                                                <ProviderBadges state=BadgeState { is_default: is_active, verified: is_verified } />
+                                                            }.into_any()
                                                             on_click=move || {
                                                                 if let Some(ref config) = preset_for_add {
                                                                     let config = config.clone();
@@ -250,23 +237,9 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                                     }
                                                                     is_configured=|| true
                                                                     dot=|| RowDot::None
-                                                                    badge=move || {
-                                                                        if cp_is_active {
-                                                                            view! {
-                                                                                <span class="px-1.5 py-0.5 bg-primary-subtle text-primary text-xs rounded shrink-0">
-                                                                                    "Default"
-                                                                                </span>
-                                                                            }.into_any()
-                                                                        } else if cp_verified {
-                                                                            view! {
-                                                                                <span class="px-1.5 py-0.5 bg-success-subtle text-success text-xs rounded shrink-0">
-                                                                                    "Verified"
-                                                                                </span>
-                                                                            }.into_any()
-                                                                        } else {
-                                                                            view! { <span></span> }.into_any()
-                                                                        }
-                                                                    }
+                                                                    badge=move || view! {
+                                                                        <ProviderBadges state=BadgeState { is_default: cp_is_active, verified: cp_verified } />
+                                                                    }.into_any()
                                                                     on_click=move || {
                                                                         set_selected_provider_id.set(Some(sel_id.clone()));
                                                                         set_show_add_form.set(false);

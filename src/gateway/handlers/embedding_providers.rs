@@ -97,11 +97,9 @@ pub async fn handle_list(
         .iter()
         .map(|p| {
             let mut val = inject_is_active(p, &settings.active_provider_id);
-            // Inject vault-resolved API key
             if let Some(obj) = val.as_object_mut() {
-                if let Some(key) = resolve_api_key(&p.id, &vault) {
-                    obj.insert("api_key".into(), serde_json::json!(key));
-                }
+                let has_api_key = resolve_api_key(&p.id, &vault).is_some();
+                obj.insert("has_api_key".into(), serde_json::json!(has_api_key));
             }
             val
         })
@@ -133,9 +131,8 @@ pub async fn handle_get(
         Some(provider) => {
             let mut val = inject_is_active(provider, &settings.active_provider_id);
             if let Some(obj) = val.as_object_mut() {
-                if let Some(key) = resolve_api_key(&params.id, &vault) {
-                    obj.insert("api_key".into(), serde_json::json!(key));
-                }
+                let has_api_key = resolve_api_key(&params.id, &vault).is_some();
+                obj.insert("has_api_key".into(), serde_json::json!(has_api_key));
             }
             JsonRpcResponse::success(request.id, val)
         }

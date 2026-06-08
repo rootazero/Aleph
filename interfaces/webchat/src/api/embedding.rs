@@ -22,6 +22,8 @@ pub struct EmbeddingProviderEntry {
     pub is_active: bool,
     #[serde(default)]
     pub verified: bool,
+    #[serde(default)]
+    pub has_api_key: bool,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }

@@ -81,6 +81,8 @@ pub struct GenerationProviderEntry {
     /// Falls back to capabilities[0] for backward compatibility.
     #[serde(default)]
     pub generation_type: Option<String>,
+    #[serde(default)]
+    pub has_api_key: bool,
 }
 
 impl GenerationProviderEntry {
