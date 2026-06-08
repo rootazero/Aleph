@@ -27,13 +27,13 @@ use serde_json::Value;
 use super::icon::use_unicode;
 use super::theme::{paint, Style};
 
-/// Max chars of a tool's primary-arg preview before ellipsis.
+/// Max display cells of a tool's primary-arg preview before ellipsis.
 const PREVIEW_MAX: usize = 72;
-/// Max chars of a success result preview (verbose mode).
+/// Max display cells of a success result preview (verbose mode).
 const RESULT_MAX: usize = 100;
-/// Max chars of an error message inlined on the result line.
+/// Max display cells of an error message inlined on the result line.
 const ERROR_MAX: usize = 160;
-/// Max chars of a reasoning preview before ellipsis.
+/// Max display cells of a reasoning preview before ellipsis.
 const REASONING_MAX: usize = 200;
 
 /// Per-tool glyph. Unicode emoji with a terse ASCII fallback so the column
@@ -424,16 +424,32 @@ fn human_count(n: u64) -> String {
     }
 }
 
-/// Char-safe truncation with a trailing ellipsis. Never splits a UTF-8 scalar
-/// (counts `chars`, not bytes) per the repo's UTF-8-safety rule.
+/// Display-width-aware truncation with a trailing ellipsis. Never splits a
+/// UTF-8 scalar, and budgets by terminal cells (CJK / full-width chars = 2,
+/// combining marks = 0) rather than scalar count, so `max` is a true visible
+/// width. A `chars().take()` budget double-counts CJK: an "80-char" preview of
+/// Chinese text is 160 cells and wraps the one-line activity row. Counting
+/// cells keeps previews on one line for Aleph's Chinese-speaking users (the
+/// same concern that drives [`super::width`]). Mirrors the width-aware
+/// truncation in the Pi / openclaw terminal cores.
 fn truncate(s: &str, max: usize) -> String {
-    let count = s.chars().count();
-    if count <= max {
+    use unicode_width::UnicodeWidthChar;
+    if super::width::display_width(s) <= max {
         return s.to_string();
     }
     let ell = if use_unicode() { "…" } else { "..." };
-    let keep = max.saturating_sub(1);
-    let head: String = s.chars().take(keep).collect();
+    // Reserve the ellipsis's own cells so the result never exceeds `max`.
+    let budget = max.saturating_sub(super::width::display_width(ell));
+    let mut width = 0usize;
+    let mut head = String::new();
+    for c in s.chars() {
+        let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+        if width + cw > budget {
+            break;
+        }
+        width += cw;
+        head.push(c);
+    }
     format!("{head}{ell}")
 }
 
@@ -510,6 +526,25 @@ mod tests {
         let s = "你好世界中";
         let t = truncate(s, 3);
         assert!(t.chars().count() <= 3);
+    }
+
+    #[test]
+    fn truncate_budgets_by_display_width() {
+        use crate::output::width::display_width;
+        // Each CJK char is 2 cells: "你好世界中" is 10 cells wide. A scalar-count
+        // budget keeps all 5 chars at max=6 (10 cells, overflow); a cell budget
+        // must never exceed 6 regardless of the ellipsis glyph (… or ...).
+        let s = "你好世界中";
+        let t = truncate(s, 6);
+        assert!(
+            display_width(&t) <= 6,
+            "truncated {t:?} is {} cells, over budget 6",
+            display_width(&t)
+        );
+        // It must actually have shrunk (input was 10 cells).
+        assert!(display_width(&t) < display_width(s));
+        // ASCII within budget is returned untouched.
+        assert_eq!(truncate("hello", 10), "hello");
     }
 
     #[test]
