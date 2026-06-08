@@ -4,6 +4,7 @@
 //! from the agent loop to connected WebSocket clients.
 
 mod impls;
+mod instant_buffer;
 mod types;
 
 #[cfg(test)]
@@ -16,6 +17,7 @@ pub use types::{
 };
 
 pub use impls::{CollectingEventEmitter, DynEventEmitter, GatewayEventEmitter, NoOpEventEmitter};
+pub use instant_buffer::InstantBufferingEmitter;
 
 use async_trait::async_trait;
 use serde_json::Value;
