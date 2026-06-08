@@ -17,6 +17,16 @@ use leptos::task::spawn_local;
 /// `settings.route.*` translation table at render time.
 const MODE_KEYS: &[&str] = &["auto", "always_local", "always_cloud"];
 
+/// Load-balancing strategy keys, matched 1:1 to the backend
+/// `LoadBalanceStrategy` serde names.
+const LB_KEYS: &[&str] = &[
+    "ordered",
+    "round_robin",
+    "least_busy",
+    "latency_aware",
+    "usage_based",
+];
+
 #[component]
 pub fn RouteView() -> impl IntoView {
     let state = expect_context::<DashboardState>();
@@ -135,6 +145,38 @@ pub fn RouteView() -> impl IntoView {
                                 </button>
                             }
                         }).collect::<Vec<_>>()}
+                    </div>
+
+                    // Load-balancing strategy — how same-tier providers are
+                    // ordered within the active route. Default "ordered" is a
+                    // no-op (configured order).
+                    <div class="bg-surface-raised rounded-lg border border-border p-4">
+                        <label class="block font-semibold text-text-primary mb-1">
+                            {t!(i18n, settings.route.load_balance)}
+                        </label>
+                        <p class="text-sm text-text-secondary mb-2">
+                            {t!(i18n, settings.route.load_balance_desc)}
+                        </p>
+                        <select
+                            class="w-full bg-surface border border-border rounded-lg px-3 py-2 text-sm text-text-primary"
+                            prop:value=move || load_balance.get()
+                            on:change=move |ev| {
+                                load_balance.set(event_target_value(&ev));
+                                saved.set(false);
+                            }
+                        >
+                            {LB_KEYS.iter().map(|key| {
+                                let key = *key;
+                                let label = move || match key {
+                                    "ordered" => t_string!(i18n, settings.route.lb_ordered),
+                                    "round_robin" => t_string!(i18n, settings.route.lb_round_robin),
+                                    "least_busy" => t_string!(i18n, settings.route.lb_least_busy),
+                                    "latency_aware" => t_string!(i18n, settings.route.lb_latency_aware),
+                                    _ => t_string!(i18n, settings.route.lb_usage_based),
+                                };
+                                view! { <option value=key>{label}</option> }
+                            }).collect::<Vec<_>>()}
+                        </select>
                     </div>
 
                     // Cloud-escalation toggle (only meaningful in Always Local)
