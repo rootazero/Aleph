@@ -26,38 +26,28 @@ impl PromptLayer for SpecialActionsLayer {
     }
     fn inject(&self, output: &mut String, _input: &LayerInput) {
         output.push_str("## Special Actions\n");
-        output.push_str("- `complete`: Call when the task is fully done. The `summary` field MUST be a comprehensive report that includes:\n");
-        output.push_str("  1. A brief overview of what was accomplished\n");
-        output.push_str("  2. Key results and findings (data, insights, metrics)\n");
-        output.push_str("  3. List of all generated files with their purposes\n");
-        output.push_str("  4. Any important notes or recommendations\n");
-        output.push_str(
-            "  **DO NOT** just say 'Task completed'. Write a detailed summary the user can immediately understand.\n",
-        );
-        output.push_str("- `ask_user`: Call when you need clarification or user decision\n");
+        output.push_str("- `complete`: Call when the task is fully done. The `summary` field MUST report: overview of what was accomplished, key results/findings (data, metrics), generated files and their purpose, notes/recommendations. **DO NOT** just say 'Task completed' — write a summary the user can act on directly.\n");
+        output.push_str("- `ask_user`: Call when you need clarification or a user decision.\n");
         output.push_str(
             "- `fail`: Call ONLY when the GOAL itself cannot be completed in this environment \
-             — never on first-method failure. Before invoking `fail`:\n",
+             — never on first-method failure. Preconditions:\n",
         );
         output.push_str(
-            "  1. You MUST have tried at least TWO distinct approaches (different tools, \
-             sources, or parameters/keywords) — for web research, climb the fallback ladder \
-             from the persistence doctrine above.\n",
+            "  1. Tried at least TWO distinct approaches (different tools, sources, or \
+             keywords) — for web research, climb the fallback ladder above.\n",
         );
         output.push_str(
-            "  2. The `summary` field MUST enumerate every method attempted and why each failed \
-             (status code, error class, empty result, etc.) so the user can verify nothing was \
-             skipped.\n",
+            "  2. `summary` enumerates every method tried and why each failed (status code, \
+             error class, empty result) so the user can verify nothing was skipped.\n",
         );
         output.push_str(
-            "  3. Distinguish *method failure* (\"Reuters returned 401\") from *goal failure* \
-             (\"every news source I can reach is offline\"). The former is NOT a `fail` — it is \
-             a routing signal. Switch methods and continue. Only the latter justifies `fail`.\n",
+            "  3. Distinguish *method failure* (\"Reuters returned 401\" — a routing signal; \
+             switch and continue) from *goal failure* (\"every source I can reach is offline\"). \
+             Only the latter justifies `fail`.\n",
         );
         output.push_str(
-            "  4. If iteration budget is the constraint (not goal feasibility), prefer \
-             `complete` with a partial result + explicit list of unfinished items, so the next \
-             scheduled run can pick up. Do NOT call `fail` for budget exhaustion alone.\n\n",
+            "  4. If iteration budget is the constraint (not feasibility), prefer `complete` \
+             with a partial result + list of unfinished items — not `fail`.\n\n",
         );
 
         // Phase 3 self-evolution path α — direct user-correction signaling.
@@ -65,24 +55,19 @@ impl PromptLayer for SpecialActionsLayer {
         // FeedbackDistill later distills into a feedback/ knowledge note.
         output.push_str("## Self-correction Logging\n\n");
         output.push_str(
-            "When the user corrects you, expresses a clear preference, or pushes back on \
-             your approach, call the `flag_user_correction` tool to record the signal so \
-             the system can learn from it. Provide:\n",
+            "When the user corrects you, states a clear preference, or pushes back, call \
+             `flag_user_correction` to record the signal. Provide:\n",
         );
-        output.push_str("- `content`: the user's correction in your own words (1-2 sentences)\n");
+        output.push_str("- `content`: the correction in your own words (1-2 sentences)\n");
         output.push_str(
-            "- `severity`: low (one-off preference) / med (project-level rule) / high \
-             (strong directive) / critical (absolute redline)\n",
+            "- `severity`: low (one-off) / med (project rule) / high (strong directive) / \
+             critical (absolute redline)\n",
         );
+        output.push_str("- `suggested_rule` (optional): a one-line imperative for next time\n\n");
         output.push_str(
-            "- `suggested_rule` (optional): a one-line imperative for how you should behave \
-             next time\n\n",
-        );
-        output.push_str(
-            "Use this proactively but conservatively — only when the signal is clear and \
-             generalizable. Do NOT flag praise, neutral acknowledgement, or your own \
-             internal reasoning. Continue the conversation normally after flagging; \
-             do not announce that you logged the correction.\n\n",
+            "Use it conservatively — only clear, generalizable signals. Skip praise, \
+             acknowledgement, and your own reasoning. Continue normally, and do not announce \
+             that you logged it.\n\n",
         );
     }
 }

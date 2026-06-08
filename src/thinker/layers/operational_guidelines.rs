@@ -41,36 +41,21 @@ impl PromptLayer for OperationalGuidelinesLayer {
         }
 
         output.push_str("## System Operational Awareness\n\n");
+        output.push_str("You can monitor your own runtime proactively.\n\n");
+
+        output.push_str("### Diagnostics (read-only, always allowed)\n");
+        output.push_str("- Disk: `df -h` · Memory: `vm_stat` / `free -h` · Processes: `ps aux | grep aleph`\n");
         output.push_str(
-            "You are aware of your own runtime environment and can monitor it proactively.\n\n",
+            "- Config validity, desktop-capability availability (startup logs / OS permissions), SQLite accessibility\n\n",
         );
 
-        output.push_str("### Diagnostic Capabilities (read-only, always allowed)\n");
-        output.push_str("- Check disk space: `df -h`\n");
-        output.push_str("- Check memory usage: `vm_stat` / `free -h`\n");
-        output.push_str("- Check running Aleph processes: `ps aux | grep aleph`\n");
-        output
-            .push_str("- Check configuration validity: read config files and validate structure\n");
+        output.push_str("### On detecting an issue\n");
         output.push_str(
-            "- Check desktop capability availability: inspect startup logs, platform support, and OS permissions\n",
+            "Config conflict, database issue, unavailable desktop capability, abnormal resource \
+             use, or capability degradation → report to the user: (1) what you observed (specific \
+             evidence), (2) potential impact, (3) suggested remediation. Never autonomously \
+             restart services, delete/compact databases, kill processes, or change system settings.\n\n",
         );
-        output.push_str("- Check SQLite health: verify database file accessibility\n\n");
-
-        output.push_str("### When You Detect Issues\n");
-        output.push_str(
-            "If you notice configuration conflicts, database issues, unavailable desktop capabilities,\n",
-        );
-        output.push_str("abnormal resource usage, or runtime capability degradation:\n\n");
-        output.push_str("**Action**: Report to the user with:\n");
-        output.push_str("1. What you observed (specific evidence)\n");
-        output.push_str("2. Potential impact\n");
-        output.push_str("3. Suggested remediation steps\n\n");
-
-        output.push_str("### What You Must NEVER Do Autonomously\n");
-        output.push_str("- Restart Aleph services\n");
-        output.push_str("- Delete or compact databases\n");
-        output.push_str("- Kill processes\n");
-        output.push_str("- Change system settings\n\n");
     }
 }
 
