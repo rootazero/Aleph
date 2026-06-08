@@ -18,6 +18,81 @@ pub struct McpTool {
     pub requires_confirmation: bool,
 }
 
+/// Per-server allow/deny filter over the tools an MCP server exposes.
+///
+/// Applied at the single point a server's `tools/list` is read
+/// ([`crate::mcp::McpClient::list_tools`]), so a denied tool is never
+/// registered into the agent's tool registry, never aggregated, and never
+/// advertised to the model. This mirrors openclaw's catalog-time `toolFilter`
+/// semantics — filtering governs *exposure*, not the raw `tools/call` path used
+/// by explicit admin RPC.
+///
+/// Glob `*` (matches any run of characters) is supported in both lists. An
+/// empty `allow` list means "every tool passes the allow stage"; `deny` always
+/// wins over `allow`. Absent on a server config = expose everything
+/// (backward-compatible default).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpToolFilter {
+    /// Glob patterns; when non-empty, a tool must match at least one to pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow: Vec<String>,
+    /// Glob patterns; a tool matching any is dropped (wins over `allow`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny: Vec<String>,
+}
+
+impl McpToolFilter {
+    /// Whether a tool with the given (unqualified) name survives this filter.
+    pub fn allows(&self, tool: &str) -> bool {
+        if self.deny.iter().any(|p| glob_match(p, tool)) {
+            return false;
+        }
+        self.allow.is_empty() || self.allow.iter().any(|p| glob_match(p, tool))
+    }
+
+    /// `true` when this filter would drop nothing (no patterns configured), so
+    /// callers can skip the per-tool scan entirely.
+    pub fn is_noop(&self) -> bool {
+        self.allow.is_empty() && self.deny.is_empty()
+    }
+}
+
+/// Minimal glob: `*` matches any (possibly empty) run of characters; every
+/// other character matches literally. No `?` / char-class support — MCP tool
+/// names don't need it. UTF-8 safe: byte offsets always land on char
+/// boundaries because they come from matched whole substrings.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    if !pattern.contains('*') {
+        return pattern == text;
+    }
+    let parts: Vec<&str> = pattern.split('*').collect();
+    let last = parts.len() - 1;
+    let mut pos = 0usize;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            // Leading segment is anchored to the start.
+            if !text[pos..].starts_with(part) {
+                return false;
+            }
+            pos += part.len();
+        } else if i == last {
+            // Trailing segment is anchored to the end, and must not overlap
+            // the prefix already consumed.
+            return text.len() - pos >= part.len() && text[pos..].ends_with(part);
+        } else {
+            // Interior segment must appear somewhere after `pos`, in order.
+            match text[pos..].find(part) {
+                Some(found) => pos += found + part.len(),
+                None => return false,
+            }
+        }
+    }
+    true
+}
+
 /// MCP Tool Call request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpToolCall {
@@ -296,6 +371,53 @@ mod tests {
         let result = McpToolResult::error("Something went wrong");
         assert!(!result.success);
         assert_eq!(result.error, Some("Something went wrong".to_string()));
+    }
+
+    #[test]
+    fn tool_filter_default_allows_everything() {
+        let f = McpToolFilter::default();
+        assert!(f.is_noop());
+        assert!(f.allows("anything"));
+        assert!(f.allows("read_file"));
+    }
+
+    #[test]
+    fn tool_filter_allowlist_gates_to_matches() {
+        let f = McpToolFilter {
+            allow: vec!["read_*".to_string(), "list_dir".to_string()],
+            deny: vec![],
+        };
+        assert!(!f.is_noop());
+        assert!(f.allows("read_file"));
+        assert!(f.allows("read_"));
+        assert!(f.allows("list_dir"));
+        assert!(!f.allows("write_file"));
+        assert!(!f.allows("list_dirs")); // exact, not prefix
+    }
+
+    #[test]
+    fn tool_filter_denylist_wins_over_allow() {
+        let f = McpToolFilter {
+            allow: vec!["*".to_string()],
+            deny: vec!["*_delete".to_string(), "shell".to_string()],
+        };
+        assert!(f.allows("read_file"));
+        assert!(!f.allows("record_delete"));
+        assert!(!f.allows("shell"));
+    }
+
+    #[test]
+    fn glob_match_anchors_and_wildcards() {
+        assert!(glob_match("*", "anything"));
+        assert!(glob_match("a*c", "axxc"));
+        assert!(glob_match("a*c", "ac"));
+        assert!(!glob_match("a*c", "ab"));
+        assert!(glob_match("*suffix", "has_suffix"));
+        assert!(glob_match("prefix*", "prefix_tail"));
+        assert!(glob_match("a*b*c", "axbyc"));
+        assert!(!glob_match("a*b*c", "axbyd"));
+        assert!(!glob_match("exact", "exacts"));
+        assert!(glob_match("exact", "exact"));
     }
 
     #[test]
