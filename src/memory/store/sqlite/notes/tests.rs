@@ -262,6 +262,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_typed_relations_returns_typed_edges_only() {
+        use crate::memory::notes::Relation;
+
+        let backend = make_backend();
+        const AGENT: &str = "main";
+
+        // Step 1: index bob (plain target, no outgoing typed relations).
+        let bob = KnowledgeNote {
+            title: "bob".into(),
+            category: "entity".into(),
+            content_hash: "hash_bob".into(),
+            created_at: 1000,
+            updated_at: 1000,
+            ..Default::default()
+        };
+        backend.index_note(&bob, AGENT, "entity").await.unwrap();
+
+        // Step 2: index alice with both a plain wikilink AND a typed relation to bob.
+        let mut alice = KnowledgeNote {
+            title: "alice".into(),
+            category: "entity".into(),
+            content_hash: "hash_alice".into(),
+            created_at: 1000,
+            updated_at: 1000,
+            ..Default::default()
+        };
+        alice.links = vec!["entity/bob".into()];
+        alice.relations = vec![Relation {
+            to: "entity/bob".into(),
+            rel_type: "colleague".into(),
+            confidence: 0.7,
+        }];
+        backend.index_note(&alice, AGENT, "entity").await.unwrap();
+
+        // Step 3: typed query for alice must return the typed edge.
+        let alice_rels = backend
+            .get_typed_relations("entity/alice", AGENT)
+            .await
+            .unwrap();
+        assert_eq!(
+            alice_rels,
+            vec![("entity/bob".to_string(), "colleague".to_string())],
+            "get_typed_relations must return the typed edge for entity/alice"
+        );
+
+        // Step 4: typed query for bob must be empty (bob has no outgoing typed relations).
+        let bob_rels = backend
+            .get_typed_relations("entity/bob", AGENT)
+            .await
+            .unwrap();
+        assert!(
+            bob_rels.is_empty(),
+            "bob has no outgoing typed relations; result must be empty"
+        );
+    }
+
+    #[tokio::test]
     async fn index_note_writes_typed_relation_column() {
         use crate::memory::notes::Relation;
 
