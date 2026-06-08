@@ -5,6 +5,10 @@
 //! delivery routing, not scheduling. Phase 1's `DeliverySurface` trait will
 //! live alongside this enum.
 
+pub mod delivery;
+pub mod desktop;
+pub mod r5_router;
+
 /// The kind of I/O surface a gateway connection presents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceKind {

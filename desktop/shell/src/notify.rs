@@ -28,33 +28,20 @@ const WS_URL: &str = "ws://127.0.0.1:18790/ws";
 const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
 const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-/// A tool call is waiting for the user's approval. A real topic event
-/// (`GatewayEventFrame::ApprovalRequested`, no `stream_method`), delivered
-/// as `{"method":"event","params":{"topic":…,"data":…}}`.
+/// A tool call is waiting for approval. A topic event (`approval.requested`).
+/// Phase 1 leaves approval on its existing operator-gated path; Phase 2 folds
+/// it into the delivery surface.
 const TOPIC_APPROVAL: &str = "approval.requested";
-/// The agent asked the user a question. Published as a *streaming* frame
-/// (`GatewayEventFrame::AskUser` → `stream.ask_user`), so the wire shape is
-/// `{"method":"stream.ask_user","params":{…frame…}}` — NOT a topic event.
-const TOPIC_ASK_USER: &str = "stream.ask_user";
-/// A run finished. Streaming frame `stream.run_complete`, carrying
-/// `total_duration_ms` so the completion notice can be gated on turn length
-/// without the bridge tracking any run-start state of its own.
-const TOPIC_RUN_COMPLETE: &str = "stream.run_complete";
 
-/// EventBus topics worth interrupting the user for. These already flow on
-/// the daemon's EventBus — the shell adds no new core topics (R1).
-///
-/// Both `stream.*` entries are streaming-frame methods: the panel subscribes
-/// to the same `stream.*` names (it rewrites them to `run.*` locally). The
-/// previous `agent.ask.user` topic never matched the `stream.ask_user`
-/// method the daemon actually emits, so question notifications silently
-/// never fired — fixed by subscribing to the real method name.
-const NOTIFY_TOPICS: &[&str] = &[TOPIC_APPROVAL, TOPIC_ASK_USER, TOPIC_RUN_COMPLETE];
+/// Core-decided R5 interrupt, already gated for interrupt-worthiness by the
+/// gateway's R5 router and addressed to this desktop surface. The shell only
+/// focus-gates and renders the core-supplied title/body.
+const TOPIC_SURFACE_NOTIFY: &str = "surface.notify";
 
-/// Minimum turn duration before a completed run is worth a desktop banner.
-/// A two-second answer does not deserve an interruption; a two-minute build
-/// does. Mirrors Reasonix's `COMPLETION_NOTIFY_MIN_MS`.
-const COMPLETION_NOTIFY_MIN_MS: u64 = 15_000;
+/// Topics this bridge subscribes to. The interrupt-worthiness policy for
+/// run-completion / questions now lives in the core (it publishes
+/// `surface.notify`); the shell no longer self-decides those.
+const NOTIFY_TOPICS: &[&str] = &[TOPIC_SURFACE_NOTIFY, TOPIC_APPROVAL];
 
 /// Run the bridge forever, reconnecting with exponential backoff.
 pub async fn run_notification_bridge(app: AppHandle) {
@@ -135,6 +122,11 @@ fn connect_request(target: &crate::connection::ConnectionTarget) -> String {
         "device_name": "Aleph Desktop",
         "device_type": "desktop",
         "device_id": "aleph-desktop-shell",
+        // Declare the surface identity so the gateway routes `surface.notify`
+        // (audience ["desktop"]) here even when the daemon is REMOTE — a remote
+        // client_ip is not loopback, so the Phase 0 fallback would otherwise
+        // label this connection Unknown and it would receive nothing.
+        "channel_kind": "desktop",
     });
     if target.is_local() {
         if let Ok(token) = std::env::var("ALEPH_GATEWAY_TOKEN") {
@@ -223,47 +215,42 @@ fn resolve_event(msg: &Value) -> Option<(String, Value)> {
 
 /// A notification the policy decided is worth showing.
 struct PreparedNotification {
-    title: &'static str,
+    title: String,
     body: String,
 }
 
-/// Pure notification policy: given an event topic, its payload, and whether
-/// the Panel window is currently focused, decide whether to interrupt the
-/// user — and with what. Returns `None` to stay silent.
-///
-/// Two gates, both R5 ("don't disturb"):
-/// 1. A focused window never produces an OS banner — the user is already
-///    here and the in-Panel UI shows the prompt.
-/// 2. A completed run only notifies once it has run at least
-///    [`COMPLETION_NOTIFY_MIN_MS`]; quick turns are not worth a banner.
+/// Pure notification policy. The core already decided WHAT is worth
+/// interrupting for (`surface.notify` is only published when worthy). The shell
+/// keeps the one gate only it can apply: a focused Panel never produces an OS
+/// banner (R5 — the in-Panel UI already shows the prompt).
 fn decide_notification(topic: &str, data: &Value, focused: bool) -> Option<PreparedNotification> {
     if focused {
         return None;
     }
     match topic {
+        TOPIC_SURFACE_NOTIFY => Some(PreparedNotification {
+            title: data
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("Aleph")
+                .to_string(),
+            body: data
+                .get("body")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("Aleph needs you.")
+                .to_string(),
+        }),
+        // Approval stays shell-rendered until Phase 2 routes it through the
+        // delivery surface too.
+        // TODO(Phase 2): once the core r5_router routes ApprovalRequested →
+        // surface.notify, REMOVE this arm — keeping it alongside core routing
+        // would fire a second, duplicate OS banner for every approval.
         TOPIC_APPROVAL => Some(PreparedNotification {
-            title: "Aleph needs your approval",
+            title: "Aleph needs your approval".to_string(),
             body: extract_text(data)
                 .unwrap_or_else(|| "A tool call is waiting for you.".to_string()),
         }),
-        TOPIC_ASK_USER => Some(PreparedNotification {
-            title: "Aleph has a question",
-            body: extract_text(data)
-                .unwrap_or_else(|| "Aleph is waiting for your reply.".to_string()),
-        }),
-        TOPIC_RUN_COMPLETE => {
-            let duration_ms = data
-                .get("total_duration_ms")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            if duration_ms < COMPLETION_NOTIFY_MIN_MS {
-                return None;
-            }
-            Some(PreparedNotification {
-                title: "Aleph finished",
-                body: "Your turn is complete.".to_string(),
-            })
-        }
         _ => None,
     }
 }
@@ -283,7 +270,7 @@ fn emit_notification(app: &AppHandle, note: &PreparedNotification) {
     if let Err(e) = app
         .notification()
         .builder()
-        .title(note.title)
+        .title(note.title.as_str())
         .body(note.body.clone())
         .show()
     {
@@ -333,6 +320,7 @@ mod tests {
         .unwrap();
         assert_eq!(v["method"], "connect");
         assert_eq!(v["params"]["device_type"], "desktop");
+        assert_eq!(v["params"]["channel_kind"], "desktop");
     }
 
     /// Both token cases are in one test to avoid races on the shared env var
@@ -367,13 +355,12 @@ mod tests {
         let v: Value = serde_json::from_str(&subscribe_request()).unwrap();
         assert_eq!(v["method"], "events.subscribe");
         let topics = v["params"]["topics"].as_array().unwrap();
-        assert_eq!(topics.len(), NOTIFY_TOPICS.len());
-        // The streaming method names — not the legacy `agent.ask.user` topic
-        // that never matched — must be present, or questions never notify.
         let names: Vec<&str> = topics.iter().filter_map(Value::as_str).collect();
-        assert!(names.contains(&TOPIC_ASK_USER));
-        assert!(names.contains(&TOPIC_RUN_COMPLETE));
-        assert!(!names.contains(&"agent.ask.user"));
+        assert!(names.contains(&TOPIC_SURFACE_NOTIFY));
+        assert!(names.contains(&TOPIC_APPROVAL));
+        // The raw stream topics moved to the core; the shell no longer subscribes.
+        assert!(!names.contains(&"stream.run_complete"));
+        assert!(!names.contains(&"stream.ask_user"));
     }
 
     #[test]
@@ -411,9 +398,9 @@ mod tests {
 
     #[test]
     fn focused_window_never_notifies() {
-        // R5: every topic stays silent while the Panel is focused.
+        // R5: every subscribed topic stays silent while the Panel is focused.
         for topic in NOTIFY_TOPICS {
-            let data = json!({ "question": "q", "total_duration_ms": 999_999 });
+            let data = json!({ "title": "t", "body": "b", "message": "m" });
             assert!(
                 decide_notification(topic, &data, true).is_none(),
                 "topic {topic} should be suppressed when focused"
@@ -429,33 +416,24 @@ mod tests {
     }
 
     #[test]
-    fn ask_user_surfaces_the_question_text() {
-        let data = json!({ "question": "Should I delete it?" });
-        let note = decide_notification(TOPIC_ASK_USER, &data, false).expect("ask fires");
-        assert_eq!(note.title, "Aleph has a question");
-        assert_eq!(note.body, "Should I delete it?");
-    }
-
-    #[test]
-    fn run_complete_is_gated_by_duration() {
-        // A quick turn is not worth a banner.
-        let quick = json!({ "total_duration_ms": COMPLETION_NOTIFY_MIN_MS - 1 });
-        assert!(decide_notification(TOPIC_RUN_COMPLETE, &quick, false).is_none());
-        // A long-running turn earns one.
-        let slow = json!({ "total_duration_ms": COMPLETION_NOTIFY_MIN_MS });
-        let note = decide_notification(TOPIC_RUN_COMPLETE, &slow, false).expect("long run fires");
+    fn surface_notify_renders_core_supplied_title_body() {
+        let data = json!({
+            "type": "surface_notify",
+            "audience": ["desktop"],
+            "title": "Aleph finished",
+            "body": "Your turn is complete."
+        });
+        let note = decide_notification(TOPIC_SURFACE_NOTIFY, &data, false)
+            .expect("surface.notify fires when unfocused");
         assert_eq!(note.title, "Aleph finished");
+        assert_eq!(note.body, "Your turn is complete.");
     }
 
     #[test]
-    fn run_complete_without_duration_stays_silent() {
-        // Missing duration → treated as 0 → below threshold → no banner.
-        assert!(decide_notification(TOPIC_RUN_COMPLETE, &json!({}), false).is_none());
-    }
-
-    #[test]
-    fn unknown_topic_is_ignored() {
-        assert!(decide_notification("agent.tool.start", &json!({}), false).is_none());
+    fn surface_notify_falls_back_on_missing_fields() {
+        let note = decide_notification(TOPIC_SURFACE_NOTIFY, &json!({}), false).unwrap();
+        assert_eq!(note.title, "Aleph");
+        assert_eq!(note.body, "Aleph needs you.");
     }
 
     #[test]

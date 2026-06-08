@@ -2103,6 +2103,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             alephcore::gateway::execution_engine::set_config_approval_requester(config_approver);
         }
 
+        // Phase 1 delivery surface: register the desktop shell as an addressable
+        // outbound surface and spawn the core R5 router. The router applies the
+        // "worth interrupting" policy (formerly in the shell) once and delivers to
+        // every registered surface; the forward-filter routes by `audience`.
+        {
+            use alephcore::gateway::surface::delivery::SurfaceRegistry;
+            use alephcore::gateway::surface::desktop::DesktopSurface;
+            let surfaces: SurfaceRegistry =
+                vec![std::sync::Arc::new(DesktopSurface::new(event_bus.clone()))];
+            let router_bus = event_bus.clone();
+            tokio::spawn(async move {
+                alephcore::gateway::surface::r5_router::run(router_bus, surfaces).await;
+            });
+        }
+
         if !args.daemon {
             println!(
                 "exec-approval: ApprovalGate + ScopedToolService.with_confirmation \
