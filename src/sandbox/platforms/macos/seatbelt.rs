@@ -847,21 +847,25 @@ impl SeatbeltDriver {
     }
 
     fn add_env_policy(&self, profile: &mut String, env: &EnvPolicy) {
-        // Environment restriction is applied at the `Command::env_clear()`
-        // boundary before sandbox-exec is invoked (see the `run` method
-        // below); SBPL itself has no `(with environment)` modifier and
-        // emitting one silently produces an invalid profile that
-        // sandbox-exec rejects at runtime. We therefore only annotate
-        // the profile here so the policy intent is visible in dumps.
+        // `EnvPolicy` is *advisory only*. The child's environment is whatever
+        // the caller placed in `SandboxCommand::env`, which `run` installs via
+        // an unconditional `Command::env_clear().envs(env)` — the same blanket
+        // clear regardless of variant. SBPL has no `(with environment)` modifier
+        // (emitting one yields an invalid profile sandbox-exec rejects), so the
+        // variant cannot be enforced by the profile either. We therefore only
+        // record the declared intent as a profile comment for dumps; it does
+        // not change runtime behaviour. (To actually enforce a variant, the
+        // caller must build a narrower `env` map before constructing the
+        // command — that filtering lives at the call site, not here.)
         match env {
             EnvPolicy::Inherit => {
                 // Default — no annotation needed.
             }
             EnvPolicy::Restricted => {
-                profile.push_str("; environment policy: restricted (enforced at exec layer)\n");
+                profile.push_str("; environment policy: restricted (advisory only)\n");
             }
             EnvPolicy::Minimal => {
-                profile.push_str("; environment policy: minimal (enforced at exec layer)\n");
+                profile.push_str("; environment policy: minimal (advisory only)\n");
             }
         }
     }
