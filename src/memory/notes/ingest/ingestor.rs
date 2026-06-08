@@ -532,7 +532,12 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
         if !self.budget.dedup_enabled || related.is_empty() {
             return ops;
         }
-        let threshold = self.budget.dedup_similarity_threshold.clamp(0.0, 1.0);
+        let dedup_threshold = self.budget.dedup_similarity_threshold.clamp(0.0, 1.0);
+        let noop_threshold = self
+            .budget
+            .dedup_noop_threshold
+            .clamp(0.0, 1.0)
+            .max(dedup_threshold);
         let dim = self.embedder.dimensions() as u32;
 
         // Stored vectors for the related pages. Pages without a vector at this
@@ -574,10 +579,14 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
             _ => return ops,
         };
 
-        // For each Create, find the best related page above threshold (never
-        // self-redirecting onto the Create's own path).
-        use std::collections::HashMap;
+        // For each Create, classify its best related match into three tiers:
+        //   sim >= noop_threshold         → NOOP  (drop the Create)
+        //   dedup_threshold <= sim < noop → MERGE (Create → Append)
+        //   sim < dedup_threshold         → ADD   (keep the Create)
+        // Never self-redirecting onto the Create's own path.
+        use std::collections::{HashMap, HashSet};
         let mut redirect: HashMap<usize, String> = HashMap::new();
+        let mut drop_noop: HashSet<usize> = HashSet::new();
         for (slot, &op_i) in create_idx.iter().enumerate() {
             let PageOp::Create { note_path, .. } = &ops[op_i] else {
                 continue;
@@ -594,43 +603,57 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                 }
             }
             if let Some((path, sim)) = best {
-                if sim >= threshold {
+                if sim >= noop_threshold {
+                    drop_noop.insert(op_i);
+                } else if sim >= dedup_threshold {
                     redirect.insert(op_i, path.to_string());
                 }
             }
         }
-        if redirect.is_empty() {
+        if redirect.is_empty() && drop_noop.is_empty() {
             return ops;
         }
 
-        // Rewrite redirected Creates → Append onto the matched existing note.
-        // The existing page owns its own title/summary, so only the candidate's
-        // facts and links carry over.
+        // Rewrite: NOOP Creates are dropped; MERGE Creates become Append onto the
+        // matched existing note (the existing page owns its title/summary, so
+        // only the candidate's facts and links carry over); everything else
+        // passes through.
         ops.into_iter()
             .enumerate()
-            .map(|(i, op)| match (redirect.remove(&i), op) {
-                (
-                    Some(target),
-                    PageOp::Create {
-                        note_path,
-                        facts,
-                        links,
-                        ..
-                    },
-                ) => {
-                    info!(
-                        from = %note_path,
-                        into = %target,
-                        "ingest dedup: redirecting near-duplicate Create into Append"
-                    );
-                    PageOp::Append {
-                        note_path: target,
-                        new_facts: facts,
-                        new_links: links,
-                        new_relations: vec![],
+            .filter_map(|(i, op)| {
+                if drop_noop.contains(&i) {
+                    if let PageOp::Create { note_path, .. } = &op {
+                        info!(
+                            note = %note_path,
+                            "ingest dedup: dropping near-identical Create as NOOP"
+                        );
                     }
+                    return None;
                 }
-                (_, op) => op,
+                match (redirect.remove(&i), op) {
+                    (
+                        Some(target),
+                        PageOp::Create {
+                            note_path,
+                            facts,
+                            links,
+                            ..
+                        },
+                    ) => {
+                        info!(
+                            from = %note_path,
+                            into = %target,
+                            "ingest dedup: redirecting near-duplicate Create into Append"
+                        );
+                        Some(PageOp::Append {
+                            note_path: target,
+                            new_facts: facts,
+                            new_links: links,
+                            new_relations: vec![],
+                        })
+                    }
+                    (_, op) => Some(op),
+                }
             })
             .collect()
     }
@@ -1624,15 +1647,21 @@ mod plan_tests {
         assert!(!t.contains("\n\n"));
     }
 
-    /// With dedup enabled and a near-identical existing note (the mock embedder
-    /// returns a constant vector → cosine 1.0), a planned `Create` is rewritten
-    /// into an `Append` onto the existing page, carrying its facts and links.
+    /// With dedup enabled and an existing note in the MERGE band, a planned
+    /// `Create` is rewritten into an `Append` onto the existing page, carrying
+    /// its facts and links. The mock embedder returns a constant `[0.1; 1024]`
+    /// for the candidate, so cosine is fixed by the seeded stored vector:
+    /// `0.03125 * sqrt(num 0.1-entries)`. 900 entries → cosine 0.9375, which is
+    /// in `[dedup 0.92, noop 0.985)` → MERGE (not NOOP).
     #[tokio::test]
     async fn dedup_redirects_near_duplicate_create_to_append() {
         let (dir, backend, indexer) = mk().await;
-        // Seed the existing note's embedding so get_embedding returns Some.
+        // Seed a MERGE-band embedding (cosine 0.9375 vs the candidate's
+        // [0.1; 1024]) so the Create redirects to Append rather than dropping.
+        let mut merge_vec = vec![0.1f32; 900];
+        merge_vec.extend(std::iter::repeat(0.0f32).take(124));
         backend
-            .upsert_embedding("learning/tokio", "default", &vec![0.1f32; 1024], 1024)
+            .upsert_embedding("learning/tokio", "default", &merge_vec, 1024)
             .await
             .unwrap();
 
@@ -1784,6 +1813,103 @@ mod plan_tests {
         assert!(
             matches!(out[0], PageOp::Create { .. }),
             "must not redirect a Create onto its own path"
+        );
+    }
+
+    /// Stored vector with `m` entries of 0.1 and the rest 0.0. Its cosine vs the
+    /// mock candidate ([0.1; 1024]) is `0.03125 * sqrt(m)`, so `m` selects the
+    /// dedup tier: 100 → 0.3125 (ADD), 400 → 0.625, 900 → 0.9375 (MERGE),
+    /// 1024 → 1.0 (NOOP).
+    fn seed_with_cosine_entries(m: usize) -> Vec<f32> {
+        let mut v = vec![0.1f32; m];
+        v.extend(std::iter::repeat(0.0f32).take(1024 - m));
+        v
+    }
+
+    /// Run one Create through dedup against a single related page "learning/tokio"
+    /// seeded with `seed_vec`, under `budget`. The candidate path differs from the
+    /// related path (no self-skip), so the seed's cosine decides the tier.
+    async fn run_dedup_tier(seed_vec: Vec<f32>, budget: RelatedBudget) -> Vec<PageOp> {
+        let (dir, backend, indexer) = mk().await;
+        backend
+            .upsert_embedding("learning/tokio", "default", &seed_vec, 1024)
+            .await
+            .unwrap();
+        let provider: Arc<dyn AiProvider> = Arc::new(RecordingMockProvider::new("{}".into()));
+        let ing = DefaultCompoundIngestor {
+            store: backend.clone(),
+            indexer,
+            provider,
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget,
+            embedding_manager: None,
+            gate: None,
+        };
+        let related = vec![RelatedPage {
+            path: "learning/tokio".into(),
+            title: "tokio".into(),
+            summary: String::new(),
+            content_preview: String::new(),
+            tags: vec![],
+            content_hash: "h".into(),
+            score: 1.0,
+        }];
+        let ops = vec![PageOp::Create {
+            note_path: "learning/tokio-runtime".into(),
+            title: "Tokio runtime".into(),
+            summary: "async".into(),
+            facts: vec!["event loop".into()],
+            links: vec!["learning/rust".into()],
+            tags: vec![],
+            relations: vec![],
+        }];
+        ing.dedup_redirect_creates("default", ops, &related).await
+    }
+
+    fn budget_dedup_on() -> RelatedBudget {
+        RelatedBudget {
+            dedup_enabled: true,
+            ..RelatedBudget::default()
+        }
+    }
+
+    /// ADD tier: best match below `dedup_threshold` (cosine 0.3125 < 0.92) →
+    /// the Create passes through unchanged.
+    #[tokio::test]
+    async fn dedup_tier_add_keeps_create() {
+        let out = run_dedup_tier(seed_with_cosine_entries(100), budget_dedup_on()).await;
+        assert!(
+            matches!(out.as_slice(), [PageOp::Create { .. }]),
+            "below dedup_threshold the Create must survive as ADD"
+        );
+    }
+
+    /// NOOP tier: best match at/above `noop_threshold` (cosine 1.0 >= 0.985) →
+    /// the Create is dropped entirely.
+    #[tokio::test]
+    async fn dedup_tier_noop_drops_create() {
+        let out = run_dedup_tier(vec![0.1f32; 1024], budget_dedup_on()).await;
+        assert!(out.is_empty(), "near-identical Create must be dropped as NOOP");
+    }
+
+    /// FLOOR: `dedup_noop_threshold` misconfigured BELOW `dedup_similarity_threshold`.
+    /// `noop_threshold` is floored to `max(0.50, 0.92) = 0.92`, so a 0.625-cosine
+    /// match — which the raw 0.50 would have NOOP-dropped — stays an ADD Create.
+    /// The floor guarantees NOOP never fires below the MERGE threshold.
+    #[tokio::test]
+    async fn dedup_noop_floor_never_fires_below_merge() {
+        let budget = RelatedBudget {
+            dedup_enabled: true,
+            dedup_similarity_threshold: 0.92,
+            dedup_noop_threshold: 0.50,
+            ..RelatedBudget::default()
+        };
+        let out = run_dedup_tier(seed_with_cosine_entries(400), budget).await;
+        assert!(
+            matches!(out.as_slice(), [PageOp::Create { .. }]),
+            "noop floored to >= dedup_threshold, so a 0.625 match stays ADD, not NOOP"
         );
     }
 }
