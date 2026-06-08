@@ -51,7 +51,16 @@ fn write_credential(path: &Path, cred: &NodeCredential) -> std::io::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let json = serde_json::to_vec_pretty(cred).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)
+    std::fs::write(path, json)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        if let Err(e) = std::fs::set_permissions(path, perms) {
+            tracing::warn!("failed to restrict node credential permissions: {e}");
+        }
+    }
+    Ok(())
 }
 
 /// Outcome of parsing a `pairing.poll` reply. Pure.
