@@ -572,11 +572,14 @@ mod tests {
         let indexer = Arc::new(NoteIndexer::new(dir.path().to_path_buf(), backend));
         let embedder: Arc<dyn EmbeddingProvider> =
             Arc::new(MockEmbeddingProvider::new(1024, "mock"));
-        let retrieval = NoteFactRetrieval::new(indexer, embedder);
+        // Hold scoring inactive so fetch_limit isolates the reranker's effect
+        // (scoring now defaults active, which would over-fetch on its own).
+        let retrieval =
+            NoteFactRetrieval::new(indexer, embedder).with_scoring_config(&inactive_scoring());
         let cfg = crate::memory::rerank::RerankConfig::default(); // enabled = false
         let retrieval = retrieval.with_rerank_config(&cfg);
         assert!(retrieval.reranker.is_none());
-        // fetch_limit unchanged when no reranker is attached.
+        // No reranker and scoring inactive → fetch_limit stays exactly `limit`.
         assert_eq!(retrieval.fetch_limit(5), 5);
     }
 
