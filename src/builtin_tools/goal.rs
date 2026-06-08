@@ -94,6 +94,10 @@ impl GoalTool {
     }
 }
 
+/// Hard ceiling on autonomous continuations a single goal may request,
+/// regardless of what the caller asks for (R5 不打扰 backstop).
+const MAX_PURSUIT_ITERATIONS: u32 = 50;
+
 /// Wall-clock milliseconds since the Unix epoch; 0 if the clock is before
 /// the epoch (never in practice).
 fn now_ms() -> u64 {
@@ -154,7 +158,12 @@ impl AlephTool for GoalTool {
                 let mut goal = Goal::new(&session, objective, 0, now)
                     .with_budget(args.token_budget)
                     .with_note(args.note.clone(), now);
-                if let Some(max_iterations) = args.pursuit_max_iterations {
+                if let Some(requested) = args.pursuit_max_iterations {
+                    // Hard cap autonomous continuations (R5 不打扰): an
+                    // unbounded value would let a single session self-run for
+                    // days. The clamped value is surfaced to the model via
+                    // `render` so it sees the effective cap.
+                    let max_iterations = requested.min(MAX_PURSUIT_ITERATIONS);
                     goal = goal.with_pursuit(PursuitMode::Active { max_iterations });
                 }
                 self.store.put(&goal)?;
@@ -234,6 +243,19 @@ mod tests {
             token_budget: None, pursuit_max_iterations: None }).await.unwrap();
         assert!(out.success);
         assert!(out.message.to_lowercase().contains("complete"));
+    }
+
+    #[tokio::test]
+    async fn pursuit_iterations_are_capped() {
+        let (tool, _d) = tool_with_session("sess-cap");
+        tool.call(GoalArgs { action: GoalAction::Set, objective: Some("z".into()),
+            status: None, note: None, token_budget: None,
+            pursuit_max_iterations: Some(1_000_000) }).await.unwrap();
+        let out = tool.call(GoalArgs { action: GoalAction::Get, objective: None,
+            status: None, note: None, token_budget: None, pursuit_max_iterations: None })
+            .await.unwrap();
+        // Effective cap surfaced to the model, not the requested 1,000,000.
+        assert!(out.message.contains(&format!("max_iterations={MAX_PURSUIT_ITERATIONS}")));
     }
 
     #[tokio::test]
