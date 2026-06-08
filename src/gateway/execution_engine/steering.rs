@@ -35,7 +35,7 @@ use tokio::sync::RwLock;
 use super::{ActiveRun, RunRequest, RunState};
 use crate::orchestrator::Orchestrator;
 use crate::routing::session_key::SessionKey;
-use crate::session::events::{now_ms, MessageContent, SessionEvent};
+use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventRecord};
 use crate::session::service::SessionId;
 use crate::sync_primitives::Arc;
 
@@ -95,6 +95,43 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
     format!("{RECONCILE_PREAMBLE}{text}")
 }
 
+/// Upper bound on un-consumed steering messages a single run may accumulate
+/// before the gateway applies backpressure (OpenSquilla `max_pending_per_session`
+/// / OpenClaw FIFO-cap parity). A flooding channel that keeps sending while the
+/// agent is mid-loop would otherwise append unbounded `UserMessage` events to the
+/// live log, bloating the very next prompt. Past the cap the injection is
+/// rejected so the inbound router's existing exponential busy/retry back-off
+/// redelivers the message once the burst drains — backpressure, never a drop.
+pub(super) const MAX_PENDING_STEERING: usize = 16;
+
+/// Count the non-synthetic user messages sitting *after* the last assistant
+/// message in `events` — the steering burst already injected into this run that
+/// the model has not yet answered.
+///
+/// Mirrors the harness follow-up predicate
+/// ([`crate::harness::agent::AgentHarness::has_unanswered_user_message`]) but
+/// from the gateway side, which has no access to the harness's prompt-boundary
+/// watermark and so uses the last assistant turn as the boundary. Returns `0`
+/// before any assistant turn has run: the loop is still processing its opening
+/// prompt, so there is no prior preamble-bearing steering injection to coalesce
+/// against, and the original task prompt must not be miscounted as a steering
+/// message. Pure and positional (R10-safe): no intent or relevance judgement,
+/// only the log's shape.
+pub(super) fn count_pending_steering(events: &[SessionEventRecord]) -> usize {
+    let Some(last_assistant) = events
+        .iter()
+        .rposition(|r| matches!(r.event, SessionEvent::AssistantMessage { .. }))
+    else {
+        return 0;
+    };
+    events[last_assistant + 1..]
+        .iter()
+        .filter(
+            |r| matches!(&r.event, SessionEvent::UserMessage { synthetic, .. } if !*synthetic),
+        )
+        .count()
+}
+
 /// Try to deliver `request` as a mid-loop steering message into the session's
 /// already-running loop. Returns `true` when the message was injected (the
 /// caller should treat the run as accepted and skip the `AgentBusy` path).
@@ -104,7 +141,16 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
 /// * no *other* run is active on this exact session (a cross-session busy
 ///   agent is genuinely unavailable; the inbound router should still retry), or
 /// * the orchestrator / session service is not yet wired, or
+/// * the run's un-consumed steering burst is already at [`MAX_PENDING_STEERING`]
+///   (backpressure — the router retries once the burst drains), or
 /// * appending the event failed.
+///
+/// # Coalescing
+///
+/// When an earlier steering message in the same un-answered burst is still
+/// pending ([`count_pending_steering`] `> 0`), the scratchpad reconcile preamble
+/// is suppressed: the first message of the burst already carries that directive,
+/// so one copy covers the coalesced batch instead of repeating it per message.
 ///
 /// # Boundary
 ///
@@ -143,10 +189,43 @@ pub(super) async fn try_inject_steering(
     // `SessionId` is a type alias for `SessionKey`, so the gateway key is the
     // harness session id verbatim — no translation needed.
     let session_id: SessionId = request.session_key.clone();
-    // If this session is driving a scratchpad execution list, tell the
-    // model to reconcile it before continuing. Mechanical lookup, no I/O.
-    let has_active_scratchpad =
-        crate::builtin_tools::scratchpad_registry::active(&request.session_key.to_key_string())
+
+    // Read the running session's tail once to make the injection both bounded
+    // and coalescing-aware (Hermes / Pi / OpenSquilla parity), then decide from
+    // that single snapshot. Fail open: a transient read error falls back to the
+    // legacy always-inject-with-preamble path, never dropping the message.
+    let pending = match orchestrator
+        .session_service
+        .get_events(&session_id, None, None)
+        .await
+    {
+        Ok(events) => count_pending_steering(&events),
+        Err(_) => 0,
+    };
+
+    // Bound: cap the un-consumed steering burst. Past the cap, reject so the
+    // inbound router's exponential busy/retry back-off redelivers once the loop
+    // drains the burst or goes idle — backpressure against a flooding channel,
+    // not a drop.
+    if pending >= MAX_PENDING_STEERING {
+        tracing::warn!(
+            session = %request.session_key.to_key_string(),
+            pending,
+            "mid-loop steering: pending burst at cap; deferring to busy/retry backpressure",
+        );
+        return false;
+    }
+
+    // If this session is driving a scratchpad execution list, tell the model to
+    // reconcile it before continuing — but only on the *first* message of an
+    // un-answered burst. A follow-up that lands while an earlier steering
+    // message is still pending would otherwise repeat the identical reconcile
+    // directive N times (pure noise the model re-reads each turn); one directive
+    // covers the whole coalesced batch (Hermes burst-merge / Pi queue parity).
+    // The model decides append / insert / reprioritize (R7 — the harness never
+    // splices `scratchpad.md` for the user). Mechanical lookup, no extra I/O.
+    let has_active_scratchpad = pending == 0
+        && crate::builtin_tools::scratchpad_registry::active(&request.session_key.to_key_string())
             .is_some();
     let text = apply_reconcile_preamble(render_user_session_text(request), has_active_scratchpad);
     let event = SessionEvent::UserMessage {
@@ -304,5 +383,107 @@ mod tests {
         let text = render_user_session_text(&req);
         assert!(text.starts_with("hello"));
         assert!(text.contains("[Image attached: image/png]"));
+    }
+
+    // ---- count_pending_steering (coalesce / bound predicate) ----
+
+    fn rec_user(text: &str, synthetic: bool) -> SessionEventRecord {
+        SessionEventRecord {
+            seq: 0,
+            created_at_ms: now_ms(),
+            event: SessionEvent::UserMessage {
+                turn_id: uuid::Uuid::new_v4(),
+                content: MessageContent {
+                    text: text.to_string(),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic,
+            },
+        }
+    }
+
+    fn rec_assistant(text: &str) -> SessionEventRecord {
+        SessionEventRecord {
+            seq: 0,
+            created_at_ms: now_ms(),
+            event: SessionEvent::AssistantMessage {
+                turn_id: uuid::Uuid::new_v4(),
+                content: MessageContent {
+                    text: text.to_string(),
+                    blocks: Vec::new(),
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+            },
+        }
+    }
+
+    #[test]
+    fn pending_is_zero_before_any_assistant_turn() {
+        // Loop still processing its opening prompt — the original prompt (and any
+        // pre-first-assistant steering) must not be miscounted as pending.
+        assert_eq!(count_pending_steering(&[rec_user("task", false)]), 0);
+        assert_eq!(
+            count_pending_steering(&[rec_user("task", false), rec_user("steer", false)]),
+            0
+        );
+    }
+
+    #[test]
+    fn pending_counts_user_after_last_assistant() {
+        let one = [
+            rec_user("task", false),
+            rec_assistant("working"),
+            rec_user("steer-1", false),
+        ];
+        assert_eq!(count_pending_steering(&one), 1);
+
+        let two = [
+            rec_user("task", false),
+            rec_assistant("working"),
+            rec_user("steer-1", false),
+            rec_user("steer-2", false),
+        ];
+        assert_eq!(count_pending_steering(&two), 2);
+    }
+
+    #[test]
+    fn pending_ignores_synthetic_user_messages() {
+        // Synthetic injections (e.g. tool-driven) are not user steering.
+        let events = [
+            rec_user("task", false),
+            rec_assistant("working"),
+            rec_user("auto", true),
+        ];
+        assert_eq!(count_pending_steering(&events), 0);
+    }
+
+    #[test]
+    fn pending_resets_at_each_assistant_boundary() {
+        // Only messages after the *last* assistant turn are still unanswered;
+        // earlier bursts were already seen and answered.
+        let events = [
+            rec_user("task", false),
+            rec_assistant("turn-1"),
+            rec_user("steer-1", false),
+            rec_assistant("turn-2"),
+            rec_user("steer-2", false),
+        ];
+        assert_eq!(count_pending_steering(&events), 1);
+    }
+
+    #[test]
+    fn pending_at_cap_triggers_bound() {
+        // A burst at the cap is what the gateway rejects for backpressure.
+        let mut events = vec![rec_user("task", false), rec_assistant("working")];
+        for i in 0..MAX_PENDING_STEERING {
+            events.push(rec_user(&format!("steer-{i}"), false));
+        }
+        assert_eq!(count_pending_steering(&events), MAX_PENDING_STEERING);
+        assert!(count_pending_steering(&events) >= MAX_PENDING_STEERING);
     }
 }
