@@ -68,6 +68,7 @@ pub mod memory_search;
 pub mod memory_timeline;
 pub mod meta_tools;
 pub mod node_invoke;
+pub mod node_file;
 pub mod note_manage;
 pub mod note_orient;
 pub mod note_schema;
@@ -187,6 +188,7 @@ pub use meta_tools::{
     ListToolsTool, SearchToolHit, SearchToolsArgs, SearchToolsOutput, SearchToolsTool,
 };
 pub use node_invoke::{NodeInvokeArgs, NodeInvokeTool};
+pub use node_file::{NodeFileArgs, NodeFileTool};
 pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};
 pub use permission_tool::{PermissionArgs, PermissionOutput, PermissionTool};
 pub use pim::{PimArgs, PimOutput, PimTool};
