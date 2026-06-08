@@ -12,7 +12,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
 
+use crate::builtin_tools::BashExecTool;
 use crate::cluster::CommandDescriptor;
+use crate::routing::session_key::SessionKey;
+use crate::sandbox::context::SESSION_ID;
+use crate::tools::AlephTool;
 
 /// 节点可执行的一个命令。`run` 返回 `Ok(payload)` 或 `Err(message)`。
 #[async_trait]
@@ -58,6 +62,43 @@ impl CommandTable {
         };
         let args = params.get("args").cloned().unwrap_or(Value::Null);
         cmd.run(args).await
+    }
+}
+
+/// `bash` 作为节点命令：在固定 session 作用域下委托 `BashExecTool`。
+pub struct BashNodeCommand {
+    bash: BashExecTool,
+    session: SessionKey,
+}
+
+impl BashNodeCommand {
+    pub fn new(bash: BashExecTool, session: SessionKey) -> Self {
+        Self { bash, session }
+    }
+}
+
+#[async_trait]
+impl NodeCommand for BashNodeCommand {
+    async fn run(&self, args: Value) -> Result<Value, String> {
+        SESSION_ID
+            .scope(self.session.clone(), self.bash.call_json(args))
+            .await
+            .map_err(|e| e.to_string())
+    }
+    fn descriptor(&self) -> CommandDescriptor {
+        CommandDescriptor {
+            name: "bash".to_string(),
+            schema: serde_json::json!({"type": "object"}),
+        }
+    }
+}
+
+impl CommandTable {
+    /// 便捷构造：注册唯一的 `bash` 命令（0c 节点的全部能力）。
+    pub fn with_bash(bash: BashExecTool, session: SessionKey) -> Self {
+        let mut t = Self::new();
+        t.register("bash", Arc::new(BashNodeCommand::new(bash, session)));
+        t
     }
 }
 
@@ -121,6 +162,37 @@ mod tests {
             .await
             .expect_err("command error surfaces");
         assert!(err.contains("boom"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn bash_command_runs_under_sandbox() {
+        use crate::routing::session_key::SessionKey;
+        use crate::sandbox::test_util::MockSandbox;
+        use crate::sandbox::SandboxOutput;
+
+        let sandbox = MockSandbox::new(SandboxOutput {
+            stdout: b"hi\n".to_vec(),
+            exit_code: Some(0),
+            duration_ms: 1,
+            ..Default::default()
+        });
+        let bash = BashExecTool::new().with_sandbox(sandbox);
+        let session = SessionKey::ephemeral("node-test");
+        let table = CommandTable::with_bash(bash, session);
+
+        let out = table
+            .dispatch("tool.call", &json!({"tool": "bash", "args": {"cmd": "echo hi"}}))
+            .await
+            .expect("bash runs under sandbox");
+        // MockSandbox returns a structured CodeExecOutput; assert the envelope shape.
+        assert!(out.get("exit_code").is_some(), "bash output envelope: {out}");
+
+        // allowlist still authoritative: bash table denies a non-bash tool.
+        let err = table
+            .dispatch("tool.call", &json!({"tool": "python", "args": {}}))
+            .await
+            .expect_err("only bash permitted");
+        assert!(err.contains("not permitted"), "{err}");
     }
 
     #[test]
