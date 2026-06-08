@@ -90,6 +90,20 @@ pub enum HealthCheckResult {
     Skipped,
 }
 
+/// Result of a rollback (restore-from-backup) operation.
+#[derive(Debug, Clone, Serialize)]
+pub struct RollbackResult {
+    /// Whether the rollback was applied (false only on internal failure paths;
+    /// dry-run returns `true` without writing).
+    pub success: bool,
+    /// Timestamp suffix of the snapshot that was (or, for dry-run, would be) restored.
+    pub restored_from: String,
+    /// Field-level diff from the current live config to the restored config.
+    pub diff: Vec<FieldDiff>,
+    /// Non-fatal warnings (e.g. the pre-rollback safety snapshot failed).
+    pub warnings: Vec<String>,
+}
+
 // =============================================================================
 // ConfigPatcher
 // =============================================================================
@@ -352,6 +366,108 @@ impl ConfigPatcher {
         }
 
         Ok(())
+    }
+
+    /// List available config snapshots (oldest first), so a caller can choose a
+    /// restore point. Each `create_snapshot` (one per applied patch) leaves a
+    /// timestamped entry here. This is the read side of the rollback capability.
+    pub fn list_backups(&self) -> Result<Vec<crate::config::backup::BackupEntry>> {
+        self.backup.list()
+    }
+
+    /// Roll the live configuration back to a prior snapshot.
+    ///
+    /// `timestamp == None` restores the most recent snapshot. The pipeline:
+    /// 1. Locate the snapshot (latest, or the exact timestamp).
+    /// 2. Parse + structurally validate it with the canonical loader, so the
+    ///    restore is processed identically to a fresh boot.
+    /// 3. Compute the current→restored diff (for preview / reporting).
+    /// 4. `dry_run`: return the diff without writing.
+    /// 5. Conflict-check (mtime) to avoid clobbering an external edit.
+    /// 6. Snapshot the *current* config first — so a rollback is itself undoable.
+    /// 7. Persist to disk, then swap in-memory only on a successful save.
+    ///
+    /// Reuses the same `config` Arc, `config_path`, `backup`, and mtime
+    /// machinery as `apply`, so a restored config is installed live exactly
+    /// like a normal patch.
+    pub async fn rollback(
+        &self,
+        timestamp: Option<&str>,
+        dry_run: bool,
+    ) -> Result<RollbackResult> {
+        let mut warnings: Vec<String> = Vec::new();
+
+        // 1. Locate the requested (or latest) snapshot.
+        let entry = self.backup.resolve(timestamp)?;
+
+        // 2. Parse + validate the snapshot. `load_from_file` applies the same
+        //    migrations/defaults as boot loading; `validate()` rejects a
+        //    structurally-invalid snapshot before it can be installed.
+        let restored = Config::load_from_file(&entry.path)?;
+        restored.validate()?;
+
+        // 3. Compute current → restored diff.
+        let current_json = {
+            let config = self.config.read().await;
+            serde_json::to_value(&*config).map_err(|e| {
+                AlephError::invalid_config(format!("Failed to serialize config to JSON: {}", e))
+            })?
+        };
+        let restored_json = serde_json::to_value(&restored).map_err(|e| {
+            AlephError::invalid_config(format!(
+                "Failed to serialize restored config to JSON: {}",
+                e
+            ))
+        })?;
+        let diff = compute_diff("", Some(&current_json), &restored_json);
+
+        // 4. dry_run: report the diff without touching disk or memory.
+        if dry_run {
+            return Ok(RollbackResult {
+                success: true,
+                restored_from: entry.timestamp,
+                diff,
+                warnings,
+            });
+        }
+
+        // 5. Guard against clobbering a concurrent external edit.
+        self.check_conflict().await?;
+
+        // 6. Snapshot the current config first, so the rollback is undoable.
+        if self.config_path.exists() {
+            if let Err(e) = self.backup.create_snapshot(&self.config_path) {
+                warnings.push(format!("Pre-rollback backup warning: {}", e));
+            }
+        }
+
+        // 7. Commit to disk first; swap in-memory only on success so the
+        //    in-memory state never diverges from what is on disk.
+        {
+            let mut config = self.config.write().await;
+            let previous = config.clone();
+            *config = restored;
+            if let Err(e) = config.save_to_file(&self.config_path) {
+                *config = previous;
+                return Err(e);
+            }
+        }
+
+        // 8. Refresh the mtime baseline so the next patch's conflict check passes.
+        self.record_mtime().await;
+
+        info!(
+            restored_from = %entry.timestamp,
+            diff_count = diff.len(),
+            "Config rolled back to snapshot"
+        );
+
+        Ok(RollbackResult {
+            success: true,
+            restored_from: entry.timestamp,
+            diff,
+            warnings,
+        })
     }
 }
 
@@ -875,5 +991,78 @@ mod tests {
             "Expected 'modified externally' in error, got: {}",
             err_msg
         );
+    }
+
+    #[tokio::test]
+    async fn test_rollback_restores_previous_value() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        // Apply a patch — this snapshots the ORIGINAL config (language=None)
+        // before writing language="zh-Hans".
+        patcher
+            .apply(PatchRequest {
+                path: "general".to_string(),
+                patch: json!({"language": "zh-Hans"}),
+                secret_fields: HashMap::new(),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            patcher.config.read().await.general.language,
+            Some("zh-Hans".to_string())
+        );
+
+        // list_backups should now surface the pre-patch snapshot.
+        let backups = patcher.list_backups().unwrap();
+        assert_eq!(backups.len(), 1, "the apply() should have left one snapshot");
+
+        // Roll back to the latest snapshot (the pre-patch original).
+        let result = patcher.rollback(None, false).await.unwrap();
+        assert!(result.success);
+        assert!(!result.diff.is_empty());
+
+        // The live config is back to the original (no language set).
+        assert_eq!(patcher.config.read().await.general.language, None);
+    }
+
+    #[tokio::test]
+    async fn test_rollback_dry_run_does_not_write() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, config_path, _backup_dir) = setup_patcher(&tmp);
+        patcher.record_mtime().await;
+
+        patcher
+            .apply(PatchRequest {
+                path: "general".to_string(),
+                patch: json!({"language": "zh-Hans"}),
+                secret_fields: HashMap::new(),
+                health_check: false,
+                dry_run: false,
+            })
+            .await
+            .unwrap();
+
+        let before = std::fs::read_to_string(&config_path).unwrap();
+        let result = patcher.rollback(None, true).await.unwrap();
+        assert!(result.success);
+
+        // dry_run: in-memory and on-disk state are both unchanged.
+        assert_eq!(
+            patcher.config.read().await.general.language,
+            Some("zh-Hans".to_string())
+        );
+        assert_eq!(std::fs::read_to_string(&config_path).unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn test_rollback_with_no_backups_errors() {
+        let tmp = TempDir::new().unwrap();
+        let (patcher, _config_path, _backup_dir) = setup_patcher(&tmp);
+        let err = patcher.rollback(None, false).await.unwrap_err().to_string();
+        assert!(err.contains("No config backups available"), "got: {err}");
     }
 }
