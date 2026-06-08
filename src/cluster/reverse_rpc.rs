@@ -30,6 +30,8 @@ impl PendingInvokes {
     /// 分配一个新的反向 RPC id 并登记一个等待者。
     /// 返回 `(id, receiver)`：调用方把 `id` 放进出站请求帧，await `receiver`。
     pub fn register(&self) -> (String, oneshot::Receiver<JsonRpcResponse>) {
+        // Relaxed: id uniqueness only; the Mutex insert below provides the
+        // cross-thread ordering for the HashMap.
         let n = self.counter.fetch_add(1, Ordering::Relaxed);
         let id = format!("rpc-{n}");
         let (tx, rx) = oneshot::channel();
@@ -41,7 +43,11 @@ impl PendingInvokes {
     }
 
     /// 把一条响应路由给等待该 id 的调用方。
-    /// 返回 `true` 表示命中了一个等待者；`false` 表示无人等待（陌生/过期 id）。
+    /// 返回 `true` 表示该 id 存在等待条目（即使其接收端已被丢弃，例如调用方已
+    /// 超时——仍算已处理的反向 RPC 响应）；`false` 表示无此 id（陌生/已解析）。
+    ///
+    /// Returns `true` iff an entry existed for this id (even if its receiver was
+    /// already dropped); `false` means no such id (unknown/already resolved).
     pub fn resolve(&self, id: &Value, response: JsonRpcResponse) -> bool {
         let Some(key) = id.as_str() else {
             return false;
@@ -52,7 +58,13 @@ impl PendingInvokes {
             .unwrap_or_else(|e| e.into_inner())
             .remove(key);
         match sender {
-            Some(tx) => tx.send(response).is_ok(),
+            Some(tx) => {
+                // Best-effort delivery: a dropped receiver (caller timed out)
+                // still counts as a known id — return true so callers treat the
+                // frame as a handled reverse-RPC response, not an unknown frame.
+                let _ = tx.send(response);
+                true
+            }
             None => false,
         }
     }
