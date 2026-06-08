@@ -29,7 +29,12 @@ pub struct McpMemoryExtension {
     server_id: Option<String>,
     /// Swappable so the boot-time bind can replace `UnboundMcpCaller` with the
     /// real MCP-backed caller without re-registering. Dispatch reads via `.load()`.
-    caller: ArcSwap<dyn McpCaller>,
+    ///
+    /// Double-`Arc`: `arc-swap`'s `RefCnt` is only implemented for `Arc<T: Sized>`,
+    /// so a trait object must be stored as `ArcSwap<Arc<dyn _>>` (the inner
+    /// `Arc<dyn _>` is a sized fat pointer). Auto-deref makes `.load().call(..)`
+    /// reach through both `Arc`s transparently.
+    caller: ArcSwap<Arc<dyn McpCaller>>,
 }
 
 impl McpMemoryExtension {
@@ -39,7 +44,7 @@ impl McpMemoryExtension {
         Self {
             name: name.into(),
             server_id: None,
-            caller: ArcSwap::from(caller),
+            caller: ArcSwap::from(Arc::new(caller)),
         }
     }
 
@@ -51,13 +56,13 @@ impl McpMemoryExtension {
         Self {
             name,
             server_id,
-            caller: ArcSwap::from(caller),
+            caller: ArcSwap::from(Arc::new(caller)),
         }
     }
 
     /// Swap the underlying caller. Visible to every subsequent hook dispatch.
     pub fn rebind(&self, caller: Arc<dyn McpCaller>) {
-        self.caller.store(caller);
+        self.caller.store(Arc::new(caller));
     }
 
     /// The MCP server id this extension's hooks route to, if resolved at
