@@ -41,9 +41,7 @@ pub fn grant_microphone(window: &WebviewWindow) {
 #[cfg(target_os = "linux")]
 fn grant_linux(pview: &tauri::webview::PlatformWebview) {
     use webkit2gtk::glib::object::Cast;
-    use webkit2gtk::{
-        PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt,
-    };
+    use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt};
 
     let webview = pview.inner();
 
@@ -53,7 +51,10 @@ fn grant_linux(pview: &tauri::webview::PlatformWebview) {
     }
 
     webview.connect_permission_request(|_webview, request| {
-        if request.downcast_ref::<UserMediaPermissionRequest>().is_some() {
+        if request
+            .downcast_ref::<UserMediaPermissionRequest>()
+            .is_some()
+        {
             request.allow();
             return true; // handled — stop further emission
         }
