@@ -3,66 +3,11 @@
 //! Core data structures for plugin management, discovery, and lifecycle.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-
-use super::{ExtensionAgent, ExtensionCommand, ExtensionSkill, HookConfig, McpServerConfig};
 
 // =============================================================================
 // Plugin Types
 // =============================================================================
-
-/// Loaded plugin
-#[derive(Debug, Clone)]
-pub struct ExtensionPlugin {
-    /// Plugin name (from manifest)
-    pub name: String,
-
-    /// Plugin version
-    pub version: Option<String>,
-
-    /// Plugin description
-    pub description: Option<String>,
-
-    /// Plugin root path
-    pub path: PathBuf,
-
-    /// Whether plugin is enabled
-    pub enabled: bool,
-
-    /// Skills provided by this plugin
-    pub skills: Vec<ExtensionSkill>,
-
-    /// Commands provided by this plugin
-    pub commands: Vec<ExtensionCommand>,
-
-    /// Agents provided by this plugin
-    pub agents: Vec<ExtensionAgent>,
-
-    /// Hook configurations
-    pub hooks: Vec<HookConfig>,
-
-    /// MCP server configurations
-    pub mcp_servers: HashMap<String, McpServerConfig>,
-}
-
-impl ExtensionPlugin {
-    /// Get plugin info
-    pub fn info(&self) -> PluginInfo {
-        PluginInfo {
-            name: self.name.clone(),
-            version: self.version.clone(),
-            description: self.description.clone(),
-            enabled: self.enabled,
-            path: self.path.to_string_lossy().to_string(),
-            skills_count: self.skills.len(),
-            commands_count: self.commands.len(),
-            agents_count: self.agents.len(),
-            hooks_count: self.hooks.len(),
-            mcp_servers_count: self.mcp_servers.len(),
-        }
-    }
-}
 
 /// Plugin info for display
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +22,12 @@ pub struct PluginInfo {
     pub agents_count: usize,
     pub hooks_count: usize,
     pub mcp_servers_count: usize,
+    /// Runtime status label: "loaded" | "disabled" | "overridden" | "error".
+    #[serde(default)]
+    pub status: String,
+    /// Error message when the plugin failed to load (status == "error").
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// Plugin origin - where the plugin was discovered from
@@ -158,6 +109,16 @@ impl PluginStatus {
     /// Check if this plugin is actively running
     pub fn is_active(&self) -> bool {
         matches!(self, PluginStatus::Loaded)
+    }
+
+    /// Stable lowercase label for client display / serialization.
+    pub fn label(&self) -> &'static str {
+        match self {
+            PluginStatus::Loaded => "loaded",
+            PluginStatus::Disabled => "disabled",
+            PluginStatus::Overridden => "overridden",
+            PluginStatus::Error(_) => "error",
+        }
     }
 }
 
@@ -262,6 +223,18 @@ pub struct PluginRecord {
     pub hook_count: usize,
     /// Service IDs registered by this plugin
     pub service_ids: Vec<String>,
+    /// Number of skills declared by this plugin
+    #[serde(default)]
+    pub skill_count: usize,
+    /// Number of in-chat commands declared by this plugin
+    #[serde(default)]
+    pub command_count: usize,
+    /// Number of agents declared by this plugin
+    #[serde(default)]
+    pub agent_count: usize,
+    /// Number of MCP servers declared by this plugin
+    #[serde(default)]
+    pub mcp_server_count: usize,
 }
 
 impl PluginRecord {
@@ -280,6 +253,10 @@ impl PluginRecord {
             tool_names: Vec::new(),
             hook_count: 0,
             service_ids: Vec::new(),
+            skill_count: 0,
+            command_count: 0,
+            agent_count: 0,
+            mcp_server_count: 0,
         }
     }
 
@@ -296,16 +273,20 @@ impl PluginRecord {
         let mut tool_names = Vec::new();
         let mut hook_count = 0;
         let mut service_ids = Vec::new();
+        let mut skill_count = 0;
+        let mut command_count = 0;
+        let mut agent_count = 0;
+        let mut mcp_server_count = 0;
 
         for cap in &output.capabilities {
             match cap {
                 CapabilityDeclaration::Tool(t) => tool_names.push(t.name.clone()),
                 CapabilityDeclaration::Hook(_) => hook_count += 1,
                 CapabilityDeclaration::Service(s) => service_ids.push(s.id.clone()),
-                CapabilityDeclaration::Skill(_)
-                | CapabilityDeclaration::Command(_)
-                | CapabilityDeclaration::Agent(_)
-                | CapabilityDeclaration::McpServer(_) => {}
+                CapabilityDeclaration::Skill(_) => skill_count += 1,
+                CapabilityDeclaration::Command(_) => command_count += 1,
+                CapabilityDeclaration::Agent(_) => agent_count += 1,
+                CapabilityDeclaration::McpServer(_) => mcp_server_count += 1,
             }
         }
 
@@ -325,6 +306,10 @@ impl PluginRecord {
             tool_names,
             hook_count,
             service_ids,
+            skill_count,
+            command_count,
+            agent_count,
+            mcp_server_count,
         }
     }
 

@@ -45,16 +45,29 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
                             tracing::warn!("Failed to refresh extensions after install: {}", e);
                         }
                     }
+                    // Count declared capabilities by kind so the install
+                    // response mirrors what `plugins.list` reports (the old
+                    // code reported every capability as a "skill").
+                    let count_kind = |kind: &str| -> u32 {
+                        output
+                            .capabilities
+                            .iter()
+                            .filter(|c| c.kind_name() == kind)
+                            .count() as u32
+                    };
                     let info = PluginInfoJson {
                         name: output.name.unwrap_or_else(|| output.plugin_id.clone()),
                         version: output.version.unwrap_or_default(),
                         description: output.description.unwrap_or_default(),
                         enabled: true,
                         path: dest_path.to_string_lossy().to_string(),
-                        skills_count: output.capabilities.len() as u32,
-                        agents_count: 0,
-                        hooks_count: 0,
-                        mcp_servers_count: 0,
+                        skills_count: count_kind("skill"),
+                        commands_count: count_kind("command"),
+                        agents_count: count_kind("agent"),
+                        hooks_count: count_kind("hook"),
+                        mcp_servers_count: count_kind("mcp_server"),
+                        status: "loaded".to_string(),
+                        error: None,
                     };
                     JsonRpcResponse::success(request.id, json!({ "plugin": info }))
                 }
