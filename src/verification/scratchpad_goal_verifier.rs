@@ -1,10 +1,16 @@
 //! `ScratchpadGoalVerifier` — the goal-loop hook.
 //!
-//! Closes the gap identified against hermes-agent's `goals.py`: after the
-//! LLM decomposes a request into an execution list (via the `scratchpad`
-//! tool's `set_objective` + `set_plan`), *something* must keep the loop
-//! running until those steps are worked through — "逐个完成、回归、直至
-//! 达成用户目标". This verifier is that hook.
+//! Closes the *within-turn* half of the gap against hermes-agent's
+//! `goals.py`: after the LLM decomposes a request into an execution list
+//! (via the `scratchpad` tool's `set_objective` + `set_plan`), *something*
+//! must keep the loop running until those steps are worked through — "逐个
+//! 完成、回归、直至达成用户目标". This verifier is that within-turn hook.
+//!
+//! The *cross-turn* half — a persistent standing goal that survives across
+//! turns/sessions with lifecycle + budget, and an opt-in autonomous
+//! continuation driver — lives in the `src/goal/` subsystem (`goal` tool +
+//! `StandingGoalLayer` + `src/tasks/goal_pursuit.rs`), not here. See
+//! docs/superpowers/specs/2026-06-08-standing-goal-design.md.
 //!
 //! ## Why this is a structural watchdog, not a JudgeVerifier (R7 / R10)
 //!
