@@ -1,13 +1,11 @@
 //
-// Agent Management — 6-tab detail view with per-agent routing.
+// Agent Management — 5-tab detail view with per-agent routing.
 
-pub mod behavior;
 pub mod channels;
 pub mod files;
 pub mod overview;
 pub mod skills;
 pub mod teams;
-pub mod tools;
 
 use crate::api::agents::{AgentSummary, AgentsApi};
 use crate::components::ui::ConfirmButton;
@@ -31,10 +29,8 @@ fn parse_agents_path(path: &str) -> (Option<String>, String) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentTab {
     Overview,
-    Behavior,
     Files,
     Skills,
-    Tools,
     Channels,
     Teams,
 }
@@ -42,10 +38,8 @@ enum AgentTab {
 impl AgentTab {
     fn from_str(s: &str) -> Self {
         match s {
-            "behavior" => Self::Behavior,
             "files" => Self::Files,
             "skills" => Self::Skills,
-            "tools" => Self::Tools,
             "channels" => Self::Channels,
             "teams" => Self::Teams,
             _ => Self::Overview,
@@ -55,22 +49,18 @@ impl AgentTab {
     fn slug(&self) -> &'static str {
         match self {
             Self::Overview => "overview",
-            Self::Behavior => "behavior",
             Self::Files => "files",
             Self::Skills => "skills",
-            Self::Tools => "tools",
             Self::Channels => "channels",
             Self::Teams => "teams",
         }
     }
 }
 
-const ALL_TABS: [AgentTab; 7] = [
+const ALL_TABS: [AgentTab; 5] = [
     AgentTab::Overview,
-    AgentTab::Behavior,
     AgentTab::Files,
     AgentTab::Skills,
-    AgentTab::Tools,
     AgentTab::Channels,
     AgentTab::Teams,
 ];
@@ -207,10 +197,8 @@ pub fn AgentsView() -> impl IntoView {
                                 let is_active = t == tab;
                                 let label = match t {
                                     AgentTab::Overview => t_string!(i18n, agents.tabs.overview).to_string(),
-                                    AgentTab::Behavior => t_string!(i18n, agents.tabs.behavior).to_string(),
                                     AgentTab::Files => t_string!(i18n, agents.tabs.files).to_string(),
                                     AgentTab::Skills => t_string!(i18n, agents.tabs.skills).to_string(),
-                                    AgentTab::Tools => t_string!(i18n, agents.tabs.tools).to_string(),
                                     AgentTab::Channels => t_string!(i18n, agents.tabs.channels).to_string(),
                                     AgentTab::Teams => t_string!(i18n, agents.tabs.teams).to_string(),
                                 };
@@ -235,10 +223,8 @@ pub fn AgentsView() -> impl IntoView {
                         <div>
                             {match tab {
                                 AgentTab::Overview => view! { <overview::OverviewTab agent_id=current_id.clone() /> }.into_any(),
-                                AgentTab::Behavior => view! { <behavior::BehaviorTab /> }.into_any(),
                                 AgentTab::Files => view! { <files::FilesTab agent_id=current_id.clone() /> }.into_any(),
                                 AgentTab::Skills => view! { <skills::SkillsTab agent_id=current_id.clone() /> }.into_any(),
-                                AgentTab::Tools => view! { <tools::ToolsTab agent_id=current_id.clone() /> }.into_any(),
                                 AgentTab::Channels => view! { <channels::ChannelsTab agent_id=current_id.clone() /> }.into_any(),
                                 AgentTab::Teams => view! { <teams::TeamsTab agent_id=current_id.clone() /> }.into_any(),
                             }}

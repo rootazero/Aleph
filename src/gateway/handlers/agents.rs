@@ -17,9 +17,7 @@ use serde_json::json;
 use tracing::{debug, info};
 
 use crate::config::agent_manager::{AgentManager, AgentPatch};
-use crate::config::types::agents_def::{
-    AgentDefinition, AgentIdentity, AgentModelRef, AgentParams,
-};
+use crate::config::types::agents_def::{AgentDefinition, AgentIdentity, AgentModelRef};
 use crate::sync_primitives::Arc;
 
 use super::super::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
@@ -71,7 +69,6 @@ pub struct CreateAgentParams {
     pub id: String,
     pub name: Option<String>,
     pub identity: Option<AgentIdentity>,
-    pub params: Option<AgentParams>,
     pub skills: Option<Vec<String>>,
 }
 
@@ -170,7 +167,6 @@ pub async fn handle_create(
         id: params.id.clone(),
         name: params.name,
         identity: params.identity,
-        params: params.params,
         skills: params.skills,
         ..Default::default()
     };

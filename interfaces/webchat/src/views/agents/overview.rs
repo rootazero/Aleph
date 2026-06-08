@@ -26,15 +26,10 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
     let emoji = RwSignal::new(String::new());
     let name = RwSignal::new(String::new());
     let description = RwSignal::new(String::new());
-    let theme = RwSignal::new(String::new());
     // "" = 继承系统默认;否则 "provider\u{1f}model"(catalog 选中项)
     let selected_model = RwSignal::new(String::new());
     let model_touched = RwSignal::new(false);
     let catalog: RwSignal<Vec<CatalogEntry>> = RwSignal::new(Vec::new());
-    let temperature = RwSignal::new(String::new());
-    let max_tokens = RwSignal::new(String::new());
-    let top_p = RwSignal::new(String::new());
-    let top_k = RwSignal::new(String::new());
     let is_saving = RwSignal::new(false);
     let save_message = RwSignal::new(Option::<(bool, String)>::None);
 
@@ -81,13 +76,6 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                             .unwrap_or("")
                             .to_string(),
                     );
-                    theme.set(
-                        identity
-                            .get("theme")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                    );
                 }
 
                 // 读取已存 model:Qualified 对象 → "provider\u{1f}model";Legacy 字符串/缺省 → 留空=继承
@@ -100,21 +88,6 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                         }
                     }
                     // Legacy bare string: no provider context → leave empty (=inherit); user can re-pick.
-                }
-
-                if let Some(params) = def.get("params") {
-                    if let Some(v) = params.get("temperature").and_then(|v| v.as_f64()) {
-                        temperature.set(format!("{}", v));
-                    }
-                    if let Some(v) = params.get("max_tokens").and_then(|v| v.as_u64()) {
-                        max_tokens.set(format!("{}", v));
-                    }
-                    if let Some(v) = params.get("top_p").and_then(|v| v.as_f64()) {
-                        top_p.set(format!("{}", v));
-                    }
-                    if let Some(v) = params.get("top_k").and_then(|v| v.as_u64()) {
-                        top_k.set(format!("{}", v));
-                    }
                 }
             }
         });
@@ -142,7 +115,6 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
             "identity": {
                 "emoji": emoji.get(),
                 "description": description.get(),
-                "theme": theme.get(),
             },
         });
 
@@ -150,23 +122,6 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
         // untouched → 键缺省 → 后端 AgentPatch.model = None → 保留原值(legacy/qualified)。
         if model_touched.get() {
             patch["model"] = model_patch;
-        }
-
-        let mut params = serde_json::Map::new();
-        if let Ok(v) = temperature.get().parse::<f32>() {
-            params.insert("temperature".to_string(), json!(v));
-        }
-        if let Ok(v) = max_tokens.get().parse::<u32>() {
-            params.insert("max_tokens".to_string(), json!(v));
-        }
-        if let Ok(v) = top_p.get().parse::<f32>() {
-            params.insert("top_p".to_string(), json!(v));
-        }
-        if let Ok(v) = top_k.get().parse::<u32>() {
-            params.insert("top_k".to_string(), json!(v));
-        }
-        if !params.is_empty() {
-            patch["params"] = serde_json::Value::Object(params);
         }
 
         spawn_local(async move {
@@ -223,16 +178,6 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                             placeholder=move || t_string!(i18n, agents.overview.description_placeholder).to_string()
                         />
                     </div>
-                    <div class="md:col-span-2">
-                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.theme)}</label>
-                        <input
-                            type="text"
-                            prop:value=move || theme.get()
-                            on:input=move |ev| theme.set(event_target_value(&ev))
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary"
-                            placeholder=move || t_string!(i18n, agents.overview.theme_placeholder).to_string()
-                        />
-                    </div>
                 </div>
             </div>
 
@@ -271,59 +216,6 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                             </p>
                         })
                     }}
-                </div>
-            </div>
-
-            // Inference Parameters
-            <div class="bg-surface-raised border border-border rounded-xl p-6">
-                <h2 class="text-lg font-semibold text-text-primary mb-4">{t!(i18n, agents.overview.inference_params)}</h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.temperature)}</label>
-                        <input
-                            type="number"
-                            step="0.1"
-                            min="0"
-                            max="2"
-                            prop:value=move || temperature.get()
-                            on:input=move |ev| temperature.set(event_target_value(&ev))
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary"
-                            placeholder="0.7"
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.max_tokens)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || max_tokens.get()
-                            on:input=move |ev| max_tokens.set(event_target_value(&ev))
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary"
-                            placeholder="4096"
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.top_p)}</label>
-                        <input
-                            type="number"
-                            step="0.05"
-                            min="0"
-                            max="1"
-                            prop:value=move || top_p.get()
-                            on:input=move |ev| top_p.set(event_target_value(&ev))
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary"
-                            placeholder="0.95"
-                        />
-                    </div>
-                    <div>
-                        <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.top_k)}</label>
-                        <input
-                            type="number"
-                            prop:value=move || top_k.get()
-                            on:input=move |ev| top_k.set(event_target_value(&ev))
-                            class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-primary"
-                            placeholder="50"
-                        />
-                    </div>
                 </div>
             </div>
 
