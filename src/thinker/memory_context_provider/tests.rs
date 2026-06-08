@@ -127,7 +127,7 @@ impl ProfileSynthesizer for FixedProfile {
 async fn tools_mode_returns_none_regardless_of_envelope() {
     let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Tools);
     let msg = provider
-        .build_memory_user_message("agent-1", "any query")
+        .build_memory_user_message("agent-1", "any query", None)
         .await
         .unwrap();
     assert!(msg.is_none(), "Tools mode must not auto-inject");
@@ -137,7 +137,7 @@ async fn tools_mode_returns_none_regardless_of_envelope() {
 async fn context_mode_with_empty_envelope_returns_none() {
     let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Context);
     let msg = provider
-        .build_memory_user_message("agent-1", "any query")
+        .build_memory_user_message("agent-1", "any query", None)
         .await
         .unwrap();
     assert!(
@@ -150,7 +150,7 @@ async fn context_mode_with_empty_envelope_returns_none() {
 async fn hybrid_mode_with_empty_envelope_returns_none() {
     let provider = MemoryContextProvider::new_for_test_empty_envelope(MemoryInjectionMode::Hybrid);
     let msg = provider
-        .build_memory_user_message("agent-1", "any query")
+        .build_memory_user_message("agent-1", "any query", None)
         .await
         .unwrap();
     assert!(msg.is_none());
@@ -186,7 +186,10 @@ async fn build_memory_user_message_invokes_on_retrieve_extension() {
     let provider = provider.with_extensions(Arc::new(reg));
 
     // Empty envelope → still invokes on_retrieve before the emptiness check.
-    let _ = provider.build_memory_user_message("a1", "q").await.unwrap();
+    let _ = provider
+        .build_memory_user_message("a1", "q", None)
+        .await
+        .unwrap();
     assert_eq!(
         *rec.0.lock().unwrap_or_else(|e| e.into_inner()),
         1,
@@ -223,7 +226,10 @@ async fn tools_mode_skips_on_retrieve_dispatch() {
     reg.register(rec.clone());
     let provider = provider.with_extensions(Arc::new(reg));
 
-    let out = provider.build_memory_user_message("a1", "q").await.unwrap();
+    let out = provider
+        .build_memory_user_message("a1", "q", None)
+        .await
+        .unwrap();
     assert!(out.is_none());
     assert_eq!(
         *rec.0.lock().unwrap_or_else(|e| e.into_inner()),
