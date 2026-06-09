@@ -866,16 +866,29 @@ async fn handle_connection(
                                                 drop(conns);
                                                 // Cluster Phase 0b: register a node-role connection so it
                                                 // surfaces in environments.list (and becomes node_invoke-reachable
-                                                // in 0c). Pure glue; no-op for non-node roles.
-                                                if is_node {
-                                                    crate::cluster::maybe_register_node(
+                                                // in 0c). Pure glue; no-op for non-node roles. On success emit a
+                                                // `node.connected` lifecycle event (sibling of presence.joined) so
+                                                // operators/Panel get a live fleet feed without polling.
+                                                if is_node
+                                                    && crate::cluster::maybe_register_node(
                                                         &ctx.node_registry,
                                                         Some("node"),
                                                         &device_id,
                                                         &conn_id,
                                                         req.params.as_ref(),
                                                         &rpc_channel_for_node,
-                                                    );
+                                                    )
+                                                {
+                                                    let name = req
+                                                        .params
+                                                        .as_ref()
+                                                        .and_then(|p| p.get("device_name"))
+                                                        .and_then(|v| v.as_str())
+                                                        .unwrap_or("unknown");
+                                                    let _ = ctx.event_bus.publish_json(&TopicEvent::new(
+                                                        "node.connected",
+                                                        serde_json::json!({"node_id": &device_id, "name": name, "conn_id": &conn_id}),
+                                                    ));
                                                 }
                                             }
                                         }
@@ -1535,8 +1548,33 @@ async fn handle_connection(
         let mut reg = ctx.reverse_rpc.write().await;
         reg.remove(&conn_id);
     }
-    // Cluster Phase 0b: drop this connection's node session if it was a node.
-    ctx.node_registry.deregister(&conn_id);
+    // Fail-fast every in-flight reverse-RPC call bound to this socket. Without
+    // this, callers (node_invoke / node_file / node approval) keep their own
+    // ReverseRpcChannel clone alive, so the oneshot senders never drop and the
+    // call blocks until its per-call timeout (≤130s) even though the node is
+    // already gone. Mirrors openclaw `node-registry.unregister()` rejecting
+    // pending invokes on disconnect.
+    let cancelled = rpc_pending.cancel_all();
+    if cancelled > 0 {
+        debug!(
+            "Connection {} closed: cancelled {} in-flight reverse-RPC call(s)",
+            conn_id, cancelled
+        );
+    }
+    // Cluster Phase 0b: drop this connection's node session if it was a node, and
+    // emit a `node.disconnected` lifecycle event so operators/Panel get a live
+    // fleet feed instead of polling `environments.list`. Capture identity BEFORE
+    // deregister (which removes it); the `if deregister` guard skips emission for
+    // a stale old connection whose node_id was already reclaimed by a reconnect.
+    let node_ident = ctx.node_registry.node_identity_by_conn(&conn_id);
+    if ctx.node_registry.deregister(&conn_id) {
+        if let Some((node_id, name)) = node_ident {
+            let _ = ctx.event_bus.publish_json(&TopicEvent::new(
+                "node.disconnected",
+                serde_json::json!({"node_id": node_id, "name": name, "conn_id": &conn_id}),
+            ));
+        }
+    }
 
     // Remove presence and emit departure event
     if let Some(_entry) = ctx.presence.remove(&conn_id) {

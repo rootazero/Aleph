@@ -78,6 +78,20 @@ impl PendingInvokes {
             .remove(id)
             .is_some()
     }
+
+    /// 丢弃**全部**等待者（连接断开清理用）。返回被取消的条目数。
+    ///
+    /// 排空 `waiters` 把所有 oneshot `Sender` 一并 drop —— 每个仍在
+    /// [`ReverseRpcChannel::call`] 里 await 的调用方随即收到 `RecvError`，被映射成
+    /// [`ReverseRpcError::Cancelled`] **立即返回**，而非空等满 `timeout_ms`
+    /// （节点掉线时最长 ≤130s）。对应 openclaw `node-registry.unregister()` 在断线时
+    /// 立刻 reject 所有 pending node invoke 的语义。
+    pub fn cancel_all(&self) -> usize {
+        let mut waiters = self.waiters.lock().unwrap_or_else(|e| e.into_inner());
+        let n = waiters.len();
+        waiters.clear();
+        n
+    }
 }
 
 /// 反向 RPC 调用失败原因。
@@ -89,10 +103,10 @@ pub enum ReverseRpcError {
     /// 在超时内没等到响应。
     #[error("reverse-rpc call timed out after {0}ms")]
     Timeout(u64),
-    /// 等待端被丢弃（连接清理时取消了 pending）。
-    /// 现仅在 Phase 0b 把 `cancel` 接到连接断开后才可达；Phase 0a 内不会触发。
-    /// Reachable once Phase 0b wires `cancel` on disconnect; inert in 0a.
-    #[error("reverse-rpc call cancelled")]
+    /// 等待端被丢弃：连接清理时 [`PendingInvokes::cancel_all`] 取消了所有 pending。
+    /// 节点掉线后在途 `node_invoke` / `node_file` / 审批调用即时收到此错误（fail-fast），
+    /// 不再空等满 `timeout_ms`。
+    #[error("reverse-rpc call cancelled (node disconnected)")]
     Cancelled,
 }
 
@@ -221,6 +235,48 @@ mod tests {
             .await
             .expect_err("must time out");
         assert!(matches!(err, ReverseRpcError::Timeout(50)));
+    }
+
+    #[tokio::test]
+    async fn cancel_all_drops_every_waiter_so_receivers_resolve_err() {
+        // 模拟连接断开清理：cancel_all 排空全部等待者 → 每个 receiver 立即以
+        // RecvError 解析（call() 会把它映射成 Cancelled）。
+        let pending = PendingInvokes::new();
+        let (_id1, rx1) = pending.register();
+        let (_id2, rx2) = pending.register();
+
+        assert_eq!(pending.cancel_all(), 2, "should report both waiters cancelled");
+        assert!(rx1.await.is_err(), "sender dropped → receiver errors");
+        assert!(rx2.await.is_err(), "sender dropped → receiver errors");
+
+        // 幂等：再次清空无残留。
+        assert_eq!(pending.cancel_all(), 0);
+    }
+
+    #[tokio::test]
+    async fn inflight_call_returns_cancelled_after_cancel_all() {
+        // 出站保活但永不回响应；cancel_all 必须让在途 call 即时返回 Cancelled
+        // 而非空等满 timeout。
+        let (out_tx, _out_rx_keepalive) = tokio::sync::mpsc::channel::<String>(8);
+        let channel = ReverseRpcChannel::new(out_tx);
+        let pending = channel.pending();
+
+        let call = tokio::spawn(async move {
+            // 大 timeout：若 cancel_all 没接好，本调用会挂到测试超时。
+            channel.call("tool.call", json!({}), 60_000).await
+        });
+
+        // 自旋等待该 call 注册其 waiter（register 后 waiters 非空），再 cancel_all。
+        // 比固定 sleep 更稳，避免 subscribe-before-publish 式时序竞态。
+        loop {
+            if pending.cancel_all() > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+
+        let err = call.await.expect("task joins").expect_err("must be cancelled");
+        assert!(matches!(err, ReverseRpcError::Cancelled));
     }
 
     #[tokio::test]
