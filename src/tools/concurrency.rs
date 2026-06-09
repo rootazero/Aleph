@@ -204,6 +204,56 @@ pub fn batch_parallelizable(claims: &[ConcurrencyClaim]) -> bool {
     true
 }
 
+/// Partition a batch of claims into contiguous, order-preserving groups such
+/// that every group is internally parallelizable while the relative order of
+/// any two *conflicting* claims is preserved across group boundaries.
+///
+/// The harness dispatches the returned groups sequentially and runs the calls
+/// *within* each group concurrently, which makes the schedule sound:
+/// * **intra-group safety** — no pair inside a group conflicts, so concurrent
+///   execution observes no torn side effects; and
+/// * **inter-group ordering** — group `k` fully completes before group `k+1`
+///   starts, so a conflict that spans a boundary is serialized.
+///
+/// This strictly generalizes the whole-batch [`batch_parallelizable`] gate: a
+/// fully-parallel batch yields a single group, a fully-serial batch yields `n`
+/// singletons, and a mixed batch (e.g. three reads then a `bash`) yields a
+/// parallel read group followed by a serial `bash` group. None of the reference
+/// agents do this — hermes-agent's `_should_parallelize_tool_batch`, openclaw's
+/// and codex's per-batch gates all make a single whole-batch parallel-or-serial
+/// decision, forcing the reads onto the serial path the moment one `bash` joins
+/// the batch.
+///
+/// Greedy and order-preserving: walk left to right, extending the current group
+/// while the next claim conflicts with no claim already in it; open a fresh
+/// group at the first conflict. Because a new group only ever begins at the
+/// current index, groups are contiguous half-open `[start, end)` ranges that
+/// tile `0..claims.len()`. O(n²) worst case over a batch that is, in practice,
+/// a handful of tool calls.
+///
+/// Returns an empty vec for an empty batch; otherwise the ranges always cover
+/// `0..claims.len()` with no gaps or overlaps.
+pub fn partition_parallel_groups(claims: &[ConcurrencyClaim]) -> Vec<(usize, usize)> {
+    let mut groups = Vec::new();
+    let mut start = 0usize;
+    for i in 1..claims.len() {
+        // Open a new group when claim[i] conflicts with any member already in
+        // the current group. Members are pairwise non-conflicting by induction,
+        // so the group stays internally parallelizable.
+        let conflicts = claims[start..i]
+            .iter()
+            .any(|c| claims_conflict(c, &claims[i]));
+        if conflicts {
+            groups.push((start, i));
+            start = i;
+        }
+    }
+    if !claims.is_empty() {
+        groups.push((start, claims.len()));
+    }
+    groups
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,5 +385,133 @@ mod tests {
     fn single_or_empty_is_vacuously_parallel() {
         assert!(batch_parallelizable(&[]));
         assert!(batch_parallelizable(&[ConcurrencyClaim::global()]));
+    }
+
+    // ---- partition_parallel_groups ----------------------------------------
+
+    /// Every partition must tile `0..n` with contiguous, non-overlapping ranges
+    /// and every group must itself be parallelizable.
+    fn assert_valid_partition(claims: &[ConcurrencyClaim], groups: &[(usize, usize)]) {
+        if claims.is_empty() {
+            assert!(groups.is_empty());
+            return;
+        }
+        assert_eq!(groups.first().unwrap().0, 0, "must start at 0");
+        assert_eq!(groups.last().unwrap().1, claims.len(), "must end at n");
+        for w in groups.windows(2) {
+            assert_eq!(w[0].1, w[1].0, "groups must be contiguous (no gap/overlap)");
+        }
+        for &(s, e) in groups {
+            assert!(s < e, "groups are non-empty");
+            assert!(
+                batch_parallelizable(&claims[s..e]),
+                "group [{s},{e}) must be internally parallelizable",
+            );
+        }
+    }
+
+    #[test]
+    fn partition_empty_is_empty() {
+        assert!(partition_parallel_groups(&[]).is_empty());
+    }
+
+    #[test]
+    fn partition_all_shared_is_one_group() {
+        let claims = vec![
+            ConcurrencyClaim::Shared,
+            ConcurrencyClaim::Shared,
+            ConcurrencyClaim::Shared,
+        ];
+        let groups = partition_parallel_groups(&claims);
+        assert_eq!(groups, vec![(0, 3)]);
+        assert_valid_partition(&claims, &groups);
+    }
+
+    #[test]
+    fn partition_disjoint_writes_is_one_group() {
+        let claims = vec![paths(&["a.txt"]), paths(&["b.txt"]), paths(&["c.txt"])];
+        let groups = partition_parallel_groups(&claims);
+        assert_eq!(groups, vec![(0, 3)]);
+        assert_valid_partition(&claims, &groups);
+    }
+
+    #[test]
+    fn partition_all_global_is_n_singletons() {
+        let claims = vec![
+            ConcurrencyClaim::global(),
+            ConcurrencyClaim::global(),
+            ConcurrencyClaim::global(),
+        ];
+        let groups = partition_parallel_groups(&claims);
+        assert_eq!(groups, vec![(0, 1), (1, 2), (2, 3)]);
+        assert_valid_partition(&claims, &groups);
+    }
+
+    #[test]
+    fn partition_reads_then_bash_splits_at_boundary() {
+        // The canonical win: N reads + one whole-world bash. The reads
+        // parallelize; the bash serializes after them. A whole-batch decider
+        // would run all four serially.
+        let claims = vec![
+            ConcurrencyClaim::Shared,
+            ConcurrencyClaim::Shared,
+            ConcurrencyClaim::Shared,
+            ConcurrencyClaim::global(),
+        ];
+        let groups = partition_parallel_groups(&claims);
+        assert_eq!(groups, vec![(0, 3), (3, 4)]);
+        assert_valid_partition(&claims, &groups);
+    }
+
+    #[test]
+    fn partition_bash_between_reads_isolates_bash() {
+        // reads | bash | reads — the bash conflicts with reads on both sides,
+        // so it sits alone between two parallel read groups.
+        let claims = vec![
+            ConcurrencyClaim::Shared,
+            ConcurrencyClaim::Shared,
+            ConcurrencyClaim::global(),
+            ConcurrencyClaim::Shared,
+            ConcurrencyClaim::Shared,
+        ];
+        let groups = partition_parallel_groups(&claims);
+        assert_eq!(groups, vec![(0, 2), (2, 3), (3, 5)]);
+        assert_valid_partition(&claims, &groups);
+    }
+
+    #[test]
+    fn partition_shared_then_disjoint_write_serializes() {
+        // Shared conflicts with ANY exclusive (its read footprint is unknown),
+        // so a read followed by a disjoint write must serialize — the partition
+        // never merges them, preserving soundness over the false "disjoint
+        // paths" intuition.
+        let claims = vec![ConcurrencyClaim::Shared, paths(&["d.rs"])];
+        let groups = partition_parallel_groups(&claims);
+        assert_eq!(groups, vec![(0, 1), (1, 2)]);
+        assert_valid_partition(&claims, &groups);
+    }
+
+    #[test]
+    fn partition_same_path_writes_serialize() {
+        let claims = vec![paths(&["src/a.rs"]), paths(&["src/a.rs"])];
+        let groups = partition_parallel_groups(&claims);
+        assert_eq!(groups, vec![(0, 1), (1, 2)]);
+        assert_valid_partition(&claims, &groups);
+    }
+
+    #[test]
+    fn partition_matches_whole_batch_gate_when_fully_parallel() {
+        // When the whole batch is parallelizable, the partition collapses to a
+        // single group — i.e. the new path never *loses* parallelism the old
+        // gate would have granted.
+        let claims = vec![paths(&["a"]), paths(&["b"]), ConcurrencyClaim::Shared];
+        // Shared conflicts with the exclusive path claims, so NOT fully parallel.
+        assert!(!batch_parallelizable(&claims));
+        let groups = partition_parallel_groups(&claims);
+        assert_valid_partition(&claims, &groups);
+
+        let parallel = vec![paths(&["a"]), paths(&["b"]), paths(&["c"])];
+        assert!(batch_parallelizable(&parallel));
+        assert_eq!(partition_parallel_groups(&parallel), vec![(0, 3)]);
     }
 }

@@ -1,10 +1,21 @@
 //! Act phase — tool-call execution with caching, guardrails, and an
 //! opencode-parity parallel fast path.
 //!
+//! [`AgentHarness::act`] first **partitions** the batch into contiguous,
+//! order-preserving groups that are each internally resource-disjoint (see
+//! [`crate::tools::concurrency::partition_parallel_groups`]) and dispatches the
+//! groups sequentially through [`AgentHarness::dispatch_group`]. This lets a
+//! mixed batch — say three reads followed by one `bash` — parallelize the reads
+//! and serialize only across the conflict boundary, a schedule the reference
+//! agents (openclaw / hermes / Pi, all whole-batch deciders) cannot produce.
+//! Every non-mixed shape (single call, parallelism disabled, within-batch
+//! duplicate, or a batch with no parallel group) routes through one
+//! `dispatch_group` over the whole batch, byte-identical to the prior behaviour.
+//!
 //! The default loop is serial in input order (every existing test relies on
-//! that). When all of the following hold for a single Act batch, the harness
-//! routes through [`AgentHarness::act_parallel`] instead, dispatching the
-//! actual `tools.execute(...)` futures concurrently via
+//! that). When all of the following hold for a single dispatch group, the
+//! harness routes through [`AgentHarness::act_parallel`] instead, dispatching
+//! the actual `tools.execute(...)` futures concurrently via
 //! [`futures::stream::FuturesOrdered`] while keeping every side effect — event
 //! emit, trace, layer-3 budget, timeline push — strictly in input order:
 //!
@@ -90,19 +101,12 @@ impl AgentHarness {
         iteration: usize,
         run_cancel: &CancellationToken,
     ) -> Result<usize, HarnessError> {
-        let mut executed_count: usize = 0;
-
-        // Within-batch idempotency memo. Scoped to this single `act()` call:
-        // duplicate calls inside one tool batch are deduplicated, but a
-        // legitimate cross-turn repeat (e.g. `read_file` after `write_file`,
-        // or any time-varying tool such as `get_current_time`) always
-        // re-executes against fresh state instead of replaying a stale result.
-        let mut tool_call_cache: HashMap<(String, String), ToolOutput> = HashMap::new();
-
         // Layer 3 turn-budget boundary. `begin_turn` is idempotent — re-entering
         // the same `TurnId` is a no-op, so this is safe even if the caller
         // somehow loops on the same turn. `end_turn` is always called via the
-        // RAII `TurnBudgetGuard` so per-turn state is released on every exit.
+        // RAII `TurnBudgetGuard` so per-turn state is released on every exit
+        // (including a group's `?` early return). The guard spans ALL groups so
+        // per-turn spill state is never reset between them.
         let budget_turn_id = crate::tools::turn_budget::TurnId::new(turn_id);
         if let Some(budget) = self.deps.turn_budget.as_ref() {
             budget.begin_turn(budget_turn_id);
@@ -111,6 +115,126 @@ impl AgentHarness {
             budget: self.deps.turn_budget.as_ref().map(|v| v.as_ref()),
             turn_id: &budget_turn_id,
         };
+
+        // Fast path: a single call, or parallelism disabled, cannot partition —
+        // run the whole batch through one dispatch group (identical to the
+        // legacy path, including the shared within-batch dedup memo).
+        let parallel_enabled = matches!(self.deps.parallel_tool_concurrency, Some(n) if n >= 2);
+        if !parallel_enabled || tool_calls.len() < 2 {
+            return self
+                .dispatch_group(
+                    session_id,
+                    turn_id,
+                    tool_calls,
+                    callback,
+                    iteration,
+                    &budget_turn_id,
+                    run_cancel,
+                )
+                .await;
+        }
+
+        // Resource-scope-aware partition. Collect each call's concurrency claim
+        // once, then split the batch into contiguous, order-preserving groups
+        // (see `crate::tools::concurrency::partition_parallel_groups`). Unlike
+        // the references (openclaw / hermes / Pi all make one whole-batch
+        // parallel-or-serial decision), a batch of N reads followed by one
+        // `bash` now parallelizes the reads and only serializes across the
+        // conflict boundary. A within-batch duplicate collapses to a single
+        // whole-batch group so the serial dedup memo retains ownership of that
+        // semantics (mirrors `can_parallel_dispatch`, which rejects duplicates).
+        let mut seen = std::collections::HashSet::new();
+        let mut has_duplicate = false;
+        let mut claims = Vec::with_capacity(tool_calls.len());
+        for call in &tool_calls {
+            let key = (
+                call.name.clone(),
+                super::canonical_json_string(&call.arguments),
+            );
+            if !seen.insert(key) {
+                has_duplicate = true;
+            }
+            claims.push(
+                self.deps
+                    .tools
+                    .call_concurrency_claim(&call.name, &call.arguments)
+                    .await,
+            );
+        }
+        let groups = if has_duplicate {
+            vec![(0usize, tool_calls.len())]
+        } else {
+            crate::tools::concurrency::partition_parallel_groups(&claims)
+        };
+
+        // Only take the multi-group path when at least one group actually
+        // parallelizes (>= 2 calls). Otherwise every group is a singleton and a
+        // whole-batch serial dispatch is identical work with one memo and one
+        // offered-tool snapshot — so route there instead (zero behaviour change).
+        if !groups.iter().any(|&(s, e)| e - s >= 2) {
+            return self
+                .dispatch_group(
+                    session_id,
+                    turn_id,
+                    tool_calls,
+                    callback,
+                    iteration,
+                    &budget_turn_id,
+                    run_cancel,
+                )
+                .await;
+        }
+
+        // Multi-group: dispatch each contiguous slice in input order. Groups run
+        // sequentially (a later group may observe an earlier group's side
+        // effects); `dispatch_group` parallelizes within any group of >= 2 calls.
+        let mut executed_count: usize = 0;
+        let mut remaining = tool_calls.into_iter();
+        for (start, end) in groups {
+            let group: Vec<NativeToolCall> = remaining.by_ref().take(end - start).collect();
+            executed_count = executed_count.saturating_add(
+                self.dispatch_group(
+                    session_id,
+                    turn_id,
+                    group,
+                    callback,
+                    iteration,
+                    &budget_turn_id,
+                    run_cancel,
+                )
+                .await?,
+            );
+        }
+        Ok(executed_count)
+    }
+
+    /// Dispatch a single group of tool calls: route through the opencode-parity
+    /// parallel fast path when [`Self::can_parallel_dispatch`] admits the group,
+    /// else fall to the serial loop. This is the former body of `act` minus the
+    /// per-turn budget boundary, which `act` now owns so it spans all groups.
+    ///
+    /// Tool failures are persisted as `SessionEvent::ToolError` and do NOT
+    /// abort the group — all calls are attempted. Returns the number of tool
+    /// calls that succeeded (not errored).
+    #[allow(clippy::too_many_arguments)]
+    async fn dispatch_group(
+        &self,
+        session_id: &SessionId,
+        turn_id: TurnId,
+        tool_calls: Vec<NativeToolCall>,
+        callback: &mut dyn HarnessCallback,
+        iteration: usize,
+        budget_turn_id: &crate::tools::turn_budget::TurnId,
+        run_cancel: &CancellationToken,
+    ) -> Result<usize, HarnessError> {
+        let mut executed_count: usize = 0;
+
+        // Within-batch idempotency memo. Scoped to this single dispatch group:
+        // duplicate calls inside one group are deduplicated, but a legitimate
+        // cross-turn repeat (e.g. `read_file` after `write_file`, or any
+        // time-varying tool such as `get_current_time`) always re-executes
+        // against fresh state instead of replaying a stale result.
+        let mut tool_call_cache: HashMap<(String, String), ToolOutput> = HashMap::new();
 
         // opencode-parity parallel fast path. Falls through to the serial loop
         // below when any precondition fails (see module docs).
@@ -122,7 +246,7 @@ impl AgentHarness {
                     tool_calls,
                     callback,
                     iteration,
-                    &budget_turn_id,
+                    budget_turn_id,
                     run_cancel,
                 )
                 .await;
@@ -362,7 +486,7 @@ impl AgentHarness {
             match inner {
                 Ok(mut output) => {
                     executed_count = executed_count.saturating_add(1);
-                    self.apply_turn_budget(&budget_turn_id, &call, &mut output);
+                    self.apply_turn_budget(budget_turn_id, &call, &mut output);
                     tool_call_cache.insert(cache_key.clone(), output.clone());
                     // Cross-batch dedup: a single success clears the failure
                     // set — the LLM has demonstrably pivoted to a working
