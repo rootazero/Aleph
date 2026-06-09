@@ -511,7 +511,8 @@ impl DashboardState {
                                                     let msg = error.get("message")
                                                         .and_then(|m| m.as_str())
                                                         .unwrap_or("Unknown error");
-                                                    let _ = tx.send(Err(msg.to_string()));
+                                                    let msg = crate::components::permission::friendly_error(msg);
+                                                    let _ = tx.send(Err(msg));
                                                 } else if let Some(result) = value.get("result") {
                                                     let _ = tx.send(Ok(result.clone()));
                                                 }
