@@ -1382,13 +1382,19 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // second set is ignored by the OnceLock. Registry clone is cheap (Arc).
         let _ = continuation_cell.set((agent_registry.clone(), engine_arc.clone()));
 
-        // Create run_manager with real execution dependencies
-        let real_run_manager = Arc::new(AgentRunManager::new(
-            router.clone(),
-            event_bus.clone(),
-            agent_registry.clone(),
-            engine_arc.clone(),
-        ));
+        // Create run_manager with real execution dependencies.
+        // Inject the live config so Panel runs honor the global output_mode
+        // toggle (typewriter/instant) fresh per run — same source the chat
+        // channels read.
+        let real_run_manager = Arc::new(
+            AgentRunManager::new(
+                router.clone(),
+                event_bus.clone(),
+                agent_registry.clone(),
+                engine_arc.clone(),
+            )
+            .with_app_config(app_config_arc.clone()),
+        );
         run_manager = Some(real_run_manager);
 
         // activity.stats — returns active agent run count + coord task count
@@ -1483,12 +1489,15 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         let simple_engine = Arc::new(SimpleExecutionEngine::new(ExecutionEngineConfig::default()));
         let simple_adapter: Arc<dyn alephcore::gateway::ExecutionAdapter> = simple_engine;
         let fallback_agent_registry = Arc::new(AgentRegistry::new());
-        let fallback_run_manager = Arc::new(AgentRunManager::new(
-            router.clone(),
-            event_bus.clone(),
-            fallback_agent_registry,
-            simple_adapter,
-        ));
+        let fallback_run_manager = Arc::new(
+            AgentRunManager::new(
+                router.clone(),
+                event_bus.clone(),
+                fallback_agent_registry,
+                simple_adapter,
+            )
+            .with_app_config(app_config_arc.clone()),
+        );
         let run_manager_clone = fallback_run_manager.clone();
         server.handlers_mut().register("agent.run", move |req| {
             let manager = run_manager_clone.clone();

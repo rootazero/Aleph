@@ -12,7 +12,7 @@ use tracing::{error, info};
 
 use super::super::agent_instance::AgentRegistry;
 use super::super::event_bus::GatewayEventBus;
-use super::super::event_emitter::{EventEmitter, GatewayEventEmitter, StreamEvent};
+use super::super::event_emitter::{EventEmitter, GatewayEventEmitter, OutputMode, StreamEvent};
 use super::super::execution_adapter::ExecutionAdapter;
 use super::super::execution_engine::RunRequest;
 use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
@@ -112,6 +112,11 @@ pub struct AgentRunManager {
     active_runs: Arc<RwLock<HashMap<String, RunState>>>,
     agent_registry: Arc<AgentRegistry>,
     execution_adapter: Arc<dyn ExecutionAdapter>,
+    /// Live application config, used to read `behavior.output_mode` fresh per
+    /// run so the global typewriter/instant switch reaches Panel runs too.
+    /// `None` for test/host-only constructions → falls back to typewriter,
+    /// matching the inbound channel path (`inbound_router::executor`).
+    app_config: Option<Arc<RwLock<crate::Config>>>,
 }
 
 impl AgentRunManager {
@@ -127,6 +132,34 @@ impl AgentRunManager {
             active_runs: Arc::new(RwLock::new(HashMap::new())),
             agent_registry,
             execution_adapter,
+            app_config: None,
+        }
+    }
+
+    /// Inject the live application config so Panel runs honor the global
+    /// `behavior.output_mode` toggle. Mirrors
+    /// `InboundRouterExecutor::with_app_config`.
+    pub fn with_app_config(mut self, config: Arc<RwLock<crate::Config>>) -> Self {
+        self.app_config = Some(config);
+        self
+    }
+
+    /// Resolve the global output mode fresh from the live config. Reads the
+    /// same `behavior.output_mode` key the chat channels read, so a runtime
+    /// toggle takes effect on the very next Panel run with no restart. Absent
+    /// config (tests, host-only) defaults to typewriter.
+    async fn resolved_output_mode(&self) -> OutputMode {
+        match &self.app_config {
+            Some(cfg) => {
+                let cfg = cfg.read().await;
+                OutputMode::from_config(
+                    cfg.behavior
+                        .as_ref()
+                        .map(|b| b.output_mode.as_str())
+                        .unwrap_or("typewriter"),
+                )
+            }
+            None => OutputMode::Typewriter,
         }
     }
 
@@ -267,8 +300,15 @@ impl AgentRunManager {
         };
 
         // Primary emitter: streams to the Panel via the gateway event bus.
-        let base_emitter: Arc<dyn EventEmitter + Send + Sync> =
-            Arc::new(GatewayEventEmitter::new(self.event_bus.clone()));
+        // Read the global output_mode fresh per run so the live
+        // typewriter/instant switch reaches Panel runs — mirroring the inbound
+        // channel path. Previously this hardcoded `GatewayEventEmitter::new`
+        // (always typewriter), so the Panel — the primary surface — ignored the
+        // global toggle entirely; instant mode only worked on chat channels.
+        let output_mode = self.resolved_output_mode().await;
+        let base_emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(
+            GatewayEventEmitter::with_output_mode(self.event_bus.clone(), output_mode),
+        );
 
         // Sub-gap (b): if this gateway/Panel run continues a session that
         // originated on an *external* channel (Telegram, ...), wrap the emitter
@@ -674,6 +714,50 @@ mod tests {
         let result = manager.start_run(params).await.unwrap();
         assert!(!result.run_id.is_empty());
         assert!(result.session_key.starts_with("agent:main:"));
+    }
+
+    // Regression: Panel runs must honor the global `behavior.output_mode`
+    // toggle fresh per run (the same key chat channels read). The bug this
+    // guards: `start_run` used to hardcode `GatewayEventEmitter::new`
+    // (typewriter), so flipping the switch to "instant" had no effect on the
+    // Panel — the primary surface — even though every chat channel obeyed it.
+    #[tokio::test]
+    async fn panel_run_resolves_global_output_mode() {
+        fn manager(cfg: Option<crate::Config>) -> AgentRunManager {
+            let m = AgentRunManager::new(
+                Arc::new(AgentRouter::new()),
+                Arc::new(GatewayEventBus::new()),
+                Arc::new(AgentRegistry::new()),
+                Arc::new(MockExecutionAdapter),
+            );
+            match cfg {
+                Some(c) => m.with_app_config(Arc::new(RwLock::new(c))),
+                None => m,
+            }
+        }
+
+        // Absent config (tests / host-only) → typewriter, matching the inbound
+        // channel fallback in `inbound_router::executor`.
+        assert!(matches!(
+            manager(None).resolved_output_mode().await,
+            OutputMode::Typewriter
+        ));
+
+        // Global switch = "instant" → Panel run resolves to instant.
+        let instant: crate::Config =
+            serde_json::from_value(json!({ "behavior": { "output_mode": "instant" } })).unwrap();
+        assert!(matches!(
+            manager(Some(instant)).resolved_output_mode().await,
+            OutputMode::Instant
+        ));
+
+        // Global switch = "typewriter" → typewriter.
+        let typewriter: crate::Config =
+            serde_json::from_value(json!({ "behavior": { "output_mode": "typewriter" } })).unwrap();
+        assert!(matches!(
+            manager(Some(typewriter)).resolved_output_mode().await,
+            OutputMode::Typewriter
+        ));
     }
 
     #[tokio::test]
