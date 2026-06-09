@@ -113,8 +113,8 @@ fn phase3_with_resolved_context_basic_path_emits_operational_guidelines() {
         "OperationalGuidelinesLayer must emit on Basic path when resolved_context is attached"
     );
     assert!(
-        prompt.contains("Diagnostic Capabilities"),
-        "Diagnostic Capabilities sub-section missing from operational guidelines"
+        prompt.contains("### Diagnostics"),
+        "Diagnostics sub-section missing from operational guidelines"
     );
     // SecurityLayer always renders a "Security Level: …" note (sandbox
     // baseline) even under permissive — that's the documented envelope
@@ -473,8 +473,8 @@ fn test_full_prompt_with_all_enhancements_background_mode() {
         "Missing operational guidelines"
     );
     assert!(
-        prompt.contains("Diagnostic Capabilities"),
-        "Missing diagnostic capabilities in operational guidelines"
+        prompt.contains("### Diagnostics"),
+        "Missing diagnostics sub-section in operational guidelines"
     );
 
     // 4. Citation standards should be present (always injected)

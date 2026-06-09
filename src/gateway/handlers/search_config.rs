@@ -645,28 +645,30 @@ mod tests {
     // but never echoes the secret back to the Panel.
     #[tokio::test]
     async fn test_handle_get_reports_has_api_key_without_echoing_secret() {
-        let mut base = Config::default();
-        base.search = Some(crate::config::types::SearchConfigInternal {
-            enabled: true,
-            default_provider: "brave".to_string(),
-            fallback_providers: None,
-            max_results: 5,
-            timeout_seconds: 10,
-            backends: std::collections::HashMap::from([(
-                "brave".to_string(),
-                crate::config::types::SearchBackendConfig {
-                    provider_type: "brave".to_string(),
-                    api_key: None,
-                    base_url: None,
-                    engine_id: None,
-                    engines: None,
-                    min_request_interval_ms: None,
-                    verified: true,
-                },
-            )]),
-            pii: Some(crate::config::types::PIIConfig::default()),
-            web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
-        });
+        let base = Config {
+            search: Some(crate::config::types::SearchConfigInternal {
+                enabled: true,
+                default_provider: "brave".to_string(),
+                fallback_providers: None,
+                max_results: 5,
+                timeout_seconds: 10,
+                backends: std::collections::HashMap::from([(
+                    "brave".to_string(),
+                    crate::config::types::SearchBackendConfig {
+                        provider_type: "brave".to_string(),
+                        api_key: None,
+                        base_url: None,
+                        engine_id: None,
+                        engines: None,
+                        min_request_interval_ms: None,
+                        verified: true,
+                    },
+                )]),
+                pii: Some(crate::config::types::PIIConfig::default()),
+                web_fetch_fallback: crate::config::types::search::default_web_fetch_fallback(),
+            }),
+            ..Default::default()
+        };
         let config = Arc::new(RwLock::new(base));
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
         let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_search_haskey.vault"));

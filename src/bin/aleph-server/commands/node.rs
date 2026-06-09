@@ -360,7 +360,7 @@ async fn handle_frame(table: &CommandTable, text: &str) -> Option<String> {
         Ok(result) => JsonRpcResponse::success(Some(id), result),
         Err(message) => JsonRpcResponse::error(Some(id), -32000, message),
     };
-    Some(serde_json::to_string(&resp).ok()?)
+    serde_json::to_string(&resp).ok()
 }
 
 #[cfg(test)]
