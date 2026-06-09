@@ -682,6 +682,30 @@ yields a protected mount on the next run. Windows had the same parallel
 gap — fixed in the same cycle, see *Windows protected-path creation gap*
 below.
 
+### Linux protected-path writable-symlink TOCTOU — fixed
+
+A second, sharper TOCTOU class survived the existence-branch fix above.
+bubblewrap resolves a `--ro-bind-try <ws>/.git` source to its **current
+inode at mount time**. A sandboxed process that, on an earlier turn in the
+same per-session workspace, replaced `.git` (or any writable ancestor
+component of it) with a symlink could redirect that read-only mount to an
+arbitrary target on the next run — silently defeating the metadata
+protection and, worse, surfacing out-of-workspace content under a
+workspace path. `WorkspaceSandbox`'s existing symlink defense
+(`workspace.rs`) only canonicalises the *requested cwd*, not the
+driver-emitted bind sources, so it did not cover this.
+
+Mirroring codex's `first_writable_symlink_component_in_path`,
+`push_metadata_protection_args` now runs a fail-closed guard
+(`protected_paths::first_writable_symlink_component`) over every protected
+path before emitting any mount: if a component **inside a writable root**
+is a symlink, profile generation aborts with a `ProfileGeneration` error
+naming the hazard rather than binding an unenforceable protection. Only
+components inside a writable root are checked — a symlink outside every
+writable root cannot be rewritten from inside the sandbox, so it is not a
+TOCTOU vector. The helper is platform-agnostic and unit-tested in
+`protected_paths.rs`.
+
 ### Windows protected-path creation gap — fixed
 
 Windows had the same shape of gap on a different mechanism. Cycle 3's

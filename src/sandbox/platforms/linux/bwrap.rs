@@ -254,7 +254,7 @@ impl BubblewrapDriver {
                 args.push("--bind".into());
                 args.push(cwd_str.into());
                 args.push(cwd_str.into());
-                push_metadata_protection_args(args, std::iter::once(cwd));
+                push_metadata_protection_args(args, std::iter::once(cwd))?;
             }
             FsPolicy::ReadPaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -275,7 +275,7 @@ impl BubblewrapDriver {
                     args.push(path_str.into());
                     args.push(path_str.into());
                 }
-                push_metadata_protection_args(args, std::iter::once(cwd));
+                push_metadata_protection_args(args, std::iter::once(cwd))?;
             }
             FsPolicy::WritePaths(paths) => {
                 let cwd_str = cwd.to_str().ok_or_else(|| {
@@ -302,7 +302,7 @@ impl BubblewrapDriver {
                 // the writable `--bind` is what makes these read-only.
                 let mut all = vec![cwd];
                 all.extend(paths.iter().map(|p| p.as_path()));
-                push_metadata_protection_args(args, all.into_iter());
+                push_metadata_protection_args(args, all.into_iter())?;
             }
             FsPolicy::FullRead { exclude } => {
                 args.push("--ro-bind".into());
@@ -429,7 +429,17 @@ fn is_loopback_literal(host: &str) -> bool {
 ///
 /// Must be emitted *after* the writable `--bind` because bwrap mounts
 /// override in declaration order.
-fn push_metadata_protection_args<'a, I>(args: &mut Vec<String>, writable_roots: I)
+///
+/// Returns `Err(ProfileGeneration)` when a protected path crosses a
+/// **writable symlink** component (TOCTOU): bwrap resolves the symlink
+/// target at mount time, so a process that swapped it between policy
+/// generation and exec would redirect the read-only protection to an
+/// arbitrary target. Such a policy cannot be enforced and must fail
+/// closed rather than silently bind the wrong inode.
+fn push_metadata_protection_args<'a, I>(
+    args: &mut Vec<String>,
+    writable_roots: I,
+) -> Result<(), SandboxError>
 where
     I: IntoIterator<Item = &'a std::path::Path>,
 {
@@ -439,6 +449,20 @@ where
         let Some(path_str) = path.to_str() else {
             continue;
         };
+        // TOCTOU guard (codex parity): refuse to emit a read-only mount
+        // whose path crosses a writable symlink the sandboxed process
+        // could swap out from under us.
+        if let Some(symlink) =
+            crate::sandbox::protected_paths::first_writable_symlink_component(&path, &roots)
+        {
+            return Err(SandboxError::ProfileGeneration(format!(
+                "TOCTOU: cannot enforce read-only protection for {} because it crosses \
+                 writable symlink {}; a sandboxed process could redirect it. Remove or \
+                 dereference the symlink before granting workspace-write.",
+                path.display(),
+                symlink.display()
+            )));
+        }
         if path.exists() {
             // Existing metadata: keep it readable but read-only.
             // `--ro-bind-try` (not `--ro-bind`) tolerates the tiny
@@ -459,6 +483,7 @@ where
             args.push(path_str.into());
         }
     }
+    Ok(())
 }
 
 #[async_trait]
@@ -801,6 +826,32 @@ mod tests {
                 .any(|w| w == ["--ro-bind-try", ws_git.as_str(), ws_git.as_str()]),
             "existing workspace .git must use --ro-bind-try"
         );
+    }
+
+    #[test]
+    fn protected_metadata_symlink_in_writable_root_fails_closed() {
+        // TOCTOU: the sandboxed process turned the protected `.git` into a
+        // symlink. bwrap would resolve+bind the target at mount time, so the
+        // read-only protection is unenforceable — profile generation must
+        // fail closed rather than silently bind the wrong inode.
+        let driver = BubblewrapDriver::new();
+        let policy = SandboxPolicy::default();
+        let ws = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), ws.path().join(".git")).unwrap();
+
+        let err = driver
+            .generate_args(&policy, ws.path())
+            .expect_err("a writable-symlink protected path must be rejected");
+        match err {
+            SandboxError::ProfileGeneration(reason) => {
+                assert!(
+                    reason.contains("TOCTOU") && reason.contains(".git"),
+                    "rejection must name the TOCTOU hazard, got: {reason}"
+                );
+            }
+            other => panic!("expected ProfileGeneration, got {other:?}"),
+        }
     }
 
     #[test]
