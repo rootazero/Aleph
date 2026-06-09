@@ -468,9 +468,43 @@ html.translucent .glass-surface {
    ============================================================ */
 
 .glass {
-  backdrop-filter: blur(20px) saturate(1.6);
-  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  position: relative;
+  backdrop-filter: blur(23px) saturate(1.6);
+  -webkit-backdrop-filter: blur(23px) saturate(1.6);
 }
+/* Gradient specular edge — bright at the top, fading down. Painted once,
+   composited; ~0 per-frame cost. */
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(180deg,
+    oklch(1 0 0 / 0.40), oklch(1 0 0 / 0.04) 42%, oklch(1 0 0 / 0));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask-composite: exclude;
+  pointer-events: none;
+}
+/* Fine grain — kills the "plastic" flatness of a large blur. */
+.glass::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.4;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+}
+/* The popover's own children must sit above the ::before/::after overlays. */
+.glass > * { position: relative; z-index: 1; }
+
+:root:not(.dark) .glass::before {
+  background: linear-gradient(180deg,
+    oklch(1 0 0 / 0.9), oklch(1 0 0 / 0.2) 45%, oklch(0.4 0.02 295 / 0.06));
+}
+:root:not(.dark) .glass::after { opacity: 0.25; }
 
 /* Soft entrance for popovers / menus. */
 @keyframes aleph-pop-in {
@@ -664,6 +698,8 @@ html.theme-switching::view-transition-new(root) {
      flat single-colour wash into a subtle mesh-gradient field. */
   --aleph-glow-c:   color-mix(in oklch, oklch(0.62 0.13 250) 10%, transparent);
   --aleph-sheen:    oklch(1 0 0 / 0.72);
+  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
+  --color-surface-raised: oklch(1.00 0 0 / 0.55);
 }
 
 /* --- Atmosphere tokens — dark --- */
@@ -675,6 +711,8 @@ html.theme-switching::view-transition-new(root) {
   --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
   --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 16%, transparent);
   --aleph-sheen:    oklch(1 0 0 / 0.05);
+  /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
+  --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
 }
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
@@ -685,6 +723,8 @@ html.theme-switching::view-transition-new(root) {
     --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
     --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 16%, transparent);
     --aleph-sheen:    oklch(1 0 0 / 0.05);
+    /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
+    --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
   }
 }
 
@@ -721,7 +761,7 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
 
 /* --- Glossy sidebar — a soft, accent-tinted column (Codex) --- */
 .aleph-sidebar {
-  background-color: var(--color-sidebar);
+  background-color: color-mix(in oklch, var(--color-sidebar) 78%, transparent);
   background-image: linear-gradient(
     180deg,
     color-mix(in oklch, var(--color-primary) 9%, var(--color-sidebar)) 0%,
@@ -730,6 +770,8 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   );
   box-shadow: inset -1px 0 0 var(--color-border-subtle),
               inset  1px 0 0 var(--aleph-sheen);
+  backdrop-filter: blur(23px) saturate(1.6);
+  -webkit-backdrop-filter: blur(23px) saturate(1.6);
 }
 
 /* Brand row — hugs the top of the sidebar by default. On macOS the row
