@@ -81,12 +81,6 @@ fn apply_theme(mode: &'static str) {
                 let _ = s.set_item("aleph-theme", "dark");
             }
         }
-        "translucent" => {
-            let _ = cls.add_2("dark", "translucent");
-            if let Some(s) = &storage {
-                let _ = s.set_item("aleph-theme", "translucent");
-            }
-        }
         _ => {
             if let Some(s) = &storage {
                 let _ = s.remove_item("aleph-theme");
@@ -173,13 +167,6 @@ fn build_actions() -> Vec<Action> {
             keywords: &["theme", "dark", "暗黑"],
             group: Group::Theme,
             run: Box::new(|| apply_theme("dark")),
-        },
-        Action {
-            id: "theme.vibrant",
-            label: "Theme: Vibrant".to_string(),
-            keywords: &["theme", "vibrant", "translucent", "glass", "玻璃"],
-            group: Group::Theme,
-            run: Box::new(|| apply_theme("translucent")),
         },
         Action {
             id: "theme.system",

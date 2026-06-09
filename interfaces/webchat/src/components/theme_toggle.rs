@@ -1,6 +1,6 @@
 //
 // Theme picker — a topbar popover that controls two of the appearance axes:
-//   • Mode   : System / Light / Dark / Vibrant (translucent glass)
+//   • Mode   : System / Light / Dark (glass is the default material in all modes)
 //   • Accent : Mauve / Ocean / Forest / Sunset / Rose
 //
 // The read/apply/persist logic + enums live in `crate::appearance` (the single
