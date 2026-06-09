@@ -99,7 +99,6 @@ mod tests {
             tags: vec![],
             created_at: updated_at,
             updated_at,
-            last_accessed_at: None,
             content_hash: String::new(),
         }
     }

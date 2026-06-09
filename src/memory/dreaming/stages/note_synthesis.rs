@@ -159,7 +159,6 @@ mod tests {
             tags: vec![],
             created_at: 1_700_000_000,
             updated_at: 1_700_000_000,
-            last_accessed_at: None,
             content_hash: String::new(),
         }
     }
