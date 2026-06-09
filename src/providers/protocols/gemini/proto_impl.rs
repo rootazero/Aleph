@@ -65,12 +65,12 @@ impl GeminiProtocol {
                             _ => {}
                         }
                     }
-                    // Keep the request valid even if the message carried no
-                    // text/image blocks (e.g. only unsupported block kinds).
+                    // Gemini rejects empty text parts ("empty text parameter",
+                    // HTTP 400), so a message that carried no convertible
+                    // blocks is skipped entirely rather than padded with a
+                    // placeholder. Mirrors hermes/pi's empty-parts guard.
                     if parts.is_empty() {
-                        parts.push(Part::Text {
-                            text: String::new(),
-                        });
+                        continue;
                     }
                     result.push(Content {
                         role: Some("user".to_string()),
@@ -109,10 +109,11 @@ impl GeminiProtocol {
                             _ => {}
                         }
                     }
+                    // Same empty-parts guard as the user arm: an assistant
+                    // message whose blocks were all dropped (e.g. a pure
+                    // Thinking turn) must not become an empty text part.
                     if parts.is_empty() {
-                        parts.push(Part::Text {
-                            text: String::new(),
-                        });
+                        continue;
                     }
                     result.push(Content {
                         role: Some("model".to_string()),
@@ -151,18 +152,47 @@ impl GeminiProtocol {
                             serde_json::json!({ "result": output })
                         }
                     };
-                    result.push(Content {
-                        role: Some("user".to_string()),
-                        parts: vec![Part::FunctionResponse {
-                            function_response: crate::providers::gemini::GeminiFunctionResponse {
-                                name: tool_name.clone(),
-                                response,
-                                id: Some(tool_call_id.clone()),
-                            },
-                        }],
-                    });
+                    let part = Part::FunctionResponse {
+                        function_response: crate::providers::gemini::GeminiFunctionResponse {
+                            name: tool_name.clone(),
+                            response,
+                            id: Some(tool_call_id.clone()),
+                        },
+                    };
+                    // Parallel function calling: Gemini requires the number of
+                    // functionResponse parts in the user turn to match the
+                    // functionCall parts of the preceding model turn, so
+                    // consecutive tool results merge into one user Content
+                    // (mirrors pi/openclaw). A response-only user turn is
+                    // recognizable by its parts being all FunctionResponse.
+                    match result.last_mut() {
+                        Some(prev)
+                            if prev.role.as_deref() == Some("user")
+                                && prev
+                                    .parts
+                                    .iter()
+                                    .all(|p| matches!(p, Part::FunctionResponse { .. })) =>
+                        {
+                            prev.parts.push(part);
+                        }
+                        _ => result.push(Content {
+                            role: Some("user".to_string()),
+                            parts: vec![part],
+                        }),
+                    }
                 }
             }
+        }
+        // Defensive: every message was skipped by the empty-parts guard but the
+        // caller did pass messages — send a minimal non-empty user turn instead
+        // of an empty `contents` array (which Gemini also rejects).
+        if result.is_empty() && !messages.is_empty() {
+            result.push(Content {
+                role: Some("user".to_string()),
+                parts: vec![Part::Text {
+                    text: " ".to_string(),
+                }],
+            });
         }
         result
     }

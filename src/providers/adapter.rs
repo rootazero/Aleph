@@ -378,6 +378,10 @@ impl TokenUsage {
     /// - **Anthropic** reports `input_tokens` as the *non-cached* portion only,
     ///   alongside a disjoint `cache_read_input_tokens`. Here the denominator
     ///   becomes `input_tokens + cache_read_tokens`.
+    /// - **Gemini** reports an overlapping `promptTokenCount` on the wire, but
+    ///   its adapter subtracts `cachedContentTokenCount` at the source (the
+    ///   pricing layer bills `input` and `cache_read` additively), so by the
+    ///   time it reaches this struct it is Anthropic-shaped (disjoint).
     ///
     /// The branch detects which convention applies from the magnitudes: when
     /// `cache_read_tokens > input_tokens` the inputs are clearly disjoint

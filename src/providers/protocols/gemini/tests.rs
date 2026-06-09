@@ -353,24 +353,87 @@ fn test_convert_s5_full_cycle() {
 }
 
 #[test]
-fn test_convert_s6_consecutive_tool_results_separate() {
-    // Gemini does NOT merge consecutive ToolResults (unlike Anthropic);
-    // each becomes a separate user Content entry
+fn test_convert_s6_consecutive_tool_results_merged() {
+    // Parallel function calling: Gemini requires the functionResponse parts of
+    // the user turn to match the functionCall parts of the preceding model
+    // turn, so consecutive ToolResults merge into ONE user Content with
+    // multiple functionResponse parts (mirrors pi/openclaw).
     let msgs = [
         UnifiedMessage::tool_result("call_1", "search", "result 1", false),
         UnifiedMessage::tool_result("call_2", "read_file", "result 2", false),
     ];
     let result = GeminiProtocol::convert_messages(&msgs);
 
-    // Each ToolResult becomes its own Content
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, Some("user".to_string()));
+    let json = serde_json::to_value(&result[0]).unwrap();
+    let parts = json["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(parts[0]["functionResponse"]["name"], "search");
+    assert_eq!(parts[1]["functionResponse"]["name"], "read_file");
+}
+
+#[test]
+fn test_convert_tool_result_merge_stops_at_text_user() {
+    // A plain text user message between tool results breaks the merge run:
+    // functionResponse parts never land inside a text-bearing user Content.
+    let msgs = [
+        UnifiedMessage::tool_result("call_1", "search", "result 1", false),
+        UnifiedMessage::user("follow-up question"),
+        UnifiedMessage::tool_result("call_2", "read_file", "result 2", false),
+    ];
+    let result = GeminiProtocol::convert_messages(&msgs);
+
+    assert_eq!(result.len(), 3);
+    let json1 = serde_json::to_value(&result[1]).unwrap();
+    assert!(json1["parts"][0].get("text").is_some());
+    let json2 = serde_json::to_value(&result[2]).unwrap();
+    assert_eq!(json2["parts"].as_array().unwrap().len(), 1);
+    assert!(json2["parts"][0].get("functionResponse").is_some());
+}
+
+#[test]
+fn test_convert_skips_empty_messages() {
+    use crate::providers::message::ContentBlock as CB;
+    // An assistant turn whose blocks were all dropped (pure Thinking) and a
+    // user turn with no convertible blocks are skipped entirely — Gemini
+    // rejects empty text parts with HTTP 400.
+    let msgs = [
+        UnifiedMessage::user("hello"),
+        UnifiedMessage::Assistant {
+            content: vec![CB::Thinking {
+                thinking: "internal reasoning".to_string(),
+                signature: None,
+            }],
+        },
+        UnifiedMessage::user("are you there?"),
+    ];
+    let result = GeminiProtocol::convert_messages(&msgs);
+
     assert_eq!(result.len(), 2);
     assert_eq!(result[0].role, Some("user".to_string()));
     assert_eq!(result[1].role, Some("user".to_string()));
-    // Both should have functionResponse parts
-    let json0 = serde_json::to_value(&result[0]).unwrap();
-    let json1 = serde_json::to_value(&result[1]).unwrap();
-    assert!(json0["parts"][0].get("functionResponse").is_some());
-    assert!(json1["parts"][0].get("functionResponse").is_some());
+}
+
+#[test]
+fn test_convert_all_empty_falls_back_to_placeholder_turn() {
+    use crate::providers::message::ContentBlock as CB;
+    // Pathological: every message is skipped. The converter still emits one
+    // minimal non-empty user turn so `contents` is never an empty array.
+    let msgs = [UnifiedMessage::Assistant {
+        content: vec![CB::Thinking {
+            thinking: "only thoughts".to_string(),
+            signature: None,
+        }],
+    }];
+    let result = GeminiProtocol::convert_messages(&msgs);
+
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].role, Some("user".to_string()));
+    match &result[0].parts[0] {
+        Part::Text { text } => assert!(!text.is_empty()),
+        _ => panic!("Expected Text part"),
+    }
 }
 
 #[test]
@@ -438,6 +501,27 @@ fn test_parse_sse_cached_content_tokens() {
         })
         .expect("Usage event not found");
     assert_eq!(usage.cache_read_tokens, Some(150));
+    // `promptTokenCount` (200) includes the cached portion (150); input must
+    // be the non-cached remainder so pricing doesn't bill cache hits twice.
+    assert_eq!(usage.input_tokens, 50);
+}
+
+#[test]
+fn test_parse_sse_usage_without_cache_keeps_full_prompt() {
+    let mut out = VecDeque::new();
+    let mut fc = 0u64;
+    let data = r#"{"candidates":[{"content":{"parts":[{"text":"hi"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":200,"candidatesTokenCount":10}}"#;
+    parse_gemini_sse_chunk(data, &mut fc, &mut out);
+
+    let usage = out
+        .iter()
+        .find_map(|d| match d {
+            Ok(ProviderDelta::Usage(u)) => Some(u.clone()),
+            _ => None,
+        })
+        .expect("Usage event not found");
+    assert_eq!(usage.input_tokens, 200);
+    assert_eq!(usage.cache_read_tokens, None);
 }
 
 #[test]
