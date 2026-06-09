@@ -1,11 +1,10 @@
-//! Codex subscription provider types
+//! Codex subscription provider
 //!
-//! Types for interacting with the Codex backend API (chatgpt.com/backend-api).
+//! Browser OAuth authentication for Codex subscription (ChatGPT) accounts.
+//! The wire protocol is handled by the shared Responses API adapter via
+//! `ResponsesVariant::codex()`, which targets
+//! `chatgpt.com/backend-api/codex/responses`.
 
 pub mod auth;
-pub mod security;
-pub mod types;
 
 pub use auth::CodexAuth;
-pub use security::CodexSecurity;
-pub use types::*;

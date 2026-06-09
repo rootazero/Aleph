@@ -1373,3 +1373,75 @@ fn build_request_defaults_tool_choice_to_auto() {
 
     assert_eq!(request.tool_choice, Some(serde_json::json!("auto")));
 }
+
+// ─── Codex session-id header (reference-parity) ───────────────────────────
+
+/// The Codex variant must forward `metadata["session_id"]` as a `session-id`
+/// request header so the ChatGPT backend can bind session state, matching the
+/// reference Codex CLI. A non-Codex variant must never emit it.
+#[test]
+fn build_request_codex_sends_session_id_header() {
+    use crate::providers::message::UnifiedMessage;
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let mut meta = HashMap::new();
+    meta.insert("session_id".to_string(), "sess-codex-1".to_string());
+    let payload = RequestPayload::new(&msgs).with_metadata(Some(meta));
+
+    let proto = OpenAiResponsesProtocol::new(Client::new(), ResponsesVariant::codex());
+    let mut config = ProviderConfig::test_config("gpt-5.4");
+    config.base_url = Some("https://chatgpt.com".to_string());
+
+    let req = proto
+        .build_request(&payload, &config)
+        .expect("codex build_request")
+        .build()
+        .expect("finalize request");
+    assert_eq!(
+        req.headers().get("session-id").and_then(|v| v.to_str().ok()),
+        Some("sess-codex-1"),
+    );
+}
+
+/// Standard (non-Codex) Responses requests must not carry the `session-id`
+/// header even when session metadata is present — it is a Codex-only signal.
+#[test]
+fn build_request_standard_omits_session_id_header() {
+    use crate::providers::message::UnifiedMessage;
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let mut meta = HashMap::new();
+    meta.insert("session_id".to_string(), "sess-xyz".to_string());
+    let payload = RequestPayload::new(&msgs).with_metadata(Some(meta));
+
+    let proto = OpenAiResponsesProtocol::new(Client::new(), ResponsesVariant::default());
+    let config = ProviderConfig::test_config("gpt-4o");
+
+    let req = proto
+        .build_request(&payload, &config)
+        .expect("standard build_request")
+        .build()
+        .expect("finalize request");
+    assert!(req.headers().get("session-id").is_none());
+}
+
+/// A Codex request without session metadata must omit the header rather than
+/// sending an empty value.
+#[test]
+fn build_request_codex_omits_session_id_when_absent() {
+    use crate::providers::message::UnifiedMessage;
+
+    let msgs = [UnifiedMessage::user("hi")];
+    let payload = RequestPayload::new(&msgs);
+
+    let proto = OpenAiResponsesProtocol::new(Client::new(), ResponsesVariant::codex());
+    let mut config = ProviderConfig::test_config("gpt-5.4");
+    config.base_url = Some("https://chatgpt.com".to_string());
+
+    let req = proto
+        .build_request(&payload, &config)
+        .expect("codex build_request")
+        .build()
+        .expect("finalize request");
+    assert!(req.headers().get("session-id").is_none());
+}
