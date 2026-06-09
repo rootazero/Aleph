@@ -363,6 +363,22 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                     suggestion: Some(suggestion),
                 });
             }
+            // Mirror the Chat adapter: some OpenAI-compatible providers signal
+            // quota/spending exhaustion with a non-429 status and a descriptive
+            // body (xAI 403, OpenAI `insufficient_quota`). Surface those as a
+            // typed usage-limit error instead of a generic provider fault.
+            if crate::providers::protocols::openai_common::usage_limit::is_usage_limit_body(
+                &error_text,
+            ) {
+                return Err(AlephError::RateLimitError {
+                    message: format!("Provider usage limit reached ({}): {}", status, error_text),
+                    suggestion: Some(
+                        "Account quota or spending limit exhausted. Upgrade your plan or wait \
+                         for the quota to reset — retrying will not help."
+                            .to_string(),
+                    ),
+                });
+            }
             return Err(AlephError::provider(format!(
                 "OpenAI Responses API error ({}): {}",
                 status, error_text
