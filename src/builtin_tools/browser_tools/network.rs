@@ -51,9 +51,9 @@ impl AlephTool for BrowserNetworkTool {
                 Ok(requests) => {
                     let line_count = requests.lines().count();
                     // Network log entries include URLs/headers from the page;
-                    // untrusted (redact credentials, then wrap — see
-                    // `redact_and_wrap`).
-                    let wrapped = super::redact_and_wrap(&self.manager, &requests);
+                    // untrusted (redact credentials, then wrap). Append-ordered
+                    // log: head+tail truncation keeps the newest requests.
+                    let wrapped = super::redact_and_wrap_log(&self.manager, &requests);
                     Ok(BrowserNetworkOutput {
                         success: true,
                         requests: wrapped,

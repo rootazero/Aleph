@@ -390,7 +390,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "browser_click",
-        description: "Click element in browser",
+        description: "Click or double-click element in browser",
         requires_config: false,
     },
     BuiltinToolDefinition {

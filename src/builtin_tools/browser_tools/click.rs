@@ -27,6 +27,9 @@ pub struct BrowserClickArgs {
     pub x: Option<f64>,
     /// Y coordinate for coordinate-based clicking.
     pub y: Option<f64>,
+    /// Double-click instead of single-click (requires ref_id targeting).
+    #[serde(default)]
+    pub double: bool,
 }
 
 /// Output from the browser_click tool.
@@ -81,7 +84,8 @@ fn resolve_target(args: &BrowserClickArgs) -> std::result::Result<ActionTarget, 
 impl AlephTool for BrowserClickTool {
     const NAME: &'static str = "browser_click";
     const DESCRIPTION: &'static str =
-        "Click an element on the page by CSS selector, accessibility ref_id, or coordinates";
+        "Click an element on the page by accessibility ref_id or coordinates; \
+         set double=true for a double-click (ref_id only)";
     type Args = BrowserClickArgs;
     type Output = BrowserClickOutput;
 
@@ -101,16 +105,31 @@ impl AlephTool for BrowserClickTool {
             });
         }
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
-            Ok((backend, tab_id)) => match backend.click(&tab_id, target).await {
-                Ok(()) => Ok(BrowserClickOutput {
-                    success: true,
-                    message: Some(format!("Clicked in profile '{}'", args.profile)),
-                }),
-                Err(e) => Ok(BrowserClickOutput {
-                    success: false,
-                    message: Some(format!("Click failed: {e}")),
-                }),
-            },
+            Ok((backend, tab_id)) => {
+                let result = if args.double {
+                    backend.dblclick(&tab_id, target).await
+                } else {
+                    backend.click(&tab_id, target).await
+                };
+                match result {
+                    Ok(()) => Ok(BrowserClickOutput {
+                        success: true,
+                        message: Some(format!(
+                            "{} in profile '{}'",
+                            if args.double {
+                                "Double-clicked"
+                            } else {
+                                "Clicked"
+                            },
+                            args.profile
+                        )),
+                    }),
+                    Err(e) => Ok(BrowserClickOutput {
+                        success: false,
+                        message: Some(format!("Click failed: {e}")),
+                    }),
+                }
+            }
             Err(e) => Ok(BrowserClickOutput {
                 success: false,
                 message: Some(format!("{e}")),
@@ -138,6 +157,7 @@ mod tests {
                 ref_id: None,
                 x: None,
                 y: None,
+                double: false,
             })
             .await;
 
@@ -157,6 +177,7 @@ mod tests {
                 ref_id: None,
                 x: Some(100.0),
                 y: Some(200.0),
+                double: false,
             })
             .await
             .unwrap();
@@ -179,10 +200,34 @@ mod tests {
                 ref_id: None,
                 x: None,
                 y: None,
+                double: false,
             })
             .await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_double_click_with_ref_id() {
+        let config = BrowserSystemConfig::default();
+        let manager = Arc::new(ProfileManager::new(config));
+        let tool = BrowserClickTool::new(manager);
+
+        let result = tool
+            .call(BrowserClickArgs {
+                profile: "default".into(),
+                selector: None,
+                ref_id: Some("e7".into()),
+                x: None,
+                y: None,
+                double: true,
+            })
+            .await
+            .unwrap();
+
+        // Without a running browser, tools degrade gracefully.
+        assert!(!result.success);
+        assert!(result.message.is_some());
     }
 
     #[tokio::test]
@@ -198,6 +243,7 @@ mod tests {
                 ref_id: Some("ref-42".into()),
                 x: None,
                 y: None,
+                double: false,
             })
             .await
             .unwrap();

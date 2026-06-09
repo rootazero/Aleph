@@ -48,8 +48,9 @@ impl AlephTool for BrowserConsoleTool {
                 Ok(messages) => {
                     let line_count = messages.lines().count();
                     // Console output is page-script-controlled; treat as untrusted
-                    // (redact credentials, then wrap — see `redact_and_wrap`).
-                    let wrapped = super::redact_and_wrap(&self.manager, &messages);
+                    // (redact credentials, then wrap). Append-ordered log:
+                    // head+tail truncation keeps the newest messages.
+                    let wrapped = super::redact_and_wrap_log(&self.manager, &messages);
                     Ok(BrowserConsoleOutput {
                         success: true,
                         messages: wrapped,
