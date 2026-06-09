@@ -17,6 +17,10 @@ const ID_CHECK_UPDATE: &str = "menu_check_update";
 const ID_QUIT: &str = "menu_quit";
 const ID_QUIT_STOP: &str = "menu_quit_stop";
 const ID_RELOAD_PANEL: &str = "menu_reload_panel";
+// Only referenced inside `#[cfg(debug_assertions)]` blocks (DevTools ships
+// in debug builds only), so the constant must be gated the same way or it
+// reads as dead code in release.
+#[cfg(debug_assertions)]
 const ID_OPEN_DEVTOOLS: &str = "menu_open_devtools";
 const ID_VISIT_REPO: &str = "menu_visit_repo";
 const ID_REPORT_ISSUE: &str = "menu_report_issue";
