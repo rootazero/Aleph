@@ -337,6 +337,17 @@ git commit -m "panel: guard auto-dark CSS rules with :not(.glass) so glass self-
 
 > 玻璃档 = 深色受控 aurora（基于旧 Dark 的戏剧感、glow 更强、alpha 略低，但**绝不**透原始壁纸）+ 强化玻璃材质（`--glass-blur`/`saturate` 加大 + 高光描边推亮拉长 + 景深加深）。
 
+- [ ] **Step 0: 守卫 light-side `:root:not(.dark)` 玻璃高光泄漏（特异性前置修复）**
+
+`html.glass` 既不带 `.light` 也不带 `.dark` → 除了 Task 4 守的 dark-side `:not(.light)` 规则，它还会命中 **light-side** `:root:not(.dark)` 规则。其中两条直接给玻璃高光/颗粒上**浅色**值，且特异性 (0,3,1) 高于本任务的 `html.glass .glass::before` (0,2,2)，不守卫则本任务的强化高光**失效**。把这两条加 `:not(.glass)`（约 L472 / L476）：
+
+```css
+:root:not(.dark):not(.glass) .glass::before {
+:root:not(.dark):not(.glass) .glass::after { opacity: 0.25; }
+```
+
+守卫后玻璃档落回 base `.glass::before`/`::after`（(0,1,1)），再被本任务 `html.glass .glass::before/::after` (0,2,2) 干净覆盖。改完核对：`grep -n ':root:not(\.dark)' interfaces/webchat/styles/tailwind.css` 输出每条都带 `:not(.glass)`。
+
 - [ ] **Step 1: 新增 `html.glass` atmosphere token 组**
 
 在 `tailwind.css` 的 `.dark { ... }` aurora 块（约 L704 `}` 之后）插入：
