@@ -18,8 +18,6 @@ use tracing::debug;
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
-// Trait must be in scope to call `get_members` on the `dyn TeamStore` roster.
-use crate::teams::TeamStore;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
 use crate::workflow::{self, ClarifyContext, WorkflowDef, WorkflowManifest};
@@ -718,6 +716,8 @@ mod tests {
     /// In-memory team store seeded with `members` (each an in-process agent).
     /// Returns the store plus the freshly-minted team id to target.
     async fn team_with(members: &[&str]) -> (Arc<dyn crate::teams::TeamStore>, String) {
+        // Trait in scope so create_team/add_member resolve on the concrete store.
+        use crate::teams::TeamStore;
         use crate::teams::types::{NewTeam, NewTeamMember};
         let conn = Connection::open_in_memory().expect("open team db");
         let store = crate::teams::SqliteTeamStore::new(conn);
