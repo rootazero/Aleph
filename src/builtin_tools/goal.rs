@@ -90,7 +90,8 @@ impl GoalTool {
         }
         if let PursuitMode::Active { max_iterations } = goal.pursuit {
             s.push_str(&format!(
-                ", pursuit=active(max_iterations={max_iterations})"
+                ", pursuit=active({}/{max_iterations} iterations used)",
+                goal.continuations_used
             ));
         }
         if let Some(note) = goal.note.as_deref() {
@@ -319,7 +320,7 @@ mod tests {
         // Effective cap surfaced to the model, not the requested 1,000,000.
         assert!(out
             .message
-            .contains(&format!("max_iterations={MAX_PURSUIT_ITERATIONS}")));
+            .contains(&format!("0/{MAX_PURSUIT_ITERATIONS} iterations used")));
     }
 
     #[tokio::test]
