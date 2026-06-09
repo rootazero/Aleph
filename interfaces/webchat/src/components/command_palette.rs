@@ -66,7 +66,7 @@ fn apply_theme(mode: &'static str) {
         return;
     };
     let cls = html.class_list();
-    let _ = cls.remove_3("dark", "light", "translucent");
+    let _ = cls.remove_4("dark", "light", "glass", "translucent");
     let storage = window.local_storage().ok().flatten();
     match mode {
         "light" => {
@@ -79,6 +79,12 @@ fn apply_theme(mode: &'static str) {
             let _ = cls.add_1("dark");
             if let Some(s) = &storage {
                 let _ = s.set_item("aleph-theme", "dark");
+            }
+        }
+        "glass" => {
+            let _ = cls.add_1("glass");
+            if let Some(s) = &storage {
+                let _ = s.set_item("aleph-theme", "glass");
             }
         }
         _ => {
@@ -167,6 +173,13 @@ fn build_actions() -> Vec<Action> {
             keywords: &["theme", "dark", "暗黑"],
             group: Group::Theme,
             run: Box::new(|| apply_theme("dark")),
+        },
+        Action {
+            id: "theme.glass",
+            label: "Theme: Glass".to_string(),
+            keywords: &["theme", "glass", "玻璃", "vibrant", "translucent"],
+            group: Group::Theme,
+            run: Box::new(|| apply_theme("glass")),
         },
         Action {
             id: "theme.system",

@@ -156,6 +156,10 @@
   --safe-area-right:  env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left:   env(safe-area-inset-left, 0px);
+
+  /* Glass material strength — overridden by html.glass to intensify. */
+  --glass-blur: 23px;
+  --glass-saturate: 1.6;
 }
 
 html {
@@ -220,7 +224,7 @@ h1, h2, h3, h4, h5, h6 {
    Dark Mode Overrides
    ============================================================ */
 
-.dark {
+.dark, html.glass {
   --color-surface:          oklch(0.15 0.020 310);
   --color-surface-raised:   oklch(0.20 0.018 310);
   --color-surface-sunken:   oklch(0.12 0.015 310);
@@ -259,7 +263,7 @@ h1, h2, h3, h4, h5, h6 {
 
 /* System preference fallback */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light) {
+  :root:not(.light):not(.glass) {
     --color-surface:          oklch(0.15 0.020 310);
     --color-surface-raised:   oklch(0.20 0.018 310);
     --color-surface-sunken:   oklch(0.12 0.015 310);
@@ -344,7 +348,7 @@ html[data-accent="rose"] {
 }
 
 /* --- Dark values (explicit `.dark` class) --- */
-html.dark[data-accent="ocean"] {
+html.dark[data-accent="ocean"], html.glass[data-accent="ocean"] {
   --color-primary:          oklch(0.68 0.130 250);
   --color-primary-hover:    oklch(0.73 0.120 250);
   --color-primary-subtle:   oklch(0.22 0.050 250);
@@ -353,7 +357,7 @@ html.dark[data-accent="ocean"] {
   --color-ring:             oklch(0.68 0.130 250 / 0.35);
   --color-chart-1:          oklch(0.68 0.130 250);
 }
-html.dark[data-accent="forest"] {
+html.dark[data-accent="forest"], html.glass[data-accent="forest"] {
   --color-primary:          oklch(0.66 0.120 150);
   --color-primary-hover:    oklch(0.71 0.110 150);
   --color-primary-subtle:   oklch(0.22 0.045 150);
@@ -362,7 +366,7 @@ html.dark[data-accent="forest"] {
   --color-ring:             oklch(0.66 0.120 150 / 0.35);
   --color-chart-1:          oklch(0.66 0.120 150);
 }
-html.dark[data-accent="sunset"] {
+html.dark[data-accent="sunset"], html.glass[data-accent="sunset"] {
   --color-primary:          oklch(0.74 0.135 65);
   --color-primary-hover:    oklch(0.79 0.125 65);
   --color-primary-subtle:   oklch(0.24 0.050 65);
@@ -371,7 +375,7 @@ html.dark[data-accent="sunset"] {
   --color-ring:             oklch(0.74 0.135 65 / 0.35);
   --color-chart-1:          oklch(0.74 0.135 65);
 }
-html.dark[data-accent="rose"] {
+html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
   --color-primary:          oklch(0.70 0.150 15);
   --color-primary-hover:    oklch(0.75 0.140 15);
   --color-primary-subtle:   oklch(0.23 0.055 15);
@@ -383,7 +387,7 @@ html.dark[data-accent="rose"] {
 
 /* --- System dark (no class, OS preference) --- */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light)[data-accent="ocean"] {
+  :root:not(.light):not(.glass)[data-accent="ocean"] {
     --color-primary:        oklch(0.68 0.130 250);
     --color-primary-hover:  oklch(0.73 0.120 250);
     --color-primary-subtle: oklch(0.22 0.050 250);
@@ -392,7 +396,7 @@ html.dark[data-accent="rose"] {
     --color-ring:           oklch(0.68 0.130 250 / 0.35);
     --color-chart-1:        oklch(0.68 0.130 250);
   }
-  :root:not(.light)[data-accent="forest"] {
+  :root:not(.light):not(.glass)[data-accent="forest"] {
     --color-primary:        oklch(0.66 0.120 150);
     --color-primary-hover:  oklch(0.71 0.110 150);
     --color-primary-subtle: oklch(0.22 0.045 150);
@@ -401,7 +405,7 @@ html.dark[data-accent="rose"] {
     --color-ring:           oklch(0.66 0.120 150 / 0.35);
     --color-chart-1:        oklch(0.66 0.120 150);
   }
-  :root:not(.light)[data-accent="sunset"] {
+  :root:not(.light):not(.glass)[data-accent="sunset"] {
     --color-primary:        oklch(0.74 0.135 65);
     --color-primary-hover:  oklch(0.79 0.125 65);
     --color-primary-subtle: oklch(0.24 0.050 65);
@@ -410,7 +414,7 @@ html.dark[data-accent="rose"] {
     --color-ring:           oklch(0.74 0.135 65 / 0.35);
     --color-chart-1:        oklch(0.74 0.135 65);
   }
-  :root:not(.light)[data-accent="rose"] {
+  :root:not(.light):not(.glass)[data-accent="rose"] {
     --color-primary:        oklch(0.70 0.150 15);
     --color-primary-hover:  oklch(0.75 0.140 15);
     --color-primary-subtle: oklch(0.23 0.055 15);
@@ -433,8 +437,8 @@ html.dark[data-accent="rose"] {
 @layer components {
   .glass {
     position: relative;
-    backdrop-filter: blur(23px) saturate(1.6);
-    -webkit-backdrop-filter: blur(23px) saturate(1.6);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   }
 }
 /* Gradient specular edge — bright at the top, fading down. Painted once,
@@ -465,11 +469,18 @@ html.dark[data-accent="rose"] {
 /* The popover's own children must sit above the ::before/::after overlays. */
 .glass > * { position: relative; z-index: 1; }
 
-:root:not(.dark) .glass::before {
+/* Glass theme: intensify the specular edge + grain on chrome glass. */
+html.glass .glass::before {
+  background: linear-gradient(180deg,
+    oklch(1 0 0 / 0.55), oklch(1 0 0 / 0.08) 50%, oklch(1 0 0 / 0));
+}
+html.glass .glass::after { opacity: 0.5; }
+
+:root:not(.dark):not(.glass) .glass::before {
   background: linear-gradient(180deg,
     oklch(1 0 0 / 0.9), oklch(1 0 0 / 0.2) 45%, oklch(0.4 0.02 295 / 0.06));
 }
-:root:not(.dark) .glass::after { opacity: 0.25; }
+:root:not(.dark):not(.glass) .glass::after { opacity: 0.25; }
 
 /* ============================================================
    Accessibility: macOS "Reduce transparency" (and the CSS media query it
@@ -489,9 +500,14 @@ html.dark[data-accent="rose"] {
     --color-surface-raised: oklch(1.00 0 0) !important;
   }
   .dark { --color-surface-raised: oklch(0.20 0.018 310) !important; }
+  html.glass {
+    --glass-blur: 0px;
+    --aleph-canvas-base: var(--aleph-solid-ground) !important;
+    --color-surface-raised: oklch(0.25 0.020 300) !important;
+  }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
-  :root:not(.light) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
+  :root:not(.light):not(.glass) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
 }
 
 /* Soft entrance for popovers / menus. */
@@ -694,22 +710,41 @@ html.theme-switching::view-transition-new(root) {
 .dark {
   --aleph-solid-ground: oklch(0.155 0.022 300);
   --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 19%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
-  --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 16%, transparent);
+  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 24%, transparent);
+  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 15%, transparent);
+  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  8%, transparent);
+  --aleph-glow-c:   color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
   --aleph-sheen:    oklch(1 0 0 / 0.05);
   /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
   --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
 }
+/* --- Atmosphere tokens — Glass (dark-based, intensified, controlled) ---
+   Strong-glass showcase theme. Reuses the dramatic dark mood (stronger glow
+   than the calmed Dark), with a slightly lower canvas alpha so the controlled
+   aurora reads deeper — but NEVER transparent: the macOS vibrancy only faintly
+   shows behind this controlled colour, raw wallpaper is never exposed. */
+html.glass {
+  --aleph-solid-ground: oklch(0.150 0.024 300);
+  --aleph-canvas-base:  oklch(0.165 0.024 300 / 0.80);
+  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 34%, transparent);
+  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 22%, transparent);
+  --aleph-glow-top: color-mix(in oklch, var(--color-primary) 12%, transparent);
+  --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 18%, transparent);
+  --aleph-sheen:    oklch(1 0 0 / 0.07);
+  /* Cards: a touch more transparent than Dark so they read glassier on aurora. */
+  --color-surface-raised: oklch(0.25 0.020 300 / 0.40);
+  /* Intensified glass material — pushed past the restrained default. */
+  --glass-blur: 30px;
+  --glass-saturate: 1.9;
+}
 @media (prefers-color-scheme: dark) {
-  :root:not(.light) {
+  :root:not(.light):not(.glass) {
     --aleph-solid-ground: oklch(0.155 0.022 300);
     --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
-    --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
-    --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 19%, transparent);
-    --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
-    --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 16%, transparent);
+    --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 24%, transparent);
+    --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 15%, transparent);
+    --aleph-glow-top: color-mix(in oklch, var(--color-primary)  8%, transparent);
+    --aleph-glow-c:   color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
     --aleph-sheen:    oklch(1 0 0 / 0.05);
     /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
     --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
@@ -776,8 +811,14 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  backdrop-filter: blur(23px) saturate(1.6);
-  -webkit-backdrop-filter: blur(23px) saturate(1.6);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+}
+/* Glass theme: deepen the sidebar's frosted layer to match the stronger chrome. */
+html.glass .aleph-sidebar {
+  box-shadow: inset -1px 0 0 var(--color-border-subtle),
+              inset  1px 0 0 var(--aleph-sheen),
+              inset  0 1px 0 oklch(1 0 0 / 0.06);
 }
 
 /* Brand row — hugs the top of the sidebar by default. On macOS the row
@@ -1390,7 +1431,8 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 .dark .aleph-shell::after,
-:root:not(.light) .aleph-shell::after { opacity: 0.05; }
+html.glass .aleph-shell::after,
+:root:not(.light):not(.glass) .aleph-shell::after { opacity: 0.05; }
 
 /* ════════════════════════════════════════════════════════════
    Chat message entrance — a one-shot rise+fade as each bubble
