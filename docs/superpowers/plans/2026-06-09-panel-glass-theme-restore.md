@@ -272,7 +272,7 @@ git commit -m "panel: tokenize glass blur/saturate behind CSS variables"
 ## Task 4: `:not(.glass)` 守卫所有自动暗色规则
 
 **Files:**
-- Modify: `interfaces/webchat/styles/tailwind.css` 中所有 `@media (prefers-color-scheme: dark)` 下的 `:root:not(.light)` 选择器（约 L262、L386、L395、L404、L413、L493/L494、L706）
+- Modify: `interfaces/webchat/styles/tailwind.css` 中**所有** `:root:not(.light)` 选择器（不止 @media token 块，还含一条 `:root:not(.light) .aleph-shell::after` 胶片颗粒后代选择器，约 L1397）。以 `grep -n ':root:not(\.light)'` 的输出为权威清单，逐条加 `:not(.glass)`（实测 8 条）。
 
 > 目的：深色 OS 下 `html.glass` 会同时命中 `:root:not(.light)`（特异性 0,2,0 > `html.glass` 0,1,1），导致自动暗色 token 串味。给每个这类选择器追加 `:not(.glass)`，让玻璃档完全自治。**本任务在 Task 5/6 引入 `html.glass` token 前先行**，避免引入后被串味掩盖。
 
@@ -384,6 +384,16 @@ html.glass .glass::before {
     oklch(1 0 0 / 0.55), oklch(1 0 0 / 0.08) 50%, oklch(1 0 0 / 0));
 }
 html.glass .glass::after { opacity: 0.5; }
+```
+
+- [ ] **Step 3b: 玻璃档继承暗色「胶片颗粒」grain（Task 4 审计补充）**
+
+`.aleph-shell::after` 是全屏胶片噪点叠层（base `opacity: 0.025`，暗色提到 `0.05`）。其选择器经 Task 4 已变成 `.dark .aleph-shell::after, :root:not(.light):not(.glass) .aleph-shell::after { opacity: 0.05; }`（约 L1397）。玻璃档不带 `.dark`、又被 `:not(.glass)` 挡在 system-dark 外 → 否则只拿浅色 0.025 颗粒。把 `html.glass` 加进该选择器组（与 Step 2「玻璃继承暗色显式规则」同一原则）：
+
+```css
+.dark .aleph-shell::after,
+html.glass .aleph-shell::after,
+:root:not(.light):not(.glass) .aleph-shell::after { opacity: 0.05; }
 ```
 
 - [ ] **Step 4: 玻璃档侧栏景深加深（可选但推荐，保持与 chrome 一致）**
