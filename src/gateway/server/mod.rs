@@ -213,6 +213,7 @@ pub struct GatewaySharedState {
     /// Cluster node registry (shared Arc with GatewayServer). Center-side view
     /// of connected `role:node` peers; populated by the connect handler.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
+    pub exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
 }
 
 /// Configuration for the Gateway server
@@ -379,6 +380,10 @@ pub struct GatewayServer {
     /// See [`GatewaySharedState::node_registry`]. `build_router` clones this Arc
     /// into the shared state so both point at the same registry.
     pub node_registry: Arc<crate::cluster::NodeRegistry>,
+    /// Shared exec-approval manager (cluster ③). `Some` once boot wires the
+    /// canonical instance; `None` in test/probe constructors ⇒ node-approval
+    /// routing is inert (the handler refuses `node.approval.request`).
+    pub exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
 }
 
 impl GatewayServer {
@@ -430,6 +435,7 @@ impl GatewayServer {
             token_manager: None,
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
+            exec_approval_manager: None,
         }
     }
 
@@ -482,6 +488,7 @@ impl GatewayServer {
             token_manager: None,
             reverse_rpc: Arc::new(RwLock::new(HashMap::new())),
             node_registry: Arc::new(crate::cluster::NodeRegistry::new()),
+            exec_approval_manager: None,
         }
     }
 
@@ -616,6 +623,7 @@ impl GatewayServer {
             )),
             reverse_rpc: self.reverse_rpc.clone(),
             node_registry: self.node_registry.clone(),
+            exec_approval_manager: self.exec_approval_manager.clone(),
         });
 
         let control_plane = create_control_plane_router();

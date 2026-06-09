@@ -106,6 +106,9 @@ struct ConnectionContext {
     /// Cluster node registry (shared Arc). The connect handler registers a
     /// `role:node` connection here and cleanup deregisters it.
     node_registry: Arc<crate::cluster::NodeRegistry>,
+    /// Shared exec-approval manager for node-initiated approvals (cluster ③).
+    /// `None` ⇒ `node.approval.request` is refused.
+    exec_approval_manager: Option<Arc<crate::exec::manager::ExecApprovalManager>>,
 }
 
 /// Extract the `aleph_session` cookie value from a request's `Cookie` header.
@@ -383,6 +386,7 @@ pub(super) async fn ws_upgrade_handler(
             client_ip,
             reverse_rpc: state.reverse_rpc.clone(),
             node_registry: state.node_registry.clone(),
+            exec_approval_manager: state.exec_approval_manager.clone(),
         };
         if let Err(e) = handle_connection(socket, peer_addr, ctx).await {
             error!("Connection error from {}: {}", peer_addr, e);
@@ -459,6 +463,10 @@ async fn handle_connection(
     // Registered under conn_id so reverse-RPC callers can reach this specific
     // connection; deregistered on cleanup.
     let (rpc_out_tx, mut rpc_out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    // Clone kept for node-initiated request replies (cluster ③): a spawned
+    // approval task sends its JSON-RPC response here; the select arm below
+    // writes it to the socket.
+    let rpc_out_tx_replies = rpc_out_tx.clone();
     let rpc_channel = crate::cluster::ReverseRpcChannel::new(rpc_out_tx);
     let rpc_pending = rpc_channel.pending();
     // Clone kept in scope so a successful `role:node` connect can register this
@@ -521,6 +529,73 @@ async fn handle_connection(
                             if looks_like_response {
                                 if let Some(id) = maybe_resp.id.clone() {
                                     rpc_pending.resolve(&id, maybe_resp);
+                                }
+                                continue;
+                            }
+                        }
+
+                        // Node-initiated reverse request (cluster ③): a
+                        // `node.approval.request` from a REGISTERED node
+                        // connection is driven asynchronously and answered with a
+                        // JSON-RPC response on this connection's outbound. Spawned
+                        // so the select loop is not blocked for the (up to 120s)
+                        // operator decision. Node identity is taken from the
+                        // authenticated connection (anti-spoof), never params.
+                        if let Ok(node_req) = serde_json::from_str::<JsonRpcRequest>(&text) {
+                            if node_req.method == "node.approval.request" {
+                                match (
+                                    ctx.node_registry.node_identity_by_conn(&conn_id),
+                                    ctx.exec_approval_manager.clone(),
+                                ) {
+                                    (Some((node_id, node_name)), Some(manager)) => {
+                                        let event_bus = ctx.event_bus.clone();
+                                        let out = rpc_out_tx_replies.clone();
+                                        let req_id = node_req.id.clone();
+                                        let params = node_req
+                                            .params
+                                            .clone()
+                                            .unwrap_or(serde_json::Value::Null);
+                                        let tool = params
+                                            .get("tool")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        let reason = params
+                                            .get("reason")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or_default()
+                                            .to_string();
+                                        tokio::spawn(async move {
+                                            let outcome = crate::approval::run_node_approval(
+                                                &manager,
+                                                &event_bus,
+                                                &node_id,
+                                                &node_name,
+                                                &tool,
+                                                &reason,
+                                            )
+                                            .await;
+                                            let resp = JsonRpcResponse::success(
+                                                req_id,
+                                                serde_json::json!({ "outcome": outcome }),
+                                            );
+                                            if let Ok(s) = serde_json::to_string(&resp) {
+                                                let _ = out.send(s).await;
+                                            }
+                                        });
+                                    }
+                                    _ => {
+                                        // Not a registered node conn, or no manager
+                                        // wired: refuse.
+                                        let resp = JsonRpcResponse::error(
+                                            node_req.id.clone(),
+                                            -32000,
+                                            "node.approval.request not permitted".to_string(),
+                                        );
+                                        if let Ok(s) = serde_json::to_string(&resp) {
+                                            let _ = rpc_out_tx_replies.send(s).await;
+                                        }
+                                    }
                                 }
                                 continue;
                             }
