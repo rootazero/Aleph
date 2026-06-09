@@ -38,11 +38,13 @@ use crate::sandbox::hooks::{SandboxBeforeHook, SandboxHookContext, SandboxHookRe
 pub use config::CommandPolicyConfigSchema;
 pub use rules::{default_rules, EnforcementMode, PolicyRule, RuleAction};
 
-/// Upper bound on how many bytes of reconstructed command text we scan.
-/// Shell scripts are agent-generated and usually tiny; very large scripts
-/// (piped via `bash -s`) are bounded here so a pathological input cannot turn
-/// the per-call scan into a latency problem. The OS sandbox remains the
-/// enforcer for anything past this window.
+/// Size of each scan window (head and tail). Shell scripts are agent-generated
+/// and usually tiny; very large scripts (piped via `bash -s`) are bounded so a
+/// pathological input cannot turn the per-call scan into a latency problem.
+/// A command text up to `2 * MAX_SCAN_BYTES` is scanned in full; beyond that the
+/// head and tail windows are scanned (see [`CommandPolicy::evaluate`]) so a
+/// padded front cannot bury a dangerous command in an unscanned tail. The OS
+/// sandbox remains the backstop for any residual middle band.
 const MAX_SCAN_BYTES: usize = 256 * 1024;
 
 /// A compiled command policy: a single [`RegexSet`] plus parallel metadata
@@ -140,15 +142,28 @@ impl CommandPolicy {
         if matches!(self.enforcement, EnforcementMode::Off) {
             return PolicyEvaluation::default();
         }
-        let scan: &str = if command_text.len() > MAX_SCAN_BYTES {
-            // Truncate on a char boundary to keep `&str` valid (UTF-8 safe).
-            let mut end = MAX_SCAN_BYTES;
-            while end > 0 && !command_text.is_char_boundary(end) {
-                end -= 1;
-            }
-            &command_text[..end]
-        } else {
+        // Scan head + tail rather than a single head window: a `bash -s`
+        // script (the large-script stdin path) longer than the cap could
+        // otherwise pad its front to bury a dangerous command in an
+        // unscanned tail, evading the filter. Text up to `2 * MAX_SCAN_BYTES`
+        // is scanned whole; beyond that we join the first and last windows.
+        // Rules are single-line (`[^\n]*`), so the `\n` seam between the two
+        // windows cannot produce a false cross-boundary match. All slice
+        // ends land on char boundaries to keep `&str` valid (UTF-8 safe).
+        let scan_buf;
+        let scan: &str = if command_text.len() <= 2 * MAX_SCAN_BYTES {
             command_text
+        } else {
+            let mut head_end = MAX_SCAN_BYTES;
+            while head_end > 0 && !command_text.is_char_boundary(head_end) {
+                head_end -= 1;
+            }
+            let mut tail_start = command_text.len() - MAX_SCAN_BYTES;
+            while tail_start < command_text.len() && !command_text.is_char_boundary(tail_start) {
+                tail_start += 1;
+            }
+            scan_buf = format!("{}\n{}", &command_text[..head_end], &command_text[tail_start..]);
+            &scan_buf
         };
 
         let matches = self.set.matches(scan);
@@ -374,6 +389,24 @@ mod tests {
         );
         let e = policy(EnforcementMode::Block).evaluate(&text);
         assert!(e.blocked.contains(&"dd_to_block_device".to_string()));
+    }
+
+    #[test]
+    fn oversized_padded_script_does_not_evade_tail_scan() {
+        // A `bash -s` script longer than 2×MAX_SCAN_BYTES pads its head with
+        // benign content and hides a Block pattern in the tail. Head-only
+        // scanning would miss it; the head+tail scan must still catch it.
+        let pad = "echo padding\n".repeat((2 * MAX_SCAN_BYTES) / 13 + 1024);
+        assert!(
+            pad.len() > 2 * MAX_SCAN_BYTES,
+            "pad must exceed the full-scan window"
+        );
+        let payload = format!("{pad}dd if=/dev/zero of=/dev/sda");
+        let e = policy(EnforcementMode::Block).evaluate(&payload);
+        assert!(
+            e.blocked.contains(&"dd_to_block_device".to_string()),
+            "dangerous tail must be caught by head+tail scan: {e:?}"
+        );
     }
 
     #[tokio::test]
