@@ -853,6 +853,15 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
+            // Cluster tag fan-out — same injected NodeRegistry as node_invoke.
+            "node_invoke_many" => Box::pin(async move {
+                let reg = self.node_registry.get().ok_or_else(|| {
+                    AlephError::tool("node_invoke_many not available: NodeRegistry not injected")
+                })?;
+                let tool = crate::builtin_tools::NodeInvokeManyTool::new(reg.clone());
+                tool.call_json(arguments).await
+            }),
+
             // Sessions tools for cross-session communication
             "session_list" => Box::pin(async move {
                 let context = self.gateway_context.get().ok_or_else(|| {

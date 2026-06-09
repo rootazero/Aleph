@@ -152,6 +152,15 @@ impl BuiltinToolRegistry {
         );
         info!("Registered node_file tool in BuiltinToolRegistry");
 
+        // node_invoke_many — cluster tag fan-out. Same deferred NodeRegistry.
+        reg(
+            tools,
+            "node_invoke_many",
+            crate::builtin_tools::NodeInvokeManyTool::DESCRIPTION,
+            schema::<crate::builtin_tools::node_invoke_many::NodeInvokeManyArgs>("node_invoke_many"),
+        );
+        info!("Registered node_invoke_many tool in BuiltinToolRegistry");
+
         // Vault store tool
         if vault_store_tool.is_some() {
             reg(
