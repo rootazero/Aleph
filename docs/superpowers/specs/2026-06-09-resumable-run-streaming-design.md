@@ -1,127 +1,78 @@
-# Resumable Run Streaming (seq-cursor catch-up)
+# Gateway gap analysis → dead `run_event_bus` discovery → scoped 熵减
 
 **Date**: 2026-06-09
-**Scope**: Aleph gateway — Core protocol layer (Panel UI adoption deferred)
-**Goal driver**: gateway gap-analysis vs openclaw / hermes-agent / Pi
+**Scope**: Aleph gateway — gap analysis vs openclaw / hermes-agent / Pi
+**Outcome**: delete the unregistered `run.*` RPC handler module (entropy
+reduction). The originally-scoped "resumable run streaming" feature was
+**dropped after source-verified premise falsification** (see below).
 
-## Problem (gap analysis, source-verified)
+## How this started
 
-`run_event_bus::RunEvent` stamps a monotonic `seq: u64` on **every** variant
-(TokenDelta / ReasoningDelta / ToolStart / ToolEnd / …) via
-`ActiveRunHandle::next_seq()`. The seq is serialized onto the wire on every
-token delta — yet across the entire core it has **zero readers** (`grep .seq`
-hits only unrelated `group_chat` / `memory` subsystems). It is an
-"advertised-but-unwired" load-bearing-looking field.
+Comparing Aleph's gateway against openclaw (WS+JSON-RPC gateway),
+hermes-agent (ACP), and Pi (stdio), the candidate gap was *resumable run
+streaming*: `run_event_bus::RunEvent` stamps a monotonic `seq: u64` on every
+variant, but `grep .seq` found **zero readers**. The hypothesis: wire the seq
+into a replay ring so a reconnecting client replays only the gap
+(`seq > since_seq`) — surpassing hermes' unbounded full-history replay.
 
-Consequence: `ActiveRunHandle::subscribe()` (the only non-test caller, in
-`handlers/runs.rs`) returns a **fresh broadcast receiver = events from now
-forward only**, with no replay. When a client is dropped (slow-consumer 1008,
-or a network blip) mid-run and reconnects, it:
+## Premise falsification (deeper read)
 
-1. gets a `HelloSnapshot` that recovers **state domains only** (presence /
-   health / config) and says **nothing about in-flight runs**;
-2. re-subscribes and receives only **future** events;
-3. **permanently loses the run-stream events emitted during the gap.**
+Tracing the actual run-streaming path overturned the hypothesis:
 
-`wait_for_run_end` even surfaces `WaitError::Lagged(n)` as an error
-("missed N events") — a known failure mode that was never recovered.
+1. `RunEvent::` is **never constructed in the execution engine** (zero
+   non-test hits). `ActiveRunHandle::new` appears only in tests.
+2. `wait_for_run_end` is called only by `handlers/runs.rs`, which is itself
+   **never registered** in any dispatch table.
+3. The whole `run_event_bus` module is referenced in production only by
+   `gateway/mod.rs` (a re-export). Its only real consumers are integration
+   tests (`tests/world/subagent_ctx.rs`, `tests/steps/subagent_steps.rs`),
+   which use it as an event-transport fixture.
+4. The **live** run-streaming path is entirely different:
+   `GatewayEventEmitter` → `GatewayEventFrame::ResponseChunk { run_id, seq, … }`
+   → the global `event_bus` (topic `agent.run.*`) → per-client buffer → WS.
+   Note the live frame carries its **own** `seq` (a separate counter on
+   `GatewayEventEmitter`).
 
-### Reference patterns
+Conclusion: `run_event_bus` (`ActiveRunHandle` / `RunEvent` / `RunStatus` /
+`wait_for_run_end`) plus the `run.wait` / `run.queue_message` handlers form a
+**dead parallel run bus**, superseded by the `event_emitter` + global
+`event_bus` path. Wiring "seq resume" into it would have been building
+resume-on-resume against a bus that is itself unwired — redundant with the live
+path and a R3/R10 violation.
+
+## Action taken this round (scoped, safe)
+
+Delete the **unregistered** `run.*` RPC handler module — the clearest,
+self-contained, zero-external-consumer dead code:
+
+- **Removed** `src/gateway/handlers/runs.rs` (445 LOC): `run.wait` /
+  `run.queue_message` handlers + their request/response types. Never registered
+  in any dispatch table; a leaf module (nothing imports from it); only its own
+  `#[cfg(test)]` tests reference it.
+- **Removed** `pub mod runs;` from `src/gateway/handlers/mod.rs`.
+
+Verified by whole-repo grep: no consumer of `handlers::runs`,
+`handle_run_wait`, `handle_run_queue_message`, `RunWaitRequest/Response`, or
+`RunQueueMessageRequest/Response` outside the deleted file. Safe to remove
+without `cargo check` (resource-governance constraint forbids it this round).
+
+## Deliberately NOT touched (deferred, with reasons)
+
+- **`run_event_bus.rs` core (904 LOC)** — also dead in production, but consumed
+  by ~1188 LOC of BDD test scaffolding (`subagent_ctx.rs` + `subagent_steps.rs`)
+  that would need untangling. A blind (no-cargo-check) deletion of that blast
+  radius is unsafe; it needs a verified pass.
+- **`loom_concurrency.rs`** — self-contained loom *models*; references
+  `run_event_bus` only in doc comments. Not a consumer. Left intact.
+- **Live-path resume** (`GatewayEventFrame.seq` + `event_bus`) — the genuine
+  version of the resume feature, but additive and overlapping the existing
+  close-on-slow-consumer + hello-resync recovery; marginal benefit. Deferred.
+
+## Reference comparison (retained — the analysis remains valid)
 
 | Project | Resume mechanism |
 |---|---|
-| hermes-agent | `_replay_session_history()` — **full** inline replay on load/resume, **blocks** the load response, unbounded |
-| openclaw | per-client `seq` + `messageSeq` **cursor** replay; close-on-slow-consumer |
+| hermes-agent | full inline history replay on load/resume (blocking, unbounded) |
+| openclaw | per-client `seq` + `messageSeq` cursor replay; close-on-slow-consumer |
 | Pi | session file rebuild on re-spawn |
-| **Aleph today** | `seq` emitted, **no consumer**; close-on-slow-consumer → hello resync (**state only**, no run stream) |
-
-## Design — bounded incremental catch-up
-
-Wire the existing `seq` into a **bounded, seq-indexed replay ring** so a
-reconnecting client replays only the gap (`seq > since_seq`), non-blocking,
-type-safe cursor. Surpasses hermes (bounded incremental vs unbounded full
-replay) and openclaw (run-stream replay vs none).
-
-### ① Replay ring on `ActiveRunHandle` (`run_event_bus.rs`)
-
-- New field `replay: Arc<Mutex<ReplayBuffer>>` where `ReplayBuffer` holds a
-  `VecDeque<RunEvent>` (cap `RUN_REPLAY_CAP = 512`) + `oldest_retained_seq`.
-- The emit path becomes: **push to ring under lock, then broadcast** — the ring
-  is always the source of truth for `seq <= current_seq`. Over cap → `pop_front`
-  and advance `oldest_retained_seq`.
-- `emit()` keeps its signature/return; the ring push is internal.
-
-### ② `subscribe_from(since_seq: Option<u64>)`
-
-```
-pub fn subscribe_from(&self, since_seq: Option<u64>)
-    -> (ReplayOutcome, broadcast::Receiver<RunEvent>)
-```
-
-- **Under the ring lock**, atomically: (a) collect events with
-  `seq > since_seq` (or all retained if `None`), (b) `event_tx.subscribe()`.
-  One lock → catch-up boundary and live receiver start are coherent: **no gap,
-  no duplicate** across the seam (the classic race; must be a single critical
-  section).
-- `ReplayOutcome`:
-  - `Replaying { events: Vec<RunEvent>, current_seq }` — normal.
-  - `Truncated { oldest_seq, current_seq }` — `since_seq < oldest_retained_seq`;
-    client must fall back to full history refetch (graceful degradation reusing
-    the existing chat-history path). No events returned (incomplete).
-- `subscribe()` is kept as `subscribe_from(None)`-with-no-catch-up for existing
-  callers (`run.wait`) — **behavior byte-identical** for them.
-
-### ③ `run.subscribe` RPC (`handlers/runs.rs`)
-
-New handler, registered alongside `run.wait` / `run.queue_message`. Does **not**
-overload `run.wait` semantics.
-
-- Params: `{ run_id: String, since_seq: Option<u64> }`
-- Response (`RunSubscribeResponse`, tagged):
-  - `Replaying { events: Vec<RunEvent>, current_seq: u64 }`
-  - `Truncated { oldest_seq: u64, current_seq: u64 }`
-  - `NotFound` — run absent from the registry (already completed + evicted);
-    client falls back to chat history (terminal state is already persisted).
-- Live stream continues via the existing event_bus topic path; the client
-  dedups by `seq` (drops live events with `seq <= max replayed seq`).
-
-### ④ `HelloSnapshot.active_runs` (`hello_snapshot.rs`)
-
-- New field `active_runs: Vec<ActiveRunSummary>` with
-  `ActiveRunSummary { run_id, session_key, status, current_seq }`.
-- Lets a reconnecting client (incl. a *different* device) discover in-flight
-  runs and the seq to resume from, without polling.
-- Source: the run registry, injected into `build_hello_snapshot` via a
-  **OnceLock provider** (mirrors existing `origin_fanout::set_channel_registry`
-  / `set_node_registry`) — does **not** thread a new dep through `AuthContext`'s
-  constructor. When no provider is set (tests / probes), the field is `[]`.
-
-## Bounded memory & lifecycle
-
-- Ring cap 512 events per run; terminal status evicts the handle from the
-  registry (existing behavior) → ring freed.
-- `RUN_REPLAY_CAP` is a module const; no config knob (YAGNI).
-
-## Entropy reduction
-
-`seq` graduates from zero-consumer dead weight to a load-bearing cursor — the
-"wire it or delete it" decision resolved toward wiring (per user). No code is
-removed; the dead field becomes live.
-
-## Non-goals (deferred)
-
-- Panel (Leptos WASM) `last_seq` tracking + reconnect `run.subscribe` call —
-  needs `-p aleph-panel` + rust_embed rebuild chain.
-- Per-frame seq on the **global** event bus (marginal; close+resync covers it).
-- Config knob for ring capacity.
-
-## Testing (core unit tests, written with the implementation)
-
-1. ring eviction advances `oldest_retained_seq`; cap respected.
-2. `subscribe_from` atomicity — emit before subscribe, subscribe mid-stream,
-   emit after; assert catch-up + live form a **contiguous gap-free,
-   duplicate-free** seq sequence.
-3. `since_seq < oldest` → `Truncated`.
-4. `since_seq == current_seq` → empty catch-up, live only.
-5. `run.subscribe` handler: Replaying / Truncated / NotFound.
-6. `HelloSnapshot` serializes `active_runs` (with and without provider).
+| Aleph (live path) | close-on-slow-consumer → hello resync (state only); final transcript persisted to chat history |
