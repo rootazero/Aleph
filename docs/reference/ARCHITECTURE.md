@@ -250,6 +250,7 @@ pattern.
 | **browser** | `src/browser/` | Browser automation |
 | **capability** | `src/capability/` | Capability system |
 | **clawhub** | `src/clawhub/` | ClawHub integration |
+| **cluster** | `src/cluster/` | Single-center node federation — reverse RPC, node registry, `node_invoke`/`node_file`, approval routing ([CLUSTER.md](./CLUSTER.md)) |
 | **components** | `src/components/` | Shared components |
 | **compressor** | `src/compressor/` | Context compression |
 | **core** | `src/core/` | Core types and primitives |
@@ -819,6 +820,7 @@ Default `max_total_chars` is 80,000. When the assembled prompt exceeds the budge
 
 - [Agent System](AGENT_SYSTEM.md) - Agent loop internals
 - [Gateway](GATEWAY.md) - WebSocket protocol and RPC methods
+- [Cluster](CLUSTER.md) - Single-center node federation (center/node, reverse RPC, `node_invoke`/`node_file`)
 - [Tool System](TOOL_SYSTEM.md) - Tool development guide
 - [Memory System](MEMORY_SYSTEM.md) - RAG and retrieval
 - [Extension System](EXTENSION_SYSTEM.md) - Plugin architecture

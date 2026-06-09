@@ -49,3 +49,9 @@ Once registered (visible in `environments.list` and the Panel cluster list):
 - Treat node tokens like secrets — they grant execution on the center's behalf.
 - If a node disconnects, in-flight calls fail fast (no hang).
 - The allowlist of runnable commands is authoritative on the node side.
+
+## See also
+
+- Engineering reference (architecture, wire protocol, redlines, tests):
+  `docs/reference/CLUSTER.md`
+- `multi_channel` guide — how this differs from 一核多端 (I/O ends vs execution arms).
