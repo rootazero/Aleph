@@ -8,7 +8,8 @@
 //!
 //! score = access_weight * 0.4 + recency_weight * 0.3 + link_weight * 0.3
 //!
-//! - `access_weight`  — 1.0 if `last_accessed_at` is Some, else 0.0
+//! - `access_weight`  — 1.0 / (1.0 + days_since_last_recall / 30.0) from the
+//!   note's latest `recall_signals` hit, or 0.0 if it was never recalled
 //! - `recency_weight` — 1.0 / (1.0 + days_since_update / 30.0)
 //! - `link_weight`    — min(incoming_link_count / 3.0, 1.0)
 //!
@@ -110,6 +111,24 @@ impl DreamStage for NoteDecayStage {
         let mut notes_archived = 0u32;
         let mut notes_protected = 0u32;
 
+        // Latest recall hit per note, fetched once and shared by the archival
+        // scoring below and the C2.7 confidence pass (which previously issued
+        // the same per-note query itself). This is what feeds `access_weight`:
+        // a recalled-but-rarely-edited note now scores on its recall recency
+        // instead of a hardcoded 0.0.
+        let mut last_hits: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for note in &ctx.notes {
+            if let Ok(Some(t)) = ctx
+                .indexer
+                .store()
+                .recall_signals_last_hit(&ctx.agent_id, &note.path)
+                .await
+            {
+                last_hits.insert(note.path.clone(), t);
+            }
+        }
+
         // Collect candidates: (path, score, category, filename)
         let mut low_score_notes: Vec<(String, f64, String, String)> = Vec::new();
 
@@ -156,7 +175,8 @@ impl DreamStage for NoteDecayStage {
             }
 
             // --- Compute activity score ---
-            let score = compute_score(note.last_accessed_at, note.updated_at, now, incoming_count);
+            let last_recalled = last_hits.get(&note.path).copied();
+            let score = compute_score(last_recalled, note.updated_at, now, incoming_count);
 
             // --- Determine archive threshold ---
             let threshold = if note.category == "reference" || note.category == "skill" {
@@ -262,7 +282,6 @@ impl DreamStage for NoteDecayStage {
             .map(|(p, _, _, _)| p.as_str())
             .collect();
 
-        let store = ctx.indexer.store().clone();
         let now_ts = chrono::Utc::now().timestamp();
 
         // Snapshot the candidate (path, category, filename) tuples up front so
@@ -281,10 +300,7 @@ impl DreamStage for NoteDecayStage {
             .collect();
 
         for (note_path, category, filename) in candidates {
-            let last_hit = store
-                .recall_signals_last_hit(&ctx.agent_id, &note_path)
-                .await
-                .unwrap_or(None);
+            let last_hit = last_hits.get(&note_path).copied();
 
             let days = match last_hit {
                 Some(t) => ((now_ts - t).max(0) as f32) / 86400.0_f32,
@@ -410,7 +426,7 @@ pub(crate) fn patch_confidence_frontmatter(content: &str, new_conf: f32) -> Opti
 ///
 /// # Arguments
 ///
-/// * `last_accessed_at` — Unix timestamp of last access, if tracked.
+/// * `last_accessed_at` — Unix timestamp of the latest recall-signal hit, if any.
 /// * `updated_at`       — Unix timestamp of last modification.
 /// * `now`              — Current Unix timestamp.
 /// * `incoming_count`   — Number of other notes that link to this one.
@@ -420,10 +436,15 @@ pub(crate) fn compute_score(
     now: i64,
     incoming_count: usize,
 ) -> f64 {
-    let access_weight = if last_accessed_at.is_some() {
-        1.0_f64
-    } else {
-        0.0_f64
+    // Graded by recall recency (mirrors `recency_weight`'s 30-day curve): a
+    // note recalled yesterday earns ~0.39 of the score, one recalled a year
+    // ago ~0.03 — so stale recalls do not grant permanent archival immunity.
+    let access_weight = match last_accessed_at {
+        Some(t) => {
+            let days_since_access = (now - t).max(0) as f64 / 86400.0;
+            1.0_f64 / (1.0_f64 + days_since_access / 30.0_f64)
+        }
+        None => 0.0_f64,
     };
 
     let days_since_update = (now - updated_at).max(0) as f64 / 86400.0;
@@ -462,15 +483,30 @@ mod tests {
 
     #[test]
     fn score_with_access_recent_update() {
-        // Has access, updated 5 days ago, 1 incoming link → decent score
+        // Recalled yesterday, updated 5 days ago, 1 incoming link → decent score
         let now = 1_000_000_000_i64;
         let updated_at = now - 5 * 86400;
         let score = compute_score(Some(now - 86400), updated_at, now, 1);
-        // access_weight = 1.0
+        // access_weight = 1/(1+1/30) ≈ 0.968
         // recency = 1/(1+5/30) ≈ 0.857
         // link_weight = 1/3 ≈ 0.333
-        // score ≈ 0.4 + 0.257 + 0.1 = 0.757
+        // score ≈ 0.387 + 0.257 + 0.1 = 0.744
         assert!(score > 0.2, "expected high score, got {score}");
+    }
+
+    #[test]
+    fn recent_recall_protects_stale_note_old_recall_does_not() {
+        // The bug this guards against: `access_weight` used to be fed a
+        // hardcoded `None`, so an unlinked note not edited for ~15 days was
+        // archived even when it was being recalled every day.
+        let now = 1_000_000_000_i64;
+        let updated_at = now - 90 * 86400; // stale content
+        // Recalled yesterday → access ≈ 0.968*0.4 + recency 0.25*0.3 ≈ 0.462
+        let hot = compute_score(Some(now - 86400), updated_at, now, 0);
+        assert!(hot > 0.2, "recently recalled note must survive, got {hot}");
+        // Recalled a year ago → access ≈ 0.076*0.4 + 0.075 ≈ 0.105
+        let cold = compute_score(Some(now - 365 * 86400), updated_at, now, 0);
+        assert!(cold < 0.2, "stale recall must not grant immunity, got {cold}");
     }
 
     #[test]

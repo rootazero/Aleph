@@ -60,6 +60,9 @@ pub use validation::{DreamValidationReport, ValidationIssue, ValidationTier};
 // ---------------------------------------------------------------------------
 
 /// Metadata for a single note in the dream pipeline.
+///
+/// Recall recency is not carried here: `NoteDecayStage` reads it directly
+/// from `recall_signals` (the live access-tracking source) when scoring.
 #[derive(Debug, Clone)]
 pub struct NoteEntry {
     pub path: String,
@@ -67,15 +70,11 @@ pub struct NoteEntry {
     pub tags: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
-    pub last_accessed_at: Option<i64>,
     pub content_hash: String,
 }
 
 impl NoteEntry {
     /// Build a `NoteEntry` from a stored note index entry.
-    ///
-    /// `last_accessed_at` is not tracked in the note index, so it is left
-    /// `None` — decay stages fall back to `updated_at` when it is absent.
     fn from_index_entry(e: &NoteIndexEntry) -> Self {
         Self {
             path: e.path.clone(),
@@ -83,7 +82,6 @@ impl NoteEntry {
             tags: e.tags.clone(),
             created_at: e.created_at,
             updated_at: e.updated_at,
-            last_accessed_at: None,
             content_hash: e.content_hash.clone(),
         }
     }
