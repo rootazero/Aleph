@@ -1486,7 +1486,10 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         use alephcore::gateway::execution_engine::ExecutionEngineConfig;
         use alephcore::gateway::execution_engine::SimpleExecutionEngine;
 
-        let simple_engine = Arc::new(SimpleExecutionEngine::new(ExecutionEngineConfig::default()));
+        let simple_engine = Arc::new(
+            SimpleExecutionEngine::new(ExecutionEngineConfig::default())
+                .with_event_bus(event_bus.clone()),
+        );
         let simple_adapter: Arc<dyn alephcore::gateway::ExecutionAdapter> = simple_engine;
         let fallback_agent_registry = Arc::new(AgentRegistry::new());
         let fallback_run_manager = Arc::new(

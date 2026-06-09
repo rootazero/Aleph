@@ -21,6 +21,7 @@ use crate::gateway::execution_adapter::ExecutionAdapter;
 pub struct SimpleExecutionEngine {
     config: ExecutionEngineConfig,
     active_runs: Arc<RwLock<HashMap<String, ActiveRun>>>,
+    event_bus: Option<Arc<crate::gateway::event_bus::GatewayEventBus>>,
 }
 
 impl SimpleExecutionEngine {
@@ -29,6 +30,34 @@ impl SimpleExecutionEngine {
         Self {
             config,
             active_runs: Arc::new(RwLock::new(HashMap::new())),
+            event_bus: None,
+        }
+    }
+
+    /// Attach the global event bus so session updates reach UI clients
+    /// (mirrors `ExecutionEngine::publish_session_updated`).
+    pub fn with_event_bus(
+        mut self,
+        event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,
+    ) -> Self {
+        self.event_bus = Some(event_bus);
+        self
+    }
+
+    /// Announce a session update on the global event bus. No-op without a bus.
+    fn publish_session_updated(
+        &self,
+        session_key: &crate::gateway::router::SessionKey,
+        origin_channel: Option<&str>,
+    ) {
+        if let Some(bus) = &self.event_bus {
+            let frame = crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key: session_key.to_key_string(),
+                origin_channel: origin_channel
+                    .filter(|c| !c.is_empty())
+                    .map(|c| c.to_string()),
+            };
+            let _ = bus.publish_frame(&frame);
         }
     }
 
@@ -95,11 +124,10 @@ impl SimpleExecutionEngine {
         // list on `SessionUpdated` (e.g. the Panel sidebar) show the new session
         // right away instead of only after the turn completes / a manual reload.
         if is_first_message {
-            let _ = emitter
-                .emit(StreamEvent::SessionUpdated {
-                    session_key: request.session_key.to_key_string(),
-                })
-                .await;
+            self.publish_session_updated(
+                &request.session_key,
+                request.metadata.get("channel_id").map(String::as_str),
+            );
         }
 
         // Execute with timeout

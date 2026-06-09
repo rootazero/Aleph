@@ -476,13 +476,18 @@ mod tests {
 
         let frame = GatewayEventFrame::SessionUpdated {
             session_key: "test-session".to_string(),
+            origin_channel: Some("telegram".to_string()),
         };
         bus.publish_frame(&frame).unwrap();
 
         let received = rx.recv().await.unwrap();
         match received {
-            GatewayEventFrame::SessionUpdated { session_key } => {
+            GatewayEventFrame::SessionUpdated {
+                session_key,
+                origin_channel,
+            } => {
                 assert_eq!(session_key, "test-session");
+                assert_eq!(origin_channel.as_deref(), Some("telegram"));
             }
             _ => panic!("expected SessionUpdated"),
         }
