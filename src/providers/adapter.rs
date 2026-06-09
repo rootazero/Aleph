@@ -319,6 +319,12 @@ pub enum StopReason {
     ToolUse,
     /// Hit max_tokens limit
     MaxTokens,
+    /// Entire context window exhausted mid-generation (Anthropic
+    /// `model_context_window_exceeded`). Distinct from [`Self::MaxTokens`]:
+    /// the output cap was not the limiter — the *prompt + output* filled the
+    /// model's context window, so retrying with more appended messages can
+    /// only re-hit the wall. Recovery is compaction, not a resume nudge.
+    ContextWindowExceeded,
     /// Stop sequence encountered
     StopSequence,
     /// Turn paused (e.g. for multi-turn reasoning)

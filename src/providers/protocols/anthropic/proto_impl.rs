@@ -382,32 +382,70 @@ impl AnthropicProtocol {
         }
     }
 
+    /// Extract a model's version as `(major, minor)` from its ID segments.
+    ///
+    /// Scans dash-separated segments (after lowercasing and dot→dash
+    /// normalization, so `claude-opus-4.6` and Bedrock `us.anthropic.claude-…`
+    /// both parse) and takes the **first run of consecutive numeric segments**
+    /// as the version: `claude-opus-4-8` → `(4, 8)`, `claude-3-5-sonnet` →
+    /// `(3, 5)`, `claude-fable-5` → `(5, 0)`.
+    ///
+    /// Only 1–2 digit segments count as version components — this skips
+    /// date stamps (`claude-sonnet-4-5-20250929` → `(4, 5)`) and keeps
+    /// non-Claude IDs routed through this protocol (e.g. `kimi-k2-0905`,
+    /// `deepseek-v3-1`) from false-matching a modern Claude generation.
+    ///
+    /// The previous substring enumeration (`contains("-4-6") || …`) had to be
+    /// re-edited for every model launch and silently mis-gated newer
+    /// generations: 4.8 / 5.x fell through to the legacy `budget_tokens` +
+    /// sampling-params path, both of which 400 on those models. A numeric
+    /// compare passes the future-proof test — a newer model ID gates
+    /// correctly with no code change.
+    pub(super) fn claude_version(model: &str) -> Option<(u32, u32)> {
+        let m = model.to_lowercase().replace('.', "-");
+        let is_version_seg = |seg: &str| seg.len() <= 2 && seg.parse::<u32>().is_ok();
+        let mut numbers = m
+            .split('-')
+            .skip_while(|seg| !is_version_seg(seg))
+            .take_while(|seg| is_version_seg(seg))
+            .map(|seg| seg.parse::<u32>().unwrap_or(0));
+        let major = numbers.next()?;
+        Some((major, numbers.next().unwrap_or(0)))
+    }
+
     /// True for Claude 4.6+ models that support adaptive thinking
     /// (`thinking: { "type": "adaptive" }` + `output_config.effort`).
     ///
-    /// Manual `budget_tokens` is deprecated on these models — Anthropic
-    /// recommends adaptive so the model picks its own budget per turn.
-    /// Substring match handles date-stamped variants like
-    /// `claude-opus-4-6-20251110` and dot/hyphen normalization.
+    /// Manual `budget_tokens` is deprecated on 4.6 and **removed** (400) on
+    /// 4.7+ — Anthropic recommends adaptive so the model picks its own budget
+    /// per turn. Version compare handles date-stamped variants like
+    /// `claude-opus-4-6-20251110`, dot/hyphen normalization, and future
+    /// generations (4.8, fable-5) without per-launch edits.
     pub(super) fn supports_adaptive_thinking(model: &str) -> bool {
-        let m = model.to_lowercase().replace('.', "-");
-        m.contains("-4-6") || m.contains("-4-7")
+        Self::claude_version(model).is_some_and(|v| v >= (4, 6))
     }
 
     /// True for models that 400 on non-default temperature/top_p/top_k even
-    /// without `thinking` enabled. Claude 4.7 explicitly rejects sampling
-    /// parameters; later releases are expected to follow.
+    /// without `thinking` enabled. Claude 4.7 removed sampling parameters and
+    /// every later release (4.8, fable-5) keeps that surface.
     pub(super) fn forbids_sampling_params(model: &str) -> bool {
-        let m = model.to_lowercase().replace('.', "-");
-        m.contains("-4-7")
+        Self::claude_version(model).is_some_and(|v| v >= (4, 7))
     }
 
     /// True for models that accept the `xhigh` adaptive effort level (Claude
-    /// 4.7+ only). 4.6 models reject `xhigh` with a 400 — callers must downgrade
+    /// 4.7+). 4.6 models reject `xhigh` with a 400 — callers must downgrade
     /// to `max` when this returns false.
     pub(super) fn supports_xhigh_effort(model: &str) -> bool {
-        let m = model.to_lowercase().replace('.', "-");
-        m.contains("-4-7")
+        Self::claude_version(model).is_some_and(|v| v >= (4, 7))
+    }
+
+    /// True for generation-5 models (`claude-fable-5`, …) where an explicit
+    /// `thinking: {type: "disabled"}` block returns a 400 — the only way to
+    /// run without thinking is to **omit** the `thinking` field entirely.
+    /// 4.6–4.8 still accept (and need) the explicit disabled block to
+    /// suppress their default thinking, so this gates only 5.x+.
+    pub(super) fn omits_disabled_thinking(model: &str) -> bool {
+        Self::claude_version(model).is_some_and(|v| v >= (5, 0))
     }
 
     /// Map [`ThinkLevel`] to an Anthropic adaptive-thinking `effort` string.

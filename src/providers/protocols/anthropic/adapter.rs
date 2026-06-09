@@ -297,21 +297,30 @@ impl ProtocolAdapter for AnthropicProtocol {
         let adaptive = Self::supports_adaptive_thinking(actual_model);
         let (thinking, adaptive_effort): (Option<ThinkingBlock>, Option<&'static str>) =
             match payload.think_level.as_ref() {
-                // Explicit `Off` on an adaptive (4.6/4.7) model: these models
+                // Explicit `Off` on an adaptive (4.6+) model: these models
                 // think by DEFAULT, so omitting the `thinking` field leaves it
                 // enabled — the caller's "off" would be silently ignored. Emit
                 // `{type:"disabled"}` to actually turn it off (pi parity:
                 // `thinkingEnabled === false → thinking:{type:"disabled"}`).
-                // Older/non-adaptive models default to no-thinking, so the
-                // generic arms below disable them by omission as before.
-                Some(crate::agents::thinking::ThinkLevel::Off) if adaptive => (
-                    Some(ThinkingBlock {
-                        thinking_type: "disabled".to_string(),
-                        budget_tokens: None,
-                        display: None,
-                    }),
-                    None,
-                ),
+                // Generation-5 models (fable-5) 400 on an explicit disabled
+                // block — omission is the only off-switch there, so they get
+                // no `thinking` field at all. Older/non-adaptive models
+                // default to no-thinking, so the generic arms below disable
+                // them by omission as before.
+                Some(crate::agents::thinking::ThinkLevel::Off) if adaptive => {
+                    if Self::omits_disabled_thinking(actual_model) {
+                        (None, None)
+                    } else {
+                        (
+                            Some(ThinkingBlock {
+                                thinking_type: "disabled".to_string(),
+                                budget_tokens: None,
+                                display: None,
+                            }),
+                            None,
+                        )
+                    }
+                }
                 Some(level) if adaptive => {
                     match Self::map_think_level_to_adaptive_effort(level, actual_model) {
                         Some(eff) => (

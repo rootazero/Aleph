@@ -166,9 +166,11 @@ pub(crate) fn parse_anthropic_sse_event(
                     "pause_turn" => StopReason::PauseTurn,
                     // The model declined to continue for safety reasons.
                     "refusal" => StopReason::Refusal,
-                    // The request exceeded the model's context window — treat as
-                    // a length stop so finish_reason translation reads "length".
-                    "model_context_window_exceeded" => StopReason::MaxTokens,
+                    // The prompt + output filled the model's context window.
+                    // Kept distinct from MaxTokens: the harness routes this to
+                    // reactive compaction, while MaxTokens gets a resume nudge
+                    // (appending more messages here would re-hit the wall).
+                    "model_context_window_exceeded" => StopReason::ContextWindowExceeded,
                     _ => StopReason::Unknown,
                 };
                 out.push_back(Ok(ProviderDelta::Done(sr)));
@@ -485,10 +487,12 @@ mod tests {
     }
 
     #[test]
-    fn message_delta_maps_context_window_exceeded_to_max_tokens() {
+    fn message_delta_maps_context_window_exceeded_distinct_from_max_tokens() {
+        // Distinct variant — the harness compacts on this instead of running
+        // the max_tokens resume-nudge loop (which would re-hit the wall).
         assert_eq!(
             done_for_stop_reason("model_context_window_exceeded"),
-            Some(StopReason::MaxTokens),
+            Some(StopReason::ContextWindowExceeded),
         );
     }
 
