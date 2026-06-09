@@ -40,7 +40,7 @@
 | 暗色背景氛围 | **冷静**：两抹柔和光晕（mauve + 蓝），有呼吸但不抢戏、不刺眼 |
 | 浅色玻璃 | **雅灰玻璃**：略冷灰 + 更明确边界 + 深色 AA 文字（亮底上不"消失"） |
 | 玻璃质感档位 | **C′ 克制液态玻璃**：质感要素全保留，响度收住（见 §5） |
-| 应用范围 | **仅 chrome**：侧栏/顶栏/弹层/卡片/模态是玻璃；主内容滚动区不加 backdrop-filter |
+| 应用范围 | **真玻璃只给固定 chrome**：侧栏/顶栏/弹层/模态。内容区卡片用「半透明 raised 面」坐在受控 aurora 上（**不加 backdrop-filter**），主内容滚动区同理 |
 
 ### 关于 C′ 的 GPU 权衡（决策依据）
 
@@ -83,11 +83,17 @@
 
 文字对比：在玻璃语境下重校 `--color-text-*` 至 AA 以上（修「文字不清晰」）。
 
-## 6. 范围：仅 chrome
+## 6. 范围：真玻璃只给固定 chrome
 
-**玻璃面（有限个数，可缓存模糊）**：侧栏 `.aleph-sidebar`、顶栏、弹层菜单 / popover、卡片、模态对话框。多数是把现有 `.glass-surface` 用法升级为 `.glass-panel`。
+**真玻璃面（有限个数、位置固定、后面是静态 aurora → 模糊结果可缓存，零滚动成本）**：
+侧栏 `.aleph-sidebar`、顶栏、弹层菜单 / popover（现有 `.glass` 类）、模态对话框。
+实现：升级现有 `.glass` 工具类承载 C′ 配方 + 给 `.aleph-sidebar` 选择器加 backdrop-filter。**无需改组件 markup**（这些表面已有 class 钩子）。
 
-**非玻璃**：主内容滚动区（坐在受控 aurora 上，无 `backdrop-filter`）；输入框 / 按钮 / 消息气泡 / 小控件（保持实色，避免数十个叠加模糊面）。
+**非真玻璃（不加 `backdrop-filter`）**：
+- **内容区卡片**（`bg-surface-raised` 盒子）：用半透明 raised 面坐在受控 aurora 上 → 视觉与玻璃 chrome 协调，但滚动时**不逐帧重算模糊**（规避 GPU 陷阱）。仅靠 `--color-surface-raised` token 调整实现，**零 markup 改动**（且 `bg-surface-raised` 与输入框共用，不能上 blur）。
+- 主内容滚动区、输入框 / 按钮 / 消息气泡 / 小控件：保持实色。
+
+> **为何卡片不上真玻璃**：卡片在滚动内容区里，backdrop-filter 会每滚动帧重算模糊 = 用户明确担心的 GPU 陷阱；且 `bg-surface-raised` 全站统一（连输入框共用），逐站点加玻璃 class 改动大且违 R3。
 
 ## 7. 主题选择器变更
 
@@ -108,11 +114,12 @@
 
 | 文件 | 改动 |
 |---|---|
-| `interfaces/webchat/styles/tailwind.css` | 主战场：受控 aurora（`--aleph-canvas-base` 半透明化）、`--glass-*` token、`.glass-panel`（暗/浅双套 C′ 参数）、reduced-transparency 降级块、删 `html.translucent` 专属块、玻璃语境文字对比重校 |
-| `interfaces/webchat/src/appearance.rs` | `ThemeMode` 退 `Vibrant`；`from_storage` 加 `"translucent" → Dark` 迁移；更新单测（`mode_storage_round_trips` / `ALL` / `non_default_values_persist_a_key` 不再含 Vibrant） |
-| `interfaces/webchat/src/components/theme_toggle.rs` | 选择器去 Vibrant 项 |
-| `interfaces/webchat/src/components/command_palette.rs` | 去/改 vibrant 切换命令与关键词 |
-| 现有 chrome 组件 | 把 `.glass-surface` 用法升级/补齐为 `.glass-panel`（sidebar / topbar / nav_menu / notification_center / directory_browser / command_palette popover / 卡片） |
+| `interfaces/webchat/styles/tailwind.css` | 主战场：受控 aurora（`--aleph-canvas-base` 半透明化）、升级 `.glass` 工具类为 C′ 配方（暗/浅双套，含 `::before` 描边 + `::after` 噪点）、`.aleph-sidebar` 加 backdrop-filter、`--color-surface-raised` 半透明化（卡片）、reduced-transparency 降级块、删 `html.translucent` 专属块、玻璃语境文字对比重校 |
+| `interfaces/webchat/src/appearance.rs` | `ThemeMode` 退 `Vibrant`（enum + `ALL` + `label` + `storage_value` + `apply_mode` arm）；`from_storage` 加 `"translucent" → Dark` 迁移；更新/新增单测 |
+| `interfaces/webchat/src/components/theme_toggle.rs` | 仅改顶部 doc 注释（选择器由 `ThemeMode::ALL` 泛型渲染，退 enum 后自动少一项，无逻辑改动） |
+| `interfaces/webchat/src/components/command_palette.rs` | 删 `theme.vibrant` action + `apply_theme` 的 `"translucent"` 分支（`remove_3` 保留以清理遗留 class） |
+
+> **无组件 markup 改动**：玻璃 chrome 全靠 CSS（`.glass` 工具类已在所有 popover 上 + `.aleph-sidebar` 选择器）。卡片靠 `--color-surface-raised` token，零站点编辑。
 
 **构建刷新链**（CLAUDE.md 强制，否则看不到效果）：
 `just wasm` → `cargo build --release -p alephcore --bin aleph-server`（rust_embed 烧 dist）→ 替换运行中 binary 让 supervisor relaunch。
