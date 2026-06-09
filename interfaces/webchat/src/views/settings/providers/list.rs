@@ -55,7 +55,7 @@ pub(super) fn SubscriptionLoginSection(
             <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
                 {t!(i18n, settings.providers.subscription_login)}
             </h2>
-            <div class="space-y-2">
+            <div class="grid grid-cols-1 gap-2">
                 {OAUTH_PRESETS.iter().enumerate().map(|(idx, preset)| {
                     let name = preset.name;
                     let description = preset.description;
