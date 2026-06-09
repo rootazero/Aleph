@@ -1,4 +1,4 @@
-//! Section 2 — 下游集群(Feature B 骨架):列出节点 + Enroll。
+//! Section 2 — Aleph 集群(Feature B 骨架):列出节点 + Enroll。
 //! Invoke / bash / deregister 待 feat/cluster-phase0c-core 合并(此处禁用占位)。
 
 use crate::api::cluster::{ClusterApi, EnrollResult, Environment};
@@ -55,9 +55,9 @@ pub fn ClusterSection() -> impl IntoView {
         <section class="space-y-4">
             <div class="flex items-center justify-between">
                 <div>
-                    <h2 class="text-lg font-semibold text-text-primary mb-1">"下游集群"</h2>
+                    <h2 class="text-lg font-semibold text-text-primary mb-1">"Aleph 集群"</h2>
                     <p class="text-sm text-text-secondary">
-                        "本 core 作为 center 登记并管理的 node 执行臂。"
+                        "本服务作为 center 登记并管理的 node 执行臂。"
                     </p>
                 </div>
                 <button
