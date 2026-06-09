@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 
 pub const METHOD_HANDSHAKE: &str = "bridge.handshake";
 pub const METHOD_PING: &str = "bridge.ping";
-pub const METHOD_SHUTDOWN: &str = "bridge.shutdown";
 pub const SUGGESTED_TIMEOUT_MS: u64 = 2_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

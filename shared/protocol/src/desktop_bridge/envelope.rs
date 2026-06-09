@@ -79,7 +79,7 @@ mod tests {
     fn notification_has_no_id() {
         let n = Notification {
             jsonrpc: "2.0".into(),
-            method: "bridge.shutdown".into(),
+            method: "perm.status_changed".into(),
             params: None,
         };
         let v = serde_json::to_value(&n).unwrap();
