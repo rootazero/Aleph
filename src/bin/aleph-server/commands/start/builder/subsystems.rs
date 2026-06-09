@@ -721,6 +721,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                 slash_access,
                 permission_level: policy.permission_level,
                 default_workspace: policy.default_workspace,
+                busy_input_mode: policy.busy_input_mode,
                 ..Default::default()
             };
             let tier_label = channel_config.caller_role_str();

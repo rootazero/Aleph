@@ -39,22 +39,36 @@ use crate::session::events::{now_ms, MessageContent, SessionEvent, SessionEventR
 use crate::session::service::SessionId;
 use crate::sync_primitives::Arc;
 
-/// Decide whether `session_key` already has *another* `Running` sibling run.
+/// Find the run id of *another* `Running` sibling on `session_key`, if any.
 ///
-/// Pure and synchronous so the same-session predicate can be unit-tested
-/// without spinning up an orchestrator. `new_run_id` is the just-reserved run
-/// that lost the `try_start_run` race; it is excluded so a run never counts
-/// itself as its own steering target.
+/// Pure and synchronous so the same-session predicate can be unit-tested without
+/// spinning up an orchestrator. `new_run_id` is the just-reserved run that lost
+/// the `try_start_run` race; it is excluded so a run never counts itself as its
+/// own steering target. The id is what the `Interrupt` busy-input mode feeds to
+/// [`super::ExecutionEngine::cancel`]; `Steer` only needs the boolean
+/// ([`find_steering_target`]).
+pub(super) fn find_steering_target_id(
+    runs: &HashMap<String, ActiveRun>,
+    new_run_id: &str,
+    session_key: &SessionKey,
+) -> Option<String> {
+    runs.iter().find_map(|(id, run)| {
+        (id != new_run_id
+            && matches!(run.state, RunState::Running)
+            && &run.request.session_key == session_key)
+            .then(|| id.clone())
+    })
+}
+
+/// Decide whether `session_key` already has *another* `Running` sibling run.
+/// Thin boolean wrapper over [`find_steering_target_id`] for the `Steer` path,
+/// which does not need the id.
 pub(super) fn find_steering_target(
     runs: &HashMap<String, ActiveRun>,
     new_run_id: &str,
     session_key: &SessionKey,
 ) -> bool {
-    runs.iter().any(|(id, run)| {
-        id != new_run_id
-            && matches!(run.state, RunState::Running)
-            && &run.request.session_key == session_key
-    })
+    find_steering_target_id(runs, new_run_id, session_key).is_some()
 }
 
 /// Render the user-visible session text for a request, mirroring the attachment
@@ -317,6 +331,23 @@ mod tests {
             "r-new",
             &run_request("s1", "steer").session_key
         ));
+    }
+
+    #[test]
+    fn target_id_returns_running_sibling_run_id() {
+        // The Interrupt mode needs the *id* to cancel, not just a boolean.
+        let mut runs = HashMap::new();
+        let (id, run) = active_run("r-old", "s1", RunState::Running);
+        runs.insert(id, run);
+        assert_eq!(
+            find_steering_target_id(&runs, "r-new", &run_request("s1", "steer").session_key),
+            Some("r-old".to_string())
+        );
+        // No cross-session match → nothing to cancel.
+        assert_eq!(
+            find_steering_target_id(&runs, "r-new", &run_request("s2", "steer").session_key),
+            None
+        );
     }
 
     #[test]

@@ -25,12 +25,20 @@ use super::InboundMessageRouter;
 /// (`"guest"`) with no locked workspace. This default is the over-permission
 /// fix — a missing config must never be treated as operator. The
 /// `permission_wiring_tests` below pin exactly this.
+/// Returns `(caller_role, locked_workspace, busy_input_mode_wire)`. The third
+/// element is the channel's busy-input policy wire string (`"steer"` default /
+/// `"interrupt"`), stamped into run metadata so the execution engine's busy
+/// branch dispatches without re-reading channel config.
 fn channel_run_identity(
     configs: &HashMap<String, ChannelConfig>,
     channel_id: &str,
-) -> (&'static str, Option<PathBuf>) {
+) -> (&'static str, Option<PathBuf>, &'static str) {
     let cfg = configs.get(channel_id).cloned().unwrap_or_default();
-    (cfg.caller_role_str(), cfg.resolved_default_workspace())
+    (
+        cfg.caller_role_str(),
+        cfg.resolved_default_workspace(),
+        cfg.busy_input_mode_wire(),
+    )
 }
 
 impl InboundMessageRouter {
@@ -252,9 +260,16 @@ impl InboundMessageRouter {
         // ("guest") — closing the prior over-permission where a missing role was
         // treated as operator. An operator opts a channel up to Config tier via
         // `permission_level = "config"` in its config block.
-        let (caller_role, channel_workspace) =
+        let (caller_role, channel_workspace, busy_input_mode) =
             channel_run_identity(&self.channel_configs, ctx.message.channel_id.as_str());
         metadata.insert("caller_role".to_string(), caller_role.to_string());
+        // Stamp the channel's busy-input policy so the execution engine's busy
+        // branch knows whether a message arriving mid-run should steer (default)
+        // or interrupt the in-flight run. Absent on Panel/CLI paths → Steer.
+        metadata.insert(
+            crate::gateway::execution_engine::BUSY_INPUT_MODE_KEY.to_string(),
+            busy_input_mode.to_string(),
+        );
 
         let is_slash = slash_command_mode.is_some();
         if let Some(mode) = slash_command_mode {
@@ -505,12 +520,19 @@ mod permission_wiring_tests {
     #[test]
     fn unconfigured_channel_defaults_to_guest_with_no_workspace() {
         let empty: HashMap<String, ChannelConfig> = HashMap::new();
-        assert_eq!(channel_run_identity(&empty, "telegram"), ("guest", None));
+        // Unconfigured → guest, no workspace, and the safe `steer` busy default.
+        assert_eq!(
+            channel_run_identity(&empty, "telegram"),
+            ("guest", None, "steer")
+        );
 
         // Unknown id in a populated map → still the safe default.
         let mut configs = HashMap::new();
         configs.insert("slack".to_string(), ChannelConfig::default());
-        assert_eq!(channel_run_identity(&configs, "telegram"), ("guest", None));
+        assert_eq!(
+            channel_run_identity(&configs, "telegram"),
+            ("guest", None, "steer")
+        );
     }
 
     /// A Chat-tier channel with an absolute, existing default_workspace is
@@ -529,8 +551,26 @@ mod permission_wiring_tests {
         );
         assert_eq!(
             channel_run_identity(&configs, "telegram"),
-            ("guest", Some(ws))
+            ("guest", Some(ws), "steer")
         );
+    }
+
+    /// A channel that opts into interrupt mode is stamped `"interrupt"` (the
+    /// metadata the execution engine's busy branch dispatches on), independent of
+    /// its permission tier.
+    #[test]
+    fn interrupt_busy_mode_is_stamped() {
+        use crate::gateway::execution_engine::BusyInputMode;
+        let mut configs = HashMap::new();
+        configs.insert(
+            "ops-bot".to_string(),
+            ChannelConfig {
+                busy_input_mode: BusyInputMode::Interrupt,
+                ..Default::default()
+            },
+        );
+        let (_role, _ws, busy) = channel_run_identity(&configs, "ops-bot");
+        assert_eq!(busy, "interrupt");
     }
 
     /// A Config-tier channel is stamped "operator" (Layer-2). With no
@@ -545,8 +585,10 @@ mod permission_wiring_tests {
                 ..Default::default()
             },
         );
-        let (role, workspace) = channel_run_identity(&configs, "ops-bot");
+        let (role, workspace, busy) = channel_run_identity(&configs, "ops-bot");
         assert_eq!(role, "operator");
         assert_eq!(workspace, None::<PathBuf>);
+        // Config tier inherits the safe steer default unless explicitly opted in.
+        assert_eq!(busy, "steer");
     }
 }

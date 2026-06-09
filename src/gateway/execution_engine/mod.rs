@@ -90,6 +90,65 @@ impl Default for ExecutionEngineConfig {
     }
 }
 
+/// Busy-input policy: what to do when a message arrives for a session whose
+/// Think→Act loop is already running. Selected **explicitly** per channel
+/// (R7 — never inferred from message content), defaulting to
+/// [`BusyInputMode::Steer`] so every existing path stays byte-identical until an
+/// operator opts a channel in.
+///
+/// This is the policy knob the reference harnesses all expose (hermes
+/// `HERMES_GATEWAY_BUSY_INPUT_MODE`, openclaw `QueueMode`, Pi `streamingBehavior`);
+/// Aleph previously hardcoded `Steer`. Pure scaffolding — the decision is a
+/// mechanical metadata lookup, the harness loop is untouched (R10, Future-Proof ✓).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BusyInputMode {
+    /// Inject the new message into the live event log; the running loop consumes
+    /// it at its next turn boundary and course-corrects without losing progress.
+    /// The original behaviour, and the safe default.
+    #[default]
+    Steer,
+    /// Cancel the running sibling on this session, then let the inbound router's
+    /// existing busy/retry back-off restart the message as a fresh run once the
+    /// slot frees. The new message supersedes the in-flight task, picking up its
+    /// full (interrupted) context from the session log — the model sees what was
+    /// done so far plus the new instruction. Reuses [`ExecutionEngine::cancel`]
+    /// and the `AgentBusy` retry path; no new dispatch machinery.
+    Interrupt,
+}
+
+/// Metadata key carrying the per-run [`BusyInputMode`] wire string
+/// (`"steer"` / `"interrupt"`). Stamped by the inbound router from the channel's
+/// `ChannelPolicyConfig`; absent on Panel/CLI paths (which default to `Steer`).
+pub const BUSY_INPUT_MODE_KEY: &str = "busy_input_mode";
+
+impl BusyInputMode {
+    /// Wire string stored in run metadata. Inverse of [`BusyInputMode::from_wire`].
+    #[must_use]
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            BusyInputMode::Steer => "steer",
+            BusyInputMode::Interrupt => "interrupt",
+        }
+    }
+
+    /// Parse from the optional metadata wire string. Any unknown / absent value
+    /// falls back to the safe [`BusyInputMode::Steer`] default.
+    #[must_use]
+    pub fn from_wire(s: Option<&str>) -> Self {
+        match s {
+            Some("interrupt") => BusyInputMode::Interrupt,
+            _ => BusyInputMode::Steer,
+        }
+    }
+
+    /// Resolve the mode from a run's metadata map.
+    #[must_use]
+    pub fn from_metadata(metadata: &HashMap<String, String>) -> Self {
+        Self::from_wire(metadata.get(BUSY_INPUT_MODE_KEY).map(String::as_str))
+    }
+}
+
 /// A run request
 #[derive(Clone)]
 pub struct RunRequest {
