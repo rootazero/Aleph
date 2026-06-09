@@ -52,15 +52,12 @@ pub fn SessionStatusBar() -> impl IntoView {
             let my_gen = poll_gen.get_untracked().wrapping_add(1);
             poll_gen.set(my_gen);
             leptos::task::spawn_local(async move {
-                loop {
-                    // `poll_gen`/`active_runs` are owned by this component.
-                    // On tab switch the component is disposed (and these
-                    // signals with it), but this detached future keeps
-                    // running — `try_*` lets it notice the disposal and stop
-                    // instead of panicking on a dead signal.
-                    let Some(gen) = poll_gen.try_get_untracked() else {
-                        break;
-                    };
+                // `poll_gen`/`active_runs` are owned by this component.
+                // On tab switch the component is disposed (and these
+                // signals with it), but this detached future keeps
+                // running — `try_*` lets it notice the disposal and stop
+                // instead of panicking on a dead signal.
+                while let Some(gen) = poll_gen.try_get_untracked() {
                     if gen != my_gen || !dash.is_connected.get_untracked() {
                         break;
                     }
