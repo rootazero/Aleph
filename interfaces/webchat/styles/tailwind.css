@@ -157,9 +157,15 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left:   env(safe-area-inset-left, 0px);
 
-  /* Glass material strength — overridden by html.glass to intensify. */
-  --glass-blur: 23px;
+  /* Tiered blur strengths. Transient popovers (`--glass-blur`) may be lush;
+     the always-on sidebar (`--glass-blur-chrome`) stays disciplined; small
+     in-content frosts and the full-viewport scrim are deliberately light.
+     `html.glass` intensifies the transient + chrome tiers only. */
+  --glass-blur: 20px;
   --glass-saturate: 1.6;
+  --glass-blur-chrome: 16px;
+  --glass-blur-subtle: 8px;
+  --scrim-blur: 2px;
 }
 
 html {
@@ -439,6 +445,10 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
     position: relative;
     backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    /* Diagonal sheen folded into the surface itself — leaves ::before for the
+       bezel and ::after for grain. Composes with the element's bg-color
+       utility (different property), so no conflict with bg-surface-overlay. */
+    background-image: linear-gradient(160deg, oklch(1 0 0 / 0.06), transparent 42%);
   }
 }
 /* Gradient specular edge — bright at the top, fading down. Painted once,
@@ -472,7 +482,7 @@ html.dark[data-accent="rose"], html.glass[data-accent="rose"] {
 /* Glass theme: intensify the specular edge + grain on chrome glass. */
 html.glass .glass::before {
   background: linear-gradient(180deg,
-    oklch(1 0 0 / 0.55), oklch(1 0 0 / 0.08) 50%, oklch(1 0 0 / 0));
+    oklch(1 0 0 / 0.62), oklch(1 0 0 / 0.10) 50%, oklch(1 0 0 / 0.02));
 }
 html.glass .glass::after { opacity: 0.5; }
 
@@ -481,6 +491,21 @@ html.glass .glass::after { opacity: 0.5; }
     oklch(1 0 0 / 0.9), oklch(1 0 0 / 0.2) 45%, oklch(0.4 0.02 295 / 0.06));
 }
 :root:not(.dark):not(.glass) .glass::after { opacity: 0.25; }
+
+/* ============================================================
+   Shared blur helpers — drive the full-viewport modal scrim and the
+   light in-content frosts off the tiered tokens, so they follow the
+   theme and the reduced-transparency safety valve. The scrim sets only
+   backdrop-filter; each call site keeps its own dim background colour.
+   ============================================================ */
+.aleph-scrim {
+  backdrop-filter: blur(var(--scrim-blur));
+  -webkit-backdrop-filter: blur(var(--scrim-blur));
+}
+.aleph-blur-subtle {
+  backdrop-filter: blur(var(--glass-blur-subtle));
+  -webkit-backdrop-filter: blur(var(--glass-blur-subtle));
+}
 
 /* ============================================================
    Accessibility: macOS "Reduce transparency" (and the CSS media query it
@@ -494,10 +519,17 @@ html.glass .glass::after { opacity: 0.5; }
     -webkit-backdrop-filter: none !important;
   }
   .glass::before, .glass::after, .aleph-sidebar::before { display: none !important; }
+  .aleph-scrim, .aleph-blur-subtle {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
   .aleph-sidebar { background-color: var(--color-sidebar) !important; }
   :root {
     --aleph-canvas-base: var(--aleph-solid-ground) !important;
     --color-surface-raised: oklch(1.00 0 0) !important;
+    --scrim-blur: 0px !important;
+    --glass-blur-subtle: 0px !important;
+    --glass-blur-chrome: 0px !important;
   }
   .dark { --color-surface-raised: oklch(0.20 0.018 310) !important; }
   html.glass {
@@ -733,9 +765,12 @@ html.glass {
   --aleph-sheen:    oklch(1 0 0 / 0.07);
   /* Cards: a touch more transparent than Dark so they read glassier on aurora. */
   --color-surface-raised: oklch(0.25 0.020 300 / 0.40);
-  /* Intensified glass material — pushed past the restrained default. */
-  --glass-blur: 30px;
-  --glass-saturate: 1.9;
+  /* Intensified glass material — pushed past the restrained default.
+     Transient popovers go lush (34px); the always-on sidebar tier
+     (--glass-blur-chrome) stays at 24px to cap idle GPU cost. */
+  --glass-blur: 34px;
+  --glass-saturate: 2.0;
+  --glass-blur-chrome: 24px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not(.light):not(.glass) {
@@ -811,8 +846,8 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
 }
 /* Glass theme: deepen the sidebar's frosted layer to match the stronger chrome. */
 html.glass .aleph-sidebar {

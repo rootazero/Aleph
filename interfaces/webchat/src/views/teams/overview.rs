@@ -414,7 +414,7 @@ pub fn OverviewView() -> impl IntoView {
                 }
                 view! {
                     <div
-                        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+                        class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 aleph-scrim p-4"
                         on:click=move |_| close_from_template()
                     >
                         <div

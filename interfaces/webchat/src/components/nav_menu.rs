@@ -123,8 +123,8 @@ pub fn NavMenu() -> impl IntoView {
 
             // Popup — opens upward
             <Show when=move || open.get()>
-                <div class="glass-surface glass animate-pop-in absolute bottom-full left-2 right-2 mb-2 z-50
-                            rounded-xl border border-border bg-surface-overlay/90 shadow-xl p-1.5 space-y-0.5">
+                <div class="glass animate-pop-in absolute bottom-full left-2 right-2 mb-2 z-50
+                            rounded-xl border border-border bg-surface-overlay/85 shadow-xl p-1.5 space-y-0.5">
                     {ALL_MODES.into_iter().map(|m| {
                         let route = route_of(m);
                         let nav = navigate.clone();

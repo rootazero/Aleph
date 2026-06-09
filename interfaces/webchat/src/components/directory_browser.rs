@@ -334,14 +334,14 @@ pub fn DirectoryBrowser(
         <Show when=move || open.get() fallback=|| ()>
             // Backdrop — click to cancel.
             <div
-                class="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm"
+                class="fixed inset-0 z-[60] bg-black/40 aleph-scrim"
                 data-tauri-drag-region="false"
                 on:click=cancel
             />
             // Modal card.
             <div
                 class="fixed left-1/2 top-[12vh] -translate-x-1/2 z-[61] w-[min(640px,calc(100vw-32px))] \
-                       glass-surface bg-surface-overlay/95 border border-border \
+                       glass bg-surface-overlay/85 border border-border \
                        rounded-2xl shadow-2xl overflow-hidden flex flex-col"
                 data-tauri-drag-region="false"
                 role="dialog"

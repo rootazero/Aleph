@@ -68,7 +68,7 @@ pub fn BootCheckGate() -> impl IntoView {
     view! {
         <Show when=move || show_gate.get() fallback=|| ()>
             <div
-                class="fixed inset-0 z-[9000] flex items-center justify-center bg-surface/95 backdrop-blur-sm p-4"
+                class="fixed inset-0 z-[9000] flex items-center justify-center bg-surface/95 aleph-scrim p-4"
                 role="dialog"
                 aria-modal="true"
             >
