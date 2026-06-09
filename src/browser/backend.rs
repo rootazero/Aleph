@@ -6,8 +6,8 @@ use async_trait::async_trait;
 
 use super::error::BrowserError;
 use super::types::{
-    ActionTarget, CookieOp, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
-    SnapshotOutput, TabId,
+    ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
+    ScrollDirection, SnapshotOutput, TabId,
 };
 
 #[async_trait]
@@ -52,6 +52,29 @@ pub trait BrowserBackend: Send + Sync {
 
     async fn press_key(&self, _tab_id: &str, _key: &str) -> Result<(), BrowserError> {
         Err(BrowserError::ActionFailed("press_key not supported".into()))
+    }
+
+    /// Navigate the tab's history: back, forward, or reload the current page.
+    ///
+    /// Default impl drives the page via `evaluate` with an arrow-function body —
+    /// both real backends' eval surfaces (`playwright-cli eval` and Chrome
+    /// DevTools MCP `evaluate_script`) require a function expression, not a bare
+    /// statement. Backends with a native history primitive override this so the
+    /// command waits for the resulting navigation to complete.
+    async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError> {
+        let js = match nav {
+            HistoryNav::Back => "() => history.back()",
+            HistoryNav::Forward => "() => history.forward()",
+            HistoryNav::Refresh => "() => location.reload()",
+        };
+        self.evaluate(tab_id, js).await.map(|_| ())
+    }
+
+    /// Double-click an element. The target must be a snapshot ref — neither
+    /// driver exposes a coordinate-based double-click primitive.
+    /// Default impl returns Unsupported.
+    async fn dblclick(&self, _tab_id: &str, _target: ActionTarget) -> Result<(), BrowserError> {
+        Err(BrowserError::ActionFailed("dblclick not supported".into()))
     }
 
     async fn wait_for_text(

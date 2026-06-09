@@ -11,8 +11,8 @@ use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::playwright_cli::{CliOutput, PlaywrightCliDriver};
 use super::types::{
-    ActionTarget, CookieOp, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
-    SnapshotOutput, TabId,
+    ActionTarget, CookieOp, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput,
+    ScrollDirection, SnapshotOutput, TabId,
 };
 
 pub struct PlaywrightCliBackend {
@@ -57,6 +57,24 @@ fn target_ref(target: &ActionTarget) -> Result<&str, BrowserError> {
             "this action requires a snapshot ref; coordinates unsupported for this op".into(),
         )),
     }
+}
+
+/// Sentinel the wait probe returns when the text is present. A bare `true`
+/// would be ambiguous — the CLI's status lines or a boolean-valued page could
+/// also print a lone `true`; this token cannot occur by accident (the probe's
+/// result value is the only thing echoed, never the page text).
+const WAIT_PROBE_FOUND: &str = "ALEPH_WAIT_FOUND";
+
+/// Build the JS probe `playwright-cli eval` runs to test whether `text` is
+/// visible on the page. `serde_json::to_string` renders `text` as a quoted,
+/// fully-escaped string literal, so arbitrary text (quotes, backslashes,
+/// newlines) can never break out of the expression.
+fn wait_probe_func(text: &str) -> String {
+    let needle = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+    format!(
+        "() => (!!document.body && document.body.innerText.includes({needle})) \
+         ? {WAIT_PROBE_FOUND:?} : 'absent'"
+    )
 }
 
 /// Translate a [`CookieOp`] into the `playwright-cli cookie-*` argv.
@@ -308,6 +326,53 @@ impl BrowserBackend for PlaywrightCliBackend {
         Ok(())
     }
 
+    async fn history(&self, _tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError> {
+        // Native commands wait for the resulting navigation, unlike the JS-eval
+        // default (history.back() returns before the load starts).
+        let cmd = match nav {
+            HistoryNav::Back => "go-back",
+            HistoryNav::Forward => "go-forward",
+            HistoryNav::Refresh => "reload",
+        };
+        let _ = self.run(&[cmd], self.nav_timeout()).await?;
+        Ok(())
+    }
+
+    async fn dblclick(&self, _tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
+        let ref_id = target_ref(&target)?;
+        let _ = self
+            .run(&["dblclick", ref_id], self.action_timeout())
+            .await?;
+        Ok(())
+    }
+
+    async fn wait_for_text(
+        &self,
+        _tab_id: &str,
+        text: &str,
+        timeout_ms: u64,
+    ) -> Result<bool, BrowserError> {
+        // playwright-cli has no wait command — poll the rendered page text via
+        // `eval` until the text appears or the budget elapses. Returns Ok(false)
+        // on timeout (text absent is an answer, not an error).
+        const POLL_INTERVAL: Duration = Duration::from_millis(500);
+        let func = wait_probe_func(text);
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
+        loop {
+            let out = self.run(&["eval", &func], self.action_timeout()).await?;
+            // The probe's result value is the only thing echoed back; the
+            // sentinel cannot appear unless the probe returned "found".
+            if out.stdout.contains(WAIT_PROBE_FOUND) {
+                return Ok(true);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                return Ok(false);
+            }
+            tokio::time::sleep(POLL_INTERVAL.min(deadline - now)).await;
+        }
+    }
+
     async fn console_messages(&self, _tab_id: &str) -> Result<String, BrowserError> {
         Ok(self.run(&["console"], self.action_timeout()).await?.stdout)
     }
@@ -519,6 +584,23 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, BrowserError::ActionFailed(_)));
+    }
+
+    #[test]
+    fn test_wait_probe_func_is_arrow_function_with_escaped_needle() {
+        // Plain text embeds as a quoted literal inside an arrow function that
+        // resolves to the sentinel (never a bare boolean — see WAIT_PROBE_FOUND).
+        let f = wait_probe_func("Loading done");
+        assert!(f.starts_with("() => "));
+        assert!(f.contains("document.body.innerText.includes(\"Loading done\")"));
+        assert!(f.contains("\"ALEPH_WAIT_FOUND\""));
+        assert!(f.contains("'absent'"));
+        // Quotes/backslashes/newlines must stay inside the string literal.
+        let f = wait_probe_func("she said \"hi\\\" \n");
+        assert!(f.starts_with("() => "));
+        assert!(f.contains("\\\"hi\\\\\\\""));
+        assert!(f.contains("\\n"));
+        assert!(!f.contains('\n'), "raw newline would break the expression");
     }
 
     #[test]

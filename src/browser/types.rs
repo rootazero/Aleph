@@ -24,6 +24,16 @@ pub enum ScrollDirection {
     Right,
 }
 
+/// History-style navigation on the current tab (back / forward / refresh).
+/// Internal to the backend contract — the tool layer maps its own serde enum
+/// onto this, so no serde derives are needed here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HistoryNav {
+    Back,
+    Forward,
+    Refresh,
+}
+
 /// Options for taking a screenshot.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScreenshotOpts {
