@@ -248,6 +248,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // (b) exec.approval.* RPC 处理器、(c) router 回调汇 共用。
     // 通道就绪后（initialize_channels 之后）再经 set_requester 注入 adapter。
     let exec_approval_manager = Arc::new(alephcore::exec::ExecApprovalManager::new());
+    // Cluster ③: share the canonical approval manager with the gateway so
+    // node-initiated `node.approval.request` frames drive `run_node_approval`.
+    server.exec_approval_manager = Some(exec_approval_manager.clone());
 
     // Build a single ApprovalGate shared between the Sandbox capability
     // escalation path and the `ScopedToolService` `requires_confirmation`

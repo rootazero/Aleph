@@ -45,11 +45,13 @@
 pub mod adapters;
 pub mod callback_sink;
 mod config;
+pub mod node_requester;
 pub mod operator_requester;
 mod policy;
 mod session_route;
 mod types;
 
+pub use node_requester::run_node_approval;
 pub use operator_requester::OperatorApprovalRequester;
 
 pub use config::{matches_glob, ConfigApprovalPolicy, PolicyConfig, PolicyRule};

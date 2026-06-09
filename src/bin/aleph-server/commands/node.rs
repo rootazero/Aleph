@@ -5,9 +5,12 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::RwLock;
 use std::time::Duration;
 
-use alephcore::cluster::{CommandDescriptor, CommandTable};
+use alephcore::cluster::{
+    ApprovalSlot, CenterApprovalRequester, CommandDescriptor, CommandTable, ReverseRpcChannel,
+};
 use alephcore::gateway::protocol::JsonRpcResponse;
 use alephcore::routing::session_key::SessionKey;
 use alephcore::sandbox::config::SandboxConfig;
@@ -110,7 +113,8 @@ pub async fn handle_node(
     token: Option<String>,
     name: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let table = Arc::new(build_command_table(&name));
+    let (table, approval_slot) = build_command_table(&name);
+    let table = Arc::new(table);
     let declared = table.descriptors();
     let url = format!("{}/ws", center.trim_end_matches('/'));
     let cred_path = credential_path(&name);
@@ -133,7 +137,7 @@ pub async fn handle_node(
 
     let mut backoff = BACKOFF_INITIAL_MS;
     loop {
-        match run_session(&url, &bearer, &name, &declared, &table).await {
+        match run_session(&url, &bearer, &name, &declared, &table, &approval_slot).await {
             Ok(SessionOutcome::Ended) => {
                 tracing::warn!("node session ended cleanly; reconnecting");
                 backoff = BACKOFF_INITIAL_MS;
@@ -166,15 +170,16 @@ fn persist_credential(path: Option<&Path>, cred: &NodeCredential) {
     }
 }
 
-/// 建节点 sandbox（镜像 sandbox_debug.rs，生产式 `None` 审批 gate=headless 安全，
-/// 升权一律拒）+ 唯一 bash 命令。
-fn build_command_table(name: &str) -> CommandTable {
+/// Build the node sandbox + command table. The `ApprovalGate` is wired to a
+/// `CenterApprovalRequester` whose channel slot is filled per-connection by
+/// `run_session`; until a connection is live the slot is `None` and escalations
+/// fail-closed (same as the old headless `None` requester).
+fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
     let cfg = SandboxConfig::default();
     let driver = create_platform_driver_from_config(&cfg);
-    // Production-style headless gate: `None` requester means any capability
-    // escalation is denied (no operator to prompt). Mirror the daemon, NOT
-    // the debug CLI's auto-approver.
-    let gate = Arc::new(ApprovalGate::new(ApprovalConfig::default(), None));
+    let slot: ApprovalSlot = Arc::new(RwLock::new(None));
+    let requester = Arc::new(CenterApprovalRequester::new(slot.clone()));
+    let gate = Arc::new(ApprovalGate::new(ApprovalConfig::default(), Some(requester)));
     let sandbox = build_sandbox(
         &cfg,
         driver,
@@ -190,7 +195,7 @@ fn build_command_table(name: &str) -> CommandTable {
         alephcore::sandbox::workspace::session_workspace_dir(&cfg.workspace_root, &session);
     let mut table = CommandTable::with_bash(bash, session);
     table.register_file_commands(workspace_dir);
-    table
+    (table, slot)
 }
 
 /// Interactive pairing: anonymous WS → `pairing.start_node` → print the code →
@@ -261,15 +266,18 @@ async fn run_session(
     token: &str,
     name: &str,
     declared: &[CommandDescriptor],
-    table: &CommandTable,
+    table: &Arc<CommandTable>,
+    approval_slot: &ApprovalSlot,
 ) -> Result<SessionOutcome, Box<dyn std::error::Error>> {
-    let (mut ws, _resp) = tokio_tungstenite::connect_async(url).await?;
+    let (ws, _resp) = tokio_tungstenite::connect_async(url).await?;
+    let (mut write, mut read) = ws.split();
+
     let connect = json!({
         "jsonrpc": "2.0", "id": 1, "method": "connect",
         "params": { "token": token, "device_name": name, "commands": declared }
     });
-    ws.send(Message::Text(connect.to_string().into())).await?;
-    let reply = ws
+    write.send(Message::Text(connect.to_string().into())).await?;
+    let reply = read
         .next()
         .await
         .ok_or("center closed before connect reply")??;
@@ -283,12 +291,60 @@ async fn run_session(
     }
     tracing::info!("node '{name}' connected to center");
 
-    while let Some(msg) = ws.next().await {
-        let Message::Text(text) = msg? else { continue };
-        if let Some(reply) = handle_frame(table, text.as_str()).await {
-            ws.send(Message::Text(reply.into())).await?;
+    // Bidirectional channel for this connection: outbound mpsc drained by a
+    // writer task; a node-side PendingInvokes resolves center responses. This
+    // is what lets a blocked bash command (awaiting approval) NOT deadlock the
+    // read loop — dispatch runs on spawned tasks while the read loop keeps
+    // pumping frames.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
+    let channel = ReverseRpcChannel::new(out_tx.clone());
+    let pending = channel.pending();
+    *approval_slot.write().unwrap_or_else(|e| e.into_inner()) = Some(channel);
+
+    let writer = tokio::spawn(async move {
+        while let Some(frame) = out_rx.recv().await {
+            if write.send(Message::Text(frame.into())).await.is_err() {
+                break;
+            }
         }
+    });
+
+    // Run the read loop in an inner block so the cleanup below (fail-close the
+    // approval slot + stop the writer) runs on EVERY exit path — including a WS
+    // error early-return via `?`, not just the normal loop fall-through.
+    let loop_result: Result<(), Box<dyn std::error::Error>> = async {
+        while let Some(msg) = read.next().await {
+            let Message::Text(text) = msg? else { continue };
+            let text = text.to_string();
+
+            // Center → node RESPONSE: resolve a node-initiated reverse-RPC call.
+            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&text) {
+                if resp.id.is_some() && (resp.result.is_some() || resp.error.is_some()) {
+                    if let Some(id) = resp.id.clone() {
+                        pending.resolve(&id, resp);
+                    }
+                    continue;
+                }
+            }
+
+            // Center → node REQUEST (tool.call): dispatch on a spawned task so a
+            // long-running command (awaiting approval) does not block this loop.
+            let table = Arc::clone(table);
+            let out = out_tx.clone();
+            tokio::spawn(async move {
+                if let Some(reply) = handle_frame(&table, &text).await {
+                    let _ = out.send(reply).await;
+                }
+            });
+        }
+        Ok(())
     }
+    .await;
+
+    // Cleanup on every exit path: fail-close the approval slot + stop the writer.
+    *approval_slot.write().unwrap_or_else(|e| e.into_inner()) = None;
+    writer.abort();
+    loop_result?;
     Ok(SessionOutcome::Ended)
 }
 

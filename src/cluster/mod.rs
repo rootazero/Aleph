@@ -6,12 +6,14 @@
 //!
 //! 红线：本模块不含任何 LLM 推理（R7），不进入 `src/harness/`（R10）。
 
+mod node_approval;
 mod node_file_cmd;
 mod node_runtime;
 mod registry;
 mod reverse_rpc;
 
 pub(crate) use node_file_cmd::sha256_hex;
+pub use node_approval::{ApprovalSlot, CenterApprovalRequester, NODE_APPROVAL_TIMEOUT_MS};
 pub use node_file_cmd::{FileReadCommand, FileWriteCommand, MAX_FILE_BYTES};
 pub use node_runtime::{CommandTable, NodeCommand};
 pub use registry::{
