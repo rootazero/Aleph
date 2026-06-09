@@ -61,7 +61,7 @@ pub fn ServiceBlockingGate() -> impl IntoView {
     view! {
         <Show when=move || show_overlay.get() fallback=|| ()>
             <div
-                class="fixed inset-0 z-[9500] flex items-center justify-center bg-surface/85 backdrop-blur-sm p-4"
+                class="fixed inset-0 z-[9500] flex items-center justify-center bg-surface/85 aleph-scrim p-4"
                 role="dialog"
                 aria-modal="true"
             >

@@ -336,7 +336,7 @@ pub fn CommandPalette() -> impl IntoView {
     view! {
         <Show when=move || open.get() fallback=|| ()>
             <div
-                class="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm"
+                class="fixed inset-0 z-[60] bg-black/40 aleph-scrim"
                 data-tauri-drag-region="false"
                 on:click=move |_| open.set(false)
             />
