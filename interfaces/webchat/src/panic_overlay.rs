@@ -164,6 +164,25 @@ fn escape_html(s: &str) -> String {
     out
 }
 
+/// Append `new_record_json` (a JSON object string) to the JSON array held in
+/// `existing_json`, keeping only the most recent `cap` entries. Robust to a
+/// missing or corrupt existing value (treated as an empty array) and to an
+/// unparseable new record (skipped). Returns the serialized JSON array.
+///
+/// Pure — no DOM/JS dependency — so it is unit-testable on the host.
+fn append_capped(existing_json: &str, new_record_json: &str, cap: usize) -> String {
+    let mut arr: Vec<serde_json::Value> =
+        serde_json::from_str(existing_json).unwrap_or_default();
+    if let Ok(record) = serde_json::from_str::<serde_json::Value>(new_record_json) {
+        arr.push(record);
+    }
+    if arr.len() > cap {
+        let drop = arr.len() - cap;
+        arr.drain(0..drop);
+    }
+    serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +208,38 @@ mod tests {
         // set_hook so the second call is a cheap no-op.
         install();
         install();
+    }
+
+    #[test]
+    fn append_capped_adds_to_empty_log() {
+        let out = append_capped("[]", r#"{"message":"boom"}"#, 10);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["message"], "boom");
+    }
+
+    #[test]
+    fn append_capped_treats_corrupt_existing_as_empty() {
+        let out = append_capped("not json at all", r#"{"message":"boom"}"#, 10);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 1);
+    }
+
+    #[test]
+    fn append_capped_keeps_only_most_recent() {
+        let existing = r#"[{"message":"a"},{"message":"b"},{"message":"c"}]"#;
+        let out = append_capped(existing, r#"{"message":"d"}"#, 3);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["message"], "b");
+        assert_eq!(arr[2]["message"], "d");
+    }
+
+    #[test]
+    fn append_capped_skips_invalid_new_record() {
+        let out = append_capped(r#"[{"message":"a"}]"#, "garbage", 10);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["message"], "a");
     }
 }
