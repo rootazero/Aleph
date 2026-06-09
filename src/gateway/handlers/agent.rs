@@ -248,6 +248,10 @@ impl AgentRunManager {
             None => None,
         };
 
+        // Capture the originating surface before `metadata` is moved into the
+        // request — used below to decide cross-surface reply fan-out.
+        let current_channel = metadata.get("channel_id").cloned().unwrap_or_default();
+
         let request = RunRequest {
             run_id: run_id.clone(),
             input: params.input.clone(),
@@ -262,8 +266,34 @@ impl AgentRunManager {
             model_override: params.model_override,
         };
 
-        let emitter: Arc<dyn EventEmitter + Send + Sync> =
+        // Primary emitter: streams to the Panel via the gateway event bus.
+        let base_emitter: Arc<dyn EventEmitter + Send + Sync> =
             Arc::new(GatewayEventEmitter::new(self.event_bus.clone()));
+
+        // Sub-gap (b): if this gateway/Panel run continues a session that
+        // originated on an *external* channel (Telegram, ...), wrap the emitter
+        // so the final reply is also delivered back to that origin channel —
+        // keeping the two surfaces in sync. Inbound channel runs never reach
+        // this handler (they deliver via ReplyEmitter), so there is no double
+        // delivery; the surface check below skips same-channel continuations.
+        let emitter: Arc<dyn EventEmitter + Send + Sync> = match (
+            agent.origin_route(&session_key).await,
+            crate::gateway::event_emitter::origin_fanout::channel_registry(),
+        ) {
+            (Some((origin_channel, origin_conversation)), Some(registry))
+                if origin_channel != current_channel =>
+            {
+                Arc::new(
+                    crate::gateway::event_emitter::origin_fanout::OriginFanoutEmitter::new(
+                        base_emitter,
+                        registry,
+                        origin_channel,
+                        origin_conversation,
+                    ),
+                )
+            }
+            _ => base_emitter,
+        };
 
         let execution_adapter = self.execution_adapter.clone();
         let active_runs = self.active_runs.clone();

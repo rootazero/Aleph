@@ -92,14 +92,40 @@ instead of the hardcoded `None`, removing the dead value.
 - `SessionIdentityMeta.source_channel` goes from a perpetually-`"unknown"` dead field to a
   live, surfaced one.
 
+## Phase 2 — cross-surface reply fan-out (sub-gap (b), now implemented)
+
+Built on the origin binding above so a continuation no longer silently forks:
+
+- **Persist the full origin route.** `set_source_channel` also captures the origin
+  conversation id (e.g. the Telegram chat id) from inbound `metadata["conversation_id"]`
+  into `identity_meta.custom["origin_conversation"]`, read back via
+  `SessionMetadata::origin_conversation()`. Idempotent with the channel stamp.
+- **`OriginFanoutEmitter`** (`event_emitter/origin_fanout.rs`) — a decorator mirroring the
+  proven `InstantBufferingEmitter` pattern. It wraps the run's primary
+  `GatewayEventEmitter` and, on `RunComplete`, delivers the final response as a single
+  message to the bound origin channel via `ChannelRegistry::send`. All other events pass
+  through untouched (no double-streaming of tool/reasoning chrome; inner sequencing intact).
+- **Registry injection without constructor churn.** A process-global
+  `OnceLock<Arc<ChannelRegistry>>` (mirrors `middleware::request_state`) is set once at
+  subsystem boot, so the Panel run path reaches the registry without threading it through
+  `AgentRunManager`. `None` in non-gateway contexts → fan-out simply skipped.
+- **Wiring + double-delivery safety.** `AgentRunManager::start_run` wraps the emitter only
+  when `AgentInstance::origin_route` resolves an external origin **and** the run's surface
+  (`metadata["channel_id"]`, `"gui:chat"` for the Panel) differs from it. Inbound channel
+  runs never reach this handler (they deliver via `ReplyEmitter`), so a channel's own reply
+  is never duplicated; same-surface continuations are skipped by the surface check.
+
+Verification: `origin_conversation` capture is idempotent and survives a same-session
+re-stamp; the decorator forwards `RunComplete` to the inner emitter even when channel
+delivery is unavailable (best-effort, never blocks the Panel stream).
+
 ## Explicitly deferred (extension points)
 
-- **Phase 2 — reply fan-out (b):** when a Panel continuation targets a session whose origin is
-  an external channel, tee the final reply back to that channel (true bidirectional sync).
-  `ReplyRoute` is already serialisable and `identity_meta.custom` can hold a persisted reply
-  route; the origin binding from this spec is the prerequisite. Out of scope this round
-  (user deprioritised cross-surface delivery).
 - **Multi-level permission (④):** `source_channel` + `ChannelPermissionLevel` can grow a
-  level-ordered model later. Documented only; no speculative abstraction now (R10 YAGNI).
+  level-ordered model later. Documented only; no speculative abstraction now (R10 YAGNI —
+  adding an ordinal rank with no third-level consumer would itself be dead code).
 - **Frontend origin badge:** G2/G3 deliver origin to the wire protocol; rendering a badge in
   the Panel sidebar is a later WASM round (consistent with prior deferral pattern).
+- **Live cross-surface streaming:** the Panel watching a *channel-initiated* run live (full
+  event mirror, not just the final reply) remains future work; this round mirrors the final
+  reply only, which is the high-value, low-risk slice.

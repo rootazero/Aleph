@@ -193,6 +193,7 @@ impl SessionManager {
         &self,
         key: &SessionKey,
         channel: &str,
+        conversation: Option<&str>,
     ) -> Result<(), SessionManagerError> {
         let channel = channel.trim();
         if channel.is_empty() || channel == "unknown" {
@@ -221,6 +222,15 @@ impl SessionManager {
             return Ok(());
         }
         identity_meta.source_channel = channel.to_string();
+        // Capture the origin conversation id (e.g. Telegram chat id) so a later
+        // cross-surface continuation (sub-gap (b)) can fan the final reply back
+        // to the originating channel.
+        if let Some(conv) = conversation.map(str::trim).filter(|c| !c.is_empty()) {
+            identity_meta.custom.insert(
+                crate::gateway::session_store::types::ORIGIN_CONVERSATION_KEY.to_string(),
+                serde_json::json!(conv),
+            );
+        }
 
         let meta_json = identity_meta
             .to_json_string()
@@ -242,8 +252,9 @@ impl SessionManager {
         &self,
         key: &SessionKey,
         channel: &str,
+        conversation: Option<&str>,
     ) -> Result<(), SessionManagerError> {
-        self.set_source_channel(key, channel).await
+        self.set_source_channel(key, channel, conversation).await
     }
 
     /// Set session lifecycle state

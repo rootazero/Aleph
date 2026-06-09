@@ -148,8 +148,9 @@ where
             // channels (both land in metadata["channel_id"]). The store call is
             // idempotent and skips the empty/"unknown" sentinel.
             if let Some(channel) = request.metadata.get("channel_id") {
+                let conversation = request.metadata.get("conversation_id").map(String::as_str);
                 agent
-                    .set_session_source_channel(&request.session_key, channel)
+                    .set_session_source_channel(&request.session_key, channel, conversation)
                     .await;
             }
         }

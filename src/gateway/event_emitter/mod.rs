@@ -5,6 +5,7 @@
 
 mod impls;
 mod instant_buffer;
+pub mod origin_fanout;
 mod types;
 
 #[cfg(test)]

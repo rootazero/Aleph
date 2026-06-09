@@ -314,6 +314,12 @@ pub(in crate::commands::start) async fn initialize_channels(
         None => Arc::new(ChannelRegistry::new()),
     };
 
+    // Wire the channel registry into the global slot read by the gateway/Panel
+    // run path for cross-surface origin reply fan-out (sub-gap (b)): a run
+    // continued from the Panel against a session that originated on an external
+    // channel delivers its final reply back to that channel.
+    alephcore::gateway::event_emitter::origin_fanout::set_channel_registry(channel_registry.clone());
+
     // Replay any deliveries persisted before this start, and keep draining new
     // transient failures, for as long as the daemon runs.
     if let Some(store) = delivery_store {

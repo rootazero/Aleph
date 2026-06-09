@@ -166,23 +166,40 @@ async fn test_set_source_channel_records_and_surfaces_origin() {
     assert_eq!(before.len(), 1);
     assert_eq!(before[0].origin_channel(), None);
 
-    // Stamp the originating channel; it must be surfaced via the read path.
-    manager.set_source_channel(&key, "telegram").await.unwrap();
+    // Stamp the originating channel + conversation; both must be surfaced via
+    // the read path.
+    manager
+        .set_source_channel(&key, "telegram", Some("chat-77"))
+        .await
+        .unwrap();
     let after = manager.list_sessions(None).await.unwrap();
     assert_eq!(
         after[0].origin_channel(),
         Some("telegram".to_string()),
         "first stamp must record the real origin"
     );
+    assert_eq!(
+        after[0].origin_conversation(),
+        Some("chat-77".to_string()),
+        "first stamp must capture the origin conversation id for reply fan-out"
+    );
 
     // Idempotent: a later continuation from a different surface must NOT clobber
     // the recorded origin (this is what keeps multi-end continuity honest).
-    manager.set_source_channel(&key, "gui:chat").await.unwrap();
+    manager
+        .set_source_channel(&key, "gui:chat", None)
+        .await
+        .unwrap();
     let still = manager.list_sessions(None).await.unwrap();
     assert_eq!(
         still[0].origin_channel(),
         Some("telegram".to_string()),
         "second stamp must not clobber the existing origin"
+    );
+    assert_eq!(
+        still[0].origin_conversation(),
+        Some("chat-77".to_string()),
+        "second stamp must not clobber the origin conversation either"
     );
 }
 
@@ -196,10 +213,14 @@ async fn test_set_source_channel_skips_empty_and_unknown_sentinel() {
     manager.get_or_create(&key).await.unwrap();
 
     // Empty / sentinel inputs are no-ops: origin stays unset (None).
-    manager.set_source_channel(&key, "   ").await.unwrap();
-    manager.set_source_channel(&key, "unknown").await.unwrap();
+    manager.set_source_channel(&key, "   ", None).await.unwrap();
+    manager
+        .set_source_channel(&key, "unknown", Some("x"))
+        .await
+        .unwrap();
     let sessions = manager.list_sessions(None).await.unwrap();
     assert_eq!(sessions[0].origin_channel(), None);
+    assert_eq!(sessions[0].origin_conversation(), None);
 }
 
 #[test]
