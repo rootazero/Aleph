@@ -413,8 +413,9 @@ impl SessionStore for SessionManager {
         &self,
         key: &SessionKey,
         channel: &str,
+        conversation: Option<&str>,
     ) -> Result<(), SessionStoreError> {
-        self.stamp_source_channel(key, channel)
+        self.stamp_source_channel(key, channel, conversation)
             .await
             .map_err(map_err)
     }

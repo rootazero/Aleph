@@ -116,8 +116,9 @@ pub trait SessionStore: Send + Sync {
         &self,
         key: &SessionKey,
         channel: &str,
+        conversation: Option<&str>,
     ) -> Result<(), SessionStoreError> {
-        let _ = (key, channel);
+        let _ = (key, channel, conversation);
         Ok(())
     }
     async fn set_state(

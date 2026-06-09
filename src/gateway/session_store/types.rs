@@ -113,7 +113,25 @@ impl SessionMetadata {
         let c = im.source_channel.trim();
         (!c.is_empty() && c != "unknown").then(|| c.to_string())
     }
+
+    /// Origin conversation id captured alongside the origin channel on the
+    /// first inbound message (e.g. the Telegram chat id). Drives cross-surface
+    /// reply fan-out (sub-gap (b)): a run continued from the Panel can deliver
+    /// its final reply back to `(origin_channel, origin_conversation)`.
+    pub fn origin_conversation(&self) -> Option<String> {
+        self.identity_meta
+            .as_ref()?
+            .custom
+            .get(ORIGIN_CONVERSATION_KEY)
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+    }
 }
+
+/// Identity-metadata custom key under which a session's origin conversation id
+/// is persisted. Written by `SessionManager::set_source_channel`, read by
+/// `SessionMetadata::origin_conversation`.
+pub const ORIGIN_CONVERSATION_KEY: &str = "origin_conversation";
 
 #[cfg(test)]
 mod origin_channel_tests {

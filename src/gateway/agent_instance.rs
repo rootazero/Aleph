@@ -310,14 +310,39 @@ impl AgentInstance {
         }
     }
 
-    /// Record the session's originating channel onto its identity metadata so
-    /// `sessions.list` / `sessions.changed` can surface conversation origin for
-    /// multi-end continuity. Idempotent in the store (never clobbers a real
-    /// origin); best-effort (a stamp failure must not abort the run).
-    pub async fn set_session_source_channel(&self, key: &SessionKey, channel: &str) {
-        if let Err(e) = self.session_store.set_source_channel(key, channel).await {
+    /// Record the session's originating channel (and, for inbound channels, its
+    /// conversation id) onto identity metadata so `sessions.list` /
+    /// `sessions.changed` can surface conversation origin and a later
+    /// cross-surface continuation can fan the reply back (sub-gap (b)).
+    /// Idempotent in the store (never clobbers a real origin); best-effort (a
+    /// stamp failure must not abort the run).
+    pub async fn set_session_source_channel(
+        &self,
+        key: &SessionKey,
+        channel: &str,
+        conversation: Option<&str>,
+    ) {
+        if let Err(e) = self
+            .session_store
+            .set_source_channel(key, channel, conversation)
+            .await
+        {
             warn!("Failed to stamp session source_channel in store: {}", e);
         }
+    }
+
+    /// Resolve a session's bound origin `(channel, conversation)` for
+    /// cross-surface reply fan-out. `Some` only when the session was first
+    /// created by an *external* channel (not the Panel's own `"gui:chat"` nor
+    /// the unknown sentinel) and an origin conversation id was captured.
+    pub async fn origin_route(&self, key: &SessionKey) -> Option<(String, String)> {
+        let meta = self.session_store.get_metadata(key).await.ok().flatten()?;
+        let channel = meta.origin_channel()?;
+        if channel == "gui:chat" {
+            return None;
+        }
+        let conversation = meta.origin_conversation()?;
+        Some((channel, conversation))
     }
 
     /// Add a message to a session (delegated to session store) and capture
