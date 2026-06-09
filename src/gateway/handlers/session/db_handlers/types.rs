@@ -43,6 +43,11 @@ pub struct SessionInfo {
     pub parent_session_key: Option<String>,
     /// Number of compactions performed
     pub compaction_count: u64,
+    /// Originating channel ("telegram", "gui:chat", ...) derived from session
+    /// identity metadata. `None` for legacy/unknown-origin sessions. Lets the
+    /// Panel distinguish channel-originated conversations from its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<String>,
 }
 
 /// Session history message.

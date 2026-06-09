@@ -51,6 +51,8 @@ pub async fn handle_list_db(
                                 .map(String::from)
                         })
                     });
+                    // Derive origin channel before the struct literal moves m's fields.
+                    let channel = m.origin_channel();
 
                     SessionInfo {
                         key: m.key,
@@ -73,6 +75,7 @@ pub async fn handle_list_db(
                         model_provider: m.model_provider,
                         parent_session_key: m.parent_session_key,
                         compaction_count: m.compaction_count as u64,
+                        channel,
                     }
                 })
                 .collect();

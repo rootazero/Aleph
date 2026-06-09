@@ -310,6 +310,16 @@ impl AgentInstance {
         }
     }
 
+    /// Record the session's originating channel onto its identity metadata so
+    /// `sessions.list` / `sessions.changed` can surface conversation origin for
+    /// multi-end continuity. Idempotent in the store (never clobbers a real
+    /// origin); best-effort (a stamp failure must not abort the run).
+    pub async fn set_session_source_channel(&self, key: &SessionKey, channel: &str) {
+        if let Err(e) = self.session_store.set_source_channel(key, channel).await {
+            warn!("Failed to stamp session source_channel in store: {}", e);
+        }
+    }
+
     /// Add a message to a session (delegated to session store) and capture
     /// it into the L0 raw_memories buffer when a writer is wired.
     pub async fn add_message(&self, key: &SessionKey, role: MessageRole, content: &str) {

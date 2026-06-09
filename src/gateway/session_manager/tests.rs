@@ -152,6 +152,56 @@ async fn test_list_sessions() {
     assert_eq!(agent1_only.len(), 2);
 }
 
+#[tokio::test]
+async fn test_set_source_channel_records_and_surfaces_origin() {
+    let temp = tempdir().unwrap();
+    let config = test_config(temp.path().join("test.db"));
+    let manager = SessionManager::new(config).unwrap();
+
+    let key = SessionKey::main("test");
+    manager.get_or_create(&key).await.unwrap();
+
+    // Fresh session: origin is the "unknown" sentinel → surfaced as None.
+    let before = manager.list_sessions(None).await.unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].origin_channel(), None);
+
+    // Stamp the originating channel; it must be surfaced via the read path.
+    manager.set_source_channel(&key, "telegram").await.unwrap();
+    let after = manager.list_sessions(None).await.unwrap();
+    assert_eq!(
+        after[0].origin_channel(),
+        Some("telegram".to_string()),
+        "first stamp must record the real origin"
+    );
+
+    // Idempotent: a later continuation from a different surface must NOT clobber
+    // the recorded origin (this is what keeps multi-end continuity honest).
+    manager.set_source_channel(&key, "gui:chat").await.unwrap();
+    let still = manager.list_sessions(None).await.unwrap();
+    assert_eq!(
+        still[0].origin_channel(),
+        Some("telegram".to_string()),
+        "second stamp must not clobber the existing origin"
+    );
+}
+
+#[tokio::test]
+async fn test_set_source_channel_skips_empty_and_unknown_sentinel() {
+    let temp = tempdir().unwrap();
+    let config = test_config(temp.path().join("test.db"));
+    let manager = SessionManager::new(config).unwrap();
+
+    let key = SessionKey::main("test");
+    manager.get_or_create(&key).await.unwrap();
+
+    // Empty / sentinel inputs are no-ops: origin stays unset (None).
+    manager.set_source_channel(&key, "   ").await.unwrap();
+    manager.set_source_channel(&key, "unknown").await.unwrap();
+    let sessions = manager.list_sessions(None).await.unwrap();
+    assert_eq!(sessions[0].origin_channel(), None);
+}
+
 #[test]
 fn test_session_identity_meta_default() {
     let meta = SessionIdentityMeta::default();
