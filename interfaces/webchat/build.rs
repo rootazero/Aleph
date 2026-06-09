@@ -1,4 +1,13 @@
 fn main() {
+    // Expose the workspace version (root VERSION file) as ALEPH_VERSION so the
+    // panic-recovery crash log can record which build crashed. Mirrors the root
+    // build.rs version injection; CLAUDE.md forbids hardcoding version numbers.
+    let version = std::fs::read_to_string("../../VERSION")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    println!("cargo:rustc-env=ALEPH_VERSION={version}");
+    println!("cargo:rerun-if-changed=../../VERSION");
+
     let cfg = leptos_i18n_build::Config::new("en")
         .expect("Failed to create i18n config")
         .add_locale("zh")
