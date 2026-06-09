@@ -684,31 +684,45 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             if inst.channel_type == "imessage" {
                 continue; // handled by the dedicated full-config path above
             }
-            let slash_access = match serde_json::from_value::<
+            let slash_access = serde_json::from_value::<
                 alephcore::gateway::inbound_router::SlashAccessConfig,
             >(inst.config.clone())
-            {
-                Ok(sa) if !sa.is_empty() => sa,
-                Ok(_) => continue, // no admins configured → keep allow-all default
-                Err(e) => {
-                    tracing::debug!(
-                        "Channel '{}' ({}) slash-access parse skipped: {}",
-                        inst.id,
-                        inst.channel_type,
-                        e
-                    );
-                    continue;
-                }
-            };
+            .unwrap_or_else(|e| {
+                tracing::debug!(
+                    "Channel '{}' ({}) slash-access parse skipped: {}",
+                    inst.id,
+                    inst.channel_type,
+                    e
+                );
+                Default::default()
+            });
+            // Per-channel permission tiering (Layer 1 / Layer 2) + locked
+            // workspace, same flat-key pattern as slash-access.
+            let policy = serde_json::from_value::<
+                alephcore::gateway::inbound_router::ChannelPolicyConfig,
+            >(inst.config.clone())
+            .unwrap_or_default();
+
+            // Backward-compat: a channel that configures neither slash admins
+            // nor a non-default tier adds nothing over the safe Chat default —
+            // skip registration so `channel_configs` stays minimal (the executor
+            // still defaults unregistered channels to Chat tier).
+            if slash_access.is_empty() && policy.is_default() {
+                continue;
+            }
+
             let channel_config = alephcore::gateway::inbound_router::ChannelConfig {
                 slash_access,
+                permission_level: policy.permission_level,
+                default_workspace: policy.default_workspace,
                 ..Default::default()
             };
+            let tier_label = channel_config.caller_role_str();
             inbound_router.register_channel_config(&inst.id, channel_config);
             if !daemon {
                 println!(
-                    "  Inbound router: slash-command access tiering registered for '{}' ({})",
-                    inst.id, inst.channel_type
+                    "  Inbound router: access tiering registered for '{}' ({}) [tier={}]",
+                    inst.id, inst.channel_type, tier_label,
                 );
             }
         }

@@ -229,6 +229,22 @@ impl InboundMessageRouter {
             let lang = cfg.general.language.as_deref().unwrap_or("zh");
             metadata.insert("locale".to_string(), lang.to_string());
         }
+        // Stamp this channel's permission tier as the run's caller_role so the
+        // tool-dispatch config gate (tools/scoped/dispatch.rs) applies uniformly
+        // to external-channel messages. Unconfigured channels default to Chat
+        // ("guest") — closing the prior over-permission where a missing role was
+        // treated as operator. An operator opts a channel up to Config tier via
+        // `permission_level = "config"` in its config block.
+        let channel_cfg = self
+            .channel_configs
+            .get(ctx.message.channel_id.as_str())
+            .cloned()
+            .unwrap_or_default();
+        metadata.insert(
+            "caller_role".to_string(),
+            channel_cfg.caller_role_str().to_string(),
+        );
+
         let is_slash = slash_command_mode.is_some();
         if let Some(mode) = slash_command_mode {
             metadata.insert(SLASH_COMMAND_MODE_KEY.to_string(), mode);
@@ -243,9 +259,11 @@ impl InboundMessageRouter {
             metadata.insert("voice_mode_active".to_string(), "true".to_string());
         }
 
-        // Channel-routed messages have no project context — see the same
-        // note in `gateway/session_scheduler.rs`. Project-mode flows enter
-        // via the desktop Panel's `chat.send` and bypass this router.
+        // Channel-routed messages run in the channel's configured workspace
+        // (Layer-1 lock): a Chat-tier channel pins its `default_workspace`; a
+        // Config-tier channel that sets none falls back to the agent default.
+        // Project-mode override (free workdir choice) enters via the desktop
+        // Panel's `chat.send` and is gated there on Config tier.
         let request = RunRequest {
             run_id: run_id.clone(),
             input: ctx.message.text.clone(),
@@ -255,7 +273,7 @@ impl InboundMessageRouter {
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
             sandbox_override: None,
-            workspace_override: None,
+            workspace_override: channel_cfg.resolved_default_workspace(),
             max_iterations_override: None,
             model_override: None,
         };

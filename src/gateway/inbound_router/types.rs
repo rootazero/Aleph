@@ -1,5 +1,7 @@
 //! Types for the inbound message router
 
+use std::path::PathBuf;
+
 use crate::gateway::pairing_store::PairingError;
 
 /// Error type for routing operations
@@ -26,6 +28,69 @@ pub enum RoutingError {
     Pairing(#[from] PairingError),
 }
 
+/// Permission tier a channel grants its messages, mapped onto Aleph's existing
+/// device Chat/Config tier (`gateway/handlers/auth/tier.rs`).
+///
+/// - `Chat` (Layer 1, default): converse + read. Config-mutating tools are gated
+///   (`tools/scoped/dispatch.rs`) and the working directory is locked to the
+///   channel's `default_workspace` — the caller cannot choose/create an arbitrary
+///   one.
+/// - `Config` (Layer 2): the above plus the "Everything is a Tool" config tools
+///   and freedom to override the working directory.
+///
+/// Default is `Chat`, mirroring `default_tier`'s remote=Chat philosophy:
+/// untrusted by default, raised explicitly by an operator. This is what closes
+/// the prior over-permission where an external channel stamped no role and was
+/// therefore treated as operator by `TurnContext::caller_is_operator`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelPermissionLevel {
+    /// Layer 1: conversation + read, locked workspace. Safe default.
+    #[default]
+    Chat,
+    /// Layer 2: config tools + free workspace choice.
+    Config,
+}
+
+impl ChannelPermissionLevel {
+    /// Connect-style role string this tier maps to, fed into the run's
+    /// `caller_role` metadata and read by the tool-dispatch config gate.
+    /// `Config` → `"operator"`, `Chat` → `"guest"` — byte-identical to the
+    /// strings `tier::role_for_permissions` produces, so the gate is uniform
+    /// across WS devices and external channels.
+    #[must_use]
+    pub fn caller_role_str(self) -> &'static str {
+        match self {
+            ChannelPermissionLevel::Config => "operator",
+            ChannelPermissionLevel::Chat => "guest",
+        }
+    }
+}
+
+/// Channel permission/workspace tiering, deserialized from each channel
+/// instance's flat config block (same pattern as [`SlashAccessConfig`]).
+/// All-default → the channel adds nothing over the safe Chat default and boot
+/// wiring need not register it.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct ChannelPolicyConfig {
+    /// Permission tier this channel grants. Default `Chat`.
+    #[serde(default)]
+    pub permission_level: ChannelPermissionLevel,
+    /// Absolute path the Chat tier is locked into. `None` → the agent's own
+    /// default workspace. Ignored for `Config` tier (which may override freely).
+    #[serde(default)]
+    pub default_workspace: Option<PathBuf>,
+}
+
+impl ChannelPolicyConfig {
+    /// `true` when the channel configures no tiering over the Chat default —
+    /// boot wiring then skips registering it (keeps `channel_configs` minimal).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.permission_level == ChannelPermissionLevel::Chat && self.default_workspace.is_none()
+    }
+}
+
 /// Unified channel config for permission checking
 #[derive(Debug, Clone)]
 pub struct ChannelConfig {
@@ -44,6 +109,11 @@ pub struct ChannelConfig {
     /// Slash-command access tiering for this channel (admin / per-command
     /// allowlists, scoped to DM vs group). Empty → gating OFF (backward-compat).
     pub slash_access: SlashAccessConfig,
+    /// Permission tier this channel's messages run at (Layer 1 / Layer 2).
+    pub permission_level: ChannelPermissionLevel,
+    /// Working directory the Chat tier is locked into (absolute). `None` → the
+    /// agent's own default workspace.
+    pub default_workspace: Option<PathBuf>,
 }
 
 /// Per-channel slash-command access tiering.
@@ -146,11 +216,40 @@ impl Default for ChannelConfig {
             require_mention: true,
             bot_name: None,
             slash_access: SlashAccessConfig::default(),
+            permission_level: ChannelPermissionLevel::default(),
+            default_workspace: None,
         }
     }
 }
 
 impl ChannelConfig {
+    /// Connect-style role string for this channel's permission tier, stamped
+    /// into the run's `caller_role` metadata so the tool-dispatch config gate
+    /// applies uniformly to external-channel messages.
+    #[must_use]
+    pub fn caller_role_str(&self) -> &'static str {
+        self.permission_level.caller_role_str()
+    }
+
+    /// Resolve the Chat-tier locked workspace, if any: only an **absolute,
+    /// existing** directory is honored — anything else falls back to `None`
+    /// (the agent's own default workspace) rather than handing the engine a
+    /// path it cannot safely chdir into.
+    #[must_use]
+    pub fn resolved_default_workspace(&self) -> Option<PathBuf> {
+        let path = self.default_workspace.as_ref()?;
+        if path.is_absolute() && path.is_dir() {
+            Some(path.clone())
+        } else {
+            tracing::warn!(
+                "channel default_workspace {:?} is not an existing absolute directory; \
+                 falling back to the agent default workspace",
+                path
+            );
+            None
+        }
+    }
+
     /// Decide whether `sender` may invoke slash command `command_name` in the
     /// requested scope (dm vs group). Thin delegate to [`SlashAccessConfig`].
     #[must_use]
@@ -258,6 +357,9 @@ impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConf
                 group_allow_admin_from: cfg.group_allow_admin_from.clone(),
                 group_user_allowed_commands: cfg.group_user_allowed_commands.clone(),
             },
+            // iMessage carries no per-channel tier override yet; safe Chat default.
+            permission_level: ChannelPermissionLevel::default(),
+            default_workspace: None,
         }
     }
 }
@@ -423,5 +525,77 @@ mod slash_access_tests {
         let bare = serde_json::json!({ "bot_token": "secret" });
         let sa2: SlashAccessConfig = serde_json::from_value(bare).expect("parses");
         assert!(sa2.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod permission_tier_tests {
+    use super::*;
+
+    #[test]
+    fn default_tier_is_chat() {
+        assert_eq!(ChannelPermissionLevel::default(), ChannelPermissionLevel::Chat);
+        assert_eq!(ChannelConfig::default().permission_level, ChannelPermissionLevel::Chat);
+        // Safe default: an unconfigured channel maps to the gated "guest" role.
+        assert_eq!(ChannelConfig::default().caller_role_str(), "guest");
+    }
+
+    #[test]
+    fn caller_role_str_maps_tiers_to_connect_role_strings() {
+        assert_eq!(ChannelPermissionLevel::Chat.caller_role_str(), "guest");
+        assert_eq!(ChannelPermissionLevel::Config.caller_role_str(), "operator");
+    }
+
+    #[test]
+    fn policy_deserializes_flat_keys_ignoring_channel_fields() {
+        let raw = serde_json::json!({
+            "bot_token": "secret",
+            "permission_level": "config",
+            "default_workspace": "/srv/work",
+        });
+        let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
+        assert_eq!(p.permission_level, ChannelPermissionLevel::Config);
+        assert_eq!(p.default_workspace.as_deref(), Some(std::path::Path::new("/srv/work")));
+        assert!(!p.is_default());
+    }
+
+    #[test]
+    fn policy_bare_config_is_default_chat() {
+        let bare = serde_json::json!({ "bot_token": "secret" });
+        let p: ChannelPolicyConfig = serde_json::from_value(bare).expect("parses");
+        assert_eq!(p.permission_level, ChannelPermissionLevel::Chat);
+        assert!(p.default_workspace.is_none());
+        assert!(p.is_default(), "no tiering configured → skip registration");
+    }
+
+    #[test]
+    fn config_tier_alone_is_not_default() {
+        let raw = serde_json::json!({ "permission_level": "config" });
+        let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
+        assert!(!p.is_default());
+    }
+
+    #[test]
+    fn resolved_default_workspace_rejects_relative_or_missing() {
+        // Relative path → None (never handed to the engine).
+        let cfg = ChannelConfig {
+            default_workspace: Some(std::path::PathBuf::from("relative/dir")),
+            ..Default::default()
+        };
+        assert!(cfg.resolved_default_workspace().is_none());
+
+        // Absolute but non-existent → None.
+        let cfg = ChannelConfig {
+            default_workspace: Some(std::path::PathBuf::from("/nonexistent/aleph/ws/xyz")),
+            ..Default::default()
+        };
+        assert!(cfg.resolved_default_workspace().is_none());
+
+        // Absolute + existing dir → honored.
+        let cfg = ChannelConfig {
+            default_workspace: Some(std::env::temp_dir()),
+            ..Default::default()
+        };
+        assert_eq!(cfg.resolved_default_workspace(), Some(std::env::temp_dir()));
     }
 }

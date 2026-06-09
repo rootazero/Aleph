@@ -15,7 +15,8 @@ mod types;
 
 pub use command_handler::serialize_parsed_command;
 pub use types::{
-    ChannelConfig, DmPolicy, GroupPolicy, RoutingError, SlashAccessConfig, SLASH_COMMAND_MODE_KEY,
+    ChannelConfig, ChannelPermissionLevel, ChannelPolicyConfig, DmPolicy, GroupPolicy,
+    RoutingError, SlashAccessConfig, SLASH_COMMAND_MODE_KEY,
 };
 
 use crate::sync_primitives::Arc;
