@@ -425,10 +425,17 @@ html.dark[data-accent="rose"] {
    Glass utility — frosted popovers / menus on any theme.
    ============================================================ */
 
-.glass {
-  position: relative;
-  backdrop-filter: blur(23px) saturate(1.6);
-  -webkit-backdrop-filter: blur(23px) saturate(1.6);
+/* Base rule lives in @layer components so positioning utilities
+   (`absolute`/`fixed` on popovers) override the `relative` fallback —
+   without a layer, this unlayered rule would clobber them. `relative`
+   still applies to any glass element that has no position utility,
+   anchoring the ::before/::after overlays. */
+@layer components {
+  .glass {
+    position: relative;
+    backdrop-filter: blur(23px) saturate(1.6);
+    -webkit-backdrop-filter: blur(23px) saturate(1.6);
+  }
 }
 /* Gradient specular edge — bright at the top, fading down. Painted once,
    composited; ~0 per-frame cost. */
@@ -471,11 +478,11 @@ html.dark[data-accent="rose"] {
    regardless of where the semi-opaque defaults sit in source order.
    ============================================================ */
 @media (prefers-reduced-transparency: reduce) {
-  .glass, .aleph-sidebar {
+  .glass, .aleph-sidebar, .aleph-sidebar::before {
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
   }
-  .glass::before, .glass::after { display: none !important; }
+  .glass::before, .glass::after, .aleph-sidebar::before { display: none !important; }
   .aleph-sidebar { background-color: var(--color-sidebar) !important; }
   :root {
     --aleph-canvas-base: var(--aleph-solid-ground) !important;
@@ -742,6 +749,14 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
 
 /* --- Glossy sidebar — a soft, accent-tinted column (Codex) --- */
 .aleph-sidebar {
+  /* `position: relative` only anchors the ::before blur layer; it does NOT
+     create a containing block for `position: fixed` descendants (only
+     backdrop-filter / transform do). Keeping the blur OFF this element — and
+     NOT adding isolation/z-index here — is load-bearing: the popovers'
+     `fixed inset-0` click-outside catchers must resolve against the viewport
+     and paint in the shell's root stacking context, or clicks in the main
+     area won't close them. */
+  position: relative;
   background-color: color-mix(in oklch, var(--color-sidebar) 78%, transparent);
   background-image: linear-gradient(
     180deg,
@@ -751,6 +766,16 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   );
   box-shadow: inset -1px 0 0 var(--color-border-subtle),
               inset  1px 0 0 var(--aleph-sheen);
+}
+/* The frosted blur lives on a z-index:-1 layer behind the sidebar content,
+   so the .aleph-sidebar element itself stays free of backdrop-filter (and
+   thus of the fixed-descendant containing block it would otherwise impose). */
+.aleph-sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
   backdrop-filter: blur(23px) saturate(1.6);
   -webkit-backdrop-filter: blur(23px) saturate(1.6);
 }
