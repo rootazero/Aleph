@@ -155,9 +155,14 @@ fn host_of(raw: &str) -> String {
 
 /// Whether a `host[:port]` names the local loopback.
 fn is_loopback_host(host: &str) -> bool {
-    let h = host.split(']').next().unwrap_or(host); // strip IPv6 `]:port`
-    let h = h.trim_start_matches('[');
-    let bare = h.split(':').next().unwrap_or(h);
+    let bare = if let Some(rest) = host.strip_prefix('[') {
+        // Bracketed IPv6 `[addr]:port` — the address is everything up to `]`
+        // (it contains its own colons, so a plain `:` split would mangle it).
+        rest.split(']').next().unwrap_or(rest)
+    } else {
+        // `host[:port]` — drop the optional port.
+        host.split(':').next().unwrap_or(host)
+    };
     bare == "127.0.0.1" || bare.eq_ignore_ascii_case("localhost") || bare == "::1"
 }
 
