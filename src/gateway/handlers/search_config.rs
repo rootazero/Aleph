@@ -531,6 +531,58 @@ pub async fn handle_test(
                 },
             }
         }
+        "jina" => {
+            let Some(ref api_key) = params.api_key else {
+                return JsonRpcResponse::success(
+                    request.id,
+                    serde_json::json!({"success": false, "message": "API key is required for Jina"}),
+                );
+            };
+            match JinaProvider::new(api_key.clone()) {
+                Ok(provider) => {
+                    let opts = SearchOptions {
+                        max_results: 1,
+                        ..Default::default()
+                    };
+                    match provider.search("test", &opts).await {
+                        Ok(_) => SearchTestResult {
+                            success: true,
+                            message: "Connection successful".to_string(),
+                        },
+                        Err(e) => SearchTestResult {
+                            success: false,
+                            message: format!("Search failed: {}", e),
+                        },
+                    }
+                }
+                Err(e) => SearchTestResult {
+                    success: false,
+                    message: format!("Failed to create provider: {}", e),
+                },
+            }
+        }
+        "duckduckgo" => match DuckDuckGoProvider::new() {
+            Ok(provider) => {
+                let opts = SearchOptions {
+                    max_results: 1,
+                    ..Default::default()
+                };
+                match provider.search("test", &opts).await {
+                    Ok(_) => SearchTestResult {
+                        success: true,
+                        message: "Connection successful".to_string(),
+                    },
+                    Err(e) => SearchTestResult {
+                        success: false,
+                        message: format!("Search failed: {}", e),
+                    },
+                }
+            }
+            Err(e) => SearchTestResult {
+                success: false,
+                message: format!("Failed to create provider: {}", e),
+            },
+        },
         _ => SearchTestResult {
             success: false,
             message: format!("Unknown provider type: {}", provider_type),
