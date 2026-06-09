@@ -489,6 +489,15 @@ name = "whatsapp_protocol_test"
 [profile.release]
 strip = true
 
+# Panel-only release profile: keep the wasm `name` section so browser stack
+# traces carry Rust symbol names. `strip` is a final-artifact setting and
+# cannot be overridden per-package, so the panel build uses this profile while
+# the `aleph-server` binary keeps `strip = true`. See
+# docs/superpowers/specs/2026-06-09-panel-crash-diagnostics-design.md.
+[profile.wasm-release]
+inherits = "release"
+strip = false
+
 # Patch matrix-sdk with a fork of matrix-sdk-0.16.0 that adds
 # #![recursion_limit = "512"] to crates/matrix-sdk/src/lib.rs.
 # The default 128 overflows when async fn body of Client::sync() is
