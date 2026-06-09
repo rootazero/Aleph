@@ -21,6 +21,10 @@ use std::panic::PanicHookInfo;
 use std::sync::Once;
 
 const OVERLAY_ID: &str = "aleph-panic-overlay";
+/// localStorage key holding the crash-history ring buffer (JSON array).
+const CRASH_LOG_KEY: &str = "aleph.panel.crashes";
+/// Maximum number of crash records retained across reloads.
+const CRASH_LOG_CAP: usize = 10;
 
 /// Install the recovery panic hook. Idempotent — repeat calls are no-ops.
 /// Call once at WASM module start, replacing the bare
@@ -36,15 +40,64 @@ fn hook(info: &PanicHookInfo<'_>) {
     // 1. Preserve dev-console behavior — same trace, same formatting.
     console_error_panic_hook::hook(info);
 
-    // 2. Mount a one-shot overlay. If anything in the overlay path itself
-    //    panics (it shouldn't — we only touch DOM), swallow it so we don't
-    //    recurse into the hook.
+    // 2. Capture a symbolicated JS backtrace, persist a crash record, and
+    //    mount a one-shot recovery overlay. If anything here panics (it
+    //    shouldn't — DOM + localStorage only) swallow it so we don't recurse.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        mount_overlay(&info.to_string());
+        let message = info.to_string();
+        let stack = capture_js_stack();
+        let crash_count = persist_crash(&message, &stack);
+        mount_overlay(&message, &stack, crash_count);
     }));
 }
 
-fn mount_overlay(message: &str) {
+/// Best-effort capture of the JS backtrace at panic time. With the wasm name
+/// section preserved (the `wasm-release` profile), these frames carry Rust
+/// symbol names. Returns an empty string if unavailable.
+fn capture_js_stack() -> String {
+    use wasm_bindgen::JsValue;
+    let err = js_sys::Error::new("");
+    js_sys::Reflect::get(&err, &JsValue::from_str("stack"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
+}
+
+/// Append a crash record to the localStorage ring buffer and return the new
+/// record count. No-op (returns 0) if localStorage is unavailable. Never
+/// panics — every fallible step degrades to a default.
+fn persist_crash(message: &str, stack: &str) -> usize {
+    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+    else {
+        return 0;
+    };
+    let existing = storage
+        .get_item(CRASH_LOG_KEY)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "[]".to_string());
+    let record = serde_json::json!({
+        "ts": js_sys::Date::now(),
+        "version": env!("ALEPH_VERSION"),
+        "message": message,
+        "stack": stack,
+        "url": current_url(),
+    });
+    let new_log = append_capped(&existing, &record.to_string(), CRASH_LOG_CAP);
+    let _ = storage.set_item(CRASH_LOG_KEY, &new_log);
+    serde_json::from_str::<Vec<serde_json::Value>>(&new_log)
+        .map(|v| v.len())
+        .unwrap_or(0)
+}
+
+/// Current page URL, or an empty string if unavailable.
+fn current_url() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().href().ok())
+        .unwrap_or_default()
+}
+
+fn mount_overlay(message: &str, stack: &str, crash_count: usize) {
     let Some(window) = web_sys::window() else {
         return;
     };
@@ -79,7 +132,15 @@ fn mount_overlay(message: &str) {
          padding:24px;",
     );
 
-    let escaped = escape_html(message);
+    // Details pane shows the panic message followed by the symbolicated stack.
+    let mut details = escape_html(message);
+    if !stack.is_empty() {
+        details.push_str("\n\n");
+        details.push_str(&escape_html(stack));
+    }
+    let note = format!(
+        "{crash_count} crash report(s) saved · localStorage key: {CRASH_LOG_KEY}"
+    );
     overlay.set_inner_html(&format!(
         "<div style=\"max-width:640px;width:100%;\
                       background:#1a1a1a;border:1px solid rgba(239,68,68,0.4);\
@@ -95,8 +156,9 @@ fn mount_overlay(message: &str) {
              <summary style=\"cursor:pointer;font-size:12px;color:#a1a1aa;user-select:none;\">Show details</summary>\
              <pre style=\"margin:8px 0 0;padding:12px;background:#0a0a0a;border-radius:8px;\
                           font-size:11px;color:#fca5a5;overflow:auto;max-height:200px;\
-                          white-space:pre-wrap;word-break:break-word;\">{escaped}</pre>\
+                          white-space:pre-wrap;word-break:break-word;\">{details}</pre>\
            </details>\
+           <p style=\"margin:0 0 18px;font-size:11px;color:#71717a;\">{note}</p>\
            <div style=\"display:flex;gap:10px;justify-content:flex-end;\">\
              <button id=\"{OVERLAY_ID}-dismiss\" style=\"padding:10px 16px;border:1px solid #404040;\
                           background:transparent;color:#d4d4d8;border-radius:10px;font-size:14px;\
@@ -107,7 +169,8 @@ fn mount_overlay(message: &str) {
            </div>\
          </div>",
         OVERLAY_ID = OVERLAY_ID,
-        escaped = escaped,
+        details = details,
+        note = note,
     ));
 
     let _ = body.append_child(&overlay);
