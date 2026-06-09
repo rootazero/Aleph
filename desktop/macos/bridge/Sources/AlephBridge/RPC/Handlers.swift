@@ -1,6 +1,8 @@
 import Foundation
 
-/// Register the Stage 0 bridge.* handlers: ping / handshake / shutdown.
+/// Register the Stage 0 bridge.* handlers: ping / handshake.
+/// Graceful shutdown is not an RPC method — the helper exits on stdin EOF
+/// (see `Server.run`) or when its parent dies (see `ParentWatch`).
 /// Later stages add ax.*, perm.*, media.*, screen.*, etc.
 func registerBridgeHandlers(_ router: Router) async {
     await router.register("bridge.ping") { _ in

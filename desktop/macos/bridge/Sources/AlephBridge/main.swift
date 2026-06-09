@@ -68,9 +68,10 @@ struct AlephBridge: ParsableCommand {
 // ArgumentParser subcommand flow invoked by desktop/macos/src/pim.rs via
 // the deprecated spawn-per-call `SwiftBridge` in desktop/shared/src/bridge/mod.rs.
 //
-// With zero arguments, enter JSON-RPC mode: bridge.{ping,handshake,shutdown}
-// over stdin/stdout. This is what the new long-lived `SwiftBridge` client in
-// desktop/shared/src/bridge/client.rs spawns.
+// With zero arguments, enter JSON-RPC mode: bridge.{ping,handshake} over
+// stdin/stdout. This is what the new long-lived `SwiftBridge` client in
+// desktop/shared/src/bridge/client.rs spawns. The process exits on stdin EOF
+// or parent death (see `ParentWatch`); there is no shutdown RPC.
 //
 // The CLI mode is scheduled for removal once every caller has migrated to
 // JSON-RPC (tracked in Stage 6 cleanup of the codex-desktop plan).
