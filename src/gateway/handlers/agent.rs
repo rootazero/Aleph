@@ -220,6 +220,21 @@ impl AgentRunManager {
         // assume the override is safe to chdir/scan into.
         let workspace_override = match params.project_root.as_deref() {
             Some(raw) => {
+                // Layer-2 (config tier) gate: choosing/creating a working
+                // directory is a config-tier capability. A chat-tier caller
+                // (remote Panel paired at "chat", or an external channel stamped
+                // "guest") is locked to its default workspace and may not pick an
+                // arbitrary project_root. Absent role (trusted local/internal
+                // run) and "operator" pass — mirrors
+                // `TurnContext::caller_is_operator`.
+                let role = crate::gateway::caller_identity::current_caller_role();
+                let is_config_tier = !matches!(role.as_deref(), Some(r) if r != "operator");
+                if !is_config_tier {
+                    return Err(format!(
+                        "choosing a working directory requires config-tier authorization; \
+                         this connection is paired at chat level (project_root: {raw})"
+                    ));
+                }
                 let path = std::path::PathBuf::from(raw);
                 if !path.is_absolute() {
                     return Err(format!("project_root must be absolute: {raw}"));
@@ -657,6 +672,68 @@ mod tests {
         // Should be able to get status
         let status = manager.get_run_status(&result.run_id).await;
         assert!(status.is_some());
+    }
+
+    /// Layer-2 gate: a chat-tier ("guest") connection may converse but must not
+    /// pick an arbitrary working directory — even a valid absolute dir is denied.
+    #[tokio::test]
+    async fn chat_tier_caller_cannot_choose_project_root() {
+        let router = Arc::new(AgentRouter::new());
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
+        let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
+
+        let params = AgentRunParams {
+            input: "work over here".to_string(),
+            session_key: None,
+            channel: None,
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: Some(std::env::temp_dir().display().to_string()),
+            model_override: None,
+        };
+
+        let result = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("guest".to_string()), manager.start_run(params))
+            .await;
+        let err = result.expect_err("chat-tier project_root override must be rejected");
+        assert!(err.contains("config-tier"), "unexpected error: {err}");
+    }
+
+    /// Config-tier ("operator") and absent-role (trusted local) callers may
+    /// choose a working directory; absent role exercises the existing default.
+    #[tokio::test]
+    async fn config_tier_caller_may_choose_project_root() {
+        let router = Arc::new(AgentRouter::new());
+        let event_bus = Arc::new(GatewayEventBus::new());
+        let (agent_registry, _tmp) = registry_with_main_agent().await;
+        let execution_adapter: Arc<dyn ExecutionAdapter> = Arc::new(MockExecutionAdapter);
+        let manager = AgentRunManager::new(router, event_bus, agent_registry, execution_adapter);
+
+        let params = AgentRunParams {
+            input: "work over here".to_string(),
+            session_key: None,
+            channel: None,
+            peer_id: None,
+            stream: false,
+            thinking: None,
+            attachments: vec![],
+            agent_id: None,
+            project_root: Some(std::env::temp_dir().display().to_string()),
+            model_override: None,
+        };
+
+        let result = crate::gateway::caller_identity::CALLER_ROLE
+            .scope(Some("operator".to_string()), manager.start_run(params))
+            .await;
+        assert!(
+            result.is_ok(),
+            "operator project_root override must succeed: {result:?}"
+        );
     }
 
     /// Regression: aborting a run must forward the cancellation to the
