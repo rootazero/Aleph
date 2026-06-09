@@ -130,6 +130,19 @@ impl BuiltinToolRegistry {
             tool
         };
 
+        // List-models tool (LLM-facing model discovery: capability + cost).
+        // Reuses the already-injected config + vault handles — no new wiring.
+        let list_models_tool = {
+            let mut tool = crate::builtin_tools::list_models::ListModelsTool::new();
+            if let Some(ref cfg) = config.config {
+                tool = tool.with_config(Arc::clone(cfg));
+            }
+            if let Some(ref mgr) = config.shared_token_manager {
+                tool = tool.with_vault(Arc::clone(mgr));
+            }
+            tool
+        };
+
         // Vault store tool (requires SharedTokenManager)
         let vault_store_tool = config.shared_token_manager.as_ref().map(|mgr| {
             info!("Creating VaultStoreTool");
@@ -1655,6 +1668,7 @@ impl BuiltinToolRegistry {
             recall_events_tool,
             self_manage_tool,
             self_config_tool,
+            list_models_tool,
             vault_store_tool,
             desktop_tool,
             desktop_ax_query_focused_tool,

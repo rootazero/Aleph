@@ -208,6 +208,11 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: false,
     },
     BuiltinToolDefinition {
+        name: "list_models",
+        description: "Discover switchable LLM models with their context window, vision/tool/reasoning support, and price per million tokens — pair with select_model to choose on capability/cost grounds",
+        requires_config: true, // Reads injected config + vault for provider/credential state
+    },
+    BuiltinToolDefinition {
         name: "self_manage",
         description: "Enter self-management mode when user wants to configure, modify, or fix Aleph",
         requires_config: false,
@@ -878,6 +883,9 @@ pub fn create_tool_boxed(
         // self_config requires the per-agent agent_id, injected at construction time
         // in BuiltinToolRegistry — cannot be created standalone here.
         "self_config" => None,
+        // list_models needs the injected config + vault handles (provider/credential
+        // state), bound at BuiltinToolRegistry construction — not standalone here.
+        "list_models" => None,
         // Media tools — require MediaPipeline
         "media_understand" => config
             .and_then(|c| c.media_pipeline.as_ref())

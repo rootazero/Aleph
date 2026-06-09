@@ -107,6 +107,8 @@ pub struct BuiltinToolRegistry {
     pub(crate) self_manage_tool: crate::builtin_tools::SelfManageTool,
     /// Self-config tool instance (identity files + config.toml access)
     pub(crate) self_config_tool: crate::builtin_tools::self_config::SelfConfigTool,
+    /// List-models tool instance (LLM-facing model discovery: capability + cost)
+    pub(crate) list_models_tool: crate::builtin_tools::list_models::ListModelsTool,
     /// Vault store tool instance (optional - requires SharedTokenManager)
     pub(crate) vault_store_tool: Option<crate::builtin_tools::VaultStoreTool>,
     /// Desktop bridge tool instance
@@ -727,6 +729,9 @@ impl ToolRegistry for BuiltinToolRegistry {
             }
             "self_config" => {
                 Box::pin(async move { self.self_config_tool.call_json(arguments).await })
+            }
+            "list_models" => {
+                Box::pin(async move { self.list_models_tool.call_json(arguments).await })
             }
             "vault_store" => Box::pin(async move {
                 let tool = self.vault_store_tool.as_ref().ok_or_else(|| {
