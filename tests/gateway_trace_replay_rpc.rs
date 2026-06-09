@@ -129,18 +129,18 @@ async fn list_cursor_advances_without_overlap() {
 #[tokio::test]
 async fn get_returns_known_trace_by_id() {
     let (_tmp, db) = seed_db(1).await;
-    // First trace inserted ends up at id=1 (SQLite auto-increment).
-    let req = JsonRpcRequest::with_id("trace.get", Some(json!({"trace_id": 1})), json!(1));
+    // Traces are keyed by their owning task_id (run id), not the SQLite row id.
+    let req = JsonRpcRequest::with_id("trace.get", Some(json!({"task_id": "task-0"})), json!(1));
     let resp = handle_get(req, db).await;
     assert!(resp.is_success(), "expected success: {:?}", resp.error);
     let result = resp.result.unwrap();
-    assert_eq!(result["trace"]["task_id"], "task-0");
+    assert_eq!(result["task"]["task_id"], "task-0");
 }
 
 #[tokio::test]
 async fn get_returns_error_for_missing_trace_id() {
     let (_tmp, db) = seed_db(1).await;
-    let req = JsonRpcRequest::with_id("trace.get", Some(json!({"trace_id": 9999})), json!(1));
+    let req = JsonRpcRequest::with_id("trace.get", Some(json!({"task_id": "task-9999"})), json!(1));
     let resp = handle_get(req, db).await;
     assert!(!resp.is_success());
     let err = resp.error.unwrap();
