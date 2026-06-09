@@ -51,21 +51,32 @@ pub fn SessionStatusBar() -> impl IntoView {
             poll_gen.set(my_gen);
             leptos::task::spawn_local(async move {
                 loop {
-                    if !dash.is_connected.get_untracked() || poll_gen.get_untracked() != my_gen {
+                    // `poll_gen`/`active_runs` are owned by this component.
+                    // On tab switch the component is disposed (and these
+                    // signals with it), but this detached future keeps
+                    // running — `try_*` lets it notice the disposal and stop
+                    // instead of panicking on a dead signal.
+                    let Some(gen) = poll_gen.try_get_untracked() else {
+                        break;
+                    };
+                    if gen != my_gen || !dash.is_connected.get_untracked() {
                         break;
                     }
-                    match dash
+                    let count = match dash
                         .rpc_call("activity.stats", serde_json::Value::Null)
                         .await
                     {
-                        Ok(result) => {
-                            let count = result
-                                .get("active_total")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            active_runs.set(Some(count));
-                        }
-                        Err(_) => active_runs.set(Some(0)),
+                        Ok(result) => result
+                            .get("active_total")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0),
+                        Err(_) => 0,
+                    };
+                    // `try_set` returns `Some` only when the signal was
+                    // already disposed (component gone during the await
+                    // above) — stop rather than spin for another 10s.
+                    if active_runs.try_set(Some(count)).is_some() {
+                        break;
                     }
                     gloo_timers::future::TimeoutFuture::new(10_000).await;
                 }
