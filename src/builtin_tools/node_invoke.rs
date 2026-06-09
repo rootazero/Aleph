@@ -18,7 +18,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct NodeInvokeArgs {
-    /// Target node: its name (e.g. "worker-1") or id. Use `environments.list`
+    /// Target node: its name (e.g. "worker-1") or id. Use the `node_list` tool
     /// to see online nodes and the commands each declares.
     pub node: String,
     /// Command to run on the node (e.g. "bash"). Must be one the node declares.
@@ -49,7 +49,7 @@ impl AlephTool for NodeInvokeTool {
     const NAME: &'static str = "node_invoke";
     const DESCRIPTION: &'static str = r#"Run a command on a connected cluster node (a remote execution arm).
 
-Address the node by its name or id (see `environments.list` for online nodes and
+Address the node by its name or id (call `node_list` for online nodes and
 the commands each declares). `command` must be one the node permits (e.g. "bash");
 `args` is that command's JSON payload, passed through verbatim — for bash:
 {"node": "worker-1", "command": "bash", "args": {"cmd": "uname -a"}}.

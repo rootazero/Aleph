@@ -24,7 +24,7 @@ const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::gen
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct NodeFileArgs {
-    /// Target node: its name (e.g. "worker-1") or id. See `environments.list`.
+    /// Target node: its name (e.g. "worker-1") or id. See the `node_list` tool.
     pub node: String,
     /// "push" (center→node) or "pull" (node→center).
     pub direction: String,

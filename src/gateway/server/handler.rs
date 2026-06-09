@@ -889,6 +889,14 @@ async fn handle_connection(
                                                         "node.connected",
                                                         serde_json::json!({"node_id": &device_id, "name": name, "conn_id": &conn_id}),
                                                     ));
+                                                    // Stamp the node device's last_seen_at so that once it
+                                                    // goes offline, environments.list can show an honest
+                                                    // "last seen" (the column was never written after enroll).
+                                                    if let Some(tm) = ctx.token_manager.as_ref() {
+                                                        if let Err(e) = tm.touch_device(&device_id) {
+                                                            debug!("failed to stamp node last_seen on connect for {}: {}", device_id, e);
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
@@ -1569,6 +1577,14 @@ async fn handle_connection(
     let node_ident = ctx.node_registry.node_identity_by_conn(&conn_id);
     if ctx.node_registry.deregister(&conn_id) {
         if let Some((node_id, name)) = node_ident {
+            // Refresh last_seen_at at the moment the node drops, so the offline
+            // entry in environments.list reads "last seen ≈ disconnect time"
+            // rather than "≈ connect time" for long-lived sessions.
+            if let Some(tm) = ctx.token_manager.as_ref() {
+                if let Err(e) = tm.touch_device(&node_id) {
+                    debug!("failed to stamp node last_seen on disconnect for {}: {}", node_id, e);
+                }
+            }
             let _ = ctx.event_bus.publish_json(&TopicEvent::new(
                 "node.disconnected",
                 serde_json::json!({"node_id": node_id, "name": name, "conn_id": &conn_id}),

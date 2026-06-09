@@ -231,7 +231,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "cluster",
         name: "集群节点",
-        tools: &["node_invoke", "node_file"],
+        tools: &["node_list", "node_invoke", "node_invoke_many", "node_file"],
     },
 ];
 

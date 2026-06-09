@@ -37,11 +37,19 @@ aleph-server node \
 
 ## Use a node (from the LLM)
 
-Once registered (visible in `environments.list` and the Panel cluster list):
+Once registered (visible via the `node_list` tool and the Panel cluster list):
+- `node_list` — discover online nodes: names, declared commands, tags.
+  Pass `tags` to preview a fan-out target set.
 - `node_invoke` — run a command (e.g. bash) on a named node.
+- `node_invoke_many` — fan one command out concurrently to every online node
+  carrying ALL the given tags (empty tags = all online nodes).
 - `node_file` — push / pull files between center and node.
 - When a node's sandbox hits a capability that needs approval, it sends a
   reverse approval request; an operator decides in the Panel approval card.
+
+The Panel cluster list also shows enrolled nodes that are currently offline
+(with a "last seen" timestamp); those cannot be invoked until they reconnect,
+but they can still be deregistered.
 
 ## Caveats
 

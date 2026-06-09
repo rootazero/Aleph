@@ -472,13 +472,13 @@ impl BuiltinToolRegistry {
         }
     }
 
-    /// 注入集群节点登记表，启用 `node_invoke` 工具。
+    /// 注入集群节点登记表，启用集群节点工具。
     ///
     /// Takes `&self` so it works through `Arc` — the registry is wrapped in
     /// `Arc::new` in `agent_init` before the gateway's `NodeRegistry` is wired.
     pub fn set_node_registry(&self, registry: Arc<crate::cluster::NodeRegistry>) {
         if self.node_registry.set(registry).is_ok() {
-            info!("NodeRegistry injected — `node_invoke` and `node_file` tools now available");
+            info!("NodeRegistry injected — cluster node tools (node_list / node_invoke / node_invoke_many / node_file) now available");
         }
     }
 
@@ -835,6 +835,16 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .await
                     .map_err(|e| AlephError::tool(format!("remember: {e}")))?;
                 let tool = crate::builtin_tools::RememberTool::new(store);
+                tool.call_json(arguments).await
+            }),
+
+            // Cluster discovery tool — read-only projection of the same
+            // injected NodeRegistry the invoke tools dispatch through.
+            "node_list" => Box::pin(async move {
+                let reg = self.node_registry.get().ok_or_else(|| {
+                    AlephError::tool("node_list not available: NodeRegistry not injected")
+                })?;
+                let tool = crate::builtin_tools::NodeListTool::new(reg.clone());
                 tool.call_json(arguments).await
             }),
 
