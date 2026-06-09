@@ -2,6 +2,7 @@ use crate::context::DashboardState;
 use crate::i18n::*;
 use crate::state::connection::ConnectionPhase;
 use leptos::prelude::*;
+use leptos::task::spawn_local;
 
 /// Compact connection-state chip rendered in the dashboard chrome.
 ///
@@ -9,6 +10,13 @@ use leptos::prelude::*;
 /// into a single `ConnectionPhase` so dot colour, label, and counter all
 /// move together. The phase enum is the source of truth — see
 /// [`crate::state::connection`] for the derivation rules and tests.
+///
+/// The second line names the *core this Panel is talking to* — `Local` for
+/// the bundled daemon, or the remote `host:port` — so a user who has switched
+/// targets (shell-core separation) can always see which brain is live. The
+/// target is read once on mount: in the desktop shell via the Tauri bridge
+/// (`get_connection_target`), in a plain browser from the page origin (the
+/// origin that served the Panel *is* the core).
 #[component]
 pub fn ConnectionStatus() -> impl IntoView {
     let state = use_context::<DashboardState>().expect("DashboardState not provided");
@@ -24,6 +32,13 @@ pub fn ConnectionStatus() -> impl IntoView {
             error.as_deref(),
             state.has_connected_once.get(),
         )
+    });
+
+    // Which core is live (Local / remote host). Resolved once on mount; a
+    // target switch reloads the whole Panel, so a fresh mount re-resolves.
+    let target = RwSignal::new(String::new());
+    spawn_local(async move {
+        target.set(resolve_target_label().await);
     });
 
     let dot_class = move || match phase.get() {
@@ -53,11 +68,11 @@ pub fn ConnectionStatus() -> impl IntoView {
     };
 
     view! {
-        <div class="bg-surface-raised border border-border rounded-2xl p-4">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                    <div class=move || format!("w-2 h-2 rounded-full {}", dot_class())></div>
-                    <span class="text-sm font-medium">{status_text}</span>
+        <div class="bg-surface-raised border border-border rounded-xl px-3 py-2.5">
+            <div class="flex items-center justify-between gap-2">
+                <div class="flex items-center gap-2 min-w-0">
+                    <div class=move || format!("w-2 h-2 rounded-full shrink-0 {}", dot_class())></div>
+                    <span class="text-sm font-medium truncate">{status_text}</span>
                 </div>
 
                 {move || detail_text().map(|s| {
@@ -66,12 +81,105 @@ pub fn ConnectionStatus() -> impl IntoView {
                     // ownership for both, so we can't reuse the binding.
                     let title = s.clone();
                     view! {
-                        <div class="text-xs text-text-tertiary truncate max-w-[16rem]" title=title>
+                        <div class="text-xs text-text-tertiary truncate max-w-[10rem]" title=title>
                             {s}
                         </div>
                     }
                 })}
             </div>
+
+            // Target line — which core this Panel is connected to.
+            {move || {
+                let label = target.get();
+                (!label.is_empty()).then(|| {
+                    let title = label.clone();
+                    view! {
+                        <div class="flex items-center gap-1.5 mt-1.5 text-xs text-text-tertiary"
+                            title=title>
+                            // server / signal glyph
+                            <svg class="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none"
+                                stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+                                <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+                                <line x1="6" y1="6" x2="6.01" y2="6" />
+                                <line x1="6" y1="18" x2="6.01" y2="18" />
+                            </svg>
+                            <span class="truncate">{label}</span>
+                        </div>
+                    }
+                })
+            }}
         </div>
+    }
+}
+
+/// Resolve the human-readable label for the live core. Desktop shell →
+/// the Tauri bridge's persisted target; plain browser → the page origin.
+/// Loopback origins collapse to `Local` so both surfaces agree.
+async fn resolve_target_label() -> String {
+    if crate::api::tauri_bridge::is_shell() {
+        match crate::api::tauri_bridge::get_connection_target().await {
+            Ok(t) if t.trim().is_empty() || t.eq_ignore_ascii_case("local") => "Local".to_string(),
+            Ok(t) => host_of(&t),
+            Err(_) => String::new(),
+        }
+    } else {
+        // The origin that served this Panel IS the core it talks to.
+        let host = web_sys::window()
+            .and_then(|w| w.location().host().ok())
+            .unwrap_or_default();
+        if host.is_empty() || is_loopback_host(&host) {
+            "Local".to_string()
+        } else {
+            host
+        }
+    }
+}
+
+/// Extract `host[:port]` from a persisted target (`http(s)://host:port`),
+/// collapsing loopback to `Local`. Pure string work — no URL crate in WASM.
+fn host_of(raw: &str) -> String {
+    let after_scheme = raw.split_once("://").map(|(_, r)| r).unwrap_or(raw);
+    let host = after_scheme.split('/').next().unwrap_or(after_scheme);
+    if is_loopback_host(host) {
+        "Local".to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+/// Whether a `host[:port]` names the local loopback.
+fn is_loopback_host(host: &str) -> bool {
+    let h = host.split(']').next().unwrap_or(host); // strip IPv6 `]:port`
+    let h = h.trim_start_matches('[');
+    let bare = h.split(':').next().unwrap_or(h);
+    bare == "127.0.0.1" || bare.eq_ignore_ascii_case("localhost") || bare == "::1"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_of_strips_scheme_and_path() {
+        assert_eq!(host_of("http://box.lan:9000"), "box.lan:9000");
+        assert_eq!(host_of("https://gw.example.com:443"), "gw.example.com:443");
+        assert_eq!(host_of("http://box.lan:9000/"), "box.lan:9000");
+    }
+
+    #[test]
+    fn host_of_collapses_loopback_to_local() {
+        assert_eq!(host_of("http://127.0.0.1:18790"), "Local");
+        assert_eq!(host_of("http://localhost:18790"), "Local");
+    }
+
+    #[test]
+    fn loopback_detection() {
+        assert!(is_loopback_host("127.0.0.1:18790"));
+        assert!(is_loopback_host("localhost"));
+        assert!(is_loopback_host("[::1]:18790"));
+        assert!(!is_loopback_host("192.168.1.5:18790"));
+        assert!(!is_loopback_host("gw.example.com"));
     }
 }
