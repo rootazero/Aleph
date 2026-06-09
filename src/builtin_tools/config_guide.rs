@@ -13,7 +13,7 @@ use crate::tools::AlephTool;
 pub struct ReadConfigGuideArgs {
     /// Topic to get configuration guide for
     #[schemars(
-        description = "Configuration domain: overview (all domains + file paths), providers (LLM provider config + vault), mcp (MCP server config), skills (skill install + format), agents (agent workspace + SOUL.md), general (general/memory/policies), generation (image/speech/video providers), channels (Telegram/Discord config), cron (scheduled tasks)"
+        description = "Configuration domain: overview (all domains + file paths), providers (LLM provider config + vault), mcp (MCP server config), skills (skill install + format), agents (agent workspace + SOUL.md), general (general/memory/policies), generation (image/speech/video providers), channels (Telegram/Discord config), cron (scheduled tasks), multi_channel (one core serving many ends: service connection + channels + device pairing), cluster (center/node cluster: enroll, node_invoke, node_file, approval)"
     )]
     pub topic: GuideTopic,
 }
@@ -30,6 +30,8 @@ pub enum GuideTopic {
     Generation,
     Channels,
     Cron,
+    MultiChannel,
+    Cluster,
 }
 
 impl GuideTopic {
@@ -44,6 +46,8 @@ impl GuideTopic {
             Self::Generation => "generation.md",
             Self::Channels => "channels.md",
             Self::Cron => "cron.md",
+            Self::MultiChannel => "multi_channel.md",
+            Self::Cluster => "cluster.md",
         }
     }
 }
@@ -118,5 +122,24 @@ impl AlephTool for ReadConfigGuideTool {
             topic: topic_name,
             content,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_topics_map_to_files() {
+        assert_eq!(GuideTopic::MultiChannel.filename(), "multi_channel.md");
+        assert_eq!(GuideTopic::Cluster.filename(), "cluster.md");
+    }
+
+    #[test]
+    fn new_topics_deserialize_snake_case() {
+        let m: GuideTopic = serde_json::from_str("\"multi_channel\"").unwrap();
+        assert!(matches!(m, GuideTopic::MultiChannel));
+        let c: GuideTopic = serde_json::from_str("\"cluster\"").unwrap();
+        assert!(matches!(c, GuideTopic::Cluster));
     }
 }

@@ -1,6 +1,6 @@
-//! Network 设置页 — 合并单页:
-//!  · Section 1 上游连接(壳核分离连接切换,Feature A)
-//!  · Section 2 下游集群(集群节点管理,Feature B 骨架)
+//! 服务与集群 设置页 — 合并单页:
+//!  · Section 1 服务连接(壳核分离连接切换:本地服务 / 远程服务)
+//!  · Section 2 Aleph 集群(集群节点管理)
 
 mod cluster;
 mod connection;
@@ -13,7 +13,7 @@ use leptos::prelude::*;
 pub fn NetworkView() -> impl IntoView {
     view! {
         <div class="px-8 pb-8 aleph-content-top max-w-5xl mx-auto space-y-10">
-            <h1 class="text-2xl font-bold text-text-primary">"网络与集群"</h1>
+            <h1 class="text-2xl font-bold text-text-primary">"服务与集群"</h1>
             <ConnectionSection />
             <ClusterSection />
         </div>
