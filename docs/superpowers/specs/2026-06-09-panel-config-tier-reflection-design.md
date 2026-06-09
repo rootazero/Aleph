@@ -56,21 +56,22 @@ Aleph 壳核分离:Panel (Leptos/WASM) 通过 JSON-RPC 连接远程 `aleph-serve
 
 一处挂载自动覆盖全部配置子页——这是"集中"的关键,避免逐页改。数据查看页(Dashboard/Memory)属于其他 mode,不受影响。
 
-### 组件 2 — `ConfigGate`(写控件闸门包装)
+### 组件 2 — `ConfigGate`(配置页闸门包装,路由层集中)
 
-可复用 Leptos 组件,包住每个配置页的**可编辑区域**(表单输入 / 保存 / 新增 / 删除 / 切换按钮)。镜像 `cluster.rs` 现有 `<Show when=move || state.is_operator()>` 范式:
+可复用 Leptos 组件,在 **`SettingsRouter`(`app.rs:375`)路由 match 层**包住每个 config-write 页的整页 view —— `"/settings/providers" => view! { <ConfigGate><ProvidersView /></ConfigGate> }`。这是真正的"集中":门控逻辑只在路由一处,共享一个 `ConfigGate`,不逐页改 20 个文件的内部。镜像 `cluster.rs` 现有 `<Show when=move || state.is_operator()>` 范式:
 
-- **operator** → 原样渲染 children。
-- **非 operator** → 渲染锁定占位("配置修改需 Config 权限")替代写控件。当前配置值仍可**只读查看**。
+- **operator** → 原样渲染 children(整页配置)。
+- **非 operator** → 渲染锁定卡(`LockedNotice`:"配置修改需 Config 权限,请联系 operator 在「设置 → 安全」授予,或重新配对选择 Config")替代整页。
 
-应用清单(config-write 页,每页一行包裹):
-- **AI**:providers、embedding-providers、reranking-providers、generation-providers、model-route、routing、search、memory
-- **Channels**:telegram、discord、whatsapp、imessage(channels 概览为只读,不挡)
-- **Extensions**:mcp、plugins、skills、clawhub、acp
-- **Advanced**:browser、policies、security、auth、execution
-- **Network**:network(cluster 已自带门控,不重复)
+**行为说明**:Chat-tier 用户打开 config 页看到锁定卡,**不保留配置值只读查看**。配置页属于第二层;第一层的"查看数据"指 Dashboard/Memory/Trace/Logs/Usage 数据仪表盘(独立 mode,完全开放,不门控)。配置值(API key / channel token)敏感,锁定卡比半禁用表单更诚实安全。
+
+应用清单(在 `SettingsRouter` 包 `<ConfigGate>` 的 config-write 路由):
 - **Basic**:general
-- **不挡**:appearance、behavior(纯浏览器本地设置,无后端调用,无 `PERMISSION_DENIED`)
+- **AI**:search、providers、embedding-providers、reranking-providers、generation-providers、model-route、memory
+- **Extensions**:routing、mcp、plugins、skills、clawhub、acp
+- **Advanced**:browser、security、auth、policies、execution
+- **Channels**:`/settings/channels/{platform}` 各平台页(`ChannelPlatformPage`)
+- **不挡**(read-only / 本地 / 连接管理):`/settings`(索引)、appearance、behavior、channels(概览只读)、network(含连接目标切换 + cluster.rs 已自带门控,Chat-tier 需保留切回本地的能力)
 
 ### 组件 3 — 连接 tier 指示
 
@@ -126,7 +127,7 @@ leptos_i18n 0.6 编译期 codegen + 严格 parity:提交前用脚本校验 en/zh
 ## 7. 验证标准
 
 1. **operator(Config tier / 本地 loopback)**:所有配置页写控件正常渲染可用,无横幅,chip 显示 Config 徽章。
-2. **guest(Chat tier / 远程默认)**:Settings 各配置页顶部显示锁定横幅;写区被 ConfigGate 替换为锁定占位;配置值仍可只读查看;chip 显示 Chat 徽章;任何漏网写操作触发 `PERMISSION_DENIED` 时显示友好提示。
+2. **guest(Chat tier / 远程默认)**:Settings 区顶部显示锁定横幅;打开任一 config-write 页显示锁定卡(整页门控);network/概览/本地偏好页仍可访问;chip 显示 Chat 徽章;任何漏网写操作触发 `PERMISSION_DENIED` 时显示友好提示。
 3. **数据查看页**(Dashboard/Memory/Trace/Logs/Usage):两种 tier 均正常可看,无门控。
 4. **i18n**:en/zh key parity 脚本通过;无孤儿 / 缺失键。
 5. **构建**:`just wasm` 通过;`-p aleph-panel` 单测通过(注意是 panel crate 非 alephcore)。
