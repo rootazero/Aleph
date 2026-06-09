@@ -493,6 +493,21 @@ html.glass .glass::after { opacity: 0.5; }
 :root:not(.dark):not(.glass) .glass::after { opacity: 0.25; }
 
 /* ============================================================
+   Shared blur helpers — drive the full-viewport modal scrim and the
+   light in-content frosts off the tiered tokens, so they follow the
+   theme and the reduced-transparency safety valve. The scrim sets only
+   backdrop-filter; each call site keeps its own dim background colour.
+   ============================================================ */
+.aleph-scrim {
+  backdrop-filter: blur(var(--scrim-blur));
+  -webkit-backdrop-filter: blur(var(--scrim-blur));
+}
+.aleph-blur-subtle {
+  backdrop-filter: blur(var(--glass-blur-subtle));
+  -webkit-backdrop-filter: blur(var(--glass-blur-subtle));
+}
+
+/* ============================================================
    Accessibility: macOS "Reduce transparency" (and the CSS media query it
    maps to) → drop all glass to opaque solids. No backdrop-filter, no
    see-through. !important on the token overrides wins the cascade
@@ -504,10 +519,17 @@ html.glass .glass::after { opacity: 0.5; }
     -webkit-backdrop-filter: none !important;
   }
   .glass::before, .glass::after, .aleph-sidebar::before { display: none !important; }
+  .aleph-scrim, .aleph-blur-subtle {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
   .aleph-sidebar { background-color: var(--color-sidebar) !important; }
   :root {
     --aleph-canvas-base: var(--aleph-solid-ground) !important;
     --color-surface-raised: oklch(1.00 0 0) !important;
+    --scrim-blur: 0px !important;
+    --glass-blur-subtle: 0px !important;
+    --glass-blur-chrome: 0px !important;
   }
   .dark { --color-surface-raised: oklch(0.20 0.018 310) !important; }
   html.glass {
