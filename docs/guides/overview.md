@@ -45,3 +45,13 @@ Call `read_config_guide(topic)` for details on each:
 - `agents` — Agent definitions and defaults
 - `cron` — Scheduled task config
 - `policies` — Tool safety, retry, filtering policies
+
+## Architecture topics
+
+These span config + CLI + vault (not a single config.toml section). Call
+`read_config_guide(topic)`:
+
+- `multi_channel` — 一核多端: one core serving many ends (service connection,
+  channels, device pairing)
+- `cluster` — Aleph 集群: center/node cluster (enroll, node_invoke, node_file,
+  approval)
