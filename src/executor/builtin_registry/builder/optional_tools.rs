@@ -132,6 +132,16 @@ impl BuiltinToolRegistry {
         );
         info!("Registered remember tool in BuiltinToolRegistry");
 
+        // node_list — cluster discovery (the read half of node_invoke). Always
+        // exposed; resolves the same deferred NodeRegistry at call time.
+        reg(
+            tools,
+            "node_list",
+            crate::builtin_tools::NodeListTool::DESCRIPTION,
+            schema::<crate::builtin_tools::node_list::NodeListArgs>("node_list"),
+        );
+        info!("Registered node_list tool in BuiltinToolRegistry");
+
         // node_invoke — cluster fan-out tool. Always exposed; its execution
         // path resolves the gateway NodeRegistry via the deferred
         // set_node_registry injection (mirrors the remember tool's pattern).

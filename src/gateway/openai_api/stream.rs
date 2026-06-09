@@ -246,6 +246,10 @@ pub fn provider_deltas_to_sse(
                                         StopReason::EndTurn => "stop",
                                         StopReason::ToolUse => "tool_calls",
                                         StopReason::MaxTokens => "length",
+                                        // OpenAI has no context-overflow finish
+                                        // reason — "length" is the closest fit
+                                        // (byte-identical to the pre-split map).
+                                        StopReason::ContextWindowExceeded => "length",
                                         StopReason::StopSequence => "stop",
                                         StopReason::PauseTurn => "stop",
                                         StopReason::Refusal => "content_filter",

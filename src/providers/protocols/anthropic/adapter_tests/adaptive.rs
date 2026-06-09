@@ -26,6 +26,58 @@ fn supports_adaptive_thinking_recognises_4_6_and_4_7_models() {
 }
 
 #[test]
+fn supports_adaptive_thinking_recognises_future_generations() {
+    // 4.8 / 5.x removed `budget_tokens` entirely — gating them as legacy
+    // would send a 400ing request. The version compare must pass the
+    // future-proof test without per-launch edits.
+    assert!(AnthropicProtocol::supports_adaptive_thinking(
+        "claude-opus-4-8"
+    ));
+    assert!(AnthropicProtocol::supports_adaptive_thinking(
+        "claude-fable-5"
+    ));
+    assert!(AnthropicProtocol::forbids_sampling_params("claude-opus-4-8"));
+    assert!(AnthropicProtocol::forbids_sampling_params("claude-fable-5"));
+    assert!(AnthropicProtocol::supports_xhigh_effort("claude-opus-4-8"));
+    assert!(!AnthropicProtocol::supports_xhigh_effort("claude-opus-4-6"));
+}
+
+#[test]
+fn claude_version_parses_ids_and_skips_dates() {
+    assert_eq!(
+        AnthropicProtocol::claude_version("claude-opus-4-8"),
+        Some((4, 8))
+    );
+    assert_eq!(
+        AnthropicProtocol::claude_version("claude-3-5-sonnet-20241022"),
+        Some((3, 5)),
+        "date stamp must not be read as a version segment",
+    );
+    assert_eq!(
+        AnthropicProtocol::claude_version("claude-sonnet-4-5-20250929"),
+        Some((4, 5))
+    );
+    assert_eq!(
+        AnthropicProtocol::claude_version("claude-fable-5"),
+        Some((5, 0))
+    );
+    assert_eq!(
+        AnthropicProtocol::claude_version("us.anthropic.claude-opus-4-7-v1:0"),
+        Some((4, 7)),
+        "Bedrock namespace dots normalize to dashes",
+    );
+    // Non-Claude IDs routed through the Anthropic protocol must not
+    // false-match a modern generation (their numeric segments are either
+    // absent or longer than two digits).
+    assert_eq!(AnthropicProtocol::claude_version("kimi-k2-0905"), None);
+    assert_eq!(
+        AnthropicProtocol::claude_version("deepseek-v3.1"),
+        Some((1, 0)),
+        "v3 is non-numeric; the lone `1` parses but stays below every gate",
+    );
+}
+
+#[test]
 fn supports_adaptive_thinking_rejects_pre_4_6_models() {
     assert!(!AnthropicProtocol::supports_adaptive_thinking(
         "claude-3-5-sonnet"
@@ -211,6 +263,52 @@ fn build_request_disabled_thinking_keeps_temperature_on_4_6() {
         body["temperature"].as_f64().unwrap(),
         f64::from(0.7f32),
         "disabled thinking must not strip sampling params"
+    );
+}
+
+#[test]
+fn build_request_omits_thinking_on_gen5_model_when_off() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    // Generation-5 models 400 on an explicit `{type:"disabled"}` block —
+    // omission is the only off-switch (claude-api: "omit the thinking param
+    // entirely instead").
+    let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::Off));
+    let mut config = ProviderConfig::test_config("claude-fable-5");
+    config.api_key = Some("sk-ant-api-test".to_string());
+
+    let body = build_body(&payload, &config);
+    assert!(
+        body.get("thinking").is_none(),
+        "fable-5 + Off → thinking field omitted, got {:?}",
+        body.get("thinking")
+    );
+}
+
+#[test]
+fn build_request_uses_adaptive_thinking_on_4_8() {
+    use crate::agents::thinking::ThinkLevel;
+    use crate::providers::message::UnifiedMessage;
+    let msgs = [UnifiedMessage::user("Hi")];
+    let payload = RequestPayload::new(&msgs).with_think_level(Some(ThinkLevel::XHigh));
+    let mut config = ProviderConfig::test_config("claude-opus-4-8");
+    config.api_key = Some("sk-ant-api-test".to_string());
+    config.temperature = Some(0.7);
+
+    let body = build_body(&payload, &config);
+    assert_eq!(
+        body["thinking"]["type"], "adaptive",
+        "4.8 must take the adaptive path, not legacy budget_tokens"
+    );
+    assert!(body["thinking"].get("budget_tokens").is_none());
+    assert_eq!(
+        body["output_config"]["effort"], "xhigh",
+        "4.8 accepts xhigh — no downgrade to max"
+    );
+    assert!(
+        body.get("temperature").is_none(),
+        "4.8 removed sampling params; temperature must be stripped"
     );
 }
 

@@ -31,8 +31,7 @@ pub trait HarnessCallback: Send {
     /// Kept for backward compatibility — prefer `on_tool_call_start`.
     fn on_tool_call(&mut self, _name: &str) {}
 
-    /// Invoked when a tool call begins. `id` pairs with `on_tool_call_done`
-    /// and `on_tool_summary`.
+    /// Invoked when a tool call begins. `id` pairs with `on_tool_call_done`.
     fn on_tool_call_start(&mut self, _id: &str, _name: &str, _args: &serde_json::Value) {}
 
     /// Invoked when a tool call finishes. `result` and `error` are mutually exclusive.
@@ -44,23 +43,8 @@ pub trait HarnessCallback: Send {
     ) {
     }
 
-    /// Invoked with an LLM-generated one-line summary for a tool call.
-    fn on_tool_summary(&mut self, _id: &str, _text: &str) {}
-
     /// Invoked when a safety gate blocks the current turn.
     fn on_safety_block(&mut self, _reason: &str) {}
-
-    /// Invoked when a stop hook blocks the current turn and forces another model turn.
-    fn on_stop_hook_block(&mut self, _reason: &str) {}
-
-    /// Invoked when a stop hook halts the loop permanently
-    /// (claude-code `preventContinuation` parity). The harness exits with
-    /// [`TerminateReason::StopHookHalt`](crate::orchestrator::dispatch::TerminateReason::StopHookHalt)
-    /// after firing this callback.
-    fn on_stop_hook_halt(&mut self, _reason: &str) {}
-
-    /// Invoked when the primary model is unavailable and a fallback is used.
-    fn on_model_fallback(&mut self, _reason: &str, _fallback_model: &str) {}
 
     /// Invoked when the harness reaches a terminal `TurnState::Done`.
     fn on_complete(&mut self) {}

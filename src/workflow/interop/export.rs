@@ -309,6 +309,7 @@ mod tests {
             agent_type: None,
             kind: WorkflowStepKind::Agent,
             choices: vec![],
+            review: false,
         }
     }
 
@@ -331,6 +332,7 @@ mod tests {
             agent_type: None,
             kind: WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
+            review: false,
         }
     }
 

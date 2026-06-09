@@ -12,17 +12,26 @@
 //! - hermes per-platform overrides live under `display.platforms.*`.
 //!   Aleph keeps a flat config knob (`gateway.runtime_footer`) for now;
 //!   per-channel overrides can be added when there's a real consumer.
+//! - beyond the hermes port, the enriched `RunSummary` fields are also
+//!   renderable: `duration` (wall-clock), `cost` (estimated USD, hermes
+//!   `~$` convention) and `tools` (per-tool emoji digest, opt-in via the
+//!   `fields` list — mirrors the opensquilla two-line footer condensed
+//!   into one line).
 
 use std::path::Path;
 use std::sync::OnceLock;
 
 use serde::{Deserialize, Serialize};
 
+use crate::gateway::event_emitter::ToolSummaryItem;
+
 /// Visible separator between footer fields.
 pub const SEPARATOR: &str = " · ";
 
-/// Default field order when none is configured.
-pub const DEFAULT_FIELDS: &[&str] = &["model", "tokens", "cwd"];
+/// Default field order when none is configured. `duration` and `cost`
+/// render only when the run summary carries data, so legacy footers
+/// (model/tokens/cwd inputs only) are byte-identical. `tools` is opt-in.
+pub const DEFAULT_FIELDS: &[&str] = &["model", "tokens", "duration", "cost", "cwd"];
 
 /// Runtime-footer configuration. Disabled by default to keep replies minimal.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -50,12 +59,68 @@ pub struct RuntimeFooterInputs<'a> {
     pub model: Option<&'a str>,
     pub total_tokens: Option<u64>,
     pub cwd: Option<&'a str>,
+    /// Wall-clock run duration. `RunSummary.duration_ms`.
+    pub duration_ms: Option<u64>,
+    /// Estimated run cost in USD. `RunSummary.estimated_cost_usd`.
+    pub cost_usd: Option<f64>,
+    /// Per-tool invocation digest. `RunSummary.tool_summaries`.
+    pub tool_summaries: &'a [ToolSummaryItem],
 }
 
 /// Strip a `vendor/` prefix for readability (`anthropic/claude-opus-4-7` →
 /// `claude-opus-4-7`). Returns the input unchanged when no slash is present.
 fn model_short(model: &str) -> &str {
     model.rsplit('/').next().unwrap_or(model)
+}
+
+/// Compact wall-clock rendering: `850ms`, `4.3s`, `2m14s`.
+fn fmt_duration(ms: u64) -> String {
+    if ms < 1_000 {
+        format!("{ms}ms")
+    } else if ms < 60_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else {
+        let total_secs = ms / 1000;
+        format!("{}m{}s", total_secs / 60, total_secs % 60)
+    }
+}
+
+/// Per-tool digest in first-seen order: `⚡bash×2 🔍web_search✗`.
+/// `×N` only when a tool ran more than once; `✗` marks a tool with at
+/// least one failed invocation. Empty input renders nothing.
+fn fmt_tools(items: &[ToolSummaryItem]) -> Option<String> {
+    if items.is_empty() {
+        return None;
+    }
+    // First-seen order, aggregated by tool name.
+    let mut order: Vec<&str> = Vec::new();
+    let mut counts: std::collections::HashMap<&str, (u32, bool, &str)> =
+        std::collections::HashMap::new();
+    for item in items {
+        let entry = counts
+            .entry(item.tool_name.as_str())
+            .or_insert_with(|| {
+                order.push(item.tool_name.as_str());
+                (0, false, item.emoji.as_str())
+            });
+        entry.0 += 1;
+        entry.1 |= !item.success;
+    }
+    let parts: Vec<String> = order
+        .iter()
+        .map(|name| {
+            let (count, failed, emoji) = counts[name];
+            let mut part = format!("{emoji}{name}");
+            if count > 1 {
+                part.push_str(&format!("\u{d7}{count}")); // ×N
+            }
+            if failed {
+                part.push('\u{2717}'); // ✗
+            }
+            part
+        })
+        .collect();
+    Some(parts.join(" "))
 }
 
 /// Collapse `$HOME` to `~` so the footer doesn't leak absolute paths.
@@ -108,6 +173,22 @@ pub fn build_footer_line(
             "cwd" => {
                 if let Some(c) = inputs.cwd.filter(|s| !s.is_empty()) {
                     parts.push(home_relative_cwd(c, home));
+                }
+            }
+            "duration" => {
+                if let Some(ms) = inputs.duration_ms.filter(|ms| *ms > 0) {
+                    parts.push(fmt_duration(ms));
+                }
+            }
+            "cost" => {
+                // hermes `~$` convention: the figure is an estimate.
+                if let Some(usd) = inputs.cost_usd.filter(|usd| *usd > 0.0) {
+                    parts.push(format!("~${usd:.4}"));
+                }
+            }
+            "tools" => {
+                if let Some(digest) = fmt_tools(inputs.tool_summaries) {
+                    parts.push(digest);
                 }
             }
             _ => {}
@@ -174,6 +255,7 @@ mod tests {
                 model: Some("gpt-5"),
                 total_tokens: Some(1234),
                 cwd: Some("/home/x"),
+                ..Default::default()
             },
             Some("/home/x"),
         );
@@ -197,6 +279,7 @@ mod tests {
                 model: Some("anthropic/claude-opus-4-7"),
                 total_tokens: Some(2048),
                 cwd: Some("/Users/zoe/work"),
+                ..Default::default()
             },
             &fields(&["model", "tokens", "cwd"]),
             Some("/Users/zoe"),
@@ -212,6 +295,7 @@ mod tests {
                 model: None,
                 total_tokens: Some(99),
                 cwd: Some("/tmp"),
+                ..Default::default()
             },
             &fields(&["model", "tokens", "cwd"]),
             None,
@@ -227,6 +311,7 @@ mod tests {
                 model: Some("gpt-5"),
                 total_tokens: Some(1),
                 cwd: None,
+                ..Default::default()
             },
             &fields(&["model", "nonexistent", "tokens"]),
             None,
@@ -242,6 +327,7 @@ mod tests {
                 model: Some("gpt-5"),
                 total_tokens: Some(7),
                 cwd: None,
+                ..Default::default()
             },
             &[],
             None,
@@ -290,5 +376,89 @@ mod tests {
         assert_eq!(model_short("gpt-5"), "gpt-5");
         assert_eq!(model_short("vendor/gpt-5"), "gpt-5");
         assert_eq!(model_short("a/b/c"), "c");
+    }
+
+    #[test]
+    fn duration_formats_compactly_per_magnitude() {
+        assert_eq!(fmt_duration(850), "850ms");
+        assert_eq!(fmt_duration(4_321), "4.3s");
+        assert_eq!(fmt_duration(134_000), "2m14s");
+    }
+
+    #[test]
+    fn duration_and_cost_render_via_field_list() {
+        let line = build_footer_line(
+            &RuntimeFooterInputs {
+                model: Some("gpt-5"),
+                duration_ms: Some(4_321),
+                cost_usd: Some(0.1234),
+                ..Default::default()
+            },
+            &fields(&["model", "duration", "cost"]),
+            None,
+        )
+        .expect("renders");
+        assert_eq!(line, "gpt-5 · 4.3s · ~$0.1234");
+    }
+
+    #[test]
+    fn zero_duration_and_zero_cost_are_skipped() {
+        // Legacy producers ship duration_ms=0 / no cost — the new default
+        // fields must not change their footer output.
+        let line = build_footer_line(
+            &RuntimeFooterInputs {
+                model: Some("gpt-5"),
+                total_tokens: Some(7),
+                duration_ms: Some(0),
+                cost_usd: Some(0.0),
+                ..Default::default()
+            },
+            &[],
+            None,
+        )
+        .expect("renders");
+        assert_eq!(line, "gpt-5 · 7t");
+    }
+
+    fn tool(name: &str, emoji: &str, success: bool) -> ToolSummaryItem {
+        ToolSummaryItem {
+            tool_id: "t".to_string(),
+            tool_name: name.to_string(),
+            emoji: emoji.to_string(),
+            duration_ms: 1,
+            success,
+        }
+    }
+
+    #[test]
+    fn tools_digest_aggregates_in_first_seen_order() {
+        let items = vec![
+            tool("bash", "\u{26a1}", true),
+            tool("web_search", "\u{1f50d}", false),
+            tool("bash", "\u{26a1}", true),
+        ];
+        let line = build_footer_line(
+            &RuntimeFooterInputs {
+                tool_summaries: &items,
+                ..Default::default()
+            },
+            &fields(&["tools"]),
+            None,
+        )
+        .expect("renders");
+        assert_eq!(line, "\u{26a1}bash\u{d7}2 \u{1f50d}web_search\u{2717}");
+    }
+
+    #[test]
+    fn tools_field_with_no_invocations_renders_nothing() {
+        let block = build_footer_block(
+            &RuntimeFooterConfig {
+                enabled: true,
+                fields: fields(&["tools"]),
+            },
+            &RuntimeFooterInputs::default(),
+            None,
+        );
+        assert!(block.is_empty());
     }
 }

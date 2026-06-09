@@ -13,10 +13,7 @@ use tokio::sync::broadcast;
 /// * `on_tool_call(name)` → `FlowStreamEvent::ToolCallStart { id: "legacy", name, args: null }`
 /// * `on_tool_call_start(id, name, args)` → `FlowStreamEvent::ToolCallStart { id, name, args }`
 /// * `on_tool_call_done(id, result, error)` → `FlowStreamEvent::ToolCallDone { id, result, error }`
-/// * `on_tool_summary(id, text)` → `FlowStreamEvent::ToolSummary { id, text }`
 /// * `on_safety_block(reason)` → `FlowStreamEvent::SafetyBlock { reason }`
-/// * `on_stop_hook_block(reason)` → `FlowStreamEvent::StopHookBlock { reason }`
-/// * `on_model_fallback(reason, fallback_model)` → `FlowStreamEvent::ModelFallback { reason, fallback_model }`
 /// * `on_complete()` → no-op (the terminal `Complete(outcome)` event is
 ///   emitted by [`BroadcastCallback::on_complete_with_outcome`], which fires
 ///   strictly after `on_complete` and after `AgentHarnessRunner` has built
@@ -80,29 +77,9 @@ impl HarnessCallback for BroadcastCallback {
         });
     }
 
-    fn on_tool_summary(&mut self, id: &str, text: &str) {
-        let _ = self.tx.send(FlowStreamEvent::ToolSummary {
-            id: id.to_string(),
-            text: text.to_string(),
-        });
-    }
-
     fn on_safety_block(&mut self, reason: &str) {
         let _ = self.tx.send(FlowStreamEvent::SafetyBlock {
             reason: reason.to_string(),
-        });
-    }
-
-    fn on_stop_hook_block(&mut self, reason: &str) {
-        let _ = self.tx.send(FlowStreamEvent::StopHookBlock {
-            reason: reason.to_string(),
-        });
-    }
-
-    fn on_model_fallback(&mut self, reason: &str, fallback_model: &str) {
-        let _ = self.tx.send(FlowStreamEvent::ModelFallback {
-            reason: reason.to_string(),
-            fallback_model: fallback_model.to_string(),
         });
     }
 

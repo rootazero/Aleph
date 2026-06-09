@@ -183,6 +183,7 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                     agent_type: call.opts.agent_type,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
+                    review: false,
                 });
                 // A sibling inside a parallel block extends the current group; a
                 // sequential step becomes the next singleton layer.
@@ -761,6 +762,7 @@ mod tests {
                     agent_type: Some("Explore".into()),
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
+                    review: false,
                 },
                 WorkflowManifestStep {
                     id: "b".into(),
@@ -775,6 +777,7 @@ mod tests {
                     agent_type: None,
                     kind: crate::workflow::def::WorkflowStepKind::Agent,
                     choices: vec![],
+                    review: false,
                 },
             ],
         }
@@ -867,6 +870,7 @@ const r = await pipeline(items, s1, s2)
                 agent_type: None,
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
+                review: false,
             }],
         };
         let js = render_workflow_js(&original);
@@ -1060,6 +1064,7 @@ await agent('fix more')
                 agent_type: None,
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
+                review: false,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1149,6 +1154,7 @@ await agent('fix more')
                 agent_type: Some("code-reviewer".into()),
                 kind: crate::workflow::def::WorkflowStepKind::Agent,
                 choices: vec![],
+                review: false,
             }],
         };
         let js = render_workflow_js(&m);
@@ -1249,6 +1255,7 @@ await agent('fix more')
             agent_type: None,
             kind: crate::workflow::def::WorkflowStepKind::Agent,
             choices: vec![],
+            review: false,
         }
     }
 

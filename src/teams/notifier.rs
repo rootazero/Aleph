@@ -3,6 +3,9 @@
 //! An [`EventHandler`] that listens for dispatcher task events and routes a
 //! message to the team leader's inbox:
 //! - a task **failure** alerts the leader immediately;
+//! - a task parked in **waiting_review** alerts the leader immediately — the
+//!   review gate only resolves through `workflow_step_review`, so without
+//!   this nudge a gated DAG would stall silently;
 //! - a task **completion** notifies the leader only once the whole team's work
 //!   has reached a terminal state (avoids per-task noise).
 //!
@@ -141,7 +144,14 @@ impl EventHandler for TeamNotifier {
     }
 
     fn subscriptions(&self) -> Vec<EventType> {
-        vec![EventType::TeamTaskCompleted, EventType::TeamTaskFailed]
+        vec![
+            EventType::TeamTaskCompleted,
+            EventType::TeamTaskFailed,
+            // Carries the "waiting_review" status transition (review-gated
+            // tasks parked by the dispatcher). All other status updates on
+            // this event type are ignored in `handle`.
+            EventType::TeamTaskUpdated,
+        ]
     }
 
     async fn handle(
@@ -159,6 +169,32 @@ impl EventHandler for TeamNotifier {
                     team_id,
                     "Team task failed",
                     format!("Task `{task_id}` failed.\n\n{error}"),
+                )
+                .await;
+            }
+            // Review-gated task parked by the dispatcher. The gate only
+            // resolves through `workflow_step_review`, so the leader must be
+            // told now — otherwise the DAG stalls with nobody polling the
+            // board. Other status transitions on this event are noise here.
+            AlephEvent::TeamTaskUpdated {
+                team_id,
+                task_id,
+                status,
+                ..
+            } if status.as_str() == "waiting_review" => {
+                self.notify_leader(
+                    team_id,
+                    "Team task awaiting review",
+                    format!(
+                        "Task `{task_id}` finished its run and is waiting for \
+                         your review. The member's output is a self-report, \
+                         not a verified fact — check it against the task's \
+                         acceptance criteria (and verify any claimed \
+                         side-effects via their handles: URLs, paths, ids) \
+                         before deciding. Resolve with `workflow_step_review` \
+                         (approve / reject / retry / skip); downstream steps \
+                         stay blocked until you do."
+                    ),
                 )
                 .await;
             }

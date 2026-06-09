@@ -22,7 +22,7 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 pub struct NodeInvokeManyArgs {
     /// Tags an online node must ALL carry to be selected (AND match). Empty or
     /// omitted = every online node (broadcast). Tags are verbatim labels like
-    /// "gpu" or "region=us"; see `environments.list`.
+    /// "gpu" or "region=us"; the `node_list` tool shows each node's tags.
     #[serde(default)]
     pub tags: Vec<String>,
     /// Command to run on each matched node (e.g. "bash"). Each node must
@@ -81,7 +81,7 @@ impl AlephTool for NodeInvokeManyTool {
     const NAME: &'static str = "node_invoke_many";
     const DESCRIPTION: &'static str = r#"Run one command CONCURRENTLY on every connected cluster node that carries ALL of the given tags (a scatter-gather fan-out).
 
-Select nodes by `tags` (AND match) — e.g. {"tags": ["gpu"], "command": "bash", "args": {"cmd": "nvidia-smi -L"}}. An empty/omitted `tags` targets every online node. See `environments.list` for online nodes and their tags. `command` must be one each node declares (a node that doesn't declare it returns a per-node error; others still run).
+Select nodes by `tags` (AND match) — e.g. {"tags": ["gpu"], "command": "bash", "args": {"cmd": "nvidia-smi -L"}}. An empty/omitted `tags` targets every online node. Call `node_list` (with the same tags) to preview which nodes will be hit. `command` must be one each node declares (a node that doesn't declare it returns a per-node error; others still run).
 
 Each node runs in its own sandbox with an independent `timeout_ms` (default 120000). Partial failure is tolerated: you always get back {"invoked", "succeeded", "failed", "results":[{"node","node_id","ok",("result"|"error")}]}. If no online node matches the tags you get a clear error listing the available tags."#;
 

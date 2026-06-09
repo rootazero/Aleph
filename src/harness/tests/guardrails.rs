@@ -696,7 +696,7 @@ async fn tool_call_block_skips_only_blocked_call_in_batch() {
     // Live "done" event must fire for BOTH calls so the broadcast stream
     // closes every ToolStart with a ToolEnd: the blocked call as an error,
     // the safe call as a success. Before wiring `on_tool_call_done` the live
-    // stream emitted starts with no ends and leaked `pending_tools` entries.
+    // stream emitted starts with no ends.
     assert!(
         cb.tool_done.contains(&("c1".to_string(), true)),
         "blocked call must emit an error `done`, got {:?}",

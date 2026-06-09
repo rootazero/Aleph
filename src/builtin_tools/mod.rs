@@ -71,6 +71,7 @@ pub mod meta_tools;
 pub mod node_invoke;
 pub mod node_invoke_many;
 pub mod node_file;
+pub mod node_list;
 pub mod note_manage;
 pub mod note_orient;
 pub mod note_schema;
@@ -190,6 +191,7 @@ pub use meta_tools::{
     ListToolsTool, SearchToolHit, SearchToolsArgs, SearchToolsOutput, SearchToolsTool,
 };
 pub use node_invoke::{NodeInvokeArgs, NodeInvokeTool};
+pub use node_list::{NodeListArgs, NodeListTool};
 pub use node_invoke_many::{NodeInvokeManyArgs, NodeInvokeManyTool};
 pub use node_file::{NodeFileArgs, NodeFileTool};
 pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};

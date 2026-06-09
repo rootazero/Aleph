@@ -254,6 +254,45 @@ pub(crate) fn bound_content(text: &str, max_chars: usize) -> (String, bool) {
     (text[..cut].to_string(), true)
 }
 
+/// Tail-preserving variant of [`bound_content`] for append-ordered logs
+/// (console / network), where the NEWEST — and usually most relevant — entries
+/// sit at the END. Head-only truncation would drop exactly the lines the
+/// model's last action produced. Keeps ~40% head + ~60% tail on line
+/// boundaries with an elision marker in between (mirrors the shell tool's
+/// head+tail split).
+pub(crate) fn bound_content_head_tail(text: &str, max_chars: usize) -> (String, bool) {
+    let total_chars = text.chars().count();
+    if total_chars <= max_chars {
+        return (text.to_string(), false);
+    }
+    let head_budget = max_chars * 2 / 5;
+    let tail_budget = max_chars - head_budget;
+    let (head, _) = bound_content(text, head_budget);
+    // Byte index where the last `tail_budget` chars start (char-safe; `skip`
+    // is in 1..total_chars because total_chars > max_chars >= tail_budget).
+    let skip = total_chars - tail_budget;
+    let byte_start = text.char_indices().nth(skip).map(|(i, _)| i).unwrap_or(0);
+    // Advance to the next line start so the tail never opens mid-line.
+    let tail = match text[byte_start..].find('\n') {
+        Some(nl) => &text[byte_start + nl + 1..],
+        None => &text[byte_start..],
+    };
+    let elided = total_chars
+        .saturating_sub(head.chars().count())
+        .saturating_sub(tail.chars().count());
+    // `bound_content` ends on a line boundary when it found one; glue a
+    // newline in only when it had to fall back to a mid-line char cut.
+    let sep = if head.ends_with('\n') || head.is_empty() {
+        ""
+    } else {
+        "\n"
+    };
+    (
+        format!("{head}{sep}…[{elided} chars elided]…\n{tail}"),
+        true,
+    )
+}
+
 /// Redact embedded secrets, then fence the untrusted page content with the
 /// prompt-injection boundary, in that order.
 ///
@@ -281,9 +320,11 @@ pub(crate) fn redact_wrap(manager: &ProfileManager, text: &str) -> String {
 ///    untrusted page content so chat-template markers injected by a hostile page
 ///    cannot escape the boundary.
 ///
-/// Used by `browser_console` / `browser_network` / `browser_evaluate`. Routing
-/// every content read through one function keeps the ordering correct and
-/// guarantees future content tools inherit all three guards.
+/// Used by `browser_evaluate` (front-loaded payloads, where the head of the
+/// result matters most). Append-ordered logs go through
+/// [`redact_and_wrap_log`] instead. Routing every content read through these
+/// two functions keeps the ordering correct and guarantees future content
+/// tools inherit all three guards.
 pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
     let (bounded, truncated) = bound_content(text, DEFAULT_CONTENT_MAX_CHARS);
     let wrapped = redact_wrap(manager, &bounded);
@@ -291,6 +332,23 @@ pub(crate) fn redact_and_wrap(manager: &ProfileManager, text: &str) -> String {
         format!(
             "{wrapped}\n[content truncated to {DEFAULT_CONTENT_MAX_CHARS} chars; \
              refine the action or read the page in smaller sections]"
+        )
+    } else {
+        wrapped
+    }
+}
+
+/// [`redact_and_wrap`] variant for append-ordered logs (`browser_console` /
+/// `browser_network`): same redact → wrap pipeline, but truncation keeps both
+/// the head and the tail so the newest entries — the ones the model's last
+/// action produced — survive.
+pub(crate) fn redact_and_wrap_log(manager: &ProfileManager, text: &str) -> String {
+    let (bounded, truncated) = bound_content_head_tail(text, DEFAULT_CONTENT_MAX_CHARS);
+    let wrapped = redact_wrap(manager, &bounded);
+    if truncated {
+        format!(
+            "{wrapped}\n[log truncated to {DEFAULT_CONTENT_MAX_CHARS} chars: middle elided, \
+             oldest and newest entries preserved]"
         )
     } else {
         wrapped
@@ -401,6 +459,42 @@ mod tests {
         let (out, truncated) = bound_content(s, 5);
         assert!(truncated);
         assert!(s.starts_with(&out) || out.is_empty());
+    }
+
+    #[test]
+    fn bound_content_head_tail_keeps_short_text_intact() {
+        let (out, truncated) = bound_content_head_tail("a\nb\nc", 100);
+        assert_eq!(out, "a\nb\nc");
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn bound_content_head_tail_preserves_newest_entries() {
+        // 20 log lines, head-only would drop the tail — the head+tail split
+        // must keep the FIRST and the LAST lines with a marker in between.
+        let log: String = (1..=20)
+            .map(|i| format!("[{i:02}] console line number {i}\n"))
+            .collect();
+        let (out, truncated) = bound_content_head_tail(&log, 200);
+        assert!(truncated);
+        assert!(out.starts_with("[01]"), "head dropped: {out:?}");
+        assert!(
+            out.contains("console line number 20"),
+            "newest entry dropped: {out:?}"
+        );
+        assert!(out.contains("chars elided"), "missing marker: {out:?}");
+        // Tail opens on a line boundary — the line right after the marker is whole.
+        let after_marker = out.split("…\n").nth(1).expect("tail after marker");
+        assert!(after_marker.starts_with('['), "tail mid-line: {out:?}");
+    }
+
+    #[test]
+    fn bound_content_head_tail_is_char_safe_on_multibyte() {
+        let s = "你好世界，这是一条很长的日志行。\n".repeat(50);
+        let (out, truncated) = bound_content_head_tail(&s, 60);
+        assert!(truncated);
+        // No panic on byte slicing, and the tail still ends like the source.
+        assert!(out.ends_with("。\n"));
     }
 
     #[test]

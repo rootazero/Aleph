@@ -226,6 +226,15 @@ impl TokenManager {
             .map_err(|e| TokenError::DatabaseError(e.to_string()))
     }
 
+    /// Stamp a device's `last_seen_at` (now). Cluster node lifecycle seams call
+    /// this on connect/disconnect so an offline node carries an honest
+    /// "last seen" in `environments.list`. Best-effort for callers.
+    pub fn touch_device(&self, device_id: &str) -> Result<(), TokenError> {
+        self.store
+            .touch_device(device_id)
+            .map_err(|e| TokenError::DatabaseError(e.to_string()))
+    }
+
     /// Clean up expired tokens
     pub fn cleanup_expired(&self) -> Result<u64, TokenError> {
         self.store

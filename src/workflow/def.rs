@@ -87,6 +87,20 @@ pub struct WorkflowStepDef {
     /// Empty → free-text answer. Ignored for agent steps.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<String>,
+    /// Gate this step behind lead review: a successful run parks the task in
+    /// `WaitingReview` instead of `Completed`, and downstream steps stay
+    /// blocked until the leader resolves it via `workflow_step_review`
+    /// (approve / reject / retry / skip). Only valid on agent steps — a
+    /// clarify step has no run to review. Defaults to `false`, and a
+    /// non-reviewed step serialises without the key (byte-identical on the
+    /// wire for every pre-existing template).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub review: bool,
+}
+
+/// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl WorkflowStepDef {
@@ -133,6 +147,12 @@ impl WorkflowDef {
                     if step.prompt.trim().is_empty() {
                         return Err(AlephError::invalid_input(format!(
                             "clarify step '{}' has no question (prompt must not be empty)",
+                            step.id
+                        )));
+                    }
+                    if step.review {
+                        return Err(AlephError::invalid_input(format!(
+                            "clarify step '{}' cannot require review — there is no agent run to review",
                             step.id
                         )));
                     }
@@ -245,6 +265,7 @@ mod tests {
             depends_on: deps.iter().map(|s| s.to_string()).collect(),
             kind: WorkflowStepKind::Agent,
             choices: vec![],
+            review: false,
         }
     }
 
@@ -256,6 +277,7 @@ mod tests {
             depends_on: deps.iter().map(|s| s.to_string()).collect(),
             kind: WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
+            review: false,
         }
     }
 
@@ -410,5 +432,43 @@ mod tests {
         let d = def(vec![clarify_step("ask", "   ", &[], &[])]);
         let err = d.validate().unwrap_err().to_string();
         assert!(err.contains("no question"), "got: {err}");
+    }
+
+    // ---- Review gate -------------------------------------------------------
+
+    #[test]
+    fn review_defaults_false_and_skips_serialisation() {
+        // Legacy steps (no `review` key) deserialise as non-reviewed, and a
+        // non-reviewed step serialises without the key → byte-identical.
+        let json = r#"{"id":"a","agent":"w","prompt":"go"}"#;
+        let s: WorkflowStepDef = serde_json::from_str(json).unwrap();
+        assert!(!s.review);
+        let out = serde_json::to_string(&s).unwrap();
+        assert!(!out.contains("review"), "non-reviewed step omits key: {out}");
+    }
+
+    #[test]
+    fn review_step_roundtrips_through_json() {
+        let json = r#"{"id":"a","agent":"w","prompt":"go","review":true}"#;
+        let s: WorkflowStepDef = serde_json::from_str(json).unwrap();
+        assert!(s.review);
+        let out = serde_json::to_string(&s).unwrap();
+        let back: WorkflowStepDef = serde_json::from_str(&out).unwrap();
+        assert!(back.review);
+    }
+
+    #[test]
+    fn validate_accepts_review_on_agent_step() {
+        let mut d = def(vec![step("a", &[])]);
+        d.steps[0].review = true;
+        assert!(d.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_review_on_clarify_step() {
+        let mut d = def(vec![clarify_step("ask", "Pick env", &[], &[])]);
+        d.steps[0].review = true;
+        let err = d.validate().unwrap_err().to_string();
+        assert!(err.contains("cannot require review"), "got: {err}");
     }
 }

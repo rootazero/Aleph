@@ -12,7 +12,7 @@ use super::chrome_mcp::ChromeMcpDriver;
 use super::error::BrowserError;
 use super::network_policy::BrowserSsrfGuard;
 use super::types::{
-    ActionTarget, EmulateOptions, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
+    ActionTarget, EmulateOptions, HistoryNav, ScreenshotOpts, ScreenshotOutput, ScrollDirection,
     SnapshotOutput, TabId,
 };
 
@@ -176,6 +176,26 @@ impl BrowserBackend for ChromeMcpBackend {
     async fn click(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
         let element = Self::extract_element_ref(&target)?;
         self.select_and_call(tab_id, "click", json!({ "uid": element }))
+            .await?;
+        Ok(())
+    }
+
+    async fn dblclick(&self, tab_id: &str, target: ActionTarget) -> Result<(), BrowserError> {
+        let element = Self::extract_element_ref(&target)?;
+        self.select_and_call(tab_id, "click", json!({ "uid": element, "dblClick": true }))
+            .await?;
+        Ok(())
+    }
+
+    async fn history(&self, tab_id: &str, nav: HistoryNav) -> Result<(), BrowserError> {
+        // Native history navigation — `navigate_page` waits for the load,
+        // unlike a fire-and-forget `history.back()` eval.
+        let nav_type = match nav {
+            HistoryNav::Back => "back",
+            HistoryNav::Forward => "forward",
+            HistoryNav::Refresh => "reload",
+        };
+        self.select_and_call(tab_id, "navigate_page", json!({ "type": nav_type }))
             .await?;
         Ok(())
     }

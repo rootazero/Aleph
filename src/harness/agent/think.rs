@@ -759,6 +759,48 @@ impl AgentHarness {
             );
         }
 
+        // 3b-pre. Context-window-exceeded recovery (claude-code parity).
+        // `model_context_window_exceeded` means the *context window* — not
+        // the output cap — filled mid-generation. The resume-nudge loop in
+        // 3b would append more messages and re-hit the wall, so route this
+        // to the same reactive-compaction rescue that `prompt_too_long`
+        // errors take: synthesize an error carrying the overflow marker
+        // (which `llm_retry::classify` maps to `CompactAndRetry`) and let
+        // the helper reuse its one-shot cap, trace, and budget plumbing.
+        // The loop is bounded by that cap: each pass either returns a
+        // compacted-and-retried response or errors out when rescues are
+        // exhausted, so a model that keeps overflowing cannot spin.
+        while matches!(
+            response.stop_reason,
+            crate::providers::adapter::StopReason::ContextWindowExceeded
+        ) {
+            // The overflowed call still billed input plus the partial output;
+            // count it before the retry replaces `response`.
+            self.account_intermediate_tokens(&response);
+            tracing::warn!(
+                ?session_id,
+                "provider stopped with model_context_window_exceeded; \
+                 routing to reactive compaction",
+            );
+            let overflow_err = crate::error::AlephError::ProviderError {
+                message: "model_context_window_exceeded: provider stopped because \
+                          the context window is full"
+                    .to_string(),
+                suggestion: None,
+            };
+            response = self
+                .try_reactive_compact_and_retry(
+                    overflow_err,
+                    session_id,
+                    &mut messages,
+                    tools_ref,
+                    budget_tool_tokens,
+                    parent_cancel,
+                    started,
+                )
+                .await?;
+        }
+
         // 3b. max_output_tokens recovery (claude-code parity, query.ts:1188).
         // When the provider hits its output-token cap mid-stream we get
         // `stop_reason == MaxTokens` plus whatever partial text it managed
@@ -1056,7 +1098,6 @@ impl AgentHarness {
                 parent_cancel,
             )
             .await;
-            callback.on_stop_hook_halt(&reason);
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::StopHookHalt {
                     reason: reason.clone(),

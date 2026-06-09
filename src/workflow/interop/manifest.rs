@@ -84,6 +84,16 @@ pub struct WorkflowManifestStep {
     /// only for a clarify step.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<String>,
+    /// Lead-review gate (see `WorkflowStepDef::review`). Executable core, so it
+    /// round-trips through [`to_def`](WorkflowManifest::to_def). Omitted on the
+    /// wire when false (byte-identical to legacy manifests).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub review: bool,
+}
+
+/// serde `skip_serializing_if` helper — keeps non-reviewed steps byte-identical.
+fn is_false(v: &bool) -> bool {
+    !*v
 }
 
 impl WorkflowManifest {
@@ -111,6 +121,7 @@ impl WorkflowManifest {
                     agent_type: None,
                     kind: s.kind,
                     choices: s.choices.clone(),
+                    review: s.review,
                 })
                 .collect(),
         }
@@ -142,6 +153,7 @@ impl WorkflowManifest {
                     depends_on: s.depends_on.clone(),
                     kind: s.kind,
                     choices: s.choices.clone(),
+                    review: s.review,
                 })
                 .collect(),
         }
@@ -164,6 +176,7 @@ mod tests {
                     depends_on: vec![],
                     kind: WorkflowStepKind::Agent,
                     choices: vec![],
+                    review: false,
                 },
                 WorkflowStepDef {
                     id: "b".into(),
@@ -172,6 +185,7 @@ mod tests {
                     depends_on: vec!["a".into()],
                     kind: WorkflowStepKind::Agent,
                     choices: vec![],
+                    review: false,
                 },
             ],
         }
@@ -221,6 +235,7 @@ mod tests {
                 agent_type: Some("Explore".into()),
                 kind: WorkflowStepKind::Agent,
                 choices: vec![],
+                review: false,
             }],
         };
         let def = manifest.to_def();
@@ -251,6 +266,7 @@ mod tests {
                 agent_type: Some("code-reviewer".into()),
                 kind: WorkflowStepKind::Agent,
                 choices: vec![],
+                review: false,
             }],
         };
         let v = serde_json::to_value(&manifest).unwrap();
@@ -278,6 +294,26 @@ mod tests {
     }
 
     #[test]
+    fn review_flag_roundtrips_through_def_and_json() {
+        let mut def = core_def();
+        def.steps[1].review = true;
+
+        // The review gate survives the manifest projection both ways.
+        let manifest = WorkflowManifest::from_def(&def);
+        assert!(!manifest.steps[0].review);
+        assert!(manifest.steps[1].review);
+        assert_eq!(manifest.to_def(), def);
+
+        // On the wire: present only on the gated step (legacy byte-identical).
+        let v = serde_json::to_value(&manifest).unwrap();
+        assert!(v["steps"][0].get("review").is_none(), "ungated omits key");
+        assert_eq!(v["steps"][1]["review"], true);
+        let s = serde_json::to_string(&manifest).unwrap();
+        let back: WorkflowManifest = serde_json::from_str(&s).unwrap();
+        assert_eq!(manifest, back);
+    }
+
+    #[test]
     fn clarify_step_roundtrips_through_def_and_json() {
         let def = WorkflowDef {
             name: "deploy".into(),
@@ -289,6 +325,7 @@ mod tests {
                 depends_on: vec![],
                 kind: WorkflowStepKind::Clarify,
                 choices: vec!["staging".into(), "prod".into()],
+                review: false,
             }],
         };
         // The clarify kind + choices survive the manifest projection both ways.

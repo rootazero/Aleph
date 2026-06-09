@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::approval::{ActionType, ApprovalPolicy};
 use crate::browser::manager::ProfileManager;
+use crate::browser::types::HistoryNav;
 use crate::error::Result;
 use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
@@ -132,19 +133,24 @@ impl AlephTool for BrowserNavigateTool {
             );
         }
 
-        let js = match args.action {
-            NavigateAction::Back => "history.back()",
-            NavigateAction::Forward => "history.forward()",
-            NavigateAction::Refresh => "location.reload()",
+        // Back/forward/refresh route through the backend's `history` method:
+        // native go-back/go-forward/reload on the managed CLI, native
+        // `navigate_page {type}` on Chrome DevTools MCP. (The old path passed a
+        // bare `history.back()` expression to `evaluate`, but both eval
+        // surfaces require an arrow-function body — the call never executed.)
+        let nav = match args.action {
+            NavigateAction::Back => HistoryNav::Back,
+            NavigateAction::Forward => HistoryNav::Forward,
+            NavigateAction::Refresh => HistoryNav::Refresh,
             NavigateAction::Goto { .. } => unreachable!("Goto handled above"),
         };
         match super::make_backend_and_tab(&self.manager, &args.profile).await {
-            Ok((backend, tab_id)) => match backend.evaluate(&tab_id, js).await {
+            Ok((backend, tab_id)) => match backend.history(&tab_id, nav).await {
                 Ok(_) => Ok(BrowserNavigateOutput {
                     success: true,
                     message: Some(format!(
-                        "Navigated {:?} in profile '{}'",
-                        args.action, args.profile
+                        "Navigated {nav:?} in profile '{}'",
+                        args.profile
                     )),
                 }),
                 Err(e) => Ok(BrowserNavigateOutput {

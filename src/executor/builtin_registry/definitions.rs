@@ -253,8 +253,18 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
         requires_config: true, // Requires MemoryContextProvider (deferred via OnceCell)
     },
     BuiltinToolDefinition {
+        name: "node_list",
+        description: "List the online cluster nodes (remote execution arms): id, name, declared commands, tags, connected-at. Optionally filter by tags (AND match) to preview which nodes a node_invoke_many fan-out would hit.",
+        requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
+    },
+    BuiltinToolDefinition {
         name: "node_invoke",
         description: "Run a command on a connected cluster node (a remote execution arm). Address the node by name or id; the command must be one the node declares (e.g. \"bash\"), and `args` is that command's JSON payload passed through verbatim.",
+        requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
+    },
+    BuiltinToolDefinition {
+        name: "node_invoke_many",
+        description: "Fan a command out concurrently to every online cluster node carrying ALL the given tags (empty tags = all online nodes). Per-node results are aggregated; one node's failure doesn't stop the others.",
         requires_config: true, // Requires NodeRegistry (deferred via OnceCell)
     },
     BuiltinToolDefinition {
@@ -390,7 +400,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "browser_click",
-        description: "Click element in browser",
+        description: "Click or double-click element in browser",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -861,6 +871,8 @@ pub fn create_tool_boxed(
         // node_invoke requires the gateway NodeRegistry, injected at boot via
         // set_node_registry; built fresh per call — same pattern as remember.
         "node_invoke" => None,
+        // node_list / node_invoke_many require the same deferred NodeRegistry.
+        "node_list" | "node_invoke_many" => None,
         // node_file requires the gateway NodeRegistry, injected at boot via
         // set_node_registry; built fresh per call — same pattern as node_invoke.
         "node_file" => None,

@@ -1,6 +1,6 @@
 use super::{ActiveRun, ExecutionEngine, ExecutionError, RunRequest, RunState};
 use crate::gateway::agent_instance::{AgentInstance, AgentState, MessageRole};
-use crate::gateway::event_emitter::{EventEmitter, RunSummary, StreamEvent};
+use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::resilience::TaskStatus;
 use crate::sync_primitives::Arc;
@@ -389,24 +389,26 @@ where
             "Agent execution completed"
         );
 
-        // Get run info for summary
-        let (started_at, steps_completed, final_seq) = {
+        // Close out the active-run record (state, completion timestamp).
+        // `final_seq` is only needed by the error branch's `RunError` emit —
+        // the terminal `RunComplete` is single-sourced from the orchestrator
+        // drain inside `run_agent_loop` (see `helpers::run_dispatch_and_drain
+        // _classified`), which carries the enriched summary; the all-zeros
+        // duplicate previously emitted here is gone.
+        let final_seq = {
             let mut runs = active_runs.write().await;
             if let Some(run) = runs.get_mut(&run_id) {
                 run.state = final_state.clone();
                 run.completed_at = Some(chrono::Utc::now());
                 run.cancel_tx = None;
-                (run.started_at, run.steps_completed, run.next_seq())
+                run.next_seq()
             } else {
-                (chrono::Utc::now(), 0, 0)
+                0
             }
         };
 
         // Reset agent state
         agent.set_state(AgentState::Idle).await;
-
-        // Emit completion event
-        let duration_ms = (chrono::Utc::now() - started_at).num_milliseconds().max(0) as u64;
 
         let final_result = match result {
             Ok(response) => {
@@ -428,23 +430,9 @@ where
                     )
                     .await;
 
-                let _ = emitter
-                    .emit(StreamEvent::RunComplete {
-                        run_id: run_id.clone(),
-                        seq: final_seq,
-                        summary: RunSummary {
-                            total_tokens: 0,
-                            tool_calls: 0,
-                            loops: steps_completed,
-                            final_response: Some(response.clone()),
-                            ..Default::default()
-                        },
-                        total_duration_ms: duration_ms,
-                    })
-                    .await;
-
                 // Notify UI that the session was updated (global bus, so
-                // channel-originated runs reach the Panel too)
+                // channel-originated runs reach the Panel too). RunComplete
+                // itself is single-sourced from the orchestrator drain.
                 self.publish_session_updated(
                     &request.session_key,
                     request.metadata.get("channel_id").map(String::as_str),
