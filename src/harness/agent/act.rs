@@ -1016,8 +1016,7 @@ impl AgentHarness {
         // Live "done" event — mirror of `on_tool_call_start`. Fired for every
         // tool that produces a `ToolCallCompleted` persistence trace so the
         // broadcast stream emits a `ToolCallDone` → `StreamEvent::ToolEnd`.
-        // Without it the live stream shows tool starts with no ends and
-        // `event_drain`'s `pending_tools` map leaks one entry per call.
+        // Without it the live stream shows tool starts with no ends.
         callback.on_tool_call_done(&call.id, Some(&output_value), None);
         self.emit(
             || crate::harness::trace::LoopTraceEvent::ToolCallCompleted {

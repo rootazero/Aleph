@@ -1,16 +1,14 @@
 //! Event drain: maps `FlowStreamEvent` variants to `EventEmitter` calls.
 //!
 //! This is a pure, stateless-per-call helper extracted from the in-progress
-//! StreamCallback. It holds drain-side state in `DrainState` (pending tool
-//! pairs, first-delta flag) so callers don't need to replicate that logic.
-//!
-//! Task 4c will wire this into `run_loop.rs`; for now it is only unit-tested.
+//! StreamCallback. It holds drain-side state in `DrainState` (text
+//! accumulator, chunk counter, scrubber) so callers don't need to replicate
+//! that logic. Wired into the live path by `helpers::run_dispatch_and_drain`
+//! (called from `run_loop.rs`).
 
 use crate::sync_primitives::Arc;
-use std::collections::HashMap;
 
 use tokio::sync::Mutex;
-use tracing::trace;
 
 use crate::gateway::event_emitter::{
     EventEmitError, EventEmitter, RunSummary, StreamEvent, ToolErrorItem, ToolSummaryItem,
@@ -20,29 +18,17 @@ use crate::memory::StreamingContextScrubber;
 use crate::orchestrator::dispatch::{FlowOutcome, FlowStreamEvent};
 use aleph_protocol::TokenBreakdownView;
 
-/// Pending tool call info stashed between `ToolCallStart` and `ToolCallDone`.
-#[derive(Debug, Clone)]
-pub(crate) struct PendingTool {
-    #[allow(dead_code)] // reserved for ToolSummary wiring (see TODO)
-    pub name: String,
-}
-
 /// Mutable drain state shared across calls for a single run.
 ///
-/// Beyond bookkeeping, this owns the live text-stream state that was
-/// previously stranded in the now-retired `StreamingDeltaSink`: a running
-/// `full_text` accumulator, a monotonic `chunk_index`, and a
-/// [`StreamingContextScrubber`] that strips any `<memory-context>` framing the
-/// model echoes back from the injected recalled-memory block before it reaches
-/// the user. The drain task processes events serially on one task, so the
-/// `Mutex<DrainState>` it lives behind is effectively uncontended.
+/// This owns the live text-stream state that was previously stranded in the
+/// now-retired `StreamingDeltaSink`: a running `full_text` accumulator, a
+/// monotonic `chunk_index`, and a [`StreamingContextScrubber`] that strips any
+/// `<memory-context>` framing the model echoes back from the injected
+/// recalled-memory block before it reaches the user. The drain task processes
+/// events serially on one task, so the `Mutex<DrainState>` it lives behind is
+/// effectively uncontended.
 #[derive(Debug)]
 pub(crate) struct DrainState {
-    /// Set to `true` on the first emitted text chunk so callers can detect
-    /// "first-delta" transitions if needed in the future.
-    pub has_emitted_text: bool,
-    /// Pending tool calls keyed by tool-call id.
-    pub pending_tools: HashMap<String, PendingTool>,
     /// Accumulated visible text within the current think iteration. Populates
     /// the `full_text` field of every `ResponseChunk`; reset at each tool
     /// boundary so each iteration's running text starts fresh.
@@ -57,8 +43,6 @@ pub(crate) struct DrainState {
 impl Default for DrainState {
     fn default() -> Self {
         Self {
-            has_emitted_text: false,
-            pending_tools: HashMap::new(),
             accumulated: String::new(),
             chunk_index: 0,
             // The injected fence is `<memory-context>`, not the scrubber's
@@ -74,7 +58,7 @@ impl Default for DrainState {
 /// Map one `FlowStreamEvent` to the appropriate `EventEmitter` call(s).
 ///
 /// `run_id` is forwarded verbatim into every `StreamEvent` variant.
-/// `state` accumulates cross-event bookkeeping (pending tools, first-delta).
+/// `state` accumulates cross-event bookkeeping (running text, chunk index).
 ///
 /// This function is `async` because the `EventEmitter` trait is async.
 pub(crate) async fn emit_flow_event(
@@ -97,7 +81,6 @@ pub(crate) async fn emit_flow_event(
                 if visible.is_empty() {
                     None
                 } else {
-                    s.has_emitted_text = true;
                     s.accumulated.push_str(&visible);
                     let full_text = s.accumulated.clone();
                     let idx = s.chunk_index;
@@ -146,8 +129,6 @@ pub(crate) async fn emit_flow_event(
             {
                 let mut s = state.lock().await;
                 s.accumulated.clear();
-                s.pending_tools
-                    .insert(id.clone(), PendingTool { name: name.clone() });
             }
             let seq = emitter.next_seq();
             emitter
@@ -162,10 +143,6 @@ pub(crate) async fn emit_flow_event(
         }
 
         FlowStreamEvent::ToolCallDone { id, result, error } => {
-            {
-                let mut s = state.lock().await;
-                s.pending_tools.remove(&id);
-            }
             let tool_result = if let Some(err) = error {
                 crate::gateway::event_emitter::ToolResult::error(err)
             } else {
@@ -184,20 +161,6 @@ pub(crate) async fn emit_flow_event(
                 .await?;
         }
 
-        FlowStreamEvent::ToolSummary { id, text } => {
-            // No dedicated ToolSummary StreamEvent today; emit as ToolUpdate.
-            // TODO(task-4c): add StreamEvent::ToolSummary variant or re-evaluate.
-            let seq = emitter.next_seq();
-            emitter
-                .emit(StreamEvent::ToolUpdate {
-                    run_id: run_id.to_string(),
-                    seq,
-                    tool_id: id,
-                    progress: text,
-                })
-                .await?;
-        }
-
         FlowStreamEvent::SafetyBlock { reason } => {
             // Map safety blocks to a run error with a recognisable error code.
             let seq = emitter.next_seq();
@@ -207,34 +170,6 @@ pub(crate) async fn emit_flow_event(
                     seq,
                     error: reason,
                     error_code: Some("safety_block".to_string()),
-                })
-                .await?;
-        }
-
-        FlowStreamEvent::StopHookBlock { reason } => {
-            // Stop-hook blocks are informational; trace-log and continue.
-            // TODO(task-4c): surface as a dedicated StreamEvent if UI needs it.
-            trace!(
-                run_id,
-                reason,
-                "stop_hook_block: harness will force another turn"
-            );
-        }
-
-        FlowStreamEvent::ModelFallback {
-            reason,
-            fallback_model,
-        } => {
-            // Emit via RunError with a distinct code so the client can show a
-            // non-fatal fallback indicator.
-            // TODO(task-4c): consider a dedicated StreamEvent::ModelFallback.
-            let seq = emitter.next_seq();
-            emitter
-                .emit(StreamEvent::RunError {
-                    run_id: run_id.to_string(),
-                    seq,
-                    error: format!("{reason} (fallback: {fallback_model})"),
-                    error_code: Some("model_fallback".to_string()),
                 })
                 .await?;
         }
@@ -266,7 +201,6 @@ async fn flush_text_boundary(
         if tail.is_empty() {
             None
         } else {
-            s.has_emitted_text = true;
             s.accumulated.push_str(&tail);
             let full_text = s.accumulated.clone();
             let idx = s.chunk_index;
@@ -323,11 +257,9 @@ pub(crate) fn build_run_summary(outcome: &FlowOutcome) -> RunSummary {
         .map(|inv| ToolSummaryItem {
             tool_id: inv.id.clone(),
             tool_name: inv.name.clone(),
-            // Emoji + display_meta stay in the renderer (P3b summary_format)
-            // — leave neutral defaults here so channel-specific rendering
-            // can override without re-walking the timeline.
+            // Per-tool emoji resolved here once; renderers (runtime footer,
+            // Panel) consume it as-is instead of re-walking the timeline.
             emoji: tool_emoji(&inv.name).to_string(),
-            display_meta: String::new(),
             duration_ms: inv.duration_ms,
             success: inv.success,
         })
@@ -471,7 +403,6 @@ mod tests {
             }
             other => panic!("expected ResponseChunk, got {other:?}"),
         }
-        assert!(state.lock().await.has_emitted_text, "flag set after delta");
     }
 
     /// Concatenate the visible content of every emitted ResponseChunk.
@@ -664,11 +595,6 @@ mod tests {
         .await
         .expect("start ok");
 
-        {
-            let s = state.lock().await;
-            assert!(s.pending_tools.contains_key("tc-1"), "pending after start");
-        }
-
         emit_flow_event(
             FlowStreamEvent::ToolCallDone {
                 id: "tc-1".to_string(),
@@ -681,11 +607,6 @@ mod tests {
         )
         .await
         .expect("done ok");
-
-        {
-            let s = state.lock().await;
-            assert!(!s.pending_tools.contains_key("tc-1"), "cleared after done");
-        }
 
         let events = inner.events().await;
 

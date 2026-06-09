@@ -1,8 +1,8 @@
 //! Task 4c integration test 3: stream tool events in order.
 //!
-//! Stub harness emits `ToolCallStart → ToolCallDone → ToolSummary` on the
-//! broadcast channel; the emitter must observe all three, in order, as
-//! their corresponding `StreamEvent`s.
+//! Stub harness emits `ToolCallStart → ToolCallDone` on the broadcast
+//! channel; the emitter must observe both, in order, as their
+//! corresponding `StreamEvent`s, followed by the terminal `RunComplete`.
 
 #[path = "gateway_chat_common/mod.rs"]
 mod common;
@@ -21,7 +21,7 @@ use common::{basic_request, orchestrator_with_stub, StubHarnessRunner};
 async fn tool_events_preserve_order() {
     let runner = StubHarnessRunner::new(Arc::new(|ctx| {
         Box::pin(async move {
-            // Emit in-order: Start → Done → Summary → Complete.
+            // Emit in-order: Start → Done → Complete.
             let _ = ctx.events.send(FlowStreamEvent::ToolCallStart {
                 id: "call-1".to_string(),
                 name: "search".to_string(),
@@ -31,10 +31,6 @@ async fn tool_events_preserve_order() {
                 id: "call-1".to_string(),
                 result: Some(serde_json::json!({ "hits": 3 })),
                 error: None,
-            });
-            let _ = ctx.events.send(FlowStreamEvent::ToolSummary {
-                id: "call-1".to_string(),
-                text: "found 3 hits".to_string(),
             });
 
             // Give the drain task a moment to observe before Complete.
@@ -69,20 +65,21 @@ async fn tool_events_preserve_order() {
     .expect("dispatch ok");
 
     let events = collector.events().await;
-    // Filter to the three we care about and assert order.
+    // Filter to the events we care about and assert order. RunComplete is
+    // single-sourced from the drain, so exactly one must follow the pair.
     let names: Vec<&'static str> = events
         .iter()
         .filter_map(|e| match e {
             StreamEvent::ToolStart { .. } => Some("tool_start"),
             StreamEvent::ToolEnd { .. } => Some("tool_end"),
-            StreamEvent::ToolUpdate { .. } => Some("tool_update"),
+            StreamEvent::RunComplete { .. } => Some("run_complete"),
             _ => None,
         })
         .collect();
 
     assert_eq!(
         names,
-        vec!["tool_start", "tool_end", "tool_update"],
-        "expected tool events in start/done/summary order; got: {names:?} (all events: {events:?})"
+        vec!["tool_start", "tool_end", "run_complete"],
+        "expected start/done order then a single RunComplete; got: {names:?} (all events: {events:?})"
     );
 }
