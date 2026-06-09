@@ -48,10 +48,18 @@ behavioral change to the harness loop (R10 — dumb loop stays dumb).
 "stop_sequence"                  => StopSequence
 "pause_turn"                     => PauseTurn
 "refusal"                        => Refusal
-"model_context_window_exceeded"  => MaxTokens   // hermes maps this to "length"
+"model_context_window_exceeded"  => ContextWindowExceeded
 _                                => Unknown
 ```
-No consumer change — variants already handled downstream.
+> **Superseded 2026-06-10:** originally mapped to `MaxTokens` (hermes maps it
+> to "length"), but that folded a context overflow into the output-cap stop and
+> sent the harness down the resume-nudge loop — which appends messages and
+> re-hits the wall. `ContextWindowExceeded` is now a distinct `StopReason`
+> variant; the harness routes it to the reactive-compaction rescue
+> (`try_reactive_compact_and_retry`) and the OpenAI-compatible gateway still
+> surfaces it as finish_reason "length".
+
+No other consumer change — remaining variants already handled downstream.
 
 ### F2 — thinking ⊥ sampling params
 `adapter.rs` `build_request`. After `thinking` is resolved, if `thinking.is_some()`,

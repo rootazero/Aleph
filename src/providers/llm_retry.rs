@@ -371,11 +371,15 @@ pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
 pub fn classify(raw: &str) -> RetryVerdict {
     let msg = raw.to_lowercase();
 
-    // Prompt too long / 413 → compact and retry (not a transient retry)
+    // Prompt too long / 413 → compact and retry (not a transient retry).
+    // `model_context_window_exceeded` is the same overflow surfaced as an
+    // Anthropic *stop reason* — the harness synthesizes an error carrying
+    // that marker to route a context-exhausted turn into the same rescue.
     if msg.contains("413")
         || msg.contains("prompt is too long")
         || msg.contains("prompt_too_long")
         || msg.contains("request_too_large")
+        || msg.contains("model_context_window_exceeded")
     {
         return RetryVerdict::CompactAndRetry {
             token_gap: parse_token_gap_str(raw),
@@ -711,6 +715,21 @@ mod tests {
     #[test]
     fn test_classify_413_status() {
         let err = anyhow::anyhow!("HTTP 413 Payload Too Large");
+        assert!(matches!(
+            classify_error(&err),
+            RetryVerdict::CompactAndRetry { token_gap: None }
+        ));
+    }
+
+    #[test]
+    fn test_classify_context_window_exceeded_stop_reason_marker() {
+        // The harness synthesizes this message when a stream ends with
+        // stop_reason `model_context_window_exceeded` — it must route to the
+        // same compaction rescue as prompt_too_long.
+        let err = anyhow::anyhow!(
+            "Provider error: model_context_window_exceeded: provider stopped \
+             because the context window is full"
+        );
         assert!(matches!(
             classify_error(&err),
             RetryVerdict::CompactAndRetry { token_gap: None }
