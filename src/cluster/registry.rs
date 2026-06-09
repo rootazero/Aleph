@@ -34,6 +34,9 @@ pub struct NodeSession {
     pub channel: ReverseRpcChannel,
     /// 节点自声明的 command 目录，0b 只存只显。
     pub declared_commands: Vec<CommandDescriptor>,
+    /// Operator-assigned free-text labels (e.g. "gpu", "region=us"). Selection
+    /// only — never an authorization gate (R7). Stored verbatim; not kv-parsed.
+    pub tags: Vec<String>,
     /// 登记时刻（Unix 秒）。
     pub connected_at: i64,
 }
@@ -65,7 +68,21 @@ pub struct Environment {
     pub name: String,
     pub status: &'static str,
     pub commands: Vec<CommandDescriptor>,
+    pub tags: Vec<String>,
     pub connected_at: i64,
+}
+
+/// A matched online node for tag-selected fan-out: enough to dispatch over
+/// reverse RPC and run the same per-node fail-fast check `node_invoke` uses.
+/// `tags` is carried so the caller can build a "available tags" hint on a
+/// zero-match. Cloneable; holds a `ReverseRpcChannel` clone.
+#[derive(Clone)]
+pub struct NodeMatch {
+    pub node_id: String,
+    pub name: String,
+    pub channel: ReverseRpcChannel,
+    pub declared_commands: Vec<CommandDescriptor>,
+    pub tags: Vec<String>,
 }
 
 #[derive(Default)]
@@ -129,6 +146,7 @@ impl NodeRegistry {
                 name: s.device_name.clone(),
                 status: "online",
                 commands: s.declared_commands.clone(),
+                tags: s.tags.clone(),
                 connected_at: s.connected_at,
             })
             .collect()
@@ -211,6 +229,26 @@ impl NodeRegistry {
         Self::match_id(&inner, name_or_id)
     }
 
+    /// All online nodes carrying EVERY tag in `tags` (AND match). An empty
+    /// `tags` slice matches every online node (the "broadcast" case). Used by
+    /// `node_invoke_many` for tag-selected concurrent fan-out. Returns a clone
+    /// snapshot so the caller dispatches without holding the registry lock.
+    pub fn resolve_all_by_tags(&self, tags: &[String]) -> Vec<NodeMatch> {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        inner
+            .nodes_by_id
+            .values()
+            .filter(|s| tags.iter().all(|t| s.tags.contains(t)))
+            .map(|s| NodeMatch {
+                node_id: s.node_id.clone(),
+                name: s.device_name.clone(),
+                channel: s.channel.clone(),
+                declared_commands: s.declared_commands.clone(),
+                tags: s.tags.clone(),
+            })
+            .collect()
+    }
+
     /// 按 node_id 主动驱逐一个会话（operator deregister 用）。从两张表都抹除，
     /// 持有的 [`ReverseRpcChannel`] clone 随之 drop。返回是否确有会话被移除。
     /// 与 [`deregister`](Self::deregister)（按 conn_id 的断线对账）正交。
@@ -263,12 +301,17 @@ pub fn maybe_register_node(
         .and_then(|p| p.get("commands"))
         .and_then(|v| serde_json::from_value::<Vec<CommandDescriptor>>(v.clone()).ok())
         .unwrap_or_default();
+    let tags = params
+        .and_then(|p| p.get("tags"))
+        .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
+        .unwrap_or_default();
     registry.register(NodeSession {
         node_id: device_id.to_string(),
         conn_id: conn_id.to_string(),
         device_name,
         channel: channel.clone(),
         declared_commands,
+        tags,
         connected_at: now_unix(),
     });
     true
@@ -302,6 +345,7 @@ mod tests {
                 name: "bash".to_string(),
                 schema: json!({"type": "object"}),
             }],
+            tags: vec![],
             connected_at: 1,
         }
     }
@@ -317,6 +361,7 @@ mod tests {
         assert_eq!(envs[0].status, "online");
         assert_eq!(envs[0].commands.len(), 1);
         assert_eq!(envs[0].commands[0].name, "bash");
+        assert!(envs[0].tags.is_empty());
     }
 
     #[test]
@@ -382,6 +427,7 @@ mod tests {
             device_name: "worker-2".to_string(),
             channel: test_channel(),
             declared_commands: vec![],
+            tags: vec![],
             connected_at: 1,
         });
         reg.register(NodeSession {
@@ -390,6 +436,7 @@ mod tests {
             device_name: "worker-1".to_string(),
             channel: test_channel(),
             declared_commands: vec![],
+            tags: vec![],
             connected_at: 1,
         });
         match reg.resolve_id("worker").unwrap_err() {
@@ -460,5 +507,62 @@ mod tests {
         assert_eq!(envs.len(), 1);
         assert_eq!(envs[0].id, "d2");
         assert_eq!(envs[0].commands[0].name, "bash");
+    }
+
+    #[test]
+    fn resolve_all_by_tags_and_semantics() {
+        let reg = NodeRegistry::new();
+        reg.register(NodeSession {
+            node_id: "a".into(),
+            conn_id: "ca".into(),
+            device_name: "node-a".into(),
+            channel: test_channel(),
+            declared_commands: vec![],
+            tags: vec!["gpu".into(), "us".into()],
+            connected_at: 1,
+        });
+        reg.register(NodeSession {
+            node_id: "b".into(),
+            conn_id: "cb".into(),
+            device_name: "node-b".into(),
+            channel: test_channel(),
+            declared_commands: vec![],
+            tags: vec!["gpu".into()],
+            connected_at: 1,
+        });
+        // AND: both tags required → only "a".
+        let both = reg.resolve_all_by_tags(&["gpu".into(), "us".into()]);
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].node_id, "a");
+        assert_eq!(both[0].name, "node-a");
+        // Single tag both carry → both.
+        assert_eq!(reg.resolve_all_by_tags(&["gpu".into()]).len(), 2);
+        // Empty tags → every online node.
+        assert_eq!(reg.resolve_all_by_tags(&[]).len(), 2);
+        // Unmatched tag → none.
+        assert!(reg.resolve_all_by_tags(&["fpga".into()]).is_empty());
+        // NodeMatch carries the node's tags (used for the zero-match hint).
+        let gpu = reg.resolve_all_by_tags(&["gpu".into()]);
+        assert!(gpu.iter().any(|m| m.tags.contains(&"us".to_string())));
+    }
+
+    #[test]
+    fn maybe_register_node_parses_tags_from_params() {
+        let reg = NodeRegistry::new();
+        let ch = test_channel();
+        let params = json!({
+            "device_name": "worker",
+            "commands": [{"name": "bash", "schema": {}}],
+            "tags": ["gpu", "region=us"]
+        });
+        assert!(maybe_register_node(&reg, Some("node"), "d1", "c1", Some(&params), &ch));
+        let m = reg.resolve_all_by_tags(&["region=us".into()]);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].node_id, "d1");
+        // Missing "tags" key → empty, not an error.
+        let ch2 = test_channel();
+        let no_tags = json!({"device_name": "w2", "commands": []});
+        assert!(maybe_register_node(&reg, Some("node"), "d2", "c2", Some(&no_tags), &ch2));
+        assert_eq!(reg.resolve_all_by_tags(&[]).len(), 2);
     }
 }
