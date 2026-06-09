@@ -70,6 +70,10 @@ pub struct Environment {
     pub commands: Vec<CommandDescriptor>,
     pub tags: Vec<String>,
     pub connected_at: i64,
+    /// 最近一次在线时刻（Unix 秒）。仅对 `status == "offline"` 的已登记节点有
+    /// 意义（在线节点恒 `None`）；`None` + offline = 登记后从未连入。
+    #[serde(default)]
+    pub last_seen_at: Option<i64>,
 }
 
 /// A matched online node for tag-selected fan-out: enough to dispatch over
@@ -148,6 +152,7 @@ impl NodeRegistry {
                 commands: s.declared_commands.clone(),
                 tags: s.tags.clone(),
                 connected_at: s.connected_at,
+                last_seen_at: None,
             })
             .collect()
     }

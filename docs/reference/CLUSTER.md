@@ -26,6 +26,7 @@
 | `src/cluster/node_runtime.rs` | 节点侧命令分发(执行臂) | `NodeCommand` / `CommandTable` / `BashNodeCommand` |
 | `src/cluster/node_file_cmd.rs` | 节点侧文件命令 | `FileReadCommand` / `FileWriteCommand` / `MAX_FILE_BYTES` / `sha256_hex` |
 | `src/cluster/node_approval.rs` | 节点侧审批请求器(反向上送中心) | `CenterApprovalRequester` / `ApprovalSlot` / `NODE_APPROVAL_TIMEOUT_MS` |
+| `src/builtin_tools/node_list.rs` | 中心侧 **LLM 工具**:列出在线节点(invoke 工具的 discover 半边) | `NodeListTool` |
 | `src/builtin_tools/node_invoke.rs` | 中心侧 **LLM 工具**:在单个节点上跑命令 | `NodeInvokeTool` |
 | `src/builtin_tools/node_invoke_many.rs` | 中心侧 **LLM 工具**:按标签把命令并发扇出到一组节点 | `NodeInvokeManyTool` / `invoke_one` |
 | `src/builtin_tools/node_file.rs` | 中心侧 **LLM 工具**:node↔center 文件传输 | `NodeFileTool` |
@@ -117,7 +118,20 @@ center}`;`bearer` = `"{token}:{signature}"`,作为 `connect` 帧的 `token` 原�
 
 ## 中心侧 LLM 工具
 
-模型经这两个工具驱动节点(纯 I/O 翻译,R4;选择由模型做,R7):
+模型经这些工具发现并驱动节点(纯 I/O 翻译,R4;选择由模型做,R7)。四个工具
+全部列于 `BUILTIN_TOOL_DEFINITIONS` + `cluster` 工具组(模型可见性与 Panel
+工具配置页都从这两处投影——只注册运行时 schema/分发是不够的):
+
+### `node_list` — 发现在线节点(discover 半边)
+
+```jsonc
+{ "tags": ["gpu"] }   // 可选 AND 过滤;省略 = 全部在线节点
+```
+
+返回 `{ count, nodes:[{id, name, status, commands, tags, connected_at}] }`。
+传与 `node_invoke_many` 相同的 `tags` 可**预览**扇出将命中的节点集合。
+旧版工具描述让模型"see `environments.list`"——那是 Panel RPC,模型不可达;
+现在 discover→invoke 闭环全在工具面。
 
 ### `node_invoke` — 在节点跑命令
 
@@ -227,6 +241,13 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 | `cluster.enroll` | operator |
 | `cluster.deregister` | operator |
 | `environments.list` | read(只读,不含凭证) |
+
+`environments.list` 是**合并视图**:NodeRegistry 在线会话 + security_store 已登记
+(role=node、未吊销)但离线的设备(`status:"offline"`,附 `last_seen_at` Unix 秒,
+`null`=登记后从未连入)。last_seen 在节点 connect/disconnect 两接缝经
+`TokenManager::touch_device` 盖章。`cluster.deregister` 寻址同样支持离线节点
+(在线 registry 多级匹配 → 回退 store 精确 id/唯一精确 name;离线注销时
+`evicted:false`,仅撤 token + 设备记录)。
 | `pairing.start_node` / `pairing.poll` | 匿名(节点配对入口) |
 | `pairing.approve` / `pairing.reject` | operator |
 | `exec.approval.resolve` | operator(同样裁决节点审批) |
