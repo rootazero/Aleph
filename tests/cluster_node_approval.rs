@@ -100,3 +100,13 @@ async fn approve_session_round_trip() {
 async fn deny_round_trip() {
     run_case(Some(ApprovalDecisionType::Deny), ApprovalOutcome::Denied).await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn timeout_round_trip() {
+    // decision = None: the mock operator never resolves, so the center's
+    // ExecApprovalManager hits DEFAULT_APPROVAL_TIMEOUT_MS (120s) and replies
+    // "timeout"; the node maps that to ApprovalOutcome::Timeout. start_paused
+    // auto-advances virtual time when all tasks park, so this completes
+    // near-instantly (NOT 120s of real wall-clock).
+    run_case(None, ApprovalOutcome::Timeout).await;
+}
