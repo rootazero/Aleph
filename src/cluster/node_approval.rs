@@ -30,7 +30,7 @@ pub const NODE_APPROVAL_TIMEOUT_MS: u64 = 130_000;
 
 /// Map the center's outcome string back to an `ApprovalOutcome`. Any unknown
 /// value (including `"denied"`) is fail-closed `Denied`.
-pub fn outcome_from_str(s: &str) -> ApprovalOutcome {
+pub(crate) fn outcome_from_str(s: &str) -> ApprovalOutcome {
     match s {
         "approved" => ApprovalOutcome::Approved,
         "approved_session" => ApprovalOutcome::ApprovedForSession,
@@ -145,6 +145,27 @@ mod tests {
         assert_eq!(
             requester.request_approval("bash", "needs network").await,
             ApprovalOutcome::ApprovedForSession
+        );
+    }
+
+    #[tokio::test]
+    async fn json_rpc_error_response_denies() {
+        let (slot, mut out_rx, pending) = slot_with_channel();
+        let requester = CenterApprovalRequester::new(slot);
+
+        // Background "center": resolve the call with a JSON-RPC ERROR response
+        // (`is_success()` is false) — the requester must fail-closed to Denied.
+        tokio::spawn(async move {
+            let frame = out_rx.recv().await.expect("request frame");
+            let req: Value = serde_json::from_str(&frame).unwrap();
+            let id = req["id"].clone();
+            let resp = JsonRpcResponse::error(Some(id.clone()), -32000, "boom".to_string());
+            pending.resolve(&id, resp);
+        });
+
+        assert_eq!(
+            requester.request_approval("bash", "needs network").await,
+            ApprovalOutcome::Denied
         );
     }
 
