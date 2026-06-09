@@ -3,7 +3,7 @@
 //! Four orthogonal, client-side axes — all persisted to `localStorage` and
 //! replayed on boot by [`init_appearance`]:
 //!
-//!   • mode      — System / Light / Dark / Vibrant → `<html>` class list
+//!   • mode      — System / Light / Dark → `<html>` class list
 //!   • accent    — colour palette                  → `data-accent` attribute
 //!   • font scale— accessibility text size         → `--control-ui-text-scale`
 //!   • roundness — corner radius density           → `--control-ui-radius-scale`
@@ -33,18 +33,16 @@ pub enum ThemeMode {
     System,
     Light,
     Dark,
-    Vibrant,
 }
 
 impl ThemeMode {
-    pub const ALL: [ThemeMode; 4] = [Self::System, Self::Light, Self::Dark, Self::Vibrant];
+    pub const ALL: [ThemeMode; 3] = [Self::System, Self::Light, Self::Dark];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::System => "跟随系统",
             Self::Light => "明亮",
             Self::Dark => "暗黑",
-            Self::Vibrant => "玻璃",
         }
     }
 
@@ -54,7 +52,6 @@ impl ThemeMode {
             Self::System => None,
             Self::Light => Some("light"),
             Self::Dark => Some("dark"),
-            Self::Vibrant => Some("translucent"),
         }
     }
 
@@ -62,7 +59,10 @@ impl ThemeMode {
         match raw {
             Some("light") => Self::Light,
             Some("dark") => Self::Dark,
-            Some("translucent") => Self::Vibrant,
+            // Legacy migration: the retired Vibrant mode persisted as
+            // "translucent". Glass is the default material in every mode now,
+            // so map it to Dark instead of silently falling back to System.
+            Some("translucent") => Self::Dark,
             _ => Self::System,
         }
     }
@@ -333,9 +333,6 @@ pub fn apply_mode(mode: ThemeMode) {
             ThemeMode::Dark => {
                 let _ = classes.add_1("dark");
             }
-            ThemeMode::Vibrant => {
-                let _ = classes.add_2("dark", "translucent");
-            }
             ThemeMode::System => {}
         }
     }
@@ -448,6 +445,13 @@ mod tests {
         // choice survives a reload (the boot replay relies on this).
         assert!(FontScale::Largest.storage_value().is_some());
         assert!(Roundness::Sharp.storage_value().is_some());
-        assert!(ThemeMode::Vibrant.storage_value().is_some());
+        assert!(ThemeMode::Dark.storage_value().is_some());
+    }
+
+    #[test]
+    fn legacy_translucent_migrates_to_dark() {
+        // The retired Vibrant mode persisted as "translucent". Glass is now the
+        // default material in every mode, so a stored "translucent" must load as Dark.
+        assert_eq!(ThemeMode::from_storage(Some("translucent")), ThemeMode::Dark);
     }
 }
