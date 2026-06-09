@@ -59,6 +59,23 @@ pub fn ConnectionStatus() -> impl IntoView {
         ConnectionPhase::Initial => t_string!(i18n, common.disconnected).to_string(),
     };
 
+    // Tier 身份徽章 —— 从捕获的 role 派生,复用 DeviceCard 的配色与标签。
+    let badge = move || {
+        tier_badge(state.role.get().as_deref()).map(|b| {
+            let (label, cls) = match b {
+                TierBadge::Config => (
+                    t_string!(i18n, settings.security.tier_config).to_string(),
+                    "text-xs px-1.5 py-0.5 rounded bg-indigo-600 text-white shrink-0",
+                ),
+                TierBadge::Chat => (
+                    t_string!(i18n, settings.security.tier_chat).to_string(),
+                    "text-xs px-1.5 py-0.5 rounded bg-surface-raised text-text-secondary shrink-0",
+                ),
+            };
+            view! { <span class=cls>{label}</span> }
+        })
+    };
+
     // Sub-line below the label — varies by phase. Reconnecting shows the
     // attempt counter; Failed surfaces the underlying error verbatim (it
     // already comes from WebSocket/network layer in English, no i18n).
@@ -77,6 +94,7 @@ pub fn ConnectionStatus() -> impl IntoView {
                 <div class="flex items-center gap-2 min-w-0">
                     <div class=move || format!("w-2 h-2 rounded-full shrink-0 {}", dot_class())></div>
                     <span class="text-sm font-medium truncate">{status_text}</span>
+                    {badge}
                 </div>
 
                 {move || detail_text().map(|s| {
@@ -166,6 +184,22 @@ fn is_loopback_host(host: &str) -> bool {
     bare == "127.0.0.1" || bare.eq_ignore_ascii_case("localhost") || bare == "::1"
 }
 
+/// 连接身份徽章:从 connect 捕获的 role 派生。operator→Config,guest→Chat,
+/// 其余(含未连接的 None / 未知 role)→无徽章。纯函数,host 可测。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TierBadge {
+    Config,
+    Chat,
+}
+
+pub(crate) fn tier_badge(role: Option<&str>) -> Option<TierBadge> {
+    match role {
+        Some("operator") => Some(TierBadge::Config),
+        Some("guest") => Some(TierBadge::Chat),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -190,5 +224,13 @@ mod tests {
         assert!(is_loopback_host("[::1]:18790"));
         assert!(!is_loopback_host("192.168.1.5:18790"));
         assert!(!is_loopback_host("gw.example.com"));
+    }
+
+    #[test]
+    fn tier_badge_maps_roles() {
+        assert_eq!(tier_badge(Some("operator")), Some(TierBadge::Config));
+        assert_eq!(tier_badge(Some("guest")), Some(TierBadge::Chat));
+        assert_eq!(tier_badge(None), None);
+        assert_eq!(tier_badge(Some("node")), None);
     }
 }
