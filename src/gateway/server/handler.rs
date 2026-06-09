@@ -543,61 +543,76 @@ async fn handle_connection(
                         // authenticated connection (anti-spoof), never params.
                         if let Ok(node_req) = serde_json::from_str::<JsonRpcRequest>(&text) {
                             if node_req.method == "node.approval.request" {
-                                match (
-                                    ctx.node_registry.node_identity_by_conn(&conn_id),
-                                    ctx.exec_approval_manager.clone(),
-                                ) {
-                                    (Some((node_id, node_name)), Some(manager)) => {
-                                        let event_bus = ctx.event_bus.clone();
-                                        let out = rpc_out_tx_replies.clone();
-                                        let req_id = node_req.id.clone();
-                                        let params = node_req
-                                            .params
-                                            .clone()
-                                            .unwrap_or(serde_json::Value::Null);
-                                        let tool = params
-                                            .get("tool")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or_default()
-                                            .to_string();
-                                        let reason = params
-                                            .get("reason")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or_default()
-                                            .to_string();
-                                        tokio::spawn(async move {
-                                            let outcome = crate::approval::run_node_approval(
-                                                &manager,
-                                                &event_bus,
-                                                &node_id,
-                                                &node_name,
-                                                &tool,
-                                                &reason,
-                                            )
-                                            .await;
-                                            let resp = JsonRpcResponse::success(
-                                                req_id,
-                                                serde_json::json!({ "outcome": outcome }),
+                                // Only an authenticated connection may reach the
+                                // node-approval path. Unauthenticated frames fall
+                                // through to normal dispatch so the standard
+                                // AUTH_REQUIRED response + auth-failure accounting
+                                // fire (and the method is not revealed as a
+                                // recognized special case).
+                                let is_authenticated = {
+                                    let conns = ctx.connections.read().await;
+                                    conns.get(&conn_id).is_some_and(|s| s.authenticated)
+                                };
+                                if is_authenticated {
+                                    match (
+                                        ctx.node_registry.node_identity_by_conn(&conn_id),
+                                        ctx.exec_approval_manager.clone(),
+                                    ) {
+                                        (Some((node_id, node_name)), Some(manager)) => {
+                                            let event_bus = ctx.event_bus.clone();
+                                            let out = rpc_out_tx_replies.clone();
+                                            let req_id = node_req.id.clone();
+                                            let params = node_req
+                                                .params
+                                                .clone()
+                                                .unwrap_or(serde_json::Value::Null);
+                                            let tool = params
+                                                .get("tool")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or_default()
+                                                .to_string();
+                                            let reason = params
+                                                .get("reason")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or_default()
+                                                .to_string();
+                                            tokio::spawn(async move {
+                                                let outcome = crate::approval::run_node_approval(
+                                                    &manager,
+                                                    &event_bus,
+                                                    &node_id,
+                                                    &node_name,
+                                                    &tool,
+                                                    &reason,
+                                                )
+                                                .await;
+                                                let resp = JsonRpcResponse::success(
+                                                    req_id,
+                                                    serde_json::json!({ "outcome": outcome }),
+                                                );
+                                                if let Ok(s) = serde_json::to_string(&resp) {
+                                                    let _ = out.send(s).await;
+                                                }
+                                            });
+                                        }
+                                        _ => {
+                                            // Not a registered node conn, or no
+                                            // manager wired: refuse.
+                                            let resp = JsonRpcResponse::error(
+                                                node_req.id.clone(),
+                                                -32000,
+                                                "node.approval.request not permitted".to_string(),
                                             );
                                             if let Ok(s) = serde_json::to_string(&resp) {
-                                                let _ = out.send(s).await;
+                                                let _ = rpc_out_tx_replies.send(s).await;
                                             }
-                                        });
-                                    }
-                                    _ => {
-                                        // Not a registered node conn, or no manager
-                                        // wired: refuse.
-                                        let resp = JsonRpcResponse::error(
-                                            node_req.id.clone(),
-                                            -32000,
-                                            "node.approval.request not permitted".to_string(),
-                                        );
-                                        if let Ok(s) = serde_json::to_string(&resp) {
-                                            let _ = rpc_out_tx_replies.send(s).await;
                                         }
                                     }
+                                    continue;
                                 }
-                                continue;
+                                // else: not authenticated — fall through (no
+                                // continue) to the normal auth-gated dispatch
+                                // below.
                             }
                         }
 
