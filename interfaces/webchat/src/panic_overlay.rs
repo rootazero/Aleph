@@ -21,6 +21,10 @@ use std::panic::PanicHookInfo;
 use std::sync::Once;
 
 const OVERLAY_ID: &str = "aleph-panic-overlay";
+/// localStorage key holding the crash-history ring buffer (JSON array).
+const CRASH_LOG_KEY: &str = "aleph.panel.crashes";
+/// Maximum number of crash records retained across reloads.
+const CRASH_LOG_CAP: usize = 10;
 
 /// Install the recovery panic hook. Idempotent — repeat calls are no-ops.
 /// Call once at WASM module start, replacing the bare
@@ -36,15 +40,64 @@ fn hook(info: &PanicHookInfo<'_>) {
     // 1. Preserve dev-console behavior — same trace, same formatting.
     console_error_panic_hook::hook(info);
 
-    // 2. Mount a one-shot overlay. If anything in the overlay path itself
-    //    panics (it shouldn't — we only touch DOM), swallow it so we don't
-    //    recurse into the hook.
+    // 2. Capture a symbolicated JS backtrace, persist a crash record, and
+    //    mount a one-shot recovery overlay. If anything here panics (it
+    //    shouldn't — DOM + localStorage only) swallow it so we don't recurse.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        mount_overlay(&info.to_string());
+        let message = info.to_string();
+        let stack = capture_js_stack();
+        let crash_count = persist_crash(&message, &stack);
+        mount_overlay(&message, &stack, crash_count);
     }));
 }
 
-fn mount_overlay(message: &str) {
+/// Best-effort capture of the JS call stack from within the panic hook. With
+/// section preserved (the `wasm-release` profile), these frames carry Rust
+/// symbol names. Returns an empty string if unavailable.
+fn capture_js_stack() -> String {
+    use wasm_bindgen::JsValue;
+    let err = js_sys::Error::new("");
+    js_sys::Reflect::get(&err, &JsValue::from_str("stack"))
+        .ok()
+        .and_then(|v| v.as_string())
+        .unwrap_or_default()
+}
+
+/// Append a crash record to the localStorage ring buffer and return the new
+/// record count. No-op (returns 0) if localStorage is unavailable. Never
+/// panics — every fallible step degrades to a default.
+fn persist_crash(message: &str, stack: &str) -> usize {
+    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
+    else {
+        return 0;
+    };
+    let existing = storage
+        .get_item(CRASH_LOG_KEY)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "[]".to_string());
+    let record = serde_json::json!({
+        "ts": js_sys::Date::now(),
+        "version": env!("ALEPH_VERSION"),
+        "message": message,
+        "stack": stack,
+        "url": current_url(),
+    });
+    let new_log = append_capped(&existing, &record.to_string(), CRASH_LOG_CAP);
+    let _ = storage.set_item(CRASH_LOG_KEY, &new_log);
+    serde_json::from_str::<Vec<serde_json::Value>>(&new_log)
+        .map(|v| v.len())
+        .unwrap_or(0)
+}
+
+/// Current page URL, or an empty string if unavailable.
+fn current_url() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().href().ok())
+        .unwrap_or_default()
+}
+
+fn mount_overlay(message: &str, stack: &str, crash_count: usize) {
     let Some(window) = web_sys::window() else {
         return;
     };
@@ -79,7 +132,15 @@ fn mount_overlay(message: &str) {
          padding:24px;",
     );
 
-    let escaped = escape_html(message);
+    // Details pane shows the panic message followed by the symbolicated stack.
+    let mut details = escape_html(message);
+    if !stack.is_empty() {
+        details.push_str("\n\n");
+        details.push_str(&escape_html(stack));
+    }
+    let note = escape_html(&format!(
+        "{crash_count} crash report(s) saved · localStorage key: {CRASH_LOG_KEY}"
+    ));
     overlay.set_inner_html(&format!(
         "<div style=\"max-width:640px;width:100%;\
                       background:#1a1a1a;border:1px solid rgba(239,68,68,0.4);\
@@ -95,8 +156,9 @@ fn mount_overlay(message: &str) {
              <summary style=\"cursor:pointer;font-size:12px;color:#a1a1aa;user-select:none;\">Show details</summary>\
              <pre style=\"margin:8px 0 0;padding:12px;background:#0a0a0a;border-radius:8px;\
                           font-size:11px;color:#fca5a5;overflow:auto;max-height:200px;\
-                          white-space:pre-wrap;word-break:break-word;\">{escaped}</pre>\
+                          white-space:pre-wrap;word-break:break-word;\">{details}</pre>\
            </details>\
+           <p style=\"margin:0 0 18px;font-size:11px;color:#71717a;\">{note}</p>\
            <div style=\"display:flex;gap:10px;justify-content:flex-end;\">\
              <button id=\"{OVERLAY_ID}-dismiss\" style=\"padding:10px 16px;border:1px solid #404040;\
                           background:transparent;color:#d4d4d8;border-radius:10px;font-size:14px;\
@@ -107,7 +169,8 @@ fn mount_overlay(message: &str) {
            </div>\
          </div>",
         OVERLAY_ID = OVERLAY_ID,
-        escaped = escaped,
+        details = details,
+        note = note,
     ));
 
     let _ = body.append_child(&overlay);
@@ -164,6 +227,25 @@ fn escape_html(s: &str) -> String {
     out
 }
 
+/// Append `new_record_json` (a JSON object string) to the JSON array held in
+/// `existing_json`, keeping only the most recent `cap` entries. Robust to a
+/// missing or corrupt existing value (treated as an empty array) and to an
+/// unparseable new record (skipped). Returns the serialized JSON array.
+///
+/// Pure — no DOM/JS dependency — so it is unit-testable on the host.
+fn append_capped(existing_json: &str, new_record_json: &str, cap: usize) -> String {
+    let mut arr: Vec<serde_json::Value> =
+        serde_json::from_str(existing_json).unwrap_or_default();
+    if let Ok(record) = serde_json::from_str::<serde_json::Value>(new_record_json) {
+        arr.push(record);
+    }
+    if arr.len() > cap {
+        let drop = arr.len() - cap;
+        arr.drain(0..drop);
+    }
+    serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +271,38 @@ mod tests {
         // set_hook so the second call is a cheap no-op.
         install();
         install();
+    }
+
+    #[test]
+    fn append_capped_adds_to_empty_log() {
+        let out = append_capped("[]", r#"{"message":"boom"}"#, 10);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["message"], "boom");
+    }
+
+    #[test]
+    fn append_capped_treats_corrupt_existing_as_empty() {
+        let out = append_capped("not json at all", r#"{"message":"boom"}"#, 10);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 1);
+    }
+
+    #[test]
+    fn append_capped_keeps_only_most_recent() {
+        let existing = r#"[{"message":"a"},{"message":"b"},{"message":"c"}]"#;
+        let out = append_capped(existing, r#"{"message":"d"}"#, 3);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr[0]["message"], "b");
+        assert_eq!(arr[2]["message"], "d");
+    }
+
+    #[test]
+    fn append_capped_skips_invalid_new_record() {
+        let out = append_capped(r#"[{"message":"a"}]"#, "garbage", 10);
+        let arr: Vec<serde_json::Value> = serde_json::from_str(&out).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["message"], "a");
     }
 }

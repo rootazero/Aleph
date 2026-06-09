@@ -117,11 +117,11 @@ wasm:
     # 1. Tailwind CSS
     (cd {{panel_dir}} && npm run build:css)
     # 2. Compile Rust → WASM
-    cargo build -p aleph-panel --target wasm32-unknown-unknown --release
+    cargo build -p aleph-panel --target wasm32-unknown-unknown --profile wasm-release
     # 3. Generate JS bindings
     wasm-bindgen --target web --no-typescript \
         --out-dir {{panel_dist}} --out-name aleph_panel \
-        target/wasm32-unknown-unknown/release/aleph_panel.wasm
+        target/wasm32-unknown-unknown/wasm-release/aleph_panel.wasm
     # 4. Runtime index.html
     cat > {{panel_dist}}/index.html << 'HTMLEOF'
     <!DOCTYPE html>
