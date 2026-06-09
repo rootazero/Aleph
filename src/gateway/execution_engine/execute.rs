@@ -44,23 +44,56 @@ where
         // concurrent-run count and could spuriously reject a sibling run.
         // `simple.rs` already uses this ordering.
         if !agent.try_start_run(&run_id).await {
-            // Agent busy. Before rejecting, try mid-loop steering: if the busy
-            // run is on THIS session, inject the message into the live event
-            // log so the running loop picks it up at its next turn boundary
-            // (codex parity). The run was never registered, so there is nothing
-            // to undo here.
-            let injected = super::steering::try_inject_steering(
-                self.config.mid_turn_steering,
-                &self.active_runs,
-                self.orchestrator.as_ref(),
-                &request,
-                &run_id,
-            )
-            .await;
-            if injected {
-                return Ok(());
+            // Agent busy. The per-channel busy-input policy (stamped into
+            // metadata by the inbound router; absent → Steer) decides what
+            // happens to this message. The run was never registered, so there is
+            // nothing to undo on either path.
+            match super::BusyInputMode::from_metadata(&request.metadata) {
+                super::BusyInputMode::Interrupt => {
+                    // Cancel the running sibling on THIS session, then let the
+                    // inbound router's existing busy/retry back-off restart this
+                    // message as a fresh run once the slot frees — the new run
+                    // reads the interrupted task's full context from the session
+                    // log plus this instruction. Reuses `cancel` + `AgentBusy`
+                    // retry; no new dispatch machinery (R10). If no same-session
+                    // sibling is running (e.g. cross-session busy), fall through
+                    // to plain busy/retry without cancelling anything.
+                    let target = {
+                        let runs = self.active_runs.read().await;
+                        super::steering::find_steering_target_id(
+                            &runs,
+                            &run_id,
+                            &request.session_key,
+                        )
+                    };
+                    if let Some(target_id) = target {
+                        let _ = self.cancel(&target_id).await;
+                        info!(
+                            session = %request.session_key.to_key_string(),
+                            target_run = %target_id,
+                            "busy-input interrupt: cancelled running sibling; message will restart as a fresh run via busy/retry",
+                        );
+                    }
+                    return Err(ExecutionError::AgentBusy(agent.id().to_string()));
+                }
+                super::BusyInputMode::Steer => {
+                    // Mid-loop steering: if the busy run is on THIS session,
+                    // inject the message into the live event log so the running
+                    // loop picks it up at its next turn boundary (codex parity).
+                    let injected = super::steering::try_inject_steering(
+                        self.config.mid_turn_steering,
+                        &self.active_runs,
+                        self.orchestrator.as_ref(),
+                        &request,
+                        &run_id,
+                    )
+                    .await;
+                    if injected {
+                        return Ok(());
+                    }
+                    return Err(ExecutionError::AgentBusy(agent.id().to_string()));
+                }
             }
-            return Err(ExecutionError::AgentBusy(agent.id().to_string()));
         }
 
         // Slot held — now enforce the concurrent-run limit and register the run.

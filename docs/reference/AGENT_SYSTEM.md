@@ -173,6 +173,39 @@ pub enum LoopEvent {
 }
 ```
 
+### Busy-Input Modes (message arrives mid-run)
+
+When a message reaches a session whose Think→Act loop is **already running**, the
+gateway's busy branch (`execution_engine/execute.rs`) chooses one of two policies,
+selected **explicitly per channel** (R7 — never inferred from message content) via
+`ChannelPolicyConfig.busy_input_mode`, stamped into run metadata
+(`BUSY_INPUT_MODE_KEY`). Absent on Panel/CLI paths → `Steer`.
+
+| Mode | Behaviour | Mechanism (all reused — R10, no new dispatch) |
+|------|-----------|-----------------------------------------------|
+| `Steer` (**default**) | Inject the message into the live event log; the running loop consumes it at its next turn boundary and course-corrects without losing progress. | `steering::try_inject_steering` + watermark final-turn catch + `MAX_PENDING_STEERING=16` backpressure + reconcile-preamble coalescing. |
+| `Interrupt` | Cancel the running sibling on this session; the message then restarts as a **fresh run** (via the inbound router's existing `AgentBusy` busy/retry back-off) that reads the interrupted task's full context from the session log plus the new instruction. | `find_steering_target_id` → `ExecutionEngine::cancel` (`cancel_tx` → `CancellationToken` → `ExecutionError::Cancelled`) → existing retry loop in `inbound_router/executor.rs`. |
+
+Reference parity: hermes `HERMES_GATEWAY_BUSY_INPUT_MODE`, openclaw `QueueMode`,
+Pi `streamingBehavior` — all expose this as explicit policy; Aleph previously
+hardcoded `Steer`.
+
+Opt a channel into interrupt in its config block:
+
+```toml
+[channels.ops-bot]
+busy_input_mode = "interrupt"   # default is "steer"
+```
+
+**Deferred (YAGNI / honest scoping):**
+- *Subagent-aware demotion* (hermes #30170): interrupt currently cancels in-flight
+  work including any subagents the run spawned. Demoting interrupt→steer when the
+  run has active subagents needs per-session subagent detection — not wired.
+  Operators enabling interrupt on a channel accept this today.
+- *Follow-up lane* (defer-until-stop, Pi/openclaw `followUp`): `Steer` already lets
+  the model decide when to address an interjection; a separate defer-until-stop
+  queue would add loop-touching drain logic for marginal gain.
+
 ---
 
 ## Thinker

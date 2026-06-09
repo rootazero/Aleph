@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::gateway::execution_engine::BusyInputMode;
 use crate::gateway::pairing_store::PairingError;
 
 /// Error type for routing operations
@@ -80,6 +81,13 @@ pub struct ChannelPolicyConfig {
     /// default workspace. Ignored for `Config` tier (which may override freely).
     #[serde(default)]
     pub default_workspace: Option<PathBuf>,
+    /// What to do when a message arrives while this channel's session is already
+    /// running a loop: `steer` (default — inject at the next turn boundary) or
+    /// `interrupt` (cancel the in-flight run; the message restarts as a fresh
+    /// run via busy/retry). Set `busy_input_mode = "interrupt"` in the channel's
+    /// config block to opt in.
+    #[serde(default)]
+    pub busy_input_mode: BusyInputMode,
 }
 
 impl ChannelPolicyConfig {
@@ -87,7 +95,9 @@ impl ChannelPolicyConfig {
     /// boot wiring then skips registering it (keeps `channel_configs` minimal).
     #[must_use]
     pub fn is_default(&self) -> bool {
-        self.permission_level == ChannelPermissionLevel::Chat && self.default_workspace.is_none()
+        self.permission_level == ChannelPermissionLevel::Chat
+            && self.default_workspace.is_none()
+            && self.busy_input_mode == BusyInputMode::Steer
     }
 }
 
@@ -114,6 +124,10 @@ pub struct ChannelConfig {
     /// Working directory the Chat tier is locked into (absolute). `None` → the
     /// agent's own default workspace.
     pub default_workspace: Option<PathBuf>,
+    /// Busy-input policy for this channel: `Steer` (default) or `Interrupt`.
+    /// Stamped into each run's metadata so the execution engine's busy branch
+    /// can dispatch without re-reading channel config.
+    pub busy_input_mode: BusyInputMode,
 }
 
 /// Per-channel slash-command access tiering.
@@ -218,6 +232,7 @@ impl Default for ChannelConfig {
             slash_access: SlashAccessConfig::default(),
             permission_level: ChannelPermissionLevel::default(),
             default_workspace: None,
+            busy_input_mode: BusyInputMode::default(),
         }
     }
 }
@@ -229,6 +244,14 @@ impl ChannelConfig {
     #[must_use]
     pub fn caller_role_str(&self) -> &'static str {
         self.permission_level.caller_role_str()
+    }
+
+    /// Wire string for this channel's busy-input policy, stamped into the run's
+    /// `busy_input_mode` metadata so the execution engine's busy branch can
+    /// dispatch (`steer` / `interrupt`) without re-reading channel config.
+    #[must_use]
+    pub fn busy_input_mode_wire(&self) -> &'static str {
+        self.busy_input_mode.as_wire()
     }
 
     /// Resolve the Chat-tier locked workspace, if any: only an **absolute,
@@ -360,6 +383,7 @@ impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConf
             // iMessage carries no per-channel tier override yet; safe Chat default.
             permission_level: ChannelPermissionLevel::default(),
             default_workspace: None,
+            busy_input_mode: BusyInputMode::default(),
         }
     }
 }
@@ -560,10 +584,36 @@ mod permission_tier_tests {
     }
 
     #[test]
+    fn policy_parses_busy_input_mode_and_affects_is_default() {
+        // Opting a channel into interrupt mode is a non-default policy even when
+        // permission/workspace are left at the safe Chat default — boot wiring
+        // must register it so the metadata stamp actually fires.
+        let raw = serde_json::json!({
+            "bot_token": "secret",
+            "busy_input_mode": "interrupt",
+        });
+        let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
+        assert_eq!(p.busy_input_mode, BusyInputMode::Interrupt);
+        assert_eq!(p.permission_level, ChannelPermissionLevel::Chat);
+        assert!(!p.is_default());
+        // Wire round-trips through the stamping helper.
+        assert_eq!(
+            ChannelConfig {
+                busy_input_mode: BusyInputMode::Interrupt,
+                ..Default::default()
+            }
+            .busy_input_mode_wire(),
+            "interrupt"
+        );
+        assert_eq!(ChannelConfig::default().busy_input_mode_wire(), "steer");
+    }
+
+    #[test]
     fn policy_bare_config_is_default_chat() {
         let bare = serde_json::json!({ "bot_token": "secret" });
         let p: ChannelPolicyConfig = serde_json::from_value(bare).expect("parses");
         assert_eq!(p.permission_level, ChannelPermissionLevel::Chat);
+        assert_eq!(p.busy_input_mode, BusyInputMode::Steer);
         assert!(p.default_workspace.is_none());
         assert!(p.is_default(), "no tiering configured → skip registration");
     }
