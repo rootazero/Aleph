@@ -651,7 +651,12 @@ html.theme-switching::view-transition-new(root) {
 
 /* --- Atmosphere tokens — light (the default look) --- */
 :root {
-  --aleph-canvas-base: oklch(0.988 0.004 295);
+  /* Opaque ground for non-macOS (browser): the semi-opaque aurora composites
+     over this so there's never see-through-to-nothing. */
+  --aleph-solid-ground: oklch(0.988 0.004 295);
+  /* Semi-opaque controlled aurora base. On macOS the always-on vibrancy faintly
+     shows through it (保留通透感); the alpha keeps it wallpaper-independent. */
+  --aleph-canvas-base: oklch(0.972 0.005 295 / 0.86);
   --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 20%, transparent);
   --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 13%, transparent);
   --aleph-glow-top: color-mix(in oklch, var(--color-primary)  7%, transparent);
@@ -663,7 +668,8 @@ html.theme-switching::view-transition-new(root) {
 
 /* --- Atmosphere tokens — dark --- */
 .dark {
-  --aleph-canvas-base: oklch(0.155 0.022 300);
+  --aleph-solid-ground: oklch(0.155 0.022 300);
+  --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
   --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
   --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 19%, transparent);
   --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
@@ -672,7 +678,8 @@ html.theme-switching::view-transition-new(root) {
 }
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
-    --aleph-canvas-base: oklch(0.155 0.022 300);
+    --aleph-solid-ground: oklch(0.155 0.022 300);
+    --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
     --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
     --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 19%, transparent);
     --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
@@ -681,8 +688,12 @@ html.theme-switching::view-transition-new(root) {
   }
 }
 
-/* Vibrant glass: drop the opaque base so the OS vibrancy shows through. */
-html.translucent { --aleph-canvas-base: transparent; }
+/* macOS: let the always-on vibrancy show behind our semi-opaque aurora in every
+   mode (faint, controlled 通透感). Non-macOS: paint an opaque ground so the
+   semi-opaque aurora has something solid to sit on. */
+html[data-platform="macos"],
+html[data-platform="macos"] body { background-color: transparent; }
+html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-ground); }
 
 /* --- The drifting light-field, fixed behind the whole shell --- */
 .aleph-shell {
