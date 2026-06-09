@@ -85,6 +85,22 @@ pub enum ProviderDelta {
     Error(String),
 }
 
+/// True when the queue holds a terminal delta — a successful [`ProviderDelta::Done`]
+/// or a provider-reported [`ProviderDelta::Error`].
+///
+/// Used by the OpenAI protocol unfolds at HTTP-stream end to distinguish a
+/// properly terminated stream from a mid-stream drop (connection closed before
+/// any terminal signal), which must surface as a transient error instead of a
+/// silently truncated turn (`DeltaCollector` defaults the stop reason to
+/// `EndTurn`).
+pub(crate) fn has_terminal_delta(
+    pending: &std::collections::VecDeque<crate::error::Result<ProviderDelta>>,
+) -> bool {
+    pending
+        .iter()
+        .any(|d| matches!(d, Ok(ProviderDelta::Done(_)) | Ok(ProviderDelta::Error(_))))
+}
+
 // =============================================================================
 // DeltaCollector
 // =============================================================================
@@ -946,5 +962,32 @@ mod tests {
         c.push(ProviderDelta::ToolCallEnd { id: "tc1".into() });
         let resp = c.finish();
         assert!(resp.tool_calls[0].thought_signature.is_none());
+    }
+
+    #[test]
+    fn has_terminal_delta_detects_done_and_error() {
+        use std::collections::VecDeque;
+
+        let mut q: VecDeque<crate::error::Result<ProviderDelta>> = VecDeque::new();
+        q.push_back(Ok(ProviderDelta::TextDelta("partial".into())));
+        assert!(
+            !has_terminal_delta(&q),
+            "text-only queue must not count as terminated"
+        );
+
+        let mut done_q: VecDeque<crate::error::Result<ProviderDelta>> = VecDeque::new();
+        done_q.push_back(Ok(ProviderDelta::TextDelta("partial".into())));
+        done_q.push_back(Ok(ProviderDelta::Done(StopReason::EndTurn)));
+        assert!(has_terminal_delta(&done_q));
+
+        let mut err_q: VecDeque<crate::error::Result<ProviderDelta>> = VecDeque::new();
+        err_q.push_back(Ok(ProviderDelta::Error("response.failed".into())));
+        assert!(
+            has_terminal_delta(&err_q),
+            "a provider-reported semantic error terminates the response"
+        );
+
+        let empty: VecDeque<crate::error::Result<ProviderDelta>> = VecDeque::new();
+        assert!(!has_terminal_delta(&empty));
     }
 }

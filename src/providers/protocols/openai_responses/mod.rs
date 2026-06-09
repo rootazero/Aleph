@@ -409,6 +409,13 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             item_to_call: HashMap<String, String>,
             /// Pending deltas queued from multi-delta events (e.g. Completed)
             pending: VecDeque<Result<ProviderDelta>>,
+            /// True once a terminal delta (`Done` from `response.completed`,
+            /// `Error` from `response.failed` / a top-level error frame) has
+            /// been queued. Unlike `done`, this must survive across
+            /// iterations: after `Completed` the stream keeps reading until
+            /// the `[DONE]` sentinel and natural HTTP end, so the end-of-bytes
+            /// branch needs to know a terminal signal was already seen.
+            saw_terminal: bool,
             /// Set to true after a terminal event to stop the stream
             done: bool,
         }
@@ -418,6 +425,7 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
             line_buf: Vec::new(),
             item_to_call: HashMap::new(),
             pending: VecDeque::new(),
+            saw_terminal: false,
             done: false,
         };
 
@@ -448,6 +456,9 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                         .or_else(|| line.strip_prefix("data:"))
                     {
                         parse_sse_event_multi(data, &mut state.item_to_call, &mut state.pending);
+                        if crate::providers::delta::has_terminal_delta(&state.pending) {
+                            state.saw_terminal = true;
+                        }
                     }
                     // Loop to drain more lines or pop from pending
                     continue;
@@ -470,7 +481,25 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                                     &mut state.item_to_call,
                                     &mut state.pending,
                                 );
+                                if crate::providers::delta::has_terminal_delta(&state.pending) {
+                                    state.saw_terminal = true;
+                                }
                             }
+                        }
+                        // No `response.completed` / `response.failed` / error
+                        // frame across the whole stream means the connection
+                        // dropped mid-response. Surface a typed transient error
+                        // instead of letting the collector default to `EndTurn`
+                        // and present truncated output as a complete turn.
+                        if !state.saw_terminal {
+                            state.pending.push_back(Err(AlephError::Timeout {
+                                suggestion: Some(
+                                    "OpenAI Responses stream closed before \
+                                     response.completed arrived — the response was \
+                                     truncated mid-stream. Retry or switch providers."
+                                        .to_string(),
+                                ),
+                            }));
                         }
                         state.done = true;
                         // Drain any pending events queued from the flush

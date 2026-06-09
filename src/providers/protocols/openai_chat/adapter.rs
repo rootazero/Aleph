@@ -423,10 +423,31 @@ impl ProtocolAdapter for OpenAiProtocol {
                                 }
                             }
                         }
+                        // Reaching here means no `[DONE]` sentinel arrived (that
+                        // path sets `done` and never re-polls the byte stream).
+                        // A terminal signal can still exist: a deferred `Done`
+                        // (finish_reason seen, trailing usage chunk lost) or a
+                        // `Done` parsed from the flushed partial line. Without
+                        // one, the connection dropped mid-response — surface a
+                        // typed transient error instead of letting the collector
+                        // default to `EndTurn` and present truncated output as a
+                        // complete turn.
+                        let has_terminal = state.deferred_done.is_some()
+                            || crate::providers::delta::has_terminal_delta(&state.pending);
                         // Release a deferred Done that never received a
                         // trailing usage chunk or `[DONE]` sentinel.
                         if let Some(done) = state.deferred_done.take() {
                             state.pending.push_back(done);
+                        }
+                        if !has_terminal {
+                            state.pending.push_back(Err(AlephError::Timeout {
+                                suggestion: Some(
+                                    "OpenAI Chat stream closed before a finish_reason or \
+                                     [DONE] sentinel arrived — the response was truncated \
+                                     mid-stream. Retry or switch providers."
+                                        .to_string(),
+                                ),
+                            }));
                         }
                         state.done = true;
                         if let Some(delta) = state.pending.pop_front() {
