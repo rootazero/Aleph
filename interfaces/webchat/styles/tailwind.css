@@ -500,6 +500,11 @@ html.glass .glass::after { opacity: 0.5; }
     --color-surface-raised: oklch(1.00 0 0) !important;
   }
   .dark { --color-surface-raised: oklch(0.20 0.018 310) !important; }
+  html.glass {
+    --glass-blur: 0px;
+    --aleph-canvas-base: var(--aleph-solid-ground) !important;
+    --color-surface-raised: oklch(0.25 0.020 300) !important;
+  }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
   :root:not(.light):not(.glass) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
