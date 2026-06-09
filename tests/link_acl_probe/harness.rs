@@ -204,6 +204,7 @@ impl LinkAclHarness {
                 // four empty ACL vecs now folded into SlashAccessConfig).
                 slash_access: Default::default(),
                 permission_level: Default::default(),
+                busy_input_mode: Default::default(),
                 default_workspace: None,
             },
         );
