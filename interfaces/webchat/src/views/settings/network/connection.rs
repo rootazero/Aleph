@@ -53,9 +53,11 @@ pub fn ConnectionSection() -> impl IntoView {
     view! {
         <section class="space-y-4">
             <div>
-                <h2 class="text-lg font-semibold text-text-primary mb-1">"服务连接"</h2>
+                <h2 class="text-lg font-semibold text-text-primary mb-1">
+                    {t!(i18n, settings.network.section_title)}
+                </h2>
                 <p class="text-sm text-text-secondary">
-                    "选择本 Panel 连接的 Aleph 服务(本地或远程)。"
+                    {t!(i18n, settings.network.description)}
                 </p>
             </div>
 
@@ -64,7 +66,7 @@ pub fn ConnectionSection() -> impl IntoView {
                 fallback=move || view! {
                     <div class="bg-surface-raised rounded-lg border border-border p-6">
                         <p class="text-sm text-text-secondary">
-                            "当前在浏览器中运行,连接切换仅在桌面 App 内可用。"
+                            {t!(i18n, settings.network.browser_only)}
                         </p>
                     </div>
                 }
@@ -90,7 +92,8 @@ pub fn ConnectionSection() -> impl IntoView {
                             prop:value=move || remote_input.get()
                             on:input=move |ev| remote_input.set(event_target_value(&ev)) />
                         <p class="text-xs text-text-tertiary">
-                            "预览:" {move || tauri_bridge::normalize_endpoint_preview(&remote_input.get())}
+                            {t!(i18n, settings.network.preview)}" "
+                            {move || tauri_bridge::normalize_endpoint_preview(&remote_input.get())}
                         </p>
                     </Show>
 
@@ -99,7 +102,7 @@ pub fn ConnectionSection() -> impl IntoView {
                             class="px-4 py-2 bg-primary text-white rounded-lg disabled:opacity-50"
                             disabled=move || busy.get()
                             on:click=move |_| show_confirm.set(true)>
-                            "应用"
+                            {t!(i18n, settings.network.apply)}
                         </button>
                     </div>
 
@@ -111,16 +114,23 @@ pub fn ConnectionSection() -> impl IntoView {
                 <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
                     <div class="bg-surface-raised rounded-lg border border-border p-6 max-w-md space-y-4">
                         <p class="text-text-primary">
-                            "将切换到 "
-                            {move || if use_remote.get() { remote_input.get() } else { "本地".to_string() }}
-                            " 并重新加载 Panel,确认?"
+                            {t!(i18n, settings.network.confirm_switch,
+                                target = move || if use_remote.get() {
+                                    remote_input.get()
+                                } else {
+                                    t_string!(i18n, settings.network.local_target).to_string()
+                                })}
                         </p>
                         <div class="flex justify-end gap-3">
                             <button class="px-3 py-2 text-text-secondary"
-                                on:click=move |_| show_confirm.set(false)>"取消"</button>
+                                on:click=move |_| show_confirm.set(false)>
+                                {t!(i18n, common.cancel)}
+                            </button>
                             <button class="px-4 py-2 bg-primary text-white rounded-lg"
                                 disabled=move || busy.get()
-                                on:click=apply>"确认切换"</button>
+                                on:click=apply>
+                                {t!(i18n, settings.network.confirm_switch_action)}
+                            </button>
                         </div>
                     </div>
                 </div>

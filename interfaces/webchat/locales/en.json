@@ -7,6 +7,12 @@
     "teams": "Teams",
     "settings": "Settings"
   },
+  "session": {
+    "healthy": "Healthy",
+    "degraded": "Degraded",
+    "disconnected": "Disconnected",
+    "active": "active"
+  },
   "common": {
     "loading": "Loading...",
     "saving": "Saving...",
@@ -299,7 +305,15 @@
   "settings": {
     "network": {
       "local_service": "Local Service",
-      "remote_service": "Remote Service"
+      "remote_service": "Remote Service",
+      "section_title": "Service Connection",
+      "description": "Choose which Aleph service this Panel connects to (local or remote).",
+      "browser_only": "Running in a browser — connection switching is only available inside the desktop app.",
+      "preview": "Preview:",
+      "apply": "Apply",
+      "local_target": "Local",
+      "confirm_switch": "Switch to {{ target }} and reload the Panel — confirm?",
+      "confirm_switch_action": "Confirm switch"
     },
     "title": "Settings",
     "welcome": "Welcome to Settings",

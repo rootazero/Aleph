@@ -46,14 +46,6 @@ pub async fn set_connection_target(raw: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 重置为本地内置 core。
-pub async fn clear_connection_target() -> Result<(), String> {
-    tauri_invoke("clear_connection_target", JsValue::NULL)
-        .await
-        .map_err(js_err)?;
-    Ok(())
-}
-
 /// 仅供 UI 预览/即时提示的 endpoint 归一,镜像 shell 端
 /// `ConnectionTarget::parse` 的显示形态(补 http scheme + 默认端口 18790)。
 /// 权威解析由 shell 的 `set_connection_target` 完成;此处只为预览,

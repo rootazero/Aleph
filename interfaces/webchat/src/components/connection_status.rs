@@ -3,6 +3,7 @@ use crate::i18n::*;
 use crate::state::connection::ConnectionPhase;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use leptos_router::components::A;
 
 /// Compact connection-state chip rendered in the dashboard chrome.
 ///
@@ -68,7 +69,10 @@ pub fn ConnectionStatus() -> impl IntoView {
     };
 
     view! {
-        <div class="bg-surface-raised border border-border rounded-xl px-3 py-2.5">
+        // Clicking the chip jumps to Settings → Service & Cluster, where the
+        // connection target can be switched (shell-core separation).
+        <A href="/settings/network"
+            attr:class="block bg-surface-raised border border-border rounded-xl px-3 py-2.5 hover:border-primary/50 transition-colors">
             <div class="flex items-center justify-between gap-2">
                 <div class="flex items-center gap-2 min-w-0">
                     <div class=move || format!("w-2 h-2 rounded-full shrink-0 {}", dot_class())></div>
@@ -110,7 +114,7 @@ pub fn ConnectionStatus() -> impl IntoView {
                     }
                 })
             }}
-        </div>
+        </A>
     }
 }
 
