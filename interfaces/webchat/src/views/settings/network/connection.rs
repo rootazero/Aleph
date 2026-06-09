@@ -1,4 +1,4 @@
-//! Section 1 — 上游连接(Feature A):切换 shell 的 core 连接(本地/远程)。
+//! Section 1 — 服务连接(Feature A):切换 shell 连接的 Aleph 服务(本地/远程)。
 //! 仅桌面 Tauri shell 内可交互;纯浏览器内只读降级。
 
 use crate::api::tauri_bridge;
@@ -53,9 +53,9 @@ pub fn ConnectionSection() -> impl IntoView {
     view! {
         <section class="space-y-4">
             <div>
-                <h2 class="text-lg font-semibold text-text-primary mb-1">"上游连接"</h2>
+                <h2 class="text-lg font-semibold text-text-primary mb-1">"服务连接"</h2>
                 <p class="text-sm text-text-secondary">
-                    "选择本 Panel 连接的 Aleph core(本地或远程)。"
+                    "选择本 Panel 连接的 Aleph 服务(本地或远程)。"
                 </p>
             </div>
 
@@ -74,13 +74,13 @@ pub fn ConnectionSection() -> impl IntoView {
                         <input type="radio" name="conn"
                             prop:checked=move || !use_remote.get()
                             on:change=move |_| use_remote.set(false) />
-                        <span class="text-text-primary">"本地 Local"</span>
+                        <span class="text-text-primary">"本地服务 Local Service"</span>
                     </label>
                     <label class="flex items-center gap-3">
                         <input type="radio" name="conn"
                             prop:checked=move || use_remote.get()
                             on:change=move |_| use_remote.set(true) />
-                        <span class="text-text-primary">"远程 Remote"</span>
+                        <span class="text-text-primary">"远程服务 Remote Service"</span>
                     </label>
 
                     <Show when=move || use_remote.get()>
