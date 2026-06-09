@@ -705,10 +705,10 @@ html.theme-switching::view-transition-new(root) {
 .dark {
   --aleph-solid-ground: oklch(0.155 0.022 300);
   --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
-  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
-  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 19%, transparent);
-  --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
-  --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 16%, transparent);
+  --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 24%, transparent);
+  --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 15%, transparent);
+  --aleph-glow-top: color-mix(in oklch, var(--color-primary)  8%, transparent);
+  --aleph-glow-c:   color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
   --aleph-sheen:    oklch(1 0 0 / 0.05);
   /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
   --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
@@ -736,10 +736,10 @@ html.glass {
   :root:not(.light):not(.glass) {
     --aleph-solid-ground: oklch(0.155 0.022 300);
     --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
-    --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
-    --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 19%, transparent);
-    --aleph-glow-top: color-mix(in oklch, var(--color-primary) 10%, transparent);
-    --aleph-glow-c:   color-mix(in oklch, oklch(0.66 0.14 250) 16%, transparent);
+    --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 24%, transparent);
+    --aleph-glow-b:   color-mix(in oklch, var(--color-primary) 15%, transparent);
+    --aleph-glow-top: color-mix(in oklch, var(--color-primary)  8%, transparent);
+    --aleph-glow-c:   color-mix(in oklch, oklch(0.64 0.10 255) 12%, transparent);
     --aleph-sheen:    oklch(1 0 0 / 0.05);
     /* Cards: semi-transparent so they read as glass-adjacent on the aurora. */
     --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
