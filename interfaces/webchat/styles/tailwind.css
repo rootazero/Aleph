@@ -422,48 +422,6 @@ html.dark[data-accent="rose"] {
 }
 
 /* ============================================================
-   Translucent Theme — surfaces float on the OS vibrancy material.
-   Inside the macOS shell a real material sits behind the webview;
-   in a plain browser the `.translucent` theme paints its own aurora
-   backdrop so the glass surfaces still read.
-   ============================================================ */
-
-html.translucent[data-platform="macos"],
-html.translucent[data-platform="macos"] body {
-  background-color: transparent;
-}
-
-/* Shared translucent surface tokens (macOS shell + browser fallback) */
-html.translucent {
-  --color-surface:          oklch(0.16 0.020 310 / 0);
-  --color-surface-raised:   oklch(0.22 0.018 310 / 0.55);
-  --color-surface-sunken:   oklch(0.13 0.015 310 / 0.40);
-  --color-surface-overlay:  oklch(0.20 0.020 310 / 0.80);
-  --color-sidebar:          oklch(0.14 0.025 310 / 0.34);
-  --color-sidebar-active:   oklch(0.30 0.035 310 / 0.60);
-  --color-border:           oklch(0.62 0.020 310 / 0.16);
-  --color-border-subtle:    oklch(0.62 0.018 310 / 0.10);
-  --color-border-strong:    oklch(0.66 0.022 310 / 0.30);
-}
-
-/* Browser fallback — paint an aurora backdrop behind the glass. */
-html.translucent:not([data-platform="macos"]) body {
-  background-color: oklch(0.13 0.020 310);
-  background-image:
-    radial-gradient(ellipse 80% 60% at 12% -5%,  oklch(0.62 0.190 310 / 0.40), transparent 62%),
-    radial-gradient(ellipse 75% 55% at 105% 110%, oklch(0.60 0.170 235 / 0.38), transparent 60%),
-    radial-gradient(ellipse 65% 50% at 50% 115%, oklch(0.64 0.150 160 / 0.26), transparent 58%);
-  background-attachment: fixed;
-}
-
-/* Frosted-glass blur for the chrome surfaces under the translucent theme. */
-html.translucent aside,
-html.translucent .glass-surface {
-  backdrop-filter: blur(24px) saturate(1.7);
-  -webkit-backdrop-filter: blur(24px) saturate(1.7);
-}
-
-/* ============================================================
    Glass utility — frosted popovers / menus on any theme.
    ============================================================ */
 
@@ -505,6 +463,29 @@ html.translucent .glass-surface {
     oklch(1 0 0 / 0.9), oklch(1 0 0 / 0.2) 45%, oklch(0.4 0.02 295 / 0.06));
 }
 :root:not(.dark) .glass::after { opacity: 0.25; }
+
+/* ============================================================
+   Accessibility: macOS "Reduce transparency" (and the CSS media query it
+   maps to) → drop all glass to opaque solids. No backdrop-filter, no
+   see-through. !important on the token overrides wins the cascade
+   regardless of where the semi-opaque defaults sit in source order.
+   ============================================================ */
+@media (prefers-reduced-transparency: reduce) {
+  .glass, .aleph-sidebar {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .glass::before, .glass::after { display: none !important; }
+  .aleph-sidebar { background-color: var(--color-sidebar) !important; }
+  :root {
+    --aleph-canvas-base: var(--aleph-solid-ground) !important;
+    --color-surface-raised: oklch(1.00 0 0) !important;
+  }
+  .dark { --color-surface-raised: oklch(0.20 0.018 310) !important; }
+}
+@media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
+  :root:not(.light) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
+}
 
 /* Soft entrance for popovers / menus. */
 @keyframes aleph-pop-in {
@@ -1385,9 +1366,6 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
 }
 .dark .aleph-shell::after,
 :root:not(.light) .aleph-shell::after { opacity: 0.05; }
-/* The translucent (OS-vibrancy) theme already carries the material's own
-   texture — adding grain on top muddies it, so suppress it there. */
-html.translucent .aleph-shell::after { display: none; }
 
 /* ════════════════════════════════════════════════════════════
    Chat message entrance — a one-shot rise+fade as each bubble
