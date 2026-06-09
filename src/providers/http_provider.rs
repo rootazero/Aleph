@@ -57,6 +57,59 @@ fn log_rejected_request_body(
     );
 }
 
+/// True when a provider error reports a rejected encrypted reasoning replay.
+///
+/// The OpenAI Responses API rejects a replayed `reasoning` input item whose
+/// `encrypted_content` blob was minted by a different endpoint/model (or has
+/// expired) with HTTP 400 `invalid_encrypted_content`. Scoped to
+/// [`AlephError::ProviderError`] so unrelated error kinds (auth, rate limit,
+/// timeouts) never trigger the strip-and-retry recovery.
+fn is_stale_encrypted_reasoning_error(err: &crate::error::AlephError) -> bool {
+    let crate::error::AlephError::ProviderError { message, .. } = err else {
+        return false;
+    };
+    message.to_ascii_lowercase().contains("encrypted_content")
+}
+
+/// Rebuild the message list with every thinking signature dropped.
+///
+/// Returns `None` when no message carries a signature — the caller then knows
+/// the encrypted-content error cannot be about this conversation and skips the
+/// retry. Thinking *text* is preserved; only the opaque replay verifier (the
+/// NDJSON `{"id","ec"}` blob for OpenAI Responses, the signed-block verifier
+/// for Anthropic) is removed, so the retried request simply omits the
+/// reasoning replay items.
+fn strip_thinking_signatures(messages: &[UnifiedMessage]) -> Option<Vec<UnifiedMessage>> {
+    let has_signature = messages.iter().any(|m| {
+        matches!(m, UnifiedMessage::Assistant { content } if content.iter().any(
+            |b| matches!(b, ContentBlock::Thinking { signature: Some(_), .. })
+        ))
+    });
+    if !has_signature {
+        return None;
+    }
+    Some(
+        messages
+            .iter()
+            .map(|m| match m {
+                UnifiedMessage::Assistant { content } => UnifiedMessage::Assistant {
+                    content: content
+                        .iter()
+                        .map(|b| match b {
+                            ContentBlock::Thinking { thinking, .. } => ContentBlock::Thinking {
+                                thinking: thinking.clone(),
+                                signature: None,
+                            },
+                            other => other.clone(),
+                        })
+                        .collect(),
+                },
+                other => other.clone(),
+            })
+            .collect(),
+    )
+}
+
 /// Generic HTTP-based AI provider
 ///
 /// This provider uses a ProtocolAdapter for protocol-specific request/response handling.
@@ -142,6 +195,15 @@ impl HttpProvider {
     /// (cost-metering hooks, provider-error promotion, truncation diagnostics,
     /// `validate`, inbound secret-leak detection) that the non-streaming path
     /// relies on. With `sink = None` the behaviour is byte-identical to before.
+    ///
+    /// Recovery: when the provider rejects a replayed encrypted reasoning item
+    /// (OpenAI Responses `invalid_encrypted_content` — the blob was minted by a
+    /// different endpoint/model, or expired), the request is retried exactly
+    /// once with all thinking signatures stripped. Without this, the stale blob
+    /// in session history fails the turn on every attempt — the retry layer
+    /// above correctly classifies the 400 as fatal (the *same* payload can
+    /// never succeed), so the only layer that can recover is this one, which
+    /// can rewrite the payload. Mirrors openclaw's encrypted-content retry.
     async fn execute(
         &self,
         payload: RequestPayload<'_>,
@@ -162,8 +224,38 @@ impl HttpProvider {
             }
         };
 
+        match self.execute_once(&filtered_messages, &payload, sink).await {
+            Err(err) if is_stale_encrypted_reasoning_error(&err) => {
+                match strip_thinking_signatures(&filtered_messages) {
+                    Some(stripped) => {
+                        tracing::warn!(
+                            provider = %self.name,
+                            error = %err,
+                            "Provider rejected replayed encrypted reasoning — \
+                             retrying once without thinking signatures"
+                        );
+                        self.execute_once(&stripped, &payload, sink).await
+                    }
+                    // No signature in the conversation — the error is about
+                    // something else; don't burn a retry.
+                    None => Err(err),
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// One request/stream/collect attempt against the provider. Split out of
+    /// [`HttpProvider::execute`] so the stale-encrypted-reasoning recovery can
+    /// re-run the attempt with a rewritten message list.
+    async fn execute_once(
+        &self,
+        messages: &[UnifiedMessage],
+        payload: &RequestPayload<'_>,
+        sink: Option<&dyn crate::providers::DeltaSink>,
+    ) -> Result<ProviderResponse> {
         let final_payload = RequestPayload {
-            messages: &filtered_messages,
+            messages,
             system_prompt: payload.system_prompt,
             system_blocks: payload.system_blocks,
             tools: payload.tools,
@@ -176,8 +268,8 @@ impl HttpProvider {
         };
 
         // Extension hooks observe LLM provider traffic for cost metering.
-        let session_id = hook_session_id(&payload);
-        let base_env = self.base_request_env(&payload, false);
+        let session_id = hook_session_id(payload);
+        let base_env = self.base_request_env(payload, false);
         crate::extension::hooks::fire_global_observer(
             crate::extension::HookEvent::PreApiRequest,
             &session_id,
@@ -560,6 +652,74 @@ mod tests {
         let result = engine.filter("User: Call 13812345678 for info");
         assert!(result.text.contains("[PHONE]"));
         assert!(!result.text.contains("13812345678"));
+    }
+
+    #[test]
+    fn stale_encrypted_reasoning_error_matches_provider_400_only() {
+        let stale = crate::error::AlephError::provider(
+            "OpenAI Responses API error (400 Bad Request): {\"error\":{\"code\":\
+             \"invalid_encrypted_content\",\"message\":\"Invalid encrypted_content\"}}",
+        );
+        assert!(super::is_stale_encrypted_reasoning_error(&stale));
+
+        let unrelated = crate::error::AlephError::provider("500 Internal Server Error");
+        assert!(!super::is_stale_encrypted_reasoning_error(&unrelated));
+
+        // Non-ProviderError kinds never trigger the recovery, even if the
+        // message mentions encrypted content.
+        let timeout = crate::error::AlephError::Timeout {
+            suggestion: Some("encrypted_content".into()),
+        };
+        assert!(!super::is_stale_encrypted_reasoning_error(&timeout));
+    }
+
+    #[test]
+    fn strip_thinking_signatures_drops_verifier_keeps_text() {
+        use crate::providers::message::{ContentBlock, UnifiedMessage};
+
+        let messages = vec![
+            UnifiedMessage::User {
+                content: vec![ContentBlock::Text {
+                    text: "hi".into(),
+                    cache_control: None,
+                }],
+            },
+            UnifiedMessage::Assistant {
+                content: vec![
+                    ContentBlock::Thinking {
+                        thinking: "chain of thought".into(),
+                        signature: Some("{\"id\":\"rs_1\",\"ec\":\"gAAA\"}\n".into()),
+                    },
+                    ContentBlock::Text {
+                        text: "answer".into(),
+                        cache_control: None,
+                    },
+                ],
+            },
+        ];
+
+        let stripped = super::strip_thinking_signatures(&messages)
+            .expect("a signed thinking block must yield a rewrite");
+        let UnifiedMessage::Assistant { content } = &stripped[1] else {
+            panic!("assistant message expected");
+        };
+        let ContentBlock::Thinking {
+            thinking,
+            signature,
+        } = &content[0]
+        else {
+            panic!("thinking block expected");
+        };
+        assert_eq!(thinking, "chain of thought");
+        assert!(signature.is_none(), "signature must be dropped");
+        assert!(
+            matches!(&content[1], ContentBlock::Text { text, .. } if text == "answer"),
+            "sibling blocks must be preserved"
+        );
+
+        // No signature anywhere → None, so the caller skips the retry.
+        assert!(super::strip_thinking_signatures(&stripped).is_none());
+        assert!(super::strip_thinking_signatures(&messages[..1]).is_none());
     }
 
     #[test]

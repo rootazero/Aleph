@@ -153,8 +153,8 @@ pub fn convert_messages(messages: &[UnifiedMessage]) -> Vec<InputItem> {
 ///
 /// Note: a *stale* encrypted blob (replayed to a different endpoint than the
 /// one that minted it) is rejected by the server with `invalid_encrypted_content`.
-/// A future hardening stage could strip reasoning items and retry; for now the
-/// blob is only ever emitted on the same endpoint that captured it.
+/// `HttpProvider::execute` recovers by stripping thinking signatures and
+/// retrying once (see `strip_thinking_signatures` in `http_provider.rs`).
 fn parse_reasoning_signature(sig: &str) -> Vec<InputItem> {
     sig.lines()
         .filter_map(|line| {
