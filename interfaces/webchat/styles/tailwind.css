@@ -846,8 +846,8 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur-chrome)) saturate(var(--glass-saturate));
 }
 /* Glass theme: deepen the sidebar's frosted layer to match the stronger chrome. */
 html.glass .aleph-sidebar {
