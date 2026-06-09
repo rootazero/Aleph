@@ -207,11 +207,18 @@ timeout the runtime is killed, stdout/stderr are drained for up to 2s,
 and we return `exit_code = 124` (POSIX `timeout(1)` convention) with the
 partial output preserved so you can see what the script accomplished.
 
-Output is capped per stream; the response carries
-`stdout_truncated_bytes` / `stderr_truncated_bytes` when bytes were
-dropped, so you know exactly how much you lost. ANSI colour codes and
-stray binary control bytes are stripped automatically — no need for
-`--color=never` or piping through `cat`.
+Output is capped per stream; when a stream overflows we keep BOTH its
+head and its tail (with a `…[N bytes elided]…` marker between them), so a
+build that prints megabytes of progress and then fails still shows you the
+final error — not just the start. The response also carries
+`stdout_truncated_bytes` / `stderr_truncated_bytes` so you know exactly how
+much was elided. ANSI colour codes and stray binary control bytes are
+stripped automatically — no need for `--color=never` or piping through `cat`.
+
+If the process is killed by a signal it surfaces as `exit_code = 128 + N`
+(POSIX convention) with a `stderr` note naming the signal — e.g. `137`
+(SIGKILL, usually an out-of-memory or resource-limit kill), `139` (SIGSEGV,
+a crash), `134` (SIGABRT, an assertion/panic abort).
 
 Capability escalations (`allow_network`, `allow_subprocess`,
 `extra_writable_paths`) require approval the first time per session. When you
@@ -448,6 +455,75 @@ fn language_label(lang: &Language) -> String {
 /// envelope. All recoverable failures surface as `success = false` with
 /// `exit_code = -1` and a human-readable `stderr` — matching the pre-Sandbox
 /// behaviour so existing callers see no shape changes.
+/// Resolve the exit code to surface to the model, plus an optional note when
+/// the process was killed by a signal.
+///
+/// On Unix `ExitStatus::code()` returns `None` for a signal death, so the
+/// sandbox records the signal separately in `SandboxOutput.signal`. Without
+/// reading it, every SIGKILL / SIGSEGV / OOM kill collapsed to `exit_code: -1`
+/// with no hint. We mirror the POSIX `128 + signal` convention (the same value
+/// codex synthesises and that bash itself reports via `$?`), and annotate the
+/// likely cause so the model doesn't have to guess whether `-1` meant a crash,
+/// an OOM kill, or a clean failure.
+///
+/// Only universal POSIX signal semantics are annotated — never command-specific
+/// exit-code guesses (e.g. "grep exited 1 so no match"), which would mean
+/// pattern-matching the command string and violate R7 (LLM sovereignty).
+fn resolve_exit_code(exit_code: Option<i32>, signal: Option<i32>) -> (i32, Option<String>) {
+    match (exit_code, signal) {
+        // Normal exit (including a clean non-zero) — the code speaks for itself.
+        (Some(code), _) => (code, None),
+        // Killed by a signal: synthesise 128+N and explain it.
+        (None, Some(sig)) => {
+            let surfaced = 128 + sig;
+            let name = signal_name(sig);
+            let hint = signal_hint(sig);
+            let note = format!(
+                "Process was killed by signal {sig} ({name}){hint} — surfaced as exit code {surfaced} (POSIX 128+signal convention)."
+            );
+            (surfaced, Some(note))
+        }
+        // No code and no signal — nothing better than the legacy sentinel.
+        (None, None) => (-1, None),
+    }
+}
+
+/// Map a Unix signal number to its conventional name. Covers the signals a
+/// sandboxed build/test/script realistically dies from; anything else is
+/// reported by number with an `unknown` label.
+fn signal_name(sig: i32) -> &'static str {
+    match sig {
+        1 => "SIGHUP",
+        2 => "SIGINT",
+        3 => "SIGQUIT",
+        4 => "SIGILL",
+        6 => "SIGABRT",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        11 => "SIGSEGV",
+        13 => "SIGPIPE",
+        15 => "SIGTERM",
+        24 => "SIGXCPU",
+        25 => "SIGXFSZ",
+        _ => "unknown",
+    }
+}
+
+/// A short, model-facing cause hint for the signals with a common,
+/// actionable interpretation. Empty for signals where naming it is enough.
+fn signal_hint(sig: i32) -> &'static str {
+    match sig {
+        6 => " — an abort (assertion failure, Rust panic with abort, or abort())",
+        9 => " — typically an out-of-memory kill or an enforced memory/CPU resource limit",
+        11 => " — a segmentation fault; the process crashed",
+        13 => " — wrote to a closed pipe (a downstream reader exited early)",
+        15 => " — terminated by an external request",
+        24 => " — CPU time limit exceeded",
+        25 => " — file size limit exceeded",
+        _ => "",
+    }
+}
+
 fn sandbox_result_to_output(
     result: std::result::Result<SandboxOutput, SandboxError>,
     language: String,
@@ -460,12 +536,27 @@ fn sandbox_result_to_output(
             // stays byte-identical via the borrow fast-path).
             let stdout =
                 sanitize_command_output(&String::from_utf8_lossy(&out.stdout)).into_owned();
-            let stderr =
+            let mut stderr =
                 sanitize_command_output(&String::from_utf8_lossy(&out.stderr)).into_owned();
-            let exit_code = out.exit_code.unwrap_or(-1);
+            // Wire the signal the sandbox captured but no consumer read.
+            // `ExitStatus::code()` is `None` on Unix when a signal killed the
+            // child, so `out.exit_code.unwrap_or(-1)` previously flattened a
+            // SIGKILL/SIGSEGV/OOM into a meaningless `-1` with no explanation.
+            // Surface `128 + signal` (POSIX convention, codex parity) and append
+            // a human-readable note so the model can tell an OOM kill from a
+            // clean failure.
+            let (exit_code, signal_note) = resolve_exit_code(out.exit_code, out.signal);
+            if let Some(note) = signal_note {
+                if stderr.is_empty() {
+                    stderr = note;
+                } else {
+                    stderr = format!("{stderr}\n{note}");
+                }
+            }
 
             debug!(
                 exit_code = exit_code,
+                signal = out.signal,
                 duration_ms = out.duration_ms,
                 truncated = out.truncated,
                 stdout_truncated_bytes = out.stdout_truncated_bytes,
@@ -1171,5 +1262,85 @@ mod tests {
             justification_seen_by_sandbox(Some("   \n  ".to_string())).await,
             None
         );
+    }
+
+    #[test]
+    fn resolve_exit_code_passes_through_normal_exit() {
+        // A real exit code (zero or non-zero) is reported verbatim with no note.
+        assert_eq!(resolve_exit_code(Some(0), None), (0, None));
+        assert_eq!(resolve_exit_code(Some(1), None), (1, None));
+        // A present code wins even if a signal was also (spuriously) recorded.
+        assert_eq!(resolve_exit_code(Some(2), Some(9)), (2, None));
+    }
+
+    #[test]
+    fn resolve_exit_code_synthesises_128_plus_signal() {
+        // The core BUG fix: a signal death had no exit code, so it used to
+        // flatten to -1. Now it surfaces 128+signal with an explanatory note.
+        let (code, note) = resolve_exit_code(None, Some(9));
+        assert_eq!(code, 137, "SIGKILL → 128 + 9");
+        let note = note.expect("signal death must carry a note");
+        assert!(note.contains("SIGKILL"), "names the signal: {note}");
+        assert!(
+            note.contains("out-of-memory") || note.contains("resource limit"),
+            "explains the likely cause: {note}"
+        );
+
+        let (code, note) = resolve_exit_code(None, Some(11));
+        assert_eq!(code, 139, "SIGSEGV → 128 + 11");
+        assert!(note.unwrap().contains("segmentation fault"));
+    }
+
+    #[test]
+    fn resolve_exit_code_falls_back_to_sentinel() {
+        // No code and no signal: nothing better than the legacy -1 sentinel,
+        // and crucially no spurious note.
+        assert_eq!(resolve_exit_code(None, None), (-1, None));
+    }
+
+    #[test]
+    fn sandbox_output_surfaces_signal_death_end_to_end() {
+        // Drive the whole mapping: a sandbox result with no exit code but a
+        // captured signal must reach the model as exit 137 + a stderr note,
+        // and must be marked unsuccessful.
+        let out = sandbox_result_to_output(
+            Ok(SandboxOutput {
+                stdout: b"partial progress\n".to_vec(),
+                stderr: Vec::new(),
+                exit_code: None,
+                signal: Some(9),
+                ..Default::default()
+            }),
+            "shell".to_string(),
+            60,
+        );
+        assert!(!out.success, "a signal death is never a success");
+        assert_eq!(out.exit_code, 137);
+        assert_eq!(out.stdout, "partial progress\n", "stdout is preserved");
+        assert!(
+            out.stderr.contains("SIGKILL") && out.stderr.contains("137"),
+            "stderr explains the signal death: {}",
+            out.stderr
+        );
+    }
+
+    #[test]
+    fn sandbox_output_appends_signal_note_to_existing_stderr() {
+        // When the process already printed to stderr before dying, the note is
+        // appended rather than clobbering the real diagnostic.
+        let out = sandbox_result_to_output(
+            Ok(SandboxOutput {
+                stdout: Vec::new(),
+                stderr: b"thread panicked at 'boom'".to_vec(),
+                exit_code: None,
+                signal: Some(6),
+                ..Default::default()
+            }),
+            "shell".to_string(),
+            60,
+        );
+        assert_eq!(out.exit_code, 134, "SIGABRT → 128 + 6");
+        assert!(out.stderr.contains("thread panicked at 'boom'"));
+        assert!(out.stderr.contains("SIGABRT"));
     }
 }
