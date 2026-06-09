@@ -24,6 +24,7 @@ use crate::components::boot_check_gate::BootCheckGate;
 use crate::components::command_palette::CommandPalette;
 use crate::components::mode_sidebar::{ModeSidebar, PanelMode};
 use crate::components::notification_center::NotificationCenter;
+use crate::components::permission::{ConfigGate, PermissionBanner};
 use crate::components::service_blocking_gate::ServiceBlockingGate;
 use crate::context::{DashboardContext, DashboardState};
 use crate::state::hotkey::{self as hotkey, HotkeyState};
@@ -342,7 +343,8 @@ fn MainContent() -> impl IntoView {
         <div style:display=move || if mode.get() == PanelMode::Teams { "contents" } else { "none" }>
             <TeamsView />
         </div>
-        <div style:display=move || if mode.get() == PanelMode::Settings { "contents" } else { "none" }>
+        <div style:display=move || if mode.get() == PanelMode::Settings { "block" } else { "none" }>
+            <PermissionBanner />
             <SettingsRouter />
         </div>
     }
@@ -380,36 +382,36 @@ fn SettingsRouter() -> impl IntoView {
         match path.as_str() {
             // Basic
             "/settings" => view! { <Settings /> }.into_any(),
-            "/settings/general" => view! { <GeneralView /> }.into_any(),
+            "/settings/general" => view! { <ConfigGate><GeneralView /></ConfigGate> }.into_any(),
             "/settings/appearance" => view! { <AppearanceView /> }.into_any(),
             "/settings/behavior" => view! { <BehaviorView /> }.into_any(),
 
             // AI
-            "/settings/search" => view! { <SearchView /> }.into_any(),
-            "/settings/providers" => view! { <ProvidersView /> }.into_any(),
-            "/settings/embedding-providers" => view! { <EmbeddingProvidersView /> }.into_any(),
-            "/settings/reranking-providers" => view! { <RerankingProvidersView /> }.into_any(),
-            "/settings/generation-providers" => view! { <GenerationProvidersView /> }.into_any(),
-            "/settings/model-route" => view! { <RouteView /> }.into_any(),
-            "/settings/memory" => view! { <MemoryView /> }.into_any(),
+            "/settings/search" => view! { <ConfigGate><SearchView /></ConfigGate> }.into_any(),
+            "/settings/providers" => view! { <ConfigGate><ProvidersView /></ConfigGate> }.into_any(),
+            "/settings/embedding-providers" => view! { <ConfigGate><EmbeddingProvidersView /></ConfigGate> }.into_any(),
+            "/settings/reranking-providers" => view! { <ConfigGate><RerankingProvidersView /></ConfigGate> }.into_any(),
+            "/settings/generation-providers" => view! { <ConfigGate><GenerationProvidersView /></ConfigGate> }.into_any(),
+            "/settings/model-route" => view! { <ConfigGate><RouteView /></ConfigGate> }.into_any(),
+            "/settings/memory" => view! { <ConfigGate><MemoryView /></ConfigGate> }.into_any(),
 
             // Browser
-            "/settings/browser" => view! { <BrowserView /> }.into_any(),
+            "/settings/browser" => view! { <ConfigGate><BrowserView /></ConfigGate> }.into_any(),
             "/settings/network" => view! { <NetworkView /> }.into_any(),
 
             // Extensions
-            "/settings/routing" => view! { <RoutingRulesView /> }.into_any(),
-            "/settings/mcp" => view! { <McpView /> }.into_any(),
-            "/settings/plugins" => view! { <PluginsView /> }.into_any(),
-            "/settings/skills" => view! { <SkillsView /> }.into_any(),
-            "/settings/clawhub" => view! { <ClawHubView /> }.into_any(),
-            "/settings/acp" => view! { <AcpHarnessesView /> }.into_any(),
+            "/settings/routing" => view! { <ConfigGate><RoutingRulesView /></ConfigGate> }.into_any(),
+            "/settings/mcp" => view! { <ConfigGate><McpView /></ConfigGate> }.into_any(),
+            "/settings/plugins" => view! { <ConfigGate><PluginsView /></ConfigGate> }.into_any(),
+            "/settings/skills" => view! { <ConfigGate><SkillsView /></ConfigGate> }.into_any(),
+            "/settings/clawhub" => view! { <ConfigGate><ClawHubView /></ConfigGate> }.into_any(),
+            "/settings/acp" => view! { <ConfigGate><AcpHarnessesView /></ConfigGate> }.into_any(),
 
             // Security
-            "/settings/security" => view! { <SecurityView /> }.into_any(),
-            "/settings/auth" => view! { <AuthView /> }.into_any(),
-            "/settings/policies" => view! { <PoliciesView /> }.into_any(),
-            "/settings/execution" => view! { <ExecutionView /> }.into_any(),
+            "/settings/security" => view! { <ConfigGate><SecurityView /></ConfigGate> }.into_any(),
+            "/settings/auth" => view! { <ConfigGate><AuthView /></ConfigGate> }.into_any(),
+            "/settings/policies" => view! { <ConfigGate><PoliciesView /></ConfigGate> }.into_any(),
+            "/settings/execution" => view! { <ConfigGate><ExecutionView /></ConfigGate> }.into_any(),
             // Channels
             "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
             _ if path.starts_with("/settings/channels/") => {
@@ -417,7 +419,8 @@ fn SettingsRouter() -> impl IntoView {
                     .strip_prefix("/settings/channels/")
                     .unwrap_or("")
                     .to_string();
-                view! { <ChannelPlatformPage platform_type=platform_type /> }.into_any()
+                let platform_type = StoredValue::new(platform_type);
+                view! { <ConfigGate><ChannelPlatformPage platform_type=platform_type.get_value() /></ConfigGate> }.into_any()
             }
 
             // Not in settings mode or unknown path — render nothing (div is hidden)
