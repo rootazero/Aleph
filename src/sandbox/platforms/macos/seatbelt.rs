@@ -679,6 +679,29 @@ impl SeatbeltDriver {
                 profile
                     .push_str("; protected metadata subpaths (read-only inside writable roots)\n");
                 for path in &protected {
+                    // TOCTOU guard (codex parity, mirrors the bwrap driver's
+                    // `push_metadata_protection_args`): refuse to emit a deny
+                    // whose path crosses a writable symlink the sandboxed
+                    // process could swap out between profile generation and
+                    // use. Seatbelt's `subpath` matches the kernel-resolved
+                    // path, so a process-created `.git -> /elsewhere` symlink
+                    // would let writes escape the deny rule entirely. A
+                    // protection that cannot be enforced must fail closed.
+                    if let Some(symlink) =
+                        crate::sandbox::protected_paths::first_writable_symlink_component(
+                            path,
+                            &writable_roots,
+                        )
+                    {
+                        return Err(SandboxError::ProfileGeneration(format!(
+                            "TOCTOU: cannot enforce read-only protection for {} because it \
+                             crosses writable symlink {}; a sandboxed process could redirect \
+                             it. Remove or dereference the symlink before granting \
+                             workspace-write.",
+                            path.display(),
+                            symlink.display()
+                        )));
+                    }
                     if let Some(path_str) = path.to_str() {
                         let path_str = escape_sbpl(path_str);
                         profile
@@ -1065,6 +1088,34 @@ mod tests {
                 profile.contains(&format!("(deny file-write* (subpath \"{root}/.aleph\"))")),
                 "missing .aleph protection under {root}"
             );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn protected_metadata_symlink_in_writable_root_fails_closed() {
+        // TOCTOU (mirrors the bwrap driver test): the sandboxed process turned
+        // the protected `.git` into a symlink. Seatbelt's `subpath` deny rule
+        // matches the kernel-resolved path, so writes through the symlink would
+        // escape the deny entirely — profile generation must fail closed rather
+        // than emit an unenforceable protection.
+        let driver = SeatbeltDriver::new();
+        let policy = SandboxPolicy::default();
+        let ws = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), ws.path().join(".git")).unwrap();
+
+        let err = driver
+            .generate_profile(&policy, ws.path())
+            .expect_err("a writable-symlink protected path must be rejected");
+        match err {
+            SandboxError::ProfileGeneration(reason) => {
+                assert!(
+                    reason.contains("TOCTOU") && reason.contains(".git"),
+                    "rejection must name the TOCTOU hazard, got: {reason}"
+                );
+            }
+            other => panic!("expected ProfileGeneration, got {other:?}"),
         }
     }
 
