@@ -308,6 +308,18 @@ impl ProtocolAdapter for OpenAiResponsesProtocol {
                     .header("OpenAI-Beta", "responses=experimental")
                     .header("originator", "aleph");
             }
+            // Session affinity: the reference Codex CLI always sends `session-id`
+            // so the ChatGPT backend can bind prompt-cache / rate-limit state to
+            // the agent session. Sourced from the same `metadata["session_id"]`
+            // that seeds `prompt_cache_key` above.
+            if let Some(session_id) = payload
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("session_id"))
+                .filter(|s| !s.is_empty())
+            {
+                builder = builder.header("session-id", session_id.as_str());
+            }
         }
 
         // Apply any variant-specific extra headers
