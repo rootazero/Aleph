@@ -104,7 +104,7 @@ pub fn NotificationCenter() -> impl IntoView {
             />
             <div
                 class="fixed top-12 right-3 z-[55] w-[min(360px,calc(100vw-32px))] \
-                       glass-surface bg-surface-overlay/95 border border-border \
+                       glass bg-surface-overlay/85 border border-border \
                        rounded-2xl shadow-2xl overflow-hidden animate-pop-in"
                 data-tauri-drag-region="false"
                 role="dialog"
