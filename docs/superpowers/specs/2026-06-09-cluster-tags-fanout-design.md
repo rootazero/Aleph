@@ -44,13 +44,13 @@ Aleph 集群子系统经前几轮会话（reverse-RPC / registry / file-transfer
 | `Environment`（投影契约） | 增 `tags: Vec<String>`（`environments.list` 自动可见，无新 RPC） | `src/cluster/registry.rs` |
 | `maybe_register_node` | 接收并存 `tags` | `src/cluster/registry.rs` |
 | `connect` 帧 | 在现有 `commands` 旁带 `tags` | `src/gateway/handlers/...`（connect 解析处） |
-| `pairing.start_node` 帧 | 带 `tags`（配对路径与直连一致） | pairing handler + `node.rs` |
-
-### 标签来源 — CLI 声明 + 持久化
+### 标签来源 — CLI 声明（每次启动提供，不持久化）
 
 - `aleph-server node --tag gpu --tag region=us ...`（`--tag` 可重复）。
-- 解析后写进现有 `~/.aleph/node/<name>.json` 凭证文件（与 `node_id`/`bearer`/`center` 并列新增 `tags`），重连/重启保持。
-- `connect`（及 `pairing.start_node`）时原样上报。
+- **实现期决定（偏离初稿）**：tags 由 CLI flag **每次启动提供**，经 `connect` 帧上报，**不**写入 `~/.aleph/node/<name>.json` 凭证文件、**不**走 `pairing.start_node` 帧。
+  - 理由：凭证文件只承载认证身份（`node_id`/`bearer`/`center`）；把 tags 也塞进去会产生"flag 与磁盘值谁优先"的歧义。CLI-每次提供与现有 `--name`/`--center` 的供给模型一致。
+  - 中心只在 `connect`（配对完成后的正式连接）落 `NodeSession`，故 tags 经 connect 帧即完全连通；`pairing.start_node` 处中心不消费 tags，发过去是死字段，故不发（避免 advertised-but-unwired）。
+  - 取舍：若节点重启时漏传 `--tag`，会以空 tags 重新登记并掉出 tag 扇出。由 launch 命令（systemd/launchd）保证 argv 完整。
 
 ## B. 寻址扩展 + 多节点扇出
 
