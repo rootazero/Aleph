@@ -1,12 +1,24 @@
 /// Ollama local LLM client implementation
 ///
-/// Implements the `AiProvider` trait for locally-hosted Ollama models.
-/// Uses Ollama's HTTP API for text and vision capabilities.
+/// Implements the `AiProvider` trait for locally-hosted Ollama models using
+/// the native chat endpoint (`/api/chat`).
+///
+/// # Why `/api/chat` (not `/api/generate`)
+///
+/// The legacy `/api/generate` endpoint accepts only a single `prompt` string,
+/// which forced this provider to discard all but the last user message — every
+/// turn arrived at the model amnesiac, with no assistant history, tool results,
+/// or earlier user turns. `/api/chat` takes a structured `messages` array, so it
+/// preserves the full multi-turn conversation, carries native `tools` for
+/// function calling, and attaches per-message `images` for vision models — the
+/// three capabilities the agent loop actually depends on. This mirrors the
+/// native-API path openclaw documents as the only reliable surface for tool
+/// calling.
 ///
 /// # Configuration
 ///
 /// Required fields:
-/// - `model`: Model name (e.g., "llama3.2", "llava", "bakllava")
+/// - `model`: Model name (e.g., "llama3.2", "qwen2.5", "llava")
 ///
 /// Optional fields:
 /// - `base_url`: Ollama server URL (defaults to "http://localhost:11434")
@@ -14,52 +26,26 @@
 ///
 /// # Prerequisites
 ///
-/// Ollama must be installed and running:
-/// - macOS/Linux: `curl -fsSL https://ollama.ai/install.sh | sh`
-/// - Manual: https://ollama.ai/download
-///
-/// Models must be pulled before use:
+/// Ollama must be installed and running, and models pulled before use:
 /// ```bash
 /// ollama pull llama3.2
-/// ollama pull llava  # For vision support
+/// ollama pull llava       # vision-capable
 /// ```
 ///
 /// # Vision Support
 ///
-/// Vision-capable models (llava, bakllava, etc.) can process images
-/// when using `process_with_attachments()`.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use alephcore::config::ProviderConfig;
-/// use alephcore::providers::ollama::OllamaProvider;
-/// use alephcore::providers::AiProvider;
-///
-/// # async fn example() -> alephcore::error::Result<()> {
-/// let config = ProviderConfig {
-///     api_key: None, // Not needed for Ollama
-///     model: "llama3.2".to_string(),
-///     base_url: Some("http://localhost:11434".to_string()),
-///     color: "#0000ff".to_string(),
-///     timeout_seconds: 60,
-///     max_tokens: None,
-///     temperature: None,
-/// };
-///
-/// let provider = OllamaProvider::new("ollama".to_string(), config)?;
-/// let response = provider.process("Hello!", Some("You are helpful")).await?;
-/// println!("Response: {}", response);
-/// # Ok(())
-/// # }
-/// ```
+/// Vision-capable models (llava, bakllava, etc.) receive any
+/// `ContentBlock::Image` blocks as the message's base64 `images` array.
 use crate::config::ProviderConfig;
 use crate::error::{AlephError, Result};
-use crate::providers::adapter::{ProviderResponse, RequestPayload};
-use crate::providers::message::UnifiedMessage;
+use crate::providers::adapter::{
+    NativeToolCall, ProviderResponse, RequestPayload, StopReason, TokenUsage,
+};
+use crate::providers::message::{ContentBlock, UnifiedMessage};
 use crate::providers::AiProvider;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
@@ -76,26 +62,12 @@ pub struct OllamaProvider {
     model: String,
     /// HTTP client
     client: Client,
-    /// API endpoint
+    /// API endpoint (`{base_url}/api/chat`)
     endpoint: String,
     /// Provider brand color
     color: String,
     /// Provider config for advanced options
     config: ProviderConfig,
-}
-
-/// Request body for Ollama /api/generate endpoint
-#[derive(Debug, Serialize)]
-struct GenerateRequest {
-    model: String,
-    prompt: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    images: Option<Vec<String>>,
-    stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    options: Option<GenerateOptions>,
 }
 
 /// Optional generation parameters (Ollama `options` object).
@@ -113,12 +85,42 @@ struct GenerateOptions {
     top_k: Option<u32>,
 }
 
-/// Response from Ollama /api/generate endpoint
+/// Response from Ollama `/api/chat` (non-streaming, `stream: false`).
 #[derive(Debug, Deserialize)]
-struct GenerateResponse {
-    response: String,
-    #[allow(dead_code)] // Deserialized from API response
-    done: bool,
+struct ChatResponse {
+    message: ChatMessage,
+    /// Why generation stopped (`"stop"`, `"length"`, …). Absent on older servers.
+    #[serde(default)]
+    done_reason: Option<String>,
+    /// Prompt tokens evaluated (input).
+    #[serde(default)]
+    prompt_eval_count: Option<u32>,
+    /// Tokens generated (output).
+    #[serde(default)]
+    eval_count: Option<u32>,
+}
+
+/// Assistant message inside a chat response.
+#[derive(Debug, Deserialize)]
+struct ChatMessage {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    tool_calls: Option<Vec<ChatToolCall>>,
+}
+
+/// A single tool call emitted by the model. Ollama assigns no id and returns
+/// `arguments` as a JSON object (not a stringified blob like OpenAI).
+#[derive(Debug, Deserialize)]
+struct ChatToolCall {
+    function: ChatFunctionCall,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChatFunctionCall {
+    name: String,
+    #[serde(default)]
+    arguments: Value,
 }
 
 /// Error response from Ollama API
@@ -146,21 +148,9 @@ pub(crate) struct OllamaModelInfo {
 impl OllamaProvider {
     /// Create new Ollama provider
     ///
-    /// # Arguments
-    ///
-    /// * `name` - Provider name
-    /// * `config` - Provider configuration with model name
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(OllamaProvider)` - Successfully initialized provider
-    /// * `Err(AlephError)` - Configuration validation failed
-    ///
     /// # Errors
     ///
-    /// Returns `InvalidConfig` if:
-    /// - Model name is empty
-    /// - Timeout is zero
+    /// Returns `InvalidConfig` if the model name is empty or the timeout is zero.
     pub fn new(name: String, config: ProviderConfig) -> Result<Self> {
         if config.default_model().is_empty() {
             return Err(AlephError::invalid_config("Model name cannot be empty"));
@@ -186,13 +176,13 @@ impl OllamaProvider {
             .as_ref()
             .map(|s| s.trim_end_matches('/').to_string())
             .unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string());
-        let endpoint = format!("{}/api/generate", base_url);
+        let endpoint = format!("{}/api/chat", base_url);
 
         info!(
             model = %config.default_model(),
             endpoint = %endpoint,
             timeout_seconds = config.timeout_seconds,
-            "Ollama provider initialized successfully (HTTP API)"
+            "Ollama provider initialized successfully (chat API)"
         );
 
         Ok(Self {
@@ -238,15 +228,188 @@ impl OllamaProvider {
         })
     }
 
-    /// Build request for text-only generation
-    fn build_request(&self, input: &str, system_prompt: Option<&str>) -> GenerateRequest {
-        GenerateRequest {
-            model: self.model.clone(),
-            prompt: input.to_string(),
-            system: system_prompt.map(|s| s.to_string()),
-            images: None,
-            stream: false,
-            options: self.build_options(),
+    /// Translate unified conversation history into Ollama `/api/chat` messages.
+    ///
+    /// Each `UnifiedMessage` maps to a role-tagged object so the full multi-turn
+    /// context survives the wire:
+    /// - `User` → `{role:"user", content, images?}` (base64 image blocks attached)
+    /// - `Assistant` → `{role:"assistant", content, tool_calls?}` (arguments stay a
+    ///   JSON object — Ollama's native shape, not a stringified blob)
+    /// - `ToolResult` → `{role:"tool", tool_name, content}`
+    fn convert_messages(messages: &[UnifiedMessage], system_prompt: Option<&str>) -> Vec<Value> {
+        let mut out = Vec::with_capacity(messages.len() + 1);
+
+        if let Some(sys) = system_prompt {
+            if !sys.is_empty() {
+                out.push(json!({ "role": "system", "content": sys }));
+            }
+        }
+
+        for msg in messages {
+            match msg {
+                UnifiedMessage::User { content } => {
+                    let text = content
+                        .iter()
+                        .filter_map(|b| b.as_text())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let images: Vec<&str> = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Image { data, .. } => Some(data.as_str()),
+                            _ => None,
+                        })
+                        .collect();
+                    let mut m = json!({ "role": "user", "content": text });
+                    if !images.is_empty() {
+                        m["images"] = json!(images);
+                    }
+                    out.push(m);
+                }
+                UnifiedMessage::Assistant { content } => {
+                    let text = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::Text { text, .. } => Some(text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let tool_calls: Vec<Value> = content
+                        .iter()
+                        .filter_map(|b| match b {
+                            ContentBlock::ToolCall {
+                                name, arguments, ..
+                            } => Some(json!({
+                                "function": { "name": name, "arguments": arguments }
+                            })),
+                            _ => None,
+                        })
+                        .collect();
+                    let mut m = json!({ "role": "assistant", "content": text });
+                    if !tool_calls.is_empty() {
+                        m["tool_calls"] = json!(tool_calls);
+                    }
+                    out.push(m);
+                }
+                UnifiedMessage::ToolResult {
+                    tool_name, content, ..
+                } => {
+                    let output = content
+                        .iter()
+                        .map(|b| match b {
+                            ContentBlock::Text { text, .. } => text.clone(),
+                            ContentBlock::Json { value } => {
+                                serde_json::to_string(value).unwrap_or_default()
+                            }
+                            _ => String::new(),
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    out.push(json!({
+                        "role": "tool",
+                        "tool_name": tool_name,
+                        "content": output,
+                    }));
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Build the `/api/chat` request body from a payload.
+    ///
+    /// Returns an owned `Value` so the caller can move it into the async send
+    /// block without borrowing the (non-`'static`) payload.
+    fn build_chat_body(&self, payload: &RequestPayload) -> Value {
+        let model = payload.model.as_deref().unwrap_or(&self.model);
+        let messages = Self::convert_messages(payload.messages, payload.system_prompt);
+
+        let mut body = json!({
+            "model": model,
+            "messages": messages,
+            "stream": false,
+        });
+
+        if let Some(opts) = self.build_options() {
+            if let Ok(v) = serde_json::to_value(opts) {
+                body["options"] = v;
+            }
+        }
+
+        if let Some(tools) = payload.tools {
+            if !tools.is_empty() {
+                let tool_specs: Vec<Value> = tools
+                    .iter()
+                    .map(|t| {
+                        json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.parameters,
+                            }
+                        })
+                    })
+                    .collect();
+                body["tools"] = json!(tool_specs);
+            }
+        }
+
+        body
+    }
+
+    /// Map an Ollama chat response into the unified `ProviderResponse`.
+    ///
+    /// Ollama omits tool-call ids, so synthesize stable per-response ids
+    /// (`ollama_call_<n>`) — the agent loop needs them to pair the eventual
+    /// `ToolResult` back to its call.
+    fn build_provider_response(&self, chat: ChatResponse) -> ProviderResponse {
+        let text = chat.message.content.trim().to_string();
+
+        let tool_calls: Vec<NativeToolCall> = chat
+            .message
+            .tool_calls
+            .unwrap_or_default()
+            .into_iter()
+            .enumerate()
+            .map(|(i, tc)| NativeToolCall {
+                id: format!("ollama_call_{}", i),
+                name: tc.function.name,
+                arguments: tc.function.arguments,
+                thought_signature: None,
+            })
+            .collect();
+
+        let stop_reason = if !tool_calls.is_empty() {
+            StopReason::ToolUse
+        } else {
+            match chat.done_reason.as_deref() {
+                Some("length") => StopReason::MaxTokens,
+                _ => StopReason::EndTurn,
+            }
+        };
+
+        let usage = match (chat.prompt_eval_count, chat.eval_count) {
+            (None, None) => None,
+            (p, e) => Some(TokenUsage {
+                input_tokens: p.unwrap_or(0),
+                output_tokens: e.unwrap_or(0),
+                ..Default::default()
+            }),
+        };
+
+        if text.is_empty() && tool_calls.is_empty() {
+            warn!(model = %self.model, "Ollama returned an empty response with no tool calls");
+        }
+
+        ProviderResponse {
+            text: if text.is_empty() { None } else { Some(text) },
+            tool_calls,
+            stop_reason,
+            usage,
+            ..Default::default()
         }
     }
 
@@ -282,34 +445,22 @@ impl AiProvider for OllamaProvider {
         &self,
         payload: RequestPayload<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + '_>> {
-        // Extract text from last user message (Ollama is text-only)
-        let input = payload
-            .messages
-            .iter()
-            .rev()
-            .find_map(|m| match m {
-                UnifiedMessage::User { content } => content.iter().find_map(|b| b.as_text()),
-                _ => None,
-            })
-            .unwrap_or("")
-            .to_string();
-        let system_prompt = payload.system_prompt.map(|s| s.to_string());
+        // Build the owned request body up front so the async block doesn't borrow
+        // the (non-'static) payload.
+        let body = self.build_chat_body(&payload);
 
         Box::pin(async move {
             debug!(
                 model = %self.model,
-                input_length = input.len(),
-                has_system_prompt = system_prompt.is_some(),
-                "Sending request to Ollama"
+                endpoint = %self.endpoint,
+                "Sending chat request to Ollama"
             );
-
-            let request_body = self.build_request(&input, system_prompt.as_deref());
 
             let response = self
                 .client
                 .post(&self.endpoint)
                 .header("Content-Type", "application/json")
-                .json(&request_body)
+                .json(&body)
                 .send()
                 .await
                 .map_err(|e| {
@@ -336,25 +487,20 @@ impl AiProvider for OllamaProvider {
                 return Err(self.handle_error(response).await);
             }
 
-            let generate_response: GenerateResponse = response.json().await.map_err(|e| {
+            let chat_response: ChatResponse = response.json().await.map_err(|e| {
                 error!(error = %e, "Failed to parse Ollama response");
                 AlephError::provider(format!("Failed to parse Ollama response: {}", e))
             })?;
 
-            let text = generate_response.response.trim().to_string();
-
-            if text.is_empty() {
-                warn!(model = %self.model, "Ollama returned empty response");
-                return Err(AlephError::provider("Ollama returned empty response"));
-            }
+            let provider_response = self.build_provider_response(chat_response);
 
             info!(
                 model = %self.model,
-                response_length = text.len(),
+                has_tool_calls = provider_response.has_tool_calls(),
                 "Ollama request completed successfully"
             );
 
-            Ok(ProviderResponse::text_only(text))
+            Ok(provider_response)
         })
     }
 
@@ -364,6 +510,13 @@ impl AiProvider for OllamaProvider {
 
     fn color(&self) -> &str {
         &self.color
+    }
+
+    fn supports_native_tools(&self) -> bool {
+        // `/api/chat` carries `tools` and returns `message.tool_calls`, so the
+        // loop should treat Ollama as a native tool-use provider rather than
+        // falling back to text-protocol parsing.
+        true
     }
 
     fn protocol(&self) -> &str {
@@ -382,8 +535,8 @@ impl crate::providers::model_discovery::ModelDiscovery for OllamaProvider {
     ) -> anyhow::Result<Vec<crate::providers::model_discovery::DiscoveredModel>> {
         use crate::providers::model_discovery::DiscoveredModel;
 
-        // Derive base URL from the /api/generate endpoint
-        let base_url = self.endpoint.trim_end_matches("/api/generate");
+        // Derive base URL from the /api/chat endpoint
+        let base_url = self.endpoint.trim_end_matches("/api/chat");
         let url = format!("{}/api/tags", base_url);
 
         let resp: TagsResponse = self.client.get(&url).send().await?.json().await?;
@@ -440,7 +593,7 @@ mod tests {
     fn test_default_endpoint() {
         let config = create_test_config();
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-        assert_eq!(provider.endpoint, "http://localhost:11434/api/generate");
+        assert_eq!(provider.endpoint, "http://localhost:11434/api/chat");
     }
 
     #[test]
@@ -448,7 +601,7 @@ mod tests {
         let mut config = create_test_config();
         config.base_url = Some("http://192.168.1.100:11434".to_string());
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
-        assert_eq!(provider.endpoint, "http://192.168.1.100:11434/api/generate");
+        assert_eq!(provider.endpoint, "http://192.168.1.100:11434/api/chat");
     }
 
     #[test]
@@ -458,22 +611,117 @@ mod tests {
 
         assert_eq!(provider.name(), "ollama");
         assert_eq!(provider.color(), "#0000ff");
+        assert!(provider.supports_native_tools());
+        assert_eq!(provider.protocol(), "ollama");
     }
 
     #[test]
-    fn test_build_request() {
+    fn build_chat_body_includes_full_history_and_system() {
         let config = create_test_config();
         let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        let msgs = vec![
+            UnifiedMessage::user("Hi"),
+            UnifiedMessage::assistant("Hello there"),
+            UnifiedMessage::user("How are you?"),
+        ];
+        let payload = RequestPayload::new(&msgs).with_system(Some("Be terse"));
+        let body = provider.build_chat_body(&payload);
 
-        let request = provider.build_request("Hello", None);
-        assert_eq!(request.model, "llama3.2");
-        assert_eq!(request.prompt, "Hello");
-        assert!(request.system.is_none());
-        assert!(request.images.is_none());
-        assert!(!request.stream);
+        assert_eq!(body["model"], "llama3.2");
+        assert_eq!(body["stream"], false);
+        let arr = body["messages"].as_array().unwrap();
+        // system + 3 conversation turns — the full history, not just the last user msg.
+        assert_eq!(arr.len(), 4);
+        assert_eq!(arr[0]["role"], "system");
+        assert_eq!(arr[0]["content"], "Be terse");
+        assert_eq!(arr[1]["role"], "user");
+        assert_eq!(arr[2]["role"], "assistant");
+        assert_eq!(arr[2]["content"], "Hello there");
+        assert_eq!(arr[3]["content"], "How are you?");
+    }
 
-        let request_with_system = provider.build_request("Hello", Some("Be helpful"));
-        assert_eq!(request_with_system.system, Some("Be helpful".to_string()));
+    #[test]
+    fn build_chat_body_honors_model_override() {
+        let config = create_test_config();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        let msgs = vec![UnifiedMessage::user("hi")];
+        let payload = RequestPayload::new(&msgs).with_model(Some("qwen2.5:32b".to_string()));
+        let body = provider.build_chat_body(&payload);
+        assert_eq!(body["model"], "qwen2.5:32b");
+    }
+
+    #[test]
+    fn build_chat_body_serializes_tools() {
+        use crate::tool_metadata::{ToolCategory, ToolDefinition};
+        let config = create_test_config();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        let tools = vec![ToolDefinition::new(
+            "search",
+            "Search the web",
+            json!({"type": "object", "properties": {"q": {"type": "string"}}}),
+            ToolCategory::Builtin,
+        )];
+        let msgs = vec![UnifiedMessage::user("find rust docs")];
+        let payload = RequestPayload::new(&msgs).with_tools(Some(&tools));
+        let body = provider.build_chat_body(&payload);
+
+        let t = body["tools"].as_array().unwrap();
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0]["type"], "function");
+        assert_eq!(t[0]["function"]["name"], "search");
+        assert_eq!(t[0]["function"]["parameters"]["type"], "object");
+    }
+
+    #[test]
+    fn build_chat_body_omits_tools_when_absent() {
+        let config = create_test_config();
+        let provider = OllamaProvider::new("ollama".to_string(), config).unwrap();
+        let msgs = vec![UnifiedMessage::user("hi")];
+        let payload = RequestPayload::new(&msgs);
+        let body = provider.build_chat_body(&payload);
+        assert!(body.get("tools").is_none());
+    }
+
+    #[test]
+    fn convert_messages_attaches_images() {
+        let msgs = vec![UnifiedMessage::user_with_content(vec![
+            ContentBlock::Text {
+                text: "describe this".into(),
+                cache_control: None,
+            },
+            ContentBlock::Image {
+                data: "BASE64DATA".into(),
+                mime_type: "image/png".into(),
+            },
+        ])];
+        let out = OllamaProvider::convert_messages(&msgs, None);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["role"], "user");
+        assert_eq!(out[0]["content"], "describe this");
+        assert_eq!(out[0]["images"][0], "BASE64DATA");
+    }
+
+    #[test]
+    fn convert_messages_maps_tool_result_and_assistant_tool_calls() {
+        let msgs = vec![
+            UnifiedMessage::Assistant {
+                content: vec![ContentBlock::ToolCall {
+                    id: "ollama_call_0".into(),
+                    name: "search".into(),
+                    arguments: json!({"q": "rust"}),
+                    thought_signature: None,
+                }],
+            },
+            UnifiedMessage::tool_result("ollama_call_0", "search", "found 3 hits", false),
+        ];
+        let out = OllamaProvider::convert_messages(&msgs, None);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0]["role"], "assistant");
+        assert_eq!(out[0]["tool_calls"][0]["function"]["name"], "search");
+        assert_eq!(out[0]["tool_calls"][0]["function"]["arguments"]["q"], "rust");
+        assert_eq!(out[1]["role"], "tool");
+        assert_eq!(out[1]["tool_name"], "search");
+        assert_eq!(out[1]["content"], "found 3 hits");
     }
 
     #[test]
@@ -558,6 +806,56 @@ mod tests {
     }
 
     #[test]
+    fn parse_chat_response_with_tool_calls() {
+        let json = r#"{
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {"function": {"name": "search", "arguments": {"q": "rust"}}}
+                ]
+            },
+            "done_reason": "stop",
+            "prompt_eval_count": 10,
+            "eval_count": 5
+        }"#;
+        let chat: ChatResponse = serde_json::from_str(json).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), create_test_config()).unwrap();
+        let resp = provider.build_provider_response(chat);
+
+        assert!(resp.has_tool_calls());
+        assert_eq!(resp.tool_calls[0].name, "search");
+        assert_eq!(resp.tool_calls[0].id, "ollama_call_0");
+        assert_eq!(resp.tool_calls[0].arguments["q"], "rust");
+        assert_eq!(resp.stop_reason, StopReason::ToolUse);
+        let usage = resp.usage.unwrap();
+        assert_eq!(usage.input_tokens, 10);
+        assert_eq!(usage.output_tokens, 5);
+    }
+
+    #[test]
+    fn parse_chat_response_text_only() {
+        let json =
+            r#"{"message": {"role": "assistant", "content": "Hello!"}, "done_reason": "stop"}"#;
+        let chat: ChatResponse = serde_json::from_str(json).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), create_test_config()).unwrap();
+        let resp = provider.build_provider_response(chat);
+
+        assert_eq!(resp.text.as_deref(), Some("Hello!"));
+        assert!(!resp.has_tool_calls());
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+    }
+
+    #[test]
+    fn parse_chat_response_length_maps_to_max_tokens() {
+        let json = r#"{"message": {"role": "assistant", "content": "truncated"}, "done_reason": "length"}"#;
+        let chat: ChatResponse = serde_json::from_str(json).unwrap();
+        let provider = OllamaProvider::new("ollama".to_string(), create_test_config()).unwrap();
+        let resp = provider.build_provider_response(chat);
+        assert_eq!(resp.stop_reason, StopReason::MaxTokens);
+    }
+
+    #[test]
     fn parse_tags_response_success() {
         let json = r#"{"models": [{"name": "llama3:latest"}, {"name": "codellama:7b"}]}"#;
         let tags: TagsResponse = serde_json::from_str(json).unwrap();
@@ -571,13 +869,5 @@ mod tests {
         let json = r#"{"models": []}"#;
         let tags: TagsResponse = serde_json::from_str(json).unwrap();
         assert!(tags.models.is_empty());
-    }
-
-    #[test]
-    fn parse_tags_response_vision_model_detection() {
-        let json = r#"{"models": [{"name": "llava:latest"}, {"name": "bakllava:7b"}]}"#;
-        let tags: TagsResponse = serde_json::from_str(json).unwrap();
-        assert!(tags.models[0].name.contains("llava"));
-        assert!(tags.models[1].name.contains("llava"));
     }
 }
