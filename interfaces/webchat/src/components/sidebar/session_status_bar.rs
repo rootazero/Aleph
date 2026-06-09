@@ -12,10 +12,12 @@
 use leptos::prelude::*;
 
 use crate::context::DashboardState;
+use crate::i18n::*;
 
 #[component]
 pub fn SessionStatusBar() -> impl IntoView {
     let dash = expect_context::<DashboardState>();
+    let i18n = use_i18n();
 
     let active_runs = RwSignal::new(Option::<u64>::None);
     // Bumped on each (re)connect so stale poll loops self-terminate.
@@ -24,11 +26,11 @@ pub fn SessionStatusBar() -> impl IntoView {
     // Gateway state string + tone, derived reactively (matches Home).
     let gateway_label = move || {
         if dash.is_connected.get() {
-            "Healthy"
+            t_string!(i18n, session.healthy).to_string()
         } else if dash.connection_error.get().is_some() {
-            "Degraded"
+            t_string!(i18n, session.degraded).to_string()
         } else {
-            "Disconnected"
+            t_string!(i18n, session.disconnected).to_string()
         }
     };
     let dot_class = move || {
@@ -95,7 +97,7 @@ pub fn SessionStatusBar() -> impl IntoView {
             </div>
             <div class="flex items-center gap-1 tabular-nums normal-case">
                 <span>{move || active_runs.get().map(|n| n.to_string()).unwrap_or_else(|| "–".to_string())}</span>
-                <span class="text-text-tertiary/70">"active"</span>
+                <span class="text-text-tertiary/70">{t!(i18n, session.active)}</span>
             </div>
         </div>
     }
