@@ -107,6 +107,19 @@ pub trait SessionStore: Send + Sync {
         topic: Option<&str>,
     ) -> Result<(), SessionStoreError>;
     async fn set_topic(&self, key: &SessionKey, topic: &str) -> Result<(), SessionStoreError>;
+    /// Record the originating channel of a session (e.g. "telegram", "gui:chat")
+    /// onto its identity metadata, so `sessions.list` / `sessions.changed` can
+    /// surface conversation origin for multi-end continuity. Idempotent: must not
+    /// clobber an already-recorded real origin. Default is a no-op so backends that
+    /// do not persist identity metadata compile unchanged.
+    async fn set_source_channel(
+        &self,
+        key: &SessionKey,
+        channel: &str,
+    ) -> Result<(), SessionStoreError> {
+        let _ = (key, channel);
+        Ok(())
+    }
     async fn set_state(
         &self,
         key: &SessionKey,

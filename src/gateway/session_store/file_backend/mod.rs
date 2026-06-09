@@ -91,7 +91,7 @@ impl FileSessionStore {
                 updated_at: chrono::Utc::now().timestamp_millis(),
                 session_id: None,
                 kind: meta.map(|m| m.session_type.clone()),
-                channel: None,
+                channel: meta.and_then(|m| m.origin_channel()),
                 label: meta.and_then(|m| m.label.clone()),
                 display_name: meta.and_then(|m| m.derived_title.clone()),
                 total_tokens: meta.map(|m| m.total_tokens).unwrap_or(0),

@@ -101,6 +101,54 @@ impl SessionMetadata {
             (None, None, None)
         }
     }
+
+    /// Origin channel of this session derived from identity metadata.
+    ///
+    /// Returns `None` for the synthetic `""`/`"unknown"` sentinel so callers
+    /// (`sessions.list`, `sessions.changed`) omit a meaningless origin badge.
+    /// Single source of truth for the "what counts as a real origin" rule,
+    /// shared by the `SessionInfo` builder and the session-changed event.
+    pub fn origin_channel(&self) -> Option<String> {
+        let im = self.identity_meta.as_ref()?;
+        let c = im.source_channel.trim();
+        (!c.is_empty() && c != "unknown").then(|| c.to_string())
+    }
+}
+
+#[cfg(test)]
+mod origin_channel_tests {
+    use super::*;
+    use crate::gateway::session_manager::SessionIdentityMeta;
+
+    fn meta_with_channel(channel: &str) -> SessionMetadata {
+        SessionMetadata {
+            identity_meta: Some(SessionIdentityMeta::owner(channel)),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn origin_channel_none_when_no_identity() {
+        assert_eq!(SessionMetadata::default().origin_channel(), None);
+    }
+
+    #[test]
+    fn origin_channel_none_for_unknown_sentinel() {
+        assert_eq!(meta_with_channel("unknown").origin_channel(), None);
+        assert_eq!(meta_with_channel("  ").origin_channel(), None);
+    }
+
+    #[test]
+    fn origin_channel_some_for_real_channel() {
+        assert_eq!(
+            meta_with_channel("telegram").origin_channel(),
+            Some("telegram".to_string())
+        );
+        assert_eq!(
+            meta_with_channel("gui:chat").origin_channel(),
+            Some("gui:chat".to_string())
+        );
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

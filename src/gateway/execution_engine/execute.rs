@@ -141,6 +141,17 @@ where
                 session_key = %request.session_key.to_key_string(),
                 "First message detected for session (will generate topic)"
             );
+            // Record the originating channel once, on session creation, so
+            // sessions.list / sessions.changed can surface conversation origin
+            // (Panel can identify + continue channel-originated conversations).
+            // "gui:chat" for Panel chat.send, the real channel id for inbound
+            // channels (both land in metadata["channel_id"]). The store call is
+            // idempotent and skips the empty/"unknown" sentinel.
+            if let Some(channel) = request.metadata.get("channel_id") {
+                agent
+                    .set_session_source_channel(&request.session_key, channel)
+                    .await;
+            }
         }
 
         // Store user message in session (with attachment markers for history).

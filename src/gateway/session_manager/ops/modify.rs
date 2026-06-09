@@ -181,6 +181,71 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Record the originating channel of a session onto its identity metadata.
+    ///
+    /// Idempotent: only writes when the current `source_channel` is unset (empty
+    /// or the `"unknown"` sentinel), so a session's real origin is never clobbered
+    /// by a later continuation from a different surface. Called once on the first
+    /// message of a session (see `execution_engine::execute`). Surfaced through
+    /// `sessions.list` (`SessionInfo.channel`) and `SessionChangedEvent.channel`
+    /// via `SessionMetadata::origin_channel`.
+    pub async fn set_source_channel(
+        &self,
+        key: &SessionKey,
+        channel: &str,
+    ) -> Result<(), SessionManagerError> {
+        let channel = channel.trim();
+        if channel.is_empty() || channel == "unknown" {
+            return Ok(());
+        }
+        let key_str = key.to_key_string();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| SessionManagerError::DatabaseError(format!("Lock error: {}", e)))?;
+
+        let existing_json: Option<String> = conn
+            .query_row(
+                "SELECT metadata FROM sessions WHERE key = ?",
+                params![&key_str],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?
+            .flatten();
+
+        let mut identity_meta = SessionIdentityMeta::from_json_str(existing_json.as_deref());
+        let current = identity_meta.source_channel.trim();
+        // Never clobber an already-recorded real origin.
+        if !current.is_empty() && current != "unknown" {
+            return Ok(());
+        }
+        identity_meta.source_channel = channel.to_string();
+
+        let meta_json = identity_meta
+            .to_json_string()
+            .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        conn.execute(
+            "UPDATE sessions SET metadata = ? WHERE key = ?",
+            params![&meta_json, &key_str],
+        )
+        .map_err(|e| SessionManagerError::DatabaseError(e.to_string()))?;
+
+        Ok(())
+    }
+
+    /// Trait-facing alias used by the `SessionStore` impl (the inherent method
+    /// name is kept distinct from the trait method to avoid recursive
+    /// trait-method resolution inside the impl).
+    pub async fn stamp_source_channel(
+        &self,
+        key: &SessionKey,
+        channel: &str,
+    ) -> Result<(), SessionManagerError> {
+        self.set_source_channel(key, channel).await
+    }
+
     /// Set session lifecycle state
     pub async fn set_state(
         &self,
