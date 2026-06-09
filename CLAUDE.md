@@ -276,6 +276,7 @@ for the full trust-transfer model.
 | AGENT_LOOP_RECOVERY.md | [docs/reference/AGENT_LOOP_RECOVERY.md](docs/reference/AGENT_LOOP_RECOVERY.md) |
 | MULTI_AGENT_SYSTEM.md | [docs/reference/MULTI_AGENT_SYSTEM.md](docs/reference/MULTI_AGENT_SYSTEM.md) |
 | GATEWAY.md | [docs/reference/GATEWAY.md](docs/reference/GATEWAY.md) |
+| CLUSTER.md | [docs/reference/CLUSTER.md](docs/reference/CLUSTER.md) — Aleph 集群（单中心非对称节点联邦）：reverse RPC + `node_invoke`/`node_file` + 命令 allowlist + 审批回中心 + 断线 fail-fast |
 | TOOL_SYSTEM.md | [docs/reference/TOOL_SYSTEM.md](docs/reference/TOOL_SYSTEM.md) |
 | MEMORY_SYSTEM.md | [docs/reference/MEMORY_SYSTEM.md](docs/reference/MEMORY_SYSTEM.md) |
 | └─ RAW_MEMORY.md | [docs/reference/memory/RAW_MEMORY.md](docs/reference/memory/RAW_MEMORY.md) |
