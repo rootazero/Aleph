@@ -263,7 +263,7 @@ h1, h2, h3, h4, h5, h6 {
 
 /* System preference fallback */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light) {
+  :root:not(.light):not(.glass) {
     --color-surface:          oklch(0.15 0.020 310);
     --color-surface-raised:   oklch(0.20 0.018 310);
     --color-surface-sunken:   oklch(0.12 0.015 310);
@@ -387,7 +387,7 @@ html.dark[data-accent="rose"] {
 
 /* --- System dark (no class, OS preference) --- */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light)[data-accent="ocean"] {
+  :root:not(.light):not(.glass)[data-accent="ocean"] {
     --color-primary:        oklch(0.68 0.130 250);
     --color-primary-hover:  oklch(0.73 0.120 250);
     --color-primary-subtle: oklch(0.22 0.050 250);
@@ -396,7 +396,7 @@ html.dark[data-accent="rose"] {
     --color-ring:           oklch(0.68 0.130 250 / 0.35);
     --color-chart-1:        oklch(0.68 0.130 250);
   }
-  :root:not(.light)[data-accent="forest"] {
+  :root:not(.light):not(.glass)[data-accent="forest"] {
     --color-primary:        oklch(0.66 0.120 150);
     --color-primary-hover:  oklch(0.71 0.110 150);
     --color-primary-subtle: oklch(0.22 0.045 150);
@@ -405,7 +405,7 @@ html.dark[data-accent="rose"] {
     --color-ring:           oklch(0.66 0.120 150 / 0.35);
     --color-chart-1:        oklch(0.66 0.120 150);
   }
-  :root:not(.light)[data-accent="sunset"] {
+  :root:not(.light):not(.glass)[data-accent="sunset"] {
     --color-primary:        oklch(0.74 0.135 65);
     --color-primary-hover:  oklch(0.79 0.125 65);
     --color-primary-subtle: oklch(0.24 0.050 65);
@@ -414,7 +414,7 @@ html.dark[data-accent="rose"] {
     --color-ring:           oklch(0.74 0.135 65 / 0.35);
     --color-chart-1:        oklch(0.74 0.135 65);
   }
-  :root:not(.light)[data-accent="rose"] {
+  :root:not(.light):not(.glass)[data-accent="rose"] {
     --color-primary:        oklch(0.70 0.150 15);
     --color-primary-hover:  oklch(0.75 0.140 15);
     --color-primary-subtle: oklch(0.23 0.055 15);
@@ -495,7 +495,7 @@ html.dark[data-accent="rose"] {
   .dark { --color-surface-raised: oklch(0.20 0.018 310) !important; }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
-  :root:not(.light) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
+  :root:not(.light):not(.glass) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
 }
 
 /* Soft entrance for popovers / menus. */
@@ -707,7 +707,7 @@ html.theme-switching::view-transition-new(root) {
   --color-surface-raised: oklch(0.26 0.018 300 / 0.45);
 }
 @media (prefers-color-scheme: dark) {
-  :root:not(.light) {
+  :root:not(.light):not(.glass) {
     --aleph-solid-ground: oklch(0.155 0.022 300);
     --aleph-canvas-base:  oklch(0.175 0.022 300 / 0.84);
     --aleph-glow-a:   color-mix(in oklch, var(--color-primary) 30%, transparent);
@@ -1394,7 +1394,7 @@ input, textarea, [contenteditable="true"], [contenteditable=""] {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
 }
 .dark .aleph-shell::after,
-:root:not(.light) .aleph-shell::after { opacity: 0.05; }
+:root:not(.light):not(.glass) .aleph-shell::after { opacity: 0.05; }
 
 /* ════════════════════════════════════════════════════════════
    Chat message entrance — a one-shot rise+fade as each bubble
