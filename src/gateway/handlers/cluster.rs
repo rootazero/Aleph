@@ -1,17 +1,22 @@
-//! 集群中心侧 RPC：`cluster.enroll`（operator 铸 node token）+
+//! 集群中心侧 RPC：`cluster.enroll`（operator 铸 node token）、
+//! `cluster.deregister`（operator 注销节点：驱逐在线会话 + 撤 token/设备）、
 //! `environments.list`（read，枚举在线节点）。形态为 gateway RPC 而非 builtin
-//! 工具——凭证操作的既有模式（同 devices.*/pairing.*）。LLM-callable 工具面随
-//! 0c 的 node_invoke 一起落地。
+//! 工具——凭证操作的既有模式（同 devices.*/pairing.*）。
 
 use std::sync::Arc;
 
 use serde::Deserialize;
+use tracing::warn;
 
+use crate::cluster::ResolveError;
 use crate::gateway::handlers::auth::AuthContext;
-use crate::gateway::handlers::{parse_params, INTERNAL_ERROR};
+use crate::gateway::handlers::{parse_params, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::gateway::security::device::DeviceRole;
 use crate::gateway::security::store::DeviceUpsertData;
+
+/// 没有任何匹配节点时的错误码（同 devices.* 的 -32004 not-found）。
+const NODE_NOT_FOUND: i32 = -32004;
 
 #[derive(Deserialize)]
 struct EnrollParams {
@@ -73,6 +78,74 @@ pub async fn handle_cluster_enroll(
     )
 }
 
+#[derive(Deserialize)]
+struct DeregisterParams {
+    /// 目标节点：name 或 id（多级匹配，同 node_invoke 寻址）。
+    node: String,
+}
+
+/// operator-gated：注销一个节点。三步硬下线，缺一不可——
+/// ① `forget` 即时驱逐在线会话（立刻从 `environments.list` 消失，且不再
+///    被 `node_invoke`/`node_file` 寻址到）；
+/// ② `revoke_device_tokens` 撤销其 token，阻止重连；
+/// ③ `revoke_device` 抹除设备记录（enroll 写入 security_store，此处对称撤除）。
+///
+/// 注意：本调用不强制 close 节点当前 WS socket——它会在下一次 ping/idle-watchdog
+/// 到期时由传输层断开。但驱逐 + 撤 token 已保证节点既无法再被下发命令、也无法
+/// 凭旧 token 重新登记。修复了"`devices.revoke` 撤 token 却把在线会话留在
+/// NodeRegistry"的旧缺口。
+pub async fn handle_cluster_deregister(
+    request: JsonRpcRequest,
+    ctx: Arc<AuthContext>,
+) -> JsonRpcResponse {
+    let params: DeregisterParams = match parse_params(&request) {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+
+    let node_id = match ctx.node_registry.resolve_id(&params.node) {
+        Ok(id) => id,
+        Err(ResolveError::NotFound) => {
+            return JsonRpcResponse::error(
+                request.id,
+                NODE_NOT_FOUND,
+                format!("no online node matches '{}'", params.node),
+            )
+        }
+        Err(e @ ResolveError::Ambiguous(_)) => {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("node '{}' {e}", params.node),
+            )
+        }
+    };
+
+    // ① 即时驱逐在线会话。
+    let evicted = ctx.node_registry.forget(&node_id);
+    // ② 撤 token，阻止重连（失败只记日志——驱逐已生效，不应让整体失败）。
+    if let Err(e) = ctx.token_manager.revoke_device_tokens(&node_id) {
+        warn!(node_id = %node_id, error = %e, "failed to revoke node tokens on deregister");
+    }
+    // ③ 抹除设备记录（enroll 的对称撤除）。
+    let device_removed = ctx
+        .security_store
+        .revoke_device(&node_id)
+        .unwrap_or_else(|e| {
+            warn!(node_id = %node_id, error = %e, "failed to revoke node device on deregister");
+            false
+        });
+
+    JsonRpcResponse::success(
+        request.id,
+        serde_json::json!({
+            "node_id": node_id,
+            "evicted": evicted,
+            "device_removed": device_removed,
+        }),
+    )
+}
+
 /// read：枚举当前在线节点（薄渲染契约，不含凭证）。
 pub async fn handle_environments_list(
     request: JsonRpcRequest,
@@ -109,6 +182,72 @@ mod tests {
             .unwrap();
         assert_eq!(v.device_id, node_id);
         assert_eq!(v.role, crate::gateway::security::DeviceRole::Node);
+    }
+
+    #[tokio::test]
+    async fn deregister_evicts_session_and_revokes_device() {
+        let ctx = create_test_context();
+        // Enroll mints a node device + token in security_store.
+        let enroll = handle_cluster_enroll(
+            JsonRpcRequest::with_id(
+                "cluster.enroll",
+                Some(serde_json::json!({"node_name": "worker-1"})),
+                serde_json::json!(1),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        let node_id = enroll.result.unwrap()["node_id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        // Register a live session for that id (mirrors the connect seam).
+        let (tx, _rx) = tokio::sync::mpsc::channel::<String>(8);
+        let ch = crate::cluster::ReverseRpcChannel::new(tx);
+        crate::cluster::maybe_register_node(
+            &ctx.node_registry,
+            Some("node"),
+            &node_id,
+            "conn-1",
+            Some(&serde_json::json!({"device_name": "worker-1", "commands": [{"name":"bash","schema":{}}]})),
+            &ch,
+        );
+        assert_eq!(ctx.node_registry.list_environments().len(), 1);
+
+        // Deregister by NAME (exercises multi-tier resolve_id).
+        let resp = handle_cluster_deregister(
+            JsonRpcRequest::with_id(
+                "cluster.deregister",
+                Some(serde_json::json!({"node": "worker-1"})),
+                serde_json::json!(2),
+            ),
+            ctx.clone(),
+        )
+        .await;
+        assert!(resp.is_success(), "deregister failed: {:?}", resp.error);
+        let r = resp.result.unwrap();
+        assert_eq!(r["node_id"], node_id);
+        assert_eq!(r["evicted"], true);
+        assert_eq!(r["device_removed"], true);
+        // The node is gone from the live registry → no longer node_invoke-reachable.
+        assert!(ctx.node_registry.list_environments().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deregister_unknown_node_is_not_found() {
+        let ctx = create_test_context();
+        let resp = handle_cluster_deregister(
+            JsonRpcRequest::with_id(
+                "cluster.deregister",
+                Some(serde_json::json!({"node": "ghost"})),
+                serde_json::json!(1),
+            ),
+            ctx,
+        )
+        .await;
+        assert!(!resp.is_success());
+        assert_eq!(resp.error.unwrap().code, -32004);
     }
 
     #[tokio::test]

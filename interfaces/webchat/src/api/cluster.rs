@@ -1,5 +1,7 @@
-//! 集群 API client。`environments.list`(已认证读)与 `cluster.enroll`
-//! (operator-only)已在 main;node_invoke / deregister 属 phase 0c,未合 main。
+//! 集群 API client。`environments.list`(已认证读)、`cluster.enroll`
+//! (operator-only 铸 token)、`cluster.deregister`(operator-only 注销节点)。
+//! 节点命令下发由 LLM 经对话驱动(`node_invoke`/`node_file` 工具,R8),
+//! 不在 Panel 暴露手动入口。
 
 use crate::context::DashboardState;
 use serde::{Deserialize, Serialize};
@@ -58,8 +60,12 @@ impl ClusterApi {
             .map_err(|e| format!("Failed to parse enroll result: {e}"))
     }
 
-    // --- phase 0c(未合 main)占位:node_invoke(node_id, command, params)
-    //     与 deregister(node_id) 待 feat/cluster-phase0c-core 合并后接线。 ---
+    /// 注销一个节点(name 或 id):驱逐在线会话 + 撤 token/设备。
+    /// RPC `cluster.deregister`(operator-only)。
+    pub async fn deregister_node(state: &DashboardState, node: String) -> Result<(), String> {
+        let params = serde_json::json!({ "node": node });
+        state.rpc_call("cluster.deregister", params).await.map(|_| ())
+    }
 }
 
 #[cfg(test)]

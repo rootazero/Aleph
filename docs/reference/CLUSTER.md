@@ -28,7 +28,7 @@
 | `src/cluster/node_approval.rs` | 节点侧审批请求器(反向上送中心) | `CenterApprovalRequester` / `ApprovalSlot` / `NODE_APPROVAL_TIMEOUT_MS` |
 | `src/builtin_tools/node_invoke.rs` | 中心侧 **LLM 工具**:在节点上跑命令 | `NodeInvokeTool` |
 | `src/builtin_tools/node_file.rs` | 中心侧 **LLM 工具**:node↔center 文件传输 | `NodeFileTool` |
-| `src/gateway/handlers/cluster.rs` | 中心侧 RPC:`cluster.enroll` / `environments.list` | `handle_cluster_enroll` / `handle_environments_list` |
+| `src/gateway/handlers/cluster.rs` | 中心侧 RPC:`cluster.enroll` / `cluster.deregister` / `environments.list` | `handle_cluster_enroll` / `handle_cluster_deregister` / `handle_environments_list` |
 | `src/bin/aleph-server/commands/node.rs` | `aleph-server node` 节点拨出运行时 | `handle_node` / `run_session` / `run_pairing` |
 
 ## 架构
@@ -78,6 +78,16 @@
 
 Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。
 
+> **注销** — `cluster.deregister`(operator):`{ "node": "<name|id>" }`。三步硬下线:
+> ① `NodeRegistry::forget` 即时驱逐在线会话(立刻从 `environments.list` 消失且不再
+> 被 `node_invoke`/`node_file` 寻址);② `revoke_device_tokens` 撤 token 阻止重连;
+> ③ `revoke_device` 抹除设备记录(enroll 的对称撤除)。返回
+> `{ node_id, evicted, device_removed }`。不强制 close 节点当前 socket——它在下一次
+> ping/idle-watchdog 到期时由传输层断开;但驱逐 + 撤 token 已令其既不可被下发命令、
+> 也无法凭旧 token 重登记。**修复了旧缺口**:`devices.revoke` 撤 token 却把在线会话
+> 留在 NodeRegistry,使被吊销节点直到 socket 自然断开前仍可被 `node_invoke` 命中。
+> Panel 入口:每行节点的 **「注销」** 按钮。
+
 ### 2. 拨出 — `aleph-server node`
 
 ```bash
@@ -114,9 +124,14 @@ center}`;`bearer` = `"{token}:{signature}"`,作为 `connect` 帧的 `token` 原�
   "timeout_ms": 120000 }        // 默认 120s,需大于命令本身耗时
 ```
 
-寻址 `NodeRegistry::resolve`(先 id 精确,后 name);**中心侧 fail-fast**:仅当
-节点声明了非空命令目录且其中不含该命令时才拒绝(空目录→交节点权威)。下发即
-`channel.call("tool.call", {tool, args})`。
+寻址 `NodeRegistry::resolve` 走**多级匹配**(映射 openclaw `node-match.ts`,但用
+类型安全的 `ResolveError` 枚举表达):① 精确 node_id → ② 精确 device_name →
+③ 模糊(id 前缀 ≥4 字符 *或* name 子串,大小写不敏感)。任一级多命中即返回
+`ResolveError::Ambiguous(候选标签)`,绝不静默挑第一个;调用方把它翻成给模型的
+精确提示(`node 'x' ambiguous — matches: worker-1 (id…), worker-2 (id…)`)。
+registry 只存在线会话,故无需"prefer-connected" tie-break。**中心侧 fail-fast**:
+仅当节点声明了非空命令目录且其中不含该命令时才拒绝(空目录→交节点权威)。
+下发即 `channel.call("tool.call", {tool, args})`。
 
 ### `node_file` — node↔center 文件传输
 
@@ -190,6 +205,7 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 | 方法 | 权限 |
 |------|------|
 | `cluster.enroll` | operator |
+| `cluster.deregister` | operator |
 | `environments.list` | read(只读,不含凭证) |
 | `pairing.start_node` / `pairing.poll` | 匿名(节点配对入口) |
 | `pairing.approve` / `pairing.reject` | operator |

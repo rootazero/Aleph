@@ -1,5 +1,5 @@
-//! Section 2 — Aleph 集群(Feature B 骨架):列出节点 + Enroll。
-//! Invoke / bash / deregister 待 feat/cluster-phase0c-core 合并(此处禁用占位)。
+//! Section 2 — Aleph 集群:列出在线节点 + Enroll(铸 token)+ 注销(下线节点)。
+//! 节点命令下发是 LLM 经对话驱动的(R8),Panel 只做只读列表 + 生命周期管理。
 
 use crate::api::cluster::{ClusterApi, EnrollResult, Environment};
 use crate::context::DashboardState;
@@ -12,6 +12,8 @@ pub fn ClusterSection() -> impl IntoView {
     let nodes = RwSignal::new(Vec::<Environment>::new());
     let error = RwSignal::new(Option::<String>::None);
     let loading = RwSignal::new(true);
+    // node_id currently being deregistered → disables that row's button.
+    let removing = RwSignal::new(Option::<String>::None);
 
     let show_enroll = RwSignal::new(false);
     let enroll_name = RwSignal::new(String::new());
@@ -105,11 +107,29 @@ pub fn ClusterSection() -> impl IntoView {
                                         </span>
                                         <span>{node.commands.len()} " cmds"</span>
                                         <button
-                                            class="px-2 py-1 rounded border border-border opacity-40 cursor-not-allowed"
-                                            disabled=true
-                                            title="feat/cluster-phase0c-core 收尾后启用"
+                                            class="px-2 py-1 rounded border border-border text-error hover:bg-error/10 disabled:opacity-40 disabled:cursor-not-allowed"
+                                            disabled={
+                                                let id = node.id.clone();
+                                                move || removing.get().as_deref() == Some(id.as_str())
+                                            }
+                                            title="注销该节点(驱逐会话并撤销 token)"
+                                            on:click={
+                                                let node_id = node.id.clone();
+                                                move |_| {
+                                                    let node_id = node_id.clone();
+                                                    removing.set(Some(node_id.clone()));
+                                                    spawn_local(async move {
+                                                        match ClusterApi::deregister_node(&state, node_id).await {
+                                                            Ok(()) => error.set(None),
+                                                            Err(e) => error.set(Some(e)),
+                                                        }
+                                                        removing.set(None);
+                                                        load();
+                                                    });
+                                                }
+                                            }
                                         >
-                                            "Invoke"
+                                            "注销"
                                         </button>
                                     </div>
                                 </div>

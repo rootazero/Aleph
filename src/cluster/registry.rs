@@ -38,6 +38,26 @@ pub struct NodeSession {
     pub connected_at: i64,
 }
 
+/// 节点寻址失败的结构化结果（取代旧的 `Option`，让歧义对调用方显式可见）。
+/// 映射 openclaw `node-match.ts` 的多级匹配，但用类型安全枚举表达——
+/// 让"歧义"成为不可忽略的一等状态，而非 stringly error。
+#[derive(Clone, Debug, PartialEq)]
+pub enum ResolveError {
+    /// 没有任何在线节点匹配该 name/id。
+    NotFound,
+    /// 多个在线节点匹配——附带可读候选标签（`name (short-id)`），供 LLM 收窄。
+    Ambiguous(Vec<String>),
+}
+
+impl std::fmt::Display for ResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ResolveError::NotFound => write!(f, "no online node matches"),
+            ResolveError::Ambiguous(c) => write!(f, "ambiguous — matches: {}", c.join(", ")),
+        }
+    }
+}
+
 /// `environments.list` 的对外序列化视图（薄渲染契约，R4）。绝不含凭证。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Environment {
@@ -131,20 +151,93 @@ impl NodeRegistry {
         Some((s.node_id.clone(), s.device_name.clone()))
     }
 
-    /// 按 name 或 id 解析一个在线节点，返回其反向 RPC 通道 + 声明的命令目录。
-    /// 先按 node_id 精确命中，再按 device_name 命中。`node_invoke` 用它寻址 +
-    /// fail-fast 校验。
-    pub fn resolve(&self, name_or_id: &str) -> Option<(ReverseRpcChannel, Vec<CommandDescriptor>)> {
-        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
-        if let Some(s) = inner.nodes_by_id.get(name_or_id) {
-            return Some((s.channel.clone(), s.declared_commands.clone()));
+    /// 把 name/id 解析为唯一的 node_id（多级匹配，registry 只存在线会话故无需
+    /// "prefer-connected" tie-break——所有候选都在线）。匹配级别（强→弱）：
+    /// ① 精确 node_id ② 精确 device_name ③ 模糊（id 前缀 ≥4 OR name 子串，
+    /// 大小写不敏感）。每级若多命中即 `Ambiguous`，绝不静默挑第一个。
+    fn match_id(inner: &RegistryInner, q: &str) -> std::result::Result<String, ResolveError> {
+        // ① 精确 id。
+        if inner.nodes_by_id.contains_key(q) {
+            return Ok(q.to_string());
         }
-        inner
+        // ② 精确 name（device_name 不保证唯一 → 可能歧义）。
+        let exact: Vec<&NodeSession> = inner
             .nodes_by_id
             .values()
-            .find(|s| s.device_name == name_or_id)
-            .map(|s| (s.channel.clone(), s.declared_commands.clone()))
+            .filter(|s| s.device_name == q)
+            .collect();
+        match exact.as_slice() {
+            [s] => return Ok(s.node_id.clone()),
+            [] => {}
+            many => return Err(ResolveError::Ambiguous(candidate_labels(many))),
+        }
+        // ③ 模糊：id 前缀（≥4 字符，避免 1 字符炸开）或 name 子串。
+        let ql = q.to_ascii_lowercase();
+        let fuzzy: Vec<&NodeSession> = inner
+            .nodes_by_id
+            .values()
+            .filter(|s| {
+                (q.len() >= 4 && s.node_id.starts_with(q))
+                    || s.device_name.to_ascii_lowercase().contains(&ql)
+            })
+            .collect();
+        match fuzzy.as_slice() {
+            [s] => Ok(s.node_id.clone()),
+            [] => Err(ResolveError::NotFound),
+            many => Err(ResolveError::Ambiguous(candidate_labels(many))),
+        }
     }
+
+    /// 按 name 或 id 解析一个在线节点，返回其反向 RPC 通道 + 声明的命令目录。
+    /// `node_invoke` / `node_file` 用它寻址 + fail-fast 校验。歧义/未命中以
+    /// 结构化 [`ResolveError`] 返回，让调用方给 LLM 精确提示。
+    pub fn resolve(
+        &self,
+        name_or_id: &str,
+    ) -> std::result::Result<(ReverseRpcChannel, Vec<CommandDescriptor>), ResolveError> {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let id = Self::match_id(&inner, name_or_id)?;
+        let s = inner
+            .nodes_by_id
+            .get(&id)
+            .expect("match_id returns an id that is present in nodes_by_id");
+        Ok((s.channel.clone(), s.declared_commands.clone()))
+    }
+
+    /// 同 [`resolve`] 的多级匹配，但只回 node_id —— `cluster.deregister` 用它把
+    /// operator 给的 name/id 落到唯一节点身份，再驱逐 + 撤 token。
+    pub fn resolve_id(&self, name_or_id: &str) -> std::result::Result<String, ResolveError> {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        Self::match_id(&inner, name_or_id)
+    }
+
+    /// 按 node_id 主动驱逐一个会话（operator deregister 用）。从两张表都抹除，
+    /// 持有的 [`ReverseRpcChannel`] clone 随之 drop。返回是否确有会话被移除。
+    /// 与 [`deregister`](Self::deregister)（按 conn_id 的断线对账）正交。
+    pub fn forget(&self, node_id: &str) -> bool {
+        let mut inner = self.inner.write().unwrap_or_else(|e| e.into_inner());
+        match inner.nodes_by_id.remove(node_id) {
+            Some(s) => {
+                inner.nodes_by_conn.remove(&s.conn_id);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// 把候选会话渲染成可读标签 `name (short-id)`，给歧义错误用。short-id 取前 8 位
+/// 足以辨识又不喧宾夺主。结果排序保证错误信息稳定（便于测试与日志比对）。
+fn candidate_labels(sessions: &[&NodeSession]) -> Vec<String> {
+    let mut labels: Vec<String> = sessions
+        .iter()
+        .map(|s| {
+            let short: String = s.node_id.chars().take(8).collect();
+            format!("{} ({})", s.device_name, short)
+        })
+        .collect();
+    labels.sort();
+    labels
 }
 
 /// connect→register 接缝：仅当 `role == Some("node")` 时把这条连接登记进
@@ -260,10 +353,65 @@ mod tests {
     fn resolve_by_id_then_by_name() {
         let reg = NodeRegistry::new();
         reg.register(session("node-a", "conn-1")); // device_name = "dev-node-a"
-        assert!(reg.resolve("node-a").is_some(), "by id");
+        assert!(reg.resolve("node-a").is_ok(), "by id");
         let (_, cmds) = reg.resolve("dev-node-a").expect("by name");
         assert_eq!(cmds[0].name, "bash");
-        assert!(reg.resolve("nope").is_none());
+        assert_eq!(reg.resolve("nope").unwrap_err(), ResolveError::NotFound);
+    }
+
+    #[test]
+    fn resolve_by_unique_id_prefix_and_name_substring() {
+        let reg = NodeRegistry::new();
+        reg.register(session("abcd1234", "conn-1")); // device_name = "dev-abcd1234"
+        // id prefix (≥4) uniquely matches.
+        assert_eq!(reg.resolve_id("abcd").unwrap(), "abcd1234");
+        // name substring (case-insensitive) uniquely matches.
+        assert_eq!(reg.resolve_id("ABCD1234").unwrap(), "abcd1234");
+        assert_eq!(reg.resolve_id("dev-abcd").unwrap(), "abcd1234");
+        // too-short prefix that isn't a name substring → not found.
+        assert_eq!(reg.resolve_id("xyz").unwrap_err(), ResolveError::NotFound);
+    }
+
+    #[test]
+    fn resolve_reports_ambiguity_with_sorted_candidates() {
+        let reg = NodeRegistry::new();
+        // Two nodes whose names share the substring "work".
+        reg.register(NodeSession {
+            node_id: "id-two".to_string(),
+            conn_id: "c2".to_string(),
+            device_name: "worker-2".to_string(),
+            channel: test_channel(),
+            declared_commands: vec![],
+            connected_at: 1,
+        });
+        reg.register(NodeSession {
+            node_id: "id-one".to_string(),
+            conn_id: "c1".to_string(),
+            device_name: "worker-1".to_string(),
+            channel: test_channel(),
+            declared_commands: vec![],
+            connected_at: 1,
+        });
+        match reg.resolve_id("worker").unwrap_err() {
+            ResolveError::Ambiguous(c) => {
+                // sorted + labelled "name (short-id)".
+                assert_eq!(c, vec!["worker-1 (id-one)", "worker-2 (id-two)"]);
+            }
+            other => panic!("expected Ambiguous, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forget_evicts_by_node_id_from_both_maps() {
+        let reg = NodeRegistry::new();
+        reg.register(session("node-a", "conn-1"));
+        assert!(reg.forget("node-a"));
+        assert!(reg.list_environments().is_empty());
+        assert!(reg.resolve("node-a").is_err());
+        // A stale conn cleanup after forget is a harmless no-op.
+        assert!(!reg.deregister("conn-1"));
+        // Forgetting an unknown id reports nothing removed.
+        assert!(!reg.forget("ghost"));
     }
 
     #[test]
