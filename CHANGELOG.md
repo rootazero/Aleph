@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [26.6.9]
+
+### Added
+
+- **Aleph 集群（One Core, Many Nodes）** — a single-center asymmetric node
+  federation built on reverse-RPC. A center daemon can now resolve and invoke
+  remote nodes over a persistent reverse channel: `node_invoke` (run a
+  command-allowlisted tool on a node), `node_file` (push/pull files
+  center↔node with per-file sha256 + 8 MB cap, never routed through the LLM
+  context), and node-side approval routing that bubbles a node's capability
+  upgrade back to the operator's existing Panel approval card. Landed across
+  Phase 0a (reverse-RPC channel + `PendingInvokes`), 0b (`NodeRegistry`), and
+  0c (node runtime, interactive 6-digit pairing enroll, command allowlist).
+- **节点生命周期与多层解析** — multi-tier node resolution with operator-driven
+  deregister and Panel wiring, plus `node.connected` / `node.disconnected`
+  lifecycle events. Node disconnects now fail-fast: in-flight invokes are
+  cancelled at the connect/disconnect seam instead of hanging up to the full
+  timeout.
+- **Panel Glass 主题** — a re-added translucent "Glass" theme with a controlled
+  dark aurora backdrop and intensified chrome glass, tokenized blur/saturate
+  behind CSS variables, a reduced-transparency opaque fallback for
+  accessibility, and a command-palette quick-switch. Light and Dark were
+  harmonized alongside it (Dark retuned to a calm darkened-Light; the drama
+  moves to Glass).
+- **一核多端会话连续性** — session origin-channel binding so a conversation
+  started on one surface (Telegram / Panel / iMessage) carries its source
+  through `sessions.list`, plus cross-surface reply fan-out and owner-DM
+  `dm_scope` wiring that lets a single user share one Main session across all
+  channels.
+- **Channel 两层权限模型** — channels map onto Chat / Config device tiers:
+  conversational access with a default workspace vs. configuration access with
+  a free workspace, closing an over-authorization gap where every inbound
+  external message was implicitly treated as operator.
+- **Panel Network 配置页** — a connection-switch page for local/remote core
+  selection with a cluster skeleton, a clickable connection-status chip that
+  links to network settings, and full connection i18n (shell-core separation).
+- **Standing-goal 子系统** — a persistent standing-goal subsystem that keeps a
+  user-set goal active across turns until satisfied.
+- **Memory 实体图与写时去重** — a memory entity graph (Gap A), write-time
+  three-tier ADD / MERGE / NOOP dedup (Gap B), hot-recall wiring, memory↔context
+  budget coordination, and memory-extension lifecycle hooks
+  (MCP binding / on_delegation / on_pre_compress).
+- **配置回滚与自管理** — config rollback / undo via `self_config`, plus the
+  "service & cluster" rename with self-management guides so Aleph's own
+  configuration is driven by natural-language tool calls (R8).
+- **Panel 崩溃自报告** — symbolicated, self-reporting panel crashes: the WASM
+  name section is preserved, a panic overlay surfaces a readable Rust stack,
+  and the last 10 crashes are kept in a ring buffer for one-shot diagnosis.
+
+### Fixed
+
+- **Panel 前后端连线大扫除** — fixed frontend↔backend wiring across all six
+  dashboard pages, wired runtime-install progress events through to the Panel,
+  unified provider behavior (fill / save / test / verify / set-default /
+  badges) with stable key echo, and removed large swaths of dead config items,
+  i18n keys, and orphaned components.
+- **停止回吐明文密钥** — provider, channel, and shared-token secrets are no
+  longer echoed back in plaintext; presence is reported via `has_*` flags and
+  re-entry uses pairing codes / reveal-once flows.
+- **凭证沙箱隔离** — agent file tools are denied access to the vault and auth
+  data; browser navigation / click / type / fill / evaluate now enforce the
+  approval policy.
+- **MCP 工具过滤与 slash 快路** — per-server MCP tool filters now apply, MCP
+  slash commands no longer hard-fail on the L0 fast path, and dead router /
+  tool-filter entropy was removed.
+- **Provider 模型 ID 归一化** — endpoint-aware OpenAI model-id normalization
+  fixes OpenRouter slug stripping.
+- **Gateway chat.history 游标分页** — `chat.history` now paginates correctly
+  before the cursor.
+- **多端打字机/即时输出同步** — the global typewriter/instant output switch is
+  synced across all channels (Telegram bypass fixed, behavior reclassified as
+  Live).
+- **中途转向注入** — mid-loop steering injection is now bounded and coalesced,
+  and a mid-final-turn steering boundary race was fixed.
+- **后台 bash 超时** — background bash jobs get a generous timeout instead of
+  the 60 s foreground default.
+- **删除操作二次确认** — all destructive Panel buttons gained an inline
+  two-step confirm.
+
 ## [26.6.7]
 
 ### Added
