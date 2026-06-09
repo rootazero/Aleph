@@ -66,23 +66,15 @@ struct CenterApprovalRequester {
 
 **WS handler 路由**（`handler.rs`，改）：来自 **node-role 连接**、`method == "node.approval.request"` 的入站请求帧 → 路由到 `handle_node_approval_request`（位置：响应拦截 `510-527` 之后、普通 RPC dispatch 之前）。**仅** allowlist 这一个反向 method；其余节点发起的 method 拒绝。`node_id`/`node_name` 从认证连接（conn → NodeRegistry / conn 上下文）派生，**不信任 params**。
 
-**`handle_node_approval_request`**（新）：
+**`run_node_approval`**（新，`src/approval/node_requester.rs`，镜像 `OperatorApprovalRequester`）：
+- 构造 `ApprovalRequest { id: uuid, command: "node '<name>': <tool> — <reason>", cwd: None, analysis: ok, agent_id: "node:<id>", session_key: "" }`。
 - 复用 `ExecApprovalManager.create / register_pending` 铸 `approval_id` + oneshot + timeout。
-- publish 新 `GatewayEventFrame::NodeApprovalRequested { approval_id, node_id, node_name, command, reason }`。
+- publish **现有** `GatewayEventFrame::ApprovalRequested { approval_id, session_key:"", channel_id:"", conversation_id:"" }`。
 - `await_registered` 等决策。
-- 决策 → 响应 payload `{outcome}`，作为 JSON-RPC 响应回发节点请求的 `id`。
-- 决策落定后 publish `ApprovalResolved` / 超时 publish `ApprovalExpired`（**复用现有 frame，按 `approval_id` 清 Panel 卡**）。
+- 决策 → 响应 payload `{outcome}`（`"approved"|"approved_session"|"denied"|"timeout"`），作为 JSON-RPC 响应回发节点请求的 `id`。
+- 决策落定后 publish 现有 `ApprovalResolved` / 超时 `ApprovalExpired`（按 `approval_id` 清 Panel 卡）。
 
-**`r5_router::approval_for`**（`r5_router.rs:75-84`，加一臂）：
-```
-GatewayEventFrame::NodeApprovalRequested { approval_id, node_name, command, reason, .. }
-    => Some(SurfaceApproval {
-        approval_id,
-        title: format!("Node '{node_name}' requests approval"),
-        body:  format!("Run `{command}`: {reason}"),
-    })
-```
-**复用现有 operator Panel 审批卡 + approve/deny + `exec.approval.resolve` RPC，零改动。**
+> **关键复用决策（设计期亲读 Panel 链路推翻"专用 frame"）**：Panel 审批卡订阅 topic `approval.**`（`context.rs:886`），收到任一 `approval.*` 事件即 refetch `exec.approvals.pending` RPC，渲染 `ExecApprovalRecord.command`。**operator 看到的命令文本来自 record 的 `command` 字段，不是 frame**。故新 frame（新 topic）会让 Panel 卡**不出现**；复用 `ApprovalRequested` + 把节点上下文塞进 `command` 字段，则 **Panel 卡零改动显示节点+命令**，resolve / event_scope 门控 / 桌面 banner 全自动复用。**无新 frame、无 `r5_router` 改动、无 WASM、无 event_scope 规则。** 桌面 R5 banner 保持通用文案（operator 点进 Panel 看详情）。
 
 ### 4.3 决策 resolve（零新增）
 
@@ -96,10 +88,10 @@ operator 在 Panel 点 approve/deny → 现有 `exec.approval.resolve { approval
   → CenterApprovalRequester.request_approval
   → channel.call("node.approval.request", {tool,reason}, timeout)
   ──[WS 上行]──▶ 中心按 conn-role + method 路由
-  → handle_node_approval_request
+  → run_node_approval（中心 handler spawn，不阻塞 select loop）
       → ExecApprovalManager.create + register_pending
-      → publish NodeApprovalRequested
-      → r5_router → operator Panel 审批卡
+      → publish ApprovalRequested（现有 frame，command="node '<name>': <tool> — <reason>"）
+      → Panel refetch exec.approvals.pending → operator 审批卡（显示节点+命令）
   → operator 点 approve
   → exec.approval.resolve（现有）→ ExecApprovalManager.resolve
   → handler oneshot 唤醒 → JSON-RPC 响应 {outcome}
@@ -128,7 +120,8 @@ operator 在 Panel 点 approve/deny → 现有 `exec.approval.resolve { approval
 ## 8. 范围边界（YAGNI）
 
 - 仅一个反向 method（`node.approval.request`）；不开通用 node→center RPC 面。
-- 复用 `ExecApprovalManager` + Panel 卡 + `exec.approval.resolve` RPC；**唯一新 frame 是 `NodeApprovalRequested`**（请求呈现）；resolve/expire 复用现有 `approval_id`-keyed frame。
+- 复用 `ExecApprovalManager` + 现有 `ApprovalRequested`/`ApprovalResolved`/`ApprovalExpired` frame + Panel 卡 + `exec.approval.resolve` RPC + `event_scope` 门控；**零新 frame、零 `r5_router` 改动、零 WASM、零 `event_scope` 规则**。节点上下文经 `command` 字段呈现。
+- 中心需把 boot 的共享 `Arc<ExecApprovalManager>` 穿线进 `GatewayServer` → `GatewaySharedState` → `ConnectionContext`（镜像 `node_registry`，`Option` 使 test 构造保持 `None` → 路由 inert）；`NodeRegistry` 加 `node_identity_by_conn(conn_id) -> Option<(node_id, node_name)>`。
 - 节点不做持久 "always allow"（`AllowAlways` → `ApprovedForSession`，同 Phase 2b）；不做 per-command 审批分层；节点侧无审批 UI。
 - R10：`src/harness/` 零改动。
 - 新 worktree 从 main 切；**不合 main**（cluster 合并用户管）。
@@ -142,9 +135,9 @@ operator 在 Panel 点 approve/deny → 现有 `exec.approval.resolve { approval
 | `ApprovalGate` 升级钩子 | `workspace.rs:289-292` | 触发点，换 requester |
 | `granted_elevations` / `denial_ledger` | `workspace.rs:299-309` | AllowSession / 短路重试天然生效 |
 | `ExecApprovalManager` create/register/await/resolve | `src/sandbox/exec_approval/` + `src/approval/` | 中心 pending/timeout/resolve 机制 |
-| `OperatorApprovalRequester` 流程 | `src/approval/operator_requester.rs` | 中心 handler 镜像（publish + await） |
-| `exec.approval.resolve` RPC | 现有 | operator 决策入口，零改动 |
-| Panel 审批卡 + R5 `SurfaceApproval` | `r5_router.rs` + Panel | 复用，仅加 frame→surface 一臂 |
-| `ApprovalResolved` / `ApprovalExpired` frame | `frame.rs` | 清卡，复用 |
+| `OperatorApprovalRequester` 流程 | `src/approval/operator_requester.rs` | `run_node_approval` 镜像（publish + await），node-flavored `ApprovalRequest` |
+| `exec.approval.resolve` + `exec.approvals.pending` RPC | 现有 | operator 决策入口 + Panel refetch 源，零改动 |
+| `ApprovalRequested`/`ApprovalResolved`/`ApprovalExpired` frame | `frame.rs` | 触发 Panel refetch + 清卡，复用（command 经 record 字段呈现） |
+| Panel 审批卡 + R5 `SurfaceApproval` + `r5_router` | `r5_router.rs` + Panel | 全复用，**零改动**（banner 通用文案可接受） |
 
-唯一**新增**：`CenterApprovalRequester`（节点）、`handle_node_approval_request`（中心）、`GatewayEventFrame::NodeApprovalRequested`（呈现）、node run_session 并发重构。
+唯一**新增**：`CenterApprovalRequester`（节点 `src/cluster/node_approval.rs`）、`run_node_approval`（中心 `src/approval/node_requester.rs`）、`NodeRegistry::node_identity_by_conn`、`ConnectionContext` 的 `exec_approval_manager` 穿线、handler.rs 的 `node.approval.request` 路由、node `run_session` 并发重构。**无新 frame。**
