@@ -12,6 +12,7 @@ use tokio::sync::OwnedSemaphorePermit;
 use super::handoff::build_handoff_context;
 use super::runner::{execute_member_task, MemberDispatchTarget, MemberRunStatus};
 use super::TeamDispatcher;
+use crate::agents::swarm::tasks::acceptance::lead_review_required;
 use crate::agents::swarm::tasks::{
     CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskUpdate, TaskRunStatus,
 };
@@ -36,6 +37,19 @@ pub fn is_dispatcher_managed(task: &CoordTask) -> bool {
         .and_then(|v| v.as_str())
         .map(|s| s == MANAGED_BY_DISPATCHER)
         .unwrap_or(false)
+}
+
+/// Terminal status for a successful member run: review-gated tasks
+/// (`lead_review_required` in metadata, stamped by the workflow compiler)
+/// park in `WaitingReview` for `workflow_step_review` to resolve; everything
+/// else completes directly. Pure — the review verdict itself is the lead
+/// LLM's call (R7), this only routes the row.
+fn completion_status(task: &CoordTask) -> CoordTaskStatus {
+    if lead_review_required(&task.metadata) {
+        CoordTaskStatus::WaitingReview
+    } else {
+        CoordTaskStatus::Completed
+    }
 }
 
 /// Pure predicate: should `task` be reaped as a zombie given the current
@@ -507,12 +521,16 @@ impl TeamDispatcher {
         match outcome.status {
             MemberRunStatus::Completed => {
                 let reply = outcome.reply.unwrap_or_default();
+                // Review-gated tasks park in WaitingReview for the lead to
+                // resolve via workflow_step_review; dependents stay blocked
+                // until the verdict. Everything else completes directly.
+                let final_status = completion_status(&task);
                 if let Err(e) = self
                     .coord_store
                     .update_task(
                         &task_id,
                         CoordTaskUpdate {
-                            status: Some(CoordTaskStatus::Completed),
+                            status: Some(final_status),
                             result: Some(reply.clone()),
                             ..Default::default()
                         },
@@ -521,13 +539,20 @@ impl TeamDispatcher {
                 {
                     tracing::warn!(task_id = %task_id, error = %e, "dispatcher: failed to persist task completion state; skipping artifact persistence");
                 } else {
+                    // The work product exists regardless of the verdict, so
+                    // the artifact persists on both paths — reviewers read it.
                     self.persist_artifact(&task_id, &owner, &task.subject, &reply)
                         .await;
-                    // AlephEvent::TeamTaskCompleted broadcast happens inside
+                    // AlephEvent::TeamTaskCompleted (or TeamTaskUpdated with
+                    // status "waiting_review") broadcast happens inside
                     // CoordTaskStore::emit_task_topic — the panel-driven
                     // completion path gets the same downstream wiring without
                     // any caller-side fan-out.
-                    tracing::info!(task_id = %task_id, "dispatcher: task completed");
+                    if final_status == CoordTaskStatus::WaitingReview {
+                        tracing::info!(task_id = %task_id, "dispatcher: task awaiting lead review");
+                    } else {
+                        tracing::info!(task_id = %task_id, "dispatcher: task completed");
+                    }
                 }
             }
             MemberRunStatus::Failed | MemberRunStatus::Timeout => {
@@ -623,6 +648,32 @@ mod tests {
             locked_by: None,
             locked_at: None,
         }
+    }
+
+    #[test]
+    fn completion_status_routes_review_gated_tasks_to_waiting_review() {
+        use crate::agents::swarm::tasks::acceptance::with_lead_review_required;
+
+        let plain = task(
+            "t1",
+            CoordTaskStatus::InProgress,
+            Some("a"),
+            true,
+            Priority::Normal,
+            1,
+        );
+        assert_eq!(completion_status(&plain), CoordTaskStatus::Completed);
+
+        let mut gated = task(
+            "t2",
+            CoordTaskStatus::InProgress,
+            Some("a"),
+            true,
+            Priority::Normal,
+            1,
+        );
+        gated.metadata = with_lead_review_required(gated.metadata, true);
+        assert_eq!(completion_status(&gated), CoordTaskStatus::WaitingReview);
     }
 
     #[test]

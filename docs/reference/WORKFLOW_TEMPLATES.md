@@ -89,12 +89,13 @@ stays a tight, fully-wired vertical slice:
   panel + CLI surface). The tool already gives the LLM full control; the RPC
   family is for direct UI access. Mirror `gateway/handlers/teams.rs`.
 - **Panel UI** for browsing/editing templates and watching a run's canvas.
-- **`lead_review_required` per-step gate**: the schema intentionally omits
-  this flag because the dispatcher does not yet read a stored flag to hold a
-  step in `WaitingReview` (only a doc-concept today). Manual control via
-  `workflow_step_review(task_id=...)` already works. Wire the auto-gate
-  (metadata key the dispatcher honours) before exposing the flag, so we never
-  ship config that does nothing.
+- ~~**`lead_review_required` per-step gate**~~ — **wired** (2026-06). A step
+  declared with `review: true` stamps `lead_review_required` into its task
+  metadata at materialisation; the dispatcher parks a successful run in
+  `WaitingReview` instead of `Completed`, the `TeamNotifier` alerts the
+  leader, and `workflow_step_review` (approve/reject/retry/skip) resolves the
+  gate. Downstream steps stay blocked until the verdict. Clarify steps reject
+  the flag at `validate()` time (no agent run to review).
 - **Immediate dispatcher signal on a team that does not exist yet**: `run`
   requires the caller to `team_create` first; auto-provisioning a throwaway
   team from the template's distinct agents is a possible convenience but adds

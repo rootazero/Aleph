@@ -6,7 +6,7 @@
 //! member needs is gathered once, at launch, from the task DAG and team state.
 
 use crate::agents::swarm::tasks::acceptance::{
-    read_acceptance_criteria, render_acceptance_section,
+    lead_review_required, read_acceptance_criteria, render_acceptance_section,
 };
 use crate::agents::swarm::tasks::{CoordTask, CoordTaskStatus, CoordTaskStore, TaskRunStatus};
 use crate::sync_primitives::Arc;
@@ -183,6 +183,22 @@ pub async fn build_handoff_context(
     out.push_str(&render_acceptance_section(&read_acceptance_criteria(
         &task.metadata,
     )));
+
+    // --- Review notice (review-gated steps only) ---
+    // The member should know its output goes to a reviewer, not straight to
+    // done: self-reports are judged, so claims need verifiable evidence.
+    // Empty for non-gated tasks (envelope byte-identical to before).
+    if lead_review_required(&task.metadata) {
+        out.push_str(
+            "\n## Review Gate\n\
+             Your result will be reviewed by the team lead before this step \
+             counts as complete. Make the reviewer's job easy: state exactly \
+             what you did, and back every externally-visible claim (files \
+             written, requests sent, things published) with a verifiable \
+             handle — a path, URL, id, or status code — rather than an \
+             unsupported assertion.\n",
+        );
+    }
 
     // --- Team protocol (operating agreement injected verbatim) ---
     // Placed right after the task so the member reads the team's rules before
@@ -461,6 +477,26 @@ mod tests {
         assert!(after.contains("## Acceptance Criteria"));
         assert!(after.contains("- [ ] tests pass"));
         assert!(after.contains("- [ ] no clippy warnings"));
+    }
+
+    #[tokio::test]
+    async fn handoff_injects_review_notice_only_when_gated() {
+        use crate::agents::swarm::tasks::acceptance::with_lead_review_required;
+        let cs = coord_store().await;
+        let ts = team_store().await;
+
+        // No flag -> no Review Gate heading (byte-identical legacy envelope).
+        let plain = cs.create_task(plain_task("Bare task")).await.unwrap();
+        let before = build_handoff_context(&cs, &ts, None, &plain).await;
+        assert!(!before.contains("## Review Gate"));
+
+        // A review-gated task tells the member its output will be judged.
+        let mut spec = plain_task("Ship login");
+        spec.metadata = with_lead_review_required(spec.metadata, true);
+        let task = cs.create_task(spec).await.unwrap();
+        let after = build_handoff_context(&cs, &ts, None, &task).await;
+        assert!(after.contains("## Review Gate"));
+        assert!(after.contains("verifiable handle"));
     }
 
     #[tokio::test]

@@ -27,6 +27,43 @@ use serde_json::Value;
 /// Metadata key under which the acceptance-criteria list is stored.
 pub const ACCEPTANCE_METADATA_KEY: &str = "acceptance_criteria";
 
+/// Metadata key marking a task whose successful run must be approved by the
+/// lead (via `workflow_step_review`) before it counts as Completed. The
+/// dispatcher routes such runs to `WaitingReview` instead of `Completed`.
+pub const LEAD_REVIEW_METADATA_KEY: &str = "lead_review_required";
+
+/// Whether this task's run must pass lead review before completing.
+///
+/// Tolerant like [`read_acceptance_criteria`]: a missing key or a non-bool
+/// value reads as `false` (no review gate), so legacy rows and hand-edited
+/// metadata never break dispatch.
+pub fn lead_review_required(metadata: &Value) -> bool {
+    metadata
+        .get(LEAD_REVIEW_METADATA_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// Return a new metadata value with the lead-review flag merged in under
+/// [`LEAD_REVIEW_METADATA_KEY`], preserving every other key.
+///
+/// Mirrors [`with_acceptance_criteria`]: a non-object input is promoted to an
+/// empty object, and `required = false` leaves the metadata untouched so
+/// callers can pass through unconditionally without polluting the row.
+pub fn with_lead_review_required(metadata: Value, required: bool) -> Value {
+    let mut value = match metadata {
+        Value::Object(_) => metadata,
+        _ => Value::Object(serde_json::Map::new()),
+    };
+    if !required {
+        return value;
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(LEAD_REVIEW_METADATA_KEY.to_string(), Value::Bool(true));
+    }
+    value
+}
+
 /// Read the acceptance-criteria list from a task's `metadata` value.
 ///
 /// Tolerant by construction (metadata is free-form, possibly authored by an
@@ -149,6 +186,37 @@ mod tests {
         let merged = with_acceptance_criteria(json!("scalar"), vec!["x".into()]);
         assert!(merged.is_object());
         assert_eq!(read_acceptance_criteria(&merged), vec!["x"]);
+    }
+
+    #[test]
+    fn lead_review_reads_false_when_absent_or_wrong_shape() {
+        assert!(!lead_review_required(&json!({})));
+        assert!(!lead_review_required(&json!({ LEAD_REVIEW_METADATA_KEY: "yes" })));
+        assert!(!lead_review_required(&json!(42)));
+        assert!(!lead_review_required(&json!({ LEAD_REVIEW_METADATA_KEY: false })));
+    }
+
+    #[test]
+    fn lead_review_roundtrips_and_preserves_siblings() {
+        let original = json!({ "managed_by": "dispatcher" });
+        let merged = with_lead_review_required(original.clone(), true);
+        assert!(original.get(LEAD_REVIEW_METADATA_KEY).is_none());
+        assert_eq!(merged["managed_by"], json!("dispatcher"));
+        assert!(lead_review_required(&merged));
+    }
+
+    #[test]
+    fn lead_review_false_does_not_add_key() {
+        let merged = with_lead_review_required(json!({ "k": 1 }), false);
+        assert!(merged.get(LEAD_REVIEW_METADATA_KEY).is_none());
+        assert_eq!(merged["k"], json!(1));
+    }
+
+    #[test]
+    fn lead_review_promotes_non_object_to_object() {
+        let merged = with_lead_review_required(json!("scalar"), true);
+        assert!(merged.is_object());
+        assert!(lead_review_required(&merged));
     }
 
     #[test]
