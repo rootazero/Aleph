@@ -356,7 +356,7 @@ mod tests {
         assert!(reg.resolve("node-a").is_ok(), "by id");
         let (_, cmds) = reg.resolve("dev-node-a").expect("by name");
         assert_eq!(cmds[0].name, "bash");
-        assert_eq!(reg.resolve("nope").unwrap_err(), ResolveError::NotFound);
+        assert!(matches!(reg.resolve("nope"), Err(ResolveError::NotFound)));
     }
 
     #[test]

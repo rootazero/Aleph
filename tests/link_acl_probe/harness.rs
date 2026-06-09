@@ -203,6 +203,8 @@ impl LinkAclHarness {
                 // All-empty slash-access → gating OFF (equivalent to the prior
                 // four empty ACL vecs now folded into SlashAccessConfig).
                 slash_access: Default::default(),
+                permission_level: Default::default(),
+                default_workspace: None,
             },
         );
     }
