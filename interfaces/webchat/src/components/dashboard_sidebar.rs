@@ -1,6 +1,7 @@
 //
 // Dashboard mode sidebar — sub-navigation for dashboard views.
 //
+use crate::components::connection_status::ConnectionStatus;
 use crate::components::sidebar::SidebarItem;
 use crate::i18n::*;
 use leptos::prelude::*;
@@ -50,6 +51,12 @@ pub fn DashboardSidebar() -> impl IntoView {
                     <path d="M8 17v-3" />
                 </SidebarItem>
             </nav>
+            // Persistent connection badge — phase + which core (Local / remote
+            // host) this Panel is wired to. Sits at the foot of the dashboard
+            // nav (the `flex-1` nav pushes it down).
+            <div class="px-3 pt-2 pb-3">
+                <ConnectionStatus />
+            </div>
         </div>
     }
 }

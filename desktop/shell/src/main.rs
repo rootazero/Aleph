@@ -288,15 +288,29 @@ fn spawn_background(handle: tauri::AppHandle) {
                         let host = url.host_str().unwrap_or("").to_string();
                         let port = url.port_or_known_default().unwrap_or(18790);
                         let reachable = daemon::tcp_reachable(&host, port).await;
-                        if !reachable {
-                            tracing::warn!("remote Gateway {host}:{port} not reachable at startup");
+                        if reachable {
+                            // Navigate the webview to the remote root; an
+                            // unauthenticated client is redirected to `/pair`.
+                            if let Some(window) = handle.get_webview_window("main") {
+                                let _ = window.navigate(url.clone());
+                            }
+                            focus_window(&handle);
+                        } else {
+                            // Spec §5.5: a remote that is unreachable at startup
+                            // must land on the bundled connection page (retry /
+                            // back-to-local), never on the dead remote origin —
+                            // otherwise the user stares at the webview's native
+                            // "can't connect" page until the supervisor's first
+                            // tick (one HEALTH_POLL_INTERVAL later) corrects it.
+                            tracing::warn!(
+                                "remote Gateway {host}:{port} not reachable at startup — showing connection page"
+                            );
+                            show_connection_page(
+                                &handle,
+                                "Remote Gateway unreachable. Retry or go back to local.",
+                            );
+                            focus_window(&handle);
                         }
-                        // Navigate the webview to the remote root; an
-                        // unauthenticated client is redirected to `/pair`.
-                        if let Some(window) = handle.get_webview_window("main") {
-                            let _ = window.navigate(url.clone());
-                        }
-                        focus_window(&handle);
                         reachable
                     }
                 };
