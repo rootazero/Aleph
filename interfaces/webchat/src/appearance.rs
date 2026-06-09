@@ -3,7 +3,7 @@
 //! Four orthogonal, client-side axes — all persisted to `localStorage` and
 //! replayed on boot by [`init_appearance`]:
 //!
-//!   • mode      — System / Light / Dark → `<html>` class list
+//!   • mode      — System / Light / Dark / Glass → `<html>` class list
 //!   • accent    — colour palette                  → `data-accent` attribute
 //!   • font scale— accessibility text size         → `--control-ui-text-scale`
 //!   • roundness — corner radius density           → `--control-ui-radius-scale`
@@ -33,16 +33,19 @@ pub enum ThemeMode {
     System,
     Light,
     Dark,
+    /// Dark-based, intensified-glass showcase theme (refined ex-Vibrant).
+    Glass,
 }
 
 impl ThemeMode {
-    pub const ALL: [ThemeMode; 3] = [Self::System, Self::Light, Self::Dark];
+    pub const ALL: [ThemeMode; 4] = [Self::System, Self::Light, Self::Dark, Self::Glass];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::System => "跟随系统",
             Self::Light => "明亮",
             Self::Dark => "暗黑",
+            Self::Glass => "玻璃",
         }
     }
 
@@ -52,6 +55,7 @@ impl ThemeMode {
             Self::System => None,
             Self::Light => Some("light"),
             Self::Dark => Some("dark"),
+            Self::Glass => Some("glass"),
         }
     }
 
@@ -59,10 +63,12 @@ impl ThemeMode {
         match raw {
             Some("light") => Self::Light,
             Some("dark") => Self::Dark,
+            Some("glass") => Self::Glass,
             // Legacy migration: the retired Vibrant mode persisted as
-            // "translucent". Glass is the default material in every mode now,
-            // so map it to Dark instead of silently falling back to System.
-            Some("translucent") => Self::Dark,
+            // "translucent". Glass is the re-introduced strong-glass successor
+            // to Vibrant, so a stored "translucent" must load as Glass
+            // (faithful restore of original intent).
+            Some("translucent") => Self::Glass,
             _ => Self::System,
         }
     }
@@ -325,13 +331,16 @@ pub fn read_roundness() -> Roundness {
 pub fn apply_mode(mode: ThemeMode) {
     if let Some(html) = root() {
         let classes = html.class_list();
-        let _ = classes.remove_3("dark", "light", "translucent");
+        let _ = classes.remove_4("dark", "light", "glass", "translucent");
         match mode {
             ThemeMode::Light => {
                 let _ = classes.add_1("light");
             }
             ThemeMode::Dark => {
                 let _ = classes.add_1("dark");
+            }
+            ThemeMode::Glass => {
+                let _ = classes.add_1("glass");
             }
             ThemeMode::System => {}
         }
@@ -449,9 +458,19 @@ mod tests {
     }
 
     #[test]
-    fn legacy_translucent_migrates_to_dark() {
-        // The retired Vibrant mode persisted as "translucent". Glass is now the
-        // default material in every mode, so a stored "translucent" must load as Dark.
-        assert_eq!(ThemeMode::from_storage(Some("translucent")), ThemeMode::Dark);
+    fn legacy_translucent_migrates_to_glass() {
+        // The retired Vibrant mode persisted as "translucent". Glass is the
+        // re-introduced strong-glass successor to Vibrant, so a stored
+        // "translucent" must load as Glass (faithful restore of original intent).
+        assert_eq!(
+            ThemeMode::from_storage(Some("translucent")),
+            ThemeMode::Glass
+        );
+    }
+
+    #[test]
+    fn glass_storage_round_trips() {
+        assert_eq!(ThemeMode::Glass.storage_value(), Some("glass"));
+        assert_eq!(ThemeMode::from_storage(Some("glass")), ThemeMode::Glass);
     }
 }

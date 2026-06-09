@@ -17,7 +17,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 /// 关联表：反向 RPC 请求 id → 等待其响应的 oneshot 发送端。
 ///
 /// 线程安全；锁中毒按 P7 处理（`unwrap_or_else(|e| e.into_inner())`）。
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct PendingInvokes {
     counter: AtomicU64,
     waiters: Mutex<HashMap<String, oneshot::Sender<JsonRpcResponse>>>,
@@ -112,7 +112,7 @@ pub enum ReverseRpcError {
 
 /// 绑定到**单条连接**的反向 RPC 通道：把请求帧写进该连接的出站 mpsc，
 /// 并通过共享的 [`PendingInvokes`] 等待相关响应。
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReverseRpcChannel {
     outbound: mpsc::Sender<String>,
     pending: Arc<PendingInvokes>,
