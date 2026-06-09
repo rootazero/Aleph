@@ -6,6 +6,7 @@
 
 use crate::sync_primitives::Arc;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -13,8 +14,24 @@ use crate::gateway::execution_engine::RunRequest;
 use crate::gateway::inbound_context::InboundContext;
 use crate::gateway::reply_emitter::{ReplyEmitter, ReplyEmitterConfig};
 
-use super::types::{RoutingError, SLASH_COMMAND_MODE_KEY};
+use super::types::{ChannelConfig, RoutingError, SLASH_COMMAND_MODE_KEY};
 use super::InboundMessageRouter;
+
+/// Resolve the run identity a channel's inbound messages execute under:
+/// the `caller_role` fed to the tool-dispatch config-tier gate, and the
+/// workspace it is locked into (Layer-1 lock for Chat tier).
+///
+/// An **unconfigured** channel (`None` in the map) defaults to Chat
+/// (`"guest"`) with no locked workspace. This default is the over-permission
+/// fix — a missing config must never be treated as operator. The
+/// `permission_wiring_tests` below pin exactly this.
+fn channel_run_identity(
+    configs: &HashMap<String, ChannelConfig>,
+    channel_id: &str,
+) -> (&'static str, Option<PathBuf>) {
+    let cfg = configs.get(channel_id).cloned().unwrap_or_default();
+    (cfg.caller_role_str(), cfg.resolved_default_workspace())
+}
 
 impl InboundMessageRouter {
     /// Execute the agent for the given context
@@ -235,15 +252,9 @@ impl InboundMessageRouter {
         // ("guest") — closing the prior over-permission where a missing role was
         // treated as operator. An operator opts a channel up to Config tier via
         // `permission_level = "config"` in its config block.
-        let channel_cfg = self
-            .channel_configs
-            .get(ctx.message.channel_id.as_str())
-            .cloned()
-            .unwrap_or_default();
-        metadata.insert(
-            "caller_role".to_string(),
-            channel_cfg.caller_role_str().to_string(),
-        );
+        let (caller_role, channel_workspace) =
+            channel_run_identity(&self.channel_configs, ctx.message.channel_id.as_str());
+        metadata.insert("caller_role".to_string(), caller_role.to_string());
 
         let is_slash = slash_command_mode.is_some();
         if let Some(mode) = slash_command_mode {
@@ -273,7 +284,7 @@ impl InboundMessageRouter {
             attachments: ctx.message.attachments.clone(),
             pending_media: pending_media.clone(),
             sandbox_override: None,
-            workspace_override: channel_cfg.resolved_default_workspace(),
+            workspace_override: channel_workspace,
             max_iterations_override: None,
             model_override: None,
         };
@@ -478,5 +489,64 @@ impl InboundMessageRouter {
             conversation_id,
             ctx.reply_route.clone(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod permission_wiring_tests {
+    use super::channel_run_identity;
+    use crate::gateway::inbound_router::types::{ChannelConfig, ChannelPermissionLevel};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    /// THE security line: a channel with no registered config runs as the gated
+    /// "guest" tier with no locked workspace. A regression here silently reopens
+    /// the external-channel over-permission hole.
+    #[test]
+    fn unconfigured_channel_defaults_to_guest_with_no_workspace() {
+        let empty: HashMap<String, ChannelConfig> = HashMap::new();
+        assert_eq!(channel_run_identity(&empty, "telegram"), ("guest", None));
+
+        // Unknown id in a populated map → still the safe default.
+        let mut configs = HashMap::new();
+        configs.insert("slack".to_string(), ChannelConfig::default());
+        assert_eq!(channel_run_identity(&configs, "telegram"), ("guest", None));
+    }
+
+    /// A Chat-tier channel with an absolute, existing default_workspace is
+    /// stamped "guest" and pinned to that workspace (Layer-1 lock).
+    #[test]
+    fn chat_tier_channel_locks_to_default_workspace() {
+        let ws = std::env::temp_dir(); // absolute + existing
+        let mut configs = HashMap::new();
+        configs.insert(
+            "telegram".to_string(),
+            ChannelConfig {
+                permission_level: ChannelPermissionLevel::Chat,
+                default_workspace: Some(ws.clone()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            channel_run_identity(&configs, "telegram"),
+            ("guest", Some(ws))
+        );
+    }
+
+    /// A Config-tier channel is stamped "operator" (Layer-2). With no
+    /// default_workspace set it carries no lock (the agent default applies).
+    #[test]
+    fn config_tier_channel_maps_to_operator() {
+        let mut configs = HashMap::new();
+        configs.insert(
+            "ops-bot".to_string(),
+            ChannelConfig {
+                permission_level: ChannelPermissionLevel::Config,
+                ..Default::default()
+            },
+        );
+        let (role, workspace) = channel_run_identity(&configs, "ops-bot");
+        assert_eq!(role, "operator");
+        assert_eq!(workspace, None::<PathBuf>);
     }
 }
