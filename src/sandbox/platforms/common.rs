@@ -96,16 +96,84 @@ pub fn glob_to_regex(pattern: &str) -> Option<String> {
     Some(regex)
 }
 
-/// Truncate captured process output to at most `max_bytes`, never cutting
-/// a UTF-8 codepoint in half (project rule P7). Returns the (possibly
-/// shortened) buffer and the number of bytes dropped (0 when no
-/// truncation happened).
+/// Truncate captured process output so the retained content is at most
+/// `max_bytes`, never cutting a UTF-8 codepoint in half (project rule P7).
+/// Returns the (possibly rewritten) buffer and the number of bytes elided
+/// from the original (0 when no truncation happened).
 ///
-/// The cut index is backed off any UTF-8 continuation byte
-/// (`0b10xx_xxxx`), so a multi-byte char is never split — for binary
-/// (non-UTF-8) output the worst case drops at most 3 extra bytes, which
-/// the returned drop count reflects.
-pub fn truncate_output(mut buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
+/// When the buffer overflows the budget we keep a **head + tail** slice with
+/// an inline elision marker between them, rather than only the head. Shell
+/// output buries the most important line — the final error, the test summary,
+/// the failing assertion — at the *end*; head-only truncation silently dropped
+/// exactly that. The split is 40% head / 60% tail (hermes parity), tail-weighted
+/// because the recent output is usually what the model needs. Both cut points
+/// are backed off / advanced past any UTF-8 continuation byte (`0b10xx_xxxx`)
+/// so neither fragment splits a multi-byte char. The returned drop count is the
+/// number of bytes elided from the middle (the marker text is not counted).
+///
+/// Tiny budgets (`< MIN_HEAD_TAIL_CAP`) and degenerate splits fall back to the
+/// original head-only truncation — see [`truncate_head_only`].
+pub fn truncate_output(buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
+    let orig_len = buf.len();
+    if orig_len <= max_bytes {
+        return (buf, 0);
+    }
+    // Tiny budgets keep the original head-only behaviour: a head+tail split
+    // with an elision marker only carries signal once the cap is large enough
+    // for both fragments to be meaningful.
+    if max_bytes < MIN_HEAD_TAIL_CAP {
+        return truncate_head_only(buf, max_bytes);
+    }
+
+    // Split the budget 40% head / 60% tail. The head preserves the command's
+    // opening (banner, the first error a build prints); the larger tail keeps
+    // the most recent output — the final error / test summary that head-only
+    // truncation silently dropped. For a failing `cargo build` that emits
+    // megabytes of progress before erroring, head-only would hand the model all
+    // the progress and LOSE the actual error at the end.
+    let head_budget = max_bytes * 2 / 5;
+    let tail_budget = max_bytes - head_budget;
+
+    // Head cut: back off any UTF-8 continuation byte so we never split a char.
+    let mut head_end = head_budget;
+    while head_end > 0 && (buf[head_end] & 0xC0) == 0x80 {
+        head_end -= 1;
+    }
+
+    // Tail cut: walk forward from (orig_len - tail_budget) to the next char
+    // boundary so the tail fragment also starts on a clean codepoint.
+    let mut tail_start = orig_len - tail_budget;
+    while tail_start < orig_len && (buf[tail_start] & 0xC0) == 0x80 {
+        tail_start += 1;
+    }
+
+    // If the fragments meet or overlap (cap nearly equals len), nothing is
+    // actually elided — fall back to head-only to avoid an empty/negative gap.
+    if tail_start <= head_end {
+        return truncate_head_only(buf, max_bytes);
+    }
+
+    let dropped = (tail_start - head_end) as u64;
+    let marker = format!("\n…[{dropped} bytes elided]…\n");
+
+    let mut out = Vec::with_capacity(head_end + marker.len() + (orig_len - tail_start));
+    out.extend_from_slice(&buf[..head_end]);
+    out.extend_from_slice(marker.as_bytes());
+    out.extend_from_slice(&buf[tail_start..]);
+    (out, dropped)
+}
+
+/// Cap below which [`truncate_output`] keeps the original head-only behaviour
+/// instead of a head+tail split. Below this the elision marker plus two
+/// fragments would carry less signal than a single contiguous head slice.
+const MIN_HEAD_TAIL_CAP: usize = 256;
+
+/// Head-only truncation: keep the first `max_bytes`, backing off any UTF-8
+/// continuation byte so a multi-byte codepoint is never split. Used for tiny
+/// budgets and the degenerate case where a head+tail split would not actually
+/// elide anything. Returns the (possibly shortened) buffer and the number of
+/// bytes dropped (0 when no truncation happened).
+fn truncate_head_only(mut buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
     let orig_len = buf.len();
     if orig_len <= max_bytes {
         return (buf, 0);
@@ -406,6 +474,51 @@ mod tests {
         let (out, dropped) = truncate_output(b"x".to_vec(), 0);
         assert!(out.is_empty());
         assert_eq!(dropped, 1);
+    }
+
+    #[test]
+    fn truncate_output_keeps_head_and_tail_above_the_cap() {
+        // Above MIN_HEAD_TAIL_CAP we keep the opening AND the ending — the
+        // final lines (the real error / test summary) survive, which head-only
+        // truncation dropped. Build a buffer where the start and end are
+        // distinguishable so we can assert both are present.
+        let cap = 1000usize;
+        let head: String = "HEAD-".repeat(200); // 1000 bytes of head marker
+        let tail: String = "-TAIL".repeat(200); // 1000 bytes of tail marker
+        let mut buf = head.into_bytes();
+        buf.extend_from_slice(&vec![b'x'; 5000]); // 5 KB of filler in the middle
+        buf.extend_from_slice(tail.as_bytes());
+        let orig_len = buf.len();
+
+        let (out, dropped) = truncate_output(buf, cap);
+        let text = std::str::from_utf8(&out).expect("stays valid UTF-8");
+
+        // Head fragment (40% = 400 bytes) and tail fragment (60% = 600 bytes)
+        // both present; the elided middle is gone.
+        assert!(text.starts_with("HEAD-"), "head opening must survive: {text:.40}");
+        assert!(text.ends_with("-TAIL"), "tail ending must survive");
+        assert!(text.contains("bytes elided"), "marker must announce the gap");
+        assert!(dropped > 0, "the middle must be reported as dropped");
+        // Retained real content (excluding the marker) honours the budget.
+        assert!(out.len() <= cap + 64, "retained content ~ cap + small marker");
+        assert_eq!(
+            dropped as usize,
+            orig_len - 400 - 600,
+            "dropped == middle between the 400-byte head and 600-byte tail"
+        );
+    }
+
+    #[test]
+    fn truncate_output_head_tail_never_splits_multibyte() {
+        // Fill head and tail regions with 3-byte euro signs so a naive byte
+        // cut would land mid-codepoint; the result must stay valid UTF-8.
+        let cap = 300usize; // just above MIN_HEAD_TAIL_CAP
+        let buf = "€".repeat(1000).into_bytes(); // 3000 bytes, all multibyte
+        let (out, _dropped) = truncate_output(buf, cap);
+        assert!(
+            std::str::from_utf8(&out).is_ok(),
+            "head+tail split must not split a multibyte codepoint"
+        );
     }
 
     #[cfg(unix)]

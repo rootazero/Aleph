@@ -142,6 +142,13 @@ ANSI colour codes and stray binary control bytes are stripped from the
 returned `stdout`/`stderr` automatically — no need for `--color=never`
 or piping through `cat`.
 
+When a stream overflows its cap we keep BOTH the head and the tail (with a
+`…[N bytes elided]…` marker between them), so a long build that fails at the
+end still shows you the final error, not just the opening. If the command is
+killed by a signal it surfaces as `exit_code = 128 + N` with a `stderr` note
+naming the signal — e.g. `137` (SIGKILL, usually an out-of-memory kill),
+`139` (SIGSEGV, a crash), `134` (SIGABRT, an assertion/panic abort).
+
 Capability escalations (`allow_network`, `allow_subprocess`, `extra_writable_paths`)
 trigger an approval prompt the first time per session; subsequent same-or-
 narrower requests reuse the grant. When you escalate, pass `justification` with
