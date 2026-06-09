@@ -180,11 +180,21 @@ pub(crate) fn parse_gemini_sse_chunk(
 
     // Usage metadata (usually in the last chunk)
     if let Some(usage) = json.get("usageMetadata") {
-        let input = usage
+        let prompt_total: u32 = usage
             .get("promptTokenCount")
             .and_then(|v| v.as_u64())
             .and_then(|v| v.try_into().ok())
             .unwrap_or(0);
+        let cached: Option<u32> = usage
+            .get("cachedContentTokenCount")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+        // Gemini's `promptTokenCount` *includes* the implicitly cached portion
+        // (`cachedContentTokenCount`). Aleph's pricing bills `input` and
+        // `cache_read` additively (disjoint, Anthropic-shaped), so report the
+        // non-cached remainder as input — otherwise every cache hit is billed
+        // twice. Same subtraction as pi/openclaw.
+        let input = prompt_total.saturating_sub(cached.unwrap_or(0));
         let output = usage
             .get("candidatesTokenCount")
             .and_then(|v| v.as_u64())
@@ -198,10 +208,7 @@ pub(crate) fn parse_gemini_sse_chunk(
         let usage_event = Ok(ProviderDelta::Usage(TokenUsage {
             input_tokens: input,
             output_tokens: output,
-            cache_read_tokens: usage
-                .get("cachedContentTokenCount")
-                .and_then(|v| v.as_u64())
-                .map(|v| v as u32),
+            cache_read_tokens: cached,
             cache_creation_tokens: None,
             thinking_tokens: usage
                 .get("thoughtsTokenCount")
