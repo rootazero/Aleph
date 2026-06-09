@@ -1127,6 +1127,11 @@
       "shell_add_danger": "+ Add Danger Pattern",
       "shell_invalid_regex": "Invalid regex patterns:"
     },
+    "permission": {
+      "banner_chat": "You are connected as Chat (read-only). Configuration changes are locked. Ask an operator to grant Config permission in Settings → Security, or re-pair selecting Config.",
+      "locked_title": "Configuration locked",
+      "locked_notice": "This page requires Config-tier permission. Ask an operator to grant it in Settings → Security, or re-pair selecting Config."
+    },
     "auth": {
       "title": "Token Auth",
       "description": "Configure token-based authentication",

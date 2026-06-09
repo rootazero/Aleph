@@ -16,6 +16,7 @@ pub mod mode_sidebar;
 pub mod model_picker;
 pub mod nav_menu;
 pub mod notification_center;
+pub mod permission;
 pub mod provider_badge;
 pub mod provider_key_field;
 pub mod provider_row_card;

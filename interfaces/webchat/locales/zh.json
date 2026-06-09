@@ -1127,6 +1127,11 @@
       "shell_add_danger": "+ 添加危险模式",
       "shell_invalid_regex": "无效的正则表达式:"
     },
+    "permission": {
+      "banner_chat": "你当前以 Chat(只读)身份连接,配置修改已锁定。如需修改,请联系 operator 在「设置 → 安全」中授予 Config 权限,或重新配对时选择 Config。",
+      "locked_title": "配置已锁定",
+      "locked_notice": "此页面需要 Config 权限。请联系 operator 在「设置 → 安全」中授予,或重新配对时选择 Config。"
+    },
     "auth": {
       "title": "令牌认证",
       "description": "配置基于令牌的认证",
