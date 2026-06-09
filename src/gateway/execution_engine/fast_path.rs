@@ -63,11 +63,10 @@ where
                 total_duration_ms: duration_ms,
             })
             .await;
-        let _ = emitter
-            .emit(StreamEvent::SessionUpdated {
-                session_key: request.session_key.to_key_string(),
-            })
-            .await;
+        self.publish_session_updated(
+            &request.session_key,
+            request.metadata.get("channel_id").map(String::as_str),
+        );
 
         // Remove from active runs after a short delay (same as normal path)
         let runs_clone = self.active_runs.clone();
@@ -148,11 +147,10 @@ where
                 total_duration_ms: duration_ms,
             })
             .await;
-        let _ = emitter
-            .emit(StreamEvent::SessionUpdated {
-                session_key: request.session_key.to_key_string(),
-            })
-            .await;
+        self.publish_session_updated(
+            &request.session_key,
+            request.metadata.get("channel_id").map(String::as_str),
+        );
         warn!(
             run_id = %run_id,
             error = %error_msg,

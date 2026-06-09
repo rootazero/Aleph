@@ -108,6 +108,12 @@ pub enum GatewayEventFrame {
     },
     SessionUpdated {
         session_key: String,
+        /// Channel that triggered the update (`metadata["channel_id"]` of the
+        /// run), e.g. "telegram". `None` for Panel-originated runs and
+        /// topic/title updates — lets clients distinguish "another surface
+        /// touched this session" (refresh) from "my own run" (ignore).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin_channel: Option<String>,
     },
     ChannelMessage {
         channel_id: ChannelId,
@@ -362,9 +368,6 @@ impl From<StreamEvent> for GatewayEventFrame {
             },
             StreamEvent::ModelResolved { run_id, model_info } => {
                 GatewayEventFrame::ModelResolved { run_id, model_info }
-            }
-            StreamEvent::SessionUpdated { session_key } => {
-                GatewayEventFrame::SessionUpdated { session_key }
             }
         }
     }

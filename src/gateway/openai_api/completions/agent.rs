@@ -180,7 +180,6 @@ impl EventEmitter for SseEventEmitter {
             StreamEvent::AskUser { .. } => None,
             StreamEvent::UncertaintySignal { .. } => None,
             StreamEvent::ModelResolved { .. } => None,
-            StreamEvent::SessionUpdated { .. } => None,
         };
 
         if let Some(data) = frame {

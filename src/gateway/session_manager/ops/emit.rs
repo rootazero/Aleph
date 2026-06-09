@@ -5,6 +5,8 @@ impl SessionManager {
         if let Some(bus) = &self.event_bus {
             let frame = crate::gateway::events::GatewayEventFrame::SessionUpdated {
                 session_key: session_key.to_string(),
+                // Topic/title/state updates have no triggering channel.
+                origin_channel: None,
             };
             let _ = bus.publish_frame(&frame);
         }

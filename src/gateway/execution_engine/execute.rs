@@ -200,13 +200,13 @@ where
         // the entire first turn and never appears in clients that refresh their
         // session list on `SessionUpdated` (e.g. the Panel sidebar) until a manual
         // reload. The run-completion `SessionUpdated` below still fires for
-        // topic/title/token updates.
+        // topic/title/token updates. Published on the global bus (not the
+        // per-run emitter) so channel-originated runs reach the Panel too.
         if is_first_message {
-            let _ = emitter
-                .emit(StreamEvent::SessionUpdated {
-                    session_key: request.session_key.to_key_string(),
-                })
-                .await;
+            self.publish_session_updated(
+                &request.session_key,
+                request.metadata.get("channel_id").map(String::as_str),
+            );
         }
 
         // Inline slash command resolution for non-router paths (Panel, CLI)
@@ -443,12 +443,12 @@ where
                     })
                     .await;
 
-                // Notify UI that the session was updated
-                let _ = emitter
-                    .emit(StreamEvent::SessionUpdated {
-                        session_key: request.session_key.to_key_string(),
-                    })
-                    .await;
+                // Notify UI that the session was updated (global bus, so
+                // channel-originated runs reach the Panel too)
+                self.publish_session_updated(
+                    &request.session_key,
+                    request.metadata.get("channel_id").map(String::as_str),
+                );
 
                 // Auto-generate session topic on first real message
                 if is_first_message {

@@ -105,18 +105,19 @@ async fn test_simple_execution_engine_basic() {
     assert!(has_run_complete, "Should have RunComplete event");
 }
 
-/// Regression: a brand-new session must be announced via `SessionUpdated` at the
-/// moment of creation (first user message), not only at run completion. Without
-/// the early emit, clients that refresh their session list on `SessionUpdated`
-/// (e.g. the Panel sidebar) don't show the new session until the turn finishes
-/// or a manual reload. We assert the first `SessionUpdated` arrives *before*
-/// `RunComplete`.
+/// Regression: a brand-new session must be announced via `SessionUpdated` on the
+/// **global event bus** at the moment of creation (first user message). The
+/// announcement is bus-published rather than emitter-emitted so it reaches the
+/// Panel for channel-originated runs too — `ReplyEmitter` only routes
+/// channel-facing events and would otherwise drop it. We also pin that the
+/// run's `metadata["channel_id"]` is surfaced as `origin_channel`, which the
+/// Panel uses to distinguish external updates from its own runs.
 ///
 /// Exercised against `SimpleExecutionEngine` (the harness-friendly engine); the
-/// production panel path is `ExecutionEngine::<P, R>::execute` (execute.rs),
-/// which carries the identical first-message emit.
+/// production path is `ExecutionEngine::<P, R>::execute` (execute.rs), which
+/// carries the identical first-message publish.
 #[tokio::test]
-async fn test_first_message_emits_session_updated_before_completion() {
+async fn test_first_message_publishes_session_updated_on_bus() {
     let temp = tempfile::tempdir().unwrap();
     let sm = test_session_manager(&temp);
     let config = AgentInstanceConfig {
@@ -128,14 +129,19 @@ async fn test_first_message_emits_session_updated_before_completion() {
 
     let agent = Arc::new(AgentInstance::new(config, sm).unwrap());
     let emitter = Arc::new(TestEmitter::new());
-    let engine = SimpleExecutionEngine::default();
+    let bus = Arc::new(crate::gateway::event_bus::GatewayEventBus::new());
+    let mut typed_rx = bus.subscribe_typed();
+    let engine =
+        SimpleExecutionEngine::new(ExecutionEngineConfig::default()).with_event_bus(bus.clone());
 
+    let mut metadata = HashMap::new();
+    metadata.insert("channel_id".to_string(), "telegram".to_string());
     let request = RunRequest {
         run_id: "run-new-session".to_string(),
         input: "first message in a brand-new session".to_string(),
         session_key: SessionKey::main("test-new-session"),
         timeout_secs: Some(5),
-        metadata: HashMap::new(),
+        metadata,
         attachments: Vec::new(),
         pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
         sandbox_override: None,
@@ -147,22 +153,25 @@ async fn test_first_message_emits_session_updated_before_completion() {
     let result = engine.execute(request, agent, emitter.clone()).await;
     assert!(result.is_ok());
 
-    let events = emitter.get_events().await;
-
-    let first_session_updated = events
-        .iter()
-        .position(|e| matches!(e, StreamEvent::SessionUpdated { .. }))
-        .expect("first message should emit a SessionUpdated event");
-    let run_complete = events
-        .iter()
-        .position(|e| matches!(e, StreamEvent::RunComplete { .. }))
-        .expect("Should have RunComplete event");
-
-    assert!(
-        first_session_updated < run_complete,
-        "new session must be announced before run completion \
-         (got SessionUpdated at {first_session_updated}, RunComplete at {run_complete})"
-    );
+    // SimpleExecutionEngine's only session announcement is the first-message
+    // one, so a received frame proves creation-time announce (not completion).
+    let frame = typed_rx
+        .try_recv()
+        .expect("first message should publish a SessionUpdated frame on the bus");
+    match frame {
+        crate::gateway::events::GatewayEventFrame::SessionUpdated {
+            session_key,
+            origin_channel,
+        } => {
+            assert_eq!(session_key, SessionKey::main("test-new-session").to_key_string());
+            assert_eq!(
+                origin_channel.as_deref(),
+                Some("telegram"),
+                "the run's channel_id metadata must surface as origin_channel"
+            );
+        }
+        other => panic!("expected SessionUpdated frame, got {other:?}"),
+    }
 }
 
 #[tokio::test]

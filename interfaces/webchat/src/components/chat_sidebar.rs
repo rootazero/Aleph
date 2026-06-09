@@ -43,6 +43,117 @@ struct AgentEntry {
     is_default: bool,
 }
 
+/// Fetch a session's history (+ persisted run traces) and rebuild the
+/// transcript in `chat.messages`. Shared by session selection and the
+/// external-update live refresh (`run.session_updated` with an
+/// `origin_channel`); callers must already have `chat.session_key`
+/// pointing at `key`.
+async fn hydrate_session_history(
+    dash: DashboardState,
+    chat: ChatState,
+    workspace: Option<WorkspaceState>,
+    key: String,
+) {
+    match ChatApi::history(&dash, &key, Some(50)).await {
+        Ok(history) => {
+            // Distinct assistant run_ids → fetch their persisted traces.
+            let run_ids: Vec<String> = {
+                let mut seen = std::collections::HashSet::new();
+                history
+                    .iter()
+                    .filter(|m| m.role == "assistant")
+                    .filter_map(|m| m.run_id.clone())
+                    .filter(|r| seen.insert(r.clone()))
+                    .collect()
+            };
+
+            let traces: std::collections::HashMap<String, Vec<serde_json::Value>> =
+                if run_ids.is_empty() {
+                    std::collections::HashMap::new()
+                } else {
+                    match crate::api::trace::TraceApi::by_runs(&dash, run_ids).await {
+                        Ok(runs) => runs,
+                        Err(e) => {
+                            web_sys::console::warn_1(&format!("trace.by_runs failed: {e}").into());
+                            std::collections::HashMap::new()
+                        }
+                    }
+                };
+
+            // Build the transcript in order: replay traced assistant
+            // runs into the (already-cleared) real chat; push user rows
+            // and trace-less assistant rows as plain bubbles.
+            chat.messages.set(Vec::new());
+            for (i, m) in history.iter().enumerate() {
+                let ts = m
+                    .timestamp
+                    .as_deref()
+                    .and_then(crate::views::chat::timeline::parse_wire_timestamp);
+
+                let traced = m.role == "assistant"
+                    && m.run_id
+                        .as_deref()
+                        .and_then(|r| traces.get(r))
+                        .map(|evs| !evs.is_empty())
+                        .unwrap_or(false);
+
+                let replayed = if traced {
+                    if let (Some(run), Some(ws)) = (m.run_id.as_deref(), workspace) {
+                        let evs = traces.get(run).cloned().unwrap_or_default();
+                        crate::views::chat::events::replay_run(chat, ws, run, &evs, &m.content);
+                        // Stamp the final bubble's timestamp from history
+                        // so day separators stay correct.
+                        let target = format!("assistant-{run}");
+                        chat.messages.update(|msgs| {
+                            if let Some(b) = msgs.iter_mut().rev().find(|b| b.id == target) {
+                                b.timestamp = ts;
+                            }
+                        });
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                // Fall back to a plain bubble whenever replay did NOT
+                // run — including the unreachable "traced but no
+                // workspace" case, so a row is never silently dropped.
+                if !replayed {
+                    chat.messages.update(|msgs| {
+                        msgs.push(crate::views::chat::state::ChatMessage {
+                            timestamp: ts,
+                            id: m.run_id.clone().unwrap_or_else(|| format!("hist-{i}")),
+                            role: m.role.clone(),
+                            content: m.content.clone(),
+                            tool_calls: vec![],
+                            is_streaming: false,
+                            is_intermediate: false,
+                            error: None,
+                            model_info: None,
+                            iteration: None,
+                            is_final: false,
+                            text_finalized: false,
+                        });
+                    });
+                }
+            }
+
+            // Loading an existing session = all activity already "seen";
+            // clear the live-only badge + active-iteration marker that
+            // replay set.
+            if let Some(ws) = workspace {
+                ws.unseen_activity.set(0);
+                ws.current_iteration.set(None);
+            }
+        }
+        Err(e) => {
+            web_sys::console::error_1(&format!("Failed to load history: {e}").into());
+        }
+    }
+}
+
 #[component]
 pub fn ChatSidebar() -> impl IntoView {
     let dashboard = expect_context::<DashboardState>();
@@ -139,12 +250,42 @@ pub fn ChatSidebar() -> impl IntoView {
     });
 
     // Subscribe to session_updated events so the list refreshes automatically.
+    // Frames carrying an `origin_channel` mean another surface (Telegram,
+    // Slack, …) touched the session: if it's the one currently open and no
+    // local run is in flight, re-hydrate the transcript so the Panel mirrors
+    // the channel conversation live. Panel-originated runs publish no origin
+    // and never trigger a self-refresh (no clobbering of streaming state).
     let reload_for_event = reload_data.clone();
     let sub_dash = dashboard;
     let subscription_id = dashboard.subscribe_events(move |event| {
-        if event.topic == "run.session_updated" {
-            reload_for_event(sub_dash);
+        if event.topic != "run.session_updated" {
+            return;
         }
+        reload_for_event(sub_dash);
+
+        let origin = event
+            .data
+            .get("origin_channel")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if origin.is_empty() {
+            return;
+        }
+        let Some(sk) = event.data.get("session_key").and_then(|v| v.as_str()) else {
+            return;
+        };
+        if chat.session_key.get_untracked().as_deref() != Some(sk) {
+            return;
+        }
+        if running.with_untracked(|m| m.contains_key(sk)) {
+            return;
+        }
+        leptos::task::spawn_local(hydrate_session_history(
+            sub_dash,
+            chat,
+            workspace,
+            sk.to_string(),
+        ));
     });
 
     // Subscribe to run lifecycle so each session row can show a live
@@ -254,111 +395,7 @@ pub fn ChatSidebar() -> impl IntoView {
         selected_agent.set(Some(agent_id));
         chat.session_key.set(Some(key.clone()));
 
-        leptos::task::spawn_local(async move {
-            match ChatApi::history(&dash, &key, Some(50)).await {
-                Ok(history) => {
-                    // Distinct assistant run_ids → fetch their persisted traces.
-                    let run_ids: Vec<String> = {
-                        let mut seen = std::collections::HashSet::new();
-                        history
-                            .iter()
-                            .filter(|m| m.role == "assistant")
-                            .filter_map(|m| m.run_id.clone())
-                            .filter(|r| seen.insert(r.clone()))
-                            .collect()
-                    };
-
-                    let traces: std::collections::HashMap<String, Vec<serde_json::Value>> =
-                        if run_ids.is_empty() {
-                            std::collections::HashMap::new()
-                        } else {
-                            match crate::api::trace::TraceApi::by_runs(&dash, run_ids).await {
-                                Ok(runs) => runs,
-                                Err(e) => {
-                                    web_sys::console::warn_1(
-                                        &format!("trace.by_runs failed: {e}").into(),
-                                    );
-                                    std::collections::HashMap::new()
-                                }
-                            }
-                        };
-
-                    // Build the transcript in order: replay traced assistant
-                    // runs into the (already-cleared) real chat; push user rows
-                    // and trace-less assistant rows as plain bubbles.
-                    chat.messages.set(Vec::new());
-                    for (i, m) in history.iter().enumerate() {
-                        let ts = m
-                            .timestamp
-                            .as_deref()
-                            .and_then(crate::views::chat::timeline::parse_wire_timestamp);
-
-                        let traced = m.role == "assistant"
-                            && m.run_id
-                                .as_deref()
-                                .and_then(|r| traces.get(r))
-                                .map(|evs| !evs.is_empty())
-                                .unwrap_or(false);
-
-                        let replayed = if traced {
-                            if let (Some(run), Some(ws)) = (m.run_id.as_deref(), workspace) {
-                                let evs = traces.get(run).cloned().unwrap_or_default();
-                                crate::views::chat::events::replay_run(
-                                    chat, ws, run, &evs, &m.content,
-                                );
-                                // Stamp the final bubble's timestamp from history
-                                // so day separators stay correct.
-                                let target = format!("assistant-{run}");
-                                chat.messages.update(|msgs| {
-                                    if let Some(b) = msgs.iter_mut().rev().find(|b| b.id == target)
-                                    {
-                                        b.timestamp = ts;
-                                    }
-                                });
-                                true
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-
-                        // Fall back to a plain bubble whenever replay did NOT
-                        // run — including the unreachable "traced but no
-                        // workspace" case, so a row is never silently dropped.
-                        if !replayed {
-                            chat.messages.update(|msgs| {
-                                msgs.push(crate::views::chat::state::ChatMessage {
-                                    timestamp: ts,
-                                    id: m.run_id.clone().unwrap_or_else(|| format!("hist-{i}")),
-                                    role: m.role.clone(),
-                                    content: m.content.clone(),
-                                    tool_calls: vec![],
-                                    is_streaming: false,
-                                    is_intermediate: false,
-                                    error: None,
-                                    model_info: None,
-                                    iteration: None,
-                                    is_final: false,
-                                    text_finalized: false,
-                                });
-                            });
-                        }
-                    }
-
-                    // Loading an existing session = all activity already "seen";
-                    // clear the live-only badge + active-iteration marker that
-                    // replay set.
-                    if let Some(ws) = workspace {
-                        ws.unseen_activity.set(0);
-                        ws.current_iteration.set(None);
-                    }
-                }
-                Err(e) => {
-                    web_sys::console::error_1(&format!("Failed to load history: {e}").into());
-                }
-            }
-        });
+        leptos::task::spawn_local(hydrate_session_history(dash, chat, workspace, key));
     };
 
     // Handle agent dropdown change — opens or focuses that agent's tab.

@@ -196,6 +196,32 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         self
     }
 
+    /// Announce a session update on the global event bus so UI sidebars can
+    /// refresh their session list without polling.
+    ///
+    /// Published directly on the bus (mirrors
+    /// `SessionManager::emit_session_updated`) rather than on the per-run
+    /// emitter: channel runs use `ReplyEmitter`, which only routes
+    /// channel-facing events, so an emitter-side announcement never reaches
+    /// the Panel for runs originating from Telegram/Slack/etc.
+    /// `origin_channel` is the triggering channel (`metadata["channel_id"]`),
+    /// `None` for Panel-originated runs.
+    pub(super) fn publish_session_updated(
+        &self,
+        session_key: &crate::gateway::router::SessionKey,
+        origin_channel: Option<&str>,
+    ) {
+        if let Some(bus) = &self.event_bus {
+            let frame = crate::gateway::events::GatewayEventFrame::SessionUpdated {
+                session_key: session_key.to_key_string(),
+                origin_channel: origin_channel
+                    .filter(|c| !c.is_empty())
+                    .map(|c| c.to_string()),
+            };
+            let _ = bus.publish_frame(&frame);
+        }
+    }
+
     /// Set the media processor for multimodal attachment handling.
     pub fn with_media_processor(
         mut self,

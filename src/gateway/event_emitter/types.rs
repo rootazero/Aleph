@@ -184,12 +184,6 @@ pub enum StreamEvent {
         run_id: String,
         model_info: ModelInfo,
     },
-
-    /// Session was updated (new messages added)
-    ///
-    /// Emitted after a run completes so that UI sidebars can refresh
-    /// their session list without polling.
-    SessionUpdated { session_key: String },
 }
 
 /// Suggested action for handling AI uncertainty
