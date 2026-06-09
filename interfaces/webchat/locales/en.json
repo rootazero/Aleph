@@ -297,6 +297,10 @@
     "next_step": "Next step"
   },
   "settings": {
+    "network": {
+      "local_service": "Local Service",
+      "remote_service": "Remote Service"
+    },
     "title": "Settings",
     "welcome": "Welcome to Settings",
     "select_category": "Select a category from the sidebar to configure Aleph Gateway",

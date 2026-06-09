@@ -2,14 +2,15 @@
 //! 仅桌面 Tauri shell 内可交互;纯浏览器内只读降级。
 
 use crate::api::tauri_bridge;
+use crate::i18n::*;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 
 #[component]
 pub fn ConnectionSection() -> impl IntoView {
+    let i18n = use_i18n();
     let in_shell = tauri_bridge::is_shell();
 
-    let current = RwSignal::new(String::new());
     let remote_input = RwSignal::new(String::new());
     let use_remote = RwSignal::new(false);
     let error = RwSignal::new(Option::<String>::None);
@@ -22,9 +23,8 @@ pub fn ConnectionSection() -> impl IntoView {
                 let is_remote = t != "local";
                 use_remote.set(is_remote);
                 if is_remote {
-                    remote_input.set(t.clone());
+                    remote_input.set(t);
                 }
-                current.set(t);
             }
         });
     }
@@ -74,13 +74,13 @@ pub fn ConnectionSection() -> impl IntoView {
                         <input type="radio" name="conn"
                             prop:checked=move || !use_remote.get()
                             on:change=move |_| use_remote.set(false) />
-                        <span class="text-text-primary">"本地服务 Local Service"</span>
+                        <span class="text-text-primary">{t!(i18n, settings.network.local_service)}</span>
                     </label>
                     <label class="flex items-center gap-3">
                         <input type="radio" name="conn"
                             prop:checked=move || use_remote.get()
                             on:change=move |_| use_remote.set(true) />
-                        <span class="text-text-primary">"远程服务 Remote Service"</span>
+                        <span class="text-text-primary">{t!(i18n, settings.network.remote_service)}</span>
                     </label>
 
                     <Show when=move || use_remote.get()>
@@ -101,9 +101,6 @@ pub fn ConnectionSection() -> impl IntoView {
                             on:click=move |_| show_confirm.set(true)>
                             "应用"
                         </button>
-                        <span class="text-xs text-text-tertiary">
-                            "当前:" {move || current.get()}
-                        </span>
                     </div>
 
                     {move || error.get().map(|e| view! { <p class="text-sm text-error">{e}</p> })}

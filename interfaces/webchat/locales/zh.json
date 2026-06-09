@@ -297,6 +297,10 @@
     "next_step": "下一步"
   },
   "settings": {
+    "network": {
+      "local_service": "本地服务",
+      "remote_service": "远程服务"
+    },
     "title": "设置",
     "welcome": "欢迎使用设置",
     "select_category": "从侧边栏选择一个类别来配置 Aleph 网关",
