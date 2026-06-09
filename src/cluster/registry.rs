@@ -120,6 +120,17 @@ impl NodeRegistry {
         inner.nodes_by_id.get(node_id).map(|s| s.channel.clone())
     }
 
+    /// Resolve `(node_id, device_name)` for a connection that is a registered
+    /// node. Returns `None` for non-node / unregistered connections. The center
+    /// uses this to stamp node identity from the AUTHENTICATED connection rather
+    /// than trusting request params (anti-spoof).
+    pub fn node_identity_by_conn(&self, conn_id: &str) -> Option<(String, String)> {
+        let inner = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        let node_id = inner.nodes_by_conn.get(conn_id)?;
+        let s = inner.nodes_by_id.get(node_id)?;
+        Some((s.node_id.clone(), s.device_name.clone()))
+    }
+
     /// 按 name 或 id 解析一个在线节点，返回其反向 RPC 通道 + 声明的命令目录。
     /// 先按 node_id 精确命中，再按 device_name 命中。`node_invoke` 用它寻址 +
     /// fail-fast 校验。
@@ -253,6 +264,17 @@ mod tests {
         let (_, cmds) = reg.resolve("dev-node-a").expect("by name");
         assert_eq!(cmds[0].name, "bash");
         assert!(reg.resolve("nope").is_none());
+    }
+
+    #[test]
+    fn node_identity_by_conn_returns_id_and_name() {
+        let reg = NodeRegistry::new();
+        reg.register(session("node-a", "conn-1")); // device_name = "dev-node-a"
+        assert_eq!(
+            reg.node_identity_by_conn("conn-1"),
+            Some(("node-a".to_string(), "dev-node-a".to_string()))
+        );
+        assert_eq!(reg.node_identity_by_conn("conn-x"), None);
     }
 
     #[test]
