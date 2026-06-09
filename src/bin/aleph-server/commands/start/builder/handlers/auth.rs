@@ -85,6 +85,12 @@ pub(in crate::commands::start) fn register_auth_handlers(
     );
     register_handler!(
         server,
+        "cluster.deregister",
+        cluster_handlers::handle_cluster_deregister,
+        auth_ctx
+    );
+    register_handler!(
+        server,
         "environments.list",
         cluster_handlers::handle_environments_list,
         auth_ctx

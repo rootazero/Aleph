@@ -10,7 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::cluster::NodeRegistry;
+use crate::cluster::{NodeRegistry, ResolveError};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
@@ -62,8 +62,14 @@ node is offline or the command isn't permitted, you get a clear error."#;
     type Output = Value;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let Some((channel, declared)) = self.node_registry.resolve(&args.node) else {
-            return Err(AlephError::tool(format!("node '{}' not online", args.node)));
+        let (channel, declared) = match self.node_registry.resolve(&args.node) {
+            Ok(v) => v,
+            Err(ResolveError::NotFound) => {
+                return Err(AlephError::tool(format!("node '{}' not online", args.node)))
+            }
+            Err(e @ ResolveError::Ambiguous(_)) => {
+                return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
+            }
         };
         // Center-side fail-fast: only reject when the node declared a non-empty
         // catalog that excludes this command. Empty catalog → defer to node authority.
@@ -187,6 +193,35 @@ mod tests {
             .await
             .expect_err("offline node errors");
         assert!(err.to_string().contains("not online"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn ambiguous_node_surfaces_candidates() {
+        let (reg, _rx, _ch) = registry_with_node("id-one", "worker-1", vec!["bash"]);
+        // Second node whose name shares the "worker" substring.
+        let (tx2, _rx2) = mpsc::channel::<String>(8);
+        let ch2 = ReverseRpcChannel::new(tx2);
+        reg.register(NodeSession {
+            node_id: "id-two".to_string(),
+            conn_id: "conn-2".to_string(),
+            device_name: "worker-2".to_string(),
+            channel: ch2,
+            declared_commands: vec![],
+            connected_at: 1,
+        });
+        let tool = NodeInvokeTool::new(reg);
+        let err = tool
+            .call(NodeInvokeArgs {
+                node: "worker".to_string(),
+                command: "bash".to_string(),
+                args: json!({}),
+                timeout_ms: Some(500),
+            })
+            .await
+            .expect_err("ambiguous node errors");
+        let msg = err.to_string();
+        assert!(msg.contains("ambiguous"), "{msg}");
+        assert!(msg.contains("worker-1") && msg.contains("worker-2"), "{msg}");
     }
 
     #[tokio::test]

@@ -68,8 +68,10 @@ const OPERATOR_METHODS: &[&str] = &[
     "devices.set_level",
     "pairing.approve",
     "pairing.reject",
-    // Cluster node enrollment (mints a node token — credential issuance)
+    // Cluster node lifecycle (enroll mints a node token; deregister evicts +
+    // revokes — both are credential/topology mutations)
     "cluster.enroll",
+    "cluster.deregister",
     // Plugin lifecycle
     "plugins.install",
     "plugins.uninstall",
@@ -315,6 +317,10 @@ mod tests {
     fn cluster_enroll_requires_operator_but_environments_list_is_open() {
         assert_eq!(
             required_privilege("cluster.enroll"),
+            MethodPrivilege::Operator
+        );
+        assert_eq!(
+            required_privilege("cluster.deregister"),
             MethodPrivilege::Operator
         );
         assert_eq!(

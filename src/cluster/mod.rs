@@ -17,6 +17,6 @@ pub use node_approval::{ApprovalSlot, CenterApprovalRequester, NODE_APPROVAL_TIM
 pub use node_file_cmd::{FileReadCommand, FileWriteCommand, MAX_FILE_BYTES};
 pub use node_runtime::{CommandTable, NodeCommand};
 pub use registry::{
-    maybe_register_node, CommandDescriptor, Environment, NodeRegistry, NodeSession,
+    maybe_register_node, CommandDescriptor, Environment, NodeRegistry, NodeSession, ResolveError,
 };
 pub use reverse_rpc::{PendingInvokes, ReverseRpcChannel, ReverseRpcError};

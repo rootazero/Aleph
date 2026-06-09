@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::builtin_tools::file_ops::{check_and_resolve_path, get_denied_paths};
-use crate::cluster::{sha256_hex, NodeRegistry, MAX_FILE_BYTES};
+use crate::cluster::{sha256_hex, NodeRegistry, ResolveError, MAX_FILE_BYTES};
 use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
@@ -70,8 +70,14 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
     type Output = Value;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
-        let Some((channel, declared)) = self.node_registry.resolve(&args.node) else {
-            return Err(AlephError::tool(format!("node '{}' not online", args.node)));
+        let (channel, declared) = match self.node_registry.resolve(&args.node) {
+            Ok(v) => v,
+            Err(ResolveError::NotFound) => {
+                return Err(AlephError::tool(format!("node '{}' not online", args.node)))
+            }
+            Err(e @ ResolveError::Ambiguous(_)) => {
+                return Err(AlephError::tool(format!("node '{}' {e}", args.node)))
+            }
         };
         let timeout = args.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
 
