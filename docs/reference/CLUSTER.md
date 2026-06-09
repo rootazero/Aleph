@@ -26,7 +26,8 @@
 | `src/cluster/node_runtime.rs` | 节点侧命令分发(执行臂) | `NodeCommand` / `CommandTable` / `BashNodeCommand` |
 | `src/cluster/node_file_cmd.rs` | 节点侧文件命令 | `FileReadCommand` / `FileWriteCommand` / `MAX_FILE_BYTES` / `sha256_hex` |
 | `src/cluster/node_approval.rs` | 节点侧审批请求器(反向上送中心) | `CenterApprovalRequester` / `ApprovalSlot` / `NODE_APPROVAL_TIMEOUT_MS` |
-| `src/builtin_tools/node_invoke.rs` | 中心侧 **LLM 工具**:在节点上跑命令 | `NodeInvokeTool` |
+| `src/builtin_tools/node_invoke.rs` | 中心侧 **LLM 工具**:在单个节点上跑命令 | `NodeInvokeTool` |
+| `src/builtin_tools/node_invoke_many.rs` | 中心侧 **LLM 工具**:按标签把命令并发扇出到一组节点 | `NodeInvokeManyTool` / `invoke_one` |
 | `src/builtin_tools/node_file.rs` | 中心侧 **LLM 工具**:node↔center 文件传输 | `NodeFileTool` |
 | `src/gateway/handlers/cluster.rs` | 中心侧 RPC:`cluster.enroll` / `cluster.deregister` / `environments.list` | `handle_cluster_enroll` / `handle_cluster_deregister` / `handle_environments_list` |
 | `src/bin/aleph-server/commands/node.rs` | `aleph-server node` 节点拨出运行时 | `handle_node` / `run_session` / `run_pairing` |
@@ -94,8 +95,11 @@ Panel 入口:设置 → **服务与集群 → Aleph 集群 → + Enroll**。
 aleph-server node \
   --center ws://<center-host>:18790 \
   --token  <token-from-enroll> \
-  --name   <node-name>
+  --name   <node-name> \
+  --tag    gpu --tag region=us      # 可重复;经 connect 帧上报,供 node_invoke_many 选择
 ```
+
+标签由 CLI 每次启动提供(经 `connect` 帧上报,出现在 `environments.list`),**不**持久化进凭证、**不**走配对帧。
 
 凭证解析优先级(`handle_node`):**持久化凭证 > `--token` > 交互配对**。
 凭证持久化在 `~/.aleph/node/<name>.json`(unix `0o600`),含 `{node_id, bearer,
@@ -132,6 +136,22 @@ center}`;`bearer` = `"{token}:{signature}"`,作为 `connect` 帧的 `token` 原�
 registry 只存在线会话,故无需"prefer-connected" tie-break。**中心侧 fail-fast**:
 仅当节点声明了非空命令目录且其中不含该命令时才拒绝(空目录→交节点权威)。
 下发即 `channel.call("tool.call", {tool, args})`。
+
+### `node_invoke_many` — 按标签并发扇出
+
+```jsonc
+{ "tags": ["gpu"],            // AND 匹配:节点须含全部 tag;[] = 所有在线节点
+  "command": "bash",          // 每个命中节点都要声明该命令(否则该节点单独报错)
+  "args": { "cmd": "nvidia-smi -L" },
+  "timeout_ms": 120000 }      // 每节点独立超时
+```
+
+经 `NodeRegistry::resolve_all_by_tags`(AND 语义)取命中集合,用 `tokio::task::JoinSet`
+**并发**下发 `tool.call`——墙钟 = 最慢单节点。**容忍部分失败**:逐节点 fail-fast
+(节点声明非空命令目录却不含该命令 → 该节点错,其余照跑),返回聚合
+`{ invoked, succeeded, failed, results:[{node,node_id,ok,(result|error)}] }`。
+**零命中报错**并附"available tags: …"提示(镜像 `resolve` 的 fail-fast 风格)。
+标签纯用于选择,不构成授权层(R7);命令执行权威仍是节点侧 `CommandTable` allowlist。
 
 ### `node_file` — node↔center 文件传输
 
@@ -194,7 +214,7 @@ approve/deny → 决策作 JSON-RPC 响应下行。
 
 | 方向 | 帧 |
 |------|----|
-| node → center | `connect { token, device_name, commands }` |
+| node → center | `connect { token, device_name, commands, tags }` |
 | center → node | 请求 `{ id, method:"tool.call", params:{ tool, args } }` |
 | node → center | 响应 `{ id, result }` / `{ id, error }` |
 | node → center | 请求 `{ id, method:"node.approval.request", params:{ tool, reason } }` |
