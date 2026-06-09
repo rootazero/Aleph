@@ -298,7 +298,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 /* ============================================================
-   Accent Palettes — orthogonal to light/dark/vibrant.
+   Accent Palettes — orthogonal to light/dark.
    Selected via the `data-accent` attribute on <html>. Each palette
    only re-tints the primary / focus / sidebar-accent tokens; the
    neutral surface hierarchy is left untouched. Default (absent or
