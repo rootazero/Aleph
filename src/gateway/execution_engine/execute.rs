@@ -585,11 +585,11 @@ where
                         let session_key_str = request.session_key.to_key_string();
                         match store.get(&session_key_str) {
                             Ok(Some(goal)) => {
+                                let now_ms = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_millis() as u64)
+                                    .unwrap_or(0);
                                 if crate::tasks::goal_pursuit::should_continue(&goal, 0) {
-                                    let now_ms = std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .map(|d| d.as_millis() as u64)
-                                        .unwrap_or(0);
                                     let bumped = goal.clone().spent_continuation(now_ms);
                                     if let Err(e) = store.put(&bumped) {
                                         warn!(
@@ -652,6 +652,34 @@ where
                                             session = %session_key_str,
                                             continuations_used = bumped.continuations_used,
                                             "goal pursuit: enqueued autonomous continuation"
+                                        );
+                                    }
+                                } else if crate::tasks::goal_pursuit::exhausted_while_active(
+                                    &goal, 0,
+                                ) {
+                                    // Active pursuit hit its iteration cap without the
+                                    // model self-reporting complete/blocked. Transition
+                                    // Active→Blocked (codex BudgetLimited parity) so the
+                                    // goal stops surfacing as an active pursuit every turn
+                                    // and the user is cued to take over. Structural
+                                    // backstop, not a judgment about the work (R7).
+                                    let note =
+                                        crate::tasks::goal_pursuit::cap_reached_note(&goal);
+                                    let blocked = goal
+                                        .clone()
+                                        .with_status(crate::goal::GoalStatus::Blocked, now_ms)
+                                        .with_note(Some(note), now_ms);
+                                    if let Err(e) = store.put(&blocked) {
+                                        warn!(
+                                            error = %e,
+                                            session = %session_key_str,
+                                            "goal pursuit: failed to persist cap-reached block"
+                                        );
+                                    } else {
+                                        info!(
+                                            session = %session_key_str,
+                                            continuations_used = goal.continuations_used,
+                                            "goal pursuit: iteration cap reached, goal blocked for user guidance"
                                         );
                                     }
                                 }

@@ -753,7 +753,18 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
         Some(b) => format!(", budget={b}"),
         None => String::new(),
     };
-    Some(format!("{} (status=active{budget})", goal.objective))
+    // Surface autonomous-pursuit pace so the model can self-budget across
+    // continuations (R9 — intelligence in the prompt).
+    let pursuit = match goal.pursuit {
+        crate::goal::PursuitMode::Active { max_iterations } => {
+            format!(", autonomous iteration {}/{}", goal.continuations_used, max_iterations)
+        }
+        crate::goal::PursuitMode::Passive => String::new(),
+    };
+    Some(format!(
+        "{} (status=active{budget}{pursuit})",
+        goal.objective
+    ))
 }
 
 /// Snapshot the tool catalog's `ToolHealthCache` and convert every
