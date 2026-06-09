@@ -240,7 +240,7 @@ fn SettingsSidebar() -> impl IntoView {
         <div class="flex flex-col h-full">
             // Search filter input — sticky so it stays visible when the
             // tab list scrolls.
-            <div class="sticky top-0 z-10 bg-surface-base/95 backdrop-blur px-3 pt-3 pb-2 border-b border-border/50">
+            <div class="sticky top-0 z-10 bg-surface-base/95 aleph-blur-subtle px-3 pt-3 pb-2 border-b border-border/50">
                 <div class="relative">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
                          stroke="currentColor" stroke-width="2" stroke-linecap="round"

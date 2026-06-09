@@ -59,7 +59,7 @@ pub fn MiniMapOverlay(
     view! {
         <div
             class="absolute bottom-4 right-4 rounded-lg overflow-hidden \
-                   border border-border/50 bg-surface-raised/80 backdrop-blur"
+                   border border-border/50 bg-surface-raised/80 aleph-blur-subtle"
             style="width: 200px; height: 200px;"
         >
             <canvas
