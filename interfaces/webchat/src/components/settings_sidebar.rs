@@ -110,7 +110,7 @@ impl SettingsTab {
             Self::Security => t_string!(i18n, settings.tabs.security).to_string(),
             Self::Auth => t_string!(i18n, settings.tabs.auth).to_string(),
             Self::Execution => "Execution".to_string(),
-            Self::Network => "网络".to_string(),
+            Self::Network => "服务与集群".to_string(),
         }
     }
 
@@ -207,7 +207,7 @@ impl SettingsGroup {
             "Channels" => t_string!(i18n, settings.groups.channels).to_string(),
             "Extensions" => t_string!(i18n, settings.groups.extensions).to_string(),
             "Advanced" => t_string!(i18n, settings.groups.advanced).to_string(),
-            "Network" => "网络".to_string(),
+            "Network" => "服务与集群".to_string(),
             other => other.to_string(),
         }
     }
