@@ -309,35 +309,42 @@ async fn run_session(
         }
     });
 
-    while let Some(msg) = read.next().await {
-        let Message::Text(text) = msg? else { continue };
-        let text = text.to_string();
+    // Run the read loop in an inner block so the cleanup below (fail-close the
+    // approval slot + stop the writer) runs on EVERY exit path — including a WS
+    // error early-return via `?`, not just the normal loop fall-through.
+    let loop_result: Result<(), Box<dyn std::error::Error>> = async {
+        while let Some(msg) = read.next().await {
+            let Message::Text(text) = msg? else { continue };
+            let text = text.to_string();
 
-        // Center → node RESPONSE (id + result/error, no method): resolve a
-        // node-initiated reverse-RPC call (e.g. node.approval.request).
-        if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&text) {
-            if resp.id.is_some() && (resp.result.is_some() || resp.error.is_some()) {
-                if let Some(id) = resp.id.clone() {
-                    pending.resolve(&id, resp);
+            // Center → node RESPONSE: resolve a node-initiated reverse-RPC call.
+            if let Ok(resp) = serde_json::from_str::<JsonRpcResponse>(&text) {
+                if resp.id.is_some() && (resp.result.is_some() || resp.error.is_some()) {
+                    if let Some(id) = resp.id.clone() {
+                        pending.resolve(&id, resp);
+                    }
+                    continue;
                 }
-                continue;
             }
+
+            // Center → node REQUEST (tool.call): dispatch on a spawned task so a
+            // long-running command (awaiting approval) does not block this loop.
+            let table = Arc::clone(table);
+            let out = out_tx.clone();
+            tokio::spawn(async move {
+                if let Some(reply) = handle_frame(&table, &text).await {
+                    let _ = out.send(reply).await;
+                }
+            });
         }
-
-        // Center → node REQUEST (tool.call): dispatch on a spawned task so a
-        // long-running command (awaiting approval) does not block this loop.
-        let table = Arc::clone(table);
-        let out = out_tx.clone();
-        tokio::spawn(async move {
-            if let Some(reply) = handle_frame(&table, &text).await {
-                let _ = out.send(reply).await;
-            }
-        });
+        Ok(())
     }
+    .await;
 
-    // Connection ended: fail-close the approval slot and stop the writer.
+    // Cleanup on every exit path: fail-close the approval slot + stop the writer.
     *approval_slot.write().unwrap_or_else(|e| e.into_inner()) = None;
     writer.abort();
+    loop_result?;
     Ok(SessionOutcome::Ended)
 }
 
