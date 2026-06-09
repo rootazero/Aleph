@@ -16,6 +16,7 @@
 
 use serde_json::json;
 
+use crate::agents::swarm::tasks::acceptance::LEAD_REVIEW_METADATA_KEY;
 use crate::agents::swarm::tasks::{
     CoordTaskId, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate, NewCoordTask, Priority,
 };
@@ -108,14 +109,20 @@ pub async fn materialize(
                 }),
             )
         } else {
-            (
-                step.agent.clone(),
-                json!({
-                    MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
-                    "workflow": def.name,
-                    "workflow_step": step.id,
-                }),
-            )
+            let mut meta = json!({
+                MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
+                "workflow": def.name,
+                "workflow_step": step.id,
+            });
+            // Review-gated step: stamp the flag the dispatcher reads at
+            // completion time to park the run in WaitingReview instead of
+            // Completed. Absent for non-reviewed steps (byte-identical rows).
+            if step.review {
+                if let Some(obj) = meta.as_object_mut() {
+                    obj.insert(LEAD_REVIEW_METADATA_KEY.to_string(), json!(true));
+                }
+            }
+            (step.agent.clone(), meta)
         };
 
         let created = match store
@@ -187,6 +194,7 @@ mod tests {
             depends_on: deps.iter().map(|s| s.to_string()).collect(),
             kind: crate::workflow::def::WorkflowStepKind::Agent,
             choices: vec![],
+            review: false,
         }
     }
 
@@ -198,6 +206,7 @@ mod tests {
             depends_on: deps.iter().map(|s| s.to_string()).collect(),
             kind: crate::workflow::def::WorkflowStepKind::Clarify,
             choices: choices.iter().map(|s| s.to_string()).collect(),
+            review: false,
         }
     }
 
@@ -365,6 +374,28 @@ mod tests {
         // The downstream agent step waits on the clarify answer.
         let run = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
         assert_eq!(run.status, CoordTaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn materialize_review_step_stamps_lead_review_flag() {
+        use crate::agents::swarm::tasks::acceptance::lead_review_required;
+        let store = setup_store().await;
+        let mut def = linear_def();
+        def.steps[1].review = true;
+        let mat = materialize(&def, "x", "team-1", &store, None).await.unwrap();
+
+        // Non-reviewed step: no flag key at all (byte-identical to legacy rows).
+        let first = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();
+        assert!(first.metadata.get(LEAD_REVIEW_METADATA_KEY).is_none());
+        assert!(!lead_review_required(&first.metadata));
+
+        // Reviewed step: flag stamped true alongside the dispatcher marker.
+        let second = store.get_task(&mat.task_ids[1]).await.unwrap().unwrap();
+        assert!(lead_review_required(&second.metadata));
+        assert_eq!(
+            second.metadata.get(MANAGED_BY_KEY).and_then(|v| v.as_str()),
+            Some(MANAGED_BY_DISPATCHER)
+        );
     }
 
     #[tokio::test]

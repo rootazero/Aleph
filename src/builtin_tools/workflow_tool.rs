@@ -464,6 +464,7 @@ mod tests {
                     depends_on: vec![],
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
+                    review: false,
                 },
                 WorkflowStepDef {
                     id: "write".into(),
@@ -472,6 +473,7 @@ mod tests {
                     depends_on: vec!["gather".into()],
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
+                    review: false,
                 },
             ],
         }
@@ -799,6 +801,7 @@ mod tests {
                     depends_on: vec![],
                     kind: crate::workflow::WorkflowStepKind::Clarify,
                     choices: vec!["staging".into(), "prod".into()],
+                    review: false,
                 },
                 WorkflowStepDef {
                     id: "run".into(),
@@ -807,6 +810,7 @@ mod tests {
                     depends_on: vec!["ask".into()],
                     kind: crate::workflow::WorkflowStepKind::Agent,
                     choices: vec![],
+                    review: false,
                 },
             ],
         };

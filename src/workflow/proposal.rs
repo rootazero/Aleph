@@ -101,6 +101,7 @@ pub fn skeleton_from_chain(chain: &[String], observations: u32) -> Option<Workfl
                 depends_on,
                 kind: Default::default(),
                 choices: Vec::new(),
+                review: false,
             }
         })
         .collect();

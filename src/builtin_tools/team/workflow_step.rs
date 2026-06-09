@@ -87,11 +87,15 @@ impl AlephTool for WorkflowStepReviewTool {
     const NAME: &'static str = "workflow_step_review";
     const DESCRIPTION: &'static str =
         "Approve / reject / retry / skip a single workflow step. The leader \
-         agent invokes this to control execution flow when \
-         `lead_review_required = true` on a task; downstream dependents \
-         unblock only when an upstream step is Completed or Skipped. When the \
-         task declares acceptance_criteria, judge approval against every item — \
-         the response echoes the checklist for confirmation.";
+         agent invokes this to resolve tasks the dispatcher parked in \
+         waiting_review (steps declared with `review: true`); downstream \
+         dependents unblock only when an upstream step is Completed or \
+         Skipped. When the task declares acceptance_criteria, judge approval \
+         against every item — the response echoes the checklist for \
+         confirmation. The member's result is a self-report, not a verified \
+         fact: before approving claims with external side-effects (files \
+         written, requests sent, things published), verify the handle it \
+         returned (path, URL, id, status code) yourself.";
 
     type Args = WorkflowStepReviewArgs;
     type Output = WorkflowStepReviewOutput;
