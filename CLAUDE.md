@@ -298,6 +298,7 @@ for the full trust-transfer model.
 | WHATSAPP_ARCHITECTURE_DESIGN.md | [docs/reference/WHATSAPP_ARCHITECTURE_DESIGN.md](docs/reference/WHATSAPP_ARCHITECTURE_DESIGN.md) |
 | DESKTOP_BRIDGE.md | [docs/reference/DESKTOP_BRIDGE.md](docs/reference/DESKTOP_BRIDGE.md) |
 | DESKTOP_SHELL.md | [docs/reference/DESKTOP_SHELL.md](docs/reference/DESKTOP_SHELL.md) |
+| **CLUSTER.md** | [docs/reference/CLUSTER.md](docs/reference/CLUSTER.md) — 单中心非对称节点联邦（一核多体）：reverse RPC + `node_invoke`/`node_file` + 命令白名单 + 审批路由 + 存活性 |
 | GOOGLE_MEET_BRIDGE.md | [docs/reference/GOOGLE_MEET_BRIDGE.md](docs/reference/GOOGLE_MEET_BRIDGE.md) — `google_meet` 薄工具契约 + 外部 transport bridge JSON-RPC 协议 |
 
 ---
