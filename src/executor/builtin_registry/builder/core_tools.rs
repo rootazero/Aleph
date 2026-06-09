@@ -140,6 +140,12 @@ impl BuiltinToolRegistry {
         );
         reg(
             tools,
+            "list_models",
+            crate::builtin_tools::list_models::ListModelsTool::DESCRIPTION,
+            schema::<crate::builtin_tools::list_models::ListModelsArgs>("list_models"),
+        );
+        reg(
+            tools,
             "desktop",
             DesktopTool::DESCRIPTION,
             schema::<crate::builtin_tools::desktop::DesktopArgs>("desktop"),
