@@ -18,6 +18,8 @@ use tracing::debug;
 use crate::agents::swarm::tasks::CoordTaskStore;
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
+// Trait must be in scope to call `get_members` on the `dyn TeamStore` roster.
+use crate::teams::TeamStore;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
 use crate::workflow::{self, ClarifyContext, WorkflowDef, WorkflowManifest};
@@ -115,6 +117,11 @@ pub struct WorkflowTool {
     /// without waiting for the fallback tick. `None` → tasks still run on the
     /// dispatcher's periodic tick, just with added latency.
     dispatch_signal: Option<Arc<tokio::sync::Notify>>,
+    /// Team roster used to pre-flight a `run`: before materialising, verify the
+    /// target team actually covers every agent step's `agent`. `None` → the
+    /// check is skipped (the dispatcher still fail-fasts any doomed task with a
+    /// clear reason, just asynchronously).
+    team_store: Option<Arc<dyn crate::teams::TeamStore>>,
 }
 
 impl WorkflowTool {
@@ -125,7 +132,63 @@ impl WorkflowTool {
         Self {
             coord_store,
             dispatch_signal,
+            team_store: None,
         }
+    }
+
+    /// Wire the team roster so `run` can pre-flight team coverage. Builder form
+    /// keeps `new` two-arg (every existing caller and test compiles unchanged);
+    /// `None` leaves the check disabled.
+    pub fn with_team_store(mut self, team_store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
+        self.team_store = team_store;
+        self
+    }
+
+    /// Reject a `run` whose team cannot execute it *before* materialising any
+    /// coord_tasks. A clarify step is owned by the sentinel (not a team member),
+    /// so it is exempt; only agent steps require a covering member. When no team
+    /// store is wired the check is a no-op — the dispatcher still fail-fasts a
+    /// doomed task, just after the run already reported success.
+    ///
+    /// Fails fast with an actionable message naming the uncovered agents and the
+    /// team's actual members, so the LLM can `team_create` / `team_member_add`
+    /// and retry instead of discovering the doomed run by polling task status
+    /// (P7 boundary validation, R8 tool feedback).
+    async fn preflight_team_coverage(&self, def: &WorkflowDef, team_id: &str) -> Result<()> {
+        let Some(team_store) = &self.team_store else {
+            return Ok(());
+        };
+        let members = team_store.get_members(team_id).await?;
+        let covered: std::collections::HashSet<&str> =
+            members.iter().map(|m| m.agent_id.as_str()).collect();
+
+        let mut missing: Vec<&str> = def
+            .steps
+            .iter()
+            .filter(|s| !s.is_clarify())
+            .map(|s| s.agent.as_str())
+            .filter(|a| !covered.contains(a))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        missing.sort_unstable();
+        missing.dedup();
+
+        let have = if covered.is_empty() {
+            "none".to_string()
+        } else {
+            let mut h: Vec<&str> = covered.into_iter().collect();
+            h.sort_unstable();
+            h.join(", ")
+        };
+        Err(AlephError::invalid_input(format!(
+            "workflow '{}' cannot run on team '{team_id}': step agent(s) [{}] are not team members \
+             (current members: {have}). Add them with team_member_add (or create the team with \
+             team_create) first.",
+            def.name,
+            missing.join(", "),
+        )))
     }
 }
 
@@ -224,6 +287,12 @@ impl AlephTool for WorkflowTool {
                 // id/agent/prompt/depends_on (R10: the executor never sees the
                 // interchange metadata).
                 let def = workflow::store::load(&name)?.to_def();
+                // Pre-flight: reject a run the team cannot execute before any
+                // coord_task is created, so the LLM gets an immediate, actionable
+                // error instead of a "success" that the dispatcher then fails
+                // task-by-task in the background (P7 / R8). No-op when no team
+                // store is wired.
+                self.preflight_team_coverage(&def, &team_id).await?;
                 // Capture the originating channel so any `clarify` step can reach
                 // the user from the autonomous dispatcher, where the launching
                 // turn no longer exists. A non-interactive run yields `None`;
@@ -642,6 +711,122 @@ mod tests {
             }
         }
         assert!(res.is_err(), "loading a missing template surfaces an error");
+    }
+
+    // --- run pre-flight: team coverage validation ---
+
+    /// In-memory team store seeded with `members` (each an in-process agent).
+    /// Returns the store plus the freshly-minted team id to target.
+    async fn team_with(members: &[&str]) -> (Arc<dyn crate::teams::TeamStore>, String) {
+        use crate::teams::types::{NewTeam, NewTeamMember};
+        let conn = Connection::open_in_memory().expect("open team db");
+        let store = crate::teams::SqliteTeamStore::new(conn);
+        store.migrate().await.expect("migrate teams");
+        let team = store
+            .create_team(NewTeam {
+                name: "wf-team".into(),
+                description: String::new(),
+                leader_id: "leader".into(),
+            })
+            .await
+            .expect("create team");
+        for m in members {
+            store
+                .add_member(NewTeamMember::for_agent(team.id.clone(), *m, "member"))
+                .await
+                .expect("add member");
+        }
+        (Arc::new(store), team.id)
+    }
+
+    #[tokio::test]
+    async fn preflight_passes_when_team_covers_all_agents() {
+        let (team_store, team_id) = team_with(&["researcher", "writer"]).await;
+        let store = setup_store().await;
+        let t = tool(store, None).with_team_store(Some(team_store));
+        t.preflight_team_coverage(&linear_def(), &team_id)
+            .await
+            .expect("team covers both agents → run is allowed");
+    }
+
+    #[tokio::test]
+    async fn preflight_fails_naming_uncovered_agents() {
+        // Team has the researcher but not the writer → run must be rejected
+        // before any task is materialised, naming the missing agent and the
+        // members that ARE present.
+        let (team_store, team_id) = team_with(&["researcher"]).await;
+        let store = setup_store().await;
+        let t = tool(store, None).with_team_store(Some(team_store));
+        let err = t
+            .preflight_team_coverage(&linear_def(), &team_id)
+            .await
+            .expect_err("missing agent rejects the run");
+        let msg = err.to_string();
+        assert!(msg.contains("writer"), "names the uncovered agent: {msg}");
+        assert!(msg.contains("researcher"), "lists current members: {msg}");
+    }
+
+    #[tokio::test]
+    async fn preflight_reports_no_members_for_unknown_team() {
+        // An unknown team id yields an empty roster, so every agent is missing
+        // and the message says the team has no members.
+        let (team_store, _real) = team_with(&["researcher", "writer"]).await;
+        let store = setup_store().await;
+        let t = tool(store, None).with_team_store(Some(team_store));
+        let err = t
+            .preflight_team_coverage(&linear_def(), "ghost-team")
+            .await
+            .expect_err("unknown team cannot cover any agent");
+        assert!(
+            err.to_string().contains("current members: none"),
+            "empty roster reported: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn preflight_exempts_clarify_step_agents() {
+        // A clarify step is owned by the sentinel, not a team member, so its
+        // (empty) agent must NOT be required. A team covering only the agent
+        // step passes even though the clarify step's agent is unset.
+        let def = WorkflowDef {
+            name: "deploy".into(),
+            description: String::new(),
+            steps: vec![
+                WorkflowStepDef {
+                    id: "ask".into(),
+                    agent: String::new(),
+                    prompt: "Deploy where?".into(),
+                    depends_on: vec![],
+                    kind: crate::workflow::WorkflowStepKind::Clarify,
+                    choices: vec!["staging".into(), "prod".into()],
+                },
+                WorkflowStepDef {
+                    id: "run".into(),
+                    agent: "deployer".into(),
+                    prompt: "deploy".into(),
+                    depends_on: vec!["ask".into()],
+                    kind: crate::workflow::WorkflowStepKind::Agent,
+                    choices: vec![],
+                },
+            ],
+        };
+        let (team_store, team_id) = team_with(&["deployer"]).await;
+        let store = setup_store().await;
+        let t = tool(store, None).with_team_store(Some(team_store));
+        t.preflight_team_coverage(&def, &team_id)
+            .await
+            .expect("clarify step's empty agent is exempt from coverage");
+    }
+
+    #[tokio::test]
+    async fn preflight_noop_without_team_store() {
+        // No team store wired → the check is a no-op (legacy behaviour). Even a
+        // bogus team id passes, leaving the dispatcher to fail-fast later.
+        let store = setup_store().await;
+        let t = tool(store, None);
+        t.preflight_team_coverage(&linear_def(), "whatever")
+            .await
+            .expect("no team store → coverage check skipped");
     }
 
     // --- export / import actions ---

@@ -1071,7 +1071,8 @@ impl BuiltinToolRegistry {
         // dispatch signal wakes the team dispatcher so it starts promptly.
         let workflow_tool = if let Some(ref coord_store) = config.coord_task_store {
             use crate::builtin_tools::workflow_tool::WorkflowTool;
-            let tool = WorkflowTool::new(Arc::clone(coord_store), config.dispatch_signal.clone());
+            let tool = WorkflowTool::new(Arc::clone(coord_store), config.dispatch_signal.clone())
+                .with_team_store(config.team_store.clone());
             {
                 use crate::tools::AlephTool;
                 let td = tool.definition();
