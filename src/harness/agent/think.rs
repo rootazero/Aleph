@@ -1098,7 +1098,6 @@ impl AgentHarness {
                 parent_cancel,
             )
             .await;
-            callback.on_stop_hook_halt(&reason);
             self.set_terminate_reason(
                 crate::orchestrator::dispatch::TerminateReason::StopHookHalt {
                     reason: reason.clone(),

@@ -13,8 +13,8 @@ mod tests;
 
 // Re-export all public types
 pub use types::{
-    ConfidenceLevel, EnhancedRunSummary, OutputMode, ReasoningStepType, RunSequenceManager,
-    RunSummary, StreamEvent, ToolErrorItem, ToolResult, ToolSummaryItem, UncertaintyAction,
+    ConfidenceLevel, OutputMode, ReasoningStepType, RunSequenceManager, RunSummary, StreamEvent,
+    ToolErrorItem, ToolResult, ToolSummaryItem, UncertaintyAction,
 };
 
 pub use impls::{CollectingEventEmitter, DynEventEmitter, GatewayEventEmitter, NoOpEventEmitter};

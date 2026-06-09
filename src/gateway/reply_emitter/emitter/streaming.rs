@@ -305,7 +305,9 @@ impl EventEmitter for ReplyEmitter {
             }
 
             StreamEvent::RunComplete { summary, .. } => {
-                // Guard against duplicate RunComplete (orchestrator drain + engine.rs both emit).
+                // RunComplete is single-sourced from the orchestrator drain
+                // (helpers::run_dispatch_and_drain_classified); keep this
+                // guard as defence against any future duplicate producer.
                 if self.run_complete_handled.swap(true, Ordering::SeqCst) {
                     tracing::debug!(run_id = %self.run_id, "Ignoring duplicate RunComplete");
                     return Ok(());
@@ -374,8 +376,9 @@ impl EventEmitter for ReplyEmitter {
                     self.buffer.lock().await.push_str(&notice);
                 }
 
-                // Optional runtime-metadata footer (model · tokens · cwd).
-                // Off unless `gateway.runtime_footer.enabled = true` in TOML.
+                // Optional runtime-metadata footer (model · tokens · duration
+                // · cost · cwd, plus an opt-in `tools` digest). Off unless
+                // `gateway.runtime_footer.enabled = true` in TOML.
                 if self.config.footer.enabled {
                     let model_label = self.model_label.lock().await.clone();
                     let cwd = std::env::current_dir()
@@ -386,6 +389,9 @@ impl EventEmitter for ReplyEmitter {
                         model: model_label.as_deref(),
                         total_tokens: Some(summary.total_tokens),
                         cwd: cwd.as_deref(),
+                        duration_ms: summary.duration_ms,
+                        cost_usd: summary.estimated_cost_usd,
+                        tool_summaries: &summary.tool_summaries,
                     };
                     let block = crate::gateway::runtime_footer::build_footer_block(
                         &self.config.footer,

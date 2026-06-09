@@ -165,7 +165,10 @@ pub async fn run_dispatch_and_drain_classified(
         }
     });
 
-    // 2. Drain task.
+    // 2. Drain task. Resolves to `true` when the terminal `Complete` event
+    //    was forwarded to the emitter, so step 4 can emit a safety-net
+    //    `RunComplete` in the rare case the broadcast channel lagged past
+    //    the `Complete` frame (or emitting it failed).
     let drain_state = Arc::new(Mutex::new(DrainState::default()));
     let drain = tokio::spawn({
         let emitter = emitter.clone();
@@ -176,21 +179,26 @@ pub async fn run_dispatch_and_drain_classified(
         async move {
             loop {
                 if cancel.is_cancelled() {
-                    break;
+                    return false;
                 }
                 match events.recv().await {
                     Ok(event) => {
                         let is_complete = matches!(event, FlowStreamEvent::Complete(_));
-                        if let Err(e) =
-                            emit_flow_event(event, &emitter, &run_id, &drain_state).await
-                        {
-                            warn!(run_id = %run_id, error = %e, "emit_flow_event failed");
-                        }
-                        if is_complete {
-                            break;
+                        match emit_flow_event(event, &emitter, &run_id, &drain_state).await {
+                            Ok(()) => {
+                                if is_complete {
+                                    return true;
+                                }
+                            }
+                            Err(e) => {
+                                warn!(run_id = %run_id, error = %e, "emit_flow_event failed");
+                                if is_complete {
+                                    return false;
+                                }
+                            }
                         }
                     }
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    Err(broadcast::error::RecvError::Closed) => return false,
                     Err(broadcast::error::RecvError::Lagged(n)) => {
                         warn!(n, run_id = %run_id, "orchestrator stream lagged; dropping frames");
                     }
@@ -206,9 +214,29 @@ pub async fn run_dispatch_and_drain_classified(
         .map_err(|e| DispatchFailure::Fatal(format!("completion dropped: {e}")))?
         .map_err(map_flow_error)?;
 
-    // 4. Let the drain task finish forwarding any in-flight events.
-    let _ = drain.await;
+    // 4. Let the drain task finish forwarding any in-flight events. The
+    //    drain is the single source of the terminal `RunComplete` (the
+    //    degenerate duplicate previously emitted by `ExecutionEngine::
+    //    execute` is gone); if the drain missed the `Complete` frame,
+    //    re-emit it here from the authoritative `FlowOutcome` so channel
+    //    and Panel consumers still observe the run end — with the full
+    //    enriched summary instead of an all-zeros placeholder.
+    let complete_forwarded = drain.await.unwrap_or(false);
     propagate.abort();
+    if !complete_forwarded {
+        let summary = super::event_drain::build_run_summary(&outcome);
+        let seq = emitter.next_seq();
+        let _ = emitter
+            .emit(
+                crate::gateway::event_emitter::StreamEvent::RunComplete {
+                    run_id: run_id.to_string(),
+                    seq,
+                    summary,
+                    total_duration_ms: outcome.duration_ms,
+                },
+            )
+            .await;
+    }
 
     // 5. Map `hit_limit` → i18n loop-halt message, dispatched on the rich
     //    `terminate_reason` so the user gets root-cause-specific advice
