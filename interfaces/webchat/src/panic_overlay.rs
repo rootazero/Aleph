@@ -51,7 +51,7 @@ fn hook(info: &PanicHookInfo<'_>) {
     }));
 }
 
-/// Best-effort capture of the JS backtrace at panic time. With the wasm name
+/// Best-effort capture of the JS call stack from within the panic hook. With
 /// section preserved (the `wasm-release` profile), these frames carry Rust
 /// symbol names. Returns an empty string if unavailable.
 fn capture_js_stack() -> String {
@@ -138,9 +138,9 @@ fn mount_overlay(message: &str, stack: &str, crash_count: usize) {
         details.push_str("\n\n");
         details.push_str(&escape_html(stack));
     }
-    let note = format!(
+    let note = escape_html(&format!(
         "{crash_count} crash report(s) saved · localStorage key: {CRASH_LOG_KEY}"
-    );
+    ));
     overlay.set_inner_html(&format!(
         "<div style=\"max-width:640px;width:100%;\
                       background:#1a1a1a;border:1px solid rgba(239,68,68,0.4);\
