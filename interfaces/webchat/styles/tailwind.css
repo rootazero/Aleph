@@ -156,6 +156,10 @@
   --safe-area-right:  env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left:   env(safe-area-inset-left, 0px);
+
+  /* Glass material strength — overridden by html.glass to intensify. */
+  --glass-blur: 23px;
+  --glass-saturate: 1.6;
 }
 
 html {
@@ -433,8 +437,8 @@ html.dark[data-accent="rose"] {
 @layer components {
   .glass {
     position: relative;
-    backdrop-filter: blur(23px) saturate(1.6);
-    -webkit-backdrop-filter: blur(23px) saturate(1.6);
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   }
 }
 /* Gradient specular edge — bright at the top, fading down. Painted once,
@@ -776,8 +780,8 @@ html:not([data-platform="macos"]) body { background-color: var(--aleph-solid-gro
   inset: 0;
   z-index: -1;
   pointer-events: none;
-  backdrop-filter: blur(23px) saturate(1.6);
-  -webkit-backdrop-filter: blur(23px) saturate(1.6);
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
 }
 
 /* Brand row — hugs the top of the sidebar by default. On macOS the row
