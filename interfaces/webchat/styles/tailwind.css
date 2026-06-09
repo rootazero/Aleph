@@ -157,9 +157,15 @@
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left:   env(safe-area-inset-left, 0px);
 
-  /* Glass material strength — overridden by html.glass to intensify. */
-  --glass-blur: 23px;
+  /* Tiered blur strengths. Transient popovers (`--glass-blur`) may be lush;
+     the always-on sidebar (`--glass-blur-chrome`) stays disciplined; small
+     in-content frosts and the full-viewport scrim are deliberately light.
+     `html.glass` intensifies the transient + chrome tiers only. */
+  --glass-blur: 20px;
   --glass-saturate: 1.6;
+  --glass-blur-chrome: 16px;
+  --glass-blur-subtle: 8px;
+  --scrim-blur: 2px;
 }
 
 html {
@@ -733,9 +739,12 @@ html.glass {
   --aleph-sheen:    oklch(1 0 0 / 0.07);
   /* Cards: a touch more transparent than Dark so they read glassier on aurora. */
   --color-surface-raised: oklch(0.25 0.020 300 / 0.40);
-  /* Intensified glass material — pushed past the restrained default. */
-  --glass-blur: 30px;
-  --glass-saturate: 1.9;
+  /* Intensified glass material — pushed past the restrained default.
+     Transient popovers go lush (34px); the always-on sidebar tier
+     (--glass-blur-chrome) stays at 24px to cap idle GPU cost. */
+  --glass-blur: 34px;
+  --glass-saturate: 2.0;
+  --glass-blur-chrome: 24px;
 }
 @media (prefers-color-scheme: dark) {
   :root:not(.light):not(.glass) {
