@@ -215,6 +215,11 @@ pub enum Command {
         /// Human-readable node name shown in `environments.list`.
         #[arg(long, value_name = "NAME", default_value = "aleph-node")]
         name: String,
+        /// Operator label for tag-based fan-out (repeatable), e.g.
+        /// `--tag gpu --tag region=us`. Stored verbatim; shown in
+        /// `environments.list` and used by `node_invoke_many`.
+        #[arg(long = "tag", value_name = "TAG")]
+        tags: Vec<String>,
     },
     /// SP-3a internal: apply restricted token + Low IL then spawn target
     /// via CreateProcessAsUserW. Invoked by WindowsSandboxDriver; not
@@ -772,6 +777,7 @@ mod tests {
                 center,
                 token,
                 name,
+                ..
             }) => {
                 assert_eq!(center, "ws://127.0.0.1:18790");
                 assert_eq!(token.as_deref(), Some("node-tok"));
@@ -794,6 +800,34 @@ mod tests {
         .unwrap();
         match args.command {
             Some(Command::Node { name, .. }) => assert_eq!(name, "aleph-node"),
+            _ => panic!("Expected Node command"),
+        }
+    }
+
+    #[test]
+    fn node_command_collects_repeated_tags() {
+        let cli = Args::try_parse_from([
+            "aleph-server", "node",
+            "--center", "ws://127.0.0.1:18790",
+            "--name", "gpu-1",
+            "--tag", "gpu",
+            "--tag", "region=us",
+        ])
+        .expect("parses");
+        match cli.command {
+            Some(Command::Node { tags, .. }) => {
+                assert_eq!(tags, vec!["gpu".to_string(), "region=us".to_string()]);
+            }
+            _ => panic!("Expected Node command"),
+        }
+    }
+
+    #[test]
+    fn node_command_defaults_to_no_tags() {
+        let cli = Args::try_parse_from(["aleph-server", "node", "--center", "ws://c"])
+            .expect("parses");
+        match cli.command {
+            Some(Command::Node { tags, .. }) => assert!(tags.is_empty()),
             _ => panic!("Expected Node command"),
         }
     }

@@ -112,6 +112,7 @@ pub async fn handle_node(
     center: String,
     token: Option<String>,
     name: String,
+    tags: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (table, approval_slot) = build_command_table(&name);
     let table = Arc::new(table);
@@ -137,7 +138,7 @@ pub async fn handle_node(
 
     let mut backoff = BACKOFF_INITIAL_MS;
     loop {
-        match run_session(&url, &bearer, &name, &declared, &table, &approval_slot).await {
+        match run_session(&url, &bearer, &name, &declared, &tags, &table, &approval_slot).await {
             Ok(SessionOutcome::Ended) => {
                 tracing::warn!("node session ended cleanly; reconnecting");
                 backoff = BACKOFF_INITIAL_MS;
@@ -266,6 +267,7 @@ async fn run_session(
     token: &str,
     name: &str,
     declared: &[CommandDescriptor],
+    tags: &[String],
     table: &Arc<CommandTable>,
     approval_slot: &ApprovalSlot,
 ) -> Result<SessionOutcome, Box<dyn std::error::Error>> {
@@ -274,7 +276,7 @@ async fn run_session(
 
     let connect = json!({
         "jsonrpc": "2.0", "id": 1, "method": "connect",
-        "params": { "token": token, "device_name": name, "commands": declared }
+        "params": { "token": token, "device_name": name, "commands": declared, "tags": tags }
     });
     write.send(Message::Text(connect.to_string().into())).await?;
     let reply = read

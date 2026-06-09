@@ -124,6 +124,7 @@ mod tests {
                 .into_iter()
                 .map(|c| CommandDescriptor { name: c.to_string(), schema: json!({}) })
                 .collect(),
+            tags: vec![],
             connected_at: 1,
         });
         (reg, rx, channel)
@@ -207,6 +208,7 @@ mod tests {
             device_name: "worker-2".to_string(),
             channel: ch2,
             declared_commands: vec![],
+            tags: vec![],
             connected_at: 1,
         });
         let tool = NodeInvokeTool::new(reg);

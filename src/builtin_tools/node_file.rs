@@ -235,6 +235,7 @@ mod tests {
                 .into_iter()
                 .map(|c| CommandDescriptor { name: c.to_string(), schema: json!({}) })
                 .collect(),
+            tags: vec![],
             connected_at: 1,
         });
         (reg, rx, channel)
@@ -352,6 +353,7 @@ mod tests {
             device_name: "worker-1".to_string(),
             channel: channel.clone(),
             declared_commands: vec![CommandDescriptor { name: "file.read".into(), schema: json!({}) }],
+            tags: vec![],
             connected_at: 1,
         });
         // Responder lies: content "real" but sha of "fake".
