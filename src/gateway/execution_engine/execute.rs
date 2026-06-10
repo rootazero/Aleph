@@ -190,10 +190,18 @@ where
 
         // Store user message in session (with attachment markers for history).
         // Shared with the mid-loop steering path so both render identically.
-        let session_text = super::steering::render_user_session_text(&request);
-        agent
-            .add_message(&request.session_key, MessageRole::User, &session_text)
-            .await;
+        //
+        // Resume-style runs (crash resume, post-run steering rescue) carry no
+        // fresh input — the session log already holds the full trajectory —
+        // so storing their empty placeholder would only pollute channel
+        // history with blank user turns.
+        let is_resume = request.metadata.get("resume").map(String::as_str) == Some("true");
+        if !is_resume {
+            let session_text = super::steering::render_user_session_text(&request);
+            agent
+                .add_message(&request.session_key, MessageRole::User, &session_text)
+                .await;
+        }
 
         // Announce the session the moment it's created (first message), not just
         // when the run completes. Without this, a brand-new session is silent for
@@ -553,16 +561,21 @@ where
                     }
                 }
 
-                // Async write to memory system (Layer 1)
-                if let Some(ref mb) = self.memory_backend {
-                    let mb = mb.clone();
-                    let sk = request.session_key.to_key_string();
-                    let agent_id = request.session_key.agent_id().to_string();
-                    let ui = request.input.clone();
-                    let ao = response.clone();
-                    tokio::spawn(async move {
-                        super::history::write_conversation_memory(mb, sk, agent_id, ui, ao).await;
-                    });
+                // Async write to memory system (Layer 1). Resume-style runs
+                // have no fresh user input — a blank user/assistant pair is
+                // noise in raw memory, so skip the write.
+                if !is_resume {
+                    if let Some(ref mb) = self.memory_backend {
+                        let mb = mb.clone();
+                        let sk = request.session_key.to_key_string();
+                        let agent_id = request.session_key.agent_id().to_string();
+                        let ui = request.input.clone();
+                        let ao = response.clone();
+                        tokio::spawn(async move {
+                            super::history::write_conversation_memory(mb, sk, agent_id, ui, ao)
+                                .await;
+                        });
+                    }
                 }
                 // Record conversation turn for compression scheduling.
                 // Signal-aware: corrections compress immediately; other turns
@@ -748,6 +761,46 @@ where
             tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
             runs_clone.write().await.remove(&run_id_clone);
         });
+
+        // codex `maybe_start_turn_for_pending_work` parity: a steering message
+        // that landed after the harness's final follow-up check — but before
+        // this run's state flipped out of `Running` above — was acknowledged
+        // into the session log yet has no live loop left to answer it. The
+        // state flip makes further injections impossible, so one bounded
+        // re-read here closes the race: if an unanswered burst remains,
+        // re-drive the loop over the existing log via the resume flow,
+        // reusing this run's emitter so the answer reaches the same client.
+        // Deliberately limited to `Completed` runs — a cancelled run means the
+        // user asked the agent to stop, so pending messages wait for the next
+        // interaction instead of restarting the loop they just killed.
+        if matches!(final_state, RunState::Completed) {
+            if let Some(rescue) =
+                super::steering::build_steering_rescue_request(self.orchestrator.as_ref(), &request)
+                    .await
+            {
+                info!(
+                    session = %request.session_key.to_key_string(),
+                    rescue_run = %rescue.run_id,
+                    "post-run steering rescue: unanswered steering burst detected; re-driving loop",
+                );
+                // The rescue's outcome must NOT replace the original run's
+                // result: the original message was already answered, and
+                // propagating e.g. a rescue `AgentBusy` (another run grabbed
+                // the freed slot — it reads the same log and covers the
+                // burst) would make the inbound router's busy/retry loop
+                // re-execute the already-answered original message. Log and
+                // swallow; the burst is never dropped — at worst it defers to
+                // the next interaction. Box::pin breaks the infinitely-sized
+                // recursive future.
+                if let Err(e) = Box::pin(self.execute(rescue, agent, emitter)).await {
+                    warn!(
+                        session = %request.session_key.to_key_string(),
+                        error = %e,
+                        "post-run steering rescue run failed; burst defers to next interaction",
+                    );
+                }
+            }
+        }
 
         final_result
     }

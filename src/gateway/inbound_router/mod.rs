@@ -760,6 +760,14 @@ impl InboundMessageRouter {
             }
         }
 
+        // /stop (alias /abort): cancel the run executing on this session.
+        // Intercepted before agent dispatch like /btw — the command must act
+        // immediately, never be queued behind (or steered into) the very run
+        // it is stopping.
+        if btw_stripped.trim() == "/stop" || btw_stripped.trim() == "/abort" {
+            return self.handle_stop(&msg, &ctx).await;
+        }
+
         // Unified slash command interception
         if ctx.message.text.trim().starts_with('/') {
             let slash_text = strip_bot_mention(ctx.message.text.trim());

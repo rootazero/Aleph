@@ -250,6 +250,60 @@ impl InboundMessageRouter {
         Ok(())
     }
 
+    /// Handle /stop (alias /abort): cancel the run currently executing on this
+    /// session and confirm to the user.
+    ///
+    /// OpenClaw `/stop` / codex `Op::Interrupt` parity — the cancel machinery
+    /// (`ExecutionEngine::cancel`, Panel `chat.abort`) predates this but was
+    /// unreachable from channels, so a Telegram user could steer a long
+    /// autonomous loop but never stop it. The command is intercepted here and
+    /// never reaches the agent loop; steering messages already injected into
+    /// the session log stay in place — the next run sees them alongside the
+    /// interruption marker and the model decides whether they still apply (R7).
+    pub(super) async fn handle_stop(
+        &self,
+        msg: &InboundMessage,
+        ctx: &InboundContext,
+    ) -> Result<(), RoutingError> {
+        let cancelled = match self.execution_adapter.as_ref() {
+            Some(adapter) => adapter
+                .cancel_session(&ctx.session_key)
+                .await
+                .unwrap_or_else(|e| {
+                    warn!(
+                        session = %ctx.session_key.to_key_string(),
+                        error = %e,
+                        "[Router] /stop: cancel_session failed"
+                    );
+                    None
+                }),
+            None => None,
+        };
+
+        if let Some(ref run_id) = cancelled {
+            info!(
+                session = %ctx.session_key.to_key_string(),
+                run_id = %run_id,
+                "[Router] /stop: cancelled running run"
+            );
+        }
+
+        let locale = self.resolve_locale().await;
+        let reply_text = crate::gateway::i18n::t(
+            if cancelled.is_some() {
+                crate::gateway::i18n::Msg::RunStopped
+            } else {
+                crate::gateway::i18n::Msg::NoActiveRun
+            },
+            locale,
+        );
+        let reply = OutboundMessage::text(msg.conversation_id.as_str(), &reply_text);
+        if let Err(e) = self.channel_registry.send(&msg.channel_id, reply).await {
+            error!("[Router] Failed to send /stop reply: {}", e);
+        }
+        Ok(())
+    }
+
     /// Generate a topic summary for the current session using LLM
     pub(super) async fn generate_session_topic(&self, session_key: &SessionKey) -> Option<String> {
         let sm = self.session_store.as_ref()?;

@@ -306,4 +306,28 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         info!("Sent cancellation signal for run {}", run_id);
         Ok(())
     }
+
+    /// Cancel the `Running` run on `session_key`, if any. Returns the
+    /// cancelled run's id, or `None` when nothing is running on the session.
+    ///
+    /// Channel-facing seam for `/stop`: channels know their session key, not
+    /// the engine-internal run id. Reuses the same same-session predicate as
+    /// the busy-input paths (`find_steering_target_id`, with no run excluded —
+    /// the empty exclusion id never matches a real run).
+    pub async fn cancel_session(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Result<Option<String>, ExecutionError> {
+        let target = {
+            let runs = self.active_runs.read().await;
+            super::steering::find_steering_target_id(&runs, "", session_key)
+        };
+        match target {
+            Some(run_id) => {
+                self.cancel(&run_id).await?;
+                Ok(Some(run_id))
+            }
+            None => Ok(None),
+        }
+    }
 }

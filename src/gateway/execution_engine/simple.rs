@@ -355,6 +355,26 @@ impl SimpleExecutionEngine {
         info!("Sent cancellation signal for run {}", run_id);
         Ok(())
     }
+
+    /// Cancel the `Running` run on `session_key`, if any. Mirrors
+    /// [`super::engine::ExecutionEngine::cancel_session`] so `/stop` works
+    /// against the provider-less fallback engine too.
+    pub async fn cancel_session(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Result<Option<String>, ExecutionError> {
+        let target = {
+            let runs = self.active_runs.read().await;
+            super::steering::find_steering_target_id(&runs, "", session_key)
+        };
+        match target {
+            Some(run_id) => {
+                self.cancel(&run_id).await?;
+                Ok(Some(run_id))
+            }
+            None => Ok(None),
+        }
+    }
 }
 
 impl Default for SimpleExecutionEngine {
@@ -387,6 +407,13 @@ impl ExecutionAdapter for SimpleExecutionEngine {
 
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError> {
         SimpleExecutionEngine::cancel(self, run_id).await
+    }
+
+    async fn cancel_session(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Result<Option<String>, ExecutionError> {
+        SimpleExecutionEngine::cancel_session(self, session_key).await
     }
 
     async fn get_status(&self, run_id: &str) -> Option<RunStatus> {

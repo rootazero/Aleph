@@ -144,6 +144,103 @@ pub(super) fn count_pending_steering(events: &[SessionEventRecord]) -> usize {
         .count()
 }
 
+/// Metadata key counting consecutive post-run steering rescues on a session.
+/// Carried on the rescue `RunRequest` so a pathological injector that keeps
+/// landing messages in the teardown window cannot chain rescues forever.
+pub(super) const STEERING_RESCUE_DEPTH_KEY: &str = "steering_rescue_depth";
+
+/// Max consecutive rescue runs (bounds the codex
+/// `maybe_start_turn_for_pending_work` parity loop). Each extra rescue
+/// requires a message to land in the narrow teardown window of the *previous*
+/// rescue, so 2 already covers pathological timing; past the cap the burst
+/// waits for the next user interaction — deferred, never dropped.
+pub(super) const MAX_STEERING_RESCUE_DEPTH: usize = 2;
+
+/// Parse the rescue depth carried in `metadata` and return the depth the next
+/// rescue run should carry, or `None` once the cap is reached. Pure so the
+/// bound is unit-testable without an orchestrator.
+pub(super) fn next_rescue_depth(metadata: &HashMap<String, String>) -> Option<usize> {
+    let depth = metadata
+        .get(STEERING_RESCUE_DEPTH_KEY)
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    (depth < MAX_STEERING_RESCUE_DEPTH).then_some(depth + 1)
+}
+
+/// Build the run that closes the steering teardown race (codex
+/// `maybe_start_turn_for_pending_work` parity).
+///
+/// A steering message that lands *after* the harness's final follow-up check
+/// but *before* the run's state flips out of `Running` is acknowledged into
+/// the session log (the injector saw a `Running` sibling) yet has no live
+/// loop left to answer it — without this, it sits unanswered until the user
+/// sends a second message. Called by `execute()` after the state flip, at
+/// which point further injections are impossible, so one bounded re-read of
+/// the log decides race-free: an unanswered burst remains → re-drive the loop
+/// over the existing log via the resume flow (`metadata["resume"]`), which
+/// seeds no new user message — the orphaned steering message already in the
+/// log is exactly what the rescue must answer.
+///
+/// Returns `None` when there is nothing to rescue, the orchestrator is not
+/// wired, the log cannot be read (fail closed — the busy/retry path still
+/// covers genuinely lost messages on their next delivery), or the rescue
+/// depth cap is reached.
+pub(super) async fn build_steering_rescue_request(
+    orchestrator: &OnceLock<Arc<Orchestrator>>,
+    request: &RunRequest,
+) -> Option<RunRequest> {
+    let Some(next_depth) = next_rescue_depth(&request.metadata) else {
+        tracing::warn!(
+            session = %request.session_key.to_key_string(),
+            cap = MAX_STEERING_RESCUE_DEPTH,
+            "post-run steering rescue: depth cap reached; deferring burst to next interaction",
+        );
+        return None;
+    };
+    let orchestrator = orchestrator.get()?;
+    let session_id: SessionId = request.session_key.clone();
+    let events = orchestrator
+        .session_service
+        .get_events(&session_id, None, None)
+        .await
+        .ok()?;
+    if count_pending_steering(&events) == 0 {
+        return None;
+    }
+
+    let mut metadata = request.metadata.clone();
+    metadata.insert("resume".to_string(), "true".to_string());
+    metadata.insert(
+        STEERING_RESCUE_DEPTH_KEY.to_string(),
+        next_depth.to_string(),
+    );
+    // Strip slash-command residue: the rescue is a plain loop continuation and
+    // must never re-enter the fast path or re-apply a skill overlay.
+    metadata.remove(crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY);
+    metadata.remove("slash_skill_instructions");
+    metadata.remove("slash_skill_allowed_tools");
+    // Strip the busy-input policy: if another run grabbed the freed slot
+    // first (it reads the same log, so it covers the orphaned burst), an
+    // inherited `Interrupt` would cancel that legitimate sibling. Absent key
+    // → default `Steer`, and the empty-input guard in `try_inject_steering`
+    // keeps the rescue from injecting a blank message — it just dissolves.
+    metadata.remove(super::BUSY_INPUT_MODE_KEY);
+
+    Some(RunRequest {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        input: String::new(),
+        session_key: request.session_key.clone(),
+        timeout_secs: request.timeout_secs,
+        metadata,
+        attachments: Vec::new(),
+        pending_media: Default::default(),
+        sandbox_override: request.sandbox_override.clone(),
+        workspace_override: request.workspace_override.clone(),
+        max_iterations_override: request.max_iterations_override,
+        model_override: request.model_override.clone(),
+    })
+}
+
 /// Try to deliver `request` as a mid-loop steering message into the session's
 /// already-running loop. Returns `true` when the message was injected (the
 /// caller should treat the run as accepted and skip the `AgentBusy` path).
@@ -184,6 +281,13 @@ pub(super) async fn try_inject_steering(
     new_run_id: &str,
 ) -> bool {
     if !enabled {
+        return false;
+    }
+
+    // Nothing to say, nothing to inject: a request with no text and no
+    // attachments (e.g. a resume-style run that lost the slot race) would
+    // append a blank user message to the live log. Fall back to busy/retry.
+    if request.input.trim().is_empty() && request.attachments.is_empty() {
         return false;
     }
 
@@ -503,6 +607,27 @@ mod tests {
             rec_user("steer-2", false),
         ];
         assert_eq!(count_pending_steering(&events), 1);
+    }
+
+    // ---- next_rescue_depth (post-run rescue bound) ----
+
+    #[test]
+    fn rescue_depth_starts_at_one_and_caps() {
+        let mut meta = HashMap::new();
+        // First rescue on a normal run (no key) carries depth 1.
+        assert_eq!(next_rescue_depth(&meta), Some(1));
+        // A garbage value degrades to the no-key default, never a panic.
+        meta.insert(STEERING_RESCUE_DEPTH_KEY.to_string(), "nope".to_string());
+        assert_eq!(next_rescue_depth(&meta), Some(1));
+        // Chained rescue increments…
+        meta.insert(STEERING_RESCUE_DEPTH_KEY.to_string(), "1".to_string());
+        assert_eq!(next_rescue_depth(&meta), Some(2));
+        // …until the cap, where the burst defers to the next interaction.
+        meta.insert(
+            STEERING_RESCUE_DEPTH_KEY.to_string(),
+            MAX_STEERING_RESCUE_DEPTH.to_string(),
+        );
+        assert_eq!(next_rescue_depth(&meta), None);
     }
 
     #[test]
