@@ -5,6 +5,19 @@ use crate::gateway::handlers::parse_params;
 use crate::gateway::handlers::plugins::handlers::get_extension_manager;
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 
+/// A plugin name is joined onto the plugins directory and used for
+/// destructive filesystem operations (remove_dir_all, marker writes), so it
+/// must be a single normal path component — no separators, no `..`, not
+/// absolute. Anything else could escape the plugins directory.
+fn is_safe_plugin_name(name: &str) -> bool {
+    use std::path::Component;
+    let mut comps = std::path::Path::new(name).components();
+    matches!(
+        (comps.next(), comps.next()),
+        (Some(Component::Normal(_)), None)
+    )
+}
+
 /// List all installed plugins
 pub async fn handle_list(request: JsonRpcRequest) -> JsonRpcResponse {
     let manager = match get_extension_manager() {
@@ -33,6 +46,14 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    if !is_safe_plugin_name(&params.name) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Invalid plugin name: {}", params.name),
+        );
+    }
 
     let plugins_dir = crate::extension::default_plugins_dir();
     let plugin_path = plugins_dir.join(&params.name);
@@ -88,6 +109,14 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
         Err(e) => return e,
     };
 
+    if !is_safe_plugin_name(&params.name) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Invalid plugin name: {}", params.name),
+        );
+    }
+
     let plugins_dir = crate::extension::default_plugins_dir();
     let plugin_path = plugins_dir.join(&params.name);
 
@@ -130,6 +159,14 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
         Ok(p) => p,
         Err(e) => return e,
     };
+
+    if !is_safe_plugin_name(&params.name) {
+        return JsonRpcResponse::error(
+            request.id,
+            INVALID_PARAMS,
+            format!("Invalid plugin name: {}", params.name),
+        );
+    }
 
     let plugins_dir = crate::extension::default_plugins_dir();
     let plugin_path = plugins_dir.join(&params.name);

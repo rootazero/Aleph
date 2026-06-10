@@ -492,6 +492,16 @@ impl EventHandler for Handler {
             }
         }
 
+        // Mirror the channel allowlist enforced for regular messages —
+        // slash commands must not bypass `allowed_channels`.
+        if !self.config.is_channel_allowed(command.channel_id.get()) {
+            tracing::debug!(
+                "Slash command from channel {} ignored (not in allowlist)",
+                command.channel_id
+            );
+            return;
+        }
+
         tracing::info!(
             "Slash command: /{} from user {}",
             command.data.name,

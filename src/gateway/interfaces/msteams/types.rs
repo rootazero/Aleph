@@ -245,7 +245,10 @@ fn html_to_plain_text(html: &str) -> String {
 /// The sender is in `<strong itemprop="mri">` and body in `<p itemprop="copy">`.
 pub fn extract_quote_info(attachments: &[ActivityAttachment]) -> Option<QuoteInfo> {
     for att in attachments {
-        let content = att.content.as_ref()?;
+        // Skip attachments without content instead of aborting the whole scan.
+        let Some(content) = att.content.as_ref() else {
+            continue;
+        };
 
         // Content might be a JSON object with text/body fields
         let html = if let Some(obj) = content.as_object() {

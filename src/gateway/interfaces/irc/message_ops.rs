@@ -169,6 +169,21 @@ impl IrcMessageOps {
         let formatted = MessageFormatter::format(text, MarkupFormat::IrcFormatting);
         let chunks = MessageFormatter::split(&formatted, MAX_PRIVMSG_PAYLOAD);
 
+        // The target sits in the middle of the raw command line: embedded
+        // CR/LF would terminate the line and inject a new command, and a
+        // space would inject extra parameters (same injection class as the
+        // trailing text handled below). Legit IRC targets never contain
+        // control characters or spaces.
+        let target: String = target
+            .chars()
+            .filter(|c| !c.is_control() && *c != ' ')
+            .collect();
+        if target.is_empty() {
+            return Err(ChannelError::SendFailed(
+                "IRC target is empty after sanitization".to_string(),
+            ));
+        }
+
         for chunk in &chunks {
             // IRC messages are strictly single-line: a raw CR/LF inside the
             // trailing parameter terminates the line and lets the remainder be

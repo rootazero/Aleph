@@ -62,9 +62,11 @@ impl TokenManager {
         let result = self.fetch_token(client).await;
         if let Ok(ref token) = result {
             let _ = tx.send(token.clone());
-        } else {
-            let _ = self.in_flight.lock().await.take();
         }
+        // Always clear the in-flight slot. A oneshot receiver left behind
+        // buffers the sent token forever, so a later caller (e.g. after the
+        // token expires) would take it and get back a stale, expired token.
+        let _ = self.in_flight.lock().await.take();
         result
     }
 

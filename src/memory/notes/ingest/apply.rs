@@ -401,7 +401,9 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
             chrono::Utc::now().format("%Y-%m-%d")
         );
         let combined = format!("{body}{marker}");
-        tokio::fs::write(&disk, &combined)
+        // Atomic write (temp + rename) — a plain fs::write can leave a
+        // truncated source-of-truth file on a crash mid-write.
+        crate::utils::atomic_write::atomic_write_file(&disk, &combined)
             .await
             .map_err(|e| AlephError::other(format!("supersede: write: {e}")))?;
         if let Ok(n) = KnowledgeNote::from_markdown(&safe, &combined) {

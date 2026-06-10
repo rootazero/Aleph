@@ -137,6 +137,15 @@ fn parse_private_key(hex_key: &str) -> Result<SigningKey, SecretError> {
         zeroize::Zeroizing::new(hex::decode(key_str).map_err(|e| {
             SecretError::EncryptionFailed(format!("Invalid hex private key: {}", e))
         })?);
+    // Length must be checked before the GenericArray conversion below:
+    // `From<&[u8]> for &GenericArray<u8, U32>` panics on length mismatch,
+    // and the key value is runtime vault data.
+    if key_bytes.len() != 32 {
+        return Err(SecretError::EncryptionFailed(format!(
+            "Invalid private key length: expected 32 bytes, got {}",
+            key_bytes.len()
+        )));
+    }
     SigningKey::from_bytes((&key_bytes[..]).into())
         .map_err(|e| SecretError::EncryptionFailed(format!("Invalid secp256k1 private key: {}", e)))
 }

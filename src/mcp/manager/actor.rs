@@ -725,8 +725,15 @@ impl McpManagerActor {
         // Store client and track start time
         self.clients.insert(config.id.clone(), client);
         self.start_times.insert(config.id.clone(), Instant::now());
+        // Mark healthy while preserving the restart-window bookkeeping
+        // (restart_count / restart_window_start). Re-inserting a fresh
+        // ServerHealth here would zero the counter on every successful spawn,
+        // letting a server that starts fine but dies between probes evade the
+        // max_restarts cap and restart-loop forever.
         self.health_states
-            .insert(config.id.clone(), ServerHealth::healthy());
+            .entry(config.id.clone())
+            .or_default()
+            .record_success();
 
         // Broadcast started event
         let _ = self.event_tx.send(McpManagerEvent::ServerStarted {

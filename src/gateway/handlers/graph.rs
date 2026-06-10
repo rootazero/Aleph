@@ -339,6 +339,23 @@ pub async fn handle_update_note_impl(
         );
     };
 
+    // Defensive (P7): `agent_id` and `category` are joined verbatim into the
+    // on-disk note path by `write_note_raw` (only `title` is sanitized there),
+    // so a crafted node_id like "../x" or an agent_id like "../../etc" would
+    // write outside the notes directory. Reject traversal components here.
+    if category.contains("..")
+        || category.contains('\\')
+        || agent_id.contains("..")
+        || agent_id.contains('/')
+        || agent_id.contains('\\')
+    {
+        return JsonRpcResponse::error(
+            req.id,
+            INVALID_PARAMS,
+            "node_id / agent_id must not contain path traversal components".to_string(),
+        );
+    }
+
     match indexer
         .write_note_raw(agent_id, category, title, &params.content)
         .await

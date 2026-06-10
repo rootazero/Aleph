@@ -312,6 +312,7 @@ pub(crate) fn split_reasoning(text: &str) -> (Option<String>, String) {
 
         // Outside code — check for thinking tags to extract
         if bytes[i] == b'<' {
+            let mut matched = false;
             for tag in THINKING_TAGS.iter() {
                 if let Some((content, end)) = try_extract_paired_tag_bytes(bytes, i, tag.as_bytes())
                 {
@@ -319,19 +320,18 @@ pub(crate) fn split_reasoning(text: &str) -> (Option<String>, String) {
                         reasoning_parts.push(content);
                     }
                     i = end;
+                    matched = true;
                     break;
                 }
             }
-            // If we matched a tag, continue; otherwise copy the '<'
-            if i < len && bytes[i] == b'<' {
-                // No match — copy '<' and continue normally
-                answer.push('<');
-                i += 1;
+            if matched {
+                // Re-run the loop from the new position so an immediately
+                // adjacent tag (e.g. `</think><think>`) is also extracted.
                 continue;
             }
-            if i >= len {
-                break;
-            }
+            // No match — copy '<' and continue normally
+            answer.push('<');
+            i += 1;
             continue;
         }
 

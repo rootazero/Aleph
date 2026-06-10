@@ -572,7 +572,7 @@ mod tests {
         let notes = [make_note("reference/rust", "reference")];
         // Predicate: notes.len() >= 2
         assert!(
-            !notes.len() >= 2,
+            notes.len() < 2,
             "single note should NOT trigger consolidation"
         );
         let _ = stage;

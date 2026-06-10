@@ -14,7 +14,7 @@
 use chrono::{DateTime, TimeZone, Utc};
 use rusqlite::{params, Connection, Result as SqliteResult};
 use std::path::{Path, PathBuf};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::gateway::channel::{
     Attachment, ChannelId, ConversationId, InboundMessage, MessageId, UserId,
@@ -192,8 +192,20 @@ impl MessagesDb {
                 continue;
             }
 
-            // Get sender info
-            let handle = self.get_handle(raw.handle_id)?;
+            // Get sender info. A failed lookup (e.g. handle_id = 0 rows in
+            // chat.db) must not abort the whole batch: messages collected so
+            // far would be dropped by the caller while the watermark has
+            // already advanced past them, losing them permanently.
+            let handle = match self.get_handle(raw.handle_id) {
+                Ok(h) => h,
+                Err(e) => {
+                    warn!(
+                        "Skipping message ROWID {} (handle {} lookup failed: {})",
+                        raw.rowid, raw.handle_id, e
+                    );
+                    continue;
+                }
+            };
 
             // Get chat info if available
             let chat_info = if let Some(chat_id) = raw.chat_id {
@@ -202,9 +214,19 @@ impl MessagesDb {
                 None
             };
 
-            // Get attachments if present (and enabled)
+            // Get attachments if present (and enabled). Degrade to no
+            // attachments on error instead of dropping the whole batch.
             let attachments = if raw.cache_has_attachments && self.include_attachments {
-                self.get_message_attachments(raw.rowid)?
+                match self.get_message_attachments(raw.rowid) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        warn!(
+                            "Attachment lookup failed for message ROWID {}: {}",
+                            raw.rowid, e
+                        );
+                        vec![]
+                    }
+                }
             } else {
                 vec![]
             };

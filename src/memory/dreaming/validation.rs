@@ -139,7 +139,7 @@ pub fn check_duplicate_hashes(notes: &[(String, String)]) -> Vec<ValidationIssue
                 note_path: paths.join(", "),
                 message: format!(
                     "duplicate content_hash '{}' across {} notes",
-                    &hash[..hash.len().min(16)],
+                    hash.get(..hash.len().min(16)).unwrap_or(hash),
                     paths.len()
                 ),
             });

@@ -156,11 +156,11 @@ impl GenerationProvider for DeepgramSttProvider {
                         let (bytes, ct) = decode_data_url(rest)?;
                         (Some(bytes), ct, None)
                     } else {
-                        let (bytes, ct) = load_local(Path::new(src))?;
+                        let (bytes, ct) = load_local(Path::new(src)).await?;
                         (Some(bytes), ct, None)
                     }
                 } else if !request.prompt.trim().is_empty() {
-                    let (bytes, ct) = load_local(Path::new(&request.prompt))?;
+                    let (bytes, ct) = load_local(Path::new(&request.prompt)).await?;
                     (Some(bytes), ct, None)
                 } else {
                     return Err(GenerationError::invalid_parameters(
@@ -299,9 +299,11 @@ impl GenerationProvider for DeepgramSttProvider {
     }
 }
 
-fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String)> {
+async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String)> {
     let path_buf = PathBuf::from(path);
-    let bytes = std::fs::read(&path_buf).map_err(|e| {
+    // Async read: audio files can be hundreds of MB and a blocking
+    // std::fs::read here would stall the tokio worker thread.
+    let bytes = tokio::fs::read(&path_buf).await.map_err(|e| {
         GenerationError::invalid_parameters(
             format!("Failed to read audio file '{}': {}", path_buf.display(), e),
             Some("file_path".to_string()),

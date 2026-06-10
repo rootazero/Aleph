@@ -689,9 +689,17 @@ impl AgentHarness {
             self.race_llm_call(self.deps.llm.process(payload), parent_cancel, started)
                 .await?
         };
+        // Whether the SURVIVING `response` was produced by the live streaming
+        // call. Every retry/rescue below re-issues the request through the
+        // non-streaming `race_llm_call`, so its text was never delta-streamed
+        // and must keep the one-shot `on_delta` emit further down — otherwise
+        // recovered text silently never reaches live stream consumers
+        // (BroadcastCallback → FlowStreamEvent::Delta has no other source).
+        let mut response_was_streamed = provider_streams;
         let mut response = match primary_call {
             Ok(r) => r,
             Err(primary_err) => {
+                response_was_streamed = false;
                 // Reactive-compaction rescue (Phase A): when the classifier
                 // tags the error as `CompactAndRetry`, summarise `messages`
                 // and retry once. Returns `Err(HarnessError::Llm)` when the
@@ -718,6 +726,8 @@ impl AgentHarness {
         let mut empty_retries = 0u32;
         while is_empty_response(&response) && empty_retries < EMPTY_RESPONSE_RETRIES {
             empty_retries += 1;
+            // The retry below replaces `response` via the non-streaming path.
+            response_was_streamed = false;
             // Count the empty call we are about to discard — it was still a
             // billed round-trip (input tokens), and the final once-per-turn
             // accounting below only sees the surviving response.
@@ -771,6 +781,8 @@ impl AgentHarness {
             // The overflowed call still billed input plus the partial output;
             // count it before the retry replaces `response`.
             self.account_intermediate_tokens(&response);
+            // The rescue below replaces `response` via the non-streaming path.
+            response_was_streamed = false;
             tracing::warn!(
                 ?session_id,
                 "provider stopped with model_context_window_exceeded; \
@@ -816,6 +828,10 @@ impl AgentHarness {
         ) && max_tokens_retries < MAX_OUTPUT_TOKENS_RECOVERY_LIMIT
         {
             max_tokens_retries += 1;
+            // The retry below replaces `response` via the non-streaming path;
+            // only the truncated partial was delta-streamed, so the surviving
+            // continuation must get the one-shot emit.
+            response_was_streamed = false;
             // Count the partial (max_output_tokens-cut) call before discarding
             // it: it billed input tokens plus the partial output the model
             // already emitted. The once-per-turn accounting below only sees
@@ -989,9 +1005,11 @@ impl AgentHarness {
             // append-only consumers (BroadcastCallback → FlowStreamEvent::Delta).
             // Non-streaming turns (mock/non-HTTP providers, or guardrailed turns
             // where streaming is suppressed so the output guardrail can sanitise
-            // the final text first) keep the one-shot emit. Either way the
-            // authoritative AssistantMessage is persisted just below.
-            if !provider_streams {
+            // the final text first) keep the one-shot emit — as does a response
+            // that survived from a non-streaming retry/rescue, whose text was
+            // never delta-streamed. Either way the authoritative
+            // AssistantMessage is persisted just below.
+            if !response_was_streamed {
                 callback.on_delta(&text);
             }
             self.emit(|| crate::harness::trace::LoopTraceEvent::TextEmitted {

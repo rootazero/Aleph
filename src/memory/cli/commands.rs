@@ -319,13 +319,17 @@ impl MemoryCommands {
     pub async fn forget(&self, path_or_prefix: &str) -> Result<String, AlephError> {
         let full_path = self.resolve_note_path(path_or_prefix).await?;
 
+        // Look up the entry BEFORE removing the index row — afterwards the
+        // lookup always misses and the file path would have to be inferred.
+        let entry = self.resolve_entry(&full_path).await;
+
         // Remove from index (links + FTS included)
         self.db
             .remove_note_index(&full_path, &self.agent_id)
             .await?;
 
         // Delete the markdown file from disk
-        if let Some(entry_) = self.resolve_entry(&full_path).await {
+        if let Some(entry_) = entry {
             let file_path = self
                 .memory_dir
                 .join(&self.agent_id)
@@ -410,8 +414,8 @@ impl MemoryCommands {
         }
     }
 
-    /// Look up an entry after it has already been removed from the index.
-    /// Returns `None` if the entry is gone (already deleted).
+    /// Look up an index entry by full path.
+    /// Returns `None` if the entry is missing (e.g. already deleted).
     async fn resolve_entry(&self, path: &str) -> Option<NoteIndexEntry> {
         self.db
             .get_note_index(path, &self.agent_id)

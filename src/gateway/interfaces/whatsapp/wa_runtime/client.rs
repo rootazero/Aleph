@@ -303,6 +303,11 @@ async fn handle_bot_event(
         }
         whatsapp_rust::types::events::Event::Message(_, info) => {
             let mut guard = message_jids.lock().await;
+            // Bound the read-receipt lookup map: it is fed by every inbound
+            // message and otherwise never pruned until shutdown.
+            if guard.len() >= 10_000 {
+                guard.clear();
+            }
             guard.insert(info.id.to_string(), info.source.chat.clone());
         }
         _ => {}

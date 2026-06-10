@@ -160,15 +160,16 @@ impl HttpProvider {
 
         // PII filtering: filter each text block individually
         if let Some(engine_lock) = crate::pii::PiiEngine::global() {
-            if let Ok(engine) = engine_lock.read() {
-                if !engine.is_provider_excluded(&self.name) {
-                    for msg in &mut filtered_messages {
-                        for block in msg.content_blocks_mut() {
-                            if let ContentBlock::Text { ref mut text, .. } = block {
-                                let result = engine.filter(text);
-                                if result.has_detections() {
-                                    *text = result.text;
-                                }
+            // Poison convention: recover the inner engine instead of silently
+            // skipping the PII filter when the lock is poisoned.
+            let engine = engine_lock.read().unwrap_or_else(|e| e.into_inner());
+            if !engine.is_provider_excluded(&self.name) {
+                for msg in &mut filtered_messages {
+                    for block in msg.content_blocks_mut() {
+                        if let ContentBlock::Text { ref mut text, .. } = block {
+                            let result = engine.filter(text);
+                            if result.has_detections() {
+                                *text = result.text;
                             }
                         }
                     }

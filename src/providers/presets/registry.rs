@@ -711,20 +711,22 @@ pub(crate) static PRESETS_BY_BASE_URL: Lazy<HashMap<&'static str, &'static Provi
 /// * `homepage`     ← `preset.homepage`
 /// * `notes`        ← `preset.description`
 ///
-/// Only canonical names are inserted — aliases share the canonical entry's
-/// metadata via `provider_metadata()` which lower-cases its input.
+/// Both canonical names and aliases are inserted — `PRESETS` exposes alias
+/// keys too (catalog iteration / `provider_metadata("kimi")`), so the
+/// metadata map must answer for the same key set.
 pub static PRESET_METADATA: Lazy<HashMap<&'static str, ProviderMetadata>> = Lazy::new(|| {
-    let mut m: HashMap<&'static str, ProviderMetadata> = HashMap::with_capacity(PROFILES.len());
+    let mut m: HashMap<&'static str, ProviderMetadata> = HashMap::with_capacity(PROFILES.len() * 2);
     for (name, preset) in PROFILES {
-        m.insert(
-            *name,
-            ProviderMetadata {
-                display_name: preset.display_name.unwrap_or(name),
-                modalities: preset.modalities,
-                homepage: preset.homepage,
-                notes: preset.description,
-            },
-        );
+        let meta = ProviderMetadata {
+            display_name: preset.display_name.unwrap_or(name),
+            modalities: preset.modalities,
+            homepage: preset.homepage,
+            notes: preset.description,
+        };
+        m.insert(*name, meta);
+        for alias in preset.aliases {
+            m.insert(*alias, meta);
+        }
     }
     m
 });

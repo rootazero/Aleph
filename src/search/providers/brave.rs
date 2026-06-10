@@ -52,9 +52,14 @@ impl BraveProvider {
 #[async_trait]
 impl SearchProvider for BraveProvider {
     async fn search(&self, query: &str, options: &SearchOptions) -> Result<Vec<SearchResult>> {
+        // Brave Web Search API caps `count` at 20 — larger values are
+        // rejected with 422, so clamp regardless of caller's max_results.
         let mut params: Vec<(&str, String)> = vec![
             ("q", query.to_string()),
-            ("count", options.validated_max_results().to_string()),
+            (
+                "count",
+                options.validated_max_results().min(20).to_string(),
+            ),
             ("safesearch", options.brave_safesearch().to_string()),
         ];
         if let Some(lang) = options.language.as_deref() {

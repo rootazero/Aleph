@@ -131,8 +131,12 @@ impl ReasoningExtractor {
                 for tag in THINK_TAGS.iter() {
                     let open_len = 1 + tag.len() + 1; // < + tag + >
                     let end = i + open_len;
+                    // `get` guards against slicing mid-char when multi-byte
+                    // text follows the `<` (LLM output is arbitrary UTF-8).
                     if end <= bytes.len()
-                        && input[i + 1..i + 1 + tag.len()].eq_ignore_ascii_case(tag)
+                        && input
+                            .get(i + 1..i + 1 + tag.len())
+                            .is_some_and(|cand| cand.eq_ignore_ascii_case(tag))
                         && bytes[i + 1 + tag.len()] == b'>'
                     {
                         return Some((&input[..i], &input[end..]));
@@ -150,8 +154,12 @@ impl ReasoningExtractor {
                 for tag in THINK_TAGS.iter() {
                     let close_len = 2 + tag.len() + 1; // </ + tag + >
                     let end = i + close_len;
+                    // `get` guards against slicing mid-char when multi-byte
+                    // text follows the `</` (LLM output is arbitrary UTF-8).
                     if end <= bytes.len()
-                        && input[i + 2..i + 2 + tag.len()].eq_ignore_ascii_case(tag)
+                        && input
+                            .get(i + 2..i + 2 + tag.len())
+                            .is_some_and(|cand| cand.eq_ignore_ascii_case(tag))
                         && bytes[i + 2 + tag.len()] == b'>'
                     {
                         return Some((&input[..i], &input[end..]));

@@ -193,6 +193,7 @@ impl XmppMessageOps {
 
             let (mut reader, mut writer) = stream.into_split();
             let mut buffer = String::new();
+            let mut pending: Vec<u8> = Vec::new();
             let mut read_buf = [0u8; 4096];
 
             // Phase 1: Send stream header
@@ -225,12 +226,35 @@ impl XmppMessageOps {
                             }
                         };
 
-                        // Append received data to buffer
-                        if let Ok(text) = std::str::from_utf8(&read_buf[..n]) {
-                            buffer.push_str(text);
-                        } else {
-                            tracing::warn!("XMPP: non-UTF8 data received, skipping");
-                            continue;
+                        // Append received data to buffer. A multi-byte UTF-8
+                        // sequence may be split across reads, so accumulate raw
+                        // bytes and only move the valid prefix into the string.
+                        pending.extend_from_slice(&read_buf[..n]);
+                        loop {
+                            match std::str::from_utf8(&pending) {
+                                Ok(text) => {
+                                    buffer.push_str(text);
+                                    pending.clear();
+                                    break;
+                                }
+                                Err(e) => {
+                                    let valid = e.valid_up_to();
+                                    if let Ok(text) = std::str::from_utf8(&pending[..valid]) {
+                                        buffer.push_str(text);
+                                    }
+                                    match e.error_len() {
+                                        Some(bad) => {
+                                            tracing::warn!("XMPP: skipping {bad} invalid UTF-8 byte(s)");
+                                            pending.drain(..valid + bad);
+                                        }
+                                        None => {
+                                            // Incomplete trailing sequence — keep it for the next read
+                                            pending.drain(..valid);
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
 
                         // Process all complete stanzas in the buffer
@@ -272,7 +296,7 @@ impl XmppMessageOps {
                                         tracing::warn!("XMPP bind send failed: {e}");
                                         break 'inner true;
                                     }
-                                } else if (stanza.contains("<iq") && stanza.contains("type='result'") || stanza.contains("type=\"result\"")) && stanza.contains("bind") {
+                                } else if stanza.contains("<iq") && (stanza.contains("type='result'") || stanza.contains("type=\"result\"")) && stanza.contains("bind") {
                                         tracing::info!("XMPP resource bound");
 
                                         // Start session

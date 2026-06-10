@@ -65,18 +65,27 @@ fn parse_interval(s: &str) -> Result<u64, String> {
     if let Some(rest) = s.strip_suffix('s') {
         rest.trim()
             .parse::<u64>()
-            .map(|v| v * 1_000)
             .map_err(|e| format!("invalid seconds value: {e}"))
+            .and_then(|v| {
+                v.checked_mul(1_000)
+                    .ok_or_else(|| "interval too large".to_string())
+            })
     } else if let Some(rest) = s.strip_suffix('m') {
         rest.trim()
             .parse::<u64>()
-            .map(|v| v * 60_000)
             .map_err(|e| format!("invalid minutes value: {e}"))
+            .and_then(|v| {
+                v.checked_mul(60_000)
+                    .ok_or_else(|| "interval too large".to_string())
+            })
     } else if let Some(rest) = s.strip_suffix('h') {
         rest.trim()
             .parse::<u64>()
-            .map(|v| v * 3_600_000)
             .map_err(|e| format!("invalid hours value: {e}"))
+            .and_then(|v| {
+                v.checked_mul(3_600_000)
+                    .ok_or_else(|| "interval too large".to_string())
+            })
     } else {
         s.parse::<u64>()
             .map_err(|e| format!("invalid interval: {e}"))
@@ -271,16 +280,30 @@ pub async fn handle_update(
     if let Some(ms) = params.get("interval_ms").and_then(|v| v.as_u64()) {
         updates.interval_ms = Some(ms);
     } else if let Some(s) = params.get("interval").and_then(|v| v.as_str()) {
-        if let Ok(ms) = parse_interval(s) {
-            updates.interval_ms = Some(ms);
+        match parse_interval(s) {
+            Ok(ms) => updates.interval_ms = Some(ms),
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid interval: {}", e),
+                );
+            }
         }
     }
     if let Some(enabled) = params.get("enabled").and_then(|v| v.as_bool()) {
         updates.enabled = Some(enabled);
     }
     if let Some(probe_val) = params.get("probe") {
-        if let Ok(probe) = serde_json::from_value::<ProbeConfig>(probe_val.clone()) {
-            updates.probe = Some(probe);
+        match serde_json::from_value::<ProbeConfig>(probe_val.clone()) {
+            Ok(probe) => updates.probe = Some(probe),
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid probe: {}", e),
+                );
+            }
         }
     }
 

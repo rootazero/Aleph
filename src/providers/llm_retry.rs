@@ -45,9 +45,13 @@ pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
     if !lower.contains("prompt is too long") && !lower.contains("prompt_too_long") {
         return None;
     }
-    // Find "N tokens > M" pattern manually
+    // Find "N tokens > M" pattern manually. Slice `lower` (not `msg`):
+    // `to_lowercase` can change byte lengths for some Unicode chars, so an
+    // index found in `lower` may not be a char boundary in `msg` — slicing
+    // `msg` with it could panic on a provider-supplied error string. The
+    // digits we extract are ASCII and identical in both strings.
     let tokens_idx = lower.find("tokens")?;
-    let before_tokens = msg[..tokens_idx].trim_end();
+    let before_tokens = lower[..tokens_idx].trim_end();
     let actual_str = before_tokens.rsplit(|c: char| !c.is_ascii_digit()).next()?;
     if actual_str.is_empty() {
         return None;

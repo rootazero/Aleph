@@ -150,10 +150,10 @@ impl OpenAiWhisperProvider {
                     .to_string();
                 return Ok((bytes, name, "application/octet-stream".to_string()));
             }
-            return load_local(Path::new(source));
+            return load_local(Path::new(source)).await;
         }
         if !request.prompt.trim().is_empty() {
-            return load_local(Path::new(&request.prompt));
+            return load_local(Path::new(&request.prompt)).await;
         }
         Err(GenerationError::invalid_parameters(
             "Whisper requires either request.prompt (local path) or params.reference_audio (URL/base64/path)",
@@ -336,9 +336,11 @@ impl GenerationProvider for OpenAiWhisperProvider {
     }
 }
 
-fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> {
+async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> {
     let path_buf = PathBuf::from(path);
-    let bytes = std::fs::read(&path_buf).map_err(|e| {
+    // Async read: a blocking std::fs::read here would stall the tokio
+    // worker thread for large audio files.
+    let bytes = tokio::fs::read(&path_buf).await.map_err(|e| {
         GenerationError::invalid_parameters(
             format!("Failed to read audio file '{}': {}", path_buf.display(), e),
             Some("file_path".to_string()),

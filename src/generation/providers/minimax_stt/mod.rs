@@ -152,7 +152,7 @@ impl GenerationProvider for MinimaxSttProvider {
                 })?
                 .to_string();
 
-            let (bytes, filename, mime) = resolve_audio_source(&request)?;
+            let (bytes, filename, mime) = resolve_audio_source(&request).await?;
             if (bytes.len() as u64) > MAX_AUDIO_BYTES {
                 return Err(GenerationError::invalid_parameters(
                     format!(
@@ -294,7 +294,7 @@ impl GenerationProvider for MinimaxSttProvider {
     }
 }
 
-fn resolve_audio_source(
+async fn resolve_audio_source(
     request: &GenerationRequest,
 ) -> GenerationResult<(Vec<u8>, String, String)> {
     if let Some(ref src) = request.params.reference_audio {
@@ -307,10 +307,10 @@ fn resolve_audio_source(
                 Some("reference_audio".to_string()),
             ));
         }
-        return load_local(Path::new(src));
+        return load_local(Path::new(src)).await;
     }
     if !request.prompt.trim().is_empty() {
-        return load_local(Path::new(&request.prompt));
+        return load_local(Path::new(&request.prompt)).await;
     }
     Err(GenerationError::invalid_parameters(
         "MiniMax STT requires either request.prompt (local path) or params.reference_audio (path or data: URL)",
@@ -318,9 +318,11 @@ fn resolve_audio_source(
     ))
 }
 
-fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> {
+async fn load_local(path: &Path) -> GenerationResult<(Vec<u8>, String, String)> {
     let path_buf = PathBuf::from(path);
-    let bytes = std::fs::read(&path_buf).map_err(|e| {
+    // Async read: a blocking std::fs::read here would stall the tokio
+    // worker thread for large audio files (limit is 200 MB).
+    let bytes = tokio::fs::read(&path_buf).await.map_err(|e| {
         GenerationError::invalid_parameters(
             format!("Failed to read audio file '{}': {}", path_buf.display(), e),
             Some("file_path".to_string()),

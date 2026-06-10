@@ -87,10 +87,19 @@ const MODEL_VENDOR_PREFIXES: &[(&str, &str)] = &[
 #[must_use]
 pub fn canonicalize_model_id(model: &str) -> String {
     let mut m = model.trim().to_ascii_lowercase();
-    // Peel one layer per matching tag (handles nested aggregator tags).
-    for tag in VENDOR_TAGS {
-        if let Some(rest) = m.strip_prefix(tag) {
-            m = rest.to_string();
+    // Peel vendor tags until none match. A single in-order pass would miss
+    // nested aggregator tags whose inner tag precedes the outer in the table
+    // (e.g. "x-ai/openai/…" — "openai/" is scanned before "x-ai/"). Each peel
+    // strictly shortens the string, so the loop terminates.
+    loop {
+        let before = m.len();
+        for tag in VENDOR_TAGS {
+            if let Some(rest) = m.strip_prefix(tag) {
+                m = rest.to_string();
+            }
+        }
+        if m.len() == before {
+            break;
         }
     }
     // Drop a trailing 8-digit date stamp (e.g. "-20250520"). Arbitrary

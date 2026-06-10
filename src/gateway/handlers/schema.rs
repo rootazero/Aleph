@@ -377,7 +377,9 @@ impl TypedHandlerRegistry {
                 }
             });
 
-            paths.insert(rpc_path, serde_json::json!({ "post": operation }));
+            // `operation` already carries the `"post"` key — inserting it
+            // directly avoids the invalid `{"post": {"post": …}}` nesting.
+            paths.insert(rpc_path, operation);
         }
 
         serde_json::json!({

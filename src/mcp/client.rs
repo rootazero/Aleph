@@ -232,13 +232,19 @@ impl McpClient {
 
         let mut tools = Vec::new();
         for connection in &connections {
-            tools.extend(connection.list_tools().await);
-        }
-        // Gate advertised tools through the per-server allow/deny filter. A
-        // dropped tool is therefore never registered, aggregated, counted, or
-        // shown to the model (catalog-time filtering, not call-time).
-        if let Some(filter) = &self.tool_filter {
-            tools.retain(|t| filter.allows(&t.name));
+            let mut conn_tools = connection.list_tools().await;
+            // Gate advertised tools through the per-server allow/deny filter. A
+            // dropped tool is therefore never registered, aggregated, counted, or
+            // shown to the model (catalog-time filtering, not call-time). The
+            // filter contract matches the server's *unqualified* tool names, so
+            // strip the "{server}:" namespace prefix added by refresh_tools
+            // before testing.
+            if let Some(filter) = &self.tool_filter {
+                let prefix = format!("{}:", connection.name());
+                conn_tools
+                    .retain(|t| filter.allows(t.name.strip_prefix(&prefix).unwrap_or(&t.name)));
+            }
+            tools.extend(conn_tools);
         }
         tools
     }

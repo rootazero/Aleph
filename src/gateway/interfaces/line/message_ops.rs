@@ -296,6 +296,7 @@ pub enum PushMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct TextPushContent {
     #[serde(rename = "type")]
     pub msg_type: String,
@@ -315,6 +316,7 @@ impl TextPushContent {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ImagePushContent {
     #[serde(rename = "type")]
     pub msg_type: String,
@@ -323,6 +325,7 @@ pub struct ImagePushContent {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VideoPushContent {
     #[serde(rename = "type")]
     pub msg_type: String,
@@ -332,6 +335,7 @@ pub struct VideoPushContent {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioPushContent {
     #[serde(rename = "type")]
     pub msg_type: String,
@@ -340,6 +344,7 @@ pub struct AudioPushContent {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FilePushContent {
     #[serde(rename = "type")]
     pub msg_type: String,
@@ -358,6 +363,7 @@ pub struct LocationPushContent {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StickerPushContent {
     #[serde(rename = "type")]
     pub msg_type: String,
@@ -549,6 +555,7 @@ pub struct ConfirmTemplate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ButtonsTemplate {
     pub thumbnail_image_url: Option<String>,
     pub image_size: Option<String>,
@@ -568,6 +575,7 @@ pub enum TemplateContent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CarouselTemplate {
     pub columns: Vec<CarouselColumn>,
     pub image_aspect_ratio: Option<String>,
@@ -575,6 +583,7 @@ pub struct CarouselTemplate {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CarouselColumn {
     pub thumbnail_image_url: Option<String>,
     pub image_background_color: Option<String>,
@@ -691,6 +700,7 @@ impl QuickReplyMessageAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct QuickReplyPostbackAction {
     #[serde(rename = "type")]
     pub action_type: String,
@@ -710,6 +720,7 @@ pub struct QuickReplyUriAction {
 // --- Reply types ---
 
 #[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReplyPayload {
     pub reply_token: String,
     pub messages: Vec<ReplyMessage>,

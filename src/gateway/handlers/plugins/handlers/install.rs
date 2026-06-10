@@ -24,6 +24,23 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
         .next_back()
         .unwrap_or("plugin")
         .trim_end_matches(".git");
+    // The repo name becomes a directory under plugins_dir (and is
+    // remove_dir_all'd on validation failure) — reject anything that is not
+    // a single normal path component (e.g. "", "..", absolute paths).
+    {
+        use std::path::Component;
+        let mut comps = std::path::Path::new(repo_name).components();
+        if !matches!(
+            (comps.next(), comps.next()),
+            (Some(Component::Normal(_)), None)
+        ) {
+            return JsonRpcResponse::error(
+                request.id,
+                INVALID_PARAMS,
+                format!("Cannot derive a safe plugin directory name from URL: {}", params.url),
+            );
+        }
+    }
     let dest_path = plugins_dir.join(repo_name);
 
     if dest_path.exists() {

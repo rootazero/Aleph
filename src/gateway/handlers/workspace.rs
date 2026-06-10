@@ -59,9 +59,16 @@ pub async fn handle_create(
             ws.icon = params.icon.clone();
 
             // Persist name/icon via update
-            let _ = workspace_manager
+            if let Err(e) = workspace_manager
                 .update(&params.id, Some(&ws.name), None, params.icon.as_deref())
-                .await;
+                .await
+            {
+                tracing::warn!(
+                    workspace = %params.id,
+                    error = %e,
+                    "workspace.create: failed to persist name/icon after create"
+                );
+            }
 
             JsonRpcResponse::success(
                 request.id,

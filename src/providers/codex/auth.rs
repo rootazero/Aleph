@@ -279,6 +279,10 @@ impl CodexAuth {
         info!("Opening browser for Codex authentication...");
         if let Err(e) = open::that(&authorize_url) {
             error!(?e, "Failed to open browser");
+            // Abort the callback server before bailing — otherwise the detached
+            // task stays bound to the fixed port 1455 and every subsequent
+            // login attempt fails to bind.
+            server_handle.abort();
             return Err(AlephError::provider(format!(
                 "Failed to open browser for authentication: {}. Please open this URL manually: {}",
                 e, authorize_url
