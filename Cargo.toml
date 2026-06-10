@@ -497,6 +497,11 @@ strip = true
 [profile.wasm-release]
 inherits = "release"
 strip = false
+# Size-first codegen: the panel is a browser download, so binary size beats
+# the marginal runtime gain of opt-level 3 here.
+opt-level = "z"
+lto = true
+codegen-units = 1
 
 # Patch matrix-sdk with a fork of matrix-sdk-0.16.0 that adds
 # #![recursion_limit = "512"] to crates/matrix-sdk/src/lib.rs.

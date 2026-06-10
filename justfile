@@ -122,6 +122,13 @@ wasm:
     wasm-bindgen --target web --no-typescript \
         --out-dir {{panel_dist}} --out-name aleph_panel \
         target/wasm32-unknown-unknown/wasm-release/aleph_panel.wasm
+    # 3.5 Shrink wasm (optional; -g keeps the name section for crash diagnostics)
+    if command -v wasm-opt >/dev/null 2>&1; then
+        wasm-opt -Oz -g {{panel_dist}}/aleph_panel_bg.wasm -o {{panel_dist}}/aleph_panel_bg.wasm
+        echo "✓ wasm-opt applied"
+    else
+        echo "⚠ wasm-opt not found; skipping (cargo install wasm-opt / brew install binaryen)"
+    fi
     # 4. Runtime index.html
     cat > {{panel_dist}}/index.html << 'HTMLEOF'
     <!DOCTYPE html>
