@@ -40,11 +40,13 @@ pub struct OriginPolicy {
 
 impl OriginPolicy {
     /// Build from the configured extra-origin allow-list.
+    #[must_use]
     pub fn new(allowed: Vec<String>) -> Self {
         Self { allowed }
     }
 
     /// Policy with no extra origins — same-origin, loopback and `tauri:` only.
+    #[must_use]
     pub fn loopback_only() -> Self {
         Self {
             allowed: Vec::new(),
@@ -57,6 +59,7 @@ impl OriginPolicy {
     /// `host` is `None` for callers that have no notion of same-origin (the
     /// static-asset CORS layer), in which case only loopback / `tauri:` /
     /// allow-list pass.
+    #[must_use]
     pub fn is_allowed(&self, origin: Option<&str>, host: Option<&str>) -> bool {
         let Some(origin) = origin else {
             // Non-browser client: no Origin header. Browsers always send one.

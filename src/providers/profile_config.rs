@@ -80,6 +80,7 @@ pub enum ProfileTier {
 
 impl ProfileTier {
     /// Get priority score (lower = higher priority)
+    #[must_use]
     pub fn priority(&self) -> u8 {
         match self {
             Self::Primary => 0,
@@ -137,11 +138,13 @@ impl ProfileConfig {
     }
 
     /// Check if the API key uses an environment variable
+    #[must_use]
     pub fn uses_env_var(&self) -> bool {
         self.api_key.starts_with("env:")
     }
 
     /// Get the environment variable name if using env: prefix
+    #[must_use]
     pub fn env_var_name(&self) -> Option<&str> {
         self.api_key.strip_prefix("env:")
     }
@@ -157,6 +160,7 @@ pub struct ProfilesConfig {
 
 impl ProfilesConfig {
     /// Create an empty configuration
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -173,6 +177,7 @@ impl ProfilesConfig {
     }
 
     /// Get the default configuration file path
+    #[must_use]
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -213,6 +218,7 @@ impl ProfilesConfig {
     /// Get profiles for a specific provider
     ///
     /// Returns profiles sorted by tier priority (primary first, then backup, then fallback)
+    #[must_use]
     pub fn profiles_for_provider(&self, provider: &str) -> Vec<(&String, &ProfileConfig)> {
         let normalized = provider.trim().to_lowercase();
 
@@ -231,6 +237,7 @@ impl ProfilesConfig {
     }
 
     /// Get a specific profile by ID
+    #[must_use]
     pub fn get_profile(&self, profile_id: &str) -> Option<&ProfileConfig> {
         self.profiles.get(profile_id)
     }
@@ -246,6 +253,7 @@ impl ProfilesConfig {
     }
 
     /// List all unique providers
+    #[must_use]
     pub fn list_providers(&self) -> Vec<String> {
         let mut providers: Vec<String> = self
             .profiles

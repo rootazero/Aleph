@@ -23,6 +23,7 @@ pub struct PimTool {
 }
 
 impl PimTool {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             approval_policy: None,

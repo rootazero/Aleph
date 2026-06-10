@@ -127,6 +127,14 @@ fn resolve_targets(args: &BootstrapRuntimeArgs) -> Vec<String> {
         .collect()
 }
 
+/// JSON-encode a string (quoted + escaped) for the NDJSON progress events.
+/// Hand-rolled `replace()` escaping missed backslashes (e.g. Windows paths)
+/// and control characters, producing invalid JSON for the install.sh /
+/// install.ps1 consumers.
+fn json_str(s: &str) -> String {
+    serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
 struct ProgressPrinter {
     json: bool,
     quiet: bool,
@@ -156,7 +164,9 @@ impl ProgressPrinter {
         }
         if self.json {
             eprintln!(
-                r#"{{"event":"step_done","capability":"{cap}","version":"{version}","path":"{path}"}}"#
+                r#"{{"event":"step_done","capability":"{cap}","version":{},"path":{}}}"#,
+                json_str(version),
+                json_str(path)
             );
         } else {
             eprintln!("  ✓ {cap} {version} ({path})");
@@ -164,9 +174,11 @@ impl ProgressPrinter {
     }
 
     fn step_failed(&mut self, cap: &str, err: &str) {
-        let err_escaped = err.replace('"', "\\\"").replace('\n', "\\n");
         if self.json {
-            eprintln!(r#"{{"event":"step_failed","capability":"{cap}","error":"{err_escaped}"}}"#);
+            eprintln!(
+                r#"{{"event":"step_failed","capability":"{cap}","error":{}}}"#,
+                json_str(err)
+            );
         } else {
             eprintln!("  ✗ {cap} failed:");
             for line in err.lines() {

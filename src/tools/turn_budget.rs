@@ -47,6 +47,7 @@ pub fn global_turn_result_budget() -> Option<Arc<TurnResultBudget>> {
 pub struct TurnId(pub uuid::Uuid);
 
 impl TurnId {
+    #[must_use]
     pub fn new(id: uuid::Uuid) -> Self {
         Self(id)
     }
@@ -102,6 +103,7 @@ pub struct TurnResultBudget {
 }
 
 impl TurnResultBudget {
+    #[must_use]
     pub fn new(max_turn_tokens: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(HashMap::new())),
@@ -109,6 +111,7 @@ impl TurnResultBudget {
         }
     }
 
+    #[must_use]
     pub fn max_turn_tokens(&self) -> usize {
         self.max_turn_tokens
     }
@@ -124,6 +127,7 @@ impl TurnResultBudget {
     /// Record a new result; return spill instructions if the cumulative
     /// total exceeds the budget. Spill order is LIFO over non-persisted
     /// entries; already-persisted entries are skipped.
+    #[must_use]
     pub fn record(&self, id: &TurnId, result: TurnResult) -> Vec<SpillInstruction> {
         let mut g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let state = g.entry(*id).or_default();

@@ -56,6 +56,7 @@ impl RuntimeContext {
     /// directory looking for `.git`; no `git` subprocess is spawned. aleph-server
     /// is a long-running daemon whose working directory is stable, so caching at
     /// process scope is sufficient.
+    #[must_use]
     pub fn collect(current_model: &str) -> Self {
         let os = std::env::consts::OS.to_string();
         let arch = std::env::consts::ARCH.to_string();
@@ -112,6 +113,7 @@ impl RuntimeContext {
     /// ```
     ///
     /// The `repo=` segment is omitted when `repo_root` is `None`.
+    #[must_use]
     pub fn to_prompt_section(&self) -> String {
         let mut parts = vec![
             format!("os={}", self.os),

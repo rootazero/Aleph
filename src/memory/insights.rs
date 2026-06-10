@@ -207,8 +207,8 @@ fn mean(sum: u64, count: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
     use crate::sync_primitives::Mutex;
+    use async_trait::async_trait;
 
     fn tool_row(
         id: &str,

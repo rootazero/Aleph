@@ -31,6 +31,7 @@ pub struct RpcClient {
 }
 
 impl RpcClient {
+    #[must_use]
     pub fn new(connector: Box<dyn AlephConnector>) -> Self {
         Self {
             connector: Rc::new(RefCell::new(connector)),
@@ -81,9 +82,7 @@ impl RpcClient {
                 if let Some(error) = response.get("error") {
                     let msg = error
                         .get("message")
-                        .and_then(|m| m.as_str())
-                        .map(|s| s.to_string())
-                        .unwrap_or_else(|| error.to_string());
+                        .and_then(|m| m.as_str()).map_or_else(|| error.to_string(), std::string::ToString::to_string);
                     let _ = tx.send(Err(RpcError::ServerError(msg)));
                 } else if let Some(result) = response.get("result") {
                     let _ = tx.send(Ok(result.clone()));

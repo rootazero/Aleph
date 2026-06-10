@@ -43,6 +43,7 @@ impl std::fmt::Debug for OAuthTokens {
 
 impl OAuthTokens {
     /// Check if the token is expired (with 5 minute buffer)
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         if let Some(expires_at) = self.expires_at {
             let now: i64 = std::time::SystemTime::now()
@@ -59,6 +60,7 @@ impl OAuthTokens {
     }
 
     /// Check if the token can be refreshed
+    #[must_use]
     pub fn can_refresh(&self) -> bool {
         self.refresh_token.is_some()
     }
@@ -175,6 +177,7 @@ pub struct OAuthStorage {
 
 impl OAuthStorage {
     /// Create new storage at the specified path
+    #[must_use]
     pub fn new(file_path: PathBuf) -> Self {
         Self {
             file_path,

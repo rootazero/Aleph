@@ -35,6 +35,7 @@ impl GenerationType {
     /// # Returns
     ///
     /// `true` for Image and Video which typically support style options
+    #[must_use]
     pub fn supports_style(&self) -> bool {
         matches!(self, GenerationType::Image | GenerationType::Video)
     }
@@ -44,6 +45,7 @@ impl GenerationType {
     /// # Returns
     ///
     /// `true` for Speech which requires voice selection
+    #[must_use]
     pub fn supports_voice(&self) -> bool {
         matches!(self, GenerationType::Speech)
     }
@@ -53,11 +55,13 @@ impl GenerationType {
     /// # Returns
     ///
     /// `true` for Video and Audio which often require async polling
+    #[must_use]
     pub fn is_long_running(&self) -> bool {
         matches!(self, GenerationType::Video | GenerationType::Audio)
     }
 
     /// Get a human-readable name for this generation type
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             GenerationType::Image => "Image",

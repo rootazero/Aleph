@@ -89,6 +89,7 @@ pub struct WebhookReceiver {
 
 impl WebhookReceiver {
     /// Create a new WebhookReceiver bound to the given port.
+    #[must_use]
     pub fn new(port: u16) -> Self {
         Self {
             port,
@@ -176,6 +177,7 @@ impl WebhookReceiver {
     /// Compute HMAC-SHA256 signature of data with the given secret.
     ///
     /// Returns the signature in the format `"sha256={hex_digest}"`.
+    #[must_use]
     pub fn compute_signature(secret: &str, data: &[u8]) -> String {
         let mut mac =
             HmacSha256::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key size");
@@ -189,6 +191,7 @@ impl WebhookReceiver {
     ///
     /// The `signature` parameter should be in `"sha256={hex_digest}"` format.
     /// Returns `true` if the signature matches.
+    #[must_use]
     pub fn verify_signature(secret: &str, body: &[u8], signature: &str) -> bool {
         let expected = Self::compute_signature(secret, body);
         crate::security::secret_equal_bytes(expected.as_bytes(), signature.as_bytes())

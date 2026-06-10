@@ -786,7 +786,10 @@ mod tests {
             }
         }
         fn prompt(&self) -> String {
-            self.last_prompt.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.last_prompt
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
         fn call_count(&self) -> usize {
             *self.calls.lock().unwrap_or_else(|e| e.into_inner())

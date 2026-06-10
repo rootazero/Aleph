@@ -807,11 +807,16 @@ mod tests {
     #[test]
     fn node_command_collects_repeated_tags() {
         let cli = Args::try_parse_from([
-            "aleph-server", "node",
-            "--center", "ws://127.0.0.1:18790",
-            "--name", "gpu-1",
-            "--tag", "gpu",
-            "--tag", "region=us",
+            "aleph-server",
+            "node",
+            "--center",
+            "ws://127.0.0.1:18790",
+            "--name",
+            "gpu-1",
+            "--tag",
+            "gpu",
+            "--tag",
+            "region=us",
         ])
         .expect("parses");
         match cli.command {
@@ -824,8 +829,8 @@ mod tests {
 
     #[test]
     fn node_command_defaults_to_no_tags() {
-        let cli = Args::try_parse_from(["aleph-server", "node", "--center", "ws://c"])
-            .expect("parses");
+        let cli =
+            Args::try_parse_from(["aleph-server", "node", "--center", "ws://c"]).expect("parses");
         match cli.command {
             Some(Command::Node { tags, .. }) => assert!(tags.is_empty()),
             _ => panic!("Expected Node command"),

@@ -48,6 +48,7 @@ impl ShellStopHook {
         }
     }
 
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -135,6 +136,7 @@ pub struct StopHookAggregateResult {
 
 impl StopHookAggregateResult {
     /// Returns the first blocking reason, if any.
+    #[must_use]
     pub fn blocking_reason(&self) -> Option<&str> {
         self.verdicts.iter().find_map(|v| match v {
             StopHookVerdict::Block { reason } => Some(reason.as_str()),
@@ -145,6 +147,7 @@ impl StopHookAggregateResult {
     /// Returns the first halt reason, if any. Halt outranks Block — when
     /// both are present in the same aggregate the harness must honour
     /// Halt (claude-code's `preventContinuation` semantics).
+    #[must_use]
     pub fn halt_reason(&self) -> Option<&str> {
         self.verdicts.iter().find_map(|v| match v {
             StopHookVerdict::Halt { reason } => Some(reason.as_str()),
@@ -153,6 +156,7 @@ impl StopHookAggregateResult {
     }
 
     /// Returns all error messages.
+    #[must_use]
     pub fn errors(&self) -> Vec<(&str, &str)> {
         self.verdicts
             .iter()

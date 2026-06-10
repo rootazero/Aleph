@@ -28,6 +28,7 @@ pub struct StateVersion {
 
 impl StateVersionTracker {
     /// Create a new tracker with all versions starting at 0.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             presence: AtomicU64::new(0),

@@ -17,6 +17,7 @@ pub struct InboundPolicy {
 }
 
 impl InboundPolicy {
+    #[must_use]
     pub fn new(config: FeishuConfig, _bot_open_id: String) -> Self {
         Self {
             dm: DmPolicyEngine::new(config.clone()),
@@ -25,6 +26,7 @@ impl InboundPolicy {
         }
     }
 
+    #[must_use]
     pub fn evaluate(&self, msg: &InboundMessage) -> InboundPolicyResult {
         if let GroupPolicyResult::Block(reason) = self.group.evaluate(msg) {
             return InboundPolicyResult::Block(reason);

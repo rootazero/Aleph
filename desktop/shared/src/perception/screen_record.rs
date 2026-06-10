@@ -2,7 +2,7 @@
 //!
 //! - **macOS**: `SCRecordingOutput` (macOS 15+) with a `screencapture -V` CLI
 //!   fallback (macOS 13–14).
-//! - **Linux**: `ffmpeg -f x11grab` for X11 / XWayland sessions, with graceful
+//! - **Linux**: `ffmpeg -f x11grab` for X11 / `XWayland` sessions, with graceful
 //!   `NotImplemented` degradation on pure Wayland.
 
 // These are consumed only by the macOS/Linux recording paths below; on Windows
@@ -44,11 +44,11 @@ pub(super) mod sc_recording_delegate {
                 tracing::error!("SCRecordingOutput: recording failed: {}", msg);
                 let ivars = self.ivars();
                 {
-                    let mut guard = ivars.error.lock().unwrap_or_else(|e| e.into_inner());
+                    let mut guard = ivars.error.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     *guard = Some(msg);
                 }
                 let (ref lock, ref cvar) = *ivars.finished;
-                let mut finished = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let mut finished = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 *finished = true;
                 cvar.notify_all();
             }
@@ -58,7 +58,7 @@ pub(super) mod sc_recording_delegate {
                 tracing::debug!("SCRecordingOutput: recording finished");
                 let ivars = self.ivars();
                 let (ref lock, ref cvar) = *ivars.finished;
-                let mut finished = lock.lock().unwrap_or_else(|e| e.into_inner());
+                let mut finished = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                 *finished = true;
                 cvar.notify_all();
             }
@@ -114,7 +114,7 @@ fn screen_record_output_path() -> Result<std::path::PathBuf> {
     Ok(media_dir.join(format!("screen_record_{ts}.mp4")))
 }
 
-/// Check if we can use SCRecordingOutput (macOS 15.0+).
+/// Check if we can use `SCRecordingOutput` (macOS 15.0+).
 #[cfg(target_os = "macos")]
 fn can_use_sc_recording_output() -> bool {
     let info = objc2_foundation::NSProcessInfo::processInfo();
@@ -122,7 +122,7 @@ fn can_use_sc_recording_output() -> bool {
     version.majorVersion >= 15
 }
 
-/// Record using SCRecordingOutput (macOS 15+).
+/// Record using `SCRecordingOutput` (macOS 15+).
 #[cfg(target_os = "macos")]
 fn sc_recording_output_record(
     config: &crate::screen_types::ScreenRecordConfig,
@@ -313,13 +313,13 @@ fn sc_recording_output_record(
 
     // 12. Wait for delegate's didFinishRecording callback
     let (lock, cvar) = &*finished_signal;
-    let guard = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let guard = lock.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let _result = cvar
         .wait_timeout_while(guard, Duration::from_secs(15), |finished| !*finished)
-        .unwrap_or_else(|e| e.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
 
     // Check for recording errors
-    if let Some(err_msg) = error_slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(err_msg) = error_slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
         return Err(DesktopError::ScreenCapture(format!(
             "Recording failed: {err_msg}"
         )));

@@ -57,6 +57,7 @@ pub enum TeamEventType {
 }
 
 impl TeamEventType {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::MessageSent => "message_sent",
@@ -82,6 +83,7 @@ impl TeamEventType {
         }
     }
 
+    #[must_use]
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "message_sent" => Some(Self::MessageSent),

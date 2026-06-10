@@ -404,6 +404,7 @@ impl StateDatabase {
     }
 
     /// Serialize embedding vector to bytes (f32 array -> bytes)
+    #[must_use]
     pub fn serialize_embedding(embedding: &[f32]) -> Vec<u8> {
         embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
     }

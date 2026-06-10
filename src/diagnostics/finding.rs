@@ -20,6 +20,7 @@ pub enum Severity {
 }
 
 impl Severity {
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Severity::Info => "info",
@@ -103,17 +104,20 @@ impl Finding {
     }
 
     /// Mark this finding as mechanically repairable by the engine.
+    #[must_use]
     pub fn repairable(mut self) -> Self {
         self.repairable = true;
         self
     }
 
     /// Record the outcome of a repair attempt (builder style).
+    #[must_use]
     pub fn with_repair(mut self, outcome: RepairOutcome) -> Self {
         self.repair_outcome = Some(outcome);
         self
     }
 
+    #[must_use]
     pub fn is_problem(&self) -> bool {
         self.severity > Severity::Info
     }

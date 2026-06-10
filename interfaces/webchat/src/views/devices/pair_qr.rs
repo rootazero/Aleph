@@ -56,7 +56,7 @@ pub fn PairQr() -> impl IntoView {
     let i18n = use_i18n();
     let url = format!("{}/pair", discover_self_host());
     let svg = generate_qr_svg(&url);
-    let url_display = url.clone();
+    let url_display = url;
     view! {
         <div class="flex flex-col items-center gap-4 p-6">
             <h2 class="text-lg font-semibold text-text-primary">{t!(i18n, devices.add_title)}</h2>

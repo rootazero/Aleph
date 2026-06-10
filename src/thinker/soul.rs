@@ -95,6 +95,7 @@ pub enum RelationshipMode {
 
 impl RelationshipMode {
     /// Get description for prompt injection
+    #[must_use]
     pub fn description(&self) -> &str {
         match self {
             Self::Peer => {
@@ -196,11 +197,13 @@ impl std::error::Error for SoulLoadError {}
 
 impl SoulManifest {
     /// Create a new empty soul manifest
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Check if this is an empty/default soul
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.identity.is_empty() && self.directives.is_empty()
     }
@@ -433,6 +436,7 @@ impl SoulManifest {
     /// For each field:
     /// - If self has a non-empty/non-default value, use it
     /// - Otherwise, fall back to base's value
+    #[must_use]
     pub fn merge_with(&self, base: &SoulManifest) -> SoulManifest {
         SoulManifest {
             identity: self.identity.clone().non_empty_or(base.identity.clone()),

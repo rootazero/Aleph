@@ -54,6 +54,7 @@ impl SignalMonitor {
     /// # Returns
     ///
     /// A `JoinHandle` for the background monitor task.
+    #[must_use]
     pub fn start(
         client: Client,
         config: SignalConfig,

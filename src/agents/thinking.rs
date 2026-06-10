@@ -76,6 +76,7 @@ impl ThinkLevel {
     /// Get the next lower thinking level for fallback
     ///
     /// Returns `None` if already at the lowest level (Off).
+    #[must_use]
     pub fn fallback(&self) -> Option<ThinkLevel> {
         match self {
             ThinkLevel::XHigh => Some(ThinkLevel::High),
@@ -88,6 +89,7 @@ impl ThinkLevel {
     }
 
     /// Get numeric weight for comparison (higher = more thinking)
+    #[must_use]
     pub fn weight(&self) -> u8 {
         match self {
             ThinkLevel::Off => 0,
@@ -100,16 +102,19 @@ impl ThinkLevel {
     }
 
     /// Check if this level is higher than another
+    #[must_use]
     pub fn is_higher_than(&self, other: &ThinkLevel) -> bool {
         self.weight() > other.weight()
     }
 
     /// Check if this level is lower than another
+    #[must_use]
     pub fn is_lower_than(&self, other: &ThinkLevel) -> bool {
         self.weight() < other.weight()
     }
 
     /// Get display name for UI
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             ThinkLevel::Off => "Off",
@@ -122,6 +127,7 @@ impl ThinkLevel {
     }
 
     /// Get description for UI
+    #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
             ThinkLevel::Off => "No extended thinking, fastest responses",
@@ -136,6 +142,7 @@ impl ThinkLevel {
     /// Get the recommended token budget for this thinking level
     ///
     /// These are approximate values that can be adjusted per provider.
+    #[must_use]
     pub fn token_budget(&self) -> u32 {
         match self {
             ThinkLevel::Off => 0,
@@ -194,6 +201,7 @@ impl std::str::FromStr for ThinkLevel {
 /// assert_eq!(normalize_think_level("xhigh"), Some(ThinkLevel::XHigh));
 /// assert_eq!(normalize_think_level("unknown"), None);
 /// ```
+#[must_use]
 pub fn normalize_think_level(raw: &str) -> Option<ThinkLevel> {
     let key = raw.trim().to_lowercase();
 
@@ -230,6 +238,7 @@ pub fn normalize_think_level(raw: &str) -> Option<ThinkLevel> {
 ///
 /// Binary thinking providers (like Z.AI) only support "off" and "on".
 /// Models that support extended thinking include "xhigh".
+#[must_use]
 pub fn list_thinking_level_labels(provider: &str, model: &str) -> Vec<&'static str> {
     if is_binary_thinking_provider(provider) {
         vec!["off", "on"]
@@ -243,6 +252,7 @@ pub fn list_thinking_level_labels(provider: &str, model: &str) -> Vec<&'static s
 }
 
 /// Format thinking levels as comma-separated string
+#[must_use]
 pub fn format_thinking_levels(provider: &str, model: &str) -> String {
     list_thinking_level_labels(provider, model).join(", ")
 }
@@ -288,6 +298,7 @@ const BINARY_THINKING_PROVIDERS: &[&str] = &["z.ai", "zai", "z-ai"];
 ///
 /// Some providers like Z.AI only support enabling or disabling thinking,
 /// without granular level control.
+#[must_use]
 pub fn is_binary_thinking_provider(provider: &str) -> bool {
     let trimmed = provider.trim();
     BINARY_THINKING_PROVIDERS
@@ -299,6 +310,7 @@ pub fn is_binary_thinking_provider(provider: &str) -> bool {
 ///
 /// Extended thinking is only available on specific high-capability models
 /// like Claude Opus and OpenAI o1/o3 series.
+#[must_use]
 pub fn supports_xhigh_thinking(provider: &str, model: &str) -> bool {
     let model_key = model.trim().to_lowercase();
     let provider_key = provider.trim().to_lowercase();
@@ -318,6 +330,7 @@ pub fn supports_xhigh_thinking(provider: &str, model: &str) -> bool {
 }
 
 /// Get supported thinking levels for a provider/model combination
+#[must_use]
 pub fn get_supported_levels(provider: &str, model: &str) -> Vec<ThinkLevel> {
     if is_binary_thinking_provider(provider) {
         vec![ThinkLevel::Off, ThinkLevel::Minimal]
@@ -337,6 +350,7 @@ pub fn get_supported_levels(provider: &str, model: &str) -> Vec<ThinkLevel> {
 }
 
 /// Check if a thinking level is supported by provider/model
+#[must_use]
 pub fn is_level_supported(level: ThinkLevel, provider: &str, model: &str) -> bool {
     get_supported_levels(provider, model).contains(&level)
 }
@@ -363,6 +377,7 @@ pub struct ThinkingFallbackState {
 
 impl ThinkingFallbackState {
     /// Create a new fallback state with initial level
+    #[must_use]
     pub fn new(initial: ThinkLevel) -> Self {
         let mut attempted = HashSet::new();
         attempted.insert(initial);
@@ -375,6 +390,7 @@ impl ThinkingFallbackState {
     }
 
     /// Create with custom max attempts
+    #[must_use]
     pub fn with_max_attempts(mut self, max: u32) -> Self {
         self.max_attempts = max;
         self
@@ -413,6 +429,7 @@ impl ThinkingFallbackState {
     }
 
     /// Check if we've exhausted all fallback options
+    #[must_use]
     pub fn is_exhausted(&self) -> bool {
         self.current == ThinkLevel::Off || self.attempts >= self.max_attempts
     }
@@ -527,6 +544,7 @@ fn pick_fallback_from_error(
 }
 
 /// Detect if error is related to unsupported thinking level
+#[must_use]
 pub fn is_thinking_level_error(message: &str) -> bool {
     let lower = message.to_lowercase();
     lower.contains("thinking")

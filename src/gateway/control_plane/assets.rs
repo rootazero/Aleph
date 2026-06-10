@@ -10,6 +10,7 @@ pub struct ControlPlaneAssets;
 
 impl ControlPlaneAssets {
     /// Get the index.html file
+    #[must_use]
     pub fn get_index_html() -> Option<Vec<u8>> {
         Self::get("index.html").map(|f| f.data.to_vec())
     }

@@ -9,6 +9,7 @@ pub struct CardBuilder;
 
 impl CardBuilder {
     /// Build Aleph's own AgentCard from server config.
+    #[must_use]
     pub fn build(config: &A2AServerConfig, bind_addr: &str) -> AgentCard {
         let name = config
             .card_name

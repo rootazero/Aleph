@@ -192,6 +192,7 @@ pub enum RunEvent {
 
 impl RunEvent {
     /// Get the run_id from any event variant
+    #[must_use]
     pub fn run_id(&self) -> &str {
         match self {
             RunEvent::StatusChanged { run_id, .. } => run_id,
@@ -208,6 +209,7 @@ impl RunEvent {
     }
 
     /// Check if this is a terminal event (run ended)
+    #[must_use]
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -246,11 +248,13 @@ pub enum RunEndResult {
 
 impl RunEndResult {
     /// Check if the result is successful
+    #[must_use]
     pub fn is_success(&self) -> bool {
         matches!(self, RunEndResult::Completed { .. })
     }
 
     /// Get error message if failed
+    #[must_use]
     pub fn error(&self) -> Option<&str> {
         match self {
             RunEndResult::Failed { error, .. } => Some(error),
@@ -344,6 +348,7 @@ impl ActiveRunHandle {
     /// Returns the handle along with receivers for input and cancellation:
     /// - `mpsc::Receiver<String>` for receiving user input
     /// - `oneshot::Receiver<()>` for receiving cancellation signal
+    #[must_use]
     pub fn new(
         run_id: String,
         session_key: SessionKey,

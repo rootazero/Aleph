@@ -69,11 +69,13 @@ impl PromptContent {
     }
 
     /// Check if this is text content
+    #[must_use]
     pub fn is_text(&self) -> bool {
         matches!(self, Self::Text { .. })
     }
 
     /// Get text content if available
+    #[must_use]
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text { text } => Some(text),

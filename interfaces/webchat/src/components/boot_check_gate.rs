@@ -75,7 +75,7 @@ pub fn BootCheckGate() -> impl IntoView {
                 <div class="w-full max-w-md rounded-2xl border border-border bg-surface-raised p-6 shadow-2xl">
                     {move || match phase.get() {
                         ConnectionPhase::Failed { reason } => {
-                            let body = reason.clone();
+                            let body = reason;
                             view! {
                                 <h2 class="text-xl font-semibold text-text-primary">
                                     {move || t_string!(i18n, boot_gate.trouble_title).to_string()}

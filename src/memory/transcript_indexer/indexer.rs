@@ -158,6 +158,7 @@ impl TranscriptIndexer {
     }
 
     /// Chunk text into overlapping segments
+    #[must_use]
     pub fn chunk_text(&self, text: &str) -> Vec<String> {
         if !self.config.enable_chunking {
             return vec![text.to_string()];
@@ -208,6 +209,7 @@ impl TranscriptIndexer {
     }
 
     /// Estimate token count for text
+    #[must_use]
     pub fn estimate_tokens(&self, text: &str) -> usize {
         text.len().div_ceil(4) // 4 chars per token, round up
     }

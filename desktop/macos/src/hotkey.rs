@@ -1,16 +1,16 @@
-//! Global hotkey listener using NSEvent monitoring.
+//! Global hotkey listener using `NSEvent` monitoring.
 //!
 //! Uses `NSEvent::addGlobalMonitorForEventsMatchingMask_handler` (unfocused)
 //! and `NSEvent::addLocalMonitorForEventsMatchingMask_handler` (focused) to
 //! detect key presses system-wide.
 //!
-//! Requires Accessibility **and** InputMonitoring TCC permissions; without them
+//! Requires Accessibility **and** `InputMonitoring` TCC permissions; without them
 //! the global monitor silently receives no events.
 //!
 //! # Preflight (Stage 4)
 //!
 //! `start()` spawns a background Tokio task (Option B — keeps `start()` sync)
-//! that calls `perm.check` for InputMonitoring and Accessibility via the Swift
+//! that calls `perm.check` for `InputMonitoring` and Accessibility via the Swift
 //! bridge.  If either is missing it emits:
 //! - `tracing::warn!` with structured `kind`, `deep_link`, `rationale` fields
 //! - `HotkeyEvent::PermissionMissing(Box<PermissionGuide>)` on the existing
@@ -79,7 +79,7 @@ const MODIFIER_MASK: NSEventModifierFlags = NSEventModifierFlags(
 // HotkeyListener
 // ---------------------------------------------------------------------------
 
-/// A global hotkey listener backed by NSEvent monitors.
+/// A global hotkey listener backed by `NSEvent` monitors.
 ///
 /// # Usage
 ///
@@ -99,7 +99,7 @@ const MODIFIER_MASK: NSEventModifierFlags = NSEventModifierFlags(
 pub struct HotkeyListener {
     tx: mpsc::Sender<HotkeyEvent>,
     hotkeys: Vec<RegisteredHotkey>,
-    /// Monitor handles returned by NSEvent; kept alive for cleanup.
+    /// Monitor handles returned by `NSEvent`; kept alive for cleanup.
     monitors: Vec<Retained<AnyObject>>,
     /// Bridge used for TCC permission preflight in `start()`.
     bridge: Arc<SwiftBridge>,
@@ -126,6 +126,7 @@ impl HotkeyListener {
     ///   Shift/Control/Option/Command constants).
     /// * `track_hold` — if `true`, emit `KeyDown`/`KeyUp`; otherwise emit
     ///   `Pressed` on key-down.
+    #[must_use]
     pub fn register(
         mut self,
         id: HotkeyId,
@@ -152,7 +153,7 @@ impl HotkeyListener {
     ///
     /// # Preflight (Stage 4, Option B)
     ///
-    /// A background Tokio task is spawned to check InputMonitoring and
+    /// A background Tokio task is spawned to check `InputMonitoring` and
     /// Accessibility permissions via the Swift bridge.  Any missing permission
     /// results in a `tracing::warn!` and a `HotkeyEvent::PermissionMissing`
     /// sent on the mpsc channel (best-effort).
@@ -181,12 +182,10 @@ impl HotkeyListener {
                                 bridge.call(METHOD_GUIDE, &GuideParams { kind }).await.ok();
                             let deep_link = guide
                                 .as_ref()
-                                .map(|g| g.deep_link.as_str())
-                                .unwrap_or("<unknown>");
+                                .map_or("<unknown>", |g| g.deep_link.as_str());
                             let rationale = guide
                                 .as_ref()
-                                .map(|g| g.rationale.as_str())
-                                .unwrap_or("<unknown>");
+                                .map_or("<unknown>", |g| g.rationale.as_str());
                             warn!(
                                 kind = ?kind,
                                 deep_link = deep_link,

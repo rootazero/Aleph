@@ -133,7 +133,7 @@ pub enum StreamEvent {
         seq: u64,
         /// Provider that just failed.
         provider: String,
-        /// 1-based attempt about to run (2..=max_attempts).
+        /// 1-based attempt about to run (`2..=max_attempts`).
         attempt: u32,
         /// Total dispatch attempts before the run gives up.
         max_attempts: u32,
@@ -188,7 +188,8 @@ pub enum UncertaintyAction {
 
 impl UncertaintyAction {
     /// Get human-readable description
-    pub fn description(&self) -> &'static str {
+    #[must_use]
+    pub const fn description(&self) -> &'static str {
         match self {
             Self::ProceedWithCaution => "Proceeding with caution despite uncertainty",
             Self::AskForClarification => "Asking user for clarification",
@@ -242,14 +243,14 @@ pub enum AgentTraceSessionOutcome {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentTraceToolCallStart {
     pub tool_id: String,
     pub tool_name: String,
     pub input: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentTraceToolCallEnd {
     pub tool_id: String,
     pub tool_name: String,
@@ -257,17 +258,19 @@ pub struct AgentTraceToolCallEnd {
     pub duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentTraceToolResult {
     Success { output: Value },
     Error { error: String, retryable: bool },
 }
 
 impl AgentTraceToolResult {
-    pub fn is_success(&self) -> bool {
+    #[must_use]
+    pub const fn is_success(&self) -> bool {
         !matches!(self, Self::Error { .. })
     }
 
+    #[must_use]
     pub fn error_text(&self) -> Option<&str> {
         match self {
             Self::Error { error, .. } => Some(error),
@@ -372,7 +375,8 @@ pub enum AgentTraceEvent {
 }
 
 impl AgentTraceEvent {
-    pub fn kind(&self) -> &'static str {
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
         match self {
             Self::TurnStarted { .. } => "turn_started",
             Self::TurnStateEntered { .. } => "turn_state_entered",
@@ -393,7 +397,7 @@ impl AgentTraceEvent {
 }
 
 impl StreamEvent {
-    /// Create a new ReasoningBlock event
+    /// Create a new `ReasoningBlock` event
     pub fn reasoning_block(
         run_id: impl Into<String>,
         seq: u64,
@@ -413,7 +417,7 @@ impl StreamEvent {
         }
     }
 
-    /// Create a new ReasoningBlock event with confidence
+    /// Create a new `ReasoningBlock` event with confidence
     pub fn reasoning_block_with_confidence(
         run_id: impl Into<String>,
         seq: u64,
@@ -434,7 +438,7 @@ impl StreamEvent {
         }
     }
 
-    /// Create a new UncertaintySignal event
+    /// Create a new `UncertaintySignal` event
     pub fn uncertainty_signal(
         run_id: impl Into<String>,
         seq: u64,
@@ -458,7 +462,8 @@ impl StreamEvent {
         }
     }
 
-    /// Get the run_id from any event variant
+    /// Get the `run_id` from any event variant
+    #[must_use]
     pub fn run_id(&self) -> &str {
         match self {
             Self::RunAccepted { run_id, .. }
@@ -479,7 +484,8 @@ impl StreamEvent {
     }
 
     /// Get the JSON-RPC method name for this event
-    pub fn method_name(&self) -> &'static str {
+    #[must_use]
+    pub const fn method_name(&self) -> &'static str {
         match self {
             Self::RunAccepted { .. } => "stream.run_accepted",
             Self::Reasoning { .. } => "stream.reasoning",
@@ -528,6 +534,7 @@ impl ToolResult {
         }
     }
 
+    #[must_use]
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = Some(metadata);
         self

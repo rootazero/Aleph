@@ -168,6 +168,7 @@ fn rest_of(s: &str, byte_offset: usize) -> &str {
 ///
 /// Sections are emitted in [`ProfileSection::ALL`] order.  `updated` is set to
 /// today's UTC date automatically.
+#[must_use]
 pub fn render_user_md(
     revision: u32,
     last_session: &str,

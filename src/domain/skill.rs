@@ -25,6 +25,7 @@ impl SkillId {
     }
 
     /// Return the underlying string slice.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -33,6 +34,7 @@ impl SkillId {
     ///
     /// For malformed IDs containing multiple colons (e.g. `a:b:c`),
     /// this returns the substring before the first colon.
+    #[must_use]
     pub fn plugin_prefix(&self) -> Option<&str> {
         self.0.split_once(':').map(|(prefix, _)| prefix)
     }
@@ -41,6 +43,7 @@ impl SkillId {
     ///
     /// For malformed IDs containing multiple colons (e.g. `a:b:c`),
     /// this returns the substring after the first colon.
+    #[must_use]
     pub fn skill_name(&self) -> &str {
         self.0
             .split_once(':')
@@ -52,6 +55,7 @@ impl SkillId {
     /// Returns `true` when:
     /// - There is no `:` and the string is non-empty (bare skill name).
     /// - There is exactly one `:` and both prefix and name are non-empty.
+    #[must_use]
     pub fn is_well_formed(&self) -> bool {
         match self.0.split_once(':') {
             None => !self.0.is_empty(),
@@ -93,11 +97,13 @@ impl PluginId {
     }
 
     /// Return the underlying string slice.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Check whether the plugin ID is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
@@ -143,6 +149,7 @@ impl SkillSource {
     /// Priority for override resolution. Higher value wins.
     ///
     /// Bundled=1 < Global=2 < Plugin=3 < Workspace=4
+    #[must_use]
     pub fn priority(&self) -> u8 {
         match self {
             Self::Bundled => 1,
@@ -185,6 +192,7 @@ pub struct ParseOsError(String);
 
 impl ParseOsError {
     /// Return the input string that failed to parse.
+    #[must_use]
     pub fn input(&self) -> &str {
         &self.0
     }
@@ -292,6 +300,7 @@ pub enum InstallKind {
 impl ValueObject for InstallKind {}
 
 impl InstallKind {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Brew => "brew",
@@ -401,16 +410,19 @@ impl SkillContent {
     }
 
     /// Return the underlying string slice.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Check if the content is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Check if the content is empty or contains only whitespace.
+    #[must_use]
     pub fn is_blank(&self) -> bool {
         self.0.trim().is_empty()
     }
@@ -504,76 +516,91 @@ impl SkillManifest {
     // --- Accessors ---
 
     /// Human-readable name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Optional owning plugin.
+    #[must_use]
     pub fn plugin(&self) -> Option<&PluginId> {
         self.plugin.as_ref()
     }
 
     /// Short description.
+    #[must_use]
     pub fn description(&self) -> &str {
         &self.description
     }
 
     /// The prompt content.
+    #[must_use]
     pub fn content(&self) -> &SkillContent {
         &self.content
     }
 
     /// How the content is injected.
+    #[must_use]
     pub fn scope(&self) -> &PromptScope {
         &self.scope
     }
 
     /// Optional tool name this skill is bound to.
+    #[must_use]
     pub fn bound_tool(&self) -> Option<&str> {
         self.bound_tool.as_deref()
     }
 
     /// Eligibility conditions.
+    #[must_use]
     pub fn eligibility(&self) -> &EligibilitySpec {
         &self.eligibility
     }
 
     /// Installation instructions.
+    #[must_use]
     pub fn install_specs(&self) -> &[InstallSpec] {
         &self.install_specs
     }
 
     /// Invocation policy.
+    #[must_use]
     pub fn invocation(&self) -> &InvocationPolicy {
         &self.invocation
     }
 
     /// Where the skill came from.
+    #[must_use]
     pub fn source(&self) -> &SkillSource {
         &self.source
     }
 
     /// API Key environment variable name required by this skill.
+    #[must_use]
     pub fn primary_env(&self) -> Option<&str> {
         self.primary_env.as_deref()
     }
 
     /// External documentation / key acquisition URL.
+    #[must_use]
     pub fn homepage(&self) -> Option<&str> {
         self.homepage.as_deref()
     }
 
     /// UI emoji icon.
+    #[must_use]
     pub fn emoji(&self) -> Option<&str> {
         self.emoji.as_deref()
     }
 
     /// When this skill should be proactively invoked.
+    #[must_use]
     pub fn when_to_use(&self) -> Option<&str> {
         self.when_to_use.as_deref()
     }
 
     /// Override priority (delegates to `SkillSource::priority()`).
+    #[must_use]
     pub fn priority(&self) -> u8 {
         self.source.priority()
     }
@@ -584,11 +611,13 @@ impl SkillManifest {
     ///
     /// A skill is model-visible when it is NOT disabled AND the invocation
     /// policy does not disable model invocation.
+    #[must_use]
     pub fn is_model_visible(&self) -> bool {
         self.scope != PromptScope::Disabled && !self.invocation.disable_model_invocation
     }
 
     /// Whether a user can invoke this skill directly.
+    #[must_use]
     pub fn is_user_invocable(&self) -> bool {
         self.invocation.user_invocable
     }

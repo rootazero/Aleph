@@ -45,6 +45,7 @@ pub fn notes_vec_table_for_dim(dim: u32) -> Result<&'static str, AlephError> {
 }
 
 /// Serialize a float embedding to a little-endian byte blob for sqlite-vec.
+#[must_use]
 pub fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(embedding.len() * 4);
     for &val in embedding {

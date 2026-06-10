@@ -38,6 +38,7 @@ pub struct ApprovalHandler {
 
 impl ApprovalHandler {
     /// Create a new approval handler
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
@@ -47,6 +48,7 @@ impl ApprovalHandler {
     }
 
     /// Create with custom default timeout
+    #[must_use]
     pub fn with_timeout(timeout: Duration) -> Self {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),

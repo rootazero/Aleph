@@ -92,6 +92,7 @@ impl ReactionHandler {
             .await
     }
 
+    #[must_use]
     pub fn should_agent_react(&self, _msg: &InboundMessage) -> bool {
         matches!(
             self.level,

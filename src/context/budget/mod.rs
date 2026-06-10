@@ -296,6 +296,7 @@ pub struct ContextBudget {
 
 impl ContextBudget {
     /// Create a new context budget from configuration.
+    #[must_use]
     pub fn new(config: &ContextBudgetConfig) -> Self {
         Self {
             token_budget: config.token_budget,
@@ -316,26 +317,31 @@ impl ContextBudget {
     }
 
     /// Total token budget.
+    #[must_use]
     pub fn token_budget(&self) -> u64 {
         self.token_budget
     }
 
     /// Characters-per-token ratio.
+    #[must_use]
     pub fn token_estimate_ratio(&self) -> f64 {
         self.token_estimate_ratio
     }
 
     /// Warning threshold fraction.
+    #[must_use]
     pub fn warning_threshold(&self) -> f64 {
         self.warning_threshold
     }
 
     /// Fresh tail count for compaction.
+    #[must_use]
     pub fn fresh_tail_count(&self) -> usize {
         self.fresh_tail_count
     }
 
     /// Last computed pressure snapshot from `before_turn()`.
+    #[must_use]
     pub fn last_pressure(&self) -> Option<&ContextPressure> {
         self.last_pressure.as_ref()
     }
@@ -351,6 +357,7 @@ impl ContextBudget {
     /// estimate and calibration factor as `before_turn`, so the ratio the
     /// preflight gate sees matches the ratio the budget check computes moments
     /// later on the (preflight-trimmed) message list.
+    #[must_use]
     pub fn peek_pressure(
         &self,
         messages: &[UnifiedMessage],
@@ -526,6 +533,7 @@ impl ContextBudget {
 
     /// Current calibration multiplier, if any observation has been recorded.
     /// Exposed for diagnostics/tests; `None` means the estimate is uncalibrated.
+    #[must_use]
     pub fn calibration(&self) -> Option<f64> {
         self.calibration
     }

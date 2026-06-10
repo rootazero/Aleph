@@ -32,6 +32,7 @@ pub struct MediaProcessor {
 }
 
 impl MediaProcessor {
+    #[must_use]
     pub fn new(config: MediaConfig) -> Self {
         Self { config }
     }

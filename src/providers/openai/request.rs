@@ -39,6 +39,7 @@ pub(crate) fn build_text_content(
 }
 
 /// Build request body for chat completion
+#[must_use]
 pub fn build_request(
     config: &ProviderConfig,
     input: &str,
@@ -48,6 +49,7 @@ pub fn build_request(
 }
 
 /// Build request body with explicit mode control.
+#[must_use]
 pub fn build_request_with_mode(
     config: &ProviderConfig,
     input: &str,
@@ -102,6 +104,7 @@ pub fn apply_thinking_config(request: &mut ChatCompletionRequest, reasoning_effo
 }
 
 /// Build request body with image for vision API
+#[must_use]
 pub fn build_vision_request(
     config: &ProviderConfig,
     input: &str,
@@ -155,6 +158,7 @@ pub fn build_vision_request(
 }
 
 /// Build request body with MediaAttachment for vision API (add-multimodal-content-support)
+#[must_use]
 pub fn build_multimodal_request(
     config: &ProviderConfig,
     input: &str,

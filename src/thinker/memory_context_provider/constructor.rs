@@ -81,6 +81,7 @@ impl MemoryContextProvider {
     }
 
     /// Set the injection mode on an existing provider (builder-style).
+    #[must_use]
     pub fn with_injection_mode(mut self, mode: MemoryInjectionMode) -> Self {
         self.injection_mode = mode;
         self
@@ -156,6 +157,7 @@ impl MemoryContextProvider {
     ///
     /// Used by Task 8 server wiring to share the same `HybridAssembler`
     /// instance with `MemoryReflector` without constructing a second one.
+    #[must_use]
     pub fn assembler(&self) -> Arc<dyn WorkingMemoryAssembler> {
         self.assembler.clone()
     }
@@ -261,6 +263,7 @@ impl MemoryContextProvider {
     }
 
     /// Set the curated hot-memory char-budget config (builder-style).
+    #[must_use]
     pub fn with_curated_config(mut self, cfg: CuratedConfig) -> Self {
         self.curated_config = cfg;
         self

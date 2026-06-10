@@ -162,6 +162,7 @@ fn generate_boundary_id() -> String {
 ///
 /// Callers needing the detection report for audit logging should use
 /// [`wrap_external_content_with_report`] instead.
+#[must_use]
 pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
     wrap_external_content_with_report(content, source).wrapped
 }
@@ -169,6 +170,7 @@ pub fn wrap_external_content(content: &str, source: ContentSource) -> String {
 /// Full report variant of [`wrap_external_content`] — returns wrapped text
 /// alongside detected patterns and the count of scrubbed tokens so callers
 /// can emit audit events.
+#[must_use]
 pub fn wrap_external_content_with_report(content: &str, source: ContentSource) -> WrapReport {
     let id = generate_boundary_id();
     let source_label = source.as_label();
@@ -475,6 +477,7 @@ const STRUCTURAL_MARKERS: &[&str] = &[
 /// in `external-content.ts`): homoglyph-fold → collapse control chars/newlines to
 /// a single space → scrub tokenizer/format markers → neutralize structural
 /// fences → truncate.
+#[must_use]
 pub fn sanitize_label(raw: &str) -> String {
     // 1. Fold homoglyphs so Cyrillic/fullwidth confusables can't smuggle markers
     //    past the literal scans below.

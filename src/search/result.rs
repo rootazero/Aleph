@@ -52,11 +52,13 @@ impl SearchResult {
     }
 
     /// Calculate content length in bytes (snippet + full_content)
+    #[must_use]
     pub fn content_length(&self) -> usize {
         self.snippet.len() + self.full_content.as_ref().map(|c| c.len()).unwrap_or(0)
     }
 
     /// Check if result has full content
+    #[must_use]
     pub fn has_full_content(&self) -> bool {
         self.full_content.is_some()
     }

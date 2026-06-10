@@ -25,7 +25,8 @@ pub struct WindowsEscapeListener {
 static LISTENER_PTR: AtomicUsize = AtomicUsize::new(0);
 
 impl WindowsEscapeListener {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self {
             aborted: AtomicBool::new(false),
             hook: Mutex::new(None),

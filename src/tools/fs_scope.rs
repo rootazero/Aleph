@@ -49,12 +49,14 @@ pub struct FsScope {
 impl FsScope {
     /// Scope for a normal (non-isolated) run: relative paths land in the
     /// workspace artifact directory, no absolute remap.
+    #[must_use]
     pub fn workspace(base: PathBuf) -> Self {
         Self { base, rebase: None }
     }
 
     /// Scope for a worktree-isolated agent: relative paths resolve at the
     /// worktree root and parent-repo absolute paths are rebased into it.
+    #[must_use]
     pub fn worktree(worktree_root: PathBuf, repo_root: PathBuf) -> Self {
         Self {
             base: worktree_root.clone(),
@@ -65,6 +67,7 @@ impl FsScope {
     /// Apply the rebase mapping to an already-canonicalized path. Returns the
     /// remapped path when `path` is under `rebase.from`; `None` otherwise
     /// (including when no rebase is configured).
+    #[must_use]
     pub fn rebase_path(&self, path: &std::path::Path) -> Option<PathBuf> {
         let (from, to) = self.rebase.as_ref()?;
         let rel = path.strip_prefix(from).ok()?;
@@ -89,6 +92,7 @@ where
 /// Read the active filesystem scope, if any. Returns `None` outside a
 /// [`with_fs_scope`] scope or when the surrounding scope explicitly set
 /// `None`.
+#[must_use]
 pub fn current() -> Option<FsScope> {
     CURRENT_FS_SCOPE.try_with(|s| s.clone()).ok().flatten()
 }

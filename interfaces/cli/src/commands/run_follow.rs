@@ -108,7 +108,7 @@ pub async fn follow_run(
         // consumers see the raw protocol stream.
         if opts.json {
             if let Ok(line) = serde_json::to_string(&event) {
-                println!("{}", line);
+                println!("{line}");
             }
         }
 
@@ -225,7 +225,7 @@ pub async fn follow_run(
             }
             StreamEvent::RunError { error, .. } => {
                 if !opts.json {
-                    eprintln!("Error: {}", error);
+                    eprintln!("Error: {error}");
                 }
                 break;
             }
@@ -263,7 +263,7 @@ pub async fn follow_run(
         );
         if !footer_rendered && tool_count > 0 {
             eprintln!();
-            eprintln!("({} tools used)", tool_count);
+            eprintln!("({tool_count} tools used)");
         }
     }
 

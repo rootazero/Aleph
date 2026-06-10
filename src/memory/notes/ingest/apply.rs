@@ -92,6 +92,7 @@ impl<'a, S: NoteStore + Send + Sync + 'static> CompoundApplyTx<'a, S> {
         }
     }
 
+    #[must_use]
     pub fn tx_id(&self) -> &str {
         &self.tx_id
     }

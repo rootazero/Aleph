@@ -19,6 +19,7 @@ pub struct ScreenRecordConfig {
 
 impl ScreenRecordConfig {
     /// Apply parameter constraints.
+    #[must_use]
     pub fn clamped(mut self) -> Self {
         // A NaN `duration_secs` survives `clamp` (it only normalizes against
         // non-NaN bounds) and would panic in `Duration::from_secs_f64` on the

@@ -91,6 +91,7 @@ impl BashExecTool {
     /// Boot wiring attaches the shared `Arc<dyn Sandbox>` via
     /// [`BashExecTool::with_sandbox`]; unconfigured instances refuse execution
     /// with a structured error (delegated to `CodeExecTool`).
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: CodeExecTool::new(),

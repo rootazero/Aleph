@@ -20,7 +20,8 @@ use crate::error::{AlephError, Result};
 use crate::tools::AlephTool;
 
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
-const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+const B64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct NodeFileArgs {
@@ -101,22 +102,21 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
 
         match args.direction.as_str() {
             "push" => {
-                let local = check_and_resolve_path(
-                    Path::new(&args.local_path),
-                    &get_denied_paths(),
-                    None,
-                )
-                .map_err(|e| AlephError::tool(format!("local path rejected: {e}")))?;
-                let meta = std::fs::metadata(&local)
-                    .map_err(|e| AlephError::tool(format!("stat local '{}': {e}", local.display())))?;
+                let local =
+                    check_and_resolve_path(Path::new(&args.local_path), &get_denied_paths(), None)
+                        .map_err(|e| AlephError::tool(format!("local path rejected: {e}")))?;
+                let meta = std::fs::metadata(&local).map_err(|e| {
+                    AlephError::tool(format!("stat local '{}': {e}", local.display()))
+                })?;
                 if meta.len() > MAX_FILE_BYTES as u64 {
                     return Err(AlephError::tool(format!(
                         "{} bytes exceeds {MAX_FILE_BYTES} cap",
                         meta.len()
                     )));
                 }
-                let bytes = std::fs::read(&local)
-                    .map_err(|e| AlephError::tool(format!("read local '{}': {e}", local.display())))?;
+                let bytes = std::fs::read(&local).map_err(|e| {
+                    AlephError::tool(format!("read local '{}': {e}", local.display()))
+                })?;
                 let sha = sha256_hex(&bytes);
                 let params = json!({
                     "tool": "file.write",
@@ -130,12 +130,16 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                 let resp = channel
                     .call("tool.call", params, timeout)
                     .await
-                    .map_err(|e| AlephError::tool(format!("node '{}' reverse-rpc failed: {e}", args.node)))?;
+                    .map_err(|e| {
+                        AlephError::tool(format!("node '{}' reverse-rpc failed: {e}", args.node))
+                    })?;
                 if !resp.is_success() {
                     return Err(AlephError::tool(format!(
                         "node '{}' file.write error: {}",
                         args.node,
-                        resp.error.map(|e| e.message).unwrap_or_else(|| "unknown".to_string())
+                        resp.error
+                            .map(|e| e.message)
+                            .unwrap_or_else(|| "unknown".to_string())
                     )));
                 }
                 Ok(json!({
@@ -151,12 +155,16 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                 let resp = channel
                     .call("tool.call", params, timeout)
                     .await
-                    .map_err(|e| AlephError::tool(format!("node '{}' reverse-rpc failed: {e}", args.node)))?;
+                    .map_err(|e| {
+                        AlephError::tool(format!("node '{}' reverse-rpc failed: {e}", args.node))
+                    })?;
                 if !resp.is_success() {
                     return Err(AlephError::tool(format!(
                         "node '{}' file.read error: {}",
                         args.node,
-                        resp.error.map(|e| e.message).unwrap_or_else(|| "unknown".to_string())
+                        resp.error
+                            .map(|e| e.message)
+                            .unwrap_or_else(|| "unknown".to_string())
                     )));
                 }
                 let result = resp.result.unwrap_or(Value::Null);
@@ -178,12 +186,9 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                 if sha != node_sha {
                     return Err(AlephError::tool("sha256 mismatch in transit".to_string()));
                 }
-                let local = check_and_resolve_path(
-                    Path::new(&args.local_path),
-                    &get_denied_paths(),
-                    None,
-                )
-                .map_err(|e| AlephError::tool(format!("local path rejected: {e}")))?;
+                let local =
+                    check_and_resolve_path(Path::new(&args.local_path), &get_denied_paths(), None)
+                        .map_err(|e| AlephError::tool(format!("local path rejected: {e}")))?;
                 if local.exists() && !args.overwrite {
                     return Err(AlephError::tool(
                         "local target exists (set overwrite)".to_string(),
@@ -193,8 +198,9 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
                     std::fs::create_dir_all(parent)
                         .map_err(|e| AlephError::tool(format!("create local dir: {e}")))?;
                 }
-                std::fs::write(&local, &bytes)
-                    .map_err(|e| AlephError::tool(format!("write local '{}': {e}", local.display())))?;
+                std::fs::write(&local, &bytes).map_err(|e| {
+                    AlephError::tool(format!("write local '{}': {e}", local.display()))
+                })?;
                 Ok(json!({
                     "direction": "pull",
                     "bytes": bytes.len(),
@@ -211,8 +217,8 @@ Example: {"node":"worker-1","direction":"push","local_path":"/tmp/build.sh","rem
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cluster::{CommandDescriptor, NodeRegistry, NodeSession, ReverseRpcChannel};
     use crate::cluster::sha256_hex;
+    use crate::cluster::{CommandDescriptor, NodeRegistry, NodeSession, ReverseRpcChannel};
     use crate::gateway::protocol::JsonRpcResponse;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -233,7 +239,10 @@ mod tests {
             channel: channel.clone(),
             declared_commands: commands
                 .into_iter()
-                .map(|c| CommandDescriptor { name: c.to_string(), schema: json!({}) })
+                .map(|c| CommandDescriptor {
+                    name: c.to_string(),
+                    schema: json!({}),
+                })
                 .collect(),
             tags: vec![],
             connected_at: 1,
@@ -352,7 +361,10 @@ mod tests {
             conn_id: "conn-1".to_string(),
             device_name: "worker-1".to_string(),
             channel: channel.clone(),
-            declared_commands: vec![CommandDescriptor { name: "file.read".into(), schema: json!({}) }],
+            declared_commands: vec![CommandDescriptor {
+                name: "file.read".into(),
+                schema: json!({}),
+            }],
             tags: vec![],
             connected_at: 1,
         });
@@ -403,7 +415,10 @@ mod tests {
             })
             .await
             .expect_err("bad direction rejected");
-        assert!(err.to_string().contains("push") && err.to_string().contains("pull"), "{err}");
+        assert!(
+            err.to_string().contains("push") && err.to_string().contains("pull"),
+            "{err}"
+        );
     }
 
     #[tokio::test]

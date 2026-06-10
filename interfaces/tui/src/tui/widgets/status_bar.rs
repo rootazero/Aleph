@@ -20,7 +20,7 @@ pub struct StatusBar<'a> {
     pub tool_progress_mode: ToolProgressMode,
 }
 
-impl<'a> StatusBar<'a> {
+impl StatusBar<'_> {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let (dot, dot_color) = if self.is_connected {
             ("\u{25cf}", DEFAULT_THEME.connected) // ●
@@ -43,7 +43,7 @@ impl<'a> StatusBar<'a> {
             Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)), // │
             Span::styled(format!(" {} ", self.session), text_style),
             Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)),
-            Span::styled(format!(" {} ", token_str), text_style),
+            Span::styled(format!(" {token_str} "), text_style),
             Span::styled("\u{2502}", sep_style.bg(DEFAULT_THEME.status_bg)),
             Span::styled(
                 format!(" T:{} ", self.tool_progress_mode.glyph()),
@@ -63,12 +63,12 @@ impl<'a> StatusBar<'a> {
 fn format_tokens(tokens: u64) -> String {
     if tokens >= 1_000_000 {
         let millions = tokens as f64 / 1_000_000.0;
-        format!("{:.1}M tok", millions)
+        format!("{millions:.1}M tok")
     } else if tokens >= 1_000 {
         let thousands = tokens as f64 / 1_000.0;
-        format!("{:.1}k tok", thousands)
+        format!("{thousands:.1}k tok")
     } else {
-        format!("{} tok", tokens)
+        format!("{tokens} tok")
     }
 }
 

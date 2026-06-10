@@ -19,6 +19,7 @@ pub enum TemplatePriority {
 }
 
 impl TemplatePriority {
+    #[must_use]
     pub fn as_coord_priority(self) -> crate::agents::swarm::tasks::Priority {
         use crate::agents::swarm::tasks::Priority;
         match self {

@@ -22,6 +22,7 @@ pub struct TokenManager {
 }
 
 impl TokenManager {
+    #[must_use]
     pub fn new(app_id: String, client_secret: String) -> Self {
         Self {
             app_id,
@@ -116,6 +117,7 @@ pub struct QQApiClient {
 }
 
 impl QQApiClient {
+    #[must_use]
     pub fn new(app_id: String, client_secret: String) -> Self {
         Self {
             http: reqwest::Client::new(),

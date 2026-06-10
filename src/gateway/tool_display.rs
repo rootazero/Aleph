@@ -11,6 +11,7 @@ pub struct ToolDisplay {
 }
 
 /// Get display metadata for a tool
+#[must_use]
 pub fn get_tool_display(tool_name: &str) -> ToolDisplay {
     match tool_name {
         "exec" | "shell" | "bash" | "run_command" => ToolDisplay {
@@ -57,6 +58,7 @@ pub fn get_tool_display(tool_name: &str) -> ToolDisplay {
 }
 
 /// Format tool parameters for display
+#[must_use]
 pub fn format_tool_meta(tool_name: &str, params: &Value) -> String {
     match tool_name {
         "read" | "read_file" | "cat" => format_path_params(params, "path"),
@@ -70,6 +72,7 @@ pub fn format_tool_meta(tool_name: &str, params: &Value) -> String {
 }
 
 /// Format complete tool summary: "🔨 Exec: mkdir -p /tmp"
+#[must_use]
 pub fn format_tool_summary(tool_name: &str, params: &Value) -> String {
     let display = get_tool_display(tool_name);
     let meta = format_tool_meta(tool_name, params);
@@ -188,6 +191,7 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 }
 
 /// Group multiple paths by directory: /tmp/{file1.txt, file2.txt}
+#[must_use]
 pub fn group_paths(paths: &[&str]) -> String {
     if paths.is_empty() {
         return String::new();

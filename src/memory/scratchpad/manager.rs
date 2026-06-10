@@ -59,6 +59,7 @@ pub enum PlanItemStatus {
 
 impl PlanItemStatus {
     /// Markdown checkbox glyph (without the leading `- `) for this state.
+    #[must_use]
     pub fn glyph(self) -> &'static str {
         match self {
             Self::Pending => "[ ]",
@@ -79,11 +80,13 @@ pub struct PlanItem {
 
 impl PlanItem {
     /// `true` when the item is finished (`[x]`).
+    #[must_use]
     pub fn is_done(&self) -> bool {
         self.status == PlanItemStatus::Done
     }
 
     /// `true` when this is the active step (`[~]`).
+    #[must_use]
     pub fn is_in_progress(&self) -> bool {
         self.status == PlanItemStatus::InProgress
     }
@@ -108,6 +111,7 @@ pub const COMPLETION_BANNER: &str = "✅ 目标达成";
 
 impl ScratchpadSnapshot {
     /// Plan items not yet finished (pending **or** in-progress).
+    #[must_use]
     pub fn incomplete(&self) -> Vec<&PlanItem> {
         self.items.iter().filter(|i| !i.is_done()).collect()
     }
@@ -116,6 +120,7 @@ impl ScratchpadSnapshot {
     /// finished (`[x]`) — the structural success/收尾 condition, the exact
     /// complement of [`Self::has_pending_work`] once a plan exists. Empty
     /// plans never count as complete (nothing was decomposed to finish).
+    #[must_use]
     pub fn is_objective_complete(&self) -> bool {
         self.objective.is_some() && !self.items.is_empty() && self.items.iter().all(|i| i.is_done())
     }
@@ -126,6 +131,7 @@ impl ScratchpadSnapshot {
     /// "what was achieved" prose is the model's final reply; this is just the
     /// scaffold both it and the user see at the 收尾 moment. Mirrors hermes-
     /// agent's `mark_done` → "✓ Goal achieved" without an LLM judge call.
+    #[must_use]
     pub fn render_completion(&self) -> String {
         let mut out = String::from(COMPLETION_BANNER);
         if let Some(obj) = &self.objective {
@@ -141,6 +147,7 @@ impl ScratchpadSnapshot {
     }
 
     /// The single in-progress item, if any — the "current step".
+    #[must_use]
     pub fn current(&self) -> Option<&PlanItem> {
         self.items.iter().find(|i| i.is_in_progress())
     }
@@ -148,6 +155,7 @@ impl ScratchpadSnapshot {
     /// `true` when an objective is set AND at least one real plan item is
     /// not yet finished. This is the structural condition the goal-loop
     /// hook fires on — not a semantic completion judgment.
+    #[must_use]
     pub fn has_pending_work(&self) -> bool {
         self.objective.is_some() && self.items.iter().any(|i| !i.is_done())
     }
@@ -156,6 +164,7 @@ impl ScratchpadSnapshot {
     /// each mutating scratchpad action (Claude Code `TodoWrite` parity: the
     /// tool always returns the updated list, giving the loop continuous
     /// visibility without touching the harness prompt builder). Pure render.
+    #[must_use]
     pub fn render_progress(&self) -> String {
         let mut out = String::new();
         if let Some(obj) = &self.objective {
@@ -198,6 +207,7 @@ impl ScratchpadManager {
     ///
     /// Files are stored under `~/.aleph/workspaces/<agent_id>/`.
     /// Falls back to a temp-style path for testing.
+    #[must_use]
     pub fn new(project_id: &str, session_id: &str) -> Self {
         let project_dir = crate::config::agent_resolver::default_workspace_root().join(project_id);
 
@@ -209,6 +219,7 @@ impl ScratchpadManager {
     }
 
     /// Create with an explicit base directory (for testing)
+    #[must_use]
     pub fn with_dir(project_dir: PathBuf, session_id: &str) -> Self {
         Self {
             project_dir,
@@ -218,6 +229,7 @@ impl ScratchpadManager {
     }
 
     /// Create with custom configuration
+    #[must_use]
     pub fn with_config(project_dir: PathBuf, session_id: &str, config: ScratchpadConfig) -> Self {
         Self {
             project_dir,
@@ -227,16 +239,19 @@ impl ScratchpadManager {
     }
 
     /// Get the project directory path
+    #[must_use]
     pub fn project_dir(&self) -> &PathBuf {
         &self.project_dir
     }
 
     /// Get the scratchpad file path
+    #[must_use]
     pub fn scratchpad_path(&self) -> PathBuf {
         self.project_dir.join(&self.config.filename)
     }
 
     /// Get the history log path
+    #[must_use]
     pub fn history_path(&self) -> PathBuf {
         self.project_dir.join(&self.config.history_filename)
     }
@@ -249,6 +264,7 @@ impl ScratchpadManager {
     }
 
     /// Check if scratchpad file exists
+    #[must_use]
     pub fn exists(&self) -> bool {
         self.scratchpad_path().exists()
     }

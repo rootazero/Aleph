@@ -175,6 +175,7 @@ pub fn discover_all(config: &DiscoveryConfig) -> ExtensionResult<ResolvedPlugins
 /// Scan a single path and return discovered plugins without conflict resolution
 ///
 /// Useful when you need to scan additional paths after initial discovery.
+#[must_use]
 pub fn scan_path(
     path: &std::path::Path,
     origin: PluginOrigin,

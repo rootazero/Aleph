@@ -33,6 +33,7 @@ rather than abbreviating it.";
 ///
 /// The analysis block gives the LLM reasoning space but should not enter
 /// the context window. If no analysis block is found, returns input unchanged.
+#[must_use]
 pub fn strip_analysis_block(text: &str) -> String {
     if let Some(start) = text.find("<analysis>") {
         if let Some(end) = text.find("</analysis>") {
@@ -67,6 +68,7 @@ pub fn strip_analysis_block(text: &str) -> String {
 ///
 /// `focus = None` (or all-whitespace) yields a prompt byte-identical to the
 /// historical static template — the default path is unchanged.
+#[must_use]
 pub fn build_window_summary_prompt(
     transcript: &str,
     token_budget: usize,
@@ -133,6 +135,7 @@ pub fn build_window_summary_prompt(
 /// the message list it owns, so task-anchoring needs no new plumbing from the
 /// caller. Returns an owned `String` because [`UnifiedMessage::text_content`]
 /// reconstructs the text from content blocks.
+#[must_use]
 pub fn latest_user_task(tail: &[UnifiedMessage]) -> Option<String> {
     tail.iter().rev().find_map(|m| match m {
         UnifiedMessage::User { .. } => {

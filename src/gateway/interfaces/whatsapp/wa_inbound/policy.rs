@@ -17,6 +17,7 @@ pub struct InboundPolicy {
 }
 
 impl InboundPolicy {
+    #[must_use]
     pub fn new(access: AccessConfig, paired_numbers: Vec<String>) -> Self {
         Self {
             dm: DmPolicyEngine::new(access.clone(), paired_numbers),
@@ -25,6 +26,7 @@ impl InboundPolicy {
         }
     }
 
+    #[must_use]
     pub fn evaluate(&self, msg: &InboundMessage) -> InboundPolicyResult {
         if let GroupPolicyResult::Block(reason) = self.group.evaluate(msg) {
             return InboundPolicyResult::Block(reason);
@@ -37,6 +39,7 @@ impl InboundPolicy {
         }
     }
 
+    #[must_use]
     pub fn approve_pairing(&self, sender_id: &str) -> bool {
         self.tracker.approve(sender_id)
     }

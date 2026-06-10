@@ -40,12 +40,14 @@ impl AccountId {
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
 impl WhatsAppAccount {
+    #[must_use]
     pub fn new(id: AccountId) -> Self {
         let auth_key = id.as_str().to_string();
         Self {

@@ -94,6 +94,7 @@ pub enum SearchProviderType {
 
 impl SearchProviderType {
     /// Returns the string identifier for this provider type
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             SearchProviderType::Tavily => "tavily",

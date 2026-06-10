@@ -848,6 +848,7 @@ impl TelegramDelivery {
     }
 
     /// Create a streaming orchestrator for this conversation.
+    #[must_use]
     pub fn send_streaming_orchestrated(
         &self,
         config: &super::config_v2::StreamingOptions,

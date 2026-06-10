@@ -123,11 +123,13 @@ pub async fn install(name: &str) -> Result<BootstrapResult, BootstrapError> {
 }
 
 /// Whether a bootstrap spec exists for this capability.
+#[must_use]
 pub fn has_spec(capability: &str) -> bool {
     find_spec(capability).is_some()
 }
 
 /// Dependencies that must be Ready before installing this capability.
+#[must_use]
 pub fn dependencies(capability: &str) -> &'static [&'static str] {
     find_spec(capability).map(|s| s.deps).unwrap_or(&[])
 }

@@ -4,7 +4,7 @@
 //! that mediates network egress for sandboxed tool invocations on
 //! macOS — but that is per-sandbox-spawn, not a user-facing config
 //! concept. A general "configure a system-wide proxy" surface (HTTPS
-//! upstream, NO_PROXY rules, auth, env injection into providers) has
+//! upstream, `NO_PROXY` rules, auth, env injection into providers) has
 //! never been designed.
 //!
 //! This subcommand surfaces the gap explicitly so users discover the

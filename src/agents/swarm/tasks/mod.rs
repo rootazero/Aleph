@@ -36,6 +36,7 @@ pub enum Priority {
 }
 
 impl Priority {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Low => "low",
@@ -45,6 +46,7 @@ impl Priority {
         }
     }
 
+    #[must_use]
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "low" => Some(Self::Low),
@@ -105,6 +107,7 @@ pub enum CoordTaskStatus {
 }
 
 impl CoordTaskStatus {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -124,6 +127,7 @@ impl CoordTaskStatus {
     ///
     /// `"blocked"` and `"unsatisfiable"` are intentionally excluded — both are
     /// derived dynamically at query time and never appear in persistent storage.
+    #[must_use]
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(Self::Pending),
@@ -143,6 +147,7 @@ impl CoordTaskStatus {
     /// task whose blocked_by set contains a task with this status no
     /// longer waits on it. Completed and Skipped both satisfy; all
     /// other statuses (including Failed) leave the dependent blocked.
+    #[must_use]
     pub fn satisfies_dependency(&self) -> bool {
         matches!(self, Self::Completed | Self::Skipped)
     }
@@ -152,6 +157,7 @@ impl CoordTaskStatus {
     /// `Unsatisfiable` (a dep terminally failed). Consumers that group these
     /// two together (e.g. a kanban "Blocked" column) use this so the
     /// `Unsatisfiable` refinement never makes a task disappear from view.
+    #[must_use]
     pub fn is_blocked_like(&self) -> bool {
         matches!(self, Self::Blocked | Self::Unsatisfiable)
     }
@@ -239,6 +245,7 @@ pub enum TaskRunStatus {
 }
 
 impl TaskRunStatus {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Running => "running",
@@ -248,6 +255,7 @@ impl TaskRunStatus {
         }
     }
 
+    #[must_use]
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "running" => Some(Self::Running),
@@ -280,6 +288,7 @@ pub enum ReviewVerdict {
 }
 
 impl ReviewerKind {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::User => "user",
@@ -287,6 +296,7 @@ impl ReviewerKind {
             Self::Auto => "auto",
         }
     }
+    #[must_use]
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "user" => Some(Self::User),
@@ -298,12 +308,14 @@ impl ReviewerKind {
 }
 
 impl ReviewVerdict {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Approved => "approved",
             Self::Rejected => "rejected",
         }
     }
+    #[must_use]
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "approved" => Some(Self::Approved),

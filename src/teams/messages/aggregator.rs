@@ -147,6 +147,7 @@ pub struct Aggregator {
 }
 
 impl Aggregator {
+    #[must_use]
     pub fn new(inner: Arc<MessageRouter>, config: AggregatorConfig) -> Arc<Self> {
         Arc::new(Self {
             inner,
@@ -156,6 +157,7 @@ impl Aggregator {
     }
 
     /// Direct passthrough for code paths that shouldn't be aggregated.
+    #[must_use]
     pub fn router(&self) -> &MessageRouter {
         &self.inner
     }

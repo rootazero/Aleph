@@ -85,6 +85,7 @@ pub struct ServiceManager {
 
 impl ServiceManager {
     /// Create a new service manager.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             services: HashMap::new(),
@@ -321,6 +322,7 @@ impl ServiceManager {
     ///
     /// * `Some(&ServiceInfo)` - If the service exists
     /// * `None` - If the service has never been started
+    #[must_use]
     pub fn get_service(&self, plugin_id: &str, service_id: &str) -> Option<&ServiceInfo> {
         let key = Self::make_key(plugin_id, service_id);
         self.services.get(&key)
@@ -330,6 +332,7 @@ impl ServiceManager {
     ///
     /// Returns a vector of references to all tracked services,
     /// regardless of their current state.
+    #[must_use]
     pub fn list_services(&self) -> Vec<&ServiceInfo> {
         self.services.values().collect()
     }
@@ -343,6 +346,7 @@ impl ServiceManager {
     /// # Returns
     ///
     /// Vector of references to services belonging to the specified plugin.
+    #[must_use]
     pub fn list_plugin_services(&self, plugin_id: &str) -> Vec<&ServiceInfo> {
         self.services
             .values()
@@ -472,6 +476,7 @@ impl ServiceManager {
     }
 
     /// Get the count of running services.
+    #[must_use]
     pub fn running_count(&self) -> usize {
         self.services
             .values()
@@ -480,6 +485,7 @@ impl ServiceManager {
     }
 
     /// Get the total count of tracked services.
+    #[must_use]
     pub fn total_count(&self) -> usize {
         self.services.len()
     }

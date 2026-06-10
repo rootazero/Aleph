@@ -114,7 +114,7 @@ pub fn ClusterSection() -> impl IntoView {
                                             }
                                             title="注销该节点(驱逐会话并撤销 token)"
                                             on:click={
-                                                let node_id = node.id.clone();
+                                                let node_id = node.id;
                                                 move |_| {
                                                     let node_id = node_id.clone();
                                                     removing.set(Some(node_id.clone()));
@@ -157,7 +157,7 @@ pub fn ClusterSection() -> impl IntoView {
                                             class="w-full px-3 py-2 bg-surface border border-border rounded-lg text-text-primary font-mono text-xs"
                                             prop:value=r.token.clone()
                                         ></textarea>
-                                        <p class="text-xs text-text-tertiary">"node_id: " {r.node_id.clone()}</p>
+                                        <p class="text-xs text-text-tertiary">"node_id: " {r.node_id}</p>
                                     </div>
                                 }
                             }

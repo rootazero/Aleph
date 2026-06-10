@@ -63,8 +63,8 @@ pub async fn send(
             .and_then(|v| v.as_str())
             .unwrap_or("-");
         println!("Message sent.");
-        println!("  Run ID:  {}", run_id);
-        println!("  Session: {}", session_key);
+        println!("  Run ID:  {run_id}");
+        println!("  Session: {session_key}");
     }
 
     client.close().await?;
@@ -89,12 +89,12 @@ pub async fn abort(
     } else {
         let aborted = result
             .get("aborted")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if aborted {
-            println!("Run '{}' aborted.", run_id);
+            println!("Run '{run_id}' aborted.");
         } else {
-            println!("Run '{}' was not running or already completed.", run_id);
+            println!("Run '{run_id}' was not running or already completed.");
         }
     }
 
@@ -123,7 +123,10 @@ pub async fn history(
     if json {
         output::print_json(&result);
     } else {
-        let count = result.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let count = result
+            .get("count")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         println!(
             "{}",
             paint(Style::Header, &format!("Chat History · {session_key}"))
@@ -213,12 +216,12 @@ pub async fn clear(
     } else {
         let cleared = result
             .get("cleared")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if cleared {
-            println!("Chat history cleared for session '{}'.", session_key);
+            println!("Chat history cleared for session '{session_key}'.");
         } else {
-            println!("No history to clear for session '{}'.", session_key);
+            println!("No history to clear for session '{session_key}'.");
         }
     }
 

@@ -13,6 +13,7 @@ pub struct AtomicRuntimeState {
 }
 
 impl AtomicRuntimeState {
+    #[must_use]
     pub fn new(initial: RuntimeState) -> Self {
         Self {
             inner: AtomicUsize::new(initial as usize),

@@ -16,6 +16,7 @@ pub struct StepStartPart {
 
 impl StepStartPart {
     /// Create a new step start marker
+    #[must_use]
     pub fn new(step_id: usize) -> Self {
         Self {
             step_id,
@@ -25,6 +26,7 @@ impl StepStartPart {
     }
 
     /// Create with associated snapshot
+    #[must_use]
     pub fn with_snapshot(step_id: usize, snapshot_id: String) -> Self {
         Self {
             step_id,
@@ -61,6 +63,7 @@ pub struct StepTokenUsage {
 
 impl StepTokenUsage {
     /// Create new token usage
+    #[must_use]
     pub fn new(input_tokens: u64, output_tokens: u64) -> Self {
         Self {
             input_tokens,
@@ -69,6 +72,7 @@ impl StepTokenUsage {
     }
 
     /// Total tokens used
+    #[must_use]
     pub fn total(&self) -> u64 {
         self.input_tokens + self.output_tokens
     }
@@ -90,6 +94,7 @@ pub struct StepFinishPart {
 
 impl StepFinishPart {
     /// Create a new step finish marker
+    #[must_use]
     pub fn new(step_id: usize, reason: StepFinishReason, duration_ms: u64) -> Self {
         Self {
             step_id,
@@ -100,6 +105,7 @@ impl StepFinishPart {
     }
 
     /// Create with token usage
+    #[must_use]
     pub fn with_tokens(
         step_id: usize,
         reason: StepFinishReason,

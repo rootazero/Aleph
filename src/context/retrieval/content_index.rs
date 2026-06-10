@@ -45,8 +45,8 @@
 //! `trigram` tokenizers are all available out of the box — no extension
 //! loading required.
 
-use std::path::Path;
 use crate::sync_primitives::Mutex;
+use std::path::Path;
 
 use rusqlite::{params, Connection};
 

@@ -5,14 +5,17 @@ pub struct RetryHandler {
 }
 
 impl RetryHandler {
+    #[must_use]
     pub fn new() -> Self {
         Self { attempts: 0 }
     }
 
+    #[must_use]
     pub fn attempts(&self) -> u8 {
         self.attempts
     }
 
+    #[must_use]
     pub fn should_retry(&self) -> bool {
         self.attempts < 2
     }

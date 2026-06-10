@@ -109,7 +109,7 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                     <h3 class="text-sm font-semibold text-text-secondary mb-2">{t!(i18n, settings.security.secrets_virtual_keys_title)}</h3>
                     <div class="space-y-2">
                         {move || {
-                            let keys = config.get().map(|c| c.secrets_protection.virtual_keys.clone()).unwrap_or_default();
+                            let keys = config.get().map(|c| c.secrets_protection.virtual_keys).unwrap_or_default();
                             keys.into_iter().enumerate().map(|(i, entry)| {
                                 view! {
                                     <div class="flex gap-2 items-center">
@@ -123,7 +123,7 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                                         <span class="text-text-tertiary">"→"</span>
                                         <input
                                             type="text"
-                                            prop:value=entry.secret_name.clone()
+                                            prop:value=entry.secret_name
                                             on:input=move |ev| update_virtual_key(i, "secret_name", event_target_value(&ev))
                                             placeholder=move || t_string!(i18n, settings.security.secrets_secret_name_placeholder).to_string()
                                             class="flex-1 px-3 py-1 bg-surface-sunken border border-border rounded text-sm text-text-primary"
@@ -151,7 +151,7 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                     <h3 class="text-sm font-semibold text-text-secondary mb-2">{t!(i18n, settings.security.secrets_leak_patterns_title)}</h3>
                     <div class="space-y-2">
                         {move || {
-                            let patterns = config.get().map(|c| c.secrets_protection.custom_leak_patterns.clone()).unwrap_or_default();
+                            let patterns = config.get().map(|c| c.secrets_protection.custom_leak_patterns).unwrap_or_default();
                             patterns.into_iter().enumerate().map(|(i, p)| {
                                 let has_err = leak_pattern_errors.get().iter().any(|(idx, _)| *idx == i);
                                 view! {
@@ -166,7 +166,7 @@ pub(super) fn SecretProtectionSection(config: RwSignal<Option<SecurityConfig>>) 
                                             />
                                             <input
                                                 type="text"
-                                                prop:value=p.pattern.clone()
+                                                prop:value=p.pattern
                                                 on:input=move |ev| update_leak_pattern(i, "pattern", event_target_value(&ev))
                                                 placeholder=move || t_string!(i18n, settings.security.secrets_regex_placeholder).to_string()
                                                 class=move || format!("w-full px-3 py-1 bg-surface-sunken border rounded text-sm text-text-primary {}",

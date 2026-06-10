@@ -64,8 +64,8 @@ pub fn ChannelConfigTemplate(
 
     // ---- Effect: load config + status when connected ----
     {
-        let section = top_section.clone();
-        let sub_key = channel_sub_key.clone();
+        let section = top_section;
+        let sub_key = channel_sub_key;
         let channel_id_for_load = channel_id.clone();
         let channel_id_for_status = channel_id.clone();
         Effect::new(move || {
@@ -126,7 +126,7 @@ pub fn ChannelConfigTemplate(
     }
 
     // ---- Save handler ----
-    let config_section_for_save = config_section.clone();
+    let config_section_for_save = config_section;
     let on_save = move || {
         if !state.is_connected.get() {
             return;
@@ -363,7 +363,7 @@ pub fn ChannelConfigTemplate(
             })}
 
             // ---- Agent binding selector ----
-            <AgentBindingSelector channel_id=channel_id.clone() />
+            <AgentBindingSelector channel_id=channel_id />
 
             // ---- Loading state OR field section ----
             {move || {
@@ -534,8 +534,7 @@ fn render_field(
                     .unwrap_or("")
                     .to_string()
             };
-            let configured_ph =
-                t_string!(i18n, settings.providers.key_configured_hint).to_string();
+            let configured_ph = t_string!(i18n, settings.providers.key_configured_hint).to_string();
             let unset_ph = if placeholder.is_empty() {
                 t_string!(i18n, settings.providers.key_unset_hint).to_string()
             } else {
@@ -824,7 +823,7 @@ fn ChannelPairingSection(channel_id: StoredValue<String>) -> impl IntoView {
                                 {t!(i18n, channel_config.approved_senders)}
                             </div>
                             {senders.into_iter().map(|s| {
-                                let sender_id = s.sender_id.clone();
+                                let sender_id = s.sender_id;
                                 let ch_id_for_revoke = channel_id.get_value();
                                 let sid_for_revoke = sender_id.clone();
                                 view! {

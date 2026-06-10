@@ -151,6 +151,7 @@ pub struct LayerInput<'a> {
 
 impl<'a> LayerInput<'a> {
     /// Input for the `Basic` path — config + tool list.
+    #[must_use]
     pub fn basic(config: &'a PromptConfig, tools: &'a [ToolInfo]) -> Self {
         Self {
             config,
@@ -176,6 +177,7 @@ impl<'a> LayerInput<'a> {
     }
 
     /// Input for the `Hydration` path — config + hydration result.
+    #[must_use]
     pub fn hydration(config: &'a PromptConfig, hydration: &'a HydrationResult) -> Self {
         Self {
             config,
@@ -201,6 +203,7 @@ impl<'a> LayerInput<'a> {
     }
 
     /// Input for the `Soul` path — config + tools + soul manifest.
+    #[must_use]
     pub fn soul(config: &'a PromptConfig, tools: &'a [ToolInfo], soul: &'a SoulManifest) -> Self {
         Self {
             config,
@@ -226,6 +229,7 @@ impl<'a> LayerInput<'a> {
     }
 
     /// Input for the `Context` path — config + resolved context.
+    #[must_use]
     pub fn context(config: &'a PromptConfig, ctx: &'a ResolvedContext) -> Self {
         Self {
             config,
@@ -251,42 +255,49 @@ impl<'a> LayerInput<'a> {
     }
 
     /// Attach workspace profile to this input.
+    #[must_use]
     pub fn with_profile(mut self, profile: Option<&'a crate::config::ProfileConfig>) -> Self {
         self.profile = profile;
         self
     }
 
     /// Set the prompt mode for this assembly.
+    #[must_use]
     pub fn with_mode(mut self, mode: PromptMode) -> Self {
         self.mode = mode;
         self
     }
 
     /// Attach inbound context to this input.
+    #[must_use]
     pub fn with_inbound(mut self, inbound: &'a InboundContext) -> Self {
         self.inbound = Some(inbound);
         self
     }
 
     /// Attach agent identity files to this input.
+    #[must_use]
     pub fn with_identity_files(mut self, files: &'a IdentityFiles) -> Self {
         self.identity_files = Some(files);
         self
     }
 
     /// Attach optional inbound context to this input.
+    #[must_use]
     pub fn with_inbound_opt(mut self, inbound: Option<&'a InboundContext>) -> Self {
         self.inbound = inbound;
         self
     }
 
     /// Attach optional agent identity files to this input.
+    #[must_use]
     pub fn with_identity_files_opt(mut self, files: Option<&'a IdentityFiles>) -> Self {
         self.identity_files = files;
         self
     }
 
     /// Attach optional `[prompt.extra_files]` content to this input.
+    #[must_use]
     pub fn with_extra_files_opt(mut self, files: Option<&'a [ExtraPromptFile]>) -> Self {
         self.extra_files = files;
         self
@@ -296,6 +307,7 @@ impl<'a> LayerInput<'a> {
     ///
     /// When set, `MemoryAugmentationLayer` injects this text verbatim and
     /// ignores the legacy `memory_context` field.
+    #[must_use]
     pub fn with_memory_user_message(mut self, text: String) -> Self {
         self.memory_user_message = Some(text);
         self
@@ -305,30 +317,35 @@ impl<'a> LayerInput<'a> {
     ///
     /// When set, `CuratedMemoryLayer` injects this text verbatim into the
     /// system prompt as a Stable section so the prefix cache stays warm.
+    #[must_use]
     pub fn with_curated_envelope(mut self, envelope: Option<String>) -> Self {
         self.curated_memory_envelope = envelope;
         self
     }
 
     /// Signal that the conversation contains compressed session summaries.
+    #[must_use]
     pub fn with_session_summaries(mut self, has: bool) -> Self {
         self.has_session_summaries = has;
         self
     }
 
     /// Attach an agent definition for sub-agent prompt assembly.
+    #[must_use]
     pub fn with_agent_def(mut self, agent_def: &'a AgentDef) -> Self {
         self.agent_def = Some(agent_def);
         self
     }
 
     /// Attach MCP server instructions for prompt injection.
+    #[must_use]
     pub fn with_mcp_instructions(mut self, instructions: &'a [McpServerInstruction]) -> Self {
         self.mcp_instructions = Some(instructions);
         self
     }
 
     /// Attach a previous session snapshot for cross-session resume.
+    #[must_use]
     pub fn with_session_snapshot(
         mut self,
         snapshot: &'a crate::memory::session_resume::SessionSnapshot,
@@ -340,6 +357,7 @@ impl<'a> LayerInput<'a> {
     /// Attach a subagent call-chain context. Used by `ChainContextLayer`
     /// to surface depth / chain_id to the LLM. Root chains (depth=0) and
     /// `None` both render an empty section.
+    #[must_use]
     pub fn with_chain_context(
         mut self,
         chain: &'a crate::harness::chain_context::ChainContext,
@@ -350,6 +368,7 @@ impl<'a> LayerInput<'a> {
 
     /// Same as `with_chain_context` but accepts an `Option` for ergonomic
     /// threading from optional config.
+    #[must_use]
     pub fn with_chain_context_opt(
         mut self,
         chain: Option<&'a crate::harness::chain_context::ChainContext>,
@@ -366,6 +385,7 @@ impl<'a> LayerInput<'a> {
     /// without forcing a switch to the dedicated `Context` route. The
     /// `Context` path's `LayerInput::context` constructor already sets
     /// this field, so callers on that path leave it alone.
+    #[must_use]
     pub fn with_resolved_context_opt(mut self, ctx: Option<&'a ResolvedContext>) -> Self {
         self.context = ctx;
         self
@@ -373,6 +393,7 @@ impl<'a> LayerInput<'a> {
 
     /// Attach the wire-protocol family identifier so `ProviderGuidanceLayer`
     /// can dispatch the right per-family operational directives.
+    #[must_use]
     pub fn with_provider_protocol(mut self, protocol: &'a str) -> Self {
         self.provider_protocol = Some(protocol);
         self
@@ -380,6 +401,7 @@ impl<'a> LayerInput<'a> {
 
     /// Same as `with_provider_protocol` but accepts an `Option` for
     /// ergonomic threading from optional config.
+    #[must_use]
     pub fn with_provider_protocol_opt(mut self, protocol: Option<&'a str>) -> Self {
         self.provider_protocol = protocol;
         self
@@ -388,6 +410,7 @@ impl<'a> LayerInput<'a> {
     /// Attach the per-run iteration cap so `SessionBudgetLayer` can
     /// surface it. Pass the resolved (post-`resolve_max_iterations`)
     /// value, not the raw override.
+    #[must_use]
     pub fn with_iteration_cap(mut self, cap: u32) -> Self {
         self.iteration_cap = Some(cap);
         self
@@ -395,12 +418,14 @@ impl<'a> LayerInput<'a> {
 
     /// Same as `with_iteration_cap` but accepts an `Option` for
     /// ergonomic threading from optional config.
+    #[must_use]
     pub fn with_iteration_cap_opt(mut self, cap: Option<u32>) -> Self {
         self.iteration_cap = cap;
         self
     }
 
     /// Get the content of an identity file by name (e.g. `"SOUL.md"`).
+    #[must_use]
     pub fn identity_file(&self, name: &str) -> Option<&str> {
         self.identity_files.and_then(|files| files.get(name))
     }

@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::automation_types::*;
+use crate::automation_types::{ScriptLanguage, ShortcutInfo};
 use crate::Result;
 
 /// Execute automation scripts and system shortcuts.

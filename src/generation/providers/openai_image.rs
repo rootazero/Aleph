@@ -161,6 +161,7 @@ impl OpenAiImageProvider {
 
     /// Get the image edits endpoint URL.
     /// Returns None for custom URLs or when secondary endpoint is unavailable.
+    #[must_use]
     pub fn edits_url(&self) -> Option<String> {
         self.resolved.secondary_endpoint(GenerationType::Image)
     }

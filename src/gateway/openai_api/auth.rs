@@ -6,6 +6,7 @@ use serde_json::json;
 ///
 /// Strips the "Bearer " prefix (case-insensitive first letter) and returns
 /// the token. Returns `None` if the prefix is missing or the token is empty.
+#[must_use]
 pub fn extract_bearer_token(header_value: &str) -> Option<&str> {
     // Case-insensitive check for "Bearer " prefix (RFC 6750)
     // Use .get(..7) instead of &s[..7] to avoid panic on non-ASCII input (P7)
@@ -36,6 +37,7 @@ pub enum ApiError {
 
 impl ApiError {
     /// Returns the HTTP status code for this error.
+    #[must_use]
     pub fn status_code(&self) -> u16 {
         match self {
             ApiError::Unauthorized(_) => 401,
@@ -50,6 +52,7 @@ impl ApiError {
     }
 
     /// Returns a machine-readable error code string.
+    #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
             ApiError::Unauthorized(_) => "invalid_api_key",
@@ -64,6 +67,7 @@ impl ApiError {
     }
 
     /// Returns a JSON representation matching the OpenAI error format.
+    #[must_use]
     pub fn to_json(&self) -> serde_json::Value {
         let (message, error_type) = match self {
             ApiError::Unauthorized(msg) => (msg.as_str(), "authentication_error"),

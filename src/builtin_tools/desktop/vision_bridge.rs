@@ -65,6 +65,7 @@ pub struct Augmentation {
 impl Augmentation {
     /// True when neither layer was produced — the caller can skip attaching
     /// empty fields to the tool output.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.ocr_text.is_none() && self.description.is_none()
     }
@@ -88,6 +89,7 @@ pub struct VisionBridge {
 
 impl VisionBridge {
     /// Build a bridge over the given vision pipeline with default TTL / cap.
+    #[must_use]
     pub fn new(pipeline: Arc<VisionPipeline>) -> Self {
         Self {
             pipeline,

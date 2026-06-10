@@ -104,6 +104,7 @@ impl AggregateRoot for MemoryFact {}
 
 impl MemoryFact {
     /// Create a new valid memory fact
+    #[must_use]
     pub fn new(content: String, note_type: NoteType, source_ids: Vec<String>) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -146,6 +147,7 @@ impl MemoryFact {
     }
 
     /// Create a new fact with specific ID (for database reconstruction)
+    #[must_use]
     pub fn with_id(id: String, content: String, note_type: NoteType) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -188,30 +190,35 @@ impl MemoryFact {
     }
 
     /// Add embedding to the fact
+    #[must_use]
     pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embedding = Some(embedding);
         self
     }
 
     /// Set similarity score (used during retrieval)
+    #[must_use]
     pub fn with_score(mut self, score: f32) -> Self {
         self.similarity_score = Some(score);
         self
     }
 
     /// Set specificity level
+    #[must_use]
     pub fn with_specificity(mut self, specificity: FactSpecificity) -> Self {
         self.specificity = specificity;
         self
     }
 
     /// Set temporal scope
+    #[must_use]
     pub fn with_temporal_scope(mut self, scope: TemporalScope) -> Self {
         self.temporal_scope = scope;
         self
     }
 
     /// Set VFS path
+    #[must_use]
     pub fn with_path(mut self, path: String) -> Self {
         self.parent_path = compute_parent_path(&path);
         self.path = path;
@@ -219,48 +226,56 @@ impl MemoryFact {
     }
 
     /// Set fact source
+    #[must_use]
     pub fn with_fact_source(mut self, source: FactSource) -> Self {
         self.fact_source = source;
         self
     }
 
     /// Set memory layer
+    #[must_use]
     pub fn with_layer(mut self, layer: MemoryLayer) -> Self {
         self.layer = layer;
         self
     }
 
     /// Set memory category
+    #[must_use]
     pub fn with_category(mut self, category: MemoryCategory) -> Self {
         self.category = category;
         self
     }
 
     /// Set agent ID for domain isolation
+    #[must_use]
     pub fn with_agent(mut self, agent: String) -> Self {
         self.agent = agent;
         self
     }
 
     /// Set persona identifier (implies Persona scope)
+    #[must_use]
     pub fn with_persona_id(mut self, persona_id: String) -> Self {
         self.persona_id = Some(persona_id);
         self
     }
 
     /// Set access count (builder pattern, useful for tests)
+    #[must_use]
     pub fn with_access_count(mut self, count: u32) -> Self {
         self.access_count = count;
         self
     }
 
     /// Set created_at timestamp (builder pattern, useful for tests)
+    #[must_use]
     pub fn with_created_at(mut self, ts: i64) -> Self {
         self.created_at = ts;
         self
     }
 
     /// Invalidate this fact with a reason
+    #[must_use]
     pub fn invalidate(mut self, reason: &str) -> Self {
         self.is_valid = false;
         self.invalidation_reason = Some(reason.to_string());
@@ -272,18 +287,21 @@ impl MemoryFact {
     }
 
     /// Set the timestamp when this fact became true
+    #[must_use]
     pub fn with_valid_from(mut self, ts: i64) -> Self {
         self.valid_from = Some(ts);
         self
     }
 
     /// Set the timestamp when this fact stopped being true
+    #[must_use]
     pub fn with_valid_to(mut self, ts: i64) -> Self {
         self.valid_to = Some(ts);
         self
     }
 
     /// Close the validity window at the current time
+    #[must_use]
     pub fn close_validity(mut self) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -294,6 +312,7 @@ impl MemoryFact {
     }
 
     /// Returns true if this fact has no end to its validity window
+    #[must_use]
     pub fn is_currently_valid(&self) -> bool {
         self.valid_to.is_none()
     }

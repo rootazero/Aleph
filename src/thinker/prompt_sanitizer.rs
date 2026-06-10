@@ -25,6 +25,7 @@ pub enum SanitizeLevel {
 ///   Suitable for user instructions and workspace files.
 /// - **Light**: Only strip injection markers (`<system>`, `<system-reminder>`, etc.).
 ///   Pass everything else through. Suitable for internal generated text.
+#[must_use]
 pub fn sanitize_for_prompt(value: &str, level: SanitizeLevel) -> String {
     match level {
         SanitizeLevel::Strict => value

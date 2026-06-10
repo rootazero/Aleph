@@ -23,6 +23,7 @@ use crate::tools::AlephTool;
 ///
 /// For ASCII names: slugify ("Trading Assistant" → "trading-assistant")
 /// For non-ASCII names: use a deterministic hash ("交易助手" → "agent-a1b2c3d4")
+#[must_use]
 pub fn generate_agent_id_from_name(name: &str) -> String {
     // Try to build an ASCII slug from the name
     let slug: String = name
@@ -166,6 +167,7 @@ impl AgentCreateTool {
         }
     }
 
+    #[must_use]
     pub fn with_agent_manager(mut self, manager: Arc<AgentManager>) -> Self {
         self.agent_manager = Some(manager);
         self

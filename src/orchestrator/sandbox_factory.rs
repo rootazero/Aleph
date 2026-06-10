@@ -34,6 +34,7 @@ pub fn build_sandbox_factory(workspace: WorkspaceBuilder) -> SandboxFactory {
 pub struct DenyAllSandbox;
 
 impl DenyAllSandbox {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

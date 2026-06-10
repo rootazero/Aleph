@@ -38,6 +38,7 @@ pub fn validate_config_schema_declaration(schema: &JsonValue) -> Result<(), Stri
 /// schema is assumed to already be well-formed; if it is not, the single
 /// compile error is returned so callers still see a problem rather than
 /// silently passing.
+#[must_use]
 pub fn validate_config_against_schema(schema: &JsonValue, value: &JsonValue) -> Vec<String> {
     let validator = match jsonschema::validator_for(schema) {
         Ok(v) => v,
@@ -63,6 +64,7 @@ pub struct UiHintReport {
 
 /// Summarise a manifest's UI hints into counts useful for validation/audit
 /// surfaces.
+#[must_use]
 pub fn summarize_ui_hints(hints: &HashMap<String, ConfigUiHint>) -> UiHintReport {
     let mut report = UiHintReport {
         total: hints.len(),

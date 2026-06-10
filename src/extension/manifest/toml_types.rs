@@ -147,6 +147,7 @@ impl Default for FilesystemPermission {
 }
 
 impl FilesystemPermission {
+    #[must_use]
     pub fn can_read(&self) -> bool {
         match self {
             FilesystemPermission::Bool(true) => true,
@@ -155,6 +156,7 @@ impl FilesystemPermission {
         }
     }
 
+    #[must_use]
     pub fn can_write(&self) -> bool {
         match self {
             FilesystemPermission::Bool(true) => true,
@@ -369,6 +371,7 @@ pub struct WasmSecretsToml {
 // =============================================================================
 
 /// Convert TOML capabilities section to runtime WasmCapabilities
+#[must_use]
 pub fn convert_wasm_capabilities(caps: &CapabilitiesSection) -> Option<WasmCapabilities> {
     if caps.workspace.is_none()
         && caps.http.is_none()

@@ -34,6 +34,7 @@ impl ProtocolToken {
     ///
     /// Returns `Some(token)` if the entire (trimmed) response is a valid
     /// protocol token. Returns `None` for normal responses.
+    #[must_use]
     pub fn parse(raw: &str) -> Option<Self> {
         let trimmed = raw.trim();
         match trimmed {
@@ -53,6 +54,7 @@ impl ProtocolToken {
     }
 
     /// Generate the prompt section that teaches LLM about protocol tokens.
+    #[must_use]
     pub fn to_prompt_section() -> String {
         let mut s = String::new();
         s.push_str("## Response Protocol Tokens\n\n");

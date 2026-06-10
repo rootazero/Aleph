@@ -21,6 +21,7 @@ impl<T> OneOrMany<T> {
     }
 
     /// Create from multiple values
+    #[must_use]
     pub fn many(values: Vec<T>) -> Self {
         Self::Many(values)
     }

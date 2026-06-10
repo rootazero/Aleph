@@ -14,6 +14,7 @@ pub enum Locale {
 
 impl Locale {
     /// Parse a locale string from config. Falls back to `Zh` for any Chinese variant.
+    #[must_use]
     pub fn from_config(s: Option<&str>) -> Self {
         match s {
             Some(s) if s.starts_with("en") => Self::En,
@@ -48,6 +49,7 @@ pub enum Msg<'a> {
 }
 
 /// Translate a message key to the target locale.
+#[must_use]
 pub fn t(msg: Msg<'_>, locale: Locale) -> String {
     match (msg, locale) {
         // ============================================================
@@ -128,6 +130,7 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
 // so the user sees actionable guidance instead of a misleading generic.
 // ---------------------------------------------------------------------------
 
+#[must_use]
 pub fn render_loop_halt(
     reason: &TerminateReason,
     iterations: usize,
@@ -275,6 +278,7 @@ pub fn render_loop_halt(
 
 /// Classify a raw execution error string into the appropriate i18n message key,
 /// then translate it.
+#[must_use]
 pub fn format_execution_error(error: &str, locale: Locale) -> String {
     let lower = error.to_lowercase();
 

@@ -26,6 +26,7 @@ pub struct ProbeOutcome {
 /// Vault key under which a provider's API key is stored (`ai:<name>`).
 /// Shared by the gateway handlers and the diagnostics connectivity check so
 /// the key scheme has exactly one definition.
+#[must_use]
 pub fn provider_vault_key(provider_name: &str) -> String {
     format!("ai:{provider_name}")
 }

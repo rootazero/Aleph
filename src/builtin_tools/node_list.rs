@@ -99,7 +99,13 @@ mod tests {
     #[tokio::test]
     async fn lists_online_nodes_with_commands_and_tags() {
         let reg = Arc::new(NodeRegistry::new());
-        register(&reg, "n-1", "worker-1", vec!["gpu"], vec!["bash", "file.read"]);
+        register(
+            &reg,
+            "n-1",
+            "worker-1",
+            vec!["gpu"],
+            vec!["bash", "file.read"],
+        );
         let out = NodeListTool::new(reg)
             .call(NodeListArgs::default())
             .await

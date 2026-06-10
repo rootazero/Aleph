@@ -53,6 +53,7 @@ fn is_bedrock_anthropic_endpoint(host: &str) -> bool {
 ///
 /// `None` / `Some("")` → `Official` (matches `build_endpoint` default).
 /// Unparseable URLs → `Custom` (conservative).
+#[must_use]
 pub fn detect_anthropic_endpoint_class(base_url: Option<&str>) -> AnthropicEndpointClass {
     let url = match base_url {
         None | Some("") => return AnthropicEndpointClass::Official,
@@ -288,6 +289,7 @@ fn strip_output_config_effort(obj: &mut serde_json::Map<String, serde_json::Valu
 // =============================================================================
 
 /// Build a complete Anthropic policy from configuration.
+#[must_use]
 pub fn build_anthropic_policy(base_url: Option<&str>) -> AnthropicPolicy {
     let class = detect_anthropic_endpoint_class(base_url);
     let capabilities = resolve_anthropic_capabilities(class, base_url);

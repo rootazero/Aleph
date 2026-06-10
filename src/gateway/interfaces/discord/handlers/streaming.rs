@@ -47,6 +47,7 @@ pub struct StreamingCache {
 }
 
 impl StreamingCache {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -55,6 +56,7 @@ impl StreamingCache {
         self.entries.insert(user_id, preview);
     }
 
+    #[must_use]
     pub fn get(&self, user_id: u64) -> Option<&StreamingPreview> {
         self.entries.get(&user_id)
     }
@@ -70,6 +72,7 @@ pub struct StreamingHandler {
 }
 
 impl StreamingHandler {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             cache: Arc::new(RwLock::new(StreamingCache::new())),

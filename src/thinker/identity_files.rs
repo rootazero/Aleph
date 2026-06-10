@@ -70,6 +70,7 @@ pub struct IdentityFiles {
 ///
 /// Checks `.aleph/<filename>` first, then `<identity_dir>/<filename>`.
 /// Returns the first path that exists, or None.
+#[must_use]
 pub fn resolve_path(identity_dir: &Path, filename: &str) -> Option<PathBuf> {
     let aleph_path = identity_dir.join(".aleph").join(filename);
     if aleph_path.is_file() {
@@ -89,6 +90,7 @@ impl IdentityFiles {
     /// Files are loaded in `IDENTITY_FILE_NAMES` order. Each file is
     /// individually capped at `config.per_file_max_chars`, and the total
     /// across all files is capped at `config.total_max_chars`.
+    #[must_use]
     pub fn load(identity_dir: &Path, config: &IdentityFilesConfig) -> Self {
         let mut files = Vec::with_capacity(IDENTITY_FILE_NAMES.len());
         let mut total_chars = 0usize;
@@ -154,6 +156,7 @@ impl IdentityFiles {
     /// Get the content of an identity file by name.
     ///
     /// Returns the (possibly truncated) content, or None if not loaded.
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&str> {
         self.files
             .iter()

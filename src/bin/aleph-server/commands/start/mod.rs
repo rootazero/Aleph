@@ -860,11 +860,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // `ToolHealthCache`. The bridge subscribes to manager events; any
     // servers that connect from this point on flow through it.
     if let Some(ref h) = mcp_handle {
-        alephcore::mcp::spawn_tool_bridge(
+        std::mem::drop(alephcore::mcp::spawn_tool_bridge(
             h.clone(),
             tool_registry_phase2.clone(),
             agent_result.tool_catalog.clone(),
-        );
+        ));
 
         // Wire MCP-type plugins into the live manager: hand each plugin's
         // `.mcp.json` servers to the manager as transient (runtime-only)
@@ -984,7 +984,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     ]),
                     move |global_event| {
                         let handler = team_logger_clone.clone();
-                        let event = global_event.event.clone();
+                        let event = global_event.event;
                         let ctx = ctx_team.clone();
                         tokio::spawn(async move {
                             match handler.handle(&event, &ctx).await {
@@ -1032,7 +1032,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         ]),
                         move |global_event| {
                             let handler = notifier.clone();
-                            let event = global_event.event.clone();
+                            let event = global_event.event;
                             let ctx = ctx.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handler.handle(&event, &ctx).await {
@@ -1592,7 +1592,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     "extension.reloaded",
                     serde_json::json!({
                         "kind": kind,
-                        "paths": paths.clone(),
+                        "paths": paths,
                         "timestamp": chrono::Utc::now().to_rfc3339(),
                     }),
                 );
@@ -1654,7 +1654,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Webhook / Memory alert targets work (not just Gateway). Same
             // engine wiring the heartbeat loop uses below.
             let cron_delivery_engine = build_task_delivery_engine(
-                cron_channel_cell.clone(),
+                cron_channel_cell,
                 memory_db.clone(),
                 webhook_ssrf_policy.clone(),
             );
@@ -2311,7 +2311,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         "gateway",
         vec![
             ("GATEWAY_VERSION", env!("ALEPH_VERSION").to_string()),
-            ("GATEWAY_BIND", final_bind.to_string()),
+            ("GATEWAY_BIND", final_bind.clone()),
             ("GATEWAY_PORT", final_port.to_string()),
             ("GATEWAY_PID", std::process::id().to_string()),
         ],

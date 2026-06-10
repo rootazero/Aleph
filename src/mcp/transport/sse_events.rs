@@ -48,6 +48,7 @@ pub struct SseRequest {
 
 impl SseEvent {
     /// Parse SSE event from event type and data
+    #[must_use]
     pub fn parse(event_type: &str, data: &str) -> Self {
         match event_type {
             "endpoint" => SseEvent::Endpoint {

@@ -470,7 +470,7 @@ pub fn ChatSidebar() -> impl IntoView {
         });
     });
 
-    let reload_for_delete = reload_data.clone();
+    let reload_for_delete = reload_data;
     let do_delete = Arc::new(move |session_key: String| {
         if is_saving.get_untracked() {
             return;
@@ -677,9 +677,9 @@ pub fn ChatSidebar() -> impl IntoView {
                                     if is_editing {
                                         // --- Edit mode ---
                                         let key_for_save = key.clone();
-                                        let key_for_save2 = key.clone();
+                                        let key_for_save2 = key;
                                         let do_rename_keydown = do_rename.clone();
-                                        let do_rename_blur = do_rename.clone();
+                                        let do_rename_blur = do_rename;
                                         view! {
                                             <div class="w-full px-3 py-2 rounded-lg bg-surface-sunken border border-primary/40">
                                                 <input
@@ -728,7 +728,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                         }.into_any()
                                     } else if is_deleting {
                                         // --- Delete-confirm mode ---
-                                        let key_for_del = key.clone();
+                                        let key_for_del = key;
                                         view! {
                                             <div
                                                 tabindex=0
@@ -773,7 +773,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                         let key_for_edit = key.clone();
                                         let key_for_del_menu = key.clone();
                                         let label_for_edit = label.clone();
-                                        let key_for_run = key.clone();
+                                        let key_for_run = key;
                                         let is_running = move || running.with(|m| m.contains_key(&key_for_run));
                                         view! {
                                             <div class="relative group">
@@ -800,7 +800,7 @@ pub fn ChatSidebar() -> impl IntoView {
                                                                 <span class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse flex-shrink-0" />
                                                             </Show>
                                                             <div class="truncate font-medium text-xs">
-                                                                {label.clone()}
+                                                                {label}
                                                             </div>
                                                         </div>
                                                         <div class="truncate text-[10px] text-text-tertiary mt-0.5">

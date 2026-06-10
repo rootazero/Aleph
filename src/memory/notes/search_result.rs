@@ -27,6 +27,7 @@ impl NoteSearchResult {
     /// Uses `path` as the ID and formats `note://{path}` as the VFS path.
     /// Tags are forwarded as source_memory_ids for traceability.
     /// Defaults: is_valid=true.
+    #[must_use]
     pub fn to_memory_fact(&self, agent_id: &str) -> MemoryFact {
         let note_type = NoteType::from_str_or_other(&self.category);
         let mut fact = MemoryFact::new(self.content.clone(), note_type, self.tags.clone());
@@ -39,6 +40,7 @@ impl NoteSearchResult {
         fact
     }
 
+    #[must_use]
     pub fn to_scored_fact(&self, agent_id: &str) -> ScoredFact {
         ScoredFact {
             fact: self.to_memory_fact(agent_id),

@@ -84,6 +84,7 @@ fn depth_prompt(depth: u32) -> &'static str {
 ///
 /// Assembles: depth instruction + target tokens + previous context (if any)
 /// + conversation + "Expand for details" instruction.
+#[must_use]
 pub fn build_summary_prompt(
     messages: &[(String, String)], // (role, content)
     depth: u32,
@@ -137,6 +138,7 @@ pub fn build_summary_prompt(
 ///
 /// `ratio` is the chars-per-token estimate (e.g. 3.5).
 /// Each returned chunk contains at least one message.
+#[must_use]
 pub fn chunk_messages(
     messages: &[(String, String)],
     chunk_tokens: usize,
@@ -182,6 +184,7 @@ pub fn chunk_messages(
 /// - d0 (leaf) → `L2Detail`
 /// - d1        → `L1Overview`
 /// - d2+       → `L0Abstract`
+#[must_use]
 pub fn summary_to_fact(
     session_id: &str,
     depth: u32,

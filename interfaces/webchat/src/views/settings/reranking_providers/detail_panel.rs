@@ -82,7 +82,7 @@ pub(super) fn ProviderDetailPanel(
     let (action_error, set_action_error) = signal(Option::<String>::None);
 
     // Build RerankConfig from form state
-    let preset_key_for_build = preset_key.clone();
+    let preset_key_for_build = preset_key;
     let build_rerank_config = move || -> RerankConfig {
         RerankConfig {
             enabled: enabled.get(),
@@ -148,7 +148,7 @@ pub(super) fn ProviderDetailPanel(
     };
 
     // Save handler
-    let build_for_save = build_rerank_config.clone();
+    let build_for_save = build_rerank_config;
     let save_state = state;
     let handle_save = move |_| {
         set_action_error.set(None);
@@ -253,7 +253,7 @@ pub(super) fn ProviderDetailPanel(
                         type="text"
                         value=move || api_base.get()
                         on:input=move |ev| api_base.set(event_target_value(&ev))
-                        placeholder=default_api_base.clone()
+                        placeholder=default_api_base
                         class="w-full px-3 py-2 border border-border rounded bg-surface text-text-primary focus:outline-none focus:ring-2 focus:ring-primary/30"
                     />
                 </div>

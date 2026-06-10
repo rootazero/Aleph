@@ -219,6 +219,7 @@ pub fn get_scratchpad_bindings_path() -> Result<PathBuf> {
 /// # Returns
 ///
 /// * `Option<PathBuf>` - The git root directory, or None if not found
+#[must_use]
 pub fn find_git_root(start: &std::path::Path) -> Option<PathBuf> {
     let mut current = start.to_path_buf();
 

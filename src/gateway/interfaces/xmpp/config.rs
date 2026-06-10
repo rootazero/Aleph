@@ -87,6 +87,7 @@ impl XmppConfig {
     /// Extract the server host from the JID domain or use the explicit server setting.
     ///
     /// For JID "bot@example.com", returns "example.com" (unless `server` is explicitly set).
+    #[must_use]
     pub fn server_host(&self) -> &str {
         if let Some(ref server) = self.server {
             server.as_str()
@@ -104,6 +105,7 @@ impl XmppConfig {
     }
 
     /// Format the server address as `host:port`
+    #[must_use]
     pub fn addr(&self) -> String {
         format!("{}:{}", self.server_host(), self.port)
     }

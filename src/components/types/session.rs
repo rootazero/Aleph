@@ -55,6 +55,7 @@ impl Default for ExecutionSession {
 }
 
 impl ExecutionSession {
+    #[must_use]
     pub fn new() -> Self {
         let now = chrono::Utc::now().timestamp();
         Self {
@@ -78,6 +79,7 @@ impl ExecutionSession {
         }
     }
 
+    #[must_use]
     pub fn with_model(mut self, model: &str) -> Self {
         self.model = model.into();
         self
@@ -90,6 +92,7 @@ impl ExecutionSession {
     }
 
     /// Set the request context (builder pattern)
+    #[must_use]
     pub fn with_context(mut self, context: serde_json::Value) -> Self {
         self.context = Some(context);
         self

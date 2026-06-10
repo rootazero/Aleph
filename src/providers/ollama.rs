@@ -718,7 +718,10 @@ mod tests {
         assert_eq!(out.len(), 2);
         assert_eq!(out[0]["role"], "assistant");
         assert_eq!(out[0]["tool_calls"][0]["function"]["name"], "search");
-        assert_eq!(out[0]["tool_calls"][0]["function"]["arguments"]["q"], "rust");
+        assert_eq!(
+            out[0]["tool_calls"][0]["function"]["arguments"]["q"],
+            "rust"
+        );
         assert_eq!(out[1]["role"], "tool");
         assert_eq!(out[1]["tool_name"], "search");
         assert_eq!(out[1]["content"], "found 3 hits");

@@ -10,7 +10,7 @@ pub mod calls;
 pub mod channels_cmd;
 pub mod chat;
 pub mod chat_cmd;
-pub(crate) mod cli_args;
+pub mod cli_args;
 pub mod completion;
 pub mod config_cmd;
 pub mod connect;

@@ -84,6 +84,7 @@ impl EventFilter {
     ///
     /// let filter = EventFilter::new(vec![EventType::ToolCallCompleted]);
     /// ```
+    #[must_use]
     pub fn new(event_types: Vec<EventType>) -> Self {
         Self {
             session_ids: None,
@@ -95,6 +96,7 @@ impl EventFilter {
     /// Create a filter that matches all events.
     ///
     /// Equivalent to `EventFilter::new(vec![EventType::All])`.
+    #[must_use]
     pub fn all() -> Self {
         Self::new(vec![EventType::All])
     }
@@ -107,6 +109,7 @@ impl EventFilter {
     /// # Arguments
     ///
     /// * `session_id` - The session ID to include
+    #[must_use]
     pub fn with_session(mut self, session_id: &str) -> Self {
         add_to_option_set(&mut self.session_ids, session_id);
         self
@@ -117,6 +120,7 @@ impl EventFilter {
     /// # Arguments
     ///
     /// * `session_ids` - The set of session IDs to include
+    #[must_use]
     pub fn with_sessions(mut self, session_ids: HashSet<String>) -> Self {
         self.session_ids = Some(session_ids);
         self
@@ -130,6 +134,7 @@ impl EventFilter {
     /// # Arguments
     ///
     /// * `agent_id` - The agent ID to include
+    #[must_use]
     pub fn with_agent(mut self, agent_id: &str) -> Self {
         add_to_option_set(&mut self.agent_ids, agent_id);
         self
@@ -140,6 +145,7 @@ impl EventFilter {
     /// # Arguments
     ///
     /// * `agent_ids` - The set of agent IDs to include
+    #[must_use]
     pub fn with_agents(mut self, agent_ids: HashSet<String>) -> Self {
         self.agent_ids = Some(agent_ids);
         self
@@ -155,6 +161,7 @@ impl EventFilter {
     /// # Arguments
     ///
     /// * `event` - The global event to check against this filter
+    #[must_use]
     pub fn matches(&self, event: &GlobalEvent) -> bool {
         // Check session filter
         if let Some(ref session_ids) = self.session_ids {
@@ -187,16 +194,19 @@ impl EventFilter {
     }
 
     /// Check if this filter has any session restrictions.
+    #[must_use]
     pub fn has_session_filter(&self) -> bool {
         self.session_ids.is_some()
     }
 
     /// Check if this filter has any agent restrictions.
+    #[must_use]
     pub fn has_agent_filter(&self) -> bool {
         self.agent_ids.is_some()
     }
 
     /// Check if this filter matches all event types.
+    #[must_use]
     pub fn matches_all_types(&self) -> bool {
         self.event_types.contains(&EventType::All)
     }

@@ -1,4 +1,4 @@
-//! App lifecycle via NSWorkspace + NSRunningApplication.
+//! App lifecycle via `NSWorkspace` + `NSRunningApplication`.
 
 use aleph_desktop::system_types::AppInfo;
 use aleph_desktop::{DesktopError, Result};
@@ -20,13 +20,12 @@ pub fn launch_app(app_name: &str) -> Result<()> {
     };
 
     let url = url.ok_or_else(|| {
-        DesktopError::InputFailed(format!("launch_app: application '{}' not found", app_name))
+        DesktopError::InputFailed(format!("launch_app: application '{app_name}' not found"))
     })?;
 
     if !ws.openURL(&url) {
         return Err(DesktopError::InputFailed(format!(
-            "launch_app: failed to launch '{}'",
-            app_name
+            "launch_app: failed to launch '{app_name}'"
         )));
     }
     Ok(())
@@ -38,31 +37,26 @@ pub fn quit_app(app_name: &str) -> Result<()> {
     let apps = ws.runningApplications();
     let lower_name = app_name.to_lowercase();
 
-    for app in apps.iter() {
+    for app in &apps {
         let matches = app
             .bundleIdentifier()
-            .map(|b| b.to_string().to_lowercase() == lower_name)
-            .unwrap_or(false)
+            .is_some_and(|b| b.to_string().to_lowercase() == lower_name)
             || app
                 .localizedName()
-                .map(|n| n.to_string().to_lowercase() == lower_name)
-                .unwrap_or(false);
+                .is_some_and(|n| n.to_string().to_lowercase() == lower_name);
 
         if matches {
             if app.terminate() {
                 return Ok(());
-            } else {
-                return Err(DesktopError::InputFailed(format!(
-                    "quit_app: '{}' refused to terminate",
-                    app_name
-                )));
             }
+            return Err(DesktopError::InputFailed(format!(
+                "quit_app: '{app_name}' refused to terminate"
+            )));
         }
     }
 
     Err(DesktopError::InputFailed(format!(
-        "quit_app: no running application matching '{}'",
-        app_name
+        "quit_app: no running application matching '{app_name}'"
     )))
 }
 
@@ -72,7 +66,7 @@ pub fn list_running_apps() -> Result<Vec<AppInfo>> {
     let apps: objc2::rc::Retained<NSArray<NSRunningApplication>> = ws.runningApplications();
 
     let mut result = Vec::new();
-    for app in apps.iter() {
+    for app in &apps {
         let name = app
             .localizedName()
             .map(|s| s.to_string())

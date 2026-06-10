@@ -44,6 +44,7 @@ pub enum PolicyTier {
 impl PolicyTier {
     /// Stable one-word tag (kebab-case) used in the prompt summary and shared
     /// docs. Matches codex's tier names so prompts read consistently.
+    #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
             PolicyTier::ReadOnly => "read-only",
@@ -57,6 +58,7 @@ impl PolicyTier {
     /// [`as_str`](Self::as_str), so every real value round-trips. An unknown
     /// tag is treated as [`DangerFullAccess`](Self::DangerFullAccess) — the
     /// fail-cautious choice that makes the model assume the riskiest posture.
+    #[must_use]
     pub fn from_tag(tag: &str) -> Self {
         match tag {
             "read-only" => PolicyTier::ReadOnly,
@@ -69,6 +71,7 @@ impl PolicyTier {
     /// True for the danger posture (root-writable + open network), where the
     /// model should be maximally cautious about destructive / exfiltration-prone
     /// actions.
+    #[must_use]
     pub fn is_danger(self) -> bool {
         matches!(self, PolicyTier::DangerFullAccess)
     }
@@ -111,6 +114,7 @@ pub enum NetworkState {
 }
 
 impl NetworkState {
+    #[must_use]
     pub fn from_policy(policy: &NetworkPolicy) -> Self {
         match policy {
             NetworkPolicy::None => Self::Denied,
@@ -123,6 +127,7 @@ impl NetworkState {
 
     /// True when egress is fully blocked. Used to gate the
     /// `ALEPH_SANDBOX_NETWORK_DISABLED=1` env var on spawned children.
+    #[must_use]
     pub fn is_denied(&self) -> bool {
         matches!(self, Self::Denied)
     }
@@ -135,6 +140,7 @@ impl SandboxSummary {
     /// - empty `fs_write` + empty `fs_read`        → `"read-only"`
     /// - non-empty `fs_write`                      → `"workspace-write"`
     /// - `network == AllowAll && fs_write covers /` → `"danger-full-access"`
+    #[must_use]
     pub fn from_baseline(backend: &'static str, caps: &SandboxCapabilities) -> Self {
         let tier = if covers_root(&caps.fs_write) && matches!(caps.network, NetworkPolicy::AllowAll)
         {
@@ -161,6 +167,7 @@ impl SandboxSummary {
     /// "Isolated" tier — used by `WorktreeSandbox` which performs
     /// workspace-tree isolation (separate git worktree) without an
     /// OS-level process sandbox. The LLM should know it is NOT seatbelted.
+    #[must_use]
     pub fn isolated_worktree(worktree_path: PathBuf) -> Self {
         Self {
             backend: "git/worktree",
@@ -174,6 +181,7 @@ impl SandboxSummary {
     /// The active posture as the ordered [`PolicyTier`] enum (parsed from the
     /// tag the summary was built with). Lets callers compare postures by risk
     /// rather than string-matching.
+    #[must_use]
     pub fn tier(&self) -> PolicyTier {
         PolicyTier::from_tag(self.policy_tier)
     }
@@ -181,6 +189,7 @@ impl SandboxSummary {
     /// Render bullet lines for the system prompt. Returns one line per
     /// fact — the caller wraps them in whatever section header it prefers.
     /// Format mirrors codex's `summarize_sandbox_policy()` output.
+    #[must_use]
     pub fn to_prompt_lines(&self) -> Vec<String> {
         let mut lines = Vec::with_capacity(5);
         lines.push(format!("Sandbox: {} ({})", self.backend, self.policy_tier));

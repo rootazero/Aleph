@@ -31,6 +31,7 @@ impl Default for AgentToAgentPolicy {
 
 impl AgentToAgentPolicy {
     /// Create a new A2A policy with specified settings
+    #[must_use]
     pub fn new(enabled: bool, allow_patterns: Vec<String>) -> Self {
         Self {
             enabled,
@@ -41,6 +42,7 @@ impl AgentToAgentPolicy {
     /// Create a permissive policy that allows all agent communication
     ///
     /// `enabled=true, allow_patterns=["*"]`
+    #[must_use]
     pub fn permissive() -> Self {
         Self {
             enabled: true,
@@ -51,6 +53,7 @@ impl AgentToAgentPolicy {
     /// Create a disabled policy that blocks all cross-agent communication
     ///
     /// Same-agent communication is still allowed even when disabled.
+    #[must_use]
     pub fn disabled() -> Self {
         Self {
             enabled: false,
@@ -69,6 +72,7 @@ impl AgentToAgentPolicy {
     /// - `"*"` matches any agent
     /// - `"prefix-*"` matches any agent starting with "prefix-"
     /// - Exact string matches the exact agent name
+    #[must_use]
     pub fn is_allowed(&self, requester: &str, target: &str) -> bool {
         // Same-agent communication is always allowed
         if requester == target {
@@ -127,6 +131,7 @@ impl AgentToAgentPolicy {
     }
 
     /// Check if the policy has any allow patterns
+    #[must_use]
     pub fn has_patterns(&self) -> bool {
         !self.allow_patterns.is_empty()
     }

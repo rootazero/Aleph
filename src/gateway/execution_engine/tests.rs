@@ -163,7 +163,10 @@ async fn test_first_message_publishes_session_updated_on_bus() {
             session_key,
             origin_channel,
         } => {
-            assert_eq!(session_key, SessionKey::main("test-new-session").to_key_string());
+            assert_eq!(
+                session_key,
+                SessionKey::main("test-new-session").to_key_string()
+            );
             assert_eq!(
                 origin_channel.as_deref(),
                 Some("telegram"),

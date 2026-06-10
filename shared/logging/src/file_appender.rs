@@ -44,7 +44,7 @@ pub fn init_component_logging(
     default_filter: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let result = GUARD.get_or_init(|| {
-        setup_logging(component, retention_days, default_filter).map_err(|e| e.to_string())
+        setup_logging(component, retention_days, default_filter)
     });
 
     match result {
@@ -59,12 +59,12 @@ fn setup_logging(
     retention_days: u32,
     default_filter: &str,
 ) -> Result<tracing_appender::non_blocking::WorkerGuard, String> {
-    let log_dir = get_log_directory().map_err(|e| e.to_string())?;
+    let log_dir = get_log_directory()?;
 
     std::fs::create_dir_all(&log_dir).map_err(|e| e.to_string())?;
 
     // Creates files like: aleph-server.log.2026-03-03
-    let file_prefix = format!("aleph-{}.log", component);
+    let file_prefix = format!("aleph-{component}.log");
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, &file_prefix);
 
     let (non_blocking_file, guard) = tracing_appender::non_blocking(file_appender);
@@ -101,7 +101,7 @@ fn setup_logging(
     tracing::info!(component, "Logging system initialized");
 
     // Clean up old log files for this component
-    let component_prefix = format!("aleph-{}", component);
+    let component_prefix = format!("aleph-{component}");
     match crate::retention::cleanup_old_logs(&log_dir, retention_days, Some(&component_prefix)) {
         Ok(count) if count > 0 => {
             tracing::info!(

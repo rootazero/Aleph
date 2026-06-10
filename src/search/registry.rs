@@ -70,6 +70,7 @@ impl SearchRegistry {
     /// Returns true if a WebFetch SERP fallback is currently armed.
     /// Used by the panel / `aleph doctor` to surface the user-visible
     /// "fallback enabled" indicator without leaking the inner Arc.
+    #[must_use]
     pub fn has_web_fetch_fallback(&self) -> bool {
         self.web_fetch_fallback.is_some()
     }
@@ -83,6 +84,7 @@ impl SearchRegistry {
     /// disabled, or no usable backend was constructed — caller should
     /// then leave `BuiltinToolConfig.search_registry = None` and the
     /// `search` tool falls back to its legacy TAVILY_API_KEY path.
+    #[must_use]
     pub fn from_config(
         config: Option<&crate::config::types::SearchConfigInternal>,
     ) -> Option<Self> {
@@ -95,6 +97,7 @@ impl SearchRegistry {
     /// Same as [`SearchRegistry::from_config`] but with an injectable factory
     /// table — exposed so tests can build a registry around a controlled
     /// provider set without depending on the global factory list.
+    #[must_use]
     pub fn from_config_with_factories(
         config: Option<&crate::config::types::SearchConfigInternal>,
         factories: &crate::search::ProviderFactoryRegistry,
@@ -194,6 +197,7 @@ impl SearchRegistry {
     }
 
     /// Get a provider by name
+    #[must_use]
     pub fn get_provider(&self, name: &str) -> Option<&Arc<dyn SearchProvider>> {
         self.providers.get(name)
     }

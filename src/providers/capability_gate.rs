@@ -38,6 +38,7 @@ pub struct RequestRequirements {
 
 impl RequestRequirements {
     /// No constraint at all — the gate is a no-op (byte-identical passthrough).
+    #[must_use]
     pub fn is_unconstrained(&self) -> bool {
         !self.needs_vision && !self.needs_tools && self.input_tokens.is_none()
     }
@@ -94,6 +95,7 @@ pub enum GateOutcome {
 ///
 /// Any single unmet requirement is conclusive; the first failure wins (the
 /// reason is for logging only, so order among failures is immaterial).
+#[must_use]
 pub fn capability_gate(req: &RequestRequirements, caps: &ModelCapabilities) -> GateOutcome {
     if let Some(tokens) = req.input_tokens {
         if tokens > caps.context_window {

@@ -81,12 +81,14 @@ impl QuestionInfo {
     }
 
     /// Enable multiple selection
+    #[must_use]
     pub fn with_multiple(mut self, multiple: bool) -> Self {
         self.multiple = multiple;
         self
     }
 
     /// Enable/disable custom input
+    #[must_use]
     pub fn with_custom(mut self, custom: bool) -> Self {
         self.custom = custom;
         self
@@ -136,6 +138,7 @@ impl QuestionRequest {
     }
 
     /// Set tool call reference
+    #[must_use]
     pub fn with_tool_call(mut self, tool_call: ToolCallRef) -> Self {
         self.tool_call = Some(tool_call);
         self
@@ -148,6 +151,7 @@ pub struct Answer(Vec<String>);
 
 impl Answer {
     /// Create a new Answer
+    #[must_use]
     pub fn new(selections: Vec<String>) -> Self {
         Self(selections)
     }
@@ -158,21 +162,25 @@ impl Answer {
     }
 
     /// Get the selections
+    #[must_use]
     pub fn selections(&self) -> &[String] {
         &self.0
     }
 
     /// Convert into inner Vec
+    #[must_use]
     pub fn into_inner(self) -> Vec<String> {
         self.0
     }
 
     /// Check if empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
     /// Get the number of selections
+    #[must_use]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -201,11 +209,13 @@ pub struct QuestionReply {
 
 impl QuestionReply {
     /// Create a new reply
+    #[must_use]
     pub fn new(answers: Vec<Answer>) -> Self {
         Self { answers }
     }
 
     /// Create a single-answer reply
+    #[must_use]
     pub fn single(answer: Vec<String>) -> Self {
         Self::new(vec![Answer::from(answer)])
     }
@@ -216,6 +226,7 @@ impl QuestionReply {
     }
 
     /// Get the first answer's first selection (common case)
+    #[must_use]
     pub fn first(&self) -> Option<&str> {
         self.answers.first()?.first().map(|s| s.as_str())
     }
@@ -246,6 +257,7 @@ pub enum QuestionEvent {
 
 impl QuestionEvent {
     /// Create an Asked event
+    #[must_use]
     pub fn asked(request: QuestionRequest) -> Self {
         Self::Asked(request)
     }

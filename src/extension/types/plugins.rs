@@ -49,6 +49,7 @@ pub enum PluginOrigin {
 
 impl PluginOrigin {
     /// Get the priority of this origin (higher = takes precedence)
+    #[must_use]
     pub fn priority(&self) -> u8 {
         match self {
             PluginOrigin::Config => 4,
@@ -76,6 +77,7 @@ impl PluginKind {
     ///
     /// Returns `Some(kind)` if the path indicates a known plugin type,
     /// `None` otherwise.
+    #[must_use]
     pub fn detect_from_path(path: &Path) -> Option<Self> {
         let filename = path.file_name()?.to_str()?;
         let ext = path.extension().and_then(|e| e.to_str());
@@ -107,11 +109,13 @@ pub enum PluginStatus {
 
 impl PluginStatus {
     /// Check if this plugin is actively running
+    #[must_use]
     pub fn is_active(&self) -> bool {
         matches!(self, PluginStatus::Loaded)
     }
 
     /// Stable lowercase label for client display / serialization.
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             PluginStatus::Loaded => "loaded",
@@ -145,11 +149,13 @@ pub struct LoadSummary {
 
 impl LoadSummary {
     /// Check if loading was successful (no errors)
+    #[must_use]
     pub fn is_success(&self) -> bool {
         self.errors.is_empty()
     }
 
     /// Total components loaded
+    #[must_use]
     pub fn total_loaded(&self) -> usize {
         self.skills_loaded + self.commands_loaded + self.agents_loaded + self.plugins_loaded
     }
@@ -176,6 +182,7 @@ pub enum PluginScope {
 
 impl PluginScope {
     /// Get the resolution priority of this scope (higher = takes precedence).
+    #[must_use]
     pub fn priority(&self) -> u8 {
         match self {
             Self::Local => 3,
@@ -239,6 +246,7 @@ pub struct PluginRecord {
 
 impl PluginRecord {
     /// Create a new plugin record with default values
+    #[must_use]
     pub fn new(id: String, name: String, kind: PluginKind, origin: PluginOrigin) -> Self {
         Self {
             id,
@@ -264,6 +272,7 @@ impl PluginRecord {
     ///
     /// Populates metadata from the adapter output and derives tool/hook counts
     /// from the declared capabilities.
+    #[must_use]
     pub fn from_adapter_output(
         output: &crate::extension::manifest::adapter::AdapterOutput,
         root_dir: PathBuf,
@@ -314,6 +323,7 @@ impl PluginRecord {
     }
 
     /// Set an error status with message
+    #[must_use]
     pub fn with_error(mut self, error: String) -> Self {
         self.status = PluginStatus::Error(error.clone());
         self.error = Some(error);
@@ -321,6 +331,7 @@ impl PluginRecord {
     }
 
     /// Set the root directory
+    #[must_use]
     pub fn with_root_dir(mut self, path: PathBuf) -> Self {
         self.root_dir = path;
         self

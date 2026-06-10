@@ -90,6 +90,7 @@ impl JsonRpcRequest {
     }
 
     /// Check if this is a notification (no response expected)
+    #[must_use]
     pub fn is_notification(&self) -> bool {
         self.id.is_none()
     }
@@ -126,6 +127,7 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     /// Create a success response
+    #[must_use]
     pub fn success(id: Option<Value>, result: Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -169,11 +171,13 @@ impl JsonRpcResponse {
     }
 
     /// Check if this is a successful response
+    #[must_use]
     pub fn is_success(&self) -> bool {
         self.error.is_none()
     }
 
     /// Check if this is an error response
+    #[must_use]
     pub fn is_error(&self) -> bool {
         self.error.is_some()
     }
@@ -181,6 +185,7 @@ impl JsonRpcResponse {
     /// Create a new response with a different id
     ///
     /// Useful for setting the id on a pre-constructed error response.
+    #[must_use]
     pub fn with_id(mut self, id: Option<Value>) -> Self {
         self.id = id;
         self
@@ -272,6 +277,7 @@ pub struct ToolCallResult {
 
 impl ToolCallResult {
     /// Create a successful result.
+    #[must_use]
     pub fn success(output: Value, execution_time_ms: u64) -> Self {
         Self {
             output,
@@ -282,6 +288,7 @@ impl ToolCallResult {
     }
 
     /// Create a failed result.
+    #[must_use]
     pub fn failure(error: String, execution_time_ms: u64) -> Self {
         Self {
             output: Value::Null,

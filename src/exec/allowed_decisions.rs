@@ -30,6 +30,7 @@ use super::socket::ApprovalDecisionType;
 /// purpose: it backfills *old* payloads, so it must NOT gain the newer
 /// `AllowSession` tier — live requests get their set from [`decisions_for_risk`]
 /// instead.
+#[must_use]
 pub fn full_set() -> Vec<ApprovalDecisionType> {
     vec![
         ApprovalDecisionType::AllowOnce,
@@ -53,6 +54,7 @@ pub fn full_set() -> Vec<ApprovalDecisionType> {
 /// - `Blocked`: deny only — defense in depth. A blocked command should be
 ///   hard-denied upstream and never reach an approval prompt; if one slips
 ///   through, the surface offers no path to run it.
+#[must_use]
 pub fn decisions_for_risk(risk: RiskLevel) -> Vec<ApprovalDecisionType> {
     match risk {
         RiskLevel::Safe | RiskLevel::Caution => vec![
@@ -77,6 +79,7 @@ pub fn decisions_for_risk(risk: RiskLevel) -> Vec<ApprovalDecisionType> {
 /// assessment runs on a single command string, so recomputing it at each
 /// render site is negligible and keeps every renderer in agreement without
 /// threading extra state through the record types.
+#[must_use]
 pub fn assess_command_decisions(command: &str) -> Vec<ApprovalDecisionType> {
     decisions_for_risk(SecurityKernel::new().assess(command))
 }

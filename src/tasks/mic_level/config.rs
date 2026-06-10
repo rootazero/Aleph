@@ -34,6 +34,7 @@ impl Default for MicLevelConfig {
 }
 
 impl MicLevelConfig {
+    #[must_use]
     pub fn effective_interval_secs(&self) -> u64 {
         self.interval_secs.max(1)
     }

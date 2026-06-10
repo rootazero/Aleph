@@ -60,6 +60,7 @@ impl Default for SsrfPolicy {
 
 impl SsrfPolicy {
     /// Returns a policy with SSRF protection disabled (bypass all checks).
+    #[must_use]
     pub fn disabled() -> Self {
         Self {
             enabled: false,

@@ -28,6 +28,7 @@ const REFRESH_MARGIN_SECS: u64 = 300;
 const GOOGLE_TOKEN_ENDPOINT: &str = "https://oauth2.googleapis.com/token";
 
 /// Check if an OAuth credential needs refresh.
+#[must_use]
 pub fn needs_refresh(cred: &OAuthCredential) -> bool {
     let Some(expires_ms) = cred.expires else {
         return false; // No expiry set — don't refresh

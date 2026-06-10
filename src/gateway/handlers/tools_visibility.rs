@@ -55,6 +55,7 @@ pub struct ToolEntry {
 // =============================================================================
 
 /// Extract a (group_id, label) pair from a ToolSource.
+#[must_use]
 pub fn extract_source(source: &ToolSource) -> (String, String) {
     match source {
         ToolSource::Native => ("native".into(), "Native".into()),
@@ -70,6 +71,7 @@ pub fn extract_source(source: &ToolSource) -> (String, String) {
 /// `"mcp:github"`) or family-prefix wildcard (`"mcp:*"`). `None` passes
 /// through unchanged. Mirrors OpenClaw's tools.catalog source filter for
 /// Panel/Webchat consumers that render source-by-source tabs.
+#[must_use]
 pub fn filter_by_source(tools: Vec<UnifiedTool>, source: Option<&str>) -> Vec<UnifiedTool> {
     let Some(src) = source else {
         return tools;
@@ -91,6 +93,7 @@ pub fn filter_by_source(tools: Vec<UnifiedTool>, source: Option<&str>) -> Vec<Un
 /// Group a flat list of tools into `ToolGroup`s by source.
 ///
 /// Groups are sorted by group ID (BTreeMap) for deterministic output.
+#[must_use]
 pub fn group_tools(tools: Vec<UnifiedTool>) -> Vec<ToolGroup> {
     let mut map: BTreeMap<String, (String, Vec<ToolEntry>)> = BTreeMap::new();
 

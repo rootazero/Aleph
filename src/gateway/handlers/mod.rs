@@ -893,6 +893,7 @@ impl HandlerRegistry {
     }
 
     /// Create an empty handler registry
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             handlers: HashMap::new(),
@@ -951,21 +952,25 @@ impl HandlerRegistry {
     }
 
     /// Check if a method is registered
+    #[must_use]
     pub fn has_method(&self, method: &str) -> bool {
         self.handlers.contains_key(method)
     }
 
     /// Get a list of all registered method names
+    #[must_use]
     pub fn methods(&self) -> Vec<String> {
         self.handlers.keys().cloned().collect()
     }
 
     /// Get the number of registered handlers
+    #[must_use]
     pub fn len(&self) -> usize {
         self.handlers.len()
     }
 
     /// Check if the registry is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.handlers.is_empty()
     }

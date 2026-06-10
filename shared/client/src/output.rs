@@ -14,11 +14,12 @@ pub enum OutputFormat {
 
 impl OutputFormat {
     /// Determine format from --json flag
-    pub fn from_json_flag(json: bool) -> Self {
+    #[must_use]
+    pub const fn from_json_flag(json: bool) -> Self {
         if json {
-            OutputFormat::Json
+            Self::Json
         } else {
-            OutputFormat::Table
+            Self::Table
         }
     }
 }
@@ -26,7 +27,7 @@ impl OutputFormat {
 /// Print data as JSON
 pub fn print_json<T: Serialize>(data: &T) -> io::Result<()> {
     let json = serde_json::to_string_pretty(data)?;
-    println!("{}", json);
+    println!("{json}");
     Ok(())
 }
 
@@ -35,7 +36,7 @@ pub fn print_table(rows: &[(&str, &str)]) {
     let max_key_len = rows.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
 
     for (key, value) in rows {
-        println!("{:width$}  {}", key, value, width = max_key_len);
+        println!("{key:max_key_len$}  {value}");
     }
 }
 
@@ -90,12 +91,12 @@ pub fn print_list_table(headers: &[&str], rows: &[Vec<String>]) {
 
 /// Print success message
 pub fn print_success(message: &str) {
-    println!("\u{2713} {}", message);
+    println!("\u{2713} {message}");
 }
 
 /// Print error message
 pub fn print_error(message: &str) {
-    eprintln!("\u{2717} {}", message);
+    eprintln!("\u{2717} {message}");
 }
 
 #[cfg(test)]

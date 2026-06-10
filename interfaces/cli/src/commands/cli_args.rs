@@ -13,7 +13,7 @@ use crate::commands::guests::GuestsAction;
 /// Each variant maps to one handler module under `commands/`. Variants do not
 /// carry logic — they are pure I/O envelopes (R4: interface-only).
 #[derive(Subcommand)]
-pub(crate) enum Commands {
+pub enum Commands {
     /// Start interactive chat session
     Chat {
         /// Session key (creates new if not specified)
@@ -60,7 +60,7 @@ pub(crate) enum Commands {
         action: Option<ToolsAction>,
     },
 
-    /// Inspect or cancel in-flight tool calls (per-tool AbortSignal RPC)
+    /// Inspect or cancel in-flight tool calls (per-tool `AbortSignal` RPC)
     Calls {
         #[command(subcommand)]
         action: CallsAction,
@@ -287,7 +287,7 @@ pub(crate) enum Commands {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ToolsAction {
+pub enum ToolsAction {
     /// List registered tools (optionally filtered by category)
     List {
         /// Filter by category
@@ -302,19 +302,19 @@ pub(crate) enum ToolsAction {
     /// Directly invoke a tool, bypassing the LLM loop. JSON arguments are
     /// forwarded to `tools.invoke` (deterministic execution path).
     Invoke {
-        /// Registered tool name (e.g. "memory_search")
+        /// Registered tool name (e.g. "`memory_search`")
         name: String,
         /// JSON arguments object (e.g. '{"query": "foo"}'). Defaults to `{}`.
         #[arg(short = 'a', long = "args", value_name = "JSON")]
         args: Option<String>,
-        /// Override the resolving agent_id (defaults to "main" server-side)
+        /// Override the resolving `agent_id` (defaults to "main" server-side)
         #[arg(long)]
         agent: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ConfigAction {
+pub enum ConfigAction {
     /// Print config file path
     File,
     /// Get configuration (optionally by section: gateway, agents, channels, etc.)
@@ -344,7 +344,7 @@ pub(crate) enum ConfigAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum CronAction {
+pub enum CronAction {
     /// List all cron jobs
     List,
     /// Show cron scheduler status
@@ -354,7 +354,7 @@ pub(crate) enum CronAction {
         /// Job ID
         job_id: String,
     },
-    /// Trigger a cron job manually (sets next_run_at_ms to now)
+    /// Trigger a cron job manually (sets `next_run_at_ms` to now)
     Run {
         /// Job ID to trigger
         job_id: String,
@@ -374,7 +374,7 @@ pub(crate) enum CronAction {
         /// Cron expression (e.g. '*/5 * * * *'). Use --schedule-kind for At/Interval.
         #[arg(short = 's', long, conflicts_with = "schedule_kind")]
         schedule: Option<String>,
-        /// Raw ScheduleKind JSON (advanced; conflicts with --schedule)
+        /// Raw `ScheduleKind` JSON (advanced; conflicts with --schedule)
         #[arg(long = "schedule-kind", value_name = "JSON")]
         schedule_kind: Option<String>,
         /// Agent ID to run as (defaults to "main")
@@ -383,7 +383,7 @@ pub(crate) enum CronAction {
         /// Prompt the agent should run on each tick
         #[arg(short, long, default_value = "")]
         prompt: String,
-        /// IANA timezone (e.g. "America/New_York")
+        /// IANA timezone (e.g. "`America/New_York`")
         #[arg(long)]
         timezone: Option<String>,
         /// Comma-separated tags
@@ -406,7 +406,7 @@ pub(crate) enum CronAction {
         /// New cron expression (mutually exclusive with --schedule-kind)
         #[arg(long, conflicts_with = "schedule_kind")]
         schedule: Option<String>,
-        /// New ScheduleKind JSON (advanced)
+        /// New `ScheduleKind` JSON (advanced)
         #[arg(long = "schedule-kind", value_name = "JSON")]
         schedule_kind: Option<String>,
         /// New timezone
@@ -448,7 +448,7 @@ pub(crate) enum CronAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum HeartbeatAction {
+pub enum HeartbeatAction {
     /// List heartbeat tasks
     List,
     /// Inspect a single heartbeat task
@@ -464,16 +464,16 @@ pub(crate) enum HeartbeatAction {
         /// Probe interval (e.g. "5m", "30s", "1h", or raw ms)
         #[arg(short, long)]
         interval: String,
-        /// Probe tool name (registered in the BuiltinToolRegistry)
+        /// Probe tool name (registered in the `BuiltinToolRegistry`)
         #[arg(short = 't', long)]
         tool: String,
         /// Agent ID to wake (defaults to "main")
         #[arg(short, long, default_value = "main")]
         agent: String,
-        /// JSON object passed as probe tool_params
+        /// JSON object passed as probe `tool_params`
         #[arg(short = 'p', long = "params", value_name = "JSON")]
         params: Option<String>,
-        /// Raw TriggerCondition JSON (defaults to {"Always":{}} server-side)
+        /// Raw `TriggerCondition` JSON (defaults to {"Always":{}} server-side)
         #[arg(long = "trigger", value_name = "JSON")]
         trigger: Option<String>,
         /// Start disabled (default is enabled)
@@ -512,7 +512,7 @@ pub(crate) enum HeartbeatAction {
         #[arg(long)]
         disable: bool,
     },
-    /// Manually trigger a heartbeat task (UserAction priority)
+    /// Manually trigger a heartbeat task (`UserAction` priority)
     Wake {
         /// Task ID
         task_id: String,
@@ -531,7 +531,7 @@ pub(crate) enum HeartbeatAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ChannelsAction {
+pub enum ChannelsAction {
     /// List all channels
     List,
     /// Show channel status
@@ -542,18 +542,18 @@ pub(crate) enum ChannelsAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum CallsAction {
-    /// List every currently-in-flight tool call (tools.in_flight)
+pub enum CallsAction {
+    /// List every currently-in-flight tool call (`tools.in_flight`)
     List,
-    /// Cancel a specific in-flight tool call by tool_call_id
+    /// Cancel a specific in-flight tool call by `tool_call_id`
     Cancel {
-        /// LLM-issued tool_call_id (see `aleph calls list`)
+        /// LLM-issued `tool_call_id` (see `aleph calls list`)
         call_id: String,
     },
 }
 
 #[derive(Subcommand)]
-pub(crate) enum GatewayAction {
+pub enum GatewayAction {
     /// Call an RPC method
     Call {
         /// RPC method name (e.g., "health", "providers.list")
@@ -564,7 +564,7 @@ pub(crate) enum GatewayAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum DaemonAction {
+pub enum DaemonAction {
     /// Show Gateway server status
     Status,
     /// Start Gateway server
@@ -605,7 +605,7 @@ pub(crate) enum DaemonAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ProvidersAction {
+pub enum ProvidersAction {
     /// List all AI providers
     List,
     /// Get provider details
@@ -632,7 +632,7 @@ pub(crate) enum ProvidersAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ModelsAction {
+pub enum ModelsAction {
     /// List all available models
     List,
     /// Get model details
@@ -642,7 +642,7 @@ pub(crate) enum ModelsAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum MemoryAction {
+pub enum MemoryAction {
     /// Search memory
     Search {
         /// Search query
@@ -673,7 +673,7 @@ pub(crate) enum MemoryAction {
 /// Note: the legacy hidden `Plugins` variant was removed during the CLI parity
 /// pass — `aleph plugin` is the single entrypoint for both lifecycle and dev.
 #[derive(Subcommand)]
-pub(crate) enum PluginAction {
+pub enum PluginAction {
     // === Lifecycle (server-connected) ===
     /// List installed plugins
     List,
@@ -759,7 +759,7 @@ pub(crate) enum PluginAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum MarketplaceAction {
+pub enum MarketplaceAction {
     /// Add a marketplace source
     Add { source: String },
     /// List configured marketplace sources
@@ -771,7 +771,7 @@ pub(crate) enum MarketplaceAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ServicesAction {
+pub enum ServicesAction {
     /// List background services
     List {
         /// Filter by plugin ID
@@ -805,7 +805,7 @@ pub(crate) enum ServicesAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum SkillsAction {
+pub enum SkillsAction {
     /// List all skills (file-based and runtime-loaded)
     List,
     /// Install a skill from source
@@ -817,7 +817,7 @@ pub(crate) enum SkillsAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum SessionAction {
+pub enum SessionAction {
     /// List all sessions
     List,
     /// Create a new session
@@ -870,7 +870,7 @@ pub(crate) enum SessionAction {
 
 /// Transcript export rendering format for `session export`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
-pub(crate) enum SessionExportFormat {
+pub enum SessionExportFormat {
     /// Human-readable Markdown transcript
     Markdown,
     /// Machine-readable JSON (`chat.history` envelope)
@@ -878,7 +878,7 @@ pub(crate) enum SessionExportFormat {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum WorkspaceAction {
+pub enum WorkspaceAction {
     /// List all workspaces
     List,
     /// Create a new workspace
@@ -904,7 +904,7 @@ pub(crate) enum WorkspaceAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum LogsAction {
+pub enum LogsAction {
     /// Get current log level
     Level,
     /// Set log level (trace, debug, info, warn, error)
@@ -917,7 +917,7 @@ pub(crate) enum LogsAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum TraceAction {
+pub enum TraceAction {
     /// List recent persisted trace replays
     List {
         /// Maximum number of tasks to show
@@ -932,7 +932,7 @@ pub(crate) enum TraceAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum IdentityAction {
+pub enum IdentityAction {
     /// Get current identity/soul
     Get,
     /// Set identity from JSON manifest
@@ -947,7 +947,7 @@ pub(crate) enum IdentityAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum VaultAction {
+pub enum VaultAction {
     /// Show vault status
     Status,
     /// Store master key (interactive input)
@@ -959,7 +959,7 @@ pub(crate) enum VaultAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum SandboxAction {
+pub enum SandboxAction {
     /// Print the active sandbox profile summary and exit
     Info,
     /// Run a command under the active sandbox profile
@@ -983,7 +983,7 @@ pub(crate) enum SandboxAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum McpAction {
+pub enum McpAction {
     /// List pending tool approval requests
     Pending,
     /// Approve a tool execution request
@@ -1010,7 +1010,7 @@ pub(crate) enum McpAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ChatControlAction {
+pub enum ChatControlAction {
     /// Send a message (non-interactive)
     Send {
         /// The message to send
@@ -1050,7 +1050,7 @@ pub(crate) enum ChatControlAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum PairingAction {
+pub enum PairingAction {
     /// List pending pairing requests
     List,
     /// Approve a pending pairing by code
@@ -1066,7 +1066,7 @@ pub(crate) enum PairingAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum DevicesAction {
+pub enum DevicesAction {
     /// List approved devices
     List,
     /// Revoke a device (also revokes its tokens)
@@ -1077,7 +1077,7 @@ pub(crate) enum DevicesAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum AuthAction {
+pub enum AuthAction {
     // DEPRECATED (Phase 4, 26.5.25): `ShowToken` + `ResetToken` are hidden
     // legacy variants kept for one release cycle so muscle-memory scripts
     // keep parsing. Drop both variants (and the matching arms in
@@ -1124,7 +1124,7 @@ pub(crate) enum AuthAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum AuthDebugAction {
+pub enum AuthDebugAction {
     /// Show the access token (developer / break-glass use only).
     ShowToken,
     /// Reset (regenerate) the access token, invalidating all sessions.
@@ -1136,7 +1136,7 @@ pub(crate) enum AuthDebugAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum WebhookAction {
+pub enum WebhookAction {
     /// List configured webhook endpoints (currently TOML-driven)
     List,
     /// Add a webhook subscription (backend not yet implemented)
@@ -1146,7 +1146,7 @@ pub(crate) enum WebhookAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum ProxyAction {
+pub enum ProxyAction {
     /// Show effective proxy configuration (backend not yet implemented)
     Show,
     /// Set proxy URL (backend not yet implemented)
@@ -1156,12 +1156,12 @@ pub(crate) enum ProxyAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum HooksAction {
+pub enum HooksAction {
     /// Show the current contents of ~/.aleph/hooks.json
     List,
     /// Add a hook entry
     Add {
-        /// Event name (snake_case or PascalCase: `before_tool_call`, `PreToolUse`, ...)
+        /// Event name (`snake_case` or `PascalCase`: `before_tool_call`, `PreToolUse`, ...)
         event: String,
         /// Shell command to run
         #[arg(long, conflicts_with_all = ["prompt", "agent", "url"])]
@@ -1200,7 +1200,7 @@ pub(crate) enum HooksAction {
 }
 
 #[derive(Subcommand)]
-pub(crate) enum SecretAction {
+pub enum SecretAction {
     /// List secret names (values are never returned)
     List,
     /// Store a secret. If --value is omitted, reads from a TTY prompt

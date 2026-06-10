@@ -456,14 +456,31 @@ impl AlephTool for TeamCreateTool {
         // Enroll members
         let mut enrolled: Vec<EnrolledMember> = Vec::new();
         for (agent_id, role, created) in resolved {
-            self.store
-                .add_member(NewTeamMember {
+            // ACP harness references must be persisted with the AcpSession
+            // kind and routing fields (mirroring `team_member_add`) — the
+            // default Agent kind would make the dispatcher treat "acp:…" as
+            // an in-process agent and fail every dispatched task.
+            let new_member = if let Some(member_ref) =
+                crate::teams::dispatcher::AcpMemberRef::parse(&agent_id)
+            {
+                NewTeamMember {
+                    team_id: team.id.clone(),
+                    agent_id: agent_id.clone(),
+                    role: role.clone(),
+                    kind: crate::teams::types::TeamMemberKind::AcpSession,
+                    acp_harness_id: Some(member_ref.harness_id.clone()),
+                    acp_cwd: None,
+                    acp_session_name: member_ref.session_name.clone(),
+                }
+            } else {
+                NewTeamMember {
                     team_id: team.id.clone(),
                     agent_id: agent_id.clone(),
                     role: role.clone(),
                     ..Default::default()
-                })
-                .await?;
+                }
+            };
+            self.store.add_member(new_member).await?;
 
             info!(
                 team_id = %team.id,

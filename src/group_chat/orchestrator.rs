@@ -35,6 +35,7 @@ pub struct GroupChatOrchestrator {
 
 impl GroupChatOrchestrator {
     /// Create a new orchestrator from config and persona definitions.
+    #[must_use]
     pub fn new(config: GroupChatConfig, persona_configs: &[PersonaConfig]) -> Self {
         Self {
             config,

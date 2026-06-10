@@ -119,6 +119,7 @@ otherwise the session working directory. This tool prefers `apply_patch`
 over multiple `file_edit` / `file_write` calls when the model needs to
 make several coordinated edits at once."#;
 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             denied_paths: get_denied_paths(),

@@ -46,6 +46,7 @@ const MAX_LISTED: usize = 8;
 pub struct ScratchpadGoalVerifier;
 
 impl ScratchpadGoalVerifier {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

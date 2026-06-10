@@ -2,8 +2,8 @@
 //!
 //! See design §5 (TOML shape) and §3.8 (hot reload via FlowRegistry::replace).
 
-use std::path::Path;
 use crate::sync_primitives::Arc;
+use std::path::Path;
 
 use serde::Deserialize;
 
@@ -76,6 +76,7 @@ fn parse_flow_file(src: &str) -> Result<FlowSet, String> {
 }
 
 /// Merge presets + user flows. User flows override presets on id collision.
+#[must_use]
 pub fn merge_catalogs(presets: FlowSet, user: FlowSet) -> FlowSet {
     let mut out = presets;
     for (id, spec) in user {

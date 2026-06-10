@@ -91,6 +91,7 @@ impl Default for SearchOptions {
 
 impl SearchOptions {
     /// Create default options with custom timeout
+    #[must_use]
     pub fn default_with_timeout(timeout_seconds: u64) -> Self {
         Self {
             timeout_seconds,
@@ -99,11 +100,13 @@ impl SearchOptions {
     }
 
     /// Returns a validated timeout in seconds, ensuring it's at least 1
+    #[must_use]
     pub fn validated_timeout(&self) -> u64 {
         self.timeout_seconds.max(1)
     }
 
     /// Returns validated max_results, capped at 50 and at least 1
+    #[must_use]
     pub fn validated_max_results(&self) -> usize {
         self.max_results.clamp(1, 50)
     }
@@ -115,6 +118,7 @@ impl SearchOptions {
     // one file. See the module-level docs for the table.
 
     /// Brave `freshness` (`pd`/`pw`/`pm`/`py`).
+    #[must_use]
     pub fn brave_freshness(&self) -> Option<&'static str> {
         Some(match self.date_range.as_deref()? {
             "day" => "pd",
@@ -126,6 +130,7 @@ impl SearchOptions {
     }
 
     /// Brave `safesearch` (`off`/`moderate`).
+    #[must_use]
     pub fn brave_safesearch(&self) -> &'static str {
         if self.safe_search {
             "moderate"
@@ -135,6 +140,7 @@ impl SearchOptions {
     }
 
     /// Bing `freshness` (`Day`/`Week`/`Month`). Bing has no `Year`.
+    #[must_use]
     pub fn bing_freshness(&self) -> Option<&'static str> {
         Some(match self.date_range.as_deref()? {
             "day" => "Day",
@@ -145,6 +151,7 @@ impl SearchOptions {
     }
 
     /// Bing `safeSearch` (`Off`/`Moderate`).
+    #[must_use]
     pub fn bing_safesearch(&self) -> &'static str {
         if self.safe_search {
             "Moderate"
@@ -154,6 +161,7 @@ impl SearchOptions {
     }
 
     /// Google CSE `dateRestrict` (`d1`/`w1`/`m1`/`y1`).
+    #[must_use]
     pub fn google_date_restrict(&self) -> Option<&'static str> {
         Some(match self.date_range.as_deref()? {
             "day" => "d1",
@@ -165,6 +173,7 @@ impl SearchOptions {
     }
 
     /// Google CSE `safe` (`active`/`off`).
+    #[must_use]
     pub fn google_safe(&self) -> &'static str {
         if self.safe_search {
             "active"
@@ -175,12 +184,14 @@ impl SearchOptions {
 
     /// Google CSE `lr` language restrictor — Google requires the
     /// `lang_` prefix, while SearXNG/Brave/Bing accept the bare code.
+    #[must_use]
     pub fn google_lr(&self) -> Option<String> {
         let lang = self.language.as_deref()?;
         Some(format!("lang_{lang}"))
     }
 
     /// SearXNG `time_range` (`day`/`week`/`month`/`year`). Bare token.
+    #[must_use]
     pub fn searxng_time_range(&self) -> Option<&'static str> {
         Some(match self.date_range.as_deref()? {
             "day" => "day",
@@ -194,6 +205,7 @@ impl SearchOptions {
     /// SearXNG `safesearch` (`0`/`1`/`2` for off/moderate/strict).
     /// We expose only Off vs Moderate today; bumping to Strict requires
     /// a new SearchOptions field.
+    #[must_use]
     pub fn searxng_safesearch(&self) -> u8 {
         if self.safe_search {
             1
@@ -204,6 +216,7 @@ impl SearchOptions {
 
     /// Tavily `days` integer (1/7/30/365) — Tavily doesn't take a
     /// freshness token; it takes a "look back N days" int instead.
+    #[must_use]
     pub fn tavily_days(&self) -> Option<u32> {
         Some(match self.date_range.as_deref()? {
             "day" => 1,
@@ -215,6 +228,7 @@ impl SearchOptions {
     }
 
     /// DuckDuckGo `kp` (`1`=moderate, `-2`=off; strict is `-1`).
+    #[must_use]
     pub fn ddg_kp(&self) -> &'static str {
         if self.safe_search {
             "1"
@@ -224,6 +238,7 @@ impl SearchOptions {
     }
 
     /// DuckDuckGo `df` (`d`/`w`/`m`/`y`).
+    #[must_use]
     pub fn ddg_df(&self) -> Option<&'static str> {
         Some(match self.date_range.as_deref()? {
             "day" => "d",
@@ -249,6 +264,7 @@ pub struct QuotaInfo {
 }
 
 impl QuotaInfo {
+    #[must_use]
     pub fn unlimited() -> Self {
         Self {
             remaining: None,

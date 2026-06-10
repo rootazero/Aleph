@@ -414,9 +414,10 @@ impl ChannelApprovalBridge {
 
     /// 请求工具调用审批并阻塞等待用户决策。
     ///
-    /// 两阶段：(1) `manager.create` 建记录得 `record.id`；
+    /// 两阶段：(1) `manager.create` 建记录得 `record.id`，随即
+    /// `register_pending` 先注册（投递前注册，快手 resolver 不会扑空）；
     /// (2) `deliver_routed` 用 `record.id` 投递按钮到指定通道会话；
-    /// (3) `wait_for_decision` 阻塞在 `record.id` 的 oneshot，由通道按钮回调
+    /// (3) `await_registered` 阻塞在 `record.id` 的 oneshot，由通道按钮回调
     /// 经 `manager.resolve(record.id, ...)` 唤醒。
     ///
     /// `channel_id` / `conversation_id` 为结构化路由参数（来自调用方解析的
@@ -466,14 +467,20 @@ impl ChannelApprovalBridge {
 
         let record = approval_manager.create(&request, timeout_ms);
 
+        // Register the pending entry BEFORE delivering the prompt so a fast
+        // resolver (instant button tap / "/approve" reply) cannot race ahead
+        // of registration (resolve-before-register → spurious timeout); see
+        // `ExecApprovalManager::register_pending`.
+        let (record_id, rx, wait_timeout) = approval_manager.register_pending(record);
+
         match self
-            .deliver_routed(channel_id, conversation_id, tool_name, reason, &record.id)
+            .deliver_routed(channel_id, conversation_id, tool_name, reason, &record_id)
             .await
         {
             Some(true) => {
                 tracing::info!(
                     tool = %tool_name,
-                    id = %record.id,
+                    id = %record_id,
                     channel = %channel_id.as_str(),
                     "Approval delivered via channel — waiting for user decision"
                 );
@@ -481,22 +488,29 @@ impl ChannelApprovalBridge {
             Some(false) => {
                 tracing::warn!(
                     tool = %tool_name,
-                    id = %record.id,
+                    id = %record_id,
                     "Approval delivery failed — denying"
                 );
+                // Retire the just-registered entry so a later session-FIFO
+                // "/approve" cannot consume it.
+                approval_manager.resolve(&record_id, ApprovalDecisionType::Deny, None);
                 return ApprovalOutcome::Denied;
             }
             None => {
                 tracing::warn!(
                     tool = %tool_name,
-                    id = %record.id,
+                    id = %record_id,
                     "No channel capability for approval delivery — denying"
                 );
+                approval_manager.resolve(&record_id, ApprovalDecisionType::Deny, None);
                 return ApprovalOutcome::Denied;
             }
         }
 
-        match approval_manager.wait_for_decision(record).await {
+        match approval_manager
+            .await_registered(record_id, rx, wait_timeout)
+            .await
+        {
             // "Allow once" approves this single invocation. Both "allow session"
             // and "allow always" carry the session-scoped grant so the dispatch
             // gate remembers it and stops re-prompting the same tool this

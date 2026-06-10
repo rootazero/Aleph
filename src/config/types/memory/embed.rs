@@ -60,10 +60,12 @@ fn default_provider_enabled() -> bool {
 }
 
 impl EmbeddingProviderConfig {
+    #[must_use]
     pub fn default_model(&self) -> &str {
         self.models.first().map(|s| s.as_str()).unwrap_or("")
     }
 
+    #[must_use]
     pub fn siliconflow() -> Self {
         Self {
             id: "siliconflow".to_string(),
@@ -81,6 +83,7 @@ impl EmbeddingProviderConfig {
         }
     }
 
+    #[must_use]
     pub fn openai() -> Self {
         Self {
             id: "openai".to_string(),
@@ -98,6 +101,7 @@ impl EmbeddingProviderConfig {
         }
     }
 
+    #[must_use]
     pub fn ollama() -> Self {
         Self {
             id: "ollama".to_string(),

@@ -25,6 +25,7 @@ use parsing::{extract_facts, extract_provenance_markers, parse_date_to_unix, spl
 /// `permanent` and `pinned` (case-insensitive). Shared SSOT used by both
 /// [`KnowledgeNote::is_permanent`] and the dream decay stage, which inspects
 /// the lightweight index `tags` without loading note bodies.
+#[must_use]
 pub fn tags_mark_permanent(tags: &[String]) -> bool {
     tags.iter().any(|t| {
         let t = t.trim();
@@ -156,11 +157,13 @@ impl KnowledgeNote {
     /// set, or — for notes authored before the flag existed — when the note
     /// carries a `permanent` / `pinned` tag. The tag fallback lets existing
     /// memory become permanent with zero migration.
+    #[must_use]
     pub fn is_permanent(&self) -> bool {
         self.permanent || tags_mark_permanent(&self.tags)
     }
 
     /// Serialize this note back to markdown with YAML frontmatter.
+    #[must_use]
     pub fn to_markdown(&self) -> String {
         let created = DateTime::from_timestamp(self.created_at, 0)
             .map(|dt| dt.format("%Y-%m-%d").to_string())
@@ -232,6 +235,7 @@ impl KnowledgeNote {
     }
 
     /// Body text for embedding — facts joined by newline.
+    #[must_use]
     pub fn body_text(&self) -> String {
         self.facts.join("\n")
     }
@@ -239,6 +243,7 @@ impl KnowledgeNote {
     /// Body text for FTS indexing — facts joined by newline with inline
     /// `\u003c!-- src: ..., origin: ..., inferred: ... --\u003e` provenance markers
     /// stripped so they don't pollute the search index.
+    #[must_use]
     pub fn body_text_for_fts(&self) -> String {
         self.facts
             .iter()

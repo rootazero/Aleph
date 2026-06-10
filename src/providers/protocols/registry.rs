@@ -32,6 +32,7 @@ pub struct ProtocolRegistry {
 
 impl ProtocolRegistry {
     /// Create a new protocol registry
+    #[must_use]
     pub fn new() -> Self {
         Self {
             dynamic: RwLock::new(HashMap::new()),
@@ -40,6 +41,7 @@ impl ProtocolRegistry {
     }
 
     /// Get the global registry instance
+    #[must_use]
     pub fn global() -> &'static Self {
         &PROTOCOL_REGISTRY
     }

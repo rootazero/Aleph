@@ -50,10 +50,12 @@ impl std::fmt::Debug for WorktreeHandle {
 }
 
 impl WorktreeHandle {
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    #[must_use]
     pub fn repo_root(&self) -> &Path {
         &self.repo_root
     }
@@ -207,6 +209,7 @@ pub struct WorktreeSandbox {
 }
 
 impl WorktreeSandbox {
+    #[must_use]
     pub fn new(worktree_path: std::path::PathBuf) -> Self {
         Self { worktree_path }
     }

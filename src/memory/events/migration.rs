@@ -36,6 +36,7 @@ pub struct EventSourcingMigration {
 
 impl EventSourcingMigration {
     /// Create a new migration backed by the given event store.
+    #[must_use]
     pub fn new(db: Arc<StateDatabase>) -> Self {
         Self { db }
     }

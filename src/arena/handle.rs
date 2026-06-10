@@ -43,11 +43,13 @@ impl ArenaHandle {
     }
 
     /// Returns the agent ID this handle belongs to.
+    #[must_use]
     pub fn agent_id(&self) -> &str {
         &self.agent_id
     }
 
     /// Returns the participant role for this handle.
+    #[must_use]
     pub fn role(&self) -> &ParticipantRole {
         &self.role
     }
@@ -103,6 +105,7 @@ impl ArenaHandle {
     }
 
     /// Get the current arena progress (cloned snapshot).
+    #[must_use]
     pub fn get_progress(&self) -> ArenaProgress {
         let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
         arena.progress().clone()
@@ -124,12 +127,14 @@ impl ArenaHandle {
     }
 
     /// Returns the current arena status.
+    #[must_use]
     pub fn arena_status(&self) -> ArenaStatus {
         let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
         arena.status()
     }
 
     /// Returns the status of a specific agent's slot.
+    #[must_use]
     pub fn slot_status(&self, target_agent_id: &AgentId) -> Option<SlotStatus> {
         let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
         arena.slots().get(target_agent_id).map(|s| s.status)
@@ -141,6 +146,7 @@ impl ArenaHandle {
     ///
     /// TODO: With many participants and artifacts, collecting and sorting all artifacts
     /// in-memory may cause latency. Consider streaming or heap-based top-N extraction.
+    #[must_use]
     pub fn snapshot_for_context(&self) -> (String, String, Vec<String>, usize, usize, Vec<String>) {
         let arena = self.arena.read().unwrap_or_else(|e| e.into_inner());
         let arena_id = arena.id().to_string();

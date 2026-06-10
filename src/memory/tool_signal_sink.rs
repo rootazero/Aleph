@@ -186,8 +186,8 @@ pub struct ToolStats {
 mod tests {
     use super::*;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
-    use async_trait::async_trait;
     use crate::sync_primitives::Mutex;
+    use async_trait::async_trait;
 
     /// Minimal in-memory store used for sink-write verification.
     struct MemStore {

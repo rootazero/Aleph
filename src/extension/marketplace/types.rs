@@ -92,6 +92,7 @@ pub const BUILTIN_MARKETPLACE_SOURCE: &str = "bundled";
 // =============================================================================
 
 /// Returns the directory where marketplace repos are cached locally.
+#[must_use]
 pub fn marketplace_cache_dir() -> PathBuf {
     crate::discovery::aleph_home_dir()
         .unwrap_or_else(|_| {
@@ -103,6 +104,7 @@ pub fn marketplace_cache_dir() -> PathBuf {
 }
 
 /// Returns the directory where plugins are installed.
+#[must_use]
 pub fn default_install_dir() -> PathBuf {
     crate::discovery::aleph_home_dir()
         .unwrap_or_else(|_| {

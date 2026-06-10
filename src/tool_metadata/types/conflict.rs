@@ -136,6 +136,7 @@ pub enum ToolSource {
 
 impl ToolSource {
     /// Get a short type label for UI display
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             ToolSource::Native => "Native",
@@ -148,6 +149,7 @@ impl ToolSource {
     }
 
     /// Get an icon hint for UI (SF Symbol name suggestion)
+    #[must_use]
     pub fn icon_hint(&self) -> &'static str {
         match self {
             ToolSource::Native => "star.fill",
@@ -163,6 +165,7 @@ impl ToolSource {
     ///
     /// Higher priority tools win name conflicts and lower priority tools
     /// are renamed with a suffix.
+    #[must_use]
     pub fn priority(&self) -> ToolPriority {
         match self {
             ToolSource::Builtin => ToolPriority::Builtin,
@@ -178,6 +181,7 @@ impl ToolSource {
     ///
     /// When a tool loses a name conflict, it's renamed to `{name}-{suffix}`.
     /// For example, an MCP tool named "search" becomes "search-mcp".
+    #[must_use]
     pub fn suffix(&self) -> &'static str {
         match self {
             ToolSource::Builtin => "system",
@@ -190,21 +194,25 @@ impl ToolSource {
     }
 
     /// Check if this source is a builtin command
+    #[must_use]
     pub fn is_builtin(&self) -> bool {
         matches!(self, ToolSource::Builtin)
     }
 
     /// Check if this source is an MCP tool
+    #[must_use]
     pub fn is_mcp(&self) -> bool {
         matches!(self, ToolSource::Mcp { .. })
     }
 
     /// Check if this source is a skill
+    #[must_use]
     pub fn is_skill(&self) -> bool {
         matches!(self, ToolSource::Skill { .. })
     }
 
     /// Check if this source is a plugin tool
+    #[must_use]
     pub fn is_plugin(&self) -> bool {
         matches!(self, ToolSource::Plugin { .. })
     }
@@ -212,6 +220,7 @@ impl ToolSource {
     /// Display priority for UI sorting (lower = first).
     ///
     /// Order: Builtin (0) > Native (1) > Custom (2) > Mcp (3) > Plugin (4) > Skill (5).
+    #[must_use]
     pub fn display_priority(&self) -> u8 {
         match self {
             ToolSource::Builtin => 0,
@@ -226,6 +235,7 @@ impl ToolSource {
     /// Format a tool ID for this source type.
     ///
     /// E.g. `ToolSource::Mcp { server: "fs" }.format_tool_id("read_file")` → `"mcp:fs:read_file"`.
+    #[must_use]
     pub fn format_tool_id(&self, name: &str) -> String {
         match self {
             ToolSource::Native => format!("native:{name}"),

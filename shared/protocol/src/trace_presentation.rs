@@ -29,7 +29,8 @@ pub enum AgentTracePresentationPreset {
 
 impl AgentTracePresentationPreset {
     /// Return the presentation options associated with this preset.
-    pub fn options(&self) -> AgentTracePresentationOptions {
+    #[must_use]
+    pub const fn options(&self) -> AgentTracePresentationOptions {
         match self {
             Self::CliCompact => AgentTracePresentationOptions {
                 content_limit: 120,
@@ -96,6 +97,7 @@ pub struct AgentTracePresentationLabels {
 
 impl AgentTracePresentationLabels {
     /// Default English labels.
+    #[must_use]
     pub fn english() -> Self {
         Self {
             turn_started: "Turn started".into(),
@@ -182,6 +184,7 @@ pub struct AgentTracePresentation {
 // ---------------------------------------------------------------------------
 
 /// Format a trace event using a preset with default English labels.
+#[must_use]
 pub fn present_agent_trace_event_with_preset(
     event: &AgentTraceEvent,
     preset: AgentTracePresentationPreset,
@@ -192,6 +195,7 @@ pub fn present_agent_trace_event_with_preset(
 }
 
 /// Format a trace event using custom labels and a preset.
+#[must_use]
 pub fn present_agent_trace_event_with_labels_and_preset(
     event: &AgentTraceEvent,
     labels: &AgentTracePresentationLabels,
@@ -209,6 +213,7 @@ pub fn present_agent_trace_event_with_labels_and_preset(
 ///
 /// Returns `None` for events that have no meaningful visual representation
 /// (currently all variants produce output, but callers should handle `None`).
+#[must_use]
 pub fn present_agent_trace_event(
     event: &AgentTraceEvent,
     options: &AgentTracePresentationOptions,
@@ -443,16 +448,19 @@ pub fn present_agent_trace_event(
 ///
 /// The second argument is `AgentTracePresentationOptions`; the
 /// `tool_input_limit` field controls the maximum output length.
+#[must_use]
 pub fn summarize_tool_input(params: &Value, options: AgentTracePresentationOptions) -> String {
     summarize_tool_input_raw(params, options.tool_input_limit)
 }
 
 /// Truncate raw tool output to `limit` characters.
+#[must_use]
 pub fn summarize_tool_output(output: &str, limit: usize) -> String {
     truncate(output, limit)
 }
 
 /// Summarize a `AgentTraceToolResult` into a short string.
+#[must_use]
 pub fn summarize_tool_result(result: &AgentTraceToolResult, limit: usize) -> String {
     match result {
         AgentTraceToolResult::Success { output } => {
@@ -495,7 +503,7 @@ fn compact_value(v: &Value) -> String {
                 let boundary = s.char_indices().nth(57).map_or(s.len(), |(i, _)| i);
                 format!("\"{}...\"", &s[..boundary])
             } else {
-                format!("\"{}\"", s)
+                format!("\"{s}\"")
             }
         }
         Value::Number(n) => n.to_string(),
@@ -508,7 +516,7 @@ fn compact_value(v: &Value) -> String {
 
 /// Serialize a value to compact JSON (single line).
 fn compact_json(v: &Value) -> String {
-    serde_json::to_string(v).unwrap_or_else(|_| format!("{:?}", v))
+    serde_json::to_string(v).unwrap_or_else(|_| format!("{v:?}"))
 }
 
 /// Truncate a string to at most `limit` characters, appending "..." if cut.

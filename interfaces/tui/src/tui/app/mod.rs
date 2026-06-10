@@ -53,7 +53,7 @@ pub enum Action {
     ScrollDown(usize),
     /// Jump to the bottom of the chat
     ScrollToBottom,
-    /// Scroll to bottom only if auto_scroll is enabled
+    /// Scroll to bottom only if `auto_scroll` is enabled
     ScrollToBottomIfAutoScroll,
 
     // -- Focus --
@@ -79,7 +79,7 @@ pub enum Action {
     DialogSelect(usize),
 
     // -- Dialog response --
-    /// Respond to an AskUser dialog
+    /// Respond to an `AskUser` dialog
     RespondToDialog { run_id: String, choice: String },
 }
 
@@ -146,7 +146,7 @@ pub enum ChatMessage {
 // Overlay state
 // ---------------------------------------------------------------------------
 
-/// State for the AskUser confirmation dialog.
+/// State for the `AskUser` confirmation dialog.
 #[derive(Debug, Clone)]
 pub struct DialogState {
     pub run_id: String,
@@ -170,7 +170,7 @@ pub struct PaletteState {
 // ---------------------------------------------------------------------------
 
 /// Central application state. Owned by the main loop, mutated through
-/// methods that enforce invariants (e.g. auto_scroll toggling).
+/// methods that enforce invariants (e.g. `auto_scroll` toggling).
 #[derive(Debug)]
 pub struct AppState {
     // -- Chat --
@@ -213,11 +213,10 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Create a new AppState with a welcome system message.
+    /// Create a new `AppState` with a welcome system message.
     pub fn new(session_key: String, model_name: String) -> Self {
         let welcome = format!(
-            "Welcome to Aleph CLI. Session: {} | Model: {}. Type /help for commands.",
-            session_key, model_name,
+            "Welcome to Aleph CLI. Session: {session_key} | Model: {model_name}. Type /help for commands.",
         );
         Self {
             messages: vec![ChatMessage::System { content: welcome }],
@@ -298,7 +297,7 @@ impl AppState {
             .expect("ensure_assistant_message guarantees this exists")
     }
 
-    /// Find a tool execution by tool_id in the last assistant message.
+    /// Find a tool execution by `tool_id` in the last assistant message.
     /// Returns None if not found or last message is not assistant.
     pub fn find_tool_mut(&mut self, tool_id: &str) -> Option<&mut ToolExecution> {
         // Search from the end to find the most recent assistant message
@@ -312,22 +311,22 @@ impl AppState {
 
     // -- Scrolling ------------------------------------------------------
 
-    /// Scroll up by `n` lines. Disables auto_scroll.
-    pub fn scroll_up(&mut self, n: usize) {
+    /// Scroll up by `n` lines. Disables `auto_scroll`.
+    pub const fn scroll_up(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_add(n);
         self.auto_scroll = false;
     }
 
-    /// Scroll down by `n` lines. If offset reaches 0, re-enables auto_scroll.
-    pub fn scroll_down(&mut self, n: usize) {
+    /// Scroll down by `n` lines. If offset reaches 0, re-enables `auto_scroll`.
+    pub const fn scroll_down(&mut self, n: usize) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
         if self.scroll_offset == 0 {
             self.auto_scroll = true;
         }
     }
 
-    /// Jump to the bottom of the chat. Re-enables auto_scroll.
-    pub fn scroll_to_bottom(&mut self) {
+    /// Jump to the bottom of the chat. Re-enables `auto_scroll`.
+    pub const fn scroll_to_bottom(&mut self) {
         self.scroll_offset = 0;
         self.auto_scroll = true;
     }
@@ -346,7 +345,7 @@ impl AppState {
                     label: n.to_string(),
                     hint: d.to_string(),
                     is_namespace: false,
-                    full_command: format!("{} ", n),
+                    full_command: format!("{n} "),
                 })
                 .collect();
             entries.extend(CommandEntry::root_display_entries(&self.gateway_commands));
@@ -461,7 +460,7 @@ impl AppState {
         self.focus = Focus::Input;
     }
 
-    /// Show an AskUser dialog.
+    /// Show an `AskUser` dialog.
     pub fn show_dialog(&mut self, run_id: String, question: String, options: Vec<String>) {
         self.dialog = Some(DialogState {
             run_id,
@@ -484,13 +483,13 @@ impl AppState {
         self.palette = None;
         self.focus = Focus::Input;
         self.scroll_to_bottom();
-        self.add_system_message(format!("Switched to session {}", session_key));
+        self.add_system_message(format!("Switched to session {session_key}"));
     }
 
     // -- Settings -------------------------------------------------------
 
     /// Toggle verbose/debug output mode.
-    pub fn toggle_verbose(&mut self) {
+    pub const fn toggle_verbose(&mut self) {
         self.verbose = !self.verbose;
     }
 
@@ -502,8 +501,8 @@ impl AppState {
         self.add_system_message("Screen cleared.".to_string());
     }
 
-    /// Update token usage from a RunSummary.
-    pub fn update_token_usage(&mut self, summary: &RunSummary) {
+    /// Update token usage from a `RunSummary`.
+    pub const fn update_token_usage(&mut self, summary: &RunSummary) {
         self.total_tokens = self.total_tokens.saturating_add(summary.total_tokens);
     }
 
@@ -616,13 +615,13 @@ impl AppState {
             // ToolSummary carries an agent-authored summary sentence — use it
             // verbatim instead of the "Tool summary: " decorated form.
             AgentTraceEvent::ToolSummary { summary, .. } => {
-                self.append_reasoning_entry(summary.clone())
+                self.append_reasoning_entry(summary.clone());
             }
             AgentTraceEvent::TurnStarted { .. }
             | AgentTraceEvent::TurnStateEntered { .. }
             | AgentTraceEvent::TurnCompleted { .. }
             | AgentTraceEvent::SessionCompleted { .. } => {
-                self.append_reasoning_entry(presentation.content.clone())
+                self.append_reasoning_entry(presentation.content.clone());
             }
             AgentTraceEvent::ToolCallStarted { .. } | AgentTraceEvent::ToolCallCompleted { .. } => {
             }

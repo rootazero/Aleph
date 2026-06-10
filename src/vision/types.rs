@@ -44,6 +44,7 @@ pub enum ImageFormat {
 
 impl ImageFormat {
     /// Return the MIME type string for this format.
+    #[must_use]
     pub fn mime_type(&self) -> &'static str {
         match self {
             Self::Png => "image/png",
@@ -53,6 +54,7 @@ impl ImageFormat {
     }
 
     /// Return the canonical file extension (without leading dot).
+    #[must_use]
     pub fn extension(&self) -> &'static str {
         match self {
             Self::Png => "png",
@@ -106,6 +108,7 @@ impl Rect {
     }
 
     /// Create a new Rect without validation (use with caution).
+    #[must_use]
     pub fn new_unchecked(x: f64, y: f64, width: f64, height: f64) -> Self {
         Self {
             x,
@@ -116,11 +119,13 @@ impl Rect {
     }
 
     /// Check if the rectangle has valid dimensions (non-negative width/height).
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.width >= 0.0 && self.height >= 0.0
     }
 
     /// Return the area of the rectangle.
+    #[must_use]
     pub fn area(&self) -> f64 {
         if self.width < 0.0
             || self.height < 0.0
@@ -223,6 +228,7 @@ pub fn validate_confidence(confidence: f64) -> Result<f64, &'static str> {
 
 impl VisionCapabilities {
     /// A provider that supports all capabilities.
+    #[must_use]
     pub fn all() -> Self {
         Self {
             image_understanding: true,
@@ -232,6 +238,7 @@ impl VisionCapabilities {
     }
 
     /// A provider that supports no capabilities (useful as a default).
+    #[must_use]
     pub fn none() -> Self {
         Self {
             image_understanding: false,

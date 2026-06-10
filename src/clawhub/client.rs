@@ -81,6 +81,7 @@ impl ClawHubClient {
     }
 
     /// Get the registry base URL
+    #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }

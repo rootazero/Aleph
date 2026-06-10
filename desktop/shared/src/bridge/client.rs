@@ -60,7 +60,7 @@ fn map_bridge_error(e: RpcError) -> DesktopError {
 /// `speech.transcribe_file`) outlast this default; they must use
 /// [`SwiftBridge::call_with_timeout`] with a deadline derived from the
 /// requested duration instead.
-pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(60);
+pub const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_mins(1);
 
 /// Long-lived RPC client for the `aleph-bridge` Swift helper.
 ///
@@ -82,6 +82,7 @@ struct BridgeProcess {
 }
 
 impl SwiftBridge {
+    #[must_use]
     pub fn new(binary_path: PathBuf) -> Self {
         Self {
             binary_path,
@@ -91,14 +92,14 @@ impl SwiftBridge {
             backoff: Arc::new(Mutex::new(Backoff::default())),
             restart_window: Arc::new(Mutex::new(RestartWindow::new(
                 5,
-                std::time::Duration::from_secs(600),
+                std::time::Duration::from_mins(10),
             ))),
             disabled: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Spawn the helper subprocess and wire up reader + stderr tasks.
-    /// This is the inner spawn — does NOT touch backoff or restart_window.
+    /// This is the inner spawn — does NOT touch backoff or `restart_window`.
     async fn spawn_process(&self) -> Result<()> {
         let mut cmd = Command::new(&self.binary_path);
         cmd.stdin(std::process::Stdio::piped())

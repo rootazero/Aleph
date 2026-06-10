@@ -19,6 +19,7 @@ pub enum DreamStrategy {
 
 impl DreamStrategy {
     /// Ordered list of stage names this strategy will execute.
+    #[must_use]
     pub fn stage_names(&self) -> Vec<&'static str> {
         match self {
             Self::Consolidate => vec![

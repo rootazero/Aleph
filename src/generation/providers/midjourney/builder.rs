@@ -63,6 +63,7 @@ impl MidjourneyProviderBuilder {
     /// # Arguments
     ///
     /// * `mode` - Fast or Relax mode
+    #[must_use]
     pub fn mode(mut self, mode: MidjourneyMode) -> Self {
         self.mode = mode;
         self
@@ -93,6 +94,7 @@ impl MidjourneyProviderBuilder {
     /// # Arguments
     ///
     /// * `secs` - Timeout duration in seconds
+    #[must_use]
     pub fn timeout_secs(mut self, secs: u64) -> Self {
         self.timeout_secs = secs;
         self

@@ -34,10 +34,12 @@ impl FeishuRuntime {
         }
     }
 
+    #[must_use]
     pub fn connection_state(&self) -> RuntimeState {
         self.state.get()
     }
 
+    #[must_use]
     pub fn state_handle(&self) -> Arc<AtomicRuntimeState> {
         Arc::clone(&self.state)
     }

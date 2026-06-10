@@ -22,6 +22,7 @@ pub struct ListFilter {
 
 impl ListFilter {
     /// Create a new filter with defaults
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -39,6 +40,7 @@ impl ListFilter {
     }
 
     /// Set result limit
+    #[must_use]
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
@@ -89,6 +91,7 @@ pub struct NoteSummary {
 
 impl NoteSummary {
     /// Create from a NoteIndexEntry
+    #[must_use]
     pub fn from_entry(entry: &NoteIndexEntry) -> Self {
         Self {
             path: entry.path.clone(),
@@ -101,6 +104,7 @@ impl NoteSummary {
     }
 
     /// Format as table row
+    #[must_use]
     pub fn to_table_row(&self) -> String {
         let tags_preview = if self.tags.is_empty() {
             "-".to_string()
@@ -120,6 +124,7 @@ impl NoteSummary {
     }
 
     /// Format as CSV row
+    #[must_use]
     pub fn to_csv_row(&self) -> String {
         format!(
             "{},{},{},\"{}\"",
@@ -249,6 +254,7 @@ impl MemoryCommands {
     }
 
     /// Format list output
+    #[must_use]
     pub fn format_list(&self, summaries: &[NoteSummary], format: OutputFormat) -> String {
         match format {
             OutputFormat::Table => {
@@ -276,6 +282,7 @@ impl MemoryCommands {
     }
 
     /// Format single note output
+    #[must_use]
     pub fn format_show(
         &self,
         summary: &NoteSummary,

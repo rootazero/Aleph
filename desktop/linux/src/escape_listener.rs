@@ -35,6 +35,7 @@ pub struct LinuxEscapeListener {
 
 impl LinuxEscapeListener {
     /// Create a listener watching `$HOME/.aleph/desktop-abort`.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             sentinel: resolve_sentinel_path(),
@@ -77,18 +78,15 @@ impl Default for LinuxEscapeListener {
 
 impl EscapeAbort for LinuxEscapeListener {
     fn start(&self) -> Result<()> {
-        match &self.sentinel {
-            Some(path) => {
-                // Clear any stale sentinel left over from a previous run so a
-                // fresh session does not start out already "aborted".
-                self.remove_sentinel();
-                debug!(
-                    path = %path.display(),
-                    "Linux escape listener armed — `touch` this file to abort desktop control"
-                );
-            }
-            None => warn!("HOME is unset — Linux desktop-abort sentinel is unavailable"),
-        }
+        if let Some(path) = &self.sentinel {
+            // Clear any stale sentinel left over from a previous run so a
+            // fresh session does not start out already "aborted".
+            self.remove_sentinel();
+            debug!(
+                path = %path.display(),
+                "Linux escape listener armed — `touch` this file to abort desktop control"
+            );
+        } else { warn!("HOME is unset — Linux desktop-abort sentinel is unavailable") }
         Ok(())
     }
 

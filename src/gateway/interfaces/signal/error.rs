@@ -105,6 +105,7 @@ pub enum SignalError {
 
 impl SignalError {
     /// Convert a reqwest status error into a SignalError
+    #[must_use]
     pub fn from_status(status: reqwest::StatusCode, body: &str) -> Self {
         if status.as_u16() == 429 {
             // Try to extract retry-after from body
@@ -127,6 +128,7 @@ impl SignalError {
     }
 
     /// Check if error is retryable
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -138,6 +140,7 @@ impl SignalError {
     }
 
     /// Get suggested retry delay for retryable errors
+    #[must_use]
     pub fn retry_delay(&self, default: Duration) -> Duration {
         match self {
             Self::RateLimited { retry_after_secs } => Duration::from_secs(*retry_after_secs),

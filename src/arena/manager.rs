@@ -21,6 +21,7 @@ pub struct ArenaManager {
 
 impl ArenaManager {
     /// Create an empty ArenaManager.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             arenas: HashMap::new(),
@@ -93,6 +94,7 @@ impl ArenaManager {
     }
 
     /// Returns arena IDs where the given agent is a participant and the arena is not Archived.
+    #[must_use]
     pub fn active_arenas_for(&self, agent_id: &AgentId) -> Vec<ArenaId> {
         self.arenas
             .iter()
@@ -118,6 +120,7 @@ impl ArenaManager {
     /// Query arena state as a JSON snapshot (for RPC handlers).
     ///
     /// Returns `None` if the arena does not exist.
+    #[must_use]
     pub fn query_arena(&self, arena_id: &ArenaId) -> Option<Value> {
         let shared = self.arenas.get(arena_id)?;
         let arena = shared.read().unwrap_or_else(|e| e.into_inner());

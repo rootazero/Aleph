@@ -12,6 +12,7 @@ pub struct ComponentId {
 
 impl ComponentId {
     /// Create a namespaced component ID for a plugin component.
+    #[must_use]
     pub fn plugin(plugin_name: &str, component_name: &str) -> Self {
         Self {
             plugin: Some(plugin_name.to_string()),
@@ -20,6 +21,7 @@ impl ComponentId {
     }
 
     /// Create a simple component ID for a built-in component.
+    #[must_use]
     pub fn builtin(name: &str) -> Self {
         Self {
             plugin: None,
@@ -31,6 +33,7 @@ impl ComponentId {
     ///
     /// "plugin:component" → plugin=Some("plugin"), name="component"
     /// "component"        → plugin=None, name="component"
+    #[must_use]
     pub fn parse(s: &str) -> Self {
         match s.splitn(2, ':').collect::<Vec<_>>().as_slice() {
             [plugin, name] => Self {
@@ -45,11 +48,13 @@ impl ComponentId {
     }
 
     /// Return the qualified name (same as Display output).
+    #[must_use]
     pub fn qualified_name(&self) -> String {
         self.to_string()
     }
 
     /// Return true if this component belongs to a plugin.
+    #[must_use]
     pub fn is_plugin(&self) -> bool {
         self.plugin.is_some()
     }

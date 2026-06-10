@@ -20,9 +20,9 @@
 //!   returns `{ user_hooks_count }`
 //! - `hooks.events` → `{ events: [String] }` — list of valid event names
 
+use crate::sync_primitives::Arc;
 use std::fs;
 use std::path::PathBuf;
-use crate::sync_primitives::Arc;
 
 use crate::extension::{try_extension_manager, ExtensionManager, HookEvent};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};

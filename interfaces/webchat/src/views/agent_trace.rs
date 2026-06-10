@@ -72,7 +72,7 @@ pub fn AgentTrace() -> impl IntoView {
                     .data
                     .get("event")
                     .cloned()
-                    .unwrap_or(event.data.clone()),
+                    .unwrap_or(event.data),
             ) {
                 let step = {
                     let mut c = counter.lock().unwrap_or_else(|e| e.into_inner());

@@ -12,10 +12,12 @@ pub struct GroupPolicyEngine {
 }
 
 impl GroupPolicyEngine {
+    #[must_use]
     pub fn new(config: FeishuConfig) -> Self {
         Self { config }
     }
 
+    #[must_use]
     pub fn evaluate(&self, msg: &InboundMessage) -> GroupPolicyResult {
         if !msg.is_group {
             return GroupPolicyResult::Pass;

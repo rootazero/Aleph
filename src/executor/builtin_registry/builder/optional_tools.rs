@@ -167,7 +167,9 @@ impl BuiltinToolRegistry {
             tools,
             "node_invoke_many",
             crate::builtin_tools::NodeInvokeManyTool::DESCRIPTION,
-            schema::<crate::builtin_tools::node_invoke_many::NodeInvokeManyArgs>("node_invoke_many"),
+            schema::<crate::builtin_tools::node_invoke_many::NodeInvokeManyArgs>(
+                "node_invoke_many",
+            ),
         );
         info!("Registered node_invoke_many tool in BuiltinToolRegistry");
 

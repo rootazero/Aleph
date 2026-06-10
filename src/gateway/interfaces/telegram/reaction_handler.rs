@@ -5,6 +5,7 @@ use crate::gateway::channel::{
     ChannelId, ConversationId, InboundMessage, MessageId, MessageMeta, UserId,
 };
 
+#[must_use]
 pub fn convert_reaction(
     update: &MessageReactionUpdated,
     channel_id: &str,

@@ -30,10 +30,12 @@ impl Default for ReplyTracker {
 }
 
 impl ReplyTracker {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    #[must_use]
     pub fn can_reply_passively(&self, msg_id: &str) -> (bool, bool) {
         if let Some(entry) = self.inner.get(msg_id) {
             let record = entry.value();
@@ -80,6 +82,7 @@ pub fn parse_target(conversation_id: &ConversationId) -> Result<(&str, &str), Ch
     }
 }
 
+#[must_use]
 pub fn chunk_text(text: &str, max_len: usize) -> Vec<String> {
     if text.len() <= max_len {
         return vec![text.to_string()];

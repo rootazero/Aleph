@@ -61,6 +61,7 @@ pub enum GateResult {
 
 impl GateResult {
     /// Returns `true` when the result is `Pass`.
+    #[must_use]
     pub fn is_pass(&self) -> bool {
         matches!(self, GateResult::Pass)
     }
@@ -107,6 +108,7 @@ pub struct DreamGate {
 
 impl DreamGate {
     /// Create a new gate with the given configuration.
+    #[must_use]
     pub fn new(config: DreamGateConfig) -> Self {
         Self {
             config,

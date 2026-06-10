@@ -70,18 +70,21 @@ impl ToolDefinition {
     }
 
     /// Set requires_confirmation flag
+    #[must_use]
     pub fn with_confirmation(mut self, requires: bool) -> Self {
         self.requires_confirmation = requires;
         self
     }
 
     /// Set LLM context (examples, usage notes)
+    #[must_use]
     pub fn with_llm_context(mut self, context: String) -> Self {
         self.llm_context = Some(context);
         self
     }
 
     /// Set strict mode flag
+    #[must_use]
     pub fn with_strict(mut self, strict: bool) -> Self {
         self.strict = strict;
         self
@@ -107,6 +110,7 @@ impl ToolDefinition {
     }
 
     /// Convert to OpenAI function calling format
+    #[must_use]
     pub fn to_openai_function(&self) -> Value {
         let mut func = serde_json::json!({
             "type": "function",
@@ -123,6 +127,7 @@ impl ToolDefinition {
     }
 
     /// Convert to Anthropic tool format
+    #[must_use]
     pub fn to_anthropic_tool(&self) -> Value {
         serde_json::json!({
             "name": self.name,
@@ -214,6 +219,7 @@ impl ToolDiff {
     }
 
     /// Format for LLM prompt
+    #[must_use]
     pub fn to_prompt(&self) -> String {
         format!(
             "vs {}: this={}, that={}. Choose this when: {}",
@@ -251,6 +257,7 @@ pub struct StructuredToolMeta {
 
 impl StructuredToolMeta {
     /// Check if this metadata is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.capabilities.is_empty()
             && self.not_suitable_for.is_empty()
@@ -259,6 +266,7 @@ impl StructuredToolMeta {
     }
 
     /// Format for LLM prompt
+    #[must_use]
     pub fn to_prompt(&self) -> String {
         let mut parts = Vec::new();
 

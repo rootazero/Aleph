@@ -60,6 +60,7 @@ impl MacOSPlatform {
     /// lazily on first use, so startup never blocks on IPC. Handshake results
     /// are logged at `info` on success and `warn` on failure — aleph-server
     /// continues to start even when the helper binary is missing.
+    #[must_use]
     pub fn new() -> Self {
         let helper_path = resolve_helper_path();
         let bridge = Arc::new(SwiftBridge::new(helper_path));
@@ -143,7 +144,7 @@ impl Default for MacOSPlatform {
 }
 
 impl DesktopPlatform for MacOSPlatform {
-    fn platform_name(&self) -> &str {
+    fn platform_name(&self) -> &'static str {
         "macOS"
     }
 
@@ -184,7 +185,7 @@ impl DesktopPlatform for MacOSPlatform {
     }
 }
 
-/// Shorthand for creating a BridgeFailed error.
+/// Shorthand for creating a `BridgeFailed` error.
 fn bridge_err(msg: &str) -> aleph_desktop::DesktopError {
     aleph_desktop::DesktopError::BridgeFailed(msg.to_string())
 }
@@ -197,7 +198,7 @@ const CAPTURE_TIMEOUT_MARGIN_SECS: f64 = 30.0;
 
 /// Deadline for on-device speech transcription. The source file length is not
 /// known to the Rust side, so this is bounded generously rather than derived.
-const SPEECH_TRANSCRIBE_TIMEOUT: Duration = Duration::from_secs(300);
+const SPEECH_TRANSCRIBE_TIMEOUT: Duration = Duration::from_mins(5);
 
 // ---------------------------------------------------------------------------
 // MediaCapability: camera + audio + speech proxied via the Swift helper.

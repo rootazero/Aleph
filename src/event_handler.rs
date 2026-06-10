@@ -69,6 +69,7 @@ pub struct McpStartupReport {
 
 impl McpStartupReport {
     /// Create from internal McpStartupReport
+    #[must_use]
     pub fn from_internal(report: &crate::mcp::McpStartupReport) -> Self {
         Self {
             succeeded_servers: report.succeeded.clone(),
@@ -84,11 +85,13 @@ impl McpStartupReport {
     }
 
     /// Check if all servers started successfully
+    #[must_use]
     pub fn all_succeeded(&self) -> bool {
         self.failed_servers.is_empty()
     }
 
     /// Get total number of servers (succeeded + failed)
+    #[must_use]
     pub fn total_count(&self) -> usize {
         self.succeeded_servers.len() + self.failed_servers.len()
     }

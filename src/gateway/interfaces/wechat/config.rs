@@ -138,6 +138,7 @@ impl WeChatConfig {
     }
 
     /// Check if a user ID is allowed for DM.
+    #[must_use]
     pub fn is_user_allowed(&self, user_id: &str) -> bool {
         match self.dm_policy {
             DmPolicy::Open => true,
@@ -147,6 +148,7 @@ impl WeChatConfig {
     }
 
     /// Check if a group ID is allowed.
+    #[must_use]
     pub fn is_group_allowed(&self, group_id: &str) -> bool {
         match self.group_policy {
             GroupPolicy::Open => true,

@@ -17,6 +17,7 @@ pub struct WasmConnector {
 }
 
 impl WasmConnector {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -26,7 +27,7 @@ impl WasmConnector {
 impl AlephConnector for WasmConnector {
     async fn connect(&mut self, url: &str) -> Result<(), ConnectionError> {
         let ws =
-            WebSocket::new(url).map_err(|e| ConnectionError::ConnectFailed(format!("{:?}", e)))?;
+            WebSocket::new(url).map_err(|e| ConnectionError::ConnectFailed(format!("{e:?}")))?;
         ws.set_binary_type(web_sys::BinaryType::Arraybuffer);
 
         let (tx, rx) = mpsc::unbounded();
@@ -85,7 +86,7 @@ impl AlephConnector for WasmConnector {
             let txt = serde_json::to_string(&message)
                 .map_err(|e| ConnectionError::SendFailed(e.to_string()))?;
             ws.send_with_str(&txt)
-                .map_err(|e| ConnectionError::SendFailed(format!("{:?}", e)))?;
+                .map_err(|e| ConnectionError::SendFailed(format!("{e:?}")))?;
             Ok(())
         } else {
             Err(ConnectionError::SendFailed("Not connected".into()))

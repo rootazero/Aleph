@@ -99,6 +99,7 @@ impl Default for SlackConfig {
 
 impl SlackConfig {
     /// Create config from environment variables
+    #[must_use]
     pub fn from_env() -> Option<Self> {
         let app_token = std::env::var("SLACK_APP_TOKEN").ok()?;
         let bot_token = std::env::var("SLACK_BOT_TOKEN").ok()?;
@@ -129,6 +130,7 @@ impl SlackConfig {
     }
 
     /// Check if a channel ID is allowed
+    #[must_use]
     pub fn is_channel_allowed(&self, channel_id: &str) -> bool {
         if self.allowed_channels.is_empty() {
             true
@@ -138,6 +140,7 @@ impl SlackConfig {
     }
 
     /// Check if a user ID is allowed
+    #[must_use]
     pub fn is_user_allowed(&self, user_id: &str) -> bool {
         if self.user_allowlist.is_empty() {
             true

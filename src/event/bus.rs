@@ -66,11 +66,13 @@ pub struct EventSubscriber {
 
 impl EventBus {
     /// Create a new event bus with default configuration
+    #[must_use]
     pub fn new() -> Self {
         Self::with_config(EventBusConfig::default())
     }
 
     /// Create a new event bus with custom buffer size
+    #[must_use]
     pub fn with_buffer_size(buffer_size: usize) -> Self {
         Self::with_config(EventBusConfig {
             buffer_size,
@@ -79,6 +81,7 @@ impl EventBus {
     }
 
     /// Create a new event bus with custom configuration
+    #[must_use]
     pub fn with_config(config: EventBusConfig) -> Self {
         let (sender, _) = broadcast::channel(config.buffer_size);
         Self {
@@ -101,6 +104,7 @@ impl EventBus {
     /// # Arguments
     ///
     /// * `agent_id` - The agent identifier
+    #[must_use]
     pub fn with_agent_id(mut self, agent_id: &str) -> Self {
         self.agent_id = Some(agent_id.to_string());
         self
@@ -115,6 +119,7 @@ impl EventBus {
     /// # Arguments
     ///
     /// * `session_id` - The session identifier
+    #[must_use]
     pub fn with_session_id(mut self, session_id: &str) -> Self {
         self.session_id = Some(session_id.to_string());
         self
@@ -145,16 +150,19 @@ impl EventBus {
     }
 
     /// Get the configured agent ID.
+    #[must_use]
     pub fn agent_id(&self) -> Option<&str> {
         self.agent_id.as_deref()
     }
 
     /// Get the configured session ID.
+    #[must_use]
     pub fn session_id(&self) -> Option<&str> {
         self.session_id.as_deref()
     }
 
     /// Check if this EventBus is connected to a GlobalBus.
+    #[must_use]
     pub fn is_connected_to_global(&self) -> bool {
         self.global_bus.is_some()
     }
@@ -232,6 +240,7 @@ impl EventBus {
     }
 
     /// Subscribe to all events
+    #[must_use]
     pub fn subscribe(&self) -> EventSubscriber {
         EventSubscriber {
             receiver: self.sender.subscribe(),
@@ -240,6 +249,7 @@ impl EventBus {
     }
 
     /// Subscribe to specific event types
+    #[must_use]
     pub fn subscribe_filtered(&self, event_types: Vec<EventType>) -> EventSubscriber {
         EventSubscriber {
             receiver: self.sender.subscribe(),
@@ -248,6 +258,7 @@ impl EventBus {
     }
 
     /// Get the current number of subscribers
+    #[must_use]
     pub fn subscriber_count(&self) -> usize {
         self.sender.receiver_count()
     }

@@ -20,6 +20,7 @@ use crate::tasks::shared::schedule::{
 /// - `Every` → anchor-aligned interval
 /// - `Cron` → cron expression with optional stagger and min gap
 /// - `At` → one-shot if in future and not yet run
+#[must_use]
 pub fn compute_next_run_for_job(job: &CronJob, now_ms: i64) -> Option<i64> {
     match &job.schedule_kind {
         ScheduleKind::Every {

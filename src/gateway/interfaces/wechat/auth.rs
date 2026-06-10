@@ -14,6 +14,7 @@ pub struct ContextTokenStore {
 }
 
 impl ContextTokenStore {
+    #[must_use]
     pub fn new(hermes_home: &str) -> Self {
         let root = Path::new(hermes_home).join("wechat").join("accounts");
         Self {

@@ -87,6 +87,7 @@ impl SkillsConfig {
         Ok(())
     }
 
+    #[must_use]
     pub fn get_entry(&self, id: &SkillId) -> Option<&SkillEntryConfig> {
         self.entries.get(id.as_str())
     }

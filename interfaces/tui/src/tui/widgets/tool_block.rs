@@ -45,11 +45,11 @@ pub fn render_tool_block(
         }
         ToolStatus::Success => {
             let dur = format_duration(&tool.duration);
-            (format!("{} \u{2713}", dur), DEFAULT_THEME.tool_success) // ✓
+            (format!("{dur} \u{2713}"), DEFAULT_THEME.tool_success) // ✓
         }
         ToolStatus::Failed => {
             let dur = format_duration(&tool.duration);
-            (format!("{} \u{2717}", dur), DEFAULT_THEME.tool_failed) // ✗
+            (format!("{dur} \u{2717}"), DEFAULT_THEME.tool_failed) // ✗
         }
     };
 
@@ -61,7 +61,7 @@ pub fn render_tool_block(
 
     // Top border: ┌ tool_name ─────────── status ┐
     let name_part = format!(" {} ", tool.name);
-    let status_part = format!(" {} ", status_char);
+    let status_part = format!(" {status_char} ");
     let name_len = name_part.len();
     let status_len = status_part.len();
     let dash_count = inner_width.saturating_sub(name_len + status_len);
@@ -91,7 +91,7 @@ pub fn render_tool_block(
             let error_prefix = "Error: ";
             let max_err_len = inner_width.saturating_sub(error_prefix.len() + 2);
             let error_display = truncate_to_width(err, max_err_len);
-            let error_full = format!("{}{}", error_prefix, error_display);
+            let error_full = format!("{error_prefix}{error_display}");
             let err_pad = inner_width.saturating_sub(error_full.len() + 1);
             lines.push(Line::from(vec![
                 Span::styled("\u{2502} ".to_string(), border_style),

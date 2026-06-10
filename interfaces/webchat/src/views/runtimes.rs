@@ -41,7 +41,7 @@ pub fn RuntimesView() -> impl IntoView {
             if ev.topic != RUNTIME_INSTALL_PROGRESS_TOPIC {
                 return;
             }
-            let Ok(p) = serde_json::from_value::<InstallProgress>(ev.data.clone()) else {
+            let Ok(p) = serde_json::from_value::<InstallProgress>(ev.data) else {
                 return;
             };
             match p.status.as_str() {
@@ -70,7 +70,9 @@ pub fn RuntimesView() -> impl IntoView {
         on_cleanup(move || {
             state.unsubscribe_events(handler_id);
             spawn_local(async move {
-                let _ = state.unsubscribe_topic(RUNTIME_INSTALL_PROGRESS_TOPIC).await;
+                let _ = state
+                    .unsubscribe_topic(RUNTIME_INSTALL_PROGRESS_TOPIC)
+                    .await;
             });
         });
     }
@@ -172,7 +174,7 @@ fn RuntimeCard(
     let can_install = matches!(info.status, RuntimeStatus::Missing) && info.supported_on_current_os;
 
     let install_handler = {
-        let name_clone = name.clone();
+        let name_clone = name;
         move |_| {
             installing.set(true);
             error_msg.set(None);
@@ -241,12 +243,12 @@ fn RuntimeCard(
             // while running, or the real error/stderr on failure.
             {move || my_progress.get().map(|p| {
                 if p.status == "failed" {
-                    let detail = p.error.clone().or(p.stderr.clone()).unwrap_or_default();
+                    let detail = p.error.clone().or(p.stderr).unwrap_or_default();
                     view! {
                         <div class="mt-3 text-xs text-danger break-words">{detail}</div>
                     }.into_any()
                 } else {
-                    let line = p.log_line.clone()
+                    let line = p.log_line
                         .unwrap_or_else(|| t_string!(i18n, runtimes.installing).to_string());
                     view! {
                         <div class="mt-3 space-y-1">

@@ -46,6 +46,7 @@ pub struct PluginLoader {
 
 impl PluginLoader {
     /// Create a new plugin loader.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             wasm_runtime: None,
@@ -55,26 +56,31 @@ impl PluginLoader {
     }
 
     /// Check if any runtime is currently active.
+    #[must_use]
     pub fn is_any_runtime_active(&self) -> bool {
         self.wasm_runtime.is_some() || !self.mcp_configs.is_empty()
     }
 
     /// Check if a specific plugin is loaded.
+    #[must_use]
     pub fn is_loaded(&self, plugin_id: &str) -> bool {
         self.loaded_plugins.contains_key(plugin_id)
     }
 
     /// Get list of loaded plugin IDs.
+    #[must_use]
     pub fn loaded_plugin_ids(&self) -> Vec<&str> {
         self.loaded_plugins.keys().map(|s| s.as_str()).collect()
     }
 
     /// Get the kind of a loaded plugin.
+    #[must_use]
     pub fn get_plugin_kind(&self, plugin_id: &str) -> Option<PluginKind> {
         self.loaded_plugins.get(plugin_id).copied()
     }
 
     /// Get number of loaded plugins.
+    #[must_use]
     pub fn loaded_count(&self) -> usize {
         self.loaded_plugins.len()
     }
@@ -82,6 +88,7 @@ impl PluginLoader {
     // ===== MCP Config Access =====
 
     /// Get MCP server configs for a specific plugin.
+    #[must_use]
     pub fn get_mcp_configs(&self, plugin_id: &str) -> Option<&HashMap<String, McpManagerConfig>> {
         self.mcp_configs.get(plugin_id)
     }
@@ -382,16 +389,19 @@ impl PluginLoader {
     }
 
     /// Check if WASM runtime is initialized.
+    #[must_use]
     pub fn is_wasm_runtime_active(&self) -> bool {
         self.wasm_runtime.is_some()
     }
 
     /// Check if any MCP plugins are loaded.
+    #[must_use]
     pub fn has_mcp_plugins(&self) -> bool {
         !self.mcp_configs.is_empty()
     }
 
     /// Get the number of MCP servers across all loaded MCP plugins.
+    #[must_use]
     pub fn mcp_server_count(&self) -> usize {
         self.mcp_configs.values().map(|m| m.len()).sum()
     }

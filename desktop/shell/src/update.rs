@@ -20,7 +20,7 @@ use tauri_plugin_updater::UpdaterExt;
 /// Delay before the first check — let the daemon boot and the Panel settle.
 const FIRST_CHECK_DELAY: Duration = Duration::from_secs(90);
 /// Interval between background checks for a long-running shell.
-const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+const CHECK_INTERVAL: Duration = Duration::from_hours(6);
 
 /// Shared update state, managed by Tauri so the background checker, the
 /// tray, and the macOS menu agree on whether an update is waiting.
@@ -36,7 +36,7 @@ pub struct Updater {
 impl Updater {
     /// Hand the background checker the tray item it should relabel.
     pub fn attach_tray_item(&self, item: MenuItem<Wry>) {
-        *self.tray_item.lock().unwrap_or_else(|e| e.into_inner()) = Some(item);
+        *self.tray_item.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(item);
     }
 }
 
@@ -45,7 +45,7 @@ pub fn has_staged_update(app: &AppHandle) -> bool {
     app.state::<Updater>()
         .staged
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .is_some()
 }
 
@@ -175,7 +175,7 @@ fn stage(app: &AppHandle, version: &str) {
     *app.state::<Updater>()
         .staged
         .lock()
-        .unwrap_or_else(|e| e.into_inner()) = Some(version.to_string());
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(version.to_string());
     set_tray_update_label(app, staged_tray_label(version));
 }
 
@@ -190,7 +190,7 @@ fn set_tray_update_label(app: &AppHandle, label: String) {
                 .state::<Updater>()
                 .tray_item
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .as_ref()
             {
                 let _ = item.set_text(&label);

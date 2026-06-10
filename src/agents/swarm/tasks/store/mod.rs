@@ -52,6 +52,7 @@ impl SqliteCoordTaskStore {
 
     /// Attach an event bus so the store emits topic events on mutations.
     /// Builder is no-op safe: stores constructed without a bus simply skip emission.
+    #[must_use]
     pub fn with_event_bus(mut self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) -> Self {
         self.bus = Some(bus);
         self
@@ -62,6 +63,7 @@ impl SqliteCoordTaskStore {
     /// [`crate::teams::snapshots::SqliteSnapshotStore`]) can share the lock
     /// and avoid the SQLite "database is locked" hazard that would arise
     /// from two independent connections to the same file.
+    #[must_use]
     pub fn connection_handle(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
     }
@@ -281,8 +283,10 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             let mut idx = 1usize;
 
             if let Some(ref status) = update.status {
-                // Never store 'blocked' — map to pending
-                let store_status = if *status == CoordTaskStatus::Blocked {
+                // Never store 'blocked' or 'unsatisfiable' (both derived at
+                // query time; from_stored rejects them) — map to pending so
+                // the row stays readable.
+                let store_status = if status.is_blocked_like() {
                     "pending"
                 } else {
                     status.as_str()

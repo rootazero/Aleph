@@ -52,6 +52,7 @@ pub struct StrategySelector {
 }
 
 impl StrategySelector {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             history: VecDeque::with_capacity(PERSONALITY_WINDOW),
@@ -72,6 +73,7 @@ impl StrategySelector {
     }
 
     /// Current synthesize threshold after personality adjustment.
+    #[must_use]
     pub fn synthesize_threshold(&self) -> f64 {
         let adjustment = self.personality_adjustment();
         (DEFAULT_SYNTHESIZE_THRESHOLD + adjustment)
@@ -95,6 +97,7 @@ impl StrategySelector {
     }
 
     /// Select the best strategy given current signals and gate decision.
+    #[must_use]
     pub fn select(&self, snapshot: &SignalSnapshot, gate: &GateDecision) -> SelectionDecision {
         let adjustment = self.personality_adjustment();
 

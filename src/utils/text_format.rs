@@ -5,12 +5,14 @@
 use chrono::{DateTime, Utc};
 
 /// Format a Unix timestamp as a human-readable UTC string
+#[must_use]
 pub fn format_timestamp(timestamp: i64) -> String {
     DateTime::<Utc>::from_timestamp(timestamp, 0)
         .map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
         .unwrap_or_else(|| "Unknown".to_string())
 }
 
+#[must_use]
 pub fn truncate_text(text: &str, max_chars: usize) -> String {
     if max_chars == 0 {
         return String::new();
@@ -22,6 +24,7 @@ pub fn truncate_text(text: &str, max_chars: usize) -> String {
     }
 }
 
+#[must_use]
 pub fn escape_markdown(text: &str) -> String {
     // Prefix each Markdown metacharacter with a backslash. A previous
     // implementation used '\0' as a "no-prefix" sentinel and filtered it

@@ -43,6 +43,7 @@ pub const TELEGRAM_HARD_LIMIT: usize = 4_000;
 
 impl FlowOutcome {
     /// Render this outcome for a specific channel style.
+    #[must_use]
     pub fn render(&self, style: SummaryStyle) -> String {
         match style {
             SummaryStyle::Plain => render_plain(self),

@@ -115,7 +115,7 @@ fn render_user_message(
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
-            format!("  {}", time_str),
+            format!("  {time_str}"),
             Style::default().fg(DEFAULT_THEME.muted),
         ),
     ]));

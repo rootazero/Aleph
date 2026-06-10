@@ -184,11 +184,13 @@ impl TerminateReason {
     /// `true` for every cap-style exit. Equivalent to the legacy
     /// `hit_limit: bool`; `Completed` and `Cancelled` return `false`. Use
     /// to populate [`FlowOutcome::hit_limit`] so the two fields never drift.
+    #[must_use]
     pub fn is_hit_limit(&self) -> bool {
         !matches!(self, Self::Completed | Self::Cancelled)
     }
 
     /// Short stable string for logging / metrics — never localized.
+    #[must_use]
     pub fn as_static_str(&self) -> &'static str {
         match self {
             Self::Completed => "completed",
@@ -230,6 +232,7 @@ pub const BUDGET_PARTIAL_RESULT_LABEL: &str = "budget_exhausted_partial_result";
 /// (which itself reads back the session log post-loop), so by the time
 /// we know "is there partial text?" the harness has already returned
 /// and only the orchestrator sees both signals.
+#[must_use]
 pub fn escalate_partial_result(reason: TerminateReason, partial: Option<&str>) -> TerminateReason {
     let Some(text) = partial else {
         return reason;
@@ -281,6 +284,7 @@ impl TokenBreakdown {
     /// Saturating sum of every component except `reasoning` — matches the
     /// `turn_token_total` definition in the harness so this stays in lockstep
     /// with [`FlowOutcome::total_tokens`].
+    #[must_use]
     pub fn total(&self) -> u64 {
         u64::from(self.input)
             + u64::from(self.output)
@@ -518,6 +522,7 @@ impl Orchestrator {
     /// `build_failover_chain`. The gateway execution engine reads it to route
     /// spawned subagents through the failover chain and to honour
     /// `AgentDef.provider_hint`.
+    #[must_use]
     pub fn with_subagent_routing(
         mut self,
         routing: crate::orchestrator::deps_builder::ProviderChain,

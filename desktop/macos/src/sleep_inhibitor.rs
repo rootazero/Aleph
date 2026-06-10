@@ -1,4 +1,4 @@
-//! macOS sleep inhibitor via IOPMAssertion.
+//! macOS sleep inhibitor via `IOPMAssertion`.
 //!
 //! Prevents system idle sleep for the duration of an [`InhibitorGuard`].
 //! The assertion type `PreventUserIdleSystemSleep` appears in `pmset -g assertions`.
@@ -32,7 +32,8 @@ extern "C" {
 pub struct MacosPower;
 
 impl MacosPower {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -54,7 +55,7 @@ impl PowerCapability for MacosPower {
                 ty.as_concrete_TypeRef() as CFTypeRef,
                 K_IO_PM_ASSERTION_LEVEL_ON,
                 name.as_concrete_TypeRef() as CFTypeRef,
-                &mut id,
+                &raw mut id,
             )
         };
         if status != K_IO_RETURN_SUCCESS {

@@ -14,6 +14,7 @@ use crate::pii::PiiEngine;
 /// Falls back to the input unchanged when the global `PiiEngine` has not been
 /// initialised (e.g. unit tests that skip `PiiEngine::init`). The lock is
 /// taken poison-safe, matching the idiom used elsewhere in `pii`.
+#[must_use]
 pub fn redact_mcp_error(text: &str) -> String {
     match PiiEngine::global() {
         Some(engine) => {

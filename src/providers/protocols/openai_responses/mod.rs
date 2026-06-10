@@ -50,6 +50,7 @@ impl ResponsesVariant {
     ///
     /// Sets the Codex backend endpoint path and required Codex mode fields
     /// (store=false, verbosity=medium, reasoning.encrypted_content include).
+    #[must_use]
     pub fn codex() -> Self {
         Self {
             endpoint_path: Some("/backend-api/codex/responses".into()),
@@ -85,6 +86,7 @@ pub struct OpenAiResponsesProtocol {
 
 impl OpenAiResponsesProtocol {
     /// Create a new adapter with the given HTTP client and variant config
+    #[must_use]
     pub fn new(client: Client, variant: ResponsesVariant) -> Self {
         Self {
             client,
@@ -100,6 +102,7 @@ impl OpenAiResponsesProtocol {
     /// For Codex variant: strips trailing `/v1` only when present, appends variant path.
     /// For standard variant: normalizes base_url and appends `/v1/responses`.
     /// Default when base_url is None: `https://api.openai.com/v1/responses`
+    #[must_use]
     pub fn build_endpoint(config: &ProviderConfig, variant: &ResponsesVariant) -> String {
         let endpoint_path = variant.endpoint_path.as_deref().unwrap_or("/v1/responses");
 

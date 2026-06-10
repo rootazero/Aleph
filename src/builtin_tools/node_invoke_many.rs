@@ -124,7 +124,9 @@ Each node runs in its own sandbox with an independent `timeout_ms` (default 1200
                 Ok(v) => results.push(v),
                 // `invoke_one` is panic-free, so this JoinError arm is currently
                 // unreachable; kept as a defensive catch-all (no node id available here).
-                Err(e) => results.push(json!({"ok": false, "error": format!("task join error: {e}")})),
+                Err(e) => {
+                    results.push(json!({"ok": false, "error": format!("task join error: {e}")}))
+                }
             }
         }
         let invoked = results.len();
@@ -164,7 +166,10 @@ mod tests {
             channel: channel.clone(),
             declared_commands: commands
                 .iter()
-                .map(|c| CommandDescriptor { name: c.to_string(), schema: json!({}) })
+                .map(|c| CommandDescriptor {
+                    name: c.to_string(),
+                    schema: json!({}),
+                })
                 .collect(),
             tags: tags.iter().map(|t| t.to_string()).collect(),
             connected_at: 1,
@@ -179,7 +184,10 @@ mod tests {
             if let Some(frame) = rx.recv().await {
                 let req: Value = serde_json::from_str(&frame).unwrap();
                 let id = req["id"].clone();
-                let resp = JsonRpcResponse::success(Some(id.clone()), json!({"ran": req["params"]["tool"]}));
+                let resp = JsonRpcResponse::success(
+                    Some(id.clone()),
+                    json!({"ran": req["params"]["tool"]}),
+                );
                 pending.resolve(&id, resp);
             }
         });
@@ -214,7 +222,10 @@ mod tests {
             .iter()
             .map(|r| r["node"].as_str().unwrap())
             .collect();
-        assert!(names.contains(&"gpu-1") && names.contains(&"gpu-2"), "{names:?}");
+        assert!(
+            names.contains(&"gpu-1") && names.contains(&"gpu-2"),
+            "{names:?}"
+        );
     }
 
     // start_paused: tokio auto-advances to the next pending timer when the

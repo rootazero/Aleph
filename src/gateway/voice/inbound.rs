@@ -103,6 +103,7 @@ pub fn resolve_stt_config(
 // ---------------------------------------------------------------------------
 
 /// Returns true if the message contains at least one audio attachment.
+#[must_use]
 pub fn has_audio_attachment(msg: &InboundMessage) -> bool {
     msg.attachments
         .iter()

@@ -4,7 +4,7 @@ use std::fs;
 
 use serde::Deserialize;
 use toml_edit::{Array, DocumentMut, Item, Table};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::config::types::agents_def::{AgentDefinition, AgentModelRef, AgentsConfig};
 use crate::error::{AlephError, Result};
@@ -76,6 +76,21 @@ impl AgentManager {
 
         fs::rename(&tmp_path, &self.config_path)
             .map_err(|e| AlephError::IoError(format!("Failed to rename tmp config: {}", e)))?;
+
+        // Restore 600 permissions (owner read/write only): the rename replaces
+        // the config file with the freshly-created temp file (default umask
+        // perms), which would otherwise widen the 600 set by save_to_file.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(metadata) = fs::metadata(&self.config_path) {
+                let mut perms = metadata.permissions();
+                perms.set_mode(0o600);
+                if let Err(e) = fs::set_permissions(&self.config_path, perms) {
+                    warn!("Failed to set config file permissions: {}", e);
+                }
+            }
+        }
 
         debug!("Saved config to {}", self.config_path.display());
         Ok(())

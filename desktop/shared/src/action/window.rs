@@ -390,7 +390,7 @@ fn macos_focus_window(window_id: u64) -> Result<()> {
     // Find the PID for this window by scanning the window list
     let windows = macos_window_list()?;
     let window = windows.iter().find(|w| w.id == window_id).ok_or_else(|| {
-        DesktopError::WindowFailed(format!("No window found with id {}", window_id))
+        DesktopError::WindowFailed(format!("No window found with id {window_id}"))
     })?;
 
     let pid = window.pid as i32;
@@ -406,8 +406,7 @@ fn macos_focus_window(window_id: u64) -> Result<()> {
             Ok(())
         }
         None => Err(DesktopError::WindowFailed(format!(
-            "No application found with PID {}",
-            pid
+            "No application found with PID {pid}"
         ))),
     }
 }
@@ -417,10 +416,10 @@ fn macos_focus_window(window_id: u64) -> Result<()> {
 ///
 /// `window_id` is resolved to its owning process (`unix id`) and window title
 /// by scanning [`macos_window_list`], mirroring [`macos_focus_window`]. The
-/// AppleScript matches the target window by title within that process and
+/// `AppleScript` matches the target window by title within that process and
 /// falls back to `window 1` when no title matches (e.g. untitled windows).
 ///
-/// All dynamic values are passed through AppleScript's `argv` rather than
+/// All dynamic values are passed through `AppleScript`'s `argv` rather than
 /// interpolated into the script body, so titles containing quotes or other
 /// metacharacters cannot break out of the string literal.
 #[cfg(target_os = "macos")]

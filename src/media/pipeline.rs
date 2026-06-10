@@ -19,6 +19,7 @@ pub struct MediaPipeline {
 
 impl MediaPipeline {
     /// Create pipeline with default policy.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             providers: Vec::new(),
@@ -27,6 +28,7 @@ impl MediaPipeline {
     }
 
     /// Create pipeline with custom policy.
+    #[must_use]
     pub fn with_policy(policy: MediaPolicy) -> Self {
         Self {
             providers: Vec::new(),
@@ -35,6 +37,7 @@ impl MediaPipeline {
     }
 
     /// Get the policy.
+    #[must_use]
     pub fn policy(&self) -> &MediaPolicy {
         &self.policy
     }
@@ -46,6 +49,7 @@ impl MediaPipeline {
     }
 
     /// Number of registered providers.
+    #[must_use]
     pub fn provider_count(&self) -> usize {
         self.providers.len()
     }
@@ -102,6 +106,7 @@ impl MediaPipeline {
     }
 
     /// List supported media categories across all providers.
+    #[must_use]
     pub fn supported_categories(&self) -> Vec<String> {
         let mut categories: Vec<String> = self
             .providers

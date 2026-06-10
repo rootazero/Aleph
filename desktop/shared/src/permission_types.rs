@@ -6,7 +6,7 @@
 //! - [`PermissionInfo`] — `{ permission: PermissionKind, status, can_request }`.
 //! - [`TCC_MANAGED`] — the subset of kinds the native TCC path actually handles.
 //!
-//! Bridge-only kinds (Automation, FullDisk, Contacts, ...) are routed via the
+//! Bridge-only kinds (Automation, `FullDisk`, Contacts, ...) are routed via the
 //! Swift helper's `perm.*` RPCs; the native trait methods return `Unknown` for
 //! those, so callers know to ask the bridge.
 
@@ -28,6 +28,7 @@ pub const TCC_MANAGED: &[PermissionKind] = &[
 ];
 
 /// `true` if `kind` is one of the [`TCC_MANAGED`] permissions.
+#[must_use]
 pub fn is_tcc_managed(kind: PermissionKind) -> bool {
     TCC_MANAGED.contains(&kind)
 }

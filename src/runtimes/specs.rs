@@ -227,14 +227,17 @@ pub const SPECS: &[RuntimeSpec] = &[
     },
 ];
 
+#[must_use]
 pub fn find_spec(name: &str) -> Option<&'static RuntimeSpec> {
     SPECS.iter().find(|s| s.name == name)
 }
 
+#[must_use]
 pub fn select_install(installs: &[OsInstall], current: TargetOs) -> Option<&OsInstall> {
     installs.iter().find(|oi| oi.os.matches(current))
 }
 
+#[must_use]
 pub fn supported_on_current_os(name: &str) -> bool {
     find_spec(name)
         .and_then(|s| select_install(s.install, TargetOs::current()))

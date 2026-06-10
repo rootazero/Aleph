@@ -27,6 +27,7 @@ pub struct TieredAuthenticator {
 }
 
 impl TieredAuthenticator {
+    #[must_use]
     pub fn new(local_bypass: bool, tokens: Vec<String>) -> Self {
         Self {
             local_bypass,
@@ -38,6 +39,7 @@ impl TieredAuthenticator {
     }
 
     /// Configure per-level permissions
+    #[must_use]
     pub fn with_permissions(
         mut self,
         local: Vec<String>,

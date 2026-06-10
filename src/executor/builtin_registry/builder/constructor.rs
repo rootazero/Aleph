@@ -461,7 +461,7 @@ impl BuiltinToolRegistry {
                 tools.insert(td.name.clone(), ut);
             }
         }
-        info!("Registered browser tools (14 tools) in BuiltinToolRegistry");
+        info!("Registered browser tools (25 tools) in BuiltinToolRegistry");
 
         // Register parameter schemas for always-available tools that are listed
         // in BUILTIN_TOOL_DEFINITIONS (so the LLM sees them) and dispatched in

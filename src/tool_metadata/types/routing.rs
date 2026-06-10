@@ -30,6 +30,7 @@ pub enum RoutingLayer {
 
 impl RoutingLayer {
     /// Get the typical latency range for this layer
+    #[must_use]
     pub fn latency_hint(&self) -> &'static str {
         match self {
             RoutingLayer::L1Rule => "<10ms",
@@ -40,6 +41,7 @@ impl RoutingLayer {
     }
 
     /// Get the default confidence for this layer
+    #[must_use]
     pub fn default_confidence(&self) -> f32 {
         match self {
             RoutingLayer::L1Rule => 1.0,

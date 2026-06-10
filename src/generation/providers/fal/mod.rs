@@ -101,6 +101,7 @@ impl FalProviderBuilder {
         self
     }
 
+    #[must_use]
     pub fn supported_types(mut self, types: Vec<GenerationType>) -> Self {
         if !types.is_empty() {
             self.supported = types;

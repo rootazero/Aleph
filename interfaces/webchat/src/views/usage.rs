@@ -79,7 +79,7 @@ pub fn UsageView() -> impl IntoView {
         if !state.is_connected.get_untracked() {
             return;
         }
-        let tid_async = tid.clone();
+        let tid_async = tid;
         leptos::task::spawn_local(async move {
             match TeamsApi::usage(&state, &tid_async, None, None).await {
                 Ok(u) => {
@@ -155,7 +155,7 @@ pub fn UsageView() -> impl IntoView {
                         <option value="" disabled=true>{t!(i18n, usage.select_a_team)}</option>
                         {move || teams.get().into_iter().map(|t| {
                             view! {
-                                <option value=t.id.clone()>{t.name}</option>
+                                <option value=t.id>{t.name}</option>
                             }
                         }).collect_view()}
                     </select>

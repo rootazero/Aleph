@@ -60,6 +60,7 @@ impl DirectoryScanner {
     }
 
     /// Get the git root directory
+    #[must_use]
     pub fn git_root(&self) -> Option<&Path> {
         self.git_root.as_deref()
     }

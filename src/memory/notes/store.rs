@@ -43,6 +43,7 @@ pub struct NoteIndexEntry {
 /// already carried `.md`, which corrupted the index and made disk reads compute
 /// a doubled `*.md.md` path. Normalizing at the write chokepoint and tolerating
 /// it on read keeps both paths single-extension.
+#[must_use]
 pub fn strip_md_ext(s: &str) -> &str {
     s.strip_suffix(".md").unwrap_or(s)
 }
@@ -50,6 +51,7 @@ pub fn strip_md_ext(s: &str) -> &str {
 /// Build the on-disk note filename (`<stem>.md`) tolerating a stem that already
 /// carries a trailing `.md`, so legacy `.md`-suffixed index rows resolve to the
 /// correct single-extension file rather than `*.md.md`.
+#[must_use]
 pub fn note_md_filename(filename: &str) -> String {
     format!("{}.md", strip_md_ext(filename))
 }

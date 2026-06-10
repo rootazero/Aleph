@@ -368,7 +368,7 @@ fn ProviderCard(
     let color = preset.color.clone();
     let name = preset.name.clone();
     let model = preset.default_model.clone();
-    let icon = preset.icon.clone();
+    let icon = preset.icon;
 
     view! {
         <ProviderRowCard

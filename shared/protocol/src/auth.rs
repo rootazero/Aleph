@@ -19,17 +19,20 @@ pub enum Role {
 
 impl Role {
     /// Returns true if the role is Owner
-    pub fn is_owner(&self) -> bool {
+    #[must_use]
+    pub const fn is_owner(&self) -> bool {
         matches!(self, Self::Owner)
     }
 
     /// Returns true if the role is Guest
-    pub fn is_guest(&self) -> bool {
+    #[must_use]
+    pub const fn is_guest(&self) -> bool {
         matches!(self, Self::Guest)
     }
 
     /// Returns true if the role is Anonymous
-    pub fn is_anonymous(&self) -> bool {
+    #[must_use]
+    pub const fn is_anonymous(&self) -> bool {
         matches!(self, Self::Anonymous)
     }
 }
@@ -57,8 +60,9 @@ impl GuestScope {
     /// * `current_time` - Unix timestamp in seconds (UTC) to check against
     ///
     /// # Returns
-    /// - `true` if `expires_at` is set and current_time >= expires_at
-    /// - `false` if `expires_at` is None or current_time < expires_at
+    /// - `true` if `expires_at` is set and `current_time` >= `expires_at`
+    /// - `false` if `expires_at` is None or `current_time` < `expires_at`
+    #[must_use]
     pub fn is_expired(&self, current_time: i64) -> bool {
         self.expires_at.is_some_and(|exp| current_time >= exp)
     }
@@ -70,6 +74,7 @@ impl GuestScope {
     ///
     /// # Returns
     /// `true` if the tool is explicitly listed in `allowed_tools`
+    #[must_use]
     pub fn allows_tool(&self, tool_name: &str) -> bool {
         self.allowed_tools.iter().any(|t| t == tool_name)
     }
@@ -82,10 +87,10 @@ impl GuestScope {
 ///
 /// # Philosophy
 ///
-/// IdentityContext embodies the "Certificate of Authority" pattern:
+/// `IdentityContext` embodies the "Certificate of Authority" pattern:
 /// - **Immutable**: Permissions frozen at request time, immune to mid-execution changes
 /// - **Self-contained**: All audit information embedded (no external queries needed)
-/// - **Traceable**: Unique request_id for log correlation
+/// - **Traceable**: Unique `request_id` for log correlation
 ///
 /// # Usage
 ///
@@ -116,12 +121,12 @@ pub struct IdentityContext {
     pub role: Role,
 
     /// Specific identity ID
-    /// - "owner" for Role::Owner
-    /// - guest_id (UUID) for Role::Guest
-    /// - "anonymous" for Role::Anonymous
+    /// - "owner" for `Role::Owner`
+    /// - `guest_id` (UUID) for `Role::Guest`
+    /// - "anonymous" for `Role::Anonymous`
     pub identity_id: String,
 
-    /// Guest scope (only present for Role::Guest)
+    /// Guest scope (only present for `Role::Guest`)
     /// This is the permission snapshot frozen at request time
     pub scope: Option<GuestScope>,
 
@@ -142,7 +147,8 @@ impl IdentityContext {
     ///
     /// # Returns
     ///
-    /// IdentityContext with Role::Owner and no scope restrictions
+    /// `IdentityContext` with `Role::Owner` and no scope restrictions
+    #[must_use]
     pub fn owner(session_key: String, source_channel: String) -> Self {
         Self {
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -166,7 +172,8 @@ impl IdentityContext {
     ///
     /// # Returns
     ///
-    /// IdentityContext with Role::Guest and embedded scope
+    /// `IdentityContext` with `Role::Guest` and embedded scope
+    #[must_use]
     pub fn guest(
         session_key: String,
         guest_id: String,
@@ -193,7 +200,8 @@ impl IdentityContext {
     ///
     /// # Returns
     ///
-    /// IdentityContext with Role::Anonymous (all operations denied)
+    /// `IdentityContext` with `Role::Anonymous` (all operations denied)
+    #[must_use]
     pub fn anonymous(session_key: String, source_channel: String) -> Self {
         Self {
             request_id: uuid::Uuid::new_v4().to_string(),
@@ -210,8 +218,7 @@ impl IdentityContext {
     fn now_unix_timestamp() -> i64 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs().try_into().unwrap_or(i64::MAX))
-            .unwrap_or(0)
+            .map_or(0, |d| d.as_secs().try_into().unwrap_or(i64::MAX))
     }
 }
 

@@ -1,8 +1,8 @@
 //! Notifications via osascript.
 //!
-//! UNUserNotificationCenter requires `block2` crate for the completion handler
+//! `UNUserNotificationCenter` requires `block2` crate for the completion handler
 //! and a bundle identifier (not available when running as CLI). For now, we use
-//! osascript which works universally. UNUserNotificationCenter support will be
+//! osascript which works universally. `UNUserNotificationCenter` support will be
 //! added when Aleph ships as a bundled .app (Direction 2).
 
 use aleph_desktop::{DesktopError, Result};
@@ -12,8 +12,7 @@ pub async fn send_notification(title: &str, body: &str) -> Result<()> {
     let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_body = body.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!(
-        "display notification \"{}\" with title \"{}\"",
-        escaped_body, escaped_title
+        "display notification \"{escaped_body}\" with title \"{escaped_title}\""
     );
 
     let output = tokio::process::Command::new("osascript")

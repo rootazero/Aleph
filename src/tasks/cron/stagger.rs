@@ -10,6 +10,7 @@ use sha2::{Digest, Sha256};
 ///
 /// SHA-256 hashes the `job_id`, takes the first 4 bytes as a big-endian u32,
 /// then returns `u32 % stagger_ms`. Returns 0 if `stagger_ms <= 0`.
+#[must_use]
 pub fn compute_stagger_offset(job_id: &str, stagger_ms: i64) -> i64 {
     if stagger_ms <= 0 {
         return 0;
@@ -27,6 +28,7 @@ pub fn compute_stagger_offset(job_id: &str, stagger_ms: i64) -> i64 {
 /// - If the result is still in the future (`> now_ms`), returns it.
 /// - Otherwise, advances by whole `stagger_ms` windows until it lands
 ///   strictly after `now_ms`.
+#[must_use]
 pub fn compute_staggered_next(
     job_id: &str,
     cron_next_ms: i64,

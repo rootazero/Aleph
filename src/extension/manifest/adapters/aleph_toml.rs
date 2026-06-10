@@ -31,7 +31,13 @@ impl ManifestAdapter for AlephTomlAdapter {
         let raw: AlephPluginToml = toml::from_str(&content)
             .map_err(|e| anyhow::anyhow!("aleph.plugin.toml parse error: {}", e))?;
 
-        let plugin_id = raw.plugin.id.clone();
+        // Sanitize the declared id so a third-party manifest cannot claim an
+        // arbitrary/colliding capability-registry key (mirrors the Codex and
+        // Cursor adapters, and the metadata path which sanitizes this id too).
+        let mut plugin_id = crate::extension::manifest::sanitize_plugin_id(&raw.plugin.id);
+        if plugin_id.is_empty() {
+            plugin_id = "unknown".to_string();
+        }
         let mut capabilities = Vec::new();
 
         // Component directories (same convention as auto-discover).

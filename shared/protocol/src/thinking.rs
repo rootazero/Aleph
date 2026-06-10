@@ -30,7 +30,8 @@ pub enum ReasoningStepType {
 
 impl ReasoningStepType {
     /// Get a human-readable label for this step type
-    pub fn label(&self) -> &'static str {
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
         match self {
             Self::Observation => "Observing",
             Self::Analysis => "Analyzing",
@@ -43,7 +44,8 @@ impl ReasoningStepType {
     }
 
     /// Get an emoji representation for this step type
-    pub fn emoji(&self) -> &'static str {
+    #[must_use]
+    pub const fn emoji(&self) -> &'static str {
         match self {
             Self::Observation => "👁️",
             Self::Analysis => "🔍",
@@ -73,7 +75,8 @@ pub enum ConfidenceLevel {
 
 impl ConfidenceLevel {
     /// Get a human-readable description
-    pub fn description(&self) -> &'static str {
+    #[must_use]
+    pub const fn description(&self) -> &'static str {
         match self {
             Self::High => "High confidence - strong evidence supports this",
             Self::Medium => "Medium confidence - reasonably certain",
@@ -83,7 +86,8 @@ impl ConfidenceLevel {
     }
 
     /// Get a numeric score (0.0 - 1.0)
-    pub fn score(&self) -> f32 {
+    #[must_use]
+    pub const fn score(&self) -> f32 {
         match self {
             Self::High => 0.9,
             Self::Medium => 0.7,

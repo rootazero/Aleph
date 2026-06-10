@@ -37,6 +37,7 @@ impl SharedArena {
     /// Create a new arena from a manifest.
     ///
     /// Pre-populates one slot per participant and initializes progress tracking.
+    #[must_use]
     pub fn new(manifest: ArenaManifest) -> Self {
         let mut slots = HashMap::new();
         let mut agent_progress = HashMap::new();
@@ -64,21 +65,25 @@ impl SharedArena {
     }
 
     /// Returns a reference to the arena manifest.
+    #[must_use]
     pub fn manifest(&self) -> &ArenaManifest {
         &self.manifest
     }
 
     /// Returns the current arena status.
+    #[must_use]
     pub fn status(&self) -> ArenaStatus {
         self.status
     }
 
     /// Returns a reference to the arena progress.
+    #[must_use]
     pub fn progress(&self) -> &ArenaProgress {
         &self.progress
     }
 
     /// Returns a reference to the agent slots.
+    #[must_use]
     pub fn slots(&self) -> &HashMap<AgentId, ArenaSlot> {
         &self.slots
     }
@@ -160,6 +165,7 @@ impl SharedArena {
     }
 
     /// Get the artifacts for the specified agent.
+    #[must_use]
     pub fn get_artifacts(&self, agent_id: &AgentId) -> &[Artifact] {
         self.slots
             .get(agent_id)
@@ -249,6 +255,7 @@ impl SharedArena {
     }
 
     /// Returns a reference to the shared facts.
+    #[must_use]
     pub fn shared_facts(&self) -> &[SharedFact] {
         &self.shared_facts
     }

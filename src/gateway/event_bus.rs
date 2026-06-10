@@ -101,6 +101,7 @@ impl TopicEvent {
     /// Attach a state-version snapshot to this event. Call right after a
     /// `state_versions.bump_*()` so subscribers can advance their cached
     /// version baseline without a separate round-trip.
+    #[must_use]
     pub fn with_state_version(
         mut self,
         version: crate::gateway::state_version::StateVersion,
@@ -110,6 +111,7 @@ impl TopicEvent {
     }
 
     /// Convert to JSON-RPC notification format
+    #[must_use]
     pub fn to_notification(&self) -> Value {
         serde_json::json!({
             "jsonrpc": "2.0",
@@ -139,6 +141,7 @@ impl TopicEvent {
 /// assert!(topic_matches("agent.run.started", "*"));
 /// assert!(!topic_matches("agent.run.started", "session.*"));
 /// ```
+#[must_use]
 pub fn topic_matches(topic: &str, pattern: &str) -> bool {
     // Wildcard matches everything
     if pattern == "*" || pattern == "**" {
@@ -252,6 +255,7 @@ pub struct TopicFilter {
 
 impl TopicFilter {
     /// Create a filter that matches all events
+    #[must_use]
     pub fn all() -> Self {
         Self {
             subscriptions: vec![TopicSubscription::pattern_only("*")],
@@ -270,6 +274,7 @@ impl TopicFilter {
 
     /// Create a filter with full subscription entries (patterns + optional
     /// `where_clause` predicates).
+    #[must_use]
     pub fn with_subscriptions(subscriptions: Vec<TopicSubscription>) -> Self {
         Self { subscriptions }
     }
@@ -278,6 +283,7 @@ impl TopicFilter {
     /// Pass `None` for `data` when no payload context is available; entries
     /// with field predicates will then be skipped (predicates can never match
     /// against missing data).
+    #[must_use]
     pub fn matches(&self, topic: &str, data: Option<&Value>) -> bool {
         self.subscriptions.iter().any(|sub| {
             topic_matches(topic, &sub.pattern) && where_clause_matches(&sub.where_clause, data)
@@ -312,6 +318,7 @@ impl TopicFilter {
 
     /// Get all patterns currently subscribed to (sans `where_clause`
     /// metadata) — sufficient for the `events.list` response shape.
+    #[must_use]
     pub fn patterns(&self) -> Vec<String> {
         self.subscriptions
             .iter()
@@ -322,6 +329,7 @@ impl TopicFilter {
     /// Get the full subscription entries, including any `where_clause`
     /// predicates. Use this when callers need to round-trip the richer
     /// shape.
+    #[must_use]
     pub fn subscriptions(&self) -> &[TopicSubscription] {
         &self.subscriptions
     }
@@ -341,6 +349,7 @@ pub struct GatewayEventBus {
 
 impl GatewayEventBus {
     /// Create a new event bus with default channel size
+    #[must_use]
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
         let (typed_sender, _) = broadcast::channel(EVENT_CHANNEL_SIZE);
@@ -351,6 +360,7 @@ impl GatewayEventBus {
     }
 
     /// Create a new event bus with custom channel size
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         let (sender, _) = broadcast::channel(capacity);
         let (typed_sender, _) = broadcast::channel(capacity);
@@ -422,16 +432,19 @@ impl GatewayEventBus {
     /// Subscribe to receive raw string events (backward compatibility).
     ///
     /// Prefer `subscribe_typed()` for new code.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<String> {
         self.sender.subscribe()
     }
 
     /// Subscribe to receive typed event frames.
+    #[must_use]
     pub fn subscribe_typed(&self) -> broadcast::Receiver<GatewayEventFrame> {
         self.typed_sender.subscribe()
     }
 
     /// Get the current number of active subscribers (string channel).
+    #[must_use]
     pub fn subscriber_count(&self) -> usize {
         self.sender.receiver_count()
     }

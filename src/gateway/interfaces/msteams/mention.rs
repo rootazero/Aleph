@@ -25,6 +25,7 @@ use super::types::Activity;
 /// `bot_id` is the bot's channel-account id (`activity.recipient.id`).
 /// `bot_name` is the bot's display name (`activity.recipient.name`), used only
 /// for the textual fallback.
+#[must_use]
 pub fn was_bot_addressed(activity: &Activity, bot_id: &str, bot_name: Option<&str>) -> bool {
     if mentioned_via_entities(activity, bot_id) {
         return true;
@@ -85,6 +86,7 @@ fn mentioned_via_at_tag(text: &str, bot_name: &str) -> bool {
 /// chats (`groupChat`) have no team and yield `None`, which makes
 /// [`effective_require_mention`](super::config::MsTeamsConfig::effective_require_mention)
 /// fall back to the global setting.
+#[must_use]
 pub fn team_id_from_channel_data(activity: &Activity) -> Option<String> {
     let team = activity.channel_data.as_ref()?.get("team")?;
     team.get("aadGroupId")

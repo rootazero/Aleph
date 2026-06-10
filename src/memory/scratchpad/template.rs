@@ -23,11 +23,13 @@ _Session: _
 "#;
 
 /// Get the scratchpad template, checking override first
+#[must_use]
 pub fn get_template(overrides: &crate::config::prompts_override::PromptsOverride) -> &str {
     overrides.scratchpad_template().unwrap_or(DEFAULT_TEMPLATE)
 }
 
 /// Generate a scratchpad with populated metadata
+#[must_use]
 pub fn generate_scratchpad(objective: Option<&str>, session_id: &str) -> String {
     let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
     let obj = objective.unwrap_or("[No active task]");

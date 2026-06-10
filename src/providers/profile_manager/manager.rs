@@ -301,6 +301,7 @@ impl AuthProfileManager {
     }
 
     /// List all profiles with their current status
+    #[must_use]
     pub fn list_profiles(&self) -> Vec<ProfileInfo> {
         let configs = self.configs.read().unwrap_or_else(|e| e.into_inner());
         let status_map = self.status.read().unwrap_or_else(|e| e.into_inner());
@@ -331,6 +332,7 @@ impl AuthProfileManager {
     }
 
     /// Get profiles for a specific provider
+    #[must_use]
     pub fn profiles_for_provider(&self, provider: &str) -> Vec<ProfileInfo> {
         self.list_profiles()
             .into_iter()
@@ -339,6 +341,7 @@ impl AuthProfileManager {
     }
 
     /// Get profile count
+    #[must_use]
     pub fn profile_count(&self) -> usize {
         self.configs
             .read()
@@ -440,6 +443,7 @@ impl AuthProfileManager {
     }
 
     /// Get reference to configs (for testing)
+    #[must_use]
     pub fn configs(&self) -> &Arc<RwLock<ProfilesConfig>> {
         &self.configs
     }

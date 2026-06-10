@@ -1,14 +1,14 @@
 //! Windows `MediaCapability` implementation.
 //!
-//! Camera capture and audio recording via `ffmpeg`'s DirectShow (`dshow`)
+//! Camera capture and audio recording via `ffmpeg`'s `DirectShow` (`dshow`)
 //! input, mirroring the shell-out approach used by the Linux platform (which
-//! targets V4L2 / PulseAudio). This keeps both platforms on one battle-tested
+//! targets V4L2 / `PulseAudio`). This keeps both platforms on one battle-tested
 //! subprocess pattern instead of introducing native Win32/WinRT capture
 //! bindings (R3 — core stays light):
 //!
 //! - **Camera** (`camera_snap` / `camera_clip`): `ffmpeg -f dshow -i
 //!   video="<name>"`. The device name comes from `ALEPH_CAMERA_DEVICE` or, when
-//!   unset, the first enumerated DirectShow video device.
+//!   unset, the first enumerated `DirectShow` video device.
 //! - **Audio recording** (`record_audio`): `ffmpeg -f dshow -i audio="<name>"`,
 //!   the name coming from `ALEPH_AUDIO_DEVICE` or the first enumerated audio
 //!   device.
@@ -35,7 +35,8 @@ use base64::{engine::general_purpose, Engine as _};
 pub struct WindowsMedia;
 
 impl WindowsMedia {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -46,14 +47,14 @@ impl Default for WindowsMedia {
     }
 }
 
-/// Kind of a DirectShow capture device.
+/// Kind of a `DirectShow` capture device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DshowKind {
     Video,
     Audio,
 }
 
-/// A DirectShow device discovered via `ffmpeg -list_devices`.
+/// A `DirectShow` device discovered via `ffmpeg -list_devices`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DshowDevice {
     name: String,
@@ -67,8 +68,7 @@ struct DshowDevice {
 fn temp_path(ext: &str) -> std::path::PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     std::env::temp_dir().join(format!("aleph-media-{}-{nanos}.{ext}", std::process::id()))
 }
 
@@ -77,7 +77,7 @@ fn temp_path(ext: &str) -> std::path::PathBuf {
 fn quality_to_qv(quality: f32) -> u32 {
     let q = quality.clamp(0.05, 1.0);
     // q=1.0 -> 2, q=0.05 -> ~30
-    (2.0 + (1.0 - q) * 29.0).round() as u32
+    (1.0 - q).mul_add(29.0, 2.0).round() as u32
 }
 
 /// Run an ffmpeg invocation, mapping a missing binary / non-zero exit to a
@@ -102,7 +102,7 @@ async fn run_ffmpeg(args: &[String]) -> Result<()> {
     }
 }
 
-/// Enumerate DirectShow capture devices via ffmpeg.
+/// Enumerate `DirectShow` capture devices via ffmpeg.
 ///
 /// `ffmpeg -list_devices true -f dshow -i dummy` prints the device table to
 /// stderr and exits non-zero (the `dummy` pseudo-device can't be opened); that
@@ -191,7 +191,7 @@ fn parse_dshow_devices(stderr: &str) -> Vec<DshowDevice> {
 
 /// Project enumerated devices into the audio-input view used by the trait.
 ///
-/// DirectShow exposes no "default device" flag, so the first audio device is
+/// `DirectShow` exposes no "default device" flag, so the first audio device is
 /// marked default as a best-effort heuristic (matching the order ffmpeg
 /// reports, which tracks the system's preferred device on most setups).
 fn audio_input_devices(parsed: &[DshowDevice]) -> Vec<AudioDeviceInfo> {
@@ -225,7 +225,7 @@ fn first_audio_device(parsed: &[DshowDevice]) -> Option<String> {
 }
 
 /// Resolve the camera device name: `ALEPH_CAMERA_DEVICE` or the first
-/// enumerated DirectShow video device.
+/// enumerated `DirectShow` video device.
 async fn resolve_camera_device() -> Result<String> {
     if let Ok(name) = std::env::var("ALEPH_CAMERA_DEVICE") {
         if !name.trim().is_empty() {
@@ -241,7 +241,7 @@ async fn resolve_camera_device() -> Result<String> {
 }
 
 /// Resolve the microphone device name: `ALEPH_AUDIO_DEVICE` or the first
-/// enumerated DirectShow audio device.
+/// enumerated `DirectShow` audio device.
 async fn resolve_audio_device() -> Result<String> {
     if let Ok(name) = std::env::var("ALEPH_AUDIO_DEVICE") {
         if !name.trim().is_empty() {
@@ -293,11 +293,10 @@ impl MediaCapability for WindowsMedia {
             })?;
 
         let (width, height) = image::load_from_memory(&bytes)
-            .map(|img| {
+            .map_or((0, 0), |img| {
                 use image::GenericImageView as _;
                 img.dimensions()
-            })
-            .unwrap_or((0, 0));
+            });
 
         let _ = std::fs::remove_file(&out_str);
 

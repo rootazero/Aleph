@@ -99,6 +99,7 @@ pub struct RouteHandle {
 
 impl RouteHandle {
     /// Seed a handle from a config snapshot.
+    #[must_use]
     pub fn from_config(cfg: &ModelRouteConfig) -> Self {
         Self {
             mode: AtomicU8::new(mode_to_u8(cfg.mode)),

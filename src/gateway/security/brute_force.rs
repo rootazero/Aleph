@@ -24,6 +24,7 @@ pub struct BruteForceDetector {
 }
 
 impl BruteForceDetector {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             records: DashMap::new(),
@@ -31,6 +32,7 @@ impl BruteForceDetector {
     }
 
     /// Check if a sender is currently blocked.
+    #[must_use]
     pub fn is_blocked(&self, channel: &str, sender: &str) -> bool {
         let key = format!("{}:{}", channel, sender);
         if let Some(record) = self.records.get(&key) {
@@ -44,6 +46,7 @@ impl BruteForceDetector {
     }
 
     /// Record a failed pairing attempt. Returns true if the sender is now blocked.
+    #[must_use]
     pub fn record_failure(&self, channel: &str, sender: &str) -> bool {
         let key = format!("{}:{}", channel, sender);
         let mut entry = self.records.entry(key).or_insert_with(|| AttemptRecord {
@@ -84,6 +87,7 @@ impl BruteForceDetector {
     }
 
     /// Prune expired records. Returns count pruned.
+    #[must_use]
     pub fn prune(&self) -> usize {
         let mut pruned = 0;
         self.records.retain(|_, record| {

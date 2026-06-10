@@ -158,6 +158,7 @@ impl LinkManager {
     /// base_dir/
     ///   links/     — link instance config files (*.yaml)
     /// ```
+    #[must_use]
     pub fn new(base_dir: PathBuf) -> Self {
         Self {
             builtin_factories: RwLock::new(HashMap::new()),

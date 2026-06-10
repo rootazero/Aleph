@@ -27,7 +27,7 @@ pub struct Document {
 }
 
 /// Generic fields shared by every node variant.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct NodeCommon {
     pub id: String,
     pub x: i64,
@@ -79,15 +79,17 @@ pub enum Node {
 }
 
 impl Node {
-    pub fn common(&self) -> &NodeCommon {
+    #[must_use]
+    pub const fn common(&self) -> &NodeCommon {
         match self {
-            Node::Text { common, .. }
-            | Node::File { common, .. }
-            | Node::Link { common, .. }
-            | Node::Group { common, .. } => common,
+            Self::Text { common, .. }
+            | Self::File { common, .. }
+            | Self::Link { common, .. }
+            | Self::Group { common, .. } => common,
         }
     }
 
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.common().id
     }
@@ -98,6 +100,7 @@ impl NodeCommon {
     ///
     /// Per the JSON Canvas spec, `x`/`y` are the box's **top-left** corner and
     /// `width`/`height` extend right/down (+y is down).
+    #[must_use]
     pub fn center(&self) -> (f64, f64) {
         (
             self.x as f64 + self.width as f64 / 2.0,
@@ -117,8 +120,8 @@ pub enum BackgroundStyle {
 /// Edge connecting two nodes.
 ///
 /// Field naming matches the spec verbatim (`fromNode`, `toSide`, …) via serde
-/// renames; Rust-side names are snake_case.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+/// renames; Rust-side names are `snake_case`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct Edge {
     pub id: String,
     #[serde(rename = "fromNode")]
@@ -150,12 +153,13 @@ pub enum Side {
 
 impl Side {
     /// The cardinal opposite — the side that faces back across a node.
-    pub fn opposite(self) -> Side {
+    #[must_use]
+    pub const fn opposite(self) -> Self {
         match self {
-            Side::Top => Side::Bottom,
-            Side::Bottom => Side::Top,
-            Side::Left => Side::Right,
-            Side::Right => Side::Left,
+            Self::Top => Self::Bottom,
+            Self::Bottom => Self::Top,
+            Self::Left => Self::Right,
+            Self::Right => Self::Left,
         }
     }
 }
@@ -170,6 +174,7 @@ impl Side {
 ///
 /// Canvas convention: +y is down. Exact 45° ties prefer the horizontal axis
 /// (`|Δx| >= |Δy|`), so a target down-and-right anchors `Right → Left`.
+#[must_use]
 pub fn facing_sides(from_center: (f64, f64), to_center: (f64, f64)) -> (Side, Side) {
     let dx = to_center.0 - from_center.0;
     let dy = to_center.1 - from_center.1;

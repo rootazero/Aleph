@@ -59,6 +59,7 @@ pub struct ClarificationOption {
 
 impl ClarificationOption {
     /// Create a new option with label and value (same)
+    #[must_use]
     pub fn new(value: &str, label: &str) -> Self {
         Self {
             label: label.to_string(),
@@ -87,6 +88,7 @@ pub struct ClarificationRequest {
 
 impl ClarificationRequest {
     /// Create a select-type clarification request
+    #[must_use]
     pub fn select(id: &str, prompt: &str, options: Vec<ClarificationOption>) -> Self {
         let has_options = !options.is_empty();
         Self {
@@ -104,6 +106,7 @@ impl ClarificationRequest {
     }
 
     /// Create a text-type clarification request
+    #[must_use]
     pub fn text(id: &str, prompt: &str, placeholder: Option<&str>) -> Self {
         Self {
             id: id.to_string(),
@@ -142,6 +145,7 @@ pub struct ClarificationResult {
 
 impl ClarificationResult {
     /// Create a selected result
+    #[must_use]
     pub fn selected(index: u32, value: String) -> Self {
         Self {
             result_type: ClarificationResultType::Selected,
@@ -151,6 +155,7 @@ impl ClarificationResult {
     }
 
     /// Create a text input result
+    #[must_use]
     pub fn text_input(value: String) -> Self {
         Self {
             result_type: ClarificationResultType::TextInput,
@@ -160,6 +165,7 @@ impl ClarificationResult {
     }
 
     /// Create a cancelled result
+    #[must_use]
     pub fn cancelled() -> Self {
         Self {
             result_type: ClarificationResultType::Cancelled,
@@ -169,6 +175,7 @@ impl ClarificationResult {
     }
 
     /// Create a timeout result
+    #[must_use]
     pub fn timeout() -> Self {
         Self {
             result_type: ClarificationResultType::Timeout,
@@ -178,6 +185,7 @@ impl ClarificationResult {
     }
 
     /// Check if the result is successful (selected or text input)
+    #[must_use]
     pub fn is_success(&self) -> bool {
         matches!(
             self.result_type,
@@ -186,6 +194,7 @@ impl ClarificationResult {
     }
 
     /// Get the value, if any
+    #[must_use]
     pub fn get_value(&self) -> Option<&str> {
         self.value.as_deref()
     }

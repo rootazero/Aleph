@@ -48,6 +48,7 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     /// Build a success response
+    #[must_use]
     pub fn success(id: Option<Value>, result: Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -58,6 +59,7 @@ impl JsonRpcResponse {
     }
 
     /// Build an error response from code and message
+    #[must_use]
     pub fn error(id: Option<Value>, code: i64, message: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -71,6 +73,7 @@ impl JsonRpcResponse {
     }
 
     /// Build an error response from an A2AError
+    #[must_use]
     pub fn from_a2a_error(id: Option<Value>, err: &A2AError) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -92,6 +95,7 @@ pub struct A2ARequestProcessor {
 }
 
 impl A2ARequestProcessor {
+    #[must_use]
     pub fn new(state: Arc<A2AServerState>) -> Self {
         Self { state }
     }

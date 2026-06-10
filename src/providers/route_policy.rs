@@ -64,6 +64,7 @@ pub struct RouteTargets {
 
 impl RouteTargets {
     /// Lift the two pins out of a `[route]` config snapshot.
+    #[must_use]
     pub fn from_config(cfg: &ModelRouteConfig) -> Self {
         Self {
             local_provider: cfg.local_provider.clone(),
@@ -72,11 +73,13 @@ impl RouteTargets {
     }
 
     /// Whether `name` is the pinned provider for either tier.
+    #[must_use]
     pub fn is_pinned(&self, name: &str) -> bool {
         self.local_provider.as_deref() == Some(name) || self.cloud_provider.as_deref() == Some(name)
     }
 
     /// Whether any pin is set (the common no-op fast path checks this first).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.local_provider.is_none() && self.cloud_provider.is_none()
     }
@@ -97,6 +100,7 @@ pub struct RateLimits {
 
 impl RateLimits {
     /// Lift the per-provider ceilings out of a `[route]` config snapshot.
+    #[must_use]
     pub fn from_config(cfg: &ModelRouteConfig) -> Self {
         Self {
             by_provider: cfg
@@ -108,6 +112,7 @@ impl RateLimits {
     }
 
     /// Whether any provider has a configured ceiling (the no-op fast path).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.by_provider.is_empty()
     }
@@ -115,6 +120,7 @@ impl RateLimits {
     /// The configured `(rpm, tpm)` ceiling for `name`, if any. Diagnostic
     /// accessor for the `route_status` snapshot; the hot path only ever uses
     /// the folded output of [`assess`](Self::assess).
+    #[must_use]
     pub fn ceiling(&self, name: &str) -> Option<(Option<u32>, Option<u32>)> {
         self.by_provider.get(name).copied()
     }
@@ -127,6 +133,7 @@ impl RateLimits {
     /// provider is `over_limit` once any configured dimension reaches 100%. The
     /// per-mille value saturates at [`u16::MAX`] so a wildly-over provider still
     /// sorts last without overflow.
+    #[must_use]
     pub fn assess(&self, name: &str, rpm_used: u32, tpm_used: u64) -> (u16, bool) {
         let Some(&(rpm, tpm)) = self.by_provider.get(name) else {
             return (0, false); // no ceiling → no signal
@@ -195,6 +202,7 @@ pub enum CandidateAction {
 ///
 /// The `Unknown` (live-primary) slot is always allowed: route mode shapes the
 /// *fallbacks* around the operator's configured default, never overrides it.
+#[must_use]
 pub fn classify_candidate(
     mode: RouteMode,
     tier: EndpointTier,

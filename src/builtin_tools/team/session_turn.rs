@@ -58,6 +58,7 @@ pub struct SessionTurnTool {
 }
 
 impl SessionTurnTool {
+    #[must_use]
     pub fn new(coordinator: Arc<SessionCoordinator>, current_agent_id: String) -> Self {
         Self {
             coordinator,

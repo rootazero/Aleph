@@ -26,6 +26,7 @@ impl IpcEndpoint {
     }
 }
 
+#[must_use]
 pub fn endpoint_path(data_dir: &Path) -> PathBuf {
     data_dir.join(ENDPOINT_FILENAME)
 }

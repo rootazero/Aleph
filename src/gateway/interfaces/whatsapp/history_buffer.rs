@@ -15,6 +15,7 @@ pub struct BufferedMessage {
 }
 
 impl BufferedMessage {
+    #[must_use]
     pub fn new(message: InboundMessage) -> Self {
         Self {
             message,
@@ -22,6 +23,7 @@ impl BufferedMessage {
         }
     }
 
+    #[must_use]
     pub fn format_for_context(&self) -> String {
         let sender = self.message.sender_name.as_deref().unwrap_or("Unknown");
         format!(
@@ -58,6 +60,7 @@ pub struct GroupHistoryBuffer {
 }
 
 impl GroupHistoryBuffer {
+    #[must_use]
     pub fn new(config: HistoryBufferConfig) -> Self {
         Self {
             config,

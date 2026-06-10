@@ -16,7 +16,7 @@ pub struct MacOSSystem {
 }
 
 impl MacOSSystem {
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { _private: () }
     }
 }
@@ -62,7 +62,7 @@ impl SystemCapability for MacOSSystem {
     }
 }
 
-/// Seconds since last keyboard/mouse event via CGEventSource.
+/// Seconds since last keyboard/mouse event via `CGEventSource`.
 fn user_idle_seconds() -> f64 {
     extern "C" {
         // CGEventSourceSecondsSinceLastEventType(stateID: CGEventSourceStateID, eventType: CGEventType) -> CFTimeInterval

@@ -145,6 +145,7 @@ impl TemplateRegistry {
         self.entries.keys().map(|s| s.as_str())
     }
 
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&TeamTemplate> {
         self.entries.get(name)
     }
@@ -153,10 +154,12 @@ impl TemplateRegistry {
         self.entries.values()
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.entries.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }

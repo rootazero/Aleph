@@ -249,6 +249,7 @@ impl MemorySearchTool {
     ///
     /// The execution engine can update this value when the active workspace changes,
     /// so that tool calls without an explicit `workspace` arg use the correct workspace.
+    #[must_use]
     pub fn default_workspace_handle(&self) -> Arc<RwLock<String>> {
         Arc::clone(&self.default_workspace)
     }
@@ -258,6 +259,7 @@ impl MemorySearchTool {
     /// The execution engine writes the active session's key string here after
     /// session resolution. Used by scope="current_session" to filter SQLite
     /// facts under `aleph://session/{session_key}/`.
+    #[must_use]
     pub fn default_session_key_handle(&self) -> Arc<RwLock<String>> {
         Arc::clone(&self.default_session_key)
     }
@@ -266,6 +268,7 @@ impl MemorySearchTool {
     ///
     /// The execution engine writes the active workspace profile's SmartRecallConfig
     /// here after workspace resolution.
+    #[must_use]
     pub fn smart_recall_config_handle(&self) -> Arc<RwLock<Option<SmartRecallConfig>>> {
         Arc::clone(&self.smart_recall_config)
     }
@@ -329,7 +332,9 @@ impl MemorySearchTool {
                 // row stored under "default" — silently returning nothing.
                 let agent_id = "default";
                 let path_prefix = format!("aleph://session/{}/", *session_key);
-                let fetch_limit = args.max_results * 2;
+                // Saturate: max_results is LLM-supplied and unclamped, so a
+                // huge value must not overflow-panic in debug builds.
+                let fetch_limit = args.max_results.saturating_mul(2);
                 let raws = self
                     .database
                     .get_raw_by_path_prefix(&path_prefix, agent_id, fetch_limit)

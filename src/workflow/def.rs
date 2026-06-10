@@ -49,6 +49,7 @@ pub enum WorkflowStepKind {
 
 impl WorkflowStepKind {
     /// Whether this is the default agent kind (used to skip serialisation).
+    #[must_use]
     pub fn is_agent(&self) -> bool {
         matches!(self, WorkflowStepKind::Agent)
     }
@@ -105,6 +106,7 @@ fn is_false(v: &bool) -> bool {
 
 impl WorkflowStepDef {
     /// Whether this step pauses the run to ask the user a question.
+    #[must_use]
     pub fn is_clarify(&self) -> bool {
         matches!(self.kind, WorkflowStepKind::Clarify)
     }
@@ -249,6 +251,7 @@ impl WorkflowDef {
 /// engine (R6 — KISS). Upstream step outputs are injected at run time by the
 /// dispatcher's `build_handoff_context`, so the prompt never needs to
 /// reference other steps.
+#[must_use]
 pub fn render_prompt(template: &str, input: &str) -> String {
     template.replace("{input}", input)
 }
@@ -444,7 +447,10 @@ mod tests {
         let s: WorkflowStepDef = serde_json::from_str(json).unwrap();
         assert!(!s.review);
         let out = serde_json::to_string(&s).unwrap();
-        assert!(!out.contains("review"), "non-reviewed step omits key: {out}");
+        assert!(
+            !out.contains("review"),
+            "non-reviewed step omits key: {out}"
+        );
     }
 
     #[test]

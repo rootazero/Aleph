@@ -244,8 +244,8 @@ pub fn handle_secret_command(action: SecretAction) -> Result<(), Box<dyn Error>>
             let name = validate_secret_name(&name)?;
             let value = resolve_secret_value(value)?;
             let body = serde_json::json!({ "key": &name, "value": &value });
-            let name_local = name.clone();
-            let value_local = value.clone();
+            let name_local = name;
+            let value_local = value;
             let summary: SecretSummary = with_policy(
                 CommandPolicy::LockOrIpc {
                     route: "/v1/admin/secrets",

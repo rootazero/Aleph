@@ -790,6 +790,7 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
 ///
 /// Free function so unit tests can exercise the conversion without
 /// constructing a full `AgentHarnessRunner`.
+#[must_use]
 pub fn compute_runtime_state_blocks(
     tool_catalog: Option<&Arc<crate::tool_metadata::ToolCatalog>>,
 ) -> Vec<crate::tools::runtime_state::RuntimeStateFragment> {

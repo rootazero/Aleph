@@ -64,7 +64,7 @@ fn send_signal(pid: u32, signal: i32) -> bool {
 /// 1. `ALEPH_SERVER_BIN` env var (explicit override)
 /// 2. Same directory as the current `aleph` binary
 /// 3. Fall back to bare name (resolved via PATH)
-pub(crate) fn find_server_binary() -> PathBuf {
+pub fn find_server_binary() -> PathBuf {
     // 1. Env var override
     if let Ok(path) = std::env::var(SERVER_BINARY_ENV) {
         let p = PathBuf::from(&path);
@@ -108,7 +108,7 @@ pub fn start(
                     "pid": pid,
                 }));
             } else {
-                eprintln!("Gateway is already running (PID {})", pid);
+                eprintln!("Gateway is already running (PID {pid})");
             }
             return Ok(());
         }
@@ -174,7 +174,7 @@ pub fn start(
                     "binary": binary.display().to_string(),
                 }));
             } else {
-                println!("Gateway started (PID: {})", child_pid);
+                println!("Gateway started (PID: {child_pid})");
             }
             Ok(())
         }
@@ -186,11 +186,10 @@ pub fn start(
                     "binary": binary.display().to_string(),
                 }));
             } else {
-                eprintln!("Failed to start Gateway: {}", e);
+                eprintln!("Failed to start Gateway: {e}");
                 eprintln!("Binary: {}", binary.display());
                 eprintln!(
-                    "Hint: set {} to override the binary path",
-                    SERVER_BINARY_ENV
+                    "Hint: set {SERVER_BINARY_ENV} to override the binary path"
                 );
             }
             Err(CliError::Other(format!(
@@ -204,16 +203,13 @@ pub fn start(
 
 /// Stop the Gateway server
 pub fn stop(json: bool) -> CliResult<()> {
-    let pid = match read_pid_file() {
-        Some(p) => p,
-        None => {
-            if json {
-                output::print_json(&serde_json::json!({"status": "not_running"}));
-            } else {
-                println!("Gateway is not running (no PID file)");
-            }
-            return Ok(());
+    let pid = if let Some(p) = read_pid_file() { p } else {
+        if json {
+            output::print_json(&serde_json::json!({"status": "not_running"}));
+        } else {
+            println!("Gateway is not running (no PID file)");
         }
+        return Ok(());
     };
 
     if !is_process_running(pid) {
@@ -224,7 +220,7 @@ pub fn stop(json: bool) -> CliResult<()> {
                 "stale_pid": pid,
             }));
         } else {
-            println!("Gateway is not running (stale PID file for PID {})", pid);
+            println!("Gateway is not running (stale PID file for PID {pid})");
         }
         return Ok(());
     }
@@ -232,7 +228,7 @@ pub fn stop(json: bool) -> CliResult<()> {
     #[cfg(unix)]
     {
         if !json {
-            println!("Sending SIGTERM to Gateway (PID {})...", pid);
+            println!("Sending SIGTERM to Gateway (PID {pid})...");
         }
         send_signal(pid, libc::SIGTERM);
 
@@ -269,7 +265,7 @@ pub fn stop(json: bool) -> CliResult<()> {
                 "method": "sigkill",
             }));
         } else {
-            println!("Gateway forcefully killed (PID {})", pid);
+            println!("Gateway forcefully killed (PID {pid})");
         }
     }
 
@@ -291,7 +287,7 @@ pub fn stop(json: bool) -> CliResult<()> {
 /// Show Gateway server status
 pub fn status(json: bool) -> CliResult<()> {
     let pid = read_pid_file();
-    let running = pid.map(is_process_running).unwrap_or(false);
+    let running = pid.is_some_and(is_process_running);
 
     if json {
         output::print_json(&serde_json::json!({
@@ -305,10 +301,10 @@ pub fn status(json: bool) -> CliResult<()> {
         match (pid, running) {
             (Some(p), true) => {
                 println!("Status:      Running");
-                println!("PID:         {}", p);
+                println!("PID:         {p}");
             }
             (Some(p), false) => {
-                println!("Status:      Not running (stale PID {})", p);
+                println!("Status:      Not running (stale PID {p})");
             }
             (None, _) => {
                 println!("Status:      Not running");
@@ -366,7 +362,7 @@ pub fn logs(lines: usize, level: Option<&str>, json: bool) -> CliResult<()> {
             println!("(no log entries found)");
         } else {
             for line in &entries {
-                println!("{}", line);
+                println!("{line}");
             }
         }
     }
@@ -387,7 +383,7 @@ fn read_log_entries(log_dir: &std::path::Path, lines: usize, level: Option<&str>
     let mut newest_mtime: Option<std::time::SystemTime> = None;
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().map(|e| e == "log").unwrap_or(false) {
+        if path.extension().is_some_and(|e| e == "log") {
             let mtime = entry.metadata().and_then(|m| m.modified()).ok();
             if log_file.is_none() || mtime > newest_mtime {
                 newest_mtime = mtime;
@@ -416,7 +412,7 @@ fn read_log_entries(log_dir: &std::path::Path, lines: usize, level: Option<&str>
                 true
             }
         })
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .collect()
 }
 

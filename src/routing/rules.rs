@@ -70,6 +70,7 @@ pub struct RoutingRules {
 
 impl RoutingRules {
     /// Compile patterns from config, logging and skipping invalid regex.
+    #[must_use]
     pub fn from_config(config: &RoutingPatternsConfig) -> Self {
         Self {
             critical: compile_patterns(&config.critical),

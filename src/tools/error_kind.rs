@@ -58,6 +58,7 @@ impl ToolErrorKind {
     /// Short stable label for prompt rendering. Stable: this string is
     /// part of the LLM-facing wire surface, do not reword without
     /// updating prompt-side tests.
+    #[must_use]
     pub fn label(self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",
@@ -80,6 +81,7 @@ impl ToolErrorKind {
     /// to succeed. `false` means "switch tool / source / args before
     /// trying again". Used by `tools::retry::execute_with_one_shot_backoff`
     /// and surfaced to the LLM in the error hint.
+    #[must_use]
     pub fn is_transient(self) -> bool {
         matches!(
             self,
@@ -95,6 +97,7 @@ impl ToolErrorKind {
 /// The classifier is deliberately pattern-based and conservative: when
 /// in doubt it returns `Execution` and the caller decides what to do.
 /// All matching is case-insensitive.
+#[must_use]
 pub fn classify_error_str(s: &str) -> ToolErrorKind {
     let lower = s.to_ascii_lowercase();
 
@@ -192,6 +195,7 @@ fn has_status(lower: &str, code: u16) -> bool {
 
 /// Classify a `ToolError` directly — preferred over `classify_error_str`
 /// because the variant gives us the answer without parsing.
+#[must_use]
 pub fn classify_tool_error(err: &ToolError) -> ToolErrorKind {
     match err {
         ToolError::Timeout { .. } => ToolErrorKind::Timeout,

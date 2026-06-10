@@ -68,6 +68,7 @@ pub struct DocumentExtractTool {
 }
 
 impl DocumentExtractTool {
+    #[must_use]
     pub fn new(pipeline: Arc<MediaPipeline>) -> Self {
         Self { pipeline }
     }

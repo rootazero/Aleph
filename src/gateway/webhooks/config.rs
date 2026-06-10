@@ -22,6 +22,7 @@ pub enum SignatureFormat {
 
 impl SignatureFormat {
     /// Get the header name for this format
+    #[must_use]
     pub fn header_name(&self) -> Option<&'static str> {
         match self {
             SignatureFormat::Github => Some("X-Hub-Signature-256"),
@@ -126,6 +127,7 @@ impl WebhookEndpointConfig {
     }
 
     /// Set signature format
+    #[must_use]
     pub fn with_signature_format(mut self, format: SignatureFormat) -> Self {
         self.signature_format = format;
         self
@@ -138,6 +140,7 @@ impl WebhookEndpointConfig {
     }
 
     /// Add allowed events
+    #[must_use]
     pub fn with_allowed_events(mut self, events: Vec<String>) -> Self {
         self.allowed_events = events;
         self
@@ -172,6 +175,7 @@ impl WebhookEndpointConfig {
     }
 
     /// Check if an event type is allowed
+    #[must_use]
     pub fn is_event_allowed(&self, event_type: &str) -> bool {
         if self.allowed_events.is_empty() {
             return true;
@@ -253,11 +257,13 @@ impl WebhooksConfig {
     }
 
     /// Get an endpoint by ID
+    #[must_use]
     pub fn get_endpoint(&self, id: &str) -> Option<&WebhookEndpointConfig> {
         self.endpoints.iter().find(|e| e.id == id)
     }
 
     /// Get an endpoint by path
+    #[must_use]
     pub fn get_endpoint_by_path(&self, path: &str) -> Option<&WebhookEndpointConfig> {
         self.endpoints.iter().find(|e| e.path == path && e.enabled)
     }

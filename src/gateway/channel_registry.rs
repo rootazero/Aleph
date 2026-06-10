@@ -97,6 +97,7 @@ pub struct ChannelRegistry {
 
 impl ChannelRegistry {
     /// Create a new channel registry
+    #[must_use]
     pub fn new() -> Self {
         let (inbound_tx, inbound_rx) = broadcast::channel(1000);
 

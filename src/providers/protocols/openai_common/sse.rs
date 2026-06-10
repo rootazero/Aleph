@@ -35,6 +35,7 @@ pub fn parse_sse_line(line: &str) -> Result<Option<SseLine>> {
     Ok(None)
 }
 
+#[must_use]
 pub fn sse_event_stream(response: reqwest::Response) -> BoxStream<'static, Result<SseLine>> {
     let buf =
         crate::sync_primitives::Arc::new(crate::sync_primitives::Mutex::new(Vec::<u8>::new()));
@@ -79,6 +80,7 @@ pub fn sse_event_stream(response: reqwest::Response) -> BoxStream<'static, Resul
     Box::pin(stream)
 }
 
+#[must_use]
 pub fn sse_line_stream(response: reqwest::Response) -> BoxStream<'static, Result<String>> {
     let stream = sse_event_stream(response).try_filter_map(|event| async move {
         match event {

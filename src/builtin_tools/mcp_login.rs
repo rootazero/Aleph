@@ -52,6 +52,7 @@ pub struct McpLoginTool {
 
 impl McpLoginTool {
     /// Create a new MCP login tool
+    #[must_use]
     pub fn new(handle: McpManagerHandle) -> Self {
         Self { handle }
     }

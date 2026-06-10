@@ -41,6 +41,7 @@ pub struct FlowRunDescriptor {
 }
 
 impl FlowRunTool {
+    #[must_use]
     pub fn descriptor() -> FlowRunDescriptor {
         FlowRunDescriptor {
             name: "flow_run",

@@ -77,6 +77,7 @@ impl InstallRegistry {
     }
 
     /// Create an empty manifest with the given version.
+    #[must_use]
     pub fn new(version: &str) -> Self {
         Self {
             bundled_version: version.to_string(),
@@ -128,6 +129,7 @@ impl InstallRegistry {
     }
 
     /// Check if a skill is official.
+    #[must_use]
     pub fn is_official(&self, name: &str) -> bool {
         self.skills
             .get(name)

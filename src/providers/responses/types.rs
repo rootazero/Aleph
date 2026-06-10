@@ -127,6 +127,7 @@ pub enum MessageContent {
 
 impl MessageContent {
     /// Get the text content (for Text variant) or concatenated text parts (for Multimodal)
+    #[must_use]
     pub fn as_text(&self) -> String {
         match self {
             Self::Text { content } => content.clone(),

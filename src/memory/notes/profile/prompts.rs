@@ -80,6 +80,7 @@ Merge rules:
 /// Wraps the current profile body in `<CurrentProfile>` tags and the session
 /// signal in `<SessionSignal>` tags with `<reason>`, `<digest>`, and
 /// `<recent_turns>` sub-elements.
+#[must_use]
 pub fn build_merge_user_prompt(profile: &UserProfile, signal: &SessionSignal) -> String {
     // Truncate digest to 2000 bytes, snapping to a UTF-8 char boundary so a
     // multibyte (CJK / emoji) codepoint straddling the limit can't panic.

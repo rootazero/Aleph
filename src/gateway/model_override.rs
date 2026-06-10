@@ -54,6 +54,7 @@ pub enum ModelOverride {
 
 impl ModelOverride {
     /// Model id the user asked for (both variants carry one).
+    #[must_use]
     pub fn model(&self) -> &str {
         match self {
             Self::Qualified { model, .. } => model,
@@ -62,6 +63,7 @@ impl ModelOverride {
     }
 
     /// Provider name when explicitly pinned, `None` for raw.
+    #[must_use]
     pub fn provider(&self) -> Option<&str> {
         match self {
             Self::Qualified { provider, .. } => Some(provider),

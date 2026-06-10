@@ -66,6 +66,7 @@ impl ToolMeta {
     }
 
     /// Set the embedding
+    #[must_use]
     pub fn with_embedding(mut self, embedding: Vec<f32>) -> Self {
         self.embedding = Some(embedding);
         self

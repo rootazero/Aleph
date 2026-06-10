@@ -56,6 +56,7 @@ pub struct McpToolFilter {
 
 impl McpToolFilter {
     /// Whether a tool with the given (unqualified) name survives this filter.
+    #[must_use]
     pub fn allows(&self, tool: &str) -> bool {
         if self.deny.iter().any(|p| glob_match(p, tool)) {
             return false;
@@ -65,6 +66,7 @@ impl McpToolFilter {
 
     /// `true` when this filter would drop nothing (no patterns configured), so
     /// callers can skip the per-tool scan entirely.
+    #[must_use]
     pub fn is_noop(&self) -> bool {
         self.allow.is_empty() && self.deny.is_empty()
     }
@@ -128,6 +130,7 @@ pub struct McpToolResult {
 
 impl McpToolResult {
     /// Create a successful result
+    #[must_use]
     pub fn success(content: Value) -> Self {
         Self {
             success: true,
@@ -220,12 +223,14 @@ impl McpRemoteServerConfig {
     }
 
     /// Set transport preference
+    #[must_use]
     pub fn with_transport(mut self, transport: TransportPreference) -> Self {
         self.transport = transport;
         self
     }
 
     /// Set request timeout
+    #[must_use]
     pub fn with_timeout(mut self, seconds: u64) -> Self {
         self.timeout_seconds = Some(seconds);
         self

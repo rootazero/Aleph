@@ -1,7 +1,7 @@
 //! Flow catalog with atomic hot reload. See design §3.8, §5.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 use arc_swap::ArcSwap;
 
@@ -14,6 +14,7 @@ pub struct FlowRegistry {
 }
 
 impl FlowRegistry {
+    #[must_use]
     pub fn new(initial: FlowSet) -> Self {
         Self {
             flows: ArcSwap::from(Arc::new(initial)),

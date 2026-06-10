@@ -25,6 +25,7 @@ impl TailscaleIdentity {
     /// - `Tailscale-User-Login`
     /// - `Tailscale-User-Name`
     /// - `X-Forwarded-For`
+    #[must_use]
     pub fn from_headers(headers: &axum::http::HeaderMap) -> Option<Self> {
         let login = header_non_empty(headers, "Tailscale-User-Login")?;
         let display_name = header_non_empty(headers, "Tailscale-User-Name")?;
@@ -53,6 +54,7 @@ fn header_non_empty(headers: &axum::http::HeaderMap, name: &str) -> Option<Strin
 /// Tailscale assigns addresses in the `100.64.0.0/10` block, which spans
 /// `100.64.0.0` through `100.127.255.255`. Only IPv4 dotted-decimal strings
 /// are accepted; anything else returns `false`.
+#[must_use]
 pub fn is_tailscale_ip(ip: &str) -> bool {
     let parts: Vec<&str> = ip.split('.').collect();
     if parts.len() != 4 {

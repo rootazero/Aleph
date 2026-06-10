@@ -6,6 +6,7 @@ use crate::gateway::interfaces::wechat::config::WeChatConfig;
 use crate::gateway::interfaces::wechat::types::Message;
 
 /// Check if a message should be accepted based on policy.
+#[must_use]
 pub fn should_accept_message(msg: &Message, config: &WeChatConfig) -> bool {
     let room_id = msg.room_id.as_deref().or(msg.chat_room_id.as_deref());
     let from_user_id = &msg.from_user_id;

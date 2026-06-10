@@ -50,11 +50,13 @@ pub struct InvalidTool {
 
 impl InvalidTool {
     /// Create a new InvalidTool with a list of available tools
+    #[must_use]
     pub fn new(available_tools: Vec<String>) -> Self {
         Self { available_tools }
     }
 
     /// Create an InvalidTool with no available tools (will be updated later)
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             available_tools: Vec::new(),
@@ -67,6 +69,7 @@ impl InvalidTool {
     }
 
     /// Get the list of available tools
+    #[must_use]
     pub fn available_tools(&self) -> &[String] {
         &self.available_tools
     }

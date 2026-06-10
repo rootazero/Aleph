@@ -27,9 +27,7 @@ pub async fn search(server_url: &str, query: &str, limit: usize, json: bool) -> 
         for item in results {
             let score = item
                 .get("score")
-                .and_then(|v| v.as_f64())
-                .map(|s| format!("{:.3}", s))
-                .unwrap_or_else(|| "-".to_string());
+                .and_then(serde_json::Value::as_f64).map_or_else(|| "-".to_string(), |s| format!("{s:.3}"));
             let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("-");
             let source = item.get("source").and_then(|v| v.as_str()).unwrap_or("-");
             rows.push(vec![score, truncate(content, 80), source.to_string()]);
@@ -53,25 +51,19 @@ pub async fn stats(server_url: &str, json: bool) -> CliResult<()> {
             "Total Facts",
             result
                 .get("total_facts")
-                .and_then(|v| v.as_u64())
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "-".to_string()),
+                .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |n| n.to_string()),
         ),
         (
             "Total Sessions",
             result
                 .get("total_sessions")
-                .and_then(|v| v.as_u64())
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "-".to_string()),
+                .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |n| n.to_string()),
         ),
         (
             "Total Graphs",
             result
                 .get("total_graphs")
-                .and_then(|v| v.as_u64())
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "-".to_string()),
+                .and_then(serde_json::Value::as_u64).map_or_else(|| "-".to_string(), |n| n.to_string()),
         ),
         (
             "Storage Size",
@@ -151,7 +143,7 @@ pub async fn delete(server_url: &str, id: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        println!("Memory entry '{}' deleted.", id);
+        println!("Memory entry '{id}' deleted.");
     }
 
     client.close().await?;

@@ -19,6 +19,7 @@ use crate::error::AlephError;
 pub const CANVAS_EXT: &str = "canvas";
 
 /// `$ALEPH_HOME/canvases/`. Falls back to `~/.aleph/canvases/`, then `./canvases/`.
+#[must_use]
 pub fn canvas_dir() -> PathBuf {
     aleph_home().join("canvases")
 }
@@ -41,6 +42,7 @@ pub struct CanvasMeta {
 /// Sanitise a user-provided name: keep `[A-Za-z0-9._-]`, replace anything
 /// else with `_`, collapse runs, trim leading/trailing punctuation. Prevents
 /// path traversal and Windows-incompatible characters.
+#[must_use]
 pub fn sanitise_name(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     let mut last_was_replacement = false;
@@ -66,12 +68,14 @@ pub fn sanitise_name(raw: &str) -> String {
 ///
 /// The name is sanitised via [`sanitise_name`]; the returned path is
 /// guaranteed to be a direct child of `dir` (no traversal).
+#[must_use]
 pub fn resolve_path_at(dir: &Path, name: &str) -> PathBuf {
     let safe = sanitise_name(name);
     dir.join(format!("{safe}.{CANVAS_EXT}"))
 }
 
 /// Same as [`resolve_path_at`] but anchored to [`canvas_dir`].
+#[must_use]
 pub fn resolve_path(name: &str) -> PathBuf {
     resolve_path_at(&canvas_dir(), name)
 }

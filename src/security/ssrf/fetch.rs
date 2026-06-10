@@ -28,6 +28,7 @@ pub struct SafeFetchRequest {
 
 impl SafeFetchRequest {
     /// Creates a GET request with the given timeout.
+    #[must_use]
     pub fn get(timeout: Duration) -> Self {
         Self {
             method: Method::GET,
@@ -38,6 +39,7 @@ impl SafeFetchRequest {
     }
 
     /// Creates a POST request with a body and timeout.
+    #[must_use]
     pub fn post(body: Vec<u8>, timeout: Duration) -> Self {
         Self {
             method: Method::POST,
@@ -48,12 +50,14 @@ impl SafeFetchRequest {
     }
 
     /// Sets custom headers on the request.
+    #[must_use]
     pub fn with_headers(mut self, headers: HeaderMap) -> Self {
         self.headers = headers;
         self
     }
 
     /// Sets the HTTP method.
+    #[must_use]
     pub fn with_method(mut self, method: Method) -> Self {
         self.method = method;
         self

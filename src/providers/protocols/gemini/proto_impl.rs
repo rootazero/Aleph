@@ -10,6 +10,7 @@ use super::GeminiProtocol;
 
 impl GeminiProtocol {
     /// Create a new Gemini protocol adapter
+    #[must_use]
     pub fn new(client: reqwest::Client) -> Self {
         Self {
             client,

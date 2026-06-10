@@ -58,6 +58,7 @@ struct TokenResponse {
 
 impl GraphTokenCache {
     /// Create a new `GraphTokenCache`.
+    #[must_use]
     pub fn new(app_id: String, app_password: String, tenant_id: String) -> Self {
         Self {
             app_id,

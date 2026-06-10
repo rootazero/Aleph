@@ -15,6 +15,7 @@ use crate::sync_primitives::Arc;
 
 impl AcpAdapterManager {
     /// Create a manager with all default harnesses enabled.
+    #[must_use]
     pub fn new() -> Self {
         let entries: HashMap<String, AcpAdapterEntry> =
             AcpAdapterEntry::all_presets().into_iter().collect();
@@ -27,6 +28,7 @@ impl AcpAdapterManager {
     /// - If `entry.preset` matches a known preset, uses the dedicated harness impl
     ///   with `entry.executable` as override.
     /// - Otherwise, uses `CustomAcpAdapter`.
+    #[must_use]
     pub fn from_entries(entries: HashMap<String, AcpAdapterEntry>) -> Self {
         let mut adapters: HashMap<String, Arc<dyn AcpAdapter>> = HashMap::new();
         let mut configs: HashMap<String, AcpAdapterEntry> = HashMap::new();

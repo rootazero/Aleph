@@ -100,6 +100,7 @@ pub enum GroupSessionScope {
 
 impl FeishuConfig {
     /// Resolve the base URL from the domain field.
+    #[must_use]
     pub fn base_url(&self) -> String {
         match self.domain.as_str() {
             "feishu" => "https://open.feishu.cn".to_string(),
@@ -109,10 +110,12 @@ impl FeishuConfig {
     }
 
     /// Returns true if webhook mode is enabled.
+    #[must_use]
     pub fn is_webhook_mode(&self) -> bool {
         self.connection_mode == "webhook"
     }
 
+    #[must_use]
     pub fn is_group_allowed(&self, chat_id: &str) -> bool {
         if !self.groups_allowed {
             return false;
@@ -148,6 +151,7 @@ impl FeishuConfig {
         Ok(())
     }
 
+    #[must_use]
     pub fn resolve_default_account_id(&self) -> String {
         self.default_account
             .clone()
@@ -155,6 +159,7 @@ impl FeishuConfig {
             .unwrap_or_else(|| "default".to_string())
     }
 
+    #[must_use]
     pub fn list_account_ids(&self) -> Vec<String> {
         self.accounts
             .as_ref()
@@ -162,6 +167,7 @@ impl FeishuConfig {
             .unwrap_or_default()
     }
 
+    #[must_use]
     pub fn resolve_credentials(&self, account_id: &str) -> Option<(String, String)> {
         let target_id = if account_id.is_empty() || account_id == "default" {
             None
@@ -195,6 +201,7 @@ impl FeishuConfig {
         }
     }
 
+    #[must_use]
     pub fn is_account_enabled(&self, account_id: &str) -> bool {
         if account_id.is_empty() || account_id == "default" {
             return true;

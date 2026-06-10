@@ -62,6 +62,7 @@ pub enum CapabilityDeclaration {
 
 impl CapabilityDeclaration {
     /// Returns the tier this capability belongs to.
+    #[must_use]
     pub fn tier(&self) -> Tier {
         match self {
             // P0: Always allowed, no permission check
@@ -74,6 +75,7 @@ impl CapabilityDeclaration {
     }
 
     /// Returns a human-readable kind name for this capability.
+    #[must_use]
     pub fn kind_name(&self) -> &'static str {
         match self {
             Self::Tool(_) => "tool",
@@ -87,6 +89,7 @@ impl CapabilityDeclaration {
     }
 
     /// Returns the required permission for this capability, if any.
+    #[must_use]
     pub fn required_permission(&self) -> Option<PluginPermission> {
         match self {
             // P0 + P1: no permission needed

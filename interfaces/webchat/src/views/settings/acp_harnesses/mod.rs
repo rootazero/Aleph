@@ -167,7 +167,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                                 let is_available = info.as_ref().map(|h| h.available).unwrap_or(false);
                                                 let is_enabled = info.as_ref().map(|h| h.enabled).unwrap_or(false);
                                                 let pid_click = pid.clone();
-                                                let pid_check = pid.clone();
+                                                let pid_check = pid;
 
                                                 view! {
                                                     <button
@@ -234,7 +234,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
 
                                     // Custom CLI section
                                     {if !custom_harnesses.is_empty() {
-                                        let custom_list = custom_harnesses.clone();
+                                        let custom_list = custom_harnesses;
                                         view! {
                                             <div>
                                                 <h2 class="text-sm font-medium text-text-secondary uppercase tracking-wider mb-3">
@@ -248,7 +248,7 @@ pub fn AcpHarnessesView() -> impl IntoView {
                                                         let is_enabled = h.enabled;
                                                         let first_char = hname.chars().next().unwrap_or('?').to_uppercase().to_string();
                                                         let hid_click = hid.clone();
-                                                        let hid_check = hid.clone();
+                                                        let hid_check = hid;
 
                                                         view! {
                                                             <button

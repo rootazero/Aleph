@@ -35,6 +35,7 @@ impl XmppMessageOps {
     /// - The message is from the bot itself
     /// - The message body is empty
     /// - The sender JID is empty
+    #[must_use]
     pub fn convert_message(
         msg: &super::types::XmppMessage,
         channel_id: &ChannelId,

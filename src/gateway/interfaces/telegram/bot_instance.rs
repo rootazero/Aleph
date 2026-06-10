@@ -51,6 +51,7 @@ pub struct BotInstance {
 }
 
 impl BotInstance {
+    #[must_use]
     pub fn new(
         account: &TelegramAccountConfig,
         callback_tx: mpsc::Sender<CallbackQuery>,

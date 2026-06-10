@@ -31,6 +31,7 @@ pub struct MemoryTimeTraveler {
 
 impl MemoryTimeTraveler {
     /// Create a new time traveler backed by the given event store.
+    #[must_use]
     pub fn new(db: Arc<StateDatabase>) -> Self {
         Self { db }
     }

@@ -89,6 +89,7 @@ impl Default for ReaperConfig {
 
 impl ReaperConfig {
     /// Apply sanity bounds to user-supplied values.
+    #[must_use]
     pub fn clamped(mut self) -> Self {
         self.interval_secs = self.interval_secs.clamp(60, 86_400);
         // Dedup retention must be at least one hour or comparison loses meaning.

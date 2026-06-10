@@ -22,6 +22,7 @@ impl InhibitorGuard {
         }
     }
 
+    #[must_use]
     pub fn noop() -> Self {
         Self { release: None }
     }

@@ -128,6 +128,7 @@ pub struct HeartbeatTask {
 
 impl HeartbeatTask {
     /// Create a new heartbeat task with defaults
+    #[must_use]
     pub fn new(name: String, agent_id: String, interval_ms: u64, probe: ProbeConfig) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -153,6 +154,7 @@ impl HeartbeatTask {
     }
 
     /// Convenience accessor for consecutive error count
+    #[must_use]
     pub fn consecutive_errors(&self) -> u32 {
         self.state.consecutive_errors
     }

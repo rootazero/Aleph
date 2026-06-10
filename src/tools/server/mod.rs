@@ -83,6 +83,7 @@ pub struct AlephToolServer {
 
 impl AlephToolServer {
     /// Create a new empty tool server.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             tools: Arc::new(Mutex::new(HashMap::new())),
@@ -113,6 +114,7 @@ impl AlephToolServer {
     /// let tool = create_tool_boxed("search", &config);
     /// let server = AlephToolServer::new().tool_boxed(tool);
     /// ```
+    #[must_use]
     pub fn tool_boxed(self, tool: Box<dyn AlephToolDyn>) -> Self {
         let name = tool.name().to_string();
         let tool_arc = Arc::from(tool);
@@ -239,6 +241,7 @@ impl AlephToolServer {
     ///
     /// The handle shares the same underlying tool registry and can be
     /// cloned cheaply for use in multiple async tasks.
+    #[must_use]
     pub fn handle(&self) -> AlephToolServerHandle {
         AlephToolServerHandle {
             tools: Arc::clone(&self.tools),

@@ -13,6 +13,7 @@ use super::store::AuthProfileStore;
 /// 3. Within each type, sort by lastUsed (oldest first = round-robin)
 /// 4. Append cooldown profiles sorted by expiry (soonest first)
 /// 5. If preferred_profile is specified, put it first
+#[must_use]
 pub fn resolve_profile_order(
     store: &AuthProfileStore,
     provider: &str,

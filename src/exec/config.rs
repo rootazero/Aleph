@@ -146,6 +146,7 @@ pub struct AllowlistEntry {
 
 impl ExecApprovalsFile {
     /// Get resolved config for an agent
+    #[must_use]
     pub fn resolve_for_agent(&self, agent_id: &str) -> ResolvedExecConfig {
         let global = self.defaults.as_ref();
         let agent = self.agents.get(agent_id);

@@ -31,6 +31,7 @@ pub struct GuestActivityLog {
 
 impl GuestActivityLog {
     /// Create a new activity log entry
+    #[must_use]
     pub fn new(
         session_id: String,
         guest_id: String,
@@ -54,6 +55,7 @@ impl GuestActivityLog {
     }
 
     /// Create a new activity log entry with error
+    #[must_use]
     pub fn with_error(
         session_id: String,
         guest_id: String,
@@ -138,35 +140,41 @@ pub struct ActivityLogQuery {
 
 impl ActivityLogQuery {
     /// Create a new query with default values
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set limit
+    #[must_use]
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
     }
 
     /// Set offset
+    #[must_use]
     pub fn with_offset(mut self, offset: usize) -> Self {
         self.offset = Some(offset);
         self
     }
 
     /// Set activity type filter
+    #[must_use]
     pub fn with_activity_type(mut self, activity_type: String) -> Self {
         self.activity_type_filter = Some(activity_type);
         self
     }
 
     /// Set status filter
+    #[must_use]
     pub fn with_status(mut self, status: ActivityStatus) -> Self {
         self.status_filter = Some(status);
         self
     }
 
     /// Set time range
+    #[must_use]
     pub fn with_time_range(mut self, start: i64, end: i64) -> Self {
         self.start_time = Some(start);
         self.end_time = Some(end);
@@ -174,6 +182,7 @@ impl ActivityLogQuery {
     }
 
     /// Check if a log entry matches this query
+    #[must_use]
     pub fn matches(&self, log: &GuestActivityLog) -> bool {
         // Check status filter
         if let Some(ref status) = self.status_filter {

@@ -40,6 +40,7 @@ pub struct McpReadResourceTool {
 
 impl McpReadResourceTool {
     /// Create a new MCP read resource tool
+    #[must_use]
     pub fn new(handle: McpManagerHandle) -> Self {
         Self { handle }
     }

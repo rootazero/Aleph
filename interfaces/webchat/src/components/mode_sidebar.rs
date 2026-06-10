@@ -168,7 +168,7 @@ fn MemorySidebar() -> impl IntoView {
                         if agents.is_empty() {
                             // Fallback while the list is loading
                             view! {
-                                <option value=current.clone()>{current.clone()}</option>
+                                <option value=current>{current.clone()}</option>
                             }.into_any()
                         } else {
                             agents.into_iter().map(|a| {

@@ -42,6 +42,7 @@ pub enum RetryCategory {
 
 impl RetryCategory {
     /// Stable lowercase wire token used in SQLite/JSON.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             RetryCategory::RateLimit => "rate_limit",
@@ -55,6 +56,7 @@ impl RetryCategory {
     /// Parse a stable wire token back into a `RetryCategory`.
     // Inherent `from_str` returning Option is an intentional API; renaming would break callers.
     #[allow(clippy::should_implement_trait)]
+    #[must_use]
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "rate_limit" => Some(RetryCategory::RateLimit),
@@ -80,6 +82,7 @@ pub struct RetryHint {
 }
 
 impl RetryHint {
+    #[must_use]
     pub const fn permanent() -> Self {
         RetryHint {
             retryable: false,
@@ -87,6 +90,7 @@ impl RetryHint {
         }
     }
 
+    #[must_use]
     pub const fn transient(category: RetryCategory) -> Self {
         RetryHint {
             retryable: true,
@@ -148,6 +152,7 @@ fn patterns() -> &'static [(RetryCategory, Regex)] {
 /// Classify an error string into a retry hint.
 ///
 /// Empty / blank strings classify as permanent (`retryable=false`).
+#[must_use]
 pub fn classify(error: &str) -> RetryHint {
     let trimmed = error.trim();
     if trimmed.is_empty() {

@@ -101,6 +101,7 @@ fn compress_generic(content: &str) -> String {
 }
 
 /// Ultra-compact one-liner summary for very old tool results.
+#[must_use]
 pub fn compress_to_oneliner(tool_name: &str, content: &str) -> String {
     let name = tool_name.to_ascii_lowercase();
     if name.contains("read") || name.contains("glob") {
@@ -121,6 +122,7 @@ pub fn compress_to_oneliner(tool_name: &str, content: &str) -> String {
 }
 
 /// Compress a subagent tool result into a structured one-liner.
+#[must_use]
 pub fn compress_subagent(content: &str) -> String {
     let first_line = content.lines().next().unwrap_or("completed");
     let brief = safe_truncate(first_line, 80);
@@ -148,6 +150,7 @@ fn safe_truncate(s: &str, n: usize) -> &str {
 ///
 /// `tool_name` is matched case-insensitively against known tool families.
 /// The returned string is the compact summary that replaces the original.
+#[must_use]
 pub fn compress_tool_result(tool_name: &str, content: &str) -> String {
     let name = tool_name.to_ascii_lowercase();
 

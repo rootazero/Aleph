@@ -74,6 +74,7 @@ const FUZZY_MIN_LEN: usize = 3;
 ///
 /// A `Repair { tier: Exact, .. }` result means no rewrite is needed; callers
 /// should treat it as a no-op.
+#[must_use]
 pub fn repair_tool_name(emitted: &str, offered: &[&str]) -> Option<Repair> {
     if emitted.is_empty() || offered.is_empty() {
         return None;
@@ -197,6 +198,7 @@ const SUGGEST_CONTAIN_MIN_LEN: usize = 3;
 /// This is the single suggestion source for both the dispatch `ToolNotFound`
 /// hint and the `get_tool_schema` not-found path, mirroring how
 /// [`repair_tool_name`] unified the repair tiers.
+#[must_use]
 pub fn suggest_candidates(emitted: &str, offered: &[&str], max: usize) -> Vec<String> {
     use crate::builtin_tools::meta_tools::levenshtein_distance;
 

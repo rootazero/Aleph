@@ -16,6 +16,7 @@ pub struct SkillRegistry {
 
 impl SkillRegistry {
     /// Create an empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -52,21 +53,25 @@ impl SkillRegistry {
     }
 
     /// Look up a manifest by id.
+    #[must_use]
     pub fn get(&self, id: &SkillId) -> Option<&SkillManifest> {
         self.manifests.get(id)
     }
 
     /// Return all registered manifests.
+    #[must_use]
     pub fn list_all(&self) -> Vec<&SkillManifest> {
         self.manifests.values().collect()
     }
 
     /// Number of registered skills.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.manifests.len()
     }
 
     /// Whether the registry is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.manifests.is_empty()
     }

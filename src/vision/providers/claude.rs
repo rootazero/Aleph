@@ -76,12 +76,14 @@ impl ClaudeVisionProvider {
     }
 
     /// Set the maximum tokens for API calls (default: 1024).
+    #[must_use]
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
         self
     }
 
     /// Set the default confidence score for responses (default: 0.9).
+    #[must_use]
     pub fn with_default_confidence(mut self, confidence: f64) -> Self {
         self.default_confidence = confidence.clamp(0.0, 1.0);
         self

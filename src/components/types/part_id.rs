@@ -103,6 +103,7 @@ pub struct PartUpdateData {
 
 impl PartUpdateData {
     /// Create a new PartUpdateData for an added part
+    #[must_use]
     pub fn added(session_id: &str, part: &SessionPart) -> Self {
         Self {
             session_id: session_id.to_string(),
@@ -116,6 +117,7 @@ impl PartUpdateData {
     }
 
     /// Create a new PartUpdateData for an updated part
+    #[must_use]
     pub fn updated(session_id: &str, part: &SessionPart, delta: Option<String>) -> Self {
         Self {
             session_id: session_id.to_string(),
@@ -129,6 +131,7 @@ impl PartUpdateData {
     }
 
     /// Create a new PartUpdateData for a removed part
+    #[must_use]
     pub fn removed(session_id: &str, part_id: &str, part_type: &str) -> Self {
         Self {
             session_id: session_id.to_string(),
@@ -142,6 +145,7 @@ impl PartUpdateData {
     }
 
     /// Create update for streaming text delta
+    #[must_use]
     pub fn text_delta(session_id: &str, part_id: &str, part_type: &str, delta: &str) -> Self {
         Self {
             session_id: session_id.to_string(),

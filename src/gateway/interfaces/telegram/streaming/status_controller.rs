@@ -13,6 +13,7 @@ pub struct StatusReactionController {
 }
 
 impl StatusReactionController {
+    #[must_use]
     pub fn new(delivery: TelegramDelivery, config: StatusReactionConfig) -> Self {
         Self {
             delivery,

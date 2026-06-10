@@ -203,15 +203,15 @@ pub(super) fn SlashPaletteView(
                             >
                                 {if is_back {
                                     view! {
-                                        <span class="text-text-tertiary shrink-0">{label.clone()}</span>
+                                        <span class="text-text-tertiary shrink-0">{label}</span>
                                     }.into_any()
                                 } else if ns_ctx.is_some() {
                                     view! {
-                                        <span class="font-medium shrink-0">{label.clone()}</span>
+                                        <span class="font-medium shrink-0">{label}</span>
                                     }.into_any()
                                 } else {
                                     view! {
-                                        <span class="font-medium shrink-0">"/" {label.clone()}</span>
+                                        <span class="font-medium shrink-0">"/" {label}</span>
                                     }.into_any()
                                 }}
                                 <span class="text-text-secondary text-xs truncate">{desc}</span>

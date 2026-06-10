@@ -17,6 +17,7 @@ pub enum FactSourceFilter {
 
 impl FactSourceFilter {
     /// Predicate evaluated row-by-row when filtering candidate facts.
+    #[must_use]
     pub fn matches(&self, source: FactSource) -> bool {
         match self {
             Self::Any => true,

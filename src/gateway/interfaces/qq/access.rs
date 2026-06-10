@@ -11,10 +11,12 @@ pub enum AccessDecision {
 }
 
 impl AccessController {
+    #[must_use]
     pub fn new(config: QQAccountConfig) -> Self {
         Self { config }
     }
 
+    #[must_use]
     pub fn check(&self, openid: &str, group_openid: Option<&str>) -> AccessDecision {
         if !self.config.enabled {
             return AccessDecision::Deny;

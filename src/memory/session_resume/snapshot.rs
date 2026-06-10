@@ -35,6 +35,7 @@ impl SessionSnapshot {
     ///
     /// Splits on `. ` (dot-space), filters for sentences containing decision marker
     /// keywords, and caps the result at [`MAX_DECISIONS`].
+    #[must_use]
     pub fn extract_decisions(summary: &str) -> Vec<String> {
         summary
             .split(". ")
@@ -52,6 +53,7 @@ impl SessionSnapshot {
     /// Render this snapshot as prompt text for LLM consumption.
     ///
     /// Empty sections are omitted to avoid noise.
+    #[must_use]
     pub fn to_prompt_text(&self) -> String {
         let mut out = String::with_capacity(512);
         out.push_str("# Previous Session Context\n\n");

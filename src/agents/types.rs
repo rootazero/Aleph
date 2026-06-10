@@ -180,6 +180,7 @@ impl AgentDef {
     }
 
     /// Set allowed tools
+    #[must_use]
     pub fn with_allowed_tools(mut self, tools: Vec<String>) -> Self {
         self.allowed_tools = tools;
         self
@@ -192,6 +193,7 @@ impl AgentDef {
     /// caller has already called `with_allowed_tools(...)` with a non-wildcard
     /// list, that flat list is preserved and unioned with the resolved sets.
     /// Callers wanting both should chain `with_allowed_tools` after this method.
+    #[must_use]
     pub fn with_allowed_tool_sets(mut self, sets: Vec<String>) -> Self {
         self.allowed_tool_sets = sets;
         if self.allowed_tools.len() == 1 && self.allowed_tools[0] == "*" {
@@ -201,24 +203,28 @@ impl AgentDef {
     }
 
     /// Set denied tools
+    #[must_use]
     pub fn with_denied_tools(mut self, tools: Vec<String>) -> Self {
         self.denied_tools = tools;
         self
     }
 
     /// Set max iterations
+    #[must_use]
     pub fn with_max_iterations(mut self, max: u32) -> Self {
         self.max_iterations = Some(max);
         self
     }
 
     /// Set context mode
+    #[must_use]
     pub fn with_context_mode(mut self, mode: ContextMode) -> Self {
         self.context_mode = mode;
         self
     }
 
     /// Set token budget
+    #[must_use]
     pub fn with_token_budget(mut self, budget: u32) -> Self {
         self.token_budget = Some(budget);
         self
@@ -237,18 +243,21 @@ impl AgentDef {
     }
 
     /// Set prompt sections this agent needs
+    #[must_use]
     pub fn with_prompt_sections(mut self, sections: Vec<String>) -> Self {
         self.prompt_sections = sections;
         self
     }
 
     /// Set per-agent MCP server scope (P3 Stage I).
+    #[must_use]
     pub fn with_mcp_servers(mut self, specs: Vec<McpServerSpec>) -> Self {
         self.mcp_servers = specs;
         self
     }
 
     /// B1 — set subagent worktree isolation.
+    #[must_use]
     pub fn with_isolation(mut self, mode: IsolationMode) -> Self {
         self.isolation = Some(mode);
         self
@@ -262,6 +271,7 @@ impl AgentDef {
     /// prevents a subagent from spawning further subagents and triggering
     /// unbounded recursion. Primary-mode agents retain full subagent
     /// spawning capability subject to the normal allow/deny lists.
+    #[must_use]
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
         // Stage B (P1): recursion guard — system invariant, overrides everything
         if matches!(self.mode, AgentMode::SubAgent) && tool_name == "subagent" {

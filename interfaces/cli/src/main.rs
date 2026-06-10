@@ -673,7 +673,7 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
                 if json {
                     crate::output::print_json(&result);
                 } else {
-                    println!("{}", result);
+                    println!("{result}");
                 }
                 client.close().await?;
                 Ok(())
@@ -750,7 +750,7 @@ async fn dispatch_marketplace(
     } else if matches!(method, "plugin.marketplace.list") {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        println!("{}", result);
+        println!("{result}");
     }
     client.close().await?;
     Ok(())

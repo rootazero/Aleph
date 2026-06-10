@@ -1343,7 +1343,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     }
                 });
 
-                let trace_by_runs_db = trace_db.clone();
+                let trace_by_runs_db = trace_db;
                 server.handlers_mut().register("trace.by_runs", move |req| {
                     let db = trace_by_runs_db.clone();
                     async move {
@@ -1492,17 +1492,17 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // SessionCoordinator::sweep_deadlocked).
             if let Some(sweep_coord) = session_coordinator.clone() {
                 tokio::spawn(async move {
-                    let mut tick =
-                        tokio::time::interval(std::time::Duration::from_secs(300));
-                    tick.set_missed_tick_behavior(
-                        tokio::time::MissedTickBehavior::Skip,
-                    );
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     loop {
                         tick.tick().await;
                         match sweep_coord.sweep_deadlocked(600, 86_400).await {
                             Ok(0) => {}
                             Ok(n) => {
-                                tracing::info!(count = n, "session sweeper: marked deadlocked sessions");
+                                tracing::info!(
+                                    count = n,
+                                    "session sweeper: marked deadlocked sessions"
+                                );
                             }
                             Err(e) => {
                                 tracing::warn!(error = %e, "session sweeper: sweep failed");
@@ -1935,7 +1935,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         alephcore::gateway::handlers::tools_cancel::handle_cancel(req, r).await
                     }
                 });
-            let reg_list = reg.clone();
+            let reg_list = reg;
             server
                 .handlers_mut()
                 .register("tools.in_flight", move |req| {

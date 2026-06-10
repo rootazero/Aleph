@@ -121,6 +121,7 @@ pub fn parse_template(content: &str) -> Result<ParsedTemplate> {
 /// The caller is responsible for supplying built-in variables such as
 /// `agent_name`, `agent_role`, `team_name`, and `leader_name` alongside any
 /// user-defined variables.
+#[must_use]
 pub fn substitute_variables(text: &str, variables: &HashMap<String, String>) -> String {
     let mut result = text.to_string();
     // Sort keys for deterministic replacement order (HashMap iteration is non-deterministic)

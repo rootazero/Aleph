@@ -197,6 +197,7 @@ struct GuardState {
 }
 
 impl PairLoopGuard {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -345,6 +346,7 @@ impl PairLoopGuard {
 
 /// Resolve effective settings from channel config, account/global defaults,
 /// and the `default_enabled` policy. Mirrors the openclaw kernel.
+#[must_use]
 pub fn resolve_pair_loop_settings(
     channel: Option<&PairLoopGuardConfig>,
     defaults: Option<&PairLoopGuardConfig>,

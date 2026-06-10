@@ -1519,10 +1519,7 @@ async fn deny_tool_hidden_from_list_and_describe() {
     assert!(svc.describe("beta").await.is_none());
     // metadata_schema mirrors list().
     let schema = svc.metadata_schema();
-    let schema_names: Vec<&str> = schema
-        .iter()
-        .map(|d| d.name.as_str())
-        .collect();
+    let schema_names: Vec<&str> = schema.iter().map(|d| d.name.as_str()).collect();
     assert!(!schema_names.contains(&"beta"));
 }
 

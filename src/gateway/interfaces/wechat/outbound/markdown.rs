@@ -1,5 +1,6 @@
 const MAX_MESSAGE_LENGTH: usize = 4000;
 
+#[must_use]
 pub fn markdown_to_wechat(markdown: &str) -> String {
     let mut result = markdown.to_string();
 

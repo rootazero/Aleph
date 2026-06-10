@@ -141,12 +141,14 @@ pub struct DreamPipeline {
 }
 
 impl DreamPipeline {
+    #[must_use]
     pub fn new(stages: Vec<Box<dyn DreamStage>>) -> Self {
         Self { stages }
     }
 
     /// Build a pipeline from a DreamStrategy, threading runtime config into stages
     /// that need it (currently SkillDistill's per-cycle cap, D5).
+    #[must_use]
     pub fn from_strategy(
         strategy: DreamStrategy,
         dreaming_cfg: &crate::config::types::memory::DreamingConfig,
@@ -238,6 +240,7 @@ impl DreamPipeline {
     /// Drop the global-only stages, leaving the note-maintenance subset that is
     /// safe to run per project namespace. Built from the same `from_strategy`
     /// list so the project fan-out never drifts from the base pipeline.
+    #[must_use]
     pub fn retain_project_stages(mut self) -> Self {
         self.stages
             .retain(|s| !Self::GLOBAL_ONLY_STAGES.contains(&s.name()));
@@ -424,6 +427,7 @@ pub struct DailyInsight {
 }
 
 impl DailyInsight {
+    #[must_use]
     pub fn new(date: String, content: String, source_memory_count: u32) -> Self {
         Self {
             date,

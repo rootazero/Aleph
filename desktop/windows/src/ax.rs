@@ -87,7 +87,7 @@ mod role_map {
     /// non-interactable AX equivalents (deliberately *not* in the allowlist) so
     /// they show up in a full tree dump but never get a clickable mark. Unknown
     /// ids fall back to `"AXUnknown"`.
-    pub fn control_type_to_ax_role(control_type: i32) -> &'static str {
+    pub const fn control_type_to_ax_role(control_type: i32) -> &'static str {
         match control_type {
             // ── interactable (must match INTERACTABLE_ROLES) ──
             CT_BUTTON => "AXButton",
@@ -143,8 +143,9 @@ pub struct WindowsAccessibility;
 
 impl WindowsAccessibility {
     /// Create a new Windows accessibility capability.
-    pub fn new() -> Self {
-        WindowsAccessibility
+    #[must_use]
+    pub const fn new() -> Self {
+        Self
     }
 }
 

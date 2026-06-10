@@ -87,6 +87,7 @@ pub enum LineMessage {
 }
 
 impl LineMessage {
+    #[must_use]
     pub fn id(&self) -> &str {
         match self {
             LineMessage::Text(m) => &m.id,
@@ -100,6 +101,7 @@ impl LineMessage {
         }
     }
 
+    #[must_use]
     pub fn text(&self) -> Option<&str> {
         match self {
             LineMessage::Text(m) => Some(&m.text),
@@ -107,6 +109,7 @@ impl LineMessage {
         }
     }
 
+    #[must_use]
     pub fn is_image(&self) -> bool {
         matches!(self, LineMessage::Image(_))
     }
@@ -197,10 +200,12 @@ pub struct LinkData {
 pub struct LineReplyToken(String);
 
 impl LineReplyToken {
+    #[must_use]
     pub fn new(token: String) -> Self {
         Self(token)
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

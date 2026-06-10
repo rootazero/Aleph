@@ -43,6 +43,7 @@ pub enum EndpointKind {
 ///
 /// Scheme-tolerant: a bare `host:port` with no scheme is still classified by
 /// prefixing `http://` before parsing.
+#[must_use]
 pub fn endpoint_kind_for_base_url(base_url: Option<&str>) -> EndpointKind {
     let raw = match base_url {
         Some(s) if !s.trim().is_empty() => s.trim(),

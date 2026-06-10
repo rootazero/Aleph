@@ -28,6 +28,7 @@ pub type PendingMedia = Arc<tokio::sync::Mutex<Vec<MediaItem>>>;
 pub const MAX_MEDIA_PER_RUN: usize = 10;
 
 /// Detect MIME type from URL extension, with a fallback default based on media_type.
+#[must_use]
 pub fn detect_mime(url: &str, media_type: &str) -> String {
     // Strip query string and fragment before checking extension
     let path = url.split('?').next().unwrap_or(url);
