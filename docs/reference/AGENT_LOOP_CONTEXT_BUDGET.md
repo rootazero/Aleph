@@ -132,6 +132,22 @@ by `harness/agent/think.rs` step 2c when the budget directive is
 failure. The 5-section summary template (Primary Request / Key Decisions /
 Files & Code / Current State / Pending) is hermes-compatible.
 
+### Fingerprint cache (per-run)
+
+The harness rebuilds the message list from the session log every turn, so an
+in-place compaction is discarded by the next rebuild. The compactor therefore
+keeps a per-run fingerprint cache (`CompactionCache { start, end, hash,
+summary }`, openteams compression-cache parity): when the previously covered
+range still hashes identically in the rebuilt list, the cached summary is
+reapplied with **zero API cost** (`CompactStrategy::CacheReuse`). Once the
+un-summarized gap behind the summary grows past 8 messages / ~4 K estimated
+tokens, one LLM merge over `[old summary + gap]` absorbs it (openclaw "merge
+prior summaries") and the cache cover widens monotonically. Any change inside
+the covered prefix (e.g. a preflight pass pruning differently) misses the hash
+and falls back to a full recompaction. Without the cache, a high-pressure run
+paid a fresh side-channel summarization call on every Think turn and the
+changing summary text thrashed the provider prompt cache.
+
 ## Token-Estimate Calibration (server-observed feedback)
 
 Every tier above reacts to a single number: `ContextPressure::ratio`, derived
