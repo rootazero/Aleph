@@ -56,6 +56,14 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     pub(super) message_router: Option<Arc<crate::teams::messages::router::MessageRouter>>,
     /// Inbox for sub-agent read_inbox actions.
     pub(super) inbox: Option<Arc<crate::teams::messages::inbox::Inbox>>,
+    /// Process-lifetime registry of background sub-agent runs. Shared across
+    /// every run this engine executes so `check_status` / `list` / `cancel`
+    /// keep working on later turns — a background sub-agent's whole point is
+    /// to outlive the turn that spawned it. (Previously constructed fresh per
+    /// request inside `run_agent_loop_inner`, which silently dropped results
+    /// and cancel tokens the moment the spawning turn ended.) Completed
+    /// entries are TTL-pruned by the tracker itself, bounding growth.
+    pub(super) background_tracker: Arc<crate::agents::background_tracker::BackgroundAgentTracker>,
     /// Orchestrator handle injected after boot assembly. Populated via
     /// `with_orchestrator` once `initialize_orchestrator` completes.
     pub(super) orchestrator: Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>>,
@@ -107,6 +115,9 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             teammate_manager: None,
             message_router: None,
             inbox: None,
+            background_tracker: Arc::new(
+                crate::agents::background_tracker::BackgroundAgentTracker::new(),
+            ),
             orchestrator: Arc::new(std::sync::OnceLock::new()),
             continuation_deps: Arc::new(std::sync::OnceLock::new()),
             channel_registry: Arc::new(tokio::sync::OnceCell::new()),

@@ -25,19 +25,26 @@ use super::InboundMessageRouter;
 /// (`"guest"`) with no locked workspace. This default is the over-permission
 /// fix — a missing config must never be treated as operator. The
 /// `permission_wiring_tests` below pin exactly this.
-/// Returns `(caller_role, locked_workspace, busy_input_mode_wire)`. The third
-/// element is the channel's busy-input policy wire string (`"steer"` default /
-/// `"interrupt"` / `"queue"`), stamped into run metadata so the execution
-/// engine's busy branch dispatches without re-reading channel config.
+/// Returns `(caller_role, locked_workspace, busy_input_mode_wire,
+/// tool_permissions)`. The third element is the channel's busy-input policy
+/// wire string (`"steer"` default / `"interrupt"` / `"queue"`), the fourth the
+/// channel's tool permission override — both stamped into run metadata so the
+/// execution engine dispatches without re-reading channel config.
 fn channel_run_identity(
     configs: &HashMap<String, ChannelConfig>,
     channel_id: &str,
-) -> (&'static str, Option<PathBuf>, &'static str) {
+) -> (
+    &'static str,
+    Option<PathBuf>,
+    &'static str,
+    Option<crate::config::types::policies::ToolPermissionsConfig>,
+) {
     let cfg = configs.get(channel_id).cloned().unwrap_or_default();
     (
         cfg.caller_role_str(),
         cfg.resolved_default_workspace(),
         cfg.busy_input_mode_wire(),
+        cfg.tool_permissions,
     )
 }
 
@@ -260,7 +267,7 @@ impl InboundMessageRouter {
         // ("guest") — closing the prior over-permission where a missing role was
         // treated as operator. An operator opts a channel up to Config tier via
         // `permission_level = "config"` in its config block.
-        let (caller_role, channel_workspace, busy_input_mode) =
+        let (caller_role, channel_workspace, busy_input_mode, channel_tool_permissions) =
             channel_run_identity(&self.channel_configs, ctx.message.channel_id.as_str());
         metadata.insert("caller_role".to_string(), caller_role.to_string());
         // Stamp the channel's busy-input policy so the execution engine's busy
@@ -270,6 +277,25 @@ impl InboundMessageRouter {
             crate::gateway::execution_engine::BUSY_INPUT_MODE_KEY.to_string(),
             busy_input_mode.to_string(),
         );
+        // Stamp the channel's tool permission override (JSON) so `run_loop`
+        // merges it as the most specific layer over global + agent
+        // permissions. Only stamped when the channel configures one —
+        // unconfigured channels stay byte-identical to pre-wiring metadata.
+        if let Some(perms) = channel_tool_permissions {
+            match serde_json::to_string(&perms) {
+                Ok(json) => {
+                    metadata.insert(
+                        crate::gateway::execution_engine::CHANNEL_TOOL_PERMISSIONS_KEY.to_string(),
+                        json,
+                    );
+                }
+                Err(e) => error!(
+                    channel_id = %ctx.message.channel_id.as_str(),
+                    error = %e,
+                    "Failed to serialize channel tool_permissions — channel layer skipped"
+                ),
+            }
+        }
 
         let is_slash = slash_command_mode.is_some();
         if let Some(mode) = slash_command_mode {
@@ -561,10 +587,11 @@ mod permission_wiring_tests {
     #[test]
     fn unconfigured_channel_defaults_to_guest_with_no_workspace() {
         let empty: HashMap<String, ChannelConfig> = HashMap::new();
-        // Unconfigured → guest, no workspace, and the safe `steer` busy default.
+        // Unconfigured → guest, no workspace, the safe `steer` busy default,
+        // and no channel tool-permission layer.
         assert_eq!(
             channel_run_identity(&empty, "telegram"),
-            ("guest", None, "steer")
+            ("guest", None, "steer", None)
         );
 
         // Unknown id in a populated map → still the safe default.
@@ -572,7 +599,7 @@ mod permission_wiring_tests {
         configs.insert("slack".to_string(), ChannelConfig::default());
         assert_eq!(
             channel_run_identity(&configs, "telegram"),
-            ("guest", None, "steer")
+            ("guest", None, "steer", None)
         );
     }
 
@@ -592,7 +619,7 @@ mod permission_wiring_tests {
         );
         assert_eq!(
             channel_run_identity(&configs, "telegram"),
-            ("guest", Some(ws), "steer")
+            ("guest", Some(ws), "steer", None)
         );
     }
 
@@ -610,8 +637,36 @@ mod permission_wiring_tests {
                 ..Default::default()
             },
         );
-        let (_role, _ws, busy) = channel_run_identity(&configs, "ops-bot");
+        let (_role, _ws, busy, _perms) = channel_run_identity(&configs, "ops-bot");
         assert_eq!(busy, "interrupt");
+    }
+
+    /// A channel carrying a tool-permission override surfaces it for the
+    /// metadata stamp; unconfigured channels surface `None` (no stamp, no
+    /// behavior change).
+    #[test]
+    fn channel_tool_permissions_surface_through_identity() {
+        use crate::config::types::policies::ToolPermissionsConfig;
+        use crate::extension::PermissionAction;
+
+        let perms = ToolPermissionsConfig {
+            default: PermissionAction::Allow,
+            overrides: [("bash".to_string(), PermissionAction::Deny)]
+                .into_iter()
+                .collect(),
+        };
+        let mut configs = HashMap::new();
+        configs.insert(
+            "group-bot".to_string(),
+            ChannelConfig {
+                tool_permissions: Some(perms),
+                ..Default::default()
+            },
+        );
+        let (_role, _ws, _busy, channel_perms) = channel_run_identity(&configs, "group-bot");
+        let channel_perms = channel_perms.expect("configured override must surface");
+        assert_eq!(channel_perms.resolve("bash"), PermissionAction::Deny);
+        assert_eq!(channel_perms.resolve("read_file"), PermissionAction::Allow);
     }
 
     /// A Config-tier channel is stamped "operator" (Layer-2). With no
@@ -626,7 +681,7 @@ mod permission_wiring_tests {
                 ..Default::default()
             },
         );
-        let (role, workspace, busy) = channel_run_identity(&configs, "ops-bot");
+        let (role, workspace, busy, _perms) = channel_run_identity(&configs, "ops-bot");
         assert_eq!(role, "operator");
         assert_eq!(workspace, None::<PathBuf>);
         // Config tier inherits the safe steer default unless explicitly opted in.

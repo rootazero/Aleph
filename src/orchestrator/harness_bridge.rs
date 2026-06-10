@@ -203,6 +203,10 @@ pub struct AgentHarnessRunner {
 
 #[async_trait]
 impl HarnessRunner for AgentHarnessRunner {
+    fn guardrails(&self) -> Option<Arc<crate::guardrails::GuardrailRegistry>> {
+        self.guardrails.clone()
+    }
+
     async fn run(
         &self,
         session_key: String,

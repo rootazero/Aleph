@@ -651,8 +651,17 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
             }
             match serde_json::from_value::<IMessageConfig>(inst.config.clone()) {
                 Ok(imessage_config) => {
-                    let channel_config =
+                    let mut channel_config =
                         alephcore::gateway::inbound_router::ChannelConfig::from(&imessage_config);
+                    // Overlay the flat-key channel policy block (tier /
+                    // workspace / busy mode are iMessage-specific via the
+                    // dedicated config above, but `tool_permissions` rides the
+                    // same ChannelPolicyConfig parse as every other channel).
+                    let policy = serde_json::from_value::<
+                        alephcore::gateway::inbound_router::ChannelPolicyConfig,
+                    >(inst.config.clone())
+                    .unwrap_or_default();
+                    channel_config.tool_permissions = policy.tool_permissions;
                     inbound_router.register_channel_config("imessage", channel_config);
                     if !daemon {
                         println!("  Inbound router: iMessage gating config registered");
@@ -722,6 +731,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
                 permission_level: policy.permission_level,
                 default_workspace: policy.default_workspace,
                 busy_input_mode: policy.busy_input_mode,
+                tool_permissions: policy.tool_permissions,
                 ..Default::default()
             };
             let tier_label = channel_config.caller_role_str();

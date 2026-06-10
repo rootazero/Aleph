@@ -280,6 +280,23 @@ provider = "openai"                      # Default to OpenAI
 # No system_prompt = use model's default behavior
 
 # ============================================================================
+# Tool Permission Policy (optional)
+# ============================================================================
+# Per-tool permission levels: "allow" (run freely), "ask" (require user
+# confirmation), "deny" (hidden from the model and rejected).
+# Layered most-restrictive-wins: global ([policies.tool_permissions]) →
+# per-agent ([agents.<id>.tool_permissions]) → per-channel
+# ([channels.<id>.tool_permissions]). Unset = everything allowed except
+# tools that self-declare confirmation.
+#
+# [policies.tool_permissions]
+# default = "allow"
+#
+# [policies.tool_permissions.overrides]
+# bash = "ask"
+# file_delete = "deny"
+
+# ============================================================================
 # Memory Module Configuration
 # ============================================================================
 [memory]

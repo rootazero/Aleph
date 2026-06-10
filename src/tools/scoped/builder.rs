@@ -44,7 +44,22 @@ impl ScopedToolService {
             health: None,
             last_health_generation: std::sync::atomic::AtomicU64::new(0),
             definition_rewriters: Vec::new(),
+            tool_permissions: None,
         }
+    }
+
+    /// Attach the merged tool permission policy (global → agent → channel,
+    /// most restrictive wins). `Deny` tools are hidden from listings and
+    /// rejected at execute; `Ask` tools route through the confirmation gate.
+    ///
+    /// Callers should skip this for an all-default policy (`Allow` + no
+    /// overrides) so the hot path stays a `None` check.
+    pub fn with_tool_permissions(
+        mut self,
+        permissions: crate::config::types::policies::ToolPermissionsConfig,
+    ) -> Self {
+        self.tool_permissions = Some(permissions);
+        self
     }
 
     /// Attach a [`ToolDefinitionRewriter`]. Rewriters run in attachment
@@ -178,6 +193,25 @@ impl ScopedToolService {
     // -------------------------------------------------------------------------
     // Helpers (shared with the trait impl in mod.rs and dispatch.rs)
     // -------------------------------------------------------------------------
+
+    /// Effective permission for `name` under the attached policy.
+    /// `None` policy → `Allow` (pre-wiring behavior).
+    pub(super) fn permission_for(&self, name: &str) -> crate::extension::PermissionAction {
+        match &self.tool_permissions {
+            Some(p) => p.resolve(name),
+            None => crate::extension::PermissionAction::Allow,
+        }
+    }
+
+    /// `true` when the permission policy denies `name` outright.
+    pub(super) fn is_permission_denied(&self, name: &str) -> bool {
+        self.permission_for(name) == crate::extension::PermissionAction::Deny
+    }
+
+    /// `true` when the permission policy requires confirmation for `name`.
+    pub(super) fn is_permission_ask(&self, name: &str) -> bool {
+        self.permission_for(name) == crate::extension::PermissionAction::Ask
+    }
 
     pub(super) fn is_allowed(&self, name: &str) -> bool {
         // Attached SubagentTool always passes the allow filter. It is appended

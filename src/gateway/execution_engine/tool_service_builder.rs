@@ -77,6 +77,10 @@ pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandl
 ///   no extension hooks are active for this request.
 /// * `session_id` — session identifier surfaced into `HookContext` for
 ///   extension command hooks.
+/// * `tool_permissions` — merged tool permission policy for this turn
+///   (global `[policies.tool_permissions]` → agent override → channel
+///   override, most restrictive wins). `None` = all-default policy; pass
+///   `None` rather than a default config so the hot path stays a no-op.
 pub fn build_request_tool_service(
     tool_registry: Arc<LoopToolRegistry>,
     allowed_tools: BTreeSet<String>,
@@ -85,10 +89,14 @@ pub fn build_request_tool_service(
     turn_context: Option<crate::tools::turn_context::TurnContext>,
     hook_executor: Option<Arc<HookExecutor>>,
     session_id: impl Into<String>,
+    tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 ) -> Arc<dyn ToolService> {
     let mut svc = ScopedToolService::new(tool_registry, allowed_tools);
     if let Some(st) = subagent_tool {
         svc = svc.with_subagent_tool(st);
+    }
+    if let Some(perms) = tool_permissions {
+        svc = svc.with_tool_permissions(perms);
     }
     if let Some(refresh) = tool_refresh {
         svc = svc.with_refresh(refresh);
@@ -157,7 +165,8 @@ mod tests {
         reg.register(Box::new(StubTool));
         let registry = Arc::new(reg);
 
-        let svc = build_request_tool_service(registry, BTreeSet::new(), None, None, None, None, "");
+        let svc =
+            build_request_tool_service(registry, BTreeSet::new(), None, None, None, None, "", None);
         let defs = svc.list().await;
         assert!(defs.iter().any(|d| d.name == "read_file"));
     }
@@ -169,7 +178,7 @@ mod tests {
         let registry = Arc::new(reg);
 
         let allowed: BTreeSet<String> = ["other".to_string()].into_iter().collect();
-        let svc = build_request_tool_service(registry, allowed, None, None, None, None, "");
+        let svc = build_request_tool_service(registry, allowed, None, None, None, None, "", None);
         let defs = svc.list().await;
         assert!(
             defs.iter().all(|d| d.name != "read_file"),

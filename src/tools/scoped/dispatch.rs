@@ -109,6 +109,22 @@ impl ScopedToolService {
             });
         }
 
+        // Permission-policy deny gate (`[policies.tool_permissions]`, merged
+        // global → agent → channel, most restrictive wins). Deny tools are
+        // already hidden from list()/describe(), so reaching here means the
+        // model guessed the name or the policy tightened mid-session — reject
+        // with an explicit reason rather than a confusing NotFound.
+        if self.is_permission_denied(name) {
+            return Err(ToolError::PermissionDenied {
+                name: name.to_string(),
+                reason: format!(
+                    "`{name}` is denied by the configured tool permission policy. \
+                     Do not retry; ask the user to adjust `[policies.tool_permissions]` \
+                     if this tool is needed."
+                ),
+            });
+        }
+
         // Config-tier authorization gate. A chat-tier connection (remote device
         // paired at "chat" level) may converse and read, but must not mutate
         // Aleph's own configuration through tools (R8: config IS a tool, so the
@@ -163,11 +179,15 @@ impl ScopedToolService {
         // Confirmation gate: tools flagged `requires_confirmation` must be
         // approved by the user before they run. Fails closed when no approval
         // transport is wired. A tool is gated when it appears in the
-        // operator-override `confirm_tools` set OR when the tool itself
+        // operator-override `confirm_tools` set, when the tool itself
         // declares `LoopTool::requires_confirmation()` — the per-tool,
         // declaration-driven seam that lets builtin / MCP / extension / skill
-        // tools opt into approval without being hard-coded gateway-side.
-        if self.confirm_tools.contains(name) || self.inner.requires_confirmation(name) {
+        // tools opt into approval without being hard-coded gateway-side — or
+        // when the merged permission policy resolves to `Ask` for this tool.
+        if self.confirm_tools.contains(name)
+            || self.inner.requires_confirmation(name)
+            || self.is_permission_ask(name)
+        {
             match &self.approval_requester {
                 Some(requester) => {
                     let reason = format!("Tool `{name}` requires your confirmation to run.");
