@@ -43,6 +43,7 @@ impl SchemaDoc {
 
     /// Extract the canonical compact view used by prompts (Tag Taxonomy +
     /// Page Thresholds + Update Policy).
+    #[must_use]
     pub fn compact_for_prompt(&self) -> String {
         let want = ["Tag Taxonomy", "Page Thresholds", "Update Policy"];
         let mut out = String::new();

@@ -78,6 +78,7 @@ pub struct FallbackProviderToml {
 impl FallbackProviderToml {
     /// The effective ordered fallback chain: explicit `chain` entries, then
     /// the back-compat `provider` when set and not already present.
+    #[must_use]
     pub fn resolved_chain(&self) -> Vec<String> {
         let mut out = self.chain.clone();
         if let Some(p) = &self.provider {

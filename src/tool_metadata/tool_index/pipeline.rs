@@ -42,18 +42,21 @@ impl Default for HydrationPipelineConfig {
 
 impl HydrationPipelineConfig {
     /// Create a new config with custom core tools
+    #[must_use]
     pub fn with_core_tools(mut self, tools: Vec<String>) -> Self {
         self.core_tools = tools;
         self
     }
 
     /// Set max full schema tools
+    #[must_use]
     pub fn with_max_full_schema(mut self, max: usize) -> Self {
         self.max_full_schema = max;
         self
     }
 
     /// Set max summary tools
+    #[must_use]
     pub fn with_max_summary(mut self, max: usize) -> Self {
         self.max_summary = max;
         self
@@ -78,6 +81,7 @@ pub struct HydrationResult {
 
 impl HydrationResult {
     /// Create an empty result
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             full_schema_tools: Vec::new(),
@@ -87,11 +91,13 @@ impl HydrationResult {
     }
 
     /// Total number of tools across all tiers
+    #[must_use]
     pub fn total_count(&self) -> usize {
         self.full_schema_tools.len() + self.summary_tools.len() + self.indexed_tool_names.len()
     }
 
     /// Check if any tools were found
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.full_schema_tools.is_empty()
             && self.summary_tools.is_empty()
@@ -99,6 +105,7 @@ impl HydrationResult {
     }
 
     /// Get all tool names for debugging
+    #[must_use]
     pub fn all_tool_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self
             .full_schema_tools
@@ -237,11 +244,13 @@ impl HydrationPipeline {
     }
 
     /// Get the current config
+    #[must_use]
     pub fn config(&self) -> &HydrationPipelineConfig {
         &self.config
     }
 
     /// Get core tool names
+    #[must_use]
     pub fn core_tools(&self) -> &[String] {
         &self.config.core_tools
     }

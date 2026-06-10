@@ -26,6 +26,7 @@ impl BindMode {
     ///
     /// `Tailnet` and `Auto` currently fall back to loopback (127.0.0.1).
     /// Real Tailscale IP resolution is planned for a future iteration.
+    #[must_use]
     pub fn resolve_addr(&self, port: u16) -> SocketAddr {
         let ip: IpAddr = match self {
             Self::Loopback | Self::Tailnet | Self::Auto => IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),

@@ -139,6 +139,7 @@ impl McpManagerActor {
     /// Get a handle to this actor
     ///
     /// Creates a new handle that can be used to send commands.
+    #[must_use]
     pub fn handle(&self) -> McpManagerHandle {
         McpManagerHandle::new(self.cmd_tx.clone(), self.event_tx.clone())
     }

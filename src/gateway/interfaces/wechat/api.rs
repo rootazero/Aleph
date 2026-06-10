@@ -95,6 +95,7 @@ pub fn build_headers(token: Option<&str>, body: &str) -> HeaderMap {
 }
 
 /// Base info payload for all requests.
+#[must_use]
 pub fn base_info() -> HashMap<String, String> {
     HashMap::from([("channel_version".to_string(), CHANNEL_VERSION.to_string())])
 }
@@ -107,6 +108,7 @@ pub struct ILinkApi {
 }
 
 impl ILinkApi {
+    #[must_use]
     pub fn new(base_url: String) -> Self {
         Self {
             http: Client::new(),
@@ -114,6 +116,7 @@ impl ILinkApi {
         }
     }
 
+    #[must_use]
     pub fn with_timeout(base_url: String, timeout_ms: u64) -> Self {
         Self {
             http: Client::builder()

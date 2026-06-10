@@ -21,6 +21,7 @@ pub struct MarkdownCliTool {
 
 impl MarkdownCliTool {
     /// Create a new Markdown CLI tool
+    #[must_use]
     pub fn new(spec: AlephSkillSpec) -> Self {
         Self { spec }
     }
@@ -119,6 +120,7 @@ pub struct MarkdownToolOutput {
 
 impl MarkdownCliTool {
     /// Get tool definition
+    #[must_use]
     pub fn definition(&self) -> ToolDefinition {
         let schema = self.build_dynamic_schema();
 
@@ -145,6 +147,7 @@ impl MarkdownCliTool {
     }
 
     /// Check if tool requires confirmation
+    #[must_use]
     pub fn requires_confirmation(&self) -> bool {
         if let Some(aleph_meta) = &self.spec.metadata.aleph {
             matches!(

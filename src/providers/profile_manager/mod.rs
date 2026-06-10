@@ -122,12 +122,14 @@ pub struct RuntimeStatus {
 
 impl RuntimeStatus {
     /// Check if currently in cooldown
+    #[must_use]
     pub fn is_in_cooldown(&self) -> bool {
         self.cooldown_until
             .is_some_and(|until| Instant::now() < until)
     }
 
     /// Get remaining cooldown duration in milliseconds
+    #[must_use]
     pub fn cooldown_remaining_ms(&self) -> Option<u64> {
         self.cooldown_until.and_then(|until| {
             let now = Instant::now();
@@ -215,6 +217,7 @@ impl AgentState {
     }
 
     /// Get usage for a profile
+    #[must_use]
     pub fn get_usage(&self, profile_id: &str) -> Option<&ProfileUsage> {
         self.usage.get(profile_id)
     }
@@ -225,16 +228,19 @@ impl AgentState {
     }
 
     /// Get override for a profile
+    #[must_use]
     pub fn get_override(&self, profile_id: &str) -> Option<&ProfileOverride> {
         self.overrides.get(profile_id)
     }
 
     /// Check if a profile is disabled for this agent
+    #[must_use]
     pub fn is_profile_disabled(&self, profile_id: &str) -> bool {
         self.overrides.get(profile_id).is_some_and(|o| o.disabled)
     }
 
     /// Check if a profile exceeds budget
+    #[must_use]
     pub fn exceeds_budget(&self, profile_id: &str) -> bool {
         let Some(override_) = self.overrides.get(profile_id) else {
             return false;

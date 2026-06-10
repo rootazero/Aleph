@@ -18,6 +18,7 @@ pub enum ResolvedUrl {
 
 impl ResolvedUrl {
     /// Get the primary endpoint URL for the given generation type.
+    #[must_use]
     pub fn primary_endpoint(&self, gen_type: GenerationType) -> String {
         match self {
             ResolvedUrl::Custom(url) => url.clone(),
@@ -36,6 +37,7 @@ impl ResolvedUrl {
 
     /// Get the secondary endpoint URL (edit for image, STT for speech).
     /// Returns None for custom URLs or types without secondary endpoints.
+    #[must_use]
     pub fn secondary_endpoint(&self, gen_type: GenerationType) -> Option<String> {
         match self {
             ResolvedUrl::Custom(_) => None,
@@ -56,6 +58,7 @@ impl ResolvedUrl {
 /// - Domain-only (no path after scheme) → Standard (auto-complete)
 /// - Domain + /v1 → Standard (auto-complete)
 /// - Anything else → Custom (use as-is)
+#[must_use]
 pub fn resolve_base_url(url: &str) -> ResolvedUrl {
     let trimmed = url.trim_end_matches('/');
     if needs_auto_complete(trimmed) {

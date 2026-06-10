@@ -62,6 +62,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     /// Attach retrieval-time scoring (recency decay + MMR diversity). An
     /// inactive config (the default) is a no-op, so callers may wire it
     /// unconditionally without changing legacy behaviour.
+    #[must_use]
     pub fn with_scoring_config(mut self, cfg: &RetrievalScoringConfig) -> Self {
         self.scoring = cfg.clone();
         self
@@ -79,6 +80,7 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
     /// no-op (returns `self` unchanged), so callers can wire unconditionally.
     ///
     /// Activates the otherwise-dormant `memory::rerank` provider backends.
+    #[must_use]
     pub fn with_rerank_config(self, cfg: &RerankConfig) -> Self {
         if !cfg.enabled {
             return self;

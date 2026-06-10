@@ -94,6 +94,7 @@ pub struct MessageCoalescer {
 }
 
 impl MessageCoalescer {
+    #[must_use]
     pub fn new(config: CoalescingConfig) -> Self {
         Self {
             buffers: DashMap::new(),

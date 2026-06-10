@@ -22,6 +22,7 @@ pub struct ReplyRoute {
 
 impl ReplyRoute {
     /// Create a new reply route
+    #[must_use]
     pub fn new(channel_id: ChannelId, conversation_id: ConversationId) -> Self {
         Self {
             channel_id,
@@ -32,12 +33,14 @@ impl ReplyRoute {
     }
 
     /// Create reply route with reply-to reference
+    #[must_use]
     pub fn with_reply_to(mut self, message_id: MessageId) -> Self {
         self.reply_to = Some(message_id);
         self
     }
 
     /// Set the original inbound message ID (for reaction lifecycle)
+    #[must_use]
     pub fn with_inbound_message_id(mut self, id: MessageId) -> Self {
         self.inbound_message_id = Some(id);
         self
@@ -71,6 +74,7 @@ pub struct InboundContext {
 
 impl InboundContext {
     /// Create a new inbound context
+    #[must_use]
     pub fn new(message: InboundMessage, reply_route: ReplyRoute, session_key: SessionKey) -> Self {
         let sender_normalized = message.sender_id.as_str().to_string();
         Self {
@@ -85,24 +89,28 @@ impl InboundContext {
     }
 
     /// Mark as authorized
+    #[must_use]
     pub fn authorize(mut self) -> Self {
         self.is_authorized = true;
         self
     }
 
     /// Mark as mentioned
+    #[must_use]
     pub fn with_mention(mut self, mentioned: bool) -> Self {
         self.is_mentioned = mentioned;
         self
     }
 
     /// Set normalized sender ID
+    #[must_use]
     pub fn with_sender_normalized(mut self, normalized: String) -> Self {
         self.sender_normalized = normalized;
         self
     }
 
     /// Set voice reply hint
+    #[must_use]
     pub fn with_voice_reply_hint(mut self, hint: bool) -> Self {
         self.voice_reply_hint = hint;
         self

@@ -49,6 +49,7 @@ pub struct ChannelApprovalBridgeAdapter {
 
 impl ChannelApprovalBridgeAdapter {
     /// Construct a new adapter. Uses the default 2-minute approval timeout.
+    #[must_use]
     pub fn new(
         bridge: Arc<ChannelApprovalBridge>,
         approval_manager: Arc<ExecApprovalManager>,

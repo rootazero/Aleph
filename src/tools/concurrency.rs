@@ -80,6 +80,7 @@ impl ConcurrencyClaim {
     }
 
     /// The whole-world exclusive claim. Conflicts with everything.
+    #[must_use]
     pub fn global() -> Self {
         ConcurrencyClaim::Exclusive {
             scope: ExclusiveScope::Global,
@@ -94,6 +95,7 @@ impl ConcurrencyClaim {
 /// * `Shared`   vs `Exclusive(_)`     → conflict (read may observe a torn write)
 /// * `Global`   vs anything           → conflict (unbounded footprint)
 /// * `Paths(a)` vs `Paths(b)`         → conflict iff the path sets overlap
+#[must_use]
 pub fn claims_conflict(a: &ConcurrencyClaim, b: &ConcurrencyClaim) -> bool {
     use ConcurrencyClaim::{Exclusive, Shared};
     match (a, b) {
@@ -155,6 +157,7 @@ fn path_pair_overlap(a: &str, b: &str) -> bool {
 /// empty/whitespace-only input. Does not canonicalize `~` or relative-vs-cwd —
 /// that is intentional; comparison falls back to the conservative
 /// absolute/relative mismatch rule above.
+#[must_use]
 pub fn normalize_path(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -193,6 +196,7 @@ pub fn normalize_path(raw: &str) -> Option<String> {
 /// so the empty / single-element cases (vacuously `true`) never reach the
 /// parallel path on their own. O(n²) over the batch, but n is the number of
 /// tool calls in one turn — small.
+#[must_use]
 pub fn batch_parallelizable(claims: &[ConcurrencyClaim]) -> bool {
     for (i, a) in claims.iter().enumerate() {
         for b in &claims[i + 1..] {
@@ -233,6 +237,7 @@ pub fn batch_parallelizable(claims: &[ConcurrencyClaim]) -> bool {
 ///
 /// Returns an empty vec for an empty batch; otherwise the ranges always cover
 /// `0..claims.len()` with no gaps or overlaps.
+#[must_use]
 pub fn partition_parallel_groups(claims: &[ConcurrencyClaim]) -> Vec<(usize, usize)> {
     let mut groups = Vec::new();
     let mut start = 0usize;

@@ -31,6 +31,7 @@ pub const MANAGED_BY_KEY: &str = "managed_by";
 pub const MANAGED_BY_DISPATCHER: &str = "dispatcher";
 
 /// Returns whether `task` is owned by the autonomous dispatcher.
+#[must_use]
 pub fn is_dispatcher_managed(task: &CoordTask) -> bool {
     task.metadata
         .get(MANAGED_BY_KEY)
@@ -61,6 +62,7 @@ fn completion_status(task: &CoordTask) -> CoordTaskStatus {
 /// process isn't running, have a recorded `started_at`, and whose elapsed
 /// time exceeds `zombie_ttl_secs`. A `zombie_ttl_secs` of 0 disables
 /// detection (matches the runtime fast-path in [`TeamDispatcher::reclaim_zombies`]).
+#[must_use]
 pub fn is_zombie(
     task: &CoordTask,
     running: &HashSet<String>,
@@ -108,6 +110,7 @@ pub fn is_zombie(
 /// candidate fits in `available_slots`, the result is the same set the old
 /// strict-priority `take(available_slots)` produced (single-owner picks fall
 /// through to pure priority/FIFO order).
+#[must_use]
 pub fn select_schedulable(
     tasks: &[CoordTask],
     running: &HashMap<String, String>,

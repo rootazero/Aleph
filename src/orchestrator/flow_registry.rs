@@ -14,6 +14,7 @@ pub struct FlowRegistry {
 }
 
 impl FlowRegistry {
+    #[must_use]
     pub fn new(initial: FlowSet) -> Self {
         Self {
             flows: ArcSwap::from(Arc::new(initial)),

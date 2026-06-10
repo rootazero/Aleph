@@ -101,6 +101,7 @@ fn glob_to_regex_str(pattern: &str) -> String {
 ///
 /// Public for use in tests. The hot path in [`ConfigApprovalPolicy::check`]
 /// uses pre-compiled regexes instead.
+#[must_use]
 pub fn matches_glob(value: &str, pattern: &str) -> bool {
     regex::Regex::new(&glob_to_regex_str(pattern))
         .map(|re| re.is_match(value))
@@ -164,6 +165,7 @@ pub struct ConfigApprovalPolicy {
 
 impl ConfigApprovalPolicy {
     /// Create a new policy from an explicit [`PolicyConfig`].
+    #[must_use]
     pub fn new(config: PolicyConfig) -> Self {
         let blocklist_by_type = compile_rules_grouped(&config.blocklist);
         let allowlist_by_type = compile_rules_grouped(&config.allowlist);
@@ -178,6 +180,7 @@ impl ConfigApprovalPolicy {
     ///
     /// If the file does not exist or cannot be parsed, a sensible default
     /// policy is returned instead.
+    #[must_use]
     pub fn load() -> Self {
         Self::load_from(Self::config_path())
     }

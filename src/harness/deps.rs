@@ -177,11 +177,13 @@ impl Default for StallConfig {
 }
 
 impl StallConfig {
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
+    #[must_use]
     pub fn with_check_interval(mut self, interval: Duration) -> Self {
         self.check_interval = interval;
         self
@@ -195,6 +197,7 @@ pub struct StallTracker {
 }
 
 impl StallTracker {
+    #[must_use]
     pub fn new(config: StallConfig) -> Self {
         Self {
             last_activity: Arc::new(Mutex::new(Instant::now())),

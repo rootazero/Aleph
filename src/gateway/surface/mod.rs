@@ -26,6 +26,7 @@ impl SurfaceKind {
     /// Parse a client-declared `channel_kind` string (case-insensitive,
     /// trimmed). Anything unrecognised or absent → `Unknown` (fail-safe: an
     /// unknown surface gets no special treatment).
+    #[must_use]
     pub fn from_opt_str(s: Option<&str>) -> Self {
         match s.map(|v| v.trim().to_ascii_lowercase()).as_deref() {
             Some("desktop") => SurfaceKind::Desktop,
@@ -36,6 +37,7 @@ impl SurfaceKind {
     }
 
     /// Stable wire/log string for this kind.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             SurfaceKind::Desktop => "desktop",

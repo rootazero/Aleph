@@ -14,6 +14,7 @@ pub struct AtomicConnectionState {
 }
 
 impl AtomicConnectionState {
+    #[must_use]
     pub fn new(initial: ConnectionState) -> Self {
         Self {
             inner: AtomicUsize::new(initial as usize),

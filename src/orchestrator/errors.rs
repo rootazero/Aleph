@@ -42,6 +42,7 @@ pub enum FlowError {
 impl FlowError {
     /// `true` when the Gateway's outer retry loop should pick another
     /// provider and dispatch again. Currently only `Transient` qualifies.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self, FlowError::Transient { .. })
     }

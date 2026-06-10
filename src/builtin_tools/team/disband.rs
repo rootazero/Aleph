@@ -58,6 +58,7 @@ impl TeamDisbandTool {
     }
 
     /// Set optional cleanup stores for post-disband resource cleanup.
+    #[must_use]
     pub fn with_cleanup_stores(
         mut self,
         msg_store: Option<Arc<dyn MessageStore>>,

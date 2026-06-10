@@ -36,16 +36,19 @@ pub struct ImageData {
 
 impl ImageData {
     /// Create a new ImageData instance
+    #[must_use]
     pub fn new(data: Vec<u8>, format: ImageFormat) -> Self {
         Self { data, format }
     }
 
     /// Get the size of the image data in bytes
+    #[must_use]
     pub fn size_bytes(&self) -> usize {
         self.data.len()
     }
 
     /// Get the size of the image data in megabytes
+    #[must_use]
     pub fn size_mb(&self) -> f64 {
         self.data.len() as f64 / (1024.0 * 1024.0)
     }
@@ -53,6 +56,7 @@ impl ImageData {
     /// Convert image to Base64 data URI format for API requests
     ///
     /// Returns a string in the format: "data:image/<format>;base64,<encoded_data>"
+    #[must_use]
     pub fn to_base64(&self) -> String {
         let mime_type = match self.format {
             ImageFormat::Png => "image/png",

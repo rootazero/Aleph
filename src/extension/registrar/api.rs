@@ -123,6 +123,7 @@ impl<'a> CapabilityApi<'a> {
     }
 
     /// Get a reference to the underlying registry (for inspection in tests).
+    #[must_use]
     pub fn registry(&self) -> &PluginRegistry {
         self.registry
     }

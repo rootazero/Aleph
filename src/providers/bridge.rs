@@ -59,6 +59,7 @@ impl AiProviderBridge {
     }
 
     /// Set a per-request model override (takes precedence over provider config).
+    #[must_use]
     pub fn with_model(mut self, model: String) -> Self {
         self.model = Some(model);
         self

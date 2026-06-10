@@ -120,6 +120,7 @@ impl CommandPolicy {
     /// Convenience constructor: the curated [`default_rules`] under the given
     /// enforcement mode. Infallible — the default patterns are known-good and
     /// covered by a compile test.
+    #[must_use]
     pub fn defaults(enforcement: EnforcementMode) -> Self {
         let rules = default_rules().into_iter().map(|r| {
             (
@@ -133,11 +134,13 @@ impl CommandPolicy {
     }
 
     /// Number of compiled rules — primarily for diagnostics / tests.
+    #[must_use]
     pub fn rule_count(&self) -> usize {
         self.names.len()
     }
 
     /// Evaluate a reconstructed command string against every rule in one pass.
+    #[must_use]
     pub fn evaluate(&self, command_text: &str) -> PolicyEvaluation {
         if matches!(self.enforcement, EnforcementMode::Off) {
             return PolicyEvaluation::default();
@@ -202,6 +205,7 @@ impl CommandPolicy {
 /// space-joined, then any UTF-8 stdin payload (the `bash -s` large-script
 /// path) on a fresh line. Non-UTF-8 stdin is skipped — the OS sandbox covers
 /// binary payloads; the policy is a text-pattern filter.
+#[must_use]
 pub fn command_text(cmd: &SandboxCommand) -> String {
     let mut s = String::with_capacity(cmd.program.len() + 16);
     s.push_str(&cmd.program);
@@ -227,6 +231,7 @@ pub struct CommandPolicyHook {
 }
 
 impl CommandPolicyHook {
+    #[must_use]
     pub fn new(policy: CommandPolicy) -> Self {
         Self { policy }
     }

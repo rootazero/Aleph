@@ -57,6 +57,7 @@ pub struct WasmCapabilityKernel {
 }
 
 impl WasmCapabilityKernel {
+    #[must_use]
     pub fn new(
         plugin_id: String,
         capabilities: WasmCapabilities,

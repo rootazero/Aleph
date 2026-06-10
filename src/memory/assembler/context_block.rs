@@ -41,6 +41,7 @@ user's actual request.]";
 /// Returns an empty string when `rendered` is empty or whitespace-only, so a
 /// caller can keep its existing "skip injection on empty envelope" branch
 /// unchanged. The fence and system note are added only around real content.
+#[must_use]
 pub fn wrap_memory_context(rendered: &str) -> String {
     if rendered.trim().is_empty() {
         return String::new();

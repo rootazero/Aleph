@@ -50,11 +50,13 @@ fn get_high_risk_patterns() -> &'static Vec<Regex> {
 
 impl RiskEvaluator {
     /// Create a new risk evaluator
+    #[must_use]
     pub fn new() -> Self {
         Self { use_patterns: true }
     }
 
     /// Check if text matches any high-risk pattern
+    #[must_use]
     pub fn matches_high_risk_pattern(&self, text: &str) -> bool {
         if !self.use_patterns {
             return false;

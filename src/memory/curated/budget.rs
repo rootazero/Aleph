@@ -12,6 +12,7 @@ use super::format::{serialize, ENTRY_DELIMITER};
 /// Counts `n` delimiters total: `n-1` between entries plus `1` trailing.
 /// Matches `format::serialize`, which emits a trailing `\n§\n` sentinel so
 /// the file is unambiguously distinguishable from legacy markdown on reload.
+#[must_use]
 pub fn used_chars(entries: &[String]) -> usize {
     if entries.is_empty() {
         return 0;
@@ -20,6 +21,7 @@ pub fn used_chars(entries: &[String]) -> usize {
 }
 
 /// Percentage of `limit` consumed (0..=100, capped at 100 for display).
+#[must_use]
 pub fn usage_pct(used: usize, limit: usize) -> u8 {
     if limit == 0 {
         return 100;
@@ -29,6 +31,7 @@ pub fn usage_pct(used: usize, limit: usize) -> u8 {
 }
 
 /// Render the prompt header line. Returns an empty string if `entries` is empty.
+#[must_use]
 pub fn header(entries: &[String], limit: usize, near_threshold: f32) -> String {
     if entries.is_empty() {
         return String::new();
@@ -46,6 +49,7 @@ pub fn header(entries: &[String], limit: usize, near_threshold: f32) -> String {
 }
 
 /// Sanity check: would adding `new_content` exceed the limit?
+#[must_use]
 pub fn would_exceed(entries: &[String], new_content: &str, limit: usize) -> bool {
     let projected: Vec<String> = entries
         .iter()

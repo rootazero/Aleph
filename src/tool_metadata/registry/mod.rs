@@ -87,6 +87,7 @@ impl Default for ToolCatalog {
 
 impl ToolCatalog {
     /// Create a new empty registry
+    #[must_use]
     pub fn new() -> Self {
         let tools: ToolStorage = Arc::new(AsyncRwLock::new(HashMap::new()));
         Self {
@@ -104,6 +105,7 @@ impl ToolCatalog {
     /// Used by callers that need to register a [`ToolHealthProbe`]
     /// (typically at boot, alongside the tool that owns the probe) or
     /// inspect cached probe results.
+    #[must_use]
     pub fn health(&self) -> Arc<ToolHealthCache> {
         Arc::clone(&self.health)
     }
@@ -118,6 +120,7 @@ impl ToolCatalog {
     }
 
     /// Remove a previously registered health probe by name.
+    #[must_use]
     pub fn unregister_health_probe(&self, name: &str) -> bool {
         self.health.unregister_probe(name)
     }
@@ -166,6 +169,7 @@ impl ToolCatalog {
     }
 
     /// Resolve a naming conflict between two tools
+    #[must_use]
     pub fn resolve_conflict(
         &self,
         name: &str,

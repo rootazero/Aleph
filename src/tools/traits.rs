@@ -170,6 +170,7 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
     ///
     /// Default mirrors opencode's `InvalidArgumentsError.message`: it names the
     /// tool and instructs the model to rewrite the input to match the schema.
+    #[must_use]
     fn format_validation_error(err: &serde_json::Error) -> String {
         format!(
             "The {tool} tool was called with invalid arguments: {detail}. \

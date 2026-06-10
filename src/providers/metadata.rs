@@ -40,6 +40,7 @@ pub enum Modality {
 
 impl Modality {
     /// Stable, lowercase identifier for serialization.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Modality::Chat => "chat",
@@ -75,6 +76,7 @@ pub struct ProviderMetadata {
 
 impl ProviderMetadata {
     /// True if this preset can serve the given modality.
+    #[must_use]
     pub fn supports(&self, m: Modality) -> bool {
         self.modalities.contains(&m)
     }

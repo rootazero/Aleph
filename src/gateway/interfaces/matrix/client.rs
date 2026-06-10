@@ -83,10 +83,12 @@ impl MatrixSdkClient {
         })
     }
 
+    #[must_use]
     pub fn user_id(&self) -> &str {
         &self.user_id
     }
 
+    #[must_use]
     pub fn inner(&self) -> &Client {
         &self.inner
     }

@@ -21,6 +21,7 @@ pub struct CompressionSession {
 
 impl CompressionSession {
     /// Create a new compression session record
+    #[must_use]
     pub fn new(
         source_memory_ids: Vec<String>,
         extracted_fact_ids: Vec<String>,
@@ -71,6 +72,7 @@ pub struct CompressionResult {
 
 impl CompressionResult {
     /// Create an empty result (no work done)
+    #[must_use]
     pub fn empty() -> Self {
         Self::default()
     }

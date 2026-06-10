@@ -9,6 +9,7 @@ use crate::gateway::session_store::types::{MessageRecord, SessionMetadata};
 const MIGRATION_MARKER: &str = ".migrated_from_sqlite";
 
 /// Check whether a legacy SQLite sessions database exists and has not yet been migrated.
+#[must_use]
 pub fn migration_needed(base_dir: &Path) -> bool {
     let marker = base_dir.join(MIGRATION_MARKER);
     if marker.exists() {

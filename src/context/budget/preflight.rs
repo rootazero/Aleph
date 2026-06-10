@@ -43,11 +43,13 @@ pub struct PreflightPipeline {
 
 impl PreflightPipeline {
     /// Create a new pipeline with the given ordered stages.
+    #[must_use]
     pub fn new(stages: Vec<Box<dyn PreflightStage>>) -> Self {
         Self { stages }
     }
 
     /// Create an empty pipeline (no-op).
+    #[must_use]
     pub fn empty() -> Self {
         Self { stages: Vec::new() }
     }

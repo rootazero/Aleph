@@ -266,6 +266,7 @@ pub struct SessionEventRecord {
 }
 
 /// Current wall-clock in unix ms.
+#[must_use]
 pub fn now_ms() -> Timestamp {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

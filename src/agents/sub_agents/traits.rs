@@ -121,6 +121,7 @@ impl StepContextInfo {
 
 impl ExecutionContextInfo {
     /// Create new execution context
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -156,6 +157,7 @@ impl ExecutionContextInfo {
     }
 
     /// Add a recent step
+    #[must_use]
     pub fn with_step(mut self, step: StepContextInfo) -> Self {
         self.recent_steps.push(step);
         self
@@ -168,6 +170,7 @@ impl ExecutionContextInfo {
     }
 
     /// Check if context is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.working_directory.is_none()
             && self.current_app.is_none()
@@ -186,6 +189,7 @@ impl ExecutionContextInfo {
     /// # Arguments
     ///
     /// * `max_length` - Maximum length of the summary (default: 500 chars)
+    #[must_use]
     pub fn build_summary(&self, max_length: Option<usize>) -> String {
         let max_len = max_length.unwrap_or(500);
         let mut parts = Vec::new();
@@ -217,6 +221,7 @@ impl ExecutionContextInfo {
     /// Create a prompt-ready context string
     ///
     /// Formats the context information for inclusion in an LLM prompt.
+    #[must_use]
     pub fn to_prompt(&self) -> String {
         let mut lines = Vec::new();
 
@@ -276,6 +281,7 @@ impl SubAgentRequest {
     }
 
     /// Set max iterations
+    #[must_use]
     pub fn with_max_iterations(mut self, max: u32) -> Self {
         self.max_iterations = Some(max);
         self
@@ -288,6 +294,7 @@ impl SubAgentRequest {
     }
 
     /// Set execution context from main agent
+    #[must_use]
     pub fn with_execution_context(mut self, context: ExecutionContextInfo) -> Self {
         self.execution_context = Some(context);
         self
@@ -402,24 +409,28 @@ impl SubAgentResult {
     }
 
     /// Add output
+    #[must_use]
     pub fn with_output(mut self, output: Value) -> Self {
         self.output = Some(output);
         self
     }
 
     /// Add iterations used
+    #[must_use]
     pub fn with_iterations(mut self, iterations: u32) -> Self {
         self.iterations_used = iterations;
         self
     }
 
     /// Add tool calls
+    #[must_use]
     pub fn with_tools_called(mut self, tools: Vec<ToolCallRecord>) -> Self {
         self.tools_called = tools;
         self
     }
 
     /// Add artifacts
+    #[must_use]
     pub fn with_artifacts(mut self, artifacts: Vec<Artifact>) -> Self {
         self.artifacts = artifacts;
         self

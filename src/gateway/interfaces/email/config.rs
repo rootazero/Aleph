@@ -88,6 +88,7 @@ impl Default for EmailConfig {
 
 impl EmailConfig {
     /// Create config from environment variables
+    #[must_use]
     pub fn from_env() -> Option<Self> {
         let imap_host = std::env::var("EMAIL_IMAP_HOST").ok()?;
         let smtp_host = std::env::var("EMAIL_SMTP_HOST").ok()?;
@@ -135,6 +136,7 @@ impl EmailConfig {
     }
 
     /// Check if a sender email is allowed
+    #[must_use]
     pub fn is_sender_allowed(&self, sender: &str) -> bool {
         if self.allowed_senders.is_empty() {
             true

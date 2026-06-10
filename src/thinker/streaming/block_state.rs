@@ -41,6 +41,7 @@ impl Default for ThinkingTagParser {
 
 impl ThinkingTagParser {
     /// Create a new parser
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: BlockState::Content,
@@ -52,16 +53,19 @@ impl ThinkingTagParser {
     }
 
     /// Get current state
+    #[must_use]
     pub fn state(&self) -> BlockState {
         self.state
     }
 
     /// Get accumulated thinking content
+    #[must_use]
     pub fn accumulated_thinking(&self) -> &str {
         &self.accumulated_thinking
     }
 
     /// Get accumulated regular content
+    #[must_use]
     pub fn accumulated_content(&self) -> &str {
         &self.accumulated_content
     }

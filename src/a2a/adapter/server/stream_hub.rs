@@ -23,6 +23,7 @@ pub struct StreamHub {
 }
 
 impl StreamHub {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             channels: AsyncRwLock::new(HashMap::new()),
@@ -30,6 +31,7 @@ impl StreamHub {
         }
     }
 
+    #[must_use]
     pub fn with_capacity(capacity: usize) -> Self {
         // broadcast::channel panics if capacity is 0
         let capacity = capacity.max(1);

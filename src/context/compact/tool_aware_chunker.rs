@@ -39,6 +39,7 @@ pub enum SemanticUnit {
 
 impl SemanticUnit {
     /// Returns all message indices covered by this unit, in ascending order.
+    #[must_use]
     pub fn message_indices(&self) -> Vec<usize> {
         match self {
             SemanticUnit::UserMessage { index } => vec![*index],
@@ -62,6 +63,7 @@ impl SemanticUnit {
     ///
     /// Uses `content_len / ratio` as a proxy, matching the estimator used
     /// throughout the compaction pipeline.
+    #[must_use]
     pub fn token_size(&self, messages: &[UnifiedMessage], ratio: f64) -> usize {
         self.message_indices()
             .iter()
@@ -74,6 +76,7 @@ impl SemanticUnit {
     }
 
     /// The earliest (smallest) message index in this unit.
+    #[must_use]
     pub fn first_index(&self) -> usize {
         match self {
             SemanticUnit::UserMessage { index } => *index,
@@ -87,6 +90,7 @@ impl SemanticUnit {
     /// For a `ToolRound` this is the follow-up (if present), else the tool
     /// result — a round can straddle a tail boundary that its `first_index`
     /// (the tool-use message) sits below.
+    #[must_use]
     pub fn last_index(&self) -> usize {
         match self {
             SemanticUnit::UserMessage { index } => *index,
@@ -119,6 +123,7 @@ pub struct SemanticChunk {
 
 impl SemanticChunk {
     /// Flat-map all message indices across every unit in the chunk, in order.
+    #[must_use]
     pub fn message_indices(&self) -> Vec<usize> {
         self.units
             .iter()
@@ -144,6 +149,7 @@ impl SemanticChunk {
 /// 3. A `ToolResult` without a preceding tool call (orphan) → `UserMessage` by
 ///    index (rare; the provider layer should already have repaired orphans).
 /// 4. A plain `Assistant` message → `AssistantText`.
+#[must_use]
 pub fn parse_semantic_units(messages: &[UnifiedMessage]) -> Vec<SemanticUnit> {
     let mut units = Vec::new();
     let mut i = 0;
@@ -228,6 +234,7 @@ pub struct ToolAwareChunker {
 
 impl ToolAwareChunker {
     /// Create a new chunker with the given token limit and estimation ratio.
+    #[must_use]
     pub fn new(chunk_token_limit: usize, token_ratio: f64) -> Self {
         Self {
             chunk_token_limit,
@@ -249,6 +256,7 @@ impl ToolAwareChunker {
     /// # Invariants
     /// - A single unit is **never split**, even if it alone exceeds the limit.
     /// - An oversized unit is placed in its own chunk.
+    #[must_use]
     pub fn chunk(
         &self,
         units: &[SemanticUnit],

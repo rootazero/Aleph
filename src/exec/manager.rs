@@ -56,6 +56,7 @@ pub struct ExecApprovalRecord {
 
 impl ExecApprovalRecord {
     /// Create from ApprovalRequest
+    #[must_use]
     pub fn from_request(request: &ApprovalRequest, timeout_ms: u64) -> Self {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -97,6 +98,7 @@ impl ExecApprovalRecord {
     }
 
     /// Check if expired
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -106,6 +108,7 @@ impl ExecApprovalRecord {
     }
 
     /// Check if resolved
+    #[must_use]
     pub fn is_resolved(&self) -> bool {
         self.decision.is_some()
     }
@@ -139,11 +142,13 @@ pub struct ExecApprovalManager {
 
 impl ExecApprovalManager {
     /// Create new manager with default storage
+    #[must_use]
     pub fn new() -> Self {
         Self::with_storage(Arc::new(ExecApprovalsStorage::new()))
     }
 
     /// Create manager with custom storage
+    #[must_use]
     pub fn with_storage(storage: Arc<ExecApprovalsStorage>) -> Self {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),
@@ -195,6 +200,7 @@ impl ExecApprovalManager {
     /// notification about the pending approval should call this FIRST, then
     /// publish, then [`Self::await_registered`] — so a fast resolver cannot
     /// race ahead of registration (resolve-before-register → spurious timeout).
+    #[must_use]
     pub fn register_pending(
         &self,
         record: ExecApprovalRecord,
@@ -392,6 +398,7 @@ impl ExecApprovalManager {
     }
 
     /// Whether `session_key` has at least one unresolved pending approval.
+    #[must_use]
     pub fn has_pending_for_session(&self, session_key: &str) -> bool {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
         pending
@@ -400,6 +407,7 @@ impl ExecApprovalManager {
     }
 
     /// Get snapshot of a pending approval
+    #[must_use]
     pub fn get_pending(&self, id: &str) -> Option<PendingApproval> {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
         pending.get(id).map(|entry| {
@@ -419,6 +427,7 @@ impl ExecApprovalManager {
     }
 
     /// List all pending approvals
+    #[must_use]
     pub fn list_pending(&self) -> Vec<PendingApproval> {
         let pending = self.pending.read().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();

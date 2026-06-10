@@ -84,6 +84,7 @@ impl PendingApproval {
     }
 
     /// Check if the approval has expired
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         self.expires_at < Utc::now()
     }

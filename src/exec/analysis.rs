@@ -24,6 +24,7 @@ pub struct CommandAnalysis {
 
 impl CommandAnalysis {
     /// Create a successful analysis with segments
+    #[must_use]
     pub fn success(segments: Vec<CommandSegment>, chains: Vec<Vec<CommandSegment>>) -> Self {
         Self {
             ok: true,
@@ -44,6 +45,7 @@ impl CommandAnalysis {
     }
 
     /// Get all executable names from segments
+    #[must_use]
     pub fn executables(&self) -> Vec<&str> {
         self.segments
             .iter()
@@ -77,12 +79,14 @@ impl CommandSegment {
     }
 
     /// Set resolution
+    #[must_use]
     pub fn with_resolution(mut self, resolution: CommandResolution) -> Self {
         self.resolution = Some(resolution);
         self
     }
 
     /// Get the executable name (first argv element)
+    #[must_use]
     pub fn executable(&self) -> Option<&str> {
         self.argv.first().map(|s| s.as_str())
     }

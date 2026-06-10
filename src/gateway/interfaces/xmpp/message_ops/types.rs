@@ -17,6 +17,7 @@ pub struct JidParts {
 
 impl JidParts {
     /// Reconstruct the bare JID (without resource)
+    #[must_use]
     pub fn bare(&self) -> String {
         format!("{}@{}", self.local, self.domain)
     }
@@ -44,6 +45,7 @@ pub struct XmppMessage {
 /// - `local@domain/resource`
 ///
 /// Returns `None` if the JID doesn't contain `@`.
+#[must_use]
 pub fn parse_jid(jid: &str) -> Option<JidParts> {
     let at_pos = jid.find('@')?;
     let local = jid[..at_pos].to_string();

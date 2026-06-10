@@ -24,6 +24,7 @@ pub struct PendingInvokes {
 }
 
 impl PendingInvokes {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -120,6 +121,7 @@ pub struct ReverseRpcChannel {
 
 impl ReverseRpcChannel {
     /// 用一条连接的出站发送端构造通道（新建独立的 pending 表）。
+    #[must_use]
     pub fn new(outbound: mpsc::Sender<String>) -> Self {
         Self {
             outbound,
@@ -128,6 +130,7 @@ impl ReverseRpcChannel {
     }
 
     /// 拿到共享的 pending 表。连接的入站循环用它把响应帧 `resolve` 回来。
+    #[must_use]
     pub fn pending(&self) -> Arc<PendingInvokes> {
         self.pending.clone()
     }

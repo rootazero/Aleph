@@ -16,6 +16,7 @@ pub struct EventScopeGuard {
 
 impl EventScopeGuard {
     /// Create a guard with custom rules.
+    #[must_use]
     pub fn new(rules: Vec<(String, Vec<String>)>) -> Self {
         Self { rules }
     }
@@ -29,6 +30,7 @@ impl EventScopeGuard {
     /// | `exec.approval.` | admin, exec.approver |
     /// | `config.changed` | admin, config.viewer |
     /// | `surface.approval` | admin, exec.approver |
+    #[must_use]
     pub fn default_rules() -> Self {
         Self {
             rules: vec![
@@ -66,6 +68,7 @@ impl EventScopeGuard {
     /// - If the topic matches a rule prefix, the client must hold at least one
     ///   of that rule's required permissions.
     /// - If no rule matches, the event is unguarded and allowed for everyone.
+    #[must_use]
     pub fn can_receive(&self, topic: &str, permissions: &[String]) -> bool {
         for (prefix, required) in &self.rules {
             if topic.starts_with(prefix) || topic == prefix {

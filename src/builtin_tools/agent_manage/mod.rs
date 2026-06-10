@@ -24,6 +24,7 @@ pub struct SessionContext {
 
 pub type SessionContextHandle = Arc<RwLock<SessionContext>>;
 
+#[must_use]
 pub fn new_session_context_handle() -> SessionContextHandle {
     Arc::new(RwLock::new(SessionContext::default()))
 }
@@ -38,6 +39,7 @@ pub struct ToolPolicy {
 }
 
 impl ToolPolicy {
+    #[must_use]
     pub fn is_allowed(&self, tool_name: &str) -> bool {
         if !self.whitelist.is_empty() && !self.whitelist.iter().any(|w| w == tool_name) {
             return false;
@@ -51,6 +53,7 @@ impl ToolPolicy {
 
 pub type ToolPolicyHandle = Arc<RwLock<ToolPolicy>>;
 
+#[must_use]
 pub fn new_tool_policy_handle() -> ToolPolicyHandle {
     Arc::new(RwLock::new(ToolPolicy::default()))
 }

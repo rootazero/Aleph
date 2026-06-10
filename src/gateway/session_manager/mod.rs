@@ -163,6 +163,7 @@ impl SessionIdentityMeta {
     }
 
     /// Parse from JSON string (with fallback to default)
+    #[must_use]
     pub fn from_json_str(json: Option<&str>) -> Self {
         json.and_then(|s| serde_json::from_str(s).ok())
             .unwrap_or_default()
@@ -174,6 +175,7 @@ impl SessionIdentityMeta {
     }
 
     /// Convert to IdentityContext for a specific request
+    #[must_use]
     pub fn to_identity_context(&self, session_key: String) -> IdentityContext {
         match self.role {
             Role::Owner => IdentityContext::owner(session_key, self.source_channel.clone()),
@@ -279,6 +281,7 @@ impl SessionManager {
     }
 
     /// Attach an event bus for publishing session lifecycle events.
+    #[must_use]
     pub fn with_event_bus(mut self, bus: Arc<super::event_bus::GatewayEventBus>) -> Self {
         self.event_bus = Some(bus);
         self

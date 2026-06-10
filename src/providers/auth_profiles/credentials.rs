@@ -58,6 +58,7 @@ pub enum AuthProfileCredential {
 
 impl AuthProfileCredential {
     /// Get the provider ID for this credential
+    #[must_use]
     pub fn provider(&self) -> &str {
         match self {
             Self::ApiKey(c) => &c.provider,
@@ -67,6 +68,7 @@ impl AuthProfileCredential {
     }
 
     /// Get the credential type name
+    #[must_use]
     pub fn credential_type(&self) -> &'static str {
         match self {
             Self::ApiKey(_) => "api_key",
@@ -76,6 +78,7 @@ impl AuthProfileCredential {
     }
 
     /// Check if the credential has valid/non-empty authentication data
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         match self {
             Self::ApiKey(c) => !c.key.trim().is_empty(),
@@ -88,6 +91,7 @@ impl AuthProfileCredential {
     }
 
     /// Check if the credential is expired (for token/oauth types)
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -105,6 +109,7 @@ impl AuthProfileCredential {
     }
 
     /// Get the API key or token for use in requests
+    #[must_use]
     pub fn resolve_key(&self) -> Option<&str> {
         match self {
             Self::ApiKey(c) => Some(&c.key),
@@ -115,6 +120,7 @@ impl AuthProfileCredential {
 
     /// Type score for ordering (lower = higher priority)
     /// OAuth > Token > API Key
+    #[must_use]
     pub fn type_score(&self) -> u8 {
         match self {
             Self::OAuth(_) => 0,

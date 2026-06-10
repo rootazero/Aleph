@@ -136,6 +136,7 @@ pub struct SkillManageTool {
 }
 
 impl SkillManageTool {
+    #[must_use]
     pub fn new(system: SkillSystem) -> Self {
         Self {
             system,

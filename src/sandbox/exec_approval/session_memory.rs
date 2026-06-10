@@ -71,6 +71,7 @@ impl SessionApprovalMemory {
 static GLOBAL: LazyLock<SessionApprovalMemory> = LazyLock::new(SessionApprovalMemory::new);
 
 /// Process-wide session approval memory shared by every per-turn tool service.
+#[must_use]
 pub fn global() -> &'static SessionApprovalMemory {
     &GLOBAL
 }

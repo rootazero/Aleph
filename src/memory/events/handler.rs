@@ -27,6 +27,7 @@ pub struct MemoryCommandHandler {
 }
 
 impl MemoryCommandHandler {
+    #[must_use]
     pub fn new(db: Arc<StateDatabase>) -> Self {
         Self {
             db,
@@ -35,6 +36,7 @@ impl MemoryCommandHandler {
     }
 
     /// Attach a `NoteIndexer` to enable the notes write path.
+    #[must_use]
     pub fn with_note_indexer(mut self, indexer: Arc<NoteIndexer<SqliteMemoryBackend>>) -> Self {
         self.note_indexer = Some(indexer);
         self

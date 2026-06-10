@@ -27,6 +27,7 @@ pub struct ApprovedDevice {
 
 impl ApprovedDevice {
     /// Create a new approved device
+    #[must_use]
     pub fn new(device_id: String, device_name: String, device_type: Option<String>) -> Self {
         Self {
             device_id,

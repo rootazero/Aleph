@@ -16,6 +16,7 @@ use crate::goal::{Goal, GoalStatus, PursuitMode};
 /// Pure decision: should this goal get one more autonomous continuation?
 /// `tokens_now` is the session's current total-token count (pass 0 when a
 /// live counter isn't available — then only the iteration cap applies).
+#[must_use]
 pub fn should_continue(goal: &Goal, tokens_now: u64) -> bool {
     let PursuitMode::Active { max_iterations } = goal.pursuit else {
         return false; // Passive goals never self-continue.
@@ -40,6 +41,7 @@ pub fn should_continue(goal: &Goal, tokens_now: u64) -> bool {
 /// (R9 — intelligence in the prompt). On the FINAL allowed iteration it switches
 /// to a wrap-up prompt (hermes "grace call" parity) so the model concludes
 /// gracefully instead of being cut mid-thought when the next hook stops it.
+#[must_use]
 pub fn continuation_prompt(goal: &Goal) -> String {
     let (this_iter, max_iter) = match goal.pursuit {
         PursuitMode::Active { max_iterations } => {
@@ -82,6 +84,7 @@ pub fn continuation_prompt(goal: &Goal) -> String {
 ///
 /// This is a structural backstop, not a judgment about the work (R7): it fires
 /// purely on the same caps `should_continue` enforces.
+#[must_use]
 pub fn exhausted_while_active(goal: &Goal, tokens_now: u64) -> bool {
     matches!(goal.pursuit, PursuitMode::Active { .. })
         && goal.status == GoalStatus::Active
@@ -90,6 +93,7 @@ pub fn exhausted_while_active(goal: &Goal, tokens_now: u64) -> bool {
 
 /// Human-readable note stamped on a goal when autonomous pursuit is cut off by
 /// the caps, so the user sees why the loop stopped on their next turn.
+#[must_use]
 pub fn cap_reached_note(goal: &Goal) -> String {
     match goal.pursuit {
         PursuitMode::Active { max_iterations } => format!(

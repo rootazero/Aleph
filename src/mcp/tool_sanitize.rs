@@ -44,6 +44,7 @@ use serde_json::{Map, Value};
 /// `anyOf`/`oneOf`/`allOf` combinators — i.e. every position that holds a
 /// sub-schema. Plain data arrays (`required`, `enum`) are never treated as
 /// schemas.
+#[must_use]
 pub fn normalize_tool_schema(schema: Value) -> Value {
     normalize_node(schema)
 }
@@ -207,6 +208,7 @@ const INJECTION_MARKERS: &[&str] = &[
 ///
 /// Advisory only — callers should warn, not block. A `None` result means the
 /// description tripped no heuristic; `Some(marker)` names the phrase that did.
+#[must_use]
 pub fn scan_description_for_injection(description: &str) -> Option<&'static str> {
     if description.is_empty() {
         return None;

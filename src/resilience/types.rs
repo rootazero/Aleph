@@ -60,6 +60,7 @@ impl TaskStatus {
     }
 
     /// Check if task can be auto-resumed on restart
+    #[must_use]
     pub fn is_recoverable(&self) -> bool {
         matches!(self, TaskStatus::Running | TaskStatus::Interrupted)
     }
@@ -267,17 +268,20 @@ impl AgentTask {
     }
 
     /// Builder: set lane
+    #[must_use]
     pub fn with_lane(mut self, lane: Lane) -> Self {
         self.lane = lane;
         self
     }
 
     /// Check if task should auto-resume on restart
+    #[must_use]
     pub fn should_auto_resume(&self) -> bool {
         self.status.is_recoverable() && self.risk_level == RiskLevel::Low
     }
 
     /// Check if task needs user confirmation to resume
+    #[must_use]
     pub fn needs_resume_confirmation(&self) -> bool {
         self.status.is_recoverable() && self.risk_level == RiskLevel::High
     }
@@ -326,6 +330,7 @@ impl TaskTrace {
     }
 
     /// Stable event kind string for storage/indexing.
+    #[must_use]
     pub fn event_kind(&self) -> &'static str {
         self.event.kind()
     }

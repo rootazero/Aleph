@@ -83,6 +83,7 @@ pub struct MessageFormatter;
 
 impl MessageFormatter {
     /// Convert standard Markdown to the given target format.
+    #[must_use]
     pub fn format(markdown: &str, target: MarkupFormat) -> String {
         match target {
             MarkupFormat::Markdown => markdown.to_string(),
@@ -101,6 +102,7 @@ impl MessageFormatter {
     /// - Code blocks (triple-backtick fences) are never split mid-block
     ///   (unless a single code block exceeds `max_len`).
     /// - Splits prefer paragraph boundaries (`\n\n`), then line boundaries (`\n`).
+    #[must_use]
     pub fn split(text: &str, max_len: usize) -> Vec<String> {
         if text.len() <= max_len {
             return vec![text.to_string()];
@@ -109,6 +111,7 @@ impl MessageFormatter {
     }
 
     /// Normalize platform-specific markup back to standard Markdown (inbound direction).
+    #[must_use]
     pub fn normalize(platform_text: &str, source: MarkupFormat) -> String {
         match source {
             MarkupFormat::Markdown | MarkupFormat::DiscordMarkdown => platform_text.to_string(),

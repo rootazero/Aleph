@@ -141,6 +141,7 @@ pub struct AgentHarness {
 }
 
 impl AgentHarness {
+    #[must_use]
     pub fn new(deps: HarnessDeps) -> Self {
         let stall_tracker = deps
             .stall_config

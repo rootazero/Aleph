@@ -41,6 +41,7 @@ fn is_static_asset(path: &str) -> bool {
 pub struct SecurityHeadersLayer;
 
 impl SecurityHeadersLayer {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

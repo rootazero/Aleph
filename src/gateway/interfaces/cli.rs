@@ -97,6 +97,7 @@ impl CliChannel {
     }
 
     /// Create a new CLI channel with custom configuration
+    #[must_use]
     pub fn with_config(config: CliChannelConfig) -> Self {
         Self::with_config_and_mode(config, false)
     }
@@ -105,6 +106,7 @@ impl CliChannel {
     ///
     /// In test mode, the channel skips spawning the stdin reader thread
     /// and allows `inject_message` to work without blocking on I/O.
+    #[must_use]
     pub fn with_config_and_mode(config: CliChannelConfig, test_mode: bool) -> Self {
         let info = ChannelInfo {
             id: ChannelId::new(&config.id),

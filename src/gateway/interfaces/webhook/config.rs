@@ -67,6 +67,7 @@ impl WebhookChannelConfig {
     }
 
     /// Check if a sender_id is allowed
+    #[must_use]
     pub fn is_sender_allowed(&self, sender_id: &str) -> bool {
         if self.allowed_senders.is_empty() {
             true

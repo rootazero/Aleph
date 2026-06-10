@@ -37,6 +37,7 @@ impl ToolContext {
 pub type ToolContextHandle = Arc<tokio::sync::RwLock<ToolContext>>;
 
 /// Create a new ToolContext handle with default paths (main workspace).
+#[must_use]
 pub fn new_tool_context_handle() -> ToolContextHandle {
     let default_workspace = dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("/tmp"))

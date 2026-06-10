@@ -49,6 +49,7 @@ impl Default for BootstrapNonceManager {
 }
 
 impl BootstrapNonceManager {
+    #[must_use]
     pub fn new(ttl: Duration, used_retention: Duration) -> Self {
         Self {
             pending: DashMap::new(),
@@ -58,11 +59,13 @@ impl BootstrapNonceManager {
         }
     }
 
+    #[must_use]
     pub fn ttl(&self) -> Duration {
         self.ttl
     }
 
     /// Issue a new nonce. Returns `(nonce, expires_in_secs)`.
+    #[must_use]
     pub fn issue(&self) -> (String, u64) {
         self.prune();
         let nonce = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());

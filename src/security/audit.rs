@@ -87,6 +87,7 @@ pub struct SecurityAuditLog {
 }
 
 impl SecurityAuditLog {
+    #[must_use]
     pub fn new(buffer_size: usize) -> (Self, mpsc::Receiver<AuditEntry>) {
         let (sender, receiver) = mpsc::channel(buffer_size);
         (
@@ -121,6 +122,7 @@ impl SecurityAuditLog {
     }
 
     /// Returns the number of audit entries dropped due to channel backpressure.
+    #[must_use]
     pub fn dropped_count(&self) -> u64 {
         self.dropped_count.load(Ordering::Relaxed)
     }

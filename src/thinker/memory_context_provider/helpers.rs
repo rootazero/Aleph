@@ -3,6 +3,7 @@ use crate::sync_primitives::Arc;
 
 /// Strip YAML frontmatter (`---\n…\n---\n`) from the start of `raw`.
 /// If no frontmatter is present, returns `raw` unchanged.
+#[must_use]
 pub fn strip_frontmatter(raw: &str) -> &str {
     if let Some(rest) = raw.strip_prefix("---\n") {
         if let Some(end) = rest.find("\n---\n") {
@@ -12,6 +13,7 @@ pub fn strip_frontmatter(raw: &str) -> &str {
     raw
 }
 
+#[must_use]
 pub fn render_orientation_envelope(s: &OrientationSnapshot) -> String {
     let esc = |t: &str| {
         t.replace('&', "&amp;")

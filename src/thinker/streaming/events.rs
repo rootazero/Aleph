@@ -64,6 +64,7 @@ pub struct TokenUsage {
 
 impl TokenUsage {
     /// Create a new TokenUsage with input and output tokens
+    #[must_use]
     pub fn new(input: u32, output: u32) -> Self {
         Self {
             input_tokens: input,
@@ -73,6 +74,7 @@ impl TokenUsage {
     }
 
     /// Total tokens (input + output)
+    #[must_use]
     pub fn total(&self) -> u32 {
         self.input_tokens + self.output_tokens
     }

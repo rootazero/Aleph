@@ -32,6 +32,7 @@ pub enum ToolSafetyLevel {
 
 impl ToolSafetyLevel {
     /// Check if this safety level requires user confirmation
+    #[must_use]
     pub fn requires_confirmation(&self) -> bool {
         matches!(
             self,
@@ -40,6 +41,7 @@ impl ToolSafetyLevel {
     }
 
     /// Get a human-readable label for this safety level
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             ToolSafetyLevel::ReadOnly => "Read Only",
@@ -50,6 +52,7 @@ impl ToolSafetyLevel {
     }
 
     /// Get a badge color hint for UI (SF Symbol color name)
+    #[must_use]
     pub fn color_hint(&self) -> &'static str {
         match self {
             ToolSafetyLevel::ReadOnly => "green",

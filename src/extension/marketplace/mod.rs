@@ -102,6 +102,7 @@ impl MarketplaceManager {
     }
 
     /// Alias for [`all_marketplaces`] — convenient for serialising back to config.
+    #[must_use]
     pub fn list(&self) -> HashMap<String, MarketplaceConfig> {
         self.all_marketplaces()
     }
@@ -110,6 +111,7 @@ impl MarketplaceManager {
     ///
     /// Use this when saving back to the config file so the built-in is not
     /// persisted as a user entry.
+    #[must_use]
     pub fn get_config(&self) -> &HashMap<String, MarketplaceConfig> {
         &self.marketplaces
     }
@@ -175,6 +177,7 @@ impl MarketplaceManager {
     ///
     /// Returns every matching [`PluginSearchResult`] — the same plugin name may
     /// appear in multiple marketplaces.
+    #[must_use]
     pub fn search_plugin(&self, name: &str) -> Vec<PluginSearchResult> {
         let all = self.all_marketplaces();
         let mut results = Vec::new();

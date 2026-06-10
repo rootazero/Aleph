@@ -120,6 +120,7 @@ impl AzureSpeechProvider {
     /// Subset of commonly used Neural voices. Azure publishes 400+ voices —
     /// we surface a representative cross-section here; callers can still pass
     /// any voice name via `params.voice`.
+    #[must_use]
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         const VOICES: &[(&str, &str, &str, &str)] = &[
             (

@@ -33,6 +33,7 @@ pub struct SkillSnapshot {
 
 impl SkillSnapshot {
     /// Create an empty snapshot with version 0.
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             version: 0,
@@ -66,6 +67,7 @@ impl SkillSnapshot {
     /// - eligible skill IDs
     /// - ineligible skill IDs with reasons
     /// - prompt XML for eligible + model-visible skills
+    #[must_use]
     pub fn build(
         registry: &SkillRegistry,
         eligibility: &EligibilityService,

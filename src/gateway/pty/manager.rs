@@ -55,6 +55,7 @@ pub struct PtyManager {
 static GLOBAL: LazyLock<PtyManager> = LazyLock::new(PtyManager::new);
 
 /// Access the process-global PTY manager.
+#[must_use]
 pub fn manager() -> &'static PtyManager {
     &GLOBAL
 }

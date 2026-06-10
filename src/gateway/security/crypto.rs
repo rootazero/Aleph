@@ -38,6 +38,7 @@ pub struct DeviceFingerprint(pub String);
 
 impl DeviceFingerprint {
     /// Create fingerprint from public key bytes
+    #[must_use]
     pub fn from_public_key(public_key: &[u8]) -> Self {
         use sha2::Digest;
         let hash = Sha256::digest(public_key);
@@ -56,6 +57,7 @@ impl std::fmt::Display for DeviceFingerprint {
 /// Generate a new Ed25519 keypair
 ///
 /// Returns (signing_key_bytes, verifying_key_bytes)
+#[must_use]
 pub fn generate_keypair() -> ([u8; 32], [u8; 32]) {
     // An Ed25519 signing key is a 32-byte seed; sourcing the seed bytes
     // directly (instead of `SigningKey::generate`) keeps this code decoupled
@@ -68,6 +70,7 @@ pub fn generate_keypair() -> ([u8; 32], [u8; 32]) {
 }
 
 /// Sign a message with Ed25519
+#[must_use]
 pub fn sign_message(signing_key_bytes: &[u8; 32], message: &[u8]) -> [u8; 64] {
     let signing_key = SigningKey::from_bytes(signing_key_bytes);
     let signature = signing_key.sign(message);
@@ -99,6 +102,7 @@ pub fn verify_signature(
 }
 
 /// Sign a token with HMAC-SHA256
+#[must_use]
 pub fn hmac_sign(secret: &[u8], token: &str) -> String {
     let mut mac = HmacSha256::new_from_slice(secret).expect("HMAC accepts any key length");
     mac.update(token.as_bytes());
@@ -116,6 +120,7 @@ pub fn hmac_verify(secret: &[u8], token: &str, signature: &str) -> Result<(), Cr
 }
 
 /// Generate a random 32-byte secret
+#[must_use]
 pub fn generate_secret() -> [u8; 32] {
     let mut secret = [0u8; 32];
     os_rng().fill_bytes(&mut secret);
@@ -127,6 +132,7 @@ pub const PAIRING_CODE_LENGTH: usize = 8;
 pub const PAIRING_CODE_CHARSET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 /// Generate an 8-character Base32 pairing code (excluding confusing chars)
+#[must_use]
 pub fn generate_pairing_code() -> String {
     let mut rng = os_rng();
     (0..PAIRING_CODE_LENGTH)

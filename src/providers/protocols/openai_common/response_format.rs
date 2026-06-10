@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 /// includes `"strict": true` inside the `json_schema` block to opt into
 /// OpenAI's strict-mode token mask.
 /// Degrades `JsonSchema` to `JsonObject` when `supports_strict` is false.
+#[must_use]
 pub fn to_chat_response_format(fmt: &ResponseFormat, supports_strict: bool) -> Option<Value> {
     match fmt {
         ResponseFormat::Text => None,
@@ -46,6 +47,7 @@ pub fn to_chat_response_format(fmt: &ResponseFormat, supports_strict: bool) -> O
 /// Build the Responses protocol's `text.format` typed value.
 /// Returns `None` when `Text` (omit format slot inside TextConfig).
 /// Degrades `JsonSchema` to `JsonObject` when `supports_strict` is false.
+#[must_use]
 pub fn to_responses_text_format(fmt: &ResponseFormat, supports_strict: bool) -> Option<TextFormat> {
     match fmt {
         ResponseFormat::Text => None,
@@ -67,6 +69,7 @@ pub fn to_responses_text_format(fmt: &ResponseFormat, supports_strict: bool) -> 
 /// Merge an explicit `ResponseFormat` config into the variant's `TextConfig`.
 /// Preserves variant's `verbosity` slot; overrides `format` slot only.
 /// Honors capability gate: `supports_strict` controls the JsonSchema branch.
+#[must_use]
 pub fn merge_text_format(
     base: Option<TextConfig>,
     fmt: Option<&ResponseFormat>,

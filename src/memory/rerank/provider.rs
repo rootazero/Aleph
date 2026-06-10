@@ -125,6 +125,7 @@ impl Default for RerankConfig {
 
 impl RerankConfig {
     /// Returns the active model (first in the list)
+    #[must_use]
     pub fn default_model(&self) -> &str {
         self.models
             .first()

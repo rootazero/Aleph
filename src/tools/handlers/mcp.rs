@@ -53,6 +53,7 @@ impl McpHandler {
     }
 
     /// Attach annotation-derived scheduling/approval flags.
+    #[must_use]
     pub fn with_flags(
         mut self,
         read_only: bool,
@@ -75,6 +76,7 @@ impl McpHandler {
     /// redundant prefix is stripped before composing so the LLM never sees
     /// `server__server:tool`, and any residual unsafe character (`:`, `.`,
     /// unicode) is mapped to `_`.
+    #[must_use]
     pub fn qualified_name(&self) -> String {
         let short = self
             .tool_name

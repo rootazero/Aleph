@@ -40,6 +40,7 @@ const LOGIN_TOOL: &str = "mcp_login";
 /// in sync with every server's discovered tools. Returns the `JoinHandle` so
 /// callers may abort it on shutdown; dropping the handle merely detaches the
 /// task, which exits on its own once the manager's event channel closes.
+#[must_use]
 pub fn spawn_tool_bridge(
     handle: McpManagerHandle,
     registry: Arc<ToolHandlerRegistry>,

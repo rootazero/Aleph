@@ -223,6 +223,7 @@ CREATE TABLE IF NOT EXISTS notes_vec_map (
 CREATE INDEX IF NOT EXISTS idx_notes_vec_map_agent ON notes_vec_map(agent_id);
 "#;
 
+#[must_use]
 pub fn vec_table_ddl(dim: u32, table_name: &str) -> String {
     format!(
         "CREATE VIRTUAL TABLE IF NOT EXISTS {table_name} USING vec0(\n    \

@@ -5,6 +5,7 @@
 /// For each item in each list, accumulates score `1 / (k + rank + 1)`.
 /// Items that appear in multiple lists accumulate higher scores.
 /// The constant k=60 is the standard RRF default.
+#[must_use]
 pub fn rrf_fuse<T: Clone + Eq + std::hash::Hash>(
     lists: Vec<Vec<T>>,
     k: f32,

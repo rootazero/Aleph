@@ -38,6 +38,7 @@ struct ManagedProfile {
 }
 
 impl ProfileManager {
+    #[must_use]
     pub fn new(config: BrowserSystemConfig) -> Self {
         let ssrf_guard = Arc::new(BrowserSsrfGuard::new(config.policy.clone()));
         let chrome_mcp_driver = Arc::new(ChromeMcpDriver::new(config.chrome_mcp.clone()));

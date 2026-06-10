@@ -32,6 +32,7 @@ pub enum NetworkAccess {
 }
 
 impl NetworkAccess {
+    #[must_use]
     pub fn to_bind_address(&self) -> &str {
         match self {
             Self::Localhost => "127.0.0.1",
@@ -39,6 +40,7 @@ impl NetworkAccess {
         }
     }
 
+    #[must_use]
     pub fn from_bind_address(addr: &str) -> Self {
         if addr == "0.0.0.0" || addr == "::" {
             Self::AllNetworks

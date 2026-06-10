@@ -29,16 +29,19 @@ pub struct ProxyHandle {
 
 impl ProxyHandle {
     /// Local address the proxy is bound to (127.0.0.1:port).
+    #[must_use]
     pub fn local_addr(&self) -> SocketAddr {
         self.addr
     }
 
     /// Convenience for env var values: `http://127.0.0.1:<port>`.
+    #[must_use]
     pub fn http_url(&self) -> String {
         format!("http://{}", self.addr)
     }
 
     /// Convenience for env var values: `socks5://127.0.0.1:<port>`.
+    #[must_use]
     pub fn socks5_url(&self) -> String {
         format!("socks5://{}", self.addr)
     }

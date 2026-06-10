@@ -196,6 +196,7 @@ impl WebhookMessageOps {
     }
 
     /// Build outbound JSON payload from an OutboundMessage.
+    #[must_use]
     pub fn build_outbound_payload(message: &OutboundMessage) -> serde_json::Value {
         serde_json::json!({
             "sender_id": "aleph",

@@ -44,6 +44,7 @@ pub enum SkillGateDecision {
 /// Pure function: no I/O, no state. The caller decides what to do with
 /// `Reject` — typically push a `DistillActionRecord` with outcome
 /// `FilteredInvalid` and skip the apply.
+#[must_use]
 pub fn validate_skill_action(action: DistillAction) -> SkillGateDecision {
     match action {
         DistillAction::New {

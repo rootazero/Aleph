@@ -138,6 +138,7 @@ pub struct EnvironmentContract {
 
 impl EnvironmentContract {
     /// Generate a description suitable for system prompt injection
+    #[must_use]
     pub fn to_prompt_description(&self) -> String {
         let mut parts = Vec::new();
 
@@ -253,6 +254,7 @@ impl ContextAggregator {
     ///
     /// Tools requiring approval are added to BOTH available_tools AND disabled_tools
     /// so the AI knows they exist but also knows approval is needed.
+    #[must_use]
     pub fn resolve(
         interaction: &InteractionManifest,
         security: &SecurityContext,

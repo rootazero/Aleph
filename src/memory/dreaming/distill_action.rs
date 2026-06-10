@@ -53,6 +53,7 @@ pub enum DistillAction {
 /// cross-category file deletion (Supersede) or merge into the wrong note
 /// (Strengthen). Stages use this helper to drop actions whose target is not
 /// in the candidate set before invoking `apply_distill_action`.
+#[must_use]
 pub fn referenced_path(action: &DistillAction) -> Option<&str> {
     match action {
         DistillAction::Strengthen {
@@ -123,6 +124,7 @@ impl DistillActionRecord {
     /// Build a record from a `DistillAction` and an apply outcome.
     ///
     /// `stage` should be either `"skill_distill"` or `"feedback_distill"`.
+    #[must_use]
     pub fn from_action(
         stage: &str,
         action: &DistillAction,

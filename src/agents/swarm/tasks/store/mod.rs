@@ -52,6 +52,7 @@ impl SqliteCoordTaskStore {
 
     /// Attach an event bus so the store emits topic events on mutations.
     /// Builder is no-op safe: stores constructed without a bus simply skip emission.
+    #[must_use]
     pub fn with_event_bus(mut self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) -> Self {
         self.bus = Some(bus);
         self
@@ -62,6 +63,7 @@ impl SqliteCoordTaskStore {
     /// [`crate::teams::snapshots::SqliteSnapshotStore`]) can share the lock
     /// and avoid the SQLite "database is locked" hazard that would arise
     /// from two independent connections to the same file.
+    #[must_use]
     pub fn connection_handle(&self) -> Arc<Mutex<Connection>> {
         Arc::clone(&self.conn)
     }

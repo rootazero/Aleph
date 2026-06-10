@@ -118,6 +118,7 @@ impl CancelHandle {
     }
 
     /// Harness ID this handle targets — used by manager-level tracing.
+    #[must_use]
     pub fn harness_id(&self) -> &str {
         &self.harness_id
     }
@@ -204,6 +205,7 @@ impl AcpSession {
     /// Clone a cancel handle that can fire `session/cancel` without holding
     /// the session mutex. Safe to call before `create_acp_session` — the
     /// returned handle becomes effective once the session id is populated.
+    #[must_use]
     pub fn cancel_handle(&self) -> CancelHandle {
         CancelHandle {
             harness_id: self.harness_id.clone(),
@@ -526,6 +528,7 @@ impl AcpSession {
     }
 
     /// Get the current session state.
+    #[must_use]
     pub fn state(&self) -> AcpSessionState {
         self.state
     }
@@ -533,6 +536,7 @@ impl AcpSession {
     /// Get the ACP session ID, if one has been created. Returns an owned
     /// copy because the id lives behind an `Arc<RwLock<>>` so a cancel
     /// handle can read it concurrently.
+    #[must_use]
     pub fn acp_session_id(&self) -> Option<String> {
         self.acp_session_id
             .read()
@@ -581,6 +585,7 @@ impl AcpSession {
     }
 
     /// Get the harness ID.
+    #[must_use]
     pub fn harness_id(&self) -> &str {
         &self.harness_id
     }

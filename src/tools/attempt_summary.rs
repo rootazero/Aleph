@@ -83,6 +83,7 @@ pub struct ToolFailureGroup {
 /// `ToolCallRequested` with a matching `call_id`. If no matching request
 /// is found (truncated tail, replay edge case) the call is recorded
 /// under `"unknown"` so the LLM still sees the kind tally.
+#[must_use]
 pub fn aggregate_failures(events: &[SessionEventRecord]) -> Vec<ToolFailureGroup> {
     let mut counts: HashMap<(String, ToolErrorKind), usize> = HashMap::new();
 
@@ -118,6 +119,7 @@ pub fn aggregate_failures(events: &[SessionEventRecord]) -> Vec<ToolFailureGroup
 /// The output is wrapped in `<system-reminder>` matching the rest of
 /// Aleph's harness-injected channel (see opencode-parity G2 in
 /// [`crate::harness::agent::prompt`]).
+#[must_use]
 pub fn render_run_summary(events: &[SessionEventRecord]) -> Option<String> {
     let groups = aggregate_failures(events);
     let total: usize = groups.iter().map(|g| g.count).sum();

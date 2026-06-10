@@ -81,6 +81,7 @@ pub struct RunningMeta {
 }
 
 impl BackgroundAgentTracker {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             running: RwLock::new(HashMap::new()),

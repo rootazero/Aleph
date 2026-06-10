@@ -28,6 +28,7 @@ pub use store::AuthProfileStore;
 pub const AUTH_STORE_VERSION: u32 = 1;
 
 /// Normalize provider ID for comparison (lowercase, trim)
+#[must_use]
 pub fn normalize_provider_id(provider: &str) -> String {
     provider.trim().to_lowercase().replace('-', "_")
 }

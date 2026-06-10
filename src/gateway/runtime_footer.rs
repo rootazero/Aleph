@@ -145,6 +145,7 @@ fn home_relative_cwd(cwd: &str, home: Option<&str>) -> String {
 ///
 /// Callers should append `"\n\n"` + footer to the final reply text — this
 /// function returns only the footer payload (no leading whitespace).
+#[must_use]
 pub fn build_footer_line(
     inputs: &RuntimeFooterInputs<'_>,
     fields: &[String],
@@ -221,6 +222,7 @@ pub fn global_config() -> RuntimeFooterConfig {
 /// Top-level entry. Returns the rendered footer (with the conventional
 /// double-newline separator already attached) or an empty string when
 /// disabled / no data.
+#[must_use]
 pub fn build_footer_block(
     cfg: &RuntimeFooterConfig,
     inputs: &RuntimeFooterInputs<'_>,

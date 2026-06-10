@@ -68,6 +68,7 @@ impl A2AClient {
         client
     }
 
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -297,16 +298,19 @@ impl A2AClient {
     }
 
     /// Get the base URL
+    #[must_use]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }
 
     /// Get the configured timeout
+    #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
 
     /// Check if auth token is configured
+    #[must_use]
     pub fn has_auth(&self) -> bool {
         self.auth_token.is_some()
     }

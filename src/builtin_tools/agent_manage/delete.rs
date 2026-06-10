@@ -53,6 +53,7 @@ pub struct AgentDeleteTool {
 }
 
 impl AgentDeleteTool {
+    #[must_use]
     pub fn new(
         registry: Arc<AgentRegistry>,
         workspace_mgr: Arc<AgentEnvStore>,

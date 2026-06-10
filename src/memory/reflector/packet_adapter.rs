@@ -32,6 +32,7 @@ pub struct NoteMeta {
 /// All slots are flattened; items are emitted in slot/insertion order.
 /// Higher `relevance` values indicate more relevant notes (matches the
 /// format used in the user-prompt header).
+#[must_use]
 pub fn envelope_to_synthesis_context(envelope: &MemoryEnvelope) -> SynthesisContext {
     let mut body = format!("QUESTION: {}\n\n", envelope.query);
     body.push_str("RETRIEVED NOTES (higher score = more relevant):\n\n");

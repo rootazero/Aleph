@@ -42,6 +42,7 @@ pub fn decrypt_event(encrypt_key: &str, encrypt_b64: &str) -> Result<String, Str
 ///
 /// Feishu sends `hex(sha256(timestamp + nonce + encrypt_key + raw_body))` in the
 /// `X-Lark-Signature` header. Comparison is constant-time.
+#[must_use]
 pub fn verify_signature(
     encrypt_key: &str,
     timestamp: &str,

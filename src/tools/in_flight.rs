@@ -96,6 +96,7 @@ pub struct InFlightSnapshot {
 impl InFlightToolCalls {
     /// Construct an empty registry. Production callers should share the same
     /// instance between the harness deps and the gateway handler.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -146,6 +147,7 @@ impl InFlightToolCalls {
     /// Removing the entry is left to the [`InFlightGuard`] drop on the
     /// harness side — that keeps registration and deregistration in one place
     /// and avoids a TOCTOU between cancel and natural completion.
+    #[must_use]
     pub fn cancel(&self, call_id: &str) -> bool {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match guard.get(call_id) {
@@ -159,6 +161,7 @@ impl InFlightToolCalls {
 
     /// Snapshot every in-flight call. Useful for diagnostic `tools.in_flight`
     /// RPCs / CLI listings without exposing the raw token.
+    #[must_use]
     pub fn list(&self) -> Vec<InFlightSnapshot> {
         let guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let mut out: Vec<InFlightSnapshot> = guard
@@ -174,11 +177,13 @@ impl InFlightToolCalls {
     }
 
     /// Number of currently-in-flight calls.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.inner.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// True when no calls are in flight.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

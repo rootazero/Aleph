@@ -65,6 +65,7 @@ pub enum PageOp {
 
 impl PageOp {
     /// Primary path this op touches — used for tx-scope + dedup.
+    #[must_use]
     pub fn primary_path(&self) -> &str {
         match self {
             PageOp::Create { note_path, .. }
@@ -105,6 +106,7 @@ impl ApplyReport {
     /// Used by `CompressionService` to decide whether to defer marking the raw
     /// batch processed (give a transiently-failed extraction a retry instead of
     /// discarding the knowledge forever).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.touched_paths.is_empty()
     }

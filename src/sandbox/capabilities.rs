@@ -64,6 +64,7 @@ pub enum NetworkPolicy {
 
 impl SandboxCapabilities {
     /// Baseline: read/write within workspace cwd, no network, no subprocess spawn.
+    #[must_use]
     pub fn strict() -> Self {
         Self::default()
     }
@@ -72,6 +73,7 @@ impl SandboxCapabilities {
     /// `Hash`/`Eq` are order-independent. Used before storing in
     /// `granted_elevations` cache to prevent duplicate entries for
     /// the same capability set with different path order.
+    #[must_use]
     pub fn normalized(&self) -> Self {
         let mut copy = self.clone();
         copy.fs_read.sort();
@@ -88,6 +90,7 @@ impl SandboxCapabilities {
     /// For `max_memory_mb` / `timeout_secs`: `None` means "unlimited". A
     /// limited child is within an unlimited baseline; an unlimited child is
     /// NOT within a limited baseline; two limited values use `<=`.
+    #[must_use]
     pub fn is_within(&self, baseline: &Self) -> bool {
         let fs_read_ok = self.fs_read.iter().all(|p| {
             baseline

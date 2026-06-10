@@ -49,6 +49,7 @@ pub struct SecretApprovalManager {
 }
 
 impl SecretApprovalManager {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pending: Mutex::new(HashMap::new()),

@@ -55,6 +55,7 @@ pub struct OpenAiFunctionCallOut {
 
 impl Message {
     /// Create a simple text message
+    #[must_use]
     pub fn text(role: &str, content: String) -> Self {
         Self {
             role: role.to_string(),
@@ -65,6 +66,7 @@ impl Message {
     }
 
     /// Create an assistant message with tool calls
+    #[must_use]
     pub fn assistant_with_tool_calls(
         text: Option<String>,
         tool_calls: Vec<OpenAiToolCallOut>,
@@ -84,6 +86,7 @@ impl Message {
     }
 
     /// Create a tool result message
+    #[must_use]
     pub fn tool_result(tool_call_id: String, content: String) -> Self {
         Self {
             role: "tool".to_string(),

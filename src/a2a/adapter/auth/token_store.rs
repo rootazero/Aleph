@@ -14,12 +14,14 @@ pub struct TokenStore {
 }
 
 impl TokenStore {
+    #[must_use]
     pub fn new(tokens: Vec<String>) -> Self {
         Self {
             tokens: tokens.into_iter().collect(),
         }
     }
 
+    #[must_use]
     pub fn is_valid(&self, token: &str) -> bool {
         // Compare against every stored token without short-circuiting: a plain
         // `HashSet::contains` (or an early `return true`) would make match

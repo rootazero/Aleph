@@ -18,6 +18,7 @@ const SYSTEM_PROMPT_TRUNCATE_LEN: usize = 120;
 ///
 /// When `targets` is non-empty, the coordinator is instructed to prioritize
 /// those personas (used by the Mention action).
+#[must_use]
 pub fn build_coordinator_prompt(
     personas: &[Persona],
     user_message: &str,
@@ -101,6 +102,7 @@ pub fn parse_coordinator_plan(raw: &str) -> Result<CoordinatorPlan, GroupChatErr
 ///
 /// This ensures the conversation continues even if the coordinator LLM call
 /// returns unparseable output.
+#[must_use]
 pub fn build_fallback_plan(personas: &[Persona]) -> CoordinatorPlan {
     let respondents = personas
         .iter()
@@ -123,6 +125,7 @@ pub fn build_fallback_plan(personas: &[Persona]) -> CoordinatorPlan {
 /// Each persona receives its own system prompt, the user's original message,
 /// any prior discussion from earlier respondents in this round, and the
 /// coordinator's guidance for this specific persona.
+#[must_use]
 pub fn build_persona_prompt(
     persona: &Persona,
     user_message: &str,

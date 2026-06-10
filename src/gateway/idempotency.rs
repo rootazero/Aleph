@@ -94,6 +94,7 @@ pub struct IdempotencyGuard {
 
 impl IdempotencyGuard {
     /// Create a new guard with the given TTL for cached results.
+    #[must_use]
     pub fn new(ttl: Duration) -> Self {
         Self {
             cache: std::sync::Arc::new(DashMap::new()),
@@ -105,6 +106,7 @@ impl IdempotencyGuard {
     ///
     /// Uses `DashMap::entry()` for atomic check-and-insert to prevent
     /// TOCTOU race conditions between concurrent requests.
+    #[must_use]
     pub fn try_acquire(&self, key: &str) -> AcquireResult {
         // First, check for existing non-expired entries without holding an entry lock
         // (entry() on an occupied key would block other readers of the same key)
@@ -165,6 +167,7 @@ impl IdempotencyGuard {
     }
 
     /// Remove expired entries. Returns number of entries pruned.
+    #[must_use]
     pub fn prune(&self) -> usize {
         let mut pruned = 0;
         self.cache.retain(|_, entry| {
@@ -184,11 +187,13 @@ impl IdempotencyGuard {
     }
 
     /// Number of entries currently in the cache.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.cache.len()
     }
 
     /// Whether the cache is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.cache.is_empty()
     }

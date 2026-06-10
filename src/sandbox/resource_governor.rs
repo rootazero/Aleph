@@ -82,6 +82,7 @@ pub struct GovernorThresholds {
 
 impl GovernorThresholds {
     /// `true` when the sample is within every configured threshold.
+    #[must_use]
     pub fn within(&self, s: &LoadSample) -> bool {
         if let Some(min_mem) = self.min_available_memory_mb {
             if s.available_memory_mb < min_mem {
@@ -122,6 +123,7 @@ pub struct ResourceGovernor {
 
 impl ResourceGovernor {
     /// Build from the serde config schema, using the real `sysinfo` probe.
+    #[must_use]
     pub fn from_schema(schema: &crate::sandbox::config::ResourceGovernorConfigSchema) -> Self {
         Self {
             enabled: schema.enabled,
@@ -152,6 +154,7 @@ impl ResourceGovernor {
     }
 
     /// `true` when this governor should be registered as a hook at all.
+    #[must_use]
     pub fn is_enabled(&self) -> bool {
         self.enabled
     }
@@ -214,6 +217,7 @@ pub struct SysinfoLoadProbe {
 }
 
 impl SysinfoLoadProbe {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             sys: crate::sync_primitives::Mutex::new(sysinfo::System::new()),

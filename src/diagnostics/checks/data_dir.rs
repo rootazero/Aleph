@@ -19,6 +19,7 @@ pub struct DataDirCheck {
 }
 
 impl DataDirCheck {
+    #[must_use]
     pub fn new(data_dir: PathBuf) -> Self {
         Self { data_dir }
     }

@@ -139,11 +139,13 @@ impl Default for GenerationConfig {
 
 impl GenerationConfig {
     /// Create a new generation config with default values
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Get the default provider for a specific generation type
+    #[must_use]
     pub fn get_default_provider(&self, gen_type: GenerationType) -> Option<&str> {
         match gen_type {
             GenerationType::Image => self.default_image_provider.as_deref(),
@@ -155,6 +157,7 @@ impl GenerationConfig {
     }
 
     /// Get a provider config by name (checks typed maps first, then legacy)
+    #[must_use]
     pub fn get_provider(&self, name: &str) -> Option<&GenerationProviderConfig> {
         self.image_providers
             .get(name)
@@ -166,6 +169,7 @@ impl GenerationConfig {
     }
 
     /// Get all enabled providers (typed maps + legacy, typed maps take priority)
+    #[must_use]
     pub fn get_enabled_providers(&self) -> Vec<(&str, &GenerationProviderConfig)> {
         let mut seen = std::collections::HashSet::new();
         let mut result = Vec::new();
@@ -199,6 +203,7 @@ impl GenerationConfig {
     /// Get providers that support a specific generation type.
     ///
     /// Typed provider maps take priority over legacy `providers` section.
+    #[must_use]
     pub fn get_providers_for_type(
         &self,
         gen_type: GenerationType,
@@ -234,6 +239,7 @@ impl GenerationConfig {
     /// Merge all provider sources into a unified list with resolved type.
     ///
     /// New typed maps take priority over legacy `providers` section.
+    #[must_use]
     pub fn merged_providers(&self) -> Vec<(String, GenerationProviderConfig, GenerationType)> {
         let mut result = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -361,6 +367,7 @@ impl GenerationConfig {
     /// Resolve the output directory with fallback to workspace default.
     ///
     /// Priority: explicit user config (from config.toml) > workspace ToolContext fallback
+    #[must_use]
     pub fn resolve_output_dir(&self, fallback: &std::path::Path) -> PathBuf {
         if let Some(ref configured) = self.output_dir {
             let path_str = configured.to_string_lossy();

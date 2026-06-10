@@ -171,10 +171,12 @@ impl MsTeamsConfig {
         Ok(())
     }
 
+    #[must_use]
     pub fn is_user_allowed(&self, aad_id: &str) -> bool {
         self.allowed_users.is_empty() || self.allowed_users.iter().any(|id| id == aad_id)
     }
 
+    #[must_use]
     pub fn is_conversation_allowed(&self, conversation_type: Option<&str>) -> bool {
         match conversation_type {
             Some("groupChat") | Some("channel") => self.groups_allowed,
@@ -185,6 +187,7 @@ impl MsTeamsConfig {
     /// Get effective require_mention for a conversation.
     ///
     /// Returns the per-team setting if available, otherwise the global setting.
+    #[must_use]
     pub fn effective_require_mention(&self, team_id: Option<&str>) -> bool {
         if let Some(team_id) = team_id {
             if let Some(team) = self.teams.get(team_id) {
@@ -199,6 +202,7 @@ impl MsTeamsConfig {
     /// Get effective reply_style for a conversation.
     ///
     /// Returns the per-team setting if available, otherwise the global setting.
+    #[must_use]
     pub fn effective_reply_style(&self, team_id: Option<&str>) -> ReplyStyle {
         if let Some(team_id) = team_id {
             if let Some(team) = self.teams.get(team_id) {

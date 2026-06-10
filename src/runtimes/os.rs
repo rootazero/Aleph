@@ -20,6 +20,7 @@ impl TargetOs {
     /// Detect the current OS at runtime.
     ///
     /// Panics on unsupported OSes at compile time via `cfg!` gating.
+    #[must_use]
     pub fn current() -> Self {
         #[cfg(target_os = "macos")]
         {
@@ -40,6 +41,7 @@ impl TargetOs {
     }
 
     /// Check whether this (possibly wildcard) target matches a concrete OS.
+    #[must_use]
     pub fn matches(&self, current: TargetOs) -> bool {
         match (*self, current) {
             (Self::AnyOs, _) => true,

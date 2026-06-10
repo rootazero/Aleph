@@ -35,6 +35,7 @@ impl AgentUsageTotal {
     /// when input was non-zero but no cache reads occurred. See
     /// [`crate::providers::adapter::TokenUsage::cache_hit_ratio`] for the
     /// per-call counterpart and the cross-protocol denominator logic.
+    #[must_use]
     pub fn cache_hit_ratio(&self) -> Option<f64> {
         if self.cache_read_tokens == 0 && self.input_tokens == 0 {
             return None;

@@ -57,6 +57,7 @@ struct LoadedWasmPlugin {
 
 impl WasmRuntime {
     /// Create a new WASM runtime
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -141,6 +142,7 @@ impl WasmRuntime {
     }
 
     /// Check if a plugin is loaded
+    #[must_use]
     pub fn is_loaded(&self, plugin_id: &str) -> bool {
         self.plugins.contains_key(plugin_id)
     }
@@ -181,6 +183,7 @@ impl WasmRuntime {
     }
 
     /// Get list of loaded plugin IDs
+    #[must_use]
     pub fn loaded_plugins(&self) -> Vec<String> {
         self.plugins.keys().cloned().collect()
     }

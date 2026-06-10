@@ -58,6 +58,7 @@ pub struct GuestSessionManager {
 
 impl GuestSessionManager {
     /// Create a new guest session manager
+    #[must_use]
     pub fn new() -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
@@ -67,6 +68,7 @@ impl GuestSessionManager {
     }
 
     /// Create a new guest session manager with a shared activity logger
+    #[must_use]
     pub fn with_logger(activity_logger: Arc<GuestActivityLogger>) -> Self {
         Self {
             sessions: Arc::new(DashMap::new()),
@@ -76,6 +78,7 @@ impl GuestSessionManager {
     }
 
     /// Get a reference to the activity logger
+    #[must_use]
     pub fn activity_logger(&self) -> &Arc<GuestActivityLogger> {
         &self.activity_logger
     }
@@ -91,6 +94,7 @@ impl GuestSessionManager {
     ///
     /// # Returns
     /// The created guest session
+    #[must_use]
     pub fn register_session(
         &self,
         session_id: String,
@@ -169,11 +173,13 @@ impl GuestSessionManager {
     }
 
     /// Get a session by session ID
+    #[must_use]
     pub fn get_session(&self, session_id: &str) -> Option<GuestSession> {
         self.sessions.get(session_id).map(|s| s.clone())
     }
 
     /// Get a session by connection ID
+    #[must_use]
     pub fn get_session_by_connection(&self, connection_id: &str) -> Option<GuestSession> {
         self.connection_to_session
             .get(connection_id)
@@ -181,6 +187,7 @@ impl GuestSessionManager {
     }
 
     /// List all active sessions
+    #[must_use]
     pub fn list_sessions(&self) -> Vec<GuestSession> {
         self.sessions
             .iter()
@@ -189,6 +196,7 @@ impl GuestSessionManager {
     }
 
     /// List sessions for a specific guest
+    #[must_use]
     pub fn list_sessions_for_guest(&self, guest_id: &str) -> Vec<GuestSession> {
         self.sessions
             .iter()
@@ -233,6 +241,7 @@ impl GuestSessionManager {
     }
 
     /// Terminate session by connection ID (called on disconnect)
+    #[must_use]
     pub fn terminate_by_connection(&self, connection_id: &str) -> Option<GuestSession> {
         let session_id = self.connection_to_session.remove(connection_id)?;
         let session = self.sessions.remove(&session_id.1).map(|(_, s)| s)?;
@@ -256,11 +265,13 @@ impl GuestSessionManager {
     }
 
     /// Get session count
+    #[must_use]
     pub fn session_count(&self) -> usize {
         self.sessions.len()
     }
 
     /// Check if a connection has an active guest session
+    #[must_use]
     pub fn has_session(&self, connection_id: &str) -> bool {
         self.connection_to_session.contains_key(connection_id)
     }

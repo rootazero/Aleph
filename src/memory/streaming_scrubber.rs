@@ -106,6 +106,7 @@ impl StreamingContextScrubber {
 
     /// True if the scrubber is currently inside an unterminated span. Useful
     /// for tests and metrics.
+    #[must_use]
     pub fn in_span(&self) -> bool {
         self.in_span
     }

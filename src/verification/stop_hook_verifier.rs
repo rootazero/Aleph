@@ -24,6 +24,7 @@ pub struct StopHookVerifier {
 }
 
 impl StopHookVerifier {
+    #[must_use]
     pub fn new(hooks: Arc<Vec<Arc<dyn StopHookHandler>>>) -> Self {
         Self { hooks }
     }

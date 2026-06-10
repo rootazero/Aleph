@@ -119,11 +119,13 @@ impl SubscriptionId {
     }
 
     /// Get the inner string reference
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
     /// Convert into inner String
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.0
     }
@@ -207,6 +209,7 @@ impl GlobalBus {
     ///
     /// Note: For most use cases, prefer `GlobalBus::global()` to access
     /// the singleton instance.
+    #[must_use]
     pub fn new() -> Self {
         let (sender, _) = broadcast::channel(DEFAULT_BUFFER_SIZE);
         Self {
@@ -220,6 +223,7 @@ impl GlobalBus {
     /// Get the global singleton instance.
     ///
     /// This is the preferred way to access the GlobalBus.
+    #[must_use]
     pub fn global() -> &'static GlobalBus {
         &GLOBAL_BUS
     }

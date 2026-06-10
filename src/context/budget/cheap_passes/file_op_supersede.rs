@@ -125,6 +125,7 @@ struct FileOpRef {
 impl FileOpSupersedeStage {
     /// Construct with the full configuration surface explicitly set.
     /// Use [`FileOpSupersedeStage::default`] for production defaults.
+    #[must_use]
     pub fn new(
         read_tools: Vec<String>,
         write_tools: Vec<String>,

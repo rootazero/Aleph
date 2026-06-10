@@ -9,6 +9,7 @@ use std::collections::HashMap;
 /// Replace `{key}` occurrences with the matching value. Unknown keys pass
 /// through unchanged. Braces are NOT escaped — there's no `{{ }}` literal
 /// support because templates don't need it.
+#[must_use]
 pub fn substitute(input: &str, vars: &HashMap<&str, &str>) -> String {
     let mut out = String::with_capacity(input.len());
     let bytes = input.as_bytes();

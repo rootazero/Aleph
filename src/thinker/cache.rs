@@ -103,6 +103,7 @@ impl Default for CacheContext {
 
 impl CacheContext {
     /// Create context from system prompt and messages
+    #[must_use]
     pub fn new(system_prompt: &str, _message_count: usize, provider_type: ProviderType) -> Self {
         // Estimate tokens (rough: 4 chars per token for English text).
         // Uses char count (not byte length) so CJK text is not over-estimated.
@@ -125,11 +126,13 @@ impl CacheContext {
     }
 
     /// Check if the context meets caching threshold
+    #[must_use]
     pub fn should_cache(&self) -> bool {
         self.enabled && self.cacheable_tokens >= MIN_CACHE_TOKENS
     }
 
     /// Check if existing cache is still valid
+    #[must_use]
     pub fn has_valid_cache(&self) -> bool {
         if let Some(expires_at) = self.cache_expires_at {
             expires_at > Utc::now() && self.existing_cache_name.is_some()
@@ -139,6 +142,7 @@ impl CacheContext {
     }
 
     /// Update with existing cache state
+    #[must_use]
     pub fn with_existing_cache(
         mut self,
         cache_name: Option<String>,
@@ -188,6 +192,7 @@ pub enum ProviderType {
 
 impl ProviderType {
     /// Detect provider type from model name
+    #[must_use]
     pub fn from_model_name(model: &str) -> Self {
         let model_lower = model.to_lowercase();
 
@@ -234,6 +239,7 @@ impl Default for CacheControl {
 
 impl CacheControl {
     /// Create an ephemeral cache control marker
+    #[must_use]
     pub fn ephemeral() -> Self {
         Self::default()
     }
@@ -274,6 +280,7 @@ impl CacheableContentBlock {
     }
 
     /// Mark this block as cacheable
+    #[must_use]
     pub fn with_cache(mut self) -> Self {
         self.cache_control = Some(CacheControl::ephemeral());
         self
@@ -448,11 +455,13 @@ impl CacheStrategy for GeminiCacheStrategy {
 
 impl GeminiCacheStrategy {
     /// Check if a new cache should be created
+    #[must_use]
     pub fn should_create_cache(&self, context: &CacheContext) -> bool {
         self.should_cache(context) && !context.has_valid_cache()
     }
 
     /// Build a cache creation request
+    #[must_use]
     pub fn build_cache_request(
         &self,
         model: &str,
@@ -505,6 +514,7 @@ impl CacheStrategy for TransparentCacheStrategy {
 // =============================================================================
 
 /// Get the appropriate cache strategy for a provider type
+#[must_use]
 pub fn get_cache_strategy(provider_type: ProviderType) -> Box<dyn CacheStrategy> {
     match provider_type {
         ProviderType::Anthropic => Box::new(AnthropicCacheStrategy),

@@ -70,18 +70,21 @@ impl WorkspaceSandbox {
     }
 
     /// Override the default 60s per-command timeout.
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.default_timeout = timeout;
         self
     }
 
     /// Override the default 1 MB combined stdout+stderr truncation budget.
+    #[must_use]
     pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
         self.max_output_bytes = max_output_bytes;
         self
     }
 
     /// Override the default hooks (empty by default).
+    #[must_use]
     pub fn with_hooks(mut self, hooks: SandboxHooks) -> Self {
         self.hooks = hooks;
         self
@@ -148,6 +151,7 @@ fn normalize_path(path: &std::path::Path, workspace_root: &std::path::Path) -> s
 /// Compute the per-session workspace directory the same way `WorkspaceSandbox`
 /// does, without instantiating one. Lets out-of-band consumers (cluster node
 /// file commands) jail to the exact dir the node's bash sandbox uses.
+#[must_use]
 pub fn session_workspace_dir(workspace_root: &std::path::Path, sid: &SessionId) -> PathBuf {
     workspace_root.join(session_key_to_filename(sid))
 }

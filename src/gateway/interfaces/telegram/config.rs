@@ -20,6 +20,7 @@ pub struct PairingEntry {
 }
 
 impl PairingEntry {
+    #[must_use]
     pub fn new(code: String) -> Self {
         Self {
             code,
@@ -28,6 +29,7 @@ impl PairingEntry {
         }
     }
 
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         self.created_at.elapsed().as_secs() > self.ttl_secs
     }
@@ -167,6 +169,7 @@ impl Default for TelegramConfig {
 
 impl TelegramConfig {
     /// Create config from environment variable
+    #[must_use]
     pub fn from_env() -> Option<Self> {
         let bot_token = std::env::var("TELEGRAM_BOT_TOKEN").ok()?;
         Some(Self {
@@ -180,6 +183,7 @@ impl TelegramConfig {
     /// Returns `true` when the allowlist is empty (open to all) or when the user
     /// is explicitly listed. Runtime-paired users are tracked separately in
     /// `AccessController::runtime_users`.
+    #[must_use]
     pub fn is_user_allowed(&self, user_id: i64) -> bool {
         if self.allowed_users.is_empty() {
             true
@@ -189,6 +193,7 @@ impl TelegramConfig {
     }
 
     /// Check if a group/chat ID is allowed
+    #[must_use]
     pub fn is_group_allowed(&self, chat_id: i64) -> bool {
         if !self.groups_allowed {
             return false;
@@ -205,6 +210,7 @@ impl TelegramConfig {
     /// Backward compatibility: non-empty `allowed_users` with the default
     /// `Pairing` policy promotes to `Allowlist`. An explicit `dm_policy`
     /// always wins. `dm_allowed: false` forces `Disabled`.
+    #[must_use]
     pub fn effective_dm_policy(&self) -> DmPolicy {
         if !self.dm_allowed {
             return DmPolicy::Disabled;
@@ -219,6 +225,7 @@ impl TelegramConfig {
     ///
     /// Backward compatibility: `groups_allowed: false` forces `Disabled`
     /// regardless of the explicit `group_policy` value.
+    #[must_use]
     pub fn effective_group_policy(&self) -> GroupPolicy {
         if !self.groups_allowed {
             return GroupPolicy::Disabled;
@@ -238,6 +245,7 @@ impl TelegramConfig {
     }
 
     /// 将旧版扁平配置升级为新版层级配置
+    #[must_use]
     pub fn upgrade_to_v2(&self) -> TelegramConfigV2 {
         TelegramConfigV2 {
             accounts: vec![TelegramAccountConfig {

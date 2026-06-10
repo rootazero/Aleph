@@ -50,6 +50,7 @@ impl Default for SchedulerConfig {
 
 impl SchedulerConfig {
     /// Create a SchedulerConfig from policy configuration
+    #[must_use]
     pub fn from_policy(policy: &CompressionPolicy) -> Self {
         Self {
             idle_timeout_seconds: policy.idle_timeout_seconds,
@@ -68,6 +69,7 @@ pub struct CompressionScheduler {
 
 impl CompressionScheduler {
     /// Create a new compression scheduler
+    #[must_use]
     pub fn new(config: SchedulerConfig) -> Self {
         Self {
             config: Mutex::new(config),
@@ -77,6 +79,7 @@ impl CompressionScheduler {
     }
 
     /// Create with default configuration
+    #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(SchedulerConfig::default())
     }

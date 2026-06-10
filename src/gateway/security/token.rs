@@ -243,6 +243,7 @@ impl TokenManager {
     }
 
     /// Get the HMAC secret (for persistence)
+    #[must_use]
     pub fn secret(&self) -> &[u8; 32] {
         &self.secret
     }
@@ -253,6 +254,7 @@ impl TokenManager {
     /// dispatch loop, which captures the token at `connect` time) derive the
     /// lookup key for [`is_token_hash_revoked`] without re-running full
     /// signature validation on every request.
+    #[must_use]
     pub fn token_hash(&self, token: &str) -> String {
         hmac_sign(&self.secret, token)
     }
@@ -266,6 +268,7 @@ impl TokenManager {
     /// DB blip never disconnects a legitimate client — the next dispatch
     /// re-checks. Expiry is intentionally NOT treated as revocation here
     /// (mid-session expiry is a separate concern).
+    #[must_use]
     pub fn is_token_hash_revoked(&self, token_hash: &str) -> bool {
         match self.store.get_token_by_hash(token_hash) {
             Ok(Some(_)) => false,

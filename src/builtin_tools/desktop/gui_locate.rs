@@ -66,6 +66,7 @@ pub struct DesktopGuiLocate {
 }
 
 impl DesktopGuiLocate {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

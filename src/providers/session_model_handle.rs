@@ -41,6 +41,7 @@ pub fn set_session_model(session_key: &str, provider: Option<String>, model: Str
 }
 
 /// Read the model preference for `session_key`, if one was set this run.
+#[must_use]
 pub fn get_session_model(session_key: &str) -> Option<SessionModelPref> {
     map()
         .read()

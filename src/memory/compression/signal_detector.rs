@@ -154,6 +154,7 @@ pub struct SignalDetector {
 
 impl SignalDetector {
     /// Create a new signal detector with default keywords
+    #[must_use]
     pub fn new() -> Self {
         Self {
             keywords: SignalKeywords::default(),
@@ -161,6 +162,7 @@ impl SignalDetector {
     }
 
     /// Create a signal detector with custom keywords
+    #[must_use]
     pub fn with_keywords(keywords: SignalKeywords) -> Self {
         Self { keywords }
     }
@@ -171,6 +173,7 @@ impl SignalDetector {
     /// 1. Correction keywords (set priority to Immediate)
     /// 2. Learning keywords (set priority to Deferred if not already Immediate)
     /// 3. Milestone keywords (keep existing priority)
+    #[must_use]
     pub fn detect(&self, message: &str) -> DetectionResult {
         let mut result = DetectionResult::default();
         let message_lower = message.to_lowercase();

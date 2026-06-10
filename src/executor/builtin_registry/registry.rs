@@ -410,6 +410,7 @@ impl BuiltinToolRegistry {
     /// Get a handle to the GatewayContext OnceCell for deferred injection.
     ///
     /// Used by agent_init to inject GatewayContext after ExecutionEngine creation.
+    #[must_use]
     pub fn gateway_context_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<GatewayContext>>> {
         Arc::clone(&self.gateway_context)
     }
@@ -425,6 +426,7 @@ impl BuiltinToolRegistry {
     }
 
     /// Get a handle to the ChannelRegistry OnceCell for deferred injection.
+    #[must_use]
     pub fn channel_registry_cell(&self) -> Arc<tokio::sync::OnceCell<Arc<ChannelRegistry>>> {
         Arc::clone(&self.channel_registry_cell)
     }
@@ -442,6 +444,7 @@ impl BuiltinToolRegistry {
     }
 
     /// Get a handle to the ClarificationManager OnceCell for deferred injection.
+    #[must_use]
     pub fn clarification_manager_cell(
         &self,
     ) -> Arc<tokio::sync::OnceCell<Arc<crate::clarification::ClarificationManager>>> {
@@ -487,6 +490,7 @@ impl BuiltinToolRegistry {
 
     /// Get a handle to the `MemoryContextProvider` `OnceCell` for deferred
     /// injection from the server builder.
+    #[must_use]
     pub fn memory_context_provider_cell(
         &self,
     ) -> Arc<tokio::sync::OnceCell<Arc<crate::thinker::MemoryContextProvider>>> {
@@ -513,6 +517,7 @@ impl BuiltinToolRegistry {
     /// Returns the schema if the tool exists in the internal registry and has
     /// a `parameters_schema` set. Used to attach schemas to the `UnifiedTool`
     /// list sent to the LLM so it knows which arguments to pass.
+    #[must_use]
     pub fn get_tool_schema(&self, name: &str) -> Option<Value> {
         self.tools
             .get(name)
@@ -520,6 +525,7 @@ impl BuiltinToolRegistry {
     }
 
     /// Returns `true` if a tool with this name has been registered in the metadata map.
+    #[must_use]
     pub fn has_tool(&self, name: &str) -> bool {
         self.tools.contains_key(name)
     }

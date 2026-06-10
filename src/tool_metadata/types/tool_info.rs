@@ -50,6 +50,7 @@ impl ToolSourceType {
     /// Get default SF Symbol icon for this source type
     ///
     /// Used for UI display in command completion and settings.
+    #[must_use]
     pub fn default_icon(&self) -> &'static str {
         match self {
             ToolSourceType::Native | ToolSourceType::Builtin => "command.circle.fill",
@@ -61,6 +62,7 @@ impl ToolSourceType {
     }
 
     /// Get badge label for this source type
+    #[must_use]
     pub fn badge_label(&self) -> &'static str {
         match self {
             ToolSourceType::Native | ToolSourceType::Builtin => "System",

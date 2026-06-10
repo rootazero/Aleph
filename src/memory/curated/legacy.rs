@@ -14,6 +14,7 @@ pub struct ParsedLoad {
     pub legacy: bool,
 }
 
+#[must_use]
 pub fn load_body(body: &str) -> ParsedLoad {
     if body.trim().is_empty() {
         return ParsedLoad {

@@ -121,11 +121,13 @@ fn default_content_truncate_length() -> u64 {
 
 impl CompressionPolicy {
     /// Get idle timeout as std::time::Duration
+    #[must_use]
     pub fn idle_timeout_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.idle_timeout_seconds as u64)
     }
 
     /// Get background interval as std::time::Duration
+    #[must_use]
     pub fn background_interval_duration(&self) -> std::time::Duration {
         std::time::Duration::from_secs(self.background_interval_seconds as u64)
     }

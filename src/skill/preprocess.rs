@@ -71,6 +71,7 @@ impl SkillPreprocessContext {
     }
 
     /// Attach the active session id so `${ALEPH_SESSION_ID}` resolves.
+    #[must_use]
     pub fn with_session(mut self, session_id: Option<String>) -> Self {
         self.session_id = session_id;
         self
@@ -100,6 +101,7 @@ pub async fn preprocess_skill_content(content: &str, ctx: &SkillPreprocessContex
 ///
 /// Returns the input borrowed and unchanged when no resolvable token is
 /// present, so the overwhelmingly common case allocates nothing.
+#[must_use]
 pub fn expand_template_vars<'a>(content: &'a str, ctx: &SkillPreprocessContext) -> Cow<'a, str> {
     let has_dir = content.contains(TOKEN_SKILL_DIR);
     let has_session = ctx.session_id.is_some() && content.contains(TOKEN_SESSION_ID);
@@ -123,6 +125,7 @@ pub fn expand_template_vars<'a>(content: &'a str, ctx: &SkillPreprocessContext) 
 /// Cheap and self-contained: reuses the manifest frontmatter splitter and
 /// parses a single optional boolean. Any parse failure (no frontmatter, bad
 /// YAML) is treated as "not allowed".
+#[must_use]
 pub fn frontmatter_allows_inline_shell(content: &str) -> bool {
     #[derive(serde::Deserialize)]
     #[serde(rename_all = "kebab-case")]

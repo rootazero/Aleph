@@ -50,6 +50,7 @@ pub fn lead_review_required(metadata: &Value) -> bool {
 /// Mirrors [`with_acceptance_criteria`]: a non-object input is promoted to an
 /// empty object, and `required = false` leaves the metadata untouched so
 /// callers can pass through unconditionally without polluting the row.
+#[must_use]
 pub fn with_lead_review_required(metadata: Value, required: bool) -> Value {
     let mut value = match metadata {
         Value::Object(_) => metadata,
@@ -124,6 +125,7 @@ pub fn with_acceptance_criteria(metadata: Value, criteria: Vec<String>) -> Value
 /// no-op for tasks that declare none (keeping the handoff envelope
 /// byte-identical to the legacy one — the same discipline the recovery and
 /// notes sections follow).
+#[must_use]
 pub fn render_acceptance_section(criteria: &[String]) -> String {
     if criteria.is_empty() {
         return String::new();

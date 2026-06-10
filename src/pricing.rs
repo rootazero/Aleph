@@ -708,6 +708,7 @@ fn effective_rates(
 /// Return the per-million-token [`RateCard`] for a `(provider, model)` pair,
 /// or `None` when the model is not priced. Powers the model picker's
 /// cost-at-a-glance column (`providers.catalog`).
+#[must_use]
 pub fn rate_card(provider: &str, model: &str) -> Option<RateCard> {
     lookup_rates(provider, model).map(|r| RateCard {
         input_per_mtok: r.input_per_mtok,
@@ -745,6 +746,7 @@ fn apply_rates(b: &TokenBreakdown, r: &Rates) -> (f64, CostStatus) {
 ///
 /// Returns `CostStatus::Unknown` when either provider or model is not in
 /// the table — callers should treat that as "no estimate available".
+#[must_use]
 pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> CostEstimate {
     let base = match lookup_rates(provider, model) {
         Some(r) => r,

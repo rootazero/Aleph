@@ -198,6 +198,7 @@ impl WorkflowTool {
     /// Wire the team roster so `run` can pre-flight team coverage. Builder form
     /// keeps `new` two-arg (every existing caller and test compiles unchanged);
     /// `None` leaves the check disabled.
+    #[must_use]
     pub fn with_team_store(mut self, team_store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
         self.team_store = team_store;
         self

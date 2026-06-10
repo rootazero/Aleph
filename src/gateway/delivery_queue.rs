@@ -105,6 +105,7 @@ pub struct DeliveryRecord {
 /// be on the wire — and [`MessageTooLarge`](ChannelError::MessageTooLarge) /
 /// [`ConfigError`](ChannelError::ConfigError) are permanent. None of those are
 /// retried.
+#[must_use]
 pub fn should_enqueue(err: &ChannelError) -> bool {
     matches!(
         err,
@@ -114,6 +115,7 @@ pub fn should_enqueue(err: &ChannelError) -> bool {
 
 /// Current wall-clock time as unix epoch seconds (saturating to 0 on a clock
 /// before the epoch — defensive, never panics).
+#[must_use]
 pub fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

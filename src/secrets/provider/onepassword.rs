@@ -25,6 +25,7 @@ impl OnePasswordProvider {
     ///
     /// - `account`: Optional 1Password account shorthand (passed as `--account`).
     /// - `service_account_token`: Optional service account token (set as `OP_SERVICE_ACCOUNT_TOKEN`).
+    #[must_use]
     pub fn new(account: Option<String>, service_account_token: Option<SecretString>) -> Self {
         Self {
             account,

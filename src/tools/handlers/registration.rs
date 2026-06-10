@@ -126,6 +126,7 @@ pub fn register_mcp_tools(
 /// `ToolSource` matches `Mcp { server_id }`. When `tool_catalog` is
 /// supplied, also tears down the matching health probes. Returns the set of
 /// qualified names that were removed.
+#[must_use]
 pub fn unregister_mcp_tools(
     registry: &ToolHandlerRegistry,
     tool_catalog: Option<&Arc<ToolCatalog>>,

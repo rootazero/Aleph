@@ -50,6 +50,7 @@ impl HydratedTool {
     }
 
     /// Create from a MemoryFact with calculated hydration level
+    #[must_use]
     pub fn from_fact(fact: MemoryFact, config: &ToolRetrievalConfig) -> Self {
         let score = fact.similarity_score.unwrap_or(0.0);
         let hydration_level = Self::calculate_hydration_level(score, config);
@@ -66,17 +67,20 @@ impl HydratedTool {
     }
 
     /// Set the cached schema (typically from ToolCatalog lookup)
+    #[must_use]
     pub fn with_schema(mut self, schema: String) -> Self {
         self.cached_schema = Some(schema);
         self
     }
 
     /// Get the JSON schema, returning cached value if available
+    #[must_use]
     pub fn schema_json(&self) -> Option<&str> {
         self.cached_schema.as_deref()
     }
 
     /// Check if schema is cached
+    #[must_use]
     pub fn has_schema(&self) -> bool {
         self.cached_schema.is_some()
     }
@@ -220,6 +224,7 @@ impl ToolRetrieval {
     }
 
     /// Get tools at each hydration level
+    #[must_use]
     pub fn partition_by_hydration(
         tools: &[HydratedTool],
     ) -> (Vec<&HydratedTool>, Vec<&HydratedTool>, Vec<&HydratedTool>) {
@@ -239,6 +244,7 @@ impl ToolRetrieval {
     }
 
     /// Get the current config
+    #[must_use]
     pub fn config(&self) -> &ToolRetrievalConfig {
         &self.config
     }

@@ -50,6 +50,7 @@ pub struct McpGetPromptTool {
 
 impl McpGetPromptTool {
     /// Create a new MCP get prompt tool
+    #[must_use]
     pub fn new(handle: McpManagerHandle) -> Self {
         Self { handle }
     }

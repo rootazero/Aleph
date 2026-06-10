@@ -47,6 +47,7 @@ fn unique_tmp_path(final_path: &Path) -> PathBuf {
 
 /// `$ALEPH_HOME/workflows/`. Falls back to `~/.aleph/workflows/`, then
 /// `./workflows/`.
+#[must_use]
 pub fn workflow_dir() -> PathBuf {
     aleph_home().join("workflows")
 }
@@ -68,6 +69,7 @@ pub struct WorkflowMeta {
 
 /// Resolve a logical name within `dir`: `{dir}/{sanitised}.json`. The returned
 /// path is guaranteed to be a direct child of `dir` (no traversal).
+#[must_use]
 pub fn resolve_path_at(dir: &Path, name: &str) -> PathBuf {
     dir.join(format!("{}.{WORKFLOW_EXT}", sanitise_name(name)))
 }

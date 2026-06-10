@@ -24,12 +24,14 @@ pub const LINUX_PLATFORM_DEFAULT_READ_ROOTS: &[&str] = &[
     "/run/current-system/sw",
 ];
 
+#[must_use]
 pub fn is_wsl() -> bool {
     std::fs::read_to_string("/proc/version")
         .map(|content| content.to_lowercase().contains("microsoft"))
         .unwrap_or(false)
 }
 
+#[must_use]
 pub fn wsl_version() -> Option<u32> {
     if !is_wsl() {
         return None;
@@ -40,6 +42,7 @@ pub fn wsl_version() -> Option<u32> {
         .map(|content| if content.contains("WSL2") { 2 } else { 1 })
 }
 
+#[must_use]
 pub fn normalize_path_for_sandbox(path: &Path, cwd: &Path) -> Option<PathBuf> {
     if path.as_os_str().is_empty() {
         return None;
@@ -51,10 +54,12 @@ pub fn normalize_path_for_sandbox(path: &Path, cwd: &Path) -> Option<PathBuf> {
     }
 }
 
+#[must_use]
 pub fn path_is_allowed(path: &Path, allowed: &[PathBuf]) -> bool {
     allowed.iter().any(|prefix| path.starts_with(prefix))
 }
 
+#[must_use]
 pub fn glob_to_regex(pattern: &str) -> Option<String> {
     if pattern.is_empty() {
         return None;
@@ -113,6 +118,7 @@ pub fn glob_to_regex(pattern: &str) -> Option<String> {
 ///
 /// Tiny budgets (`< MIN_HEAD_TAIL_CAP`) and degenerate splits fall back to the
 /// original head-only truncation — see [`truncate_head_only`].
+#[must_use]
 pub fn truncate_output(buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
     let orig_len = buf.len();
     if orig_len <= max_bytes {
@@ -192,6 +198,7 @@ fn truncate_head_only(mut buf: Vec<u8>, max_bytes: usize) -> (Vec<u8>, u64) {
 /// populate `SandboxOutput.signal` so callers can distinguish a SIGSEGV /
 /// rlimit-or-cgroup SIGKILL from a clean non-zero exit.
 #[cfg(unix)]
+#[must_use]
 pub fn termination_signal(status: &std::process::ExitStatus) -> Option<i32> {
     use std::os::unix::process::ExitStatusExt;
     status.signal()

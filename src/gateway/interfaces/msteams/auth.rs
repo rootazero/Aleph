@@ -50,6 +50,7 @@ struct TokenResponse {
 
 impl TokenCache {
     /// Create a new `TokenCache`.
+    #[must_use]
     pub fn new(app_id: String, app_password: String, tenant_id: String) -> Self {
         Self {
             app_id,
@@ -192,6 +193,7 @@ pub struct JwtValidator {
 
 impl JwtValidator {
     /// Create a new `JwtValidator`.
+    #[must_use]
     pub fn new(app_id: String) -> Self {
         Self {
             app_id,
@@ -202,6 +204,7 @@ impl JwtValidator {
     }
 
     /// Returns true if keys need refreshing (signature mismatch detected).
+    #[must_use]
     pub fn key_refresh_needed(&self) -> bool {
         self.refresh_needed
             .load(crate::sync_primitives::Ordering::SeqCst)
@@ -351,6 +354,7 @@ impl JwtValidator {
 /// Allowed:
 /// - Any subdomain of `botframework.com`
 /// - `smba.trafficmanager.net`
+#[must_use]
 pub fn validate_service_url(url: &str) -> bool {
     let host = match extract_host(url) {
         Some(h) => h,
@@ -607,6 +611,7 @@ pub enum AuthFlow {
 }
 
 impl AuthFlow {
+    #[must_use]
     pub fn is_federated(&self) -> bool {
         matches!(self, AuthFlow::Federated(_))
     }
@@ -691,6 +696,7 @@ pub struct ManagedIdentityTokenProvider {
 }
 
 impl ManagedIdentityTokenProvider {
+    #[must_use]
     pub fn new(client_id: Option<String>) -> Self {
         Self {
             client: reqwest::Client::new(),
@@ -737,6 +743,7 @@ pub struct JwtAssertionGenerator {
 }
 
 impl JwtAssertionGenerator {
+    #[must_use]
     pub fn new(certificate: Certificate, app_id: String, authority_url: String) -> Self {
         Self {
             certificate_der: certificate.der,

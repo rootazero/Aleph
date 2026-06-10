@@ -131,11 +131,13 @@ impl<S: NoteStore> NoteIndexer<S> {
     }
 
     /// Getter for the memory directory.
+    #[must_use]
     pub fn memory_dir(&self) -> &Path {
         &self.memory_dir
     }
 
     /// Getter for the underlying store.
+    #[must_use]
     pub fn store(&self) -> &Arc<S> {
         &self.store
     }

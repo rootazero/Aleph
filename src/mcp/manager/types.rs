@@ -141,12 +141,14 @@ impl McpManagerConfig {
     }
 
     /// Set command arguments
+    #[must_use]
     pub fn with_args(mut self, args: Vec<String>) -> Self {
         self.args = args;
         self
     }
 
     /// Set environment variables
+    #[must_use]
     pub fn with_env(mut self, env: HashMap<String, String>) -> Self {
         self.env = env;
         self
@@ -159,18 +161,21 @@ impl McpManagerConfig {
     }
 
     /// Set auto-start flag
+    #[must_use]
     pub fn with_auto_start(mut self, auto_start: bool) -> Self {
         self.auto_start = auto_start;
         self
     }
 
     /// Set timeout in seconds
+    #[must_use]
     pub fn with_timeout(mut self, seconds: u64) -> Self {
         self.timeout_seconds = Some(seconds);
         self
     }
 
     /// Set the per-server tool allow/deny filter.
+    #[must_use]
     pub fn with_tool_filter(mut self, filter: McpToolFilter) -> Self {
         self.tool_filter = Some(filter);
         self
@@ -267,6 +272,7 @@ impl Default for ServerHealth {
 
 impl ServerHealth {
     /// Create a new healthy server health
+    #[must_use]
     pub fn healthy() -> Self {
         Self {
             status: HealthStatus::Healthy,
@@ -714,6 +720,7 @@ pub enum McpManagerEvent {
 
 impl McpManagerEvent {
     /// Get the server ID if this event is server-specific
+    #[must_use]
     pub fn server_id(&self) -> Option<&str> {
         match self {
             Self::ManagerReady | Self::ManagerShutdown | Self::ConfigReloaded { .. } => None,
@@ -730,6 +737,7 @@ impl McpManagerEvent {
     }
 
     /// Check if this is a lifecycle event (start/stop/crash)
+    #[must_use]
     pub fn is_lifecycle_event(&self) -> bool {
         matches!(
             self,
@@ -741,6 +749,7 @@ impl McpManagerEvent {
     }
 
     /// Check if this is a capability change event
+    #[must_use]
     pub fn is_capability_event(&self) -> bool {
         matches!(
             self,

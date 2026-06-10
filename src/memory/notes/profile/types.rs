@@ -24,6 +24,7 @@ impl ProfileSection {
         ProfileSection::OpenQuestions,
     ];
 
+    #[must_use]
     pub fn heading(&self) -> &'static str {
         match self {
             ProfileSection::Identity => "Identity",

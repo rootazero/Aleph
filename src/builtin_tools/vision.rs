@@ -112,6 +112,7 @@ pub struct VisionTool {
 
 impl VisionTool {
     /// Create a new vision tool backed by the given pipeline.
+    #[must_use]
     pub fn new(pipeline: Arc<VisionPipeline>) -> Self {
         Self { pipeline }
     }

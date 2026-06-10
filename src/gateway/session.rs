@@ -34,6 +34,7 @@ impl HttpSessionManager {
         }
     }
 
+    #[must_use]
     pub fn expiry_hours(&self) -> u64 {
         self.expiry_hours
     }

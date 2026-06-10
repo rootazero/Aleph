@@ -77,6 +77,7 @@ pub struct ApprovalConfig {
 }
 
 impl ApprovalConfig {
+    #[must_use]
     pub fn is_always_confirm(&self, tool_name: &str) -> bool {
         self.always_confirm.contains(tool_name)
     }

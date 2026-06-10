@@ -71,6 +71,7 @@ pub struct MsTeamsChannel {
 
 impl MsTeamsChannel {
     /// Create a new Teams channel instance.
+    #[must_use]
     pub fn new(id: &str, config: MsTeamsConfig) -> Self {
         Self::with_mode(id, config, false)
     }
@@ -123,6 +124,7 @@ impl MsTeamsChannel {
     }
 
     /// Create a Teams channel for testing (test mode enabled).
+    #[must_use]
     pub fn for_test(id: &str, config: MsTeamsConfig) -> Self {
         Self::with_mode(id, config, true)
     }

@@ -45,6 +45,7 @@ pub struct PlaywrightCliDriver {
 }
 
 impl PlaywrightCliDriver {
+    #[must_use]
     pub fn new(config: PlaywrightCliConfig) -> Self {
         Self {
             binary_path: RwLock::new(None),
@@ -267,6 +268,7 @@ fn classify_stderr(
 }
 
 /// Parse stdout for `### Page / URL / Title / Snapshot [path]` header.
+#[must_use]
 pub fn parse_page_meta(stdout: &str) -> Option<PageMeta> {
     let mut meta = PageMeta::default();
     let mut in_page_section = false;

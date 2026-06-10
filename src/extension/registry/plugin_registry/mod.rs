@@ -49,6 +49,7 @@ pub struct PluginRegistry {
 
 impl PluginRegistry {
     /// Create a new empty plugin registry.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -79,6 +80,7 @@ impl PluginRegistry {
     }
 
     /// Get a plugin by ID.
+    #[must_use]
     pub fn get_plugin(&self, id: &str) -> Option<&PluginRecord> {
         self.plugins.get(id)
     }
@@ -89,11 +91,13 @@ impl PluginRegistry {
     }
 
     /// List all registered plugins.
+    #[must_use]
     pub fn list_plugins(&self) -> Vec<&PluginRecord> {
         self.plugins.values().collect()
     }
 
     /// List all active (loaded) plugins.
+    #[must_use]
     pub fn list_active_plugins(&self) -> Vec<&PluginRecord> {
         self.plugins
             .values()
@@ -176,16 +180,19 @@ impl PluginRegistry {
     }
 
     /// Get a tool by name.
+    #[must_use]
     pub fn get_tool(&self, name: &str) -> Option<&ToolRegistration> {
         self.tools.get(name)
     }
 
     /// List all registered tools.
+    #[must_use]
     pub fn list_tools(&self) -> Vec<&ToolRegistration> {
         self.tools.values().collect()
     }
 
     /// List tools from a specific plugin.
+    #[must_use]
     pub fn list_tools_for_plugin(&self, plugin_id: &str) -> Vec<&ToolRegistration> {
         self.tools
             .values()
@@ -216,11 +223,13 @@ impl PluginRegistry {
     /// Get all hooks registered for a specific event.
     ///
     /// Returns hooks in priority order (lower priority = earlier in list).
+    #[must_use]
     pub fn get_hooks_for_event(&self, event: HookEvent) -> Vec<&HookRegistration> {
         self.hooks.iter().filter(|h| h.event == event).collect()
     }
 
     /// List all registered hooks.
+    #[must_use]
     pub fn list_hooks(&self) -> Vec<&HookRegistration> {
         self.hooks.iter().collect()
     }
@@ -245,11 +254,13 @@ impl PluginRegistry {
     }
 
     /// Get a service by ID.
+    #[must_use]
     pub fn get_service(&self, id: &str) -> Option<&ServiceRegistration> {
         self.services.get(id)
     }
 
     /// List all registered services.
+    #[must_use]
     pub fn list_services(&self) -> Vec<&ServiceRegistration> {
         self.services.values().collect()
     }
@@ -275,11 +286,13 @@ impl PluginRegistry {
     }
 
     /// Get an in-chat command by name.
+    #[must_use]
     pub fn get_command(&self, name: &str) -> Option<&CommandRegistration> {
         self.commands.get(name)
     }
 
     /// List all registered in-chat commands.
+    #[must_use]
     pub fn list_commands(&self) -> Vec<&CommandRegistration> {
         self.commands.values().collect()
     }
@@ -305,11 +318,13 @@ impl PluginRegistry {
     }
 
     /// Get a skill by name.
+    #[must_use]
     pub fn get_skill(&self, name: &str) -> Option<&SkillRegistration> {
         self.skills.get(name)
     }
 
     /// List all registered skills.
+    #[must_use]
     pub fn list_skills(&self) -> Vec<&SkillRegistration> {
         self.skills.values().collect()
     }
@@ -335,11 +350,13 @@ impl PluginRegistry {
     }
 
     /// Get an agent by name.
+    #[must_use]
     pub fn get_agent(&self, name: &str) -> Option<&AgentRegistration> {
         self.agents.get(name)
     }
 
     /// List all registered agents.
+    #[must_use]
     pub fn list_agents(&self) -> Vec<&AgentRegistration> {
         self.agents.values().collect()
     }
@@ -354,6 +371,7 @@ impl PluginRegistry {
     }
 
     /// Get all diagnostic messages.
+    #[must_use]
     pub fn diagnostics(&self) -> &[PluginDiagnostic] {
         &self.diagnostics
     }
@@ -410,6 +428,7 @@ impl PluginRegistry {
     // =========================================================================
 
     /// Get registry statistics.
+    #[must_use]
     pub fn stats(&self) -> RegistryStats {
         RegistryStats {
             plugins: self.plugins.len(),

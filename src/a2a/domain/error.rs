@@ -44,6 +44,7 @@ pub enum A2AError {
 
 impl A2AError {
     /// Returns the JSON-RPC error code for this error
+    #[must_use]
     pub fn error_code(&self) -> i64 {
         match self {
             Self::ParseError(_) => -32700,
@@ -64,6 +65,7 @@ impl A2AError {
     }
 
     /// Convert to a JSON-RPC error object
+    #[must_use]
     pub fn to_jsonrpc_error(&self) -> serde_json::Value {
         serde_json::json!({
             "code": self.error_code(),

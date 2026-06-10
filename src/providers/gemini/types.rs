@@ -177,6 +177,7 @@ impl GeminiError {
     /// Extract a retry delay (seconds, as a display string) from a
     /// `google.rpc.RetryInfo` entry in `details`. Gemini puts the
     /// authoritative 429 backoff here, often without a `Retry-After` header.
+    #[must_use]
     pub fn retry_delay_secs(&self) -> Option<String> {
         for detail in &self.details {
             let is_retry_info = detail

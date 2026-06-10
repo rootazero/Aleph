@@ -18,6 +18,7 @@ pub enum InitPhase {
 }
 
 impl InitPhase {
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             Self::Directories => "directories",
@@ -28,6 +29,7 @@ impl InitPhase {
         }
     }
 
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Directories => "Creating directories",

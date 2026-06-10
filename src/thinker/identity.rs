@@ -48,6 +48,7 @@ pub struct IdentityResolver {
 
 impl IdentityResolver {
     /// Create a new resolver with global path
+    #[must_use]
     pub fn new(global_path: PathBuf) -> Self {
         Self {
             global_path,
@@ -56,6 +57,7 @@ impl IdentityResolver {
     }
 
     /// Create resolver with default paths
+    #[must_use]
     pub fn with_defaults() -> Self {
         let home = dirs::home_dir()
             .or_else(|| {
@@ -80,16 +82,19 @@ impl IdentityResolver {
     }
 
     /// Check if session has an override
+    #[must_use]
     pub fn has_session_override(&self) -> bool {
         self.session_override.is_some()
     }
 
     /// Get the global soul path
+    #[must_use]
     pub fn global_path(&self) -> &PathBuf {
         &self.global_path
     }
 
     /// Resolve the effective SoulManifest for current context
+    #[must_use]
     pub fn resolve(&self) -> SoulManifest {
         // Priority: Session > Global > Default
         if let Some(ref override_soul) = self.session_override {
@@ -127,6 +132,7 @@ impl IdentityResolver {
     }
 
     /// List all available identity sources
+    #[must_use]
     pub fn list_sources(&self) -> Vec<IdentitySource> {
         let mut sources = Vec::new();
 

@@ -29,6 +29,7 @@ pub struct ScrubResult<'a> {
 /// Scan `bytes` for secret patterns; replace matches with `[REDACTED:NAME]`.
 /// Matches whose contents hash-match an entry in `injected` are skipped
 /// (they were intentionally injected by the placeholder pipeline).
+#[must_use]
 pub fn scrub_secrets_bytes<'a>(bytes: &'a [u8], injected: &[InjectedSecret]) -> ScrubResult<'a> {
     let patterns = default_patterns_bytes();
     let mut hits: Vec<&'static str> = Vec::new();
@@ -116,6 +117,7 @@ const UNSAFE_INVISIBLE_SEQUENCES: &[&[u8]] = &[
 /// the complete encoding of its code point — never spanning a character
 /// boundary — because its lead byte (`0xE2` / `0xEF`) always starts a fresh
 /// character and its trailing bytes are continuation bytes that never start one.
+#[must_use]
 pub fn strip_unsafe_invisible(bytes: &[u8]) -> (Cow<'_, [u8]>, usize) {
     // Every target shares one of two lead bytes — cheap reject for clean output.
     if !bytes.iter().any(|&b| b == 0xE2 || b == 0xEF) {

@@ -59,6 +59,7 @@ pub struct SkillStatusEntry {
 }
 
 impl SkillStatusEntry {
+    #[must_use]
     pub fn build(
         manifest: &SkillManifest,
         eligibility: &EligibilityResult,
@@ -137,6 +138,7 @@ impl SkillStatusEntry {
         }
     }
 
+    #[must_use]
     pub fn matches_filter(&self, filter: SkillStatusFilter) -> bool {
         match filter {
             SkillStatusFilter::All => true,

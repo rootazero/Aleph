@@ -19,11 +19,13 @@ pub struct SessionKey {
 
 impl SessionKey {
     /// Default (unnamed) session for the given harness + cwd.
+    #[must_use]
     pub fn new(harness_id: &str, cwd: &str) -> Self {
         Self::with_name(harness_id, cwd, None)
     }
 
     /// Named session — `None` is equivalent to `new()` (empty name).
+    #[must_use]
     pub fn with_name(harness_id: &str, cwd: &str, name: Option<&str>) -> Self {
         Self {
             harness_id: harness_id.to_string(),
@@ -32,15 +34,18 @@ impl SessionKey {
         }
     }
 
+    #[must_use]
     pub fn harness_id(&self) -> &str {
         &self.harness_id
     }
 
+    #[must_use]
     pub fn cwd(&self) -> &std::path::Path {
         &self.cwd
     }
 
     /// Empty string for the default/unnamed session.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }

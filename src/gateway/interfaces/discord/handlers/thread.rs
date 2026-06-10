@@ -33,6 +33,7 @@ impl AgentId {
         Self(id.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -64,6 +65,7 @@ pub struct ThreadBindingHandler {
 
 impl ThreadBindingHandler {
     /// Create a new ThreadBindingHandler
+    #[must_use]
     pub fn new() -> Self {
         Self {
             bindings: Arc::new(RwLock::new(HashMap::new())),

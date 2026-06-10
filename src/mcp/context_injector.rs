@@ -113,6 +113,7 @@ impl ContextInjector {
     }
 
     /// Format context as a system message for injection
+    #[must_use]
     pub fn format_as_system_message(contexts: &[InjectedContext]) -> Option<SamplingMessage> {
         if contexts.is_empty() {
             return None;

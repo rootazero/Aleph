@@ -47,6 +47,7 @@ pub struct A2AToolDeps {
 pub type A2AToolHandle = Arc<ArcSwapOption<A2AToolDeps>>;
 
 /// Create an empty A2A tool handle.
+#[must_use]
 pub fn new_a2a_tool_handle() -> A2AToolHandle {
     Arc::new(ArcSwapOption::empty())
 }

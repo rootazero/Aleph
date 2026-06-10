@@ -188,6 +188,7 @@ pub struct PromptBuilder {
 
 impl PromptBuilder {
     /// Create a new prompt builder
+    #[must_use]
     pub fn new(config: PromptConfig) -> Self {
         let pipeline = PromptPipeline::default_layers();
         Self {

@@ -257,6 +257,7 @@ pub enum AuthMode {
 
 impl AuthMode {
     /// Whether this mode requires authentication
+    #[must_use]
     pub fn is_auth_required(&self) -> bool {
         matches!(self, AuthMode::Token)
     }
@@ -290,6 +291,7 @@ impl Default for AuthConfig {
 
 impl AuthConfig {
     /// Whether authentication is required
+    #[must_use]
     pub fn is_auth_required(&self) -> bool {
         matches!(self.mode, AuthMode::Token)
     }
@@ -338,6 +340,7 @@ impl Default for AgentConfig {
 
 impl AgentConfig {
     /// Convert to AgentInstanceConfig
+    #[must_use]
     pub fn to_instance_config(&self, agent_id: &str) -> AgentInstanceConfig {
         AgentInstanceConfig {
             agent_id: agent_id.to_string(),
@@ -533,6 +536,7 @@ impl GatewayConfig {
     }
 
     /// Get agent configs as instance configs
+    #[must_use]
     pub fn get_agent_instance_configs(&self) -> Vec<AgentInstanceConfig> {
         self.agents
             .iter()
@@ -541,6 +545,7 @@ impl GatewayConfig {
     }
 
     /// Get the default agent ID (first one, or "main" if exists)
+    #[must_use]
     pub fn default_agent_id(&self) -> Option<&str> {
         if self.agents.contains_key("main") {
             Some("main")

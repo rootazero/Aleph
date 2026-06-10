@@ -65,6 +65,7 @@ pub enum DenialReason {
 impl DenialReason {
     /// Short, model-facing explanation appended to the refusal so the agent
     /// stops re-attempting and changes approach instead of looping.
+    #[must_use]
     pub fn agent_hint(self) -> &'static str {
         match self {
             DenialReason::UserRejected => {
@@ -112,6 +113,7 @@ pub struct DenialLedger {
 /// hot, purely-internal path. `detail` should be the same deterministic string
 /// the approval prompt was built from (e.g. the capability-request text) so
 /// the *same* request maps to the *same* fingerprint across attempts.
+#[must_use]
 pub fn action_fingerprint(tool: &str, detail: &str) -> String {
     const FNV_OFFSET: u64 = 0xcbf29ce484222325;
     const FNV_PRIME: u64 = 0x100000001b3;
@@ -229,6 +231,7 @@ static GLOBAL: LazyLock<DenialLedger> = LazyLock::new(DenialLedger::new);
 /// Process-wide denial ledger shared by the confirm gate and the sandbox
 /// elevation path — the negative counterpart to
 /// [`session_memory::global`](super::session_memory::global).
+#[must_use]
 pub fn global() -> &'static DenialLedger {
     &GLOBAL
 }

@@ -68,6 +68,7 @@ pub struct AudioTranscribeTool {
 }
 
 impl AudioTranscribeTool {
+    #[must_use]
     pub fn new(pipeline: Arc<MediaPipeline>) -> Self {
         Self { pipeline }
     }

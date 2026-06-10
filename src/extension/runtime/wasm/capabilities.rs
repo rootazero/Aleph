@@ -79,6 +79,7 @@ fn default_path_prefix() -> String {
 /// - `*.domain.com` does NOT match `a.b.domain.com` (nested subdomains)
 ///
 /// Without a wildcard prefix, an exact (case-insensitive) match is required.
+#[must_use]
 pub fn host_matches_pattern(host: &str, pattern: &str) -> bool {
     if pattern.starts_with("*.") {
         let suffix = &pattern[1..]; // ".domain.com"
@@ -110,6 +111,7 @@ fn path_has_prefix(path: &str, prefix: &str) -> bool {
 
 impl EndpointPattern {
     /// Check whether a request (method, host, path) matches this pattern.
+    #[must_use]
     pub fn matches(&self, method: &str, host: &str, path: &str) -> bool {
         // Method check: empty means allow all
         if !self.methods.is_empty() && !self.methods.iter().any(|m| m.eq_ignore_ascii_case(method))
@@ -190,6 +192,7 @@ impl SecretsCapability {
     /// - A pattern ending with `*` matches any name that starts with
     ///   the prefix before the `*` (e.g. `slack_*` matches `slack_token`).
     /// - Otherwise, an exact match is required.
+    #[must_use]
     pub fn is_allowed(&self, name: &str) -> bool {
         self.allowed_patterns.iter().any(|pattern| {
             if let Some(prefix) = pattern.strip_suffix('*') {

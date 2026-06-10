@@ -63,6 +63,7 @@ pub struct ExecContext {
 }
 
 /// Decide whether to allow command execution
+#[must_use]
 pub fn decide_exec_approval(
     config: &ResolvedExecConfig,
     analysis: &CommandAnalysis,

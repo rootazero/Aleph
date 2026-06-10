@@ -76,6 +76,7 @@ fn parse_flow_file(src: &str) -> Result<FlowSet, String> {
 }
 
 /// Merge presets + user flows. User flows override presets on id collision.
+#[must_use]
 pub fn merge_catalogs(presets: FlowSet, user: FlowSet) -> FlowSet {
     let mut out = presets;
     for (id, spec) in user {

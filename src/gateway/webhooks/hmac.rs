@@ -28,6 +28,7 @@ pub enum VerificationResult {
 
 impl VerificationResult {
     /// Returns true if the signature is valid or verification is disabled
+    #[must_use]
     pub fn is_ok(&self) -> bool {
         matches!(
             self,
@@ -36,6 +37,7 @@ impl VerificationResult {
     }
 
     /// Returns true if the signature verification failed
+    #[must_use]
     pub fn is_err(&self) -> bool {
         !self.is_ok()
     }
@@ -51,6 +53,7 @@ impl VerificationResult {
 ///
 /// # Returns
 /// The verification result
+#[must_use]
 pub fn verify_signature(
     format: SignatureFormat,
     secret: &str,
@@ -235,6 +238,7 @@ fn constant_time_compare(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Generate a signature for testing/debugging
+#[must_use]
 pub fn generate_signature(format: SignatureFormat, secret: &str, payload: &[u8]) -> String {
     let hmac = compute_hmac_sha256(secret, payload);
     let hex_sig = hex::encode(&hmac);

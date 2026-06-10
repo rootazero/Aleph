@@ -27,6 +27,7 @@ pub struct InjectedSecret {
 }
 
 impl InjectedSecret {
+    #[must_use]
     pub fn from_value(name: &str, value: &str) -> Self {
         // Use non-zero fixed keys to avoid trivial rainbow table attacks
         let mut hasher =

@@ -63,6 +63,7 @@ pub struct BusStatistics {
 
 impl AgentMessageBus {
     /// Create a new message bus
+    #[must_use]
     pub fn new() -> Self {
         let (critical_tx, _) = broadcast::channel(CRITICAL_CHANNEL_CAPACITY);
         let (important_tx, _) = broadcast::channel(IMPORTANT_CHANNEL_CAPACITY);

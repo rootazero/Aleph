@@ -264,6 +264,7 @@ pub struct DesktopSom {
 }
 
 impl DesktopSom {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

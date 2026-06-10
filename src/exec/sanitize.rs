@@ -58,6 +58,7 @@ pub fn has_invisible_chars(text: &str) -> bool {
 
 /// Returns a copy of the text with all invisible, dangerous, and confusable
 /// Unicode characters removed.
+#[must_use]
 pub fn sanitize_display_text(text: &str) -> String {
     text.chars()
         .filter(|c| !is_invisible_char(*c) && !is_confusable_homoglyph(*c))

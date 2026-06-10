@@ -33,6 +33,7 @@ pub struct GenericAcpAdapter {
 
 impl GenericAcpAdapter {
     /// Create from an AcpAdapterEntry config.
+    #[must_use]
     pub fn from_entry(entry: &AcpAdapterEntry) -> Self {
         let id = entry.preset.clone().unwrap_or_default();
         let display_name = entry.display_name.clone();

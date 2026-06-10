@@ -55,6 +55,7 @@ impl Default for CompressionConfig {
 
 impl CompressionConfig {
     /// Create from config policy
+    #[must_use]
     pub fn from_policy(policy: &crate::config::CompressionPolicy) -> Self {
         Self {
             batch_size: 50,

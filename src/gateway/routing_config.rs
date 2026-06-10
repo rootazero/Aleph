@@ -70,6 +70,7 @@ impl RoutingConfig {
     }
 
     /// Set DM scope
+    #[must_use]
     pub fn with_dm_scope(mut self, scope: DmScope) -> Self {
         self.dm_scope = scope;
         self

@@ -151,6 +151,7 @@ impl Default for IMessageConfig {
 
 impl IMessageConfig {
     /// Get the expanded database path
+    #[must_use]
     pub fn db_path(&self) -> PathBuf {
         expand_path(&self.db_path)
     }

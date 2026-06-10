@@ -553,11 +553,13 @@ impl GenerationProvider for GoogleImagenProvider {
 // === Helper Functions ===
 
 /// Check if an aspect ratio is valid
+#[must_use]
 pub fn is_valid_aspect_ratio(ratio: &str) -> bool {
     ASPECT_RATIOS.contains(&ratio)
 }
 
 /// Check if an image size is valid
+#[must_use]
 pub fn is_valid_image_size(size: &str) -> bool {
     IMAGE_SIZES.contains(&size)
 }

@@ -35,6 +35,7 @@ impl Default for CooldownConfig {
 /// - 2nd error: 5 minutes
 /// - 3rd error: 25 minutes
 /// - 4th+ error: 1 hour (max)
+#[must_use]
 pub fn calculate_cooldown_ms(error_count: u32) -> u64 {
     let normalized = error_count.max(1);
     let exponent = (normalized - 1).min(3);
@@ -51,6 +52,7 @@ pub fn calculate_cooldown_ms(error_count: u32) -> u64 {
 /// - 2nd error: billing_backoff * 2 (10 hours)
 /// - 3rd error: billing_backoff * 4 (20 hours)
 /// - Max: billing_max (default 24 hours)
+#[must_use]
 pub fn calculate_billing_cooldown_ms(error_count: u32, config: &CooldownConfig) -> u64 {
     let normalized = error_count.max(1);
     let exponent = (normalized - 1).min(10);

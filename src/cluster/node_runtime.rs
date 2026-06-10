@@ -32,6 +32,7 @@ pub struct CommandTable {
 }
 
 impl CommandTable {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -41,6 +42,7 @@ impl CommandTable {
     }
 
     /// 节点 connect 时声明给中心的命令目录。
+    #[must_use]
     pub fn descriptors(&self) -> Vec<CommandDescriptor> {
         self.commands.values().map(|c| c.descriptor()).collect()
     }
@@ -95,6 +97,7 @@ impl NodeCommand for BashNodeCommand {
 
 impl CommandTable {
     /// 便捷构造：注册唯一的 `bash` 命令（0c 节点的全部能力）。
+    #[must_use]
     pub fn with_bash(bash: BashExecTool, session: SessionKey) -> Self {
         let mut t = Self::new();
         t.register("bash", Arc::new(BashNodeCommand::new(bash, session)));

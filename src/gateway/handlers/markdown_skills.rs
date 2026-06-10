@@ -40,6 +40,7 @@ static SKILL_PATHS: Lazy<Arc<RwLock<std::collections::HashMap<String, PathBuf>>>
     Lazy::new(|| Arc::new(RwLock::new(std::collections::HashMap::new())));
 
 /// Accessor for the shared markdown-skill server.
+#[must_use]
 pub fn markdown_skills_server() -> &'static AlephToolServer {
     &MARKDOWN_SKILLS_SERVER
 }

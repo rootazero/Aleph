@@ -62,6 +62,7 @@ impl RuntimeStateFragment {
     /// The output is indented two spaces (the parent `<tool_runtime_state>`
     /// block adds none) so several fragments compose cleanly. Empty `hints`
     /// + Available status emits an empty self-closing element.
+    #[must_use]
     pub fn render_xml(&self) -> String {
         let (status_attr, unavail_hint) = match &self.status {
             ToolStatus::Available => (String::new(), None),

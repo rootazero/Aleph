@@ -26,6 +26,7 @@ pub struct IdentityMap {
 }
 
 impl IdentityMap {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             external_to_internal: DashMap::new(),
@@ -39,6 +40,7 @@ impl IdentityMap {
     }
 
     /// Resolve external identity to internal user ID
+    #[must_use]
     pub fn resolve(&self, platform: &str, platform_user_id: &str) -> Option<UserId> {
         let key = Self::make_key(platform, platform_user_id);
         self.external_to_internal.get(&key).map(|v| v.clone())
@@ -77,6 +79,7 @@ impl IdentityMap {
     }
 
     /// Get all external identities for a user
+    #[must_use]
     pub fn get_external_identities(&self, user_id: &UserId) -> Vec<String> {
         self.internal_to_external
             .get(user_id)

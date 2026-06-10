@@ -87,6 +87,7 @@ pub struct StreamingController {
 
 impl StreamingController {
     /// Create a new controller with the given config.
+    #[must_use]
     pub fn new(config: StreamingConfig) -> Self {
         let effective_debounce = config.debounce_interval;
         Self {
@@ -146,6 +147,7 @@ impl StreamingController {
     }
 
     /// Whether mid-stream edits are currently suppressed (flood fallback mode).
+    #[must_use]
     pub fn is_suppressed(&self) -> bool {
         self.suppressed
     }
@@ -158,11 +160,13 @@ impl StreamingController {
     }
 
     /// Returns the message ID of the sent message, if any.
+    #[must_use]
     pub fn message_id(&self) -> Option<&MessageId> {
         self.sent_message_id.as_ref()
     }
 
     /// Returns the current buffer contents.
+    #[must_use]
     pub fn buffer(&self) -> &str {
         &self.buffer
     }

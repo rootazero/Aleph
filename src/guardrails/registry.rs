@@ -22,10 +22,12 @@ pub struct GuardrailRegistry {
 }
 
 impl GuardrailRegistry {
+    #[must_use]
     pub fn builder() -> GuardrailRegistryBuilder {
         GuardrailRegistryBuilder::default()
     }
 
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             input: Vec::new(),
@@ -134,6 +136,7 @@ impl GuardrailRegistryBuilder {
         self.tool_call.push(g);
         self
     }
+    #[must_use]
     pub fn build(self) -> GuardrailRegistry {
         GuardrailRegistry {
             input: self.input,

@@ -53,6 +53,7 @@ pub struct AllowlistValidator {
 
 impl AllowlistValidator {
     /// Create a new validator with the given endpoint patterns.
+    #[must_use]
     pub fn new(patterns: Vec<EndpointPattern>) -> Self {
         Self { patterns }
     }

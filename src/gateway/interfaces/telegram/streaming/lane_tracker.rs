@@ -19,6 +19,7 @@ pub struct LaneState {
 }
 
 impl LaneState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             preview_message_id: None,
@@ -43,6 +44,7 @@ pub struct LaneDeliveryTracker {
 }
 
 impl LaneDeliveryTracker {
+    #[must_use]
     pub fn new(chat_id: i64, thread_id: Option<i64>) -> Self {
         let mut lanes = HashMap::new();
         lanes.insert(LaneId::Answer, LaneState::new());
@@ -55,14 +57,17 @@ impl LaneDeliveryTracker {
         }
     }
 
+    #[must_use]
     pub fn chat_id(&self) -> i64 {
         self.chat_id
     }
 
+    #[must_use]
     pub fn thread_id(&self) -> Option<i64> {
         self.thread_id
     }
 
+    #[must_use]
     pub fn get(&self, lane_id: LaneId) -> Option<&LaneState> {
         self.lanes.get(&lane_id)
     }

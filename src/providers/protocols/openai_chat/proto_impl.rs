@@ -15,6 +15,7 @@ use super::{sanitize_tool_name, OpenAiProtocol};
 
 impl OpenAiProtocol {
     /// Create a new OpenAI protocol adapter with the given HTTP client
+    #[must_use]
     pub fn new(client: reqwest::Client) -> Self {
         Self {
             client,

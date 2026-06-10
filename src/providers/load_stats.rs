@@ -158,6 +158,7 @@ pub struct LoadStats {
 
 impl LoadStats {
     /// Create an empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

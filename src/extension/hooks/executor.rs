@@ -97,6 +97,7 @@ pub struct HookExecutor {
 
 impl HookExecutor {
     /// Create a new hook executor
+    #[must_use]
     pub fn new(hooks: Vec<HookConfig>) -> Self {
         let regex_cache = Self::build_regex_cache(&hooks);
         Self {
@@ -108,6 +109,7 @@ impl HookExecutor {
     }
 
     /// Set the command timeout
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.command_timeout = timeout;
         self
@@ -123,6 +125,7 @@ impl HookExecutor {
     }
 
     /// Create a new empty hook executor
+    #[must_use]
     pub fn empty() -> Self {
         Self::new(Vec::new())
     }
@@ -190,6 +193,7 @@ impl HookExecutor {
     }
 
     /// Get the number of hooks
+    #[must_use]
     pub fn hook_count(&self) -> usize {
         self.hooks.len()
     }

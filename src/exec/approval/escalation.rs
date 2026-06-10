@@ -32,6 +32,7 @@ fn resolve_path_with_symlinks(path: &Path) -> PathBuf {
 }
 
 /// Check if path escalation is needed
+#[must_use]
 pub fn check_path_escalation(
     params: &HashMap<String, String>,
     approved_paths: &[String],
@@ -114,6 +115,7 @@ fn normalize_path_components(path: &Path) -> PathBuf {
 }
 
 /// Check if path is in sensitive directory
+#[must_use]
 pub fn is_sensitive_directory(path: &Path) -> bool {
     let sensitive_components = [
         ".ssh",

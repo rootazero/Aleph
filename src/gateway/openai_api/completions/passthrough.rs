@@ -21,6 +21,7 @@ use crate::tool_metadata::{ToolCategory, ToolDefinition};
 use serde_json::{json, Value};
 
 /// Convert OpenAI-format tool definitions to internal `ToolDefinition`.
+#[must_use]
 pub fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
     tools
         .iter()
@@ -47,6 +48,7 @@ pub fn convert_openai_tools(tools: &[Value]) -> Vec<ToolDefinition> {
 }
 
 /// Convert OpenAI-format tool_choice value to internal `ToolChoice`.
+#[must_use]
 pub fn convert_tool_choice(choice: &Value) -> Option<ToolChoice> {
     match choice {
         Value::String(s) => match s.as_str() {

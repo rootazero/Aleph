@@ -41,6 +41,7 @@ impl WhisperTranscription {
     /// - `api_key` — OpenAI (or compatible) API key.
     /// - `base_url` — Override the API base URL (e.g. for local whisper-compatible servers).
     /// - `model` — Override the model name (default: `whisper-1`).
+    #[must_use]
     pub fn new(api_key: String, base_url: Option<String>, model: Option<String>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(TRANSCRIPTION_TIMEOUT)

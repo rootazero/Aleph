@@ -5,6 +5,7 @@
 
 /// Truncate `s` to at most `max_bytes`, guaranteeing the result is valid UTF-8
 /// by backing up to the nearest char boundary.
+#[must_use]
 pub fn truncate_utf8_safe(s: &str, max_bytes: usize) -> String {
     if s.len() <= max_bytes {
         return s.to_string();
@@ -18,6 +19,7 @@ pub fn truncate_utf8_safe(s: &str, max_bytes: usize) -> String {
 
 /// Estimate tokens using the existing 4-chars-per-token heuristic (matches
 /// `ContextComptroller` behavior). Never returns zero for non-empty text.
+#[must_use]
 pub fn estimate_tokens(s: &str) -> u32 {
     if s.is_empty() {
         return 0;

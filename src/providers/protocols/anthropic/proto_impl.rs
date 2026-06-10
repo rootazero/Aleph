@@ -23,6 +23,7 @@ use super::{sanitize_anthropic_tool_name, AnthropicProtocol, CLAUDE_CODE_IDENTIT
 const MIN_OUTPUT_TOKENS_WITH_THINKING: u32 = 1024;
 impl AnthropicProtocol {
     /// Create a new Anthropic protocol adapter
+    #[must_use]
     pub fn new(client: Client) -> Self {
         Self {
             client,

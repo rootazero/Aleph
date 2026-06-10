@@ -430,6 +430,7 @@ impl Default for DiscordConfig {
 
 impl DiscordConfig {
     /// Create config from environment variable
+    #[must_use]
     pub fn from_env() -> Option<Self> {
         let bot_token = std::env::var("DISCORD_BOT_TOKEN").ok()?;
         let application_id = std::env::var("DISCORD_APPLICATION_ID")
@@ -444,6 +445,7 @@ impl DiscordConfig {
     }
 
     /// Check if a guild ID is allowed
+    #[must_use]
     pub fn is_guild_allowed(&self, guild_id: u64) -> bool {
         if self.allowed_guilds.is_empty() {
             true
@@ -453,6 +455,7 @@ impl DiscordConfig {
     }
 
     /// Check if a channel ID is allowed
+    #[must_use]
     pub fn is_channel_allowed(&self, channel_id: u64) -> bool {
         if self.allowed_channels.is_empty() {
             true

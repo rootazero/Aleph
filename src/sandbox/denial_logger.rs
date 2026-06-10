@@ -50,6 +50,7 @@ impl Default for DenialLogger {
 
 impl DenialLogger {
     /// Construct a stopped logger; call [`start`] to begin streaming.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

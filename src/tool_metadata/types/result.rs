@@ -58,16 +58,19 @@ impl ToolResult {
     }
 
     /// Check if result is successful
+    #[must_use]
     pub fn is_success(&self) -> bool {
         self.success
     }
 
     /// Get error message if failed
+    #[must_use]
     pub fn error_message(&self) -> Option<&str> {
         self.error.as_deref()
     }
 
     /// Convert to JSON
+    #[must_use]
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or(serde_json::json!({
             "success": false,

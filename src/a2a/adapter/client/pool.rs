@@ -14,6 +14,7 @@ pub struct A2AClientPool {
 }
 
 impl A2AClientPool {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             clients: AsyncRwLock::new(HashMap::new()),

@@ -103,6 +103,7 @@ impl AuthProfileProviderRegistry {
     ///
     /// * `store` - Auth profile store containing credentials
     /// * `config` - Registry configuration
+    #[must_use]
     pub fn new(store: AuthProfileStore, config: AuthProfileRegistryConfig) -> Self {
         let target_provider = config.provider_type.clone();
         let registry = Self {
@@ -229,6 +230,7 @@ impl AuthProfileProviderRegistry {
     }
 
     /// Get the currently active profile ID
+    #[must_use]
     pub fn active_profile_id(&self) -> Option<String> {
         self.active_profile
             .read()
@@ -237,12 +239,14 @@ impl AuthProfileProviderRegistry {
     }
 
     /// Get all available profile IDs
+    #[must_use]
     pub fn available_profiles(&self) -> Vec<String> {
         let store = self.store.read().unwrap_or_else(|e| e.into_inner());
         resolve_profile_order(&store, &self.target_provider, None, None)
     }
 
     /// Get profile count
+    #[must_use]
     pub fn profile_count(&self) -> usize {
         self.providers
             .read()
@@ -311,6 +315,7 @@ impl AuthProfileProviderRegistry {
     }
 
     /// Get a reference to the auth profile store
+    #[must_use]
     pub fn store(&self) -> &Arc<RwLock<AuthProfileStore>> {
         &self.store
     }

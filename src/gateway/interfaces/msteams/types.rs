@@ -49,6 +49,7 @@ pub struct Activity {
 }
 
 impl Activity {
+    #[must_use]
     pub fn text_message(text: &str) -> Self {
         Self {
             activity_type: "message".into(),
@@ -111,6 +112,7 @@ pub fn inject_ai_entity(activity: &mut Activity) {
     }
 }
 
+#[must_use]
 pub fn build_ai_generated_entity() -> serde_json::Value {
     serde_json::json!({
         "type": "https://schema.org/Message",
@@ -120,6 +122,7 @@ pub fn build_ai_generated_entity() -> serde_json::Value {
     })
 }
 
+#[must_use]
 pub fn build_stream_info_entity(
     stream_id: Option<&str>,
     stream_type: &str,
@@ -136,6 +139,7 @@ pub fn build_stream_info_entity(
     entity
 }
 
+#[must_use]
 pub fn build_welcome_card(bot_name: &str, prompt_starters: &[&str]) -> serde_json::Value {
     serde_json::json!({
         "type": "AdaptiveCard",
@@ -184,6 +188,7 @@ const STATUS_TEXTS: &[&str] = &[
     "Putting an answer together...",
 ];
 
+#[must_use]
 pub fn pick_status_text() -> &'static str {
     use std::time::SystemTime;
     let seed = SystemTime::now()

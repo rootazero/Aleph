@@ -57,6 +57,7 @@ impl Default for SkillPromptBudget {
 
 impl SkillPromptBudget {
     /// A budget that imposes no limits (renders every skill).
+    #[must_use]
     pub fn unlimited() -> Self {
         Self {
             max_skills: 0,
@@ -124,6 +125,7 @@ fn render_skill_fragment_compact(skill: &SkillManifest) -> String {
 ///   </skill>
 /// </available_skills>
 /// ```
+#[must_use]
 pub fn build_skills_prompt_xml(skills: &[&SkillManifest]) -> String {
     build_skills_prompt_xml_with_budget(skills, &SkillPromptBudget::default())
 }

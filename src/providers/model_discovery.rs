@@ -66,6 +66,7 @@ impl CachedDiscovery {
     /// Build a cache without any fallback.
     ///
     /// Equivalent to legacy behaviour: discovery failures propagate as errors.
+    #[must_use]
     pub fn new(inner: Box<dyn ModelDiscovery>, ttl: Duration) -> Self {
         Self {
             inner,
@@ -86,6 +87,7 @@ impl CachedDiscovery {
     /// Returns the same `CachedDiscovery` shape as [`Self::new`] but with
     /// `preset.fallback_models` already attached. Unknown preset names
     /// silently keep an empty fallback (matches legacy `new`).
+    #[must_use]
     pub fn from_preset(inner: Box<dyn ModelDiscovery>, preset_name: &str, ttl: Duration) -> Self {
         let fallback = crate::providers::presets::get_preset(preset_name)
             .map(|p| p.fallback_models)

@@ -36,6 +36,7 @@ use crate::session::events::MessageContent;
 /// separately via the `Multimodal(Vec<MessageContent>)` variant.
 ///
 /// `prompt` is the fresh user message that triggered this run.
+#[must_use]
 pub fn history_to_flow_input(history: Vec<UnifiedMessage>, prompt: String) -> FlowInput {
     let turns: Vec<FlowHistoryTurn> = history
         .into_iter()

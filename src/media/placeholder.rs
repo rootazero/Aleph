@@ -11,6 +11,7 @@ pub enum MediaPlaceholderType {
 }
 
 impl MediaPlaceholderType {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             MediaPlaceholderType::Image => "image",
@@ -32,6 +33,7 @@ impl MediaPlaceholder {
         Self { ty, id: id.into() }
     }
 
+    #[must_use]
     pub fn to_text(&self) -> String {
         format!("{{{{media:{}:{}}}}}", self.ty.as_str(), self.id)
     }
@@ -51,6 +53,7 @@ pub struct MediaRecord {
 }
 
 impl MediaRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -69,6 +72,7 @@ impl MediaRegistry {
         MediaPlaceholder::new(ty, id)
     }
 
+    #[must_use]
     pub fn resolve(&self, id: &str) -> Option<&MediaRecord> {
         self.entries.get(id)
     }

@@ -47,18 +47,21 @@ impl UnifiedTool {
     }
 
     /// Builder method: set parameters schema
+    #[must_use]
     pub fn with_parameters_schema(mut self, schema: Value) -> Self {
         self.parameters_schema = Some(schema);
         self
     }
 
     /// Builder method: set requires confirmation
+    #[must_use]
     pub fn with_requires_confirmation(mut self, requires: bool) -> Self {
         self.requires_confirmation = requires;
         self
     }
 
     /// Builder method: set safety level
+    #[must_use]
     pub fn with_safety_level(mut self, level: ToolSafetyLevel) -> Self {
         self.safety_level = level;
         // Sync requires_confirmation with safety level
@@ -73,6 +76,7 @@ impl UnifiedTool {
     }
 
     /// Builder method: set active state
+    #[must_use]
     pub fn with_active(mut self, active: bool) -> Self {
         self.is_active = active;
         self
@@ -95,6 +99,7 @@ impl UnifiedTool {
     }
 
     /// Builder method: set parameter hint for UI display
+    #[must_use]
     pub fn with_param_hint(mut self, hint: &str) -> Self {
         self.param_hint = Some(hint.to_string());
         self
@@ -107,18 +112,21 @@ impl UnifiedTool {
     }
 
     /// Builder method: set builtin flag
+    #[must_use]
     pub fn with_builtin(mut self, is_builtin: bool) -> Self {
         self.is_builtin = is_builtin;
         self
     }
 
     /// Builder method: set sort order
+    #[must_use]
     pub fn with_sort_order(mut self, order: i32) -> Self {
         self.sort_order = order;
         self
     }
 
     /// Builder method: set has_subtools flag
+    #[must_use]
     pub fn with_has_subtools(mut self, has: bool) -> Self {
         self.has_subtools = has;
         self
@@ -147,6 +155,7 @@ impl UnifiedTool {
     }
 
     /// Builder method: set routing capabilities
+    #[must_use]
     pub fn with_routing_capabilities(mut self, caps: Vec<String>) -> Self {
         self.routing_capabilities = caps;
         self
@@ -159,6 +168,7 @@ impl UnifiedTool {
     }
 
     /// Builder method: set routing strip prefix
+    #[must_use]
     pub fn with_routing_strip_prefix(mut self, strip: bool) -> Self {
         self.routing_strip_prefix = strip;
         self
@@ -182,6 +192,7 @@ impl UnifiedTool {
     }
 
     /// Builder method: mark as renamed due to conflict
+    #[must_use]
     pub fn with_was_renamed(mut self, renamed: bool) -> Self {
         self.was_renamed = renamed;
         self
@@ -192,12 +203,14 @@ impl UnifiedTool {
     // =========================================================================
 
     /// Builder method: set dispatch mode
+    #[must_use]
     pub fn with_dispatch_mode(mut self, mode: DispatchMode) -> Self {
         self.dispatch_mode = mode;
         self
     }
 
     /// Builder method: set visible channels
+    #[must_use]
     pub fn with_visible_channels(mut self, channels: Vec<ChannelType>) -> Self {
         self.visible_channels = channels;
         self

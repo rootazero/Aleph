@@ -25,6 +25,7 @@ pub struct NotificationService {
 }
 
 impl NotificationService {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             configs: AsyncRwLock::new(HashMap::new()),

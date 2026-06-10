@@ -39,6 +39,7 @@ const MAX_NAME_LEN: usize = 80;
 
 /// `$ALEPH_HOME/workflows/proposals/` — the gated draft directory, a sibling
 /// concept to the active [`store::workflow_dir`].
+#[must_use]
 pub fn proposals_dir() -> PathBuf {
     store::workflow_dir().join("proposals")
 }
@@ -73,6 +74,7 @@ pub fn canonical_name(skills: &[String]) -> String {
 /// should really say, which agents own them — is added by the LLM/user when
 /// the proposal is reviewed, not invented here. Returns `None` for a chain of
 /// fewer than two skills (a single skill is not a MetaSkill).
+#[must_use]
 pub fn skeleton_from_chain(chain: &[String], observations: u32) -> Option<WorkflowDef> {
     if chain.len() < 2 {
         return None;
@@ -158,6 +160,7 @@ pub fn accept(name: &str) -> Result<PathBuf> {
 /// chain's canonical name. Used by the miner to avoid re-drafting the same
 /// MetaSkill every dream cycle. Name-based dedup is deliberate: the canonical
 /// name is the chain's identity, so it needs no step-by-step comparison.
+#[must_use]
 pub fn already_covered(chain: &[String]) -> bool {
     let name = canonical_name(chain);
     let in_active = store::list()

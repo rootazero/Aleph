@@ -34,6 +34,7 @@ pub struct MediaProcessor {
 
 impl MediaProcessor {
     /// Create a new processor with optional transcription and vision backends.
+    #[must_use]
     pub fn new(
         transcription: Option<Box<dyn TranscriptionService>>,
         vision: Option<Arc<VisionPipeline>>,

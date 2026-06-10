@@ -13,6 +13,7 @@ impl Config {
     ///
     /// Returns unified path for all platforms:
     /// - All platforms: ~/.aleph/config.toml
+    #[must_use]
     pub fn default_path() -> PathBuf {
         crate::utils::paths::get_config_dir()
             .map(|d| d.join("config.toml"))

@@ -46,6 +46,7 @@ impl ToolError {
     ///
     /// For richer, prompt-side classification (rate-limited,
     /// unauthorized, blocked-by-policy, …) see [`Self::kind`].
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(self, Self::Timeout { .. } | Self::Transport { .. })
     }
@@ -59,6 +60,7 @@ impl ToolError {
     /// but the kind further distinguishes "switch source"
     /// (Unauthorized/BlockedByPolicy) from "switch tool"
     /// (Timeout/Transport).
+    #[must_use]
     pub fn kind(&self) -> crate::tools::error_kind::ToolErrorKind {
         crate::tools::error_kind::classify_tool_error(self)
     }
@@ -209,6 +211,7 @@ pub trait ToolService: Send + Sync + 'static {
 /// Information loss (e.g., `ToolSource::Mcp` collapses to `category: Builtin`,
 /// `metadata.requires_approval` is dropped) is preserved as-is from the
 /// pre-Stage-2 behavior. Fixing the lossy mapping is out of Stage 2 scope.
+#[must_use]
 pub fn to_metadata_form(defs: &[ToolDefinition]) -> Arc<[crate::tool_metadata::ToolDefinition]> {
     defs.iter()
         .map(|def| crate::tool_metadata::ToolDefinition {

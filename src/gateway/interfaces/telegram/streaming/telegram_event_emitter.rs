@@ -16,6 +16,7 @@ pub struct TelegramEventEmitter {
 }
 
 impl TelegramEventEmitter {
+    #[must_use]
     pub fn new(
         bot: teloxide::Bot,
         config: StreamingOptions,

@@ -52,6 +52,7 @@ pub struct PromptPipeline {
 
 impl PromptPipeline {
     /// Create a new pipeline, sorting layers by ascending priority.
+    #[must_use]
     pub fn new(mut layers: Vec<Box<dyn PromptLayer>>) -> Self {
         layers.sort_by_key(|l| l.priority());
         Self {
@@ -298,6 +299,7 @@ impl PromptPipeline {
     /// 1750  SessionContextGuideLayer
     /// 1755  ExecutionPlanLayer
     /// 1760  SessionResumeLayer
+    #[must_use]
     pub fn default_layers() -> Self {
         Self::new(vec![
             Box::new(SoulLayer),

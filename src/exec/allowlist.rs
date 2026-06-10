@@ -4,6 +4,7 @@ use super::analysis::CommandResolution;
 use super::config::AllowlistEntry;
 
 /// Check if a resolution matches any allowlist entry
+#[must_use]
 pub fn match_allowlist<'a>(
     allowlist: &'a [AllowlistEntry],
     resolution: &CommandResolution,
