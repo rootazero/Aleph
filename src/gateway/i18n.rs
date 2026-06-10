@@ -218,6 +218,16 @@ pub fn render_loop_halt(
              Shorten the request or raise `max_output_tokens`."
         ),
 
+        (TerminateReason::DiminishingReturns, Locale::Zh) => format!(
+            "检测到收益递减，已提前收尾（{iterations} 次迭代，{tool_calls} 次工具调用）。\n\
+             如需继续，请把任务拆分得更具体后重试。"
+        ),
+        (TerminateReason::DiminishingReturns, Locale::En) => format!(
+            "Stopped early on diminishing returns ({iterations} iterations, \
+             {tool_calls} tool calls).\n\
+             Break the task into more specific steps and retry if needed."
+        ),
+
         // BudgetExhaustedPartialResult is the partial-result escalation
         // of a budget cap. The user-facing message highlights that the
         // partial work has been preserved for the next run (cron resume).

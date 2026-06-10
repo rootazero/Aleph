@@ -603,26 +603,37 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
-        // LLM-only builtin tools: deliberately kept OUT of BUILTIN_TOOL_DEFINITIONS
-        // (and thus the command/slash catalog) but still must be callable by the
-        // model. `scratchpad` is driven by the harness steering preamble ("call
-        // the scratchpad tool…") and its progress sink; `voice_mode_set` ceded
-        // its command surface to `/voice` (commit 8d66abb33) yet stays an LLM
-        // tool; `goal` is the standing-goal manager (R8) — model-driven, no
-        // command surface. All are registered in the runtime map with full
-        // schemas, but the loop tool list is sourced from
-        // BUILTIN_TOOL_DEFINITIONS — so without this append they were invisible
-        // to the model. Pull their already-built UnifiedTool metadata (incl.
-        // parameter schema) straight from the registry.
+        // Runtime-map completion: the registry constructor conditionally
+        // registers every executable tool — with full parameter schemas —
+        // into its unified metadata map, but the loop tool list above is
+        // sourced from the static BUILTIN_TOOL_DEFINITIONS. A hand-maintained
+        // patch list used to bridge the gap (scratchpad / voice_mode_set /
+        // goal) and silently drifted: meta discovery tools (`list_tools` —
+        // which act.rs error nudges tell the model to call), provider-gated
+        // generation tools (video/audio/speech_generate), store-gated team
+        // tools (`task_exit_journal` — "LLM-self-called" per its registration
+        // comment), and the desktop capability family were all dispatchable
+        // yet never advertised to the model. Complete the list from the map
+        // itself so registration is the single source of truth: anything the
+        // registry can execute, the model can see. Conditional registration
+        // already guarantees map entries have live dependencies, and the
+        // appended tail is sorted for a deterministic tool order
+        // (prompt-cache stability).
         {
-            use alephcore::executor::ToolRegistry;
-            for name in ["scratchpad", "voice_mode_set", "goal"] {
-                if tools.iter().any(|t| t.name == name) {
-                    continue;
-                }
-                if let Some(t) = tool_registry.get_tool(name) {
-                    tools.push(t.clone());
-                }
+            let existing: std::collections::HashSet<String> =
+                tools.iter().map(|t| t.name.clone()).collect();
+            let mut completion: Vec<UnifiedTool> = tool_registry
+                .unified_tools()
+                .filter(|t| !existing.contains(&t.name))
+                .cloned()
+                .collect();
+            completion.sort_by(|a, b| a.name.cmp(&b.name));
+            if !completion.is_empty() {
+                tracing::info!(
+                    count = completion.len(),
+                    "LLM tool list completed from registry runtime map"
+                );
+                tools.extend(completion);
             }
         }
 

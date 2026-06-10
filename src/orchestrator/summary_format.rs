@@ -244,6 +244,7 @@ fn humanize_terminate(r: &TerminateReason) -> String {
         TerminateReason::EmptyResponseExhausted => "Empty response from provider".into(),
         TerminateReason::StopHookHalt { reason } => format!("Stop hook halt: {reason}"),
         TerminateReason::MaxOutputTokensExhausted => "Max output tokens exhausted".into(),
+        TerminateReason::DiminishingReturns => "Stopped early on diminishing returns".into(),
         TerminateReason::ReactiveCompactExhausted => {
             "Context overflow recovery failed (reactive compaction)".into()
         }

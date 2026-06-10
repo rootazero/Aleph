@@ -259,6 +259,19 @@ fn read_summary_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<TeamSummary> {
     })
 }
 
+/// Broadcast a team lifecycle event on the process-global bus (best-effort).
+///
+/// Mirrors the coord-task store pattern (`agents/swarm/tasks/store/mod.rs`):
+/// `TeamEventLogger` persists these into `team_events` so the kanban drawer
+/// renders team lifecycle transitions (creation, membership changes, disband)
+/// alongside task events. GlobalBus is a singleton — no injection required —
+/// and broadcasting with zero subscribers (library tests) is safe.
+async fn broadcast_team_event(team_id: &str, event: crate::event::AlephEvent) {
+    crate::event::GlobalBus::global()
+        .broadcast("team_store", team_id, event)
+        .await;
+}
+
 // ---------------------------------------------------------------------------
 // TeamStore implementation
 // ---------------------------------------------------------------------------
@@ -278,6 +291,20 @@ impl TeamStore for SqliteTeamStore {
             params![id, input.name, input.description, input.leader_id, now],
         )
         .map_err(db_err)?;
+        drop(conn);
+
+        // Members (including the leader) enroll via `add_member`, which emits
+        // one `TeamMemberAdded` each — so `member_ids` is empty here and the
+        // timeline stays complete without double-reporting membership.
+        broadcast_team_event(
+            &id,
+            crate::event::AlephEvent::TeamCreated {
+                team_id: id.clone(),
+                name: input.name.clone(),
+                member_ids: Vec::new(),
+            },
+        )
+        .await;
 
         Ok(Team {
             id,
@@ -368,6 +395,15 @@ impl TeamStore for SqliteTeamStore {
             }
             return Err(not_found(format!("team not found: {id}")));
         }
+        drop(conn);
+
+        broadcast_team_event(
+            id,
+            crate::event::AlephEvent::TeamDisbanded {
+                team_id: id.to_string(),
+            },
+        )
+        .await;
         Ok(())
     }
 
@@ -472,6 +508,19 @@ impl TeamStore for SqliteTeamStore {
                 .map_err(db_err)?;
             return Ok(member);
         }
+        drop(conn);
+
+        // Fires on first enrollment and on role/kind re-upsert alike — the
+        // timeline records the latest membership shape either way.
+        broadcast_team_event(
+            &input.team_id,
+            crate::event::AlephEvent::TeamMemberAdded {
+                team_id: input.team_id.clone(),
+                member_id: input.agent_id.clone(),
+                role: input.role.clone(),
+            },
+        )
+        .await;
 
         Ok(TeamMember {
             team_id: input.team_id,
@@ -544,6 +593,16 @@ impl TeamStore for SqliteTeamStore {
                 "agent '{agent_id}' is not a member of team '{team_id}'"
             )));
         }
+        drop(conn);
+
+        broadcast_team_event(
+            team_id,
+            crate::event::AlephEvent::TeamMemberRemoved {
+                team_id: team_id.to_string(),
+                member_id: agent_id.to_string(),
+            },
+        )
+        .await;
 
         Ok(())
     }

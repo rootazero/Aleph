@@ -1,13 +1,21 @@
-//! Builtin tool definitions - Single Source of Truth
-//!
-//! This module defines ALL builtin tools in one place, ensuring consistency
-//! across the system.
+//! Builtin tool definitions — static catalog base.
 //!
 //! # Architecture
 //!
-//! This is the authoritative source for builtin tool definitions.
-//! Both BuiltinToolRegistry (Agent Loop execution) and AlephToolServer (tool management)
-//! source their tool definitions from this module.
+//! `BUILTIN_TOOL_DEFINITIONS` is the static, unconditional subset of the
+//! builtin tool surface: the names/descriptions that exist regardless of
+//! runtime configuration. It seeds the slash-command catalog and the base of
+//! the LLM tool list, and AlephToolServer sources tool construction from it
+//! via `create_tool_boxed()`.
+//!
+//! It is deliberately NOT the complete tool surface. Conditionally-registered
+//! tools (generation tools gated on a provider, team tools gated on a coord
+//! store, ACP/arena tools, meta discovery tools, LLM-only tools like
+//! `scratchpad`/`goal`) live only in `BuiltinToolRegistry`'s runtime metadata
+//! map, populated by the builder. The LLM tool list is therefore completed
+//! from `BuiltinToolRegistry::unified_tools()` at agent init — adding a tool
+//! here is only needed when it should also have a command surface and be
+//! advertised even before its dependencies are configured.
 //!
 //! # Usage
 //!

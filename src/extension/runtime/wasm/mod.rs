@@ -9,7 +9,6 @@ mod capability_kernel;
 mod credential_injector;
 mod host_functions;
 mod limits;
-mod permissions;
 
 pub use allowlist::{AllowlistError, AllowlistValidator};
 pub use capabilities::{
@@ -19,7 +18,6 @@ pub use capabilities::{
 pub use capability_kernel::{CapabilityError, WasmCapabilityKernel};
 pub use credential_injector::{inject_credential, CredentialError};
 pub use limits::WasmResourceLimits;
-pub use permissions::PermissionChecker;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

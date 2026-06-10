@@ -12,7 +12,6 @@ mod path_utils;
 pub(crate) use path_utils::{check_and_resolve_path, get_denied_paths};
 pub(crate) mod read;
 mod search;
-mod state;
 mod stats;
 mod text;
 mod tool;
@@ -23,11 +22,6 @@ pub(crate) mod write;
 pub use apply_patch::{ApplyPatchArgs, ApplyPatchOutput, ApplyPatchTool};
 pub use edit::FileEditTool;
 pub use read::FileReadTool;
-pub use state::{
-    clear_written_files, get_working_dir, get_written_files, mark_session_start,
-    record_written_file, scan_new_files_in_working_dir, set_working_dir, take_written_files,
-    WrittenFile,
-};
 pub use tool::FileOpsTool;
 pub use types::{FileInfo, FileOperation, FileOpsArgs, FileOpsOutput};
 pub use write::FileWriteTool;

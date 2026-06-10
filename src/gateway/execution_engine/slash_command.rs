@@ -16,6 +16,24 @@ use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 
 use super::engine::ExecutionEngine;
 
+/// Shorthand slash aliases → canonical tool names.
+///
+/// Single source for both the fast-path resolver below and the inbound
+/// router's namespace check (`inbound_router::mod`), which previously kept a
+/// hardcoded mirror of these names that could silently drift.
+pub(crate) const SHORTHAND_ALIASES: &[(&str, &str)] = &[
+    ("rename", "session_set_topic"),
+    ("video", "video_generate"),
+    ("image", "image_generate"),
+    ("audio", "audio_generate"),
+    ("speech", "speech_generate"),
+];
+
+/// Returns `true` if `name` is a shorthand slash alias (e.g. `image`).
+pub(crate) fn is_shorthand_alias(name: &str) -> bool {
+    SHORTHAND_ALIASES.iter().any(|(alias, _)| *alias == name)
+}
+
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Try to resolve a `/command args` input to a slash command mode JSON.
     ///
@@ -41,14 +59,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         };
 
         // Map common shorthand commands to their actual tool names
-        let cmd_name = match cmd_name.as_str() {
-            "rename" => "session_set_topic".to_string(),
-            "video" => "video_generate".to_string(),
-            "image" => "image_generate".to_string(),
-            "audio" => "audio_generate".to_string(),
-            "speech" => "speech_generate".to_string(),
-            other => other.to_string(),
-        };
+        let cmd_name = SHORTHAND_ALIASES
+            .iter()
+            .find(|(alias, _)| *alias == cmd_name)
+            .map(|(_, canonical)| (*canonical).to_string())
+            .unwrap_or(cmd_name);
 
         // Check if this matches a registered tool
         if self.tool_registry.get_tool(&cmd_name).is_some() {

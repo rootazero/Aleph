@@ -82,12 +82,22 @@ pub struct ChannelPolicyConfig {
     #[serde(default)]
     pub default_workspace: Option<PathBuf>,
     /// What to do when a message arrives while this channel's session is already
-    /// running a loop: `steer` (default — inject at the next turn boundary) or
+    /// running a loop: `steer` (default — inject at the next turn boundary),
     /// `interrupt` (cancel the in-flight run; the message restarts as a fresh
-    /// run via busy/retry). Set `busy_input_mode = "interrupt"` in the channel's
-    /// config block to opt in.
+    /// run via the busy queue), or `queue` (never disturb the running task; the
+    /// message is delivered as a fresh run once it finishes). Set
+    /// `busy_input_mode = "interrupt"` / `"queue"` in the channel's config
+    /// block to opt in.
     #[serde(default)]
     pub busy_input_mode: BusyInputMode,
+    /// Per-channel tool permission override (`tool_permissions` block in the
+    /// channel's config): merged by `run_loop` as the third layer over
+    /// global + agent permissions, most restrictive wins. Lets an operator
+    /// e.g. deny `bash` on a group channel while the same agent keeps it
+    /// elsewhere (openclaw per-group tools / opensquilla channel-matrix
+    /// parity). `None` → channel adds no tool restrictions.
+    #[serde(default)]
+    pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 }
 
 impl ChannelPolicyConfig {
@@ -98,6 +108,7 @@ impl ChannelPolicyConfig {
         self.permission_level == ChannelPermissionLevel::Chat
             && self.default_workspace.is_none()
             && self.busy_input_mode == BusyInputMode::Steer
+            && self.tool_permissions.is_none()
     }
 }
 
@@ -124,10 +135,14 @@ pub struct ChannelConfig {
     /// Working directory the Chat tier is locked into (absolute). `None` → the
     /// agent's own default workspace.
     pub default_workspace: Option<PathBuf>,
-    /// Busy-input policy for this channel: `Steer` (default) or `Interrupt`.
-    /// Stamped into each run's metadata so the execution engine's busy branch
-    /// can dispatch without re-reading channel config.
+    /// Busy-input policy for this channel: `Steer` (default), `Interrupt`, or
+    /// `Queue`. Stamped into each run's metadata so the execution engine's
+    /// busy branch can dispatch without re-reading channel config.
     pub busy_input_mode: BusyInputMode,
+    /// Per-channel tool permission override. Stamped (JSON) into each run's
+    /// metadata so `run_loop` can merge it over global + agent permissions
+    /// without re-reading channel config. `None` → no channel restrictions.
+    pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 }
 
 /// Per-channel slash-command access tiering.
@@ -233,6 +248,7 @@ impl Default for ChannelConfig {
             permission_level: ChannelPermissionLevel::default(),
             default_workspace: None,
             busy_input_mode: BusyInputMode::default(),
+            tool_permissions: None,
         }
     }
 }
@@ -248,7 +264,8 @@ impl ChannelConfig {
 
     /// Wire string for this channel's busy-input policy, stamped into the run's
     /// `busy_input_mode` metadata so the execution engine's busy branch can
-    /// dispatch (`steer` / `interrupt`) without re-reading channel config.
+    /// dispatch (`steer` / `interrupt` / `queue`) without re-reading channel
+    /// config.
     #[must_use]
     pub fn busy_input_mode_wire(&self) -> &'static str {
         self.busy_input_mode.as_wire()
@@ -384,6 +401,9 @@ impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConf
             permission_level: ChannelPermissionLevel::default(),
             default_workspace: None,
             busy_input_mode: BusyInputMode::default(),
+            // Boot wiring overlays `tool_permissions` from the instance's flat
+            // config block (same ChannelPolicyConfig parse as other channels).
+            tool_permissions: None,
         }
     }
 }
@@ -558,8 +578,14 @@ mod permission_tier_tests {
 
     #[test]
     fn default_tier_is_chat() {
-        assert_eq!(ChannelPermissionLevel::default(), ChannelPermissionLevel::Chat);
-        assert_eq!(ChannelConfig::default().permission_level, ChannelPermissionLevel::Chat);
+        assert_eq!(
+            ChannelPermissionLevel::default(),
+            ChannelPermissionLevel::Chat
+        );
+        assert_eq!(
+            ChannelConfig::default().permission_level,
+            ChannelPermissionLevel::Chat
+        );
         // Safe default: an unconfigured channel maps to the gated "guest" role.
         assert_eq!(ChannelConfig::default().caller_role_str(), "guest");
     }
@@ -579,7 +605,10 @@ mod permission_tier_tests {
         });
         let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
         assert_eq!(p.permission_level, ChannelPermissionLevel::Config);
-        assert_eq!(p.default_workspace.as_deref(), Some(std::path::Path::new("/srv/work")));
+        assert_eq!(
+            p.default_workspace.as_deref(),
+            Some(std::path::Path::new("/srv/work"))
+        );
         assert!(!p.is_default());
     }
 
@@ -606,6 +635,31 @@ mod permission_tier_tests {
             "interrupt"
         );
         assert_eq!(ChannelConfig::default().busy_input_mode_wire(), "steer");
+    }
+
+    #[test]
+    fn policy_parses_queue_busy_input_mode() {
+        // The follow-up lane: queue mode must parse, register as non-default
+        // (so the metadata stamp fires), and round-trip its wire string.
+        let raw = serde_json::json!({
+            "bot_token": "secret",
+            "busy_input_mode": "queue",
+        });
+        let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
+        assert_eq!(p.busy_input_mode, BusyInputMode::Queue);
+        assert!(!p.is_default());
+        assert_eq!(
+            ChannelConfig {
+                busy_input_mode: BusyInputMode::Queue,
+                ..Default::default()
+            }
+            .busy_input_mode_wire(),
+            "queue"
+        );
+        assert_eq!(
+            BusyInputMode::from_wire(Some("queue")),
+            BusyInputMode::Queue
+        );
     }
 
     #[test]
@@ -647,5 +701,30 @@ mod permission_tier_tests {
             ..Default::default()
         };
         assert_eq!(cfg.resolved_default_workspace(), Some(std::env::temp_dir()));
+    }
+
+    /// A `tool_permissions` block in a channel's flat config parses into the
+    /// policy and disqualifies the channel from the skip-registration default
+    /// — otherwise the override would be silently dropped at boot.
+    #[test]
+    fn policy_tool_permissions_parse_and_break_default() {
+        use crate::extension::PermissionAction;
+
+        let raw = serde_json::json!({
+            "bot_token": "secret",
+            "tool_permissions": {
+                "default": "allow",
+                "overrides": { "bash": "deny", "file_write": "ask" }
+            }
+        });
+        let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
+        assert!(
+            !p.is_default(),
+            "tool_permissions alone must force registration"
+        );
+        let perms = p.tool_permissions.expect("block surfaces");
+        assert_eq!(perms.resolve("bash"), PermissionAction::Deny);
+        assert_eq!(perms.resolve("file_write"), PermissionAction::Ask);
+        assert_eq!(perms.resolve("read_file"), PermissionAction::Allow);
     }
 }

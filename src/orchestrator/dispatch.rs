@@ -1,7 +1,7 @@
 //! Orchestrator core + seven-step dispatch. See design §6.
 
-use std::collections::{HashMap, HashSet};
 use crate::sync_primitives::Arc;
+use std::collections::{HashMap, HashSet};
 
 use crate::sync_primitives::Mutex;
 
@@ -145,6 +145,12 @@ pub enum TerminateReason {
     /// distinct from `Completed` (clean exit) and `EmptyResponseExhausted`
     /// (no content at all).
     MaxOutputTokensExhausted,
+    /// The context-budget `after_turn` window flagged diminishing returns
+    /// (`LoopDirective::StopDiminishing`): recent turns kept spending tokens
+    /// without productive tool output, so the loop stopped early after a
+    /// grace turn. Same subsystem as `ContextBudgetExhausted` but a
+    /// different signal — productivity, not prompt size.
+    DiminishingReturns,
     /// The provider returned a context-window overflow (`prompt_too_long`
     /// / 413) and the harness attempted reactive compaction, but either
     /// the rescue retry still overflowed or no compactor was wired. The
@@ -195,6 +201,7 @@ impl TerminateReason {
             Self::EmptyResponseExhausted => "empty_response_exhausted",
             Self::StopHookHalt { .. } => "stop_hook_halt",
             Self::MaxOutputTokensExhausted => "max_output_tokens_exhausted",
+            Self::DiminishingReturns => "diminishing_returns",
             Self::ReactiveCompactExhausted => "reactive_compact_exhausted",
             Self::Cancelled => "cancelled",
             Self::BudgetExhaustedPartialResult { .. } => "budget_exhausted_partial_result",
@@ -245,9 +252,10 @@ pub fn escalate_partial_result(reason: TerminateReason, partial: Option<&str>) -
         // (`Completed`), a structural failure (`StallTimeout`,
         // `TurnTimeout`, `ConsecutiveFailureCap`, `VerifierVeto`,
         // `EmptyResponseExhausted`), a permanent halt (`StopHookHalt`),
-        // an externally-driven stop (`Cancelled`), or already a
-        // PartialResult — none should be re-classified as "partial,
-        // resume me later".
+        // an externally-driven stop (`Cancelled`), a productivity stop
+        // (`DiminishingReturns` — resuming would just resume the spin),
+        // or already a PartialResult — none should be re-classified as
+        // "partial, resume me later".
         other => other,
     }
 }
@@ -471,6 +479,17 @@ pub trait HarnessRunner: Send + Sync {
         // and falls through to the legacy resolution chain.
         max_iterations_override: Option<u32>,
     ) -> Result<FlowOutcome, FlowError>;
+
+    /// The guardrail registry this runner installs on its own harness, if
+    /// any. The gateway threads it into `SubagentTool` so spawned subagents
+    /// enforce the same Input/Output/ToolCall checks as the main harness
+    /// (Stage 5a inheritance — previously the spawner's `guardrails` field
+    /// existed but no production caller ever populated it). Default `None`
+    /// keeps test mocks and the simple engine unguarded, matching their
+    /// main-harness behavior.
+    fn guardrails(&self) -> Option<Arc<crate::guardrails::GuardrailRegistry>> {
+        None
+    }
 }
 
 impl Orchestrator {

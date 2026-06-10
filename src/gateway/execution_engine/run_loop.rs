@@ -30,7 +30,8 @@ pub(super) use super::tool_refresh::{active_plugin_tools_for_agent, ExtensionToo
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Run the agent loop (think->act two-step, Claude Code-inspired).
     ///
-    /// Uses the flat `LoopToolRegistry` and single-layer `SafetyGuard`.
+    /// Uses the flat `LoopToolRegistry`; tool permissions are enforced by
+    /// `ScopedToolService` (merged global → agent → channel policy).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
         &self,
@@ -109,19 +110,55 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // dispatcher worker tasks, etc.) inherit the project context.
         // `None` is also published explicitly so a nested run cannot leak
         // an outer scope's project into a non-project agent.
+        //
+        // Alongside it, publish the per-run `FsScope` carrying this run's
+        // workspace artifact dir (`<workspace>/output/documents`, the same
+        // value `ToolContext::from_workspace` derives). File tools prefer the
+        // task-local over the shared `ToolContextHandle`, so a concurrent run
+        // rewriting the handle mid-run no longer redirects THIS run's
+        // relative-path writes into the other run's workspace. Mirrors the
+        // `effective_workspace` fallback inside `run_agent_loop_inner`
+        // (override > agent workspace); validation of the override stays in
+        // the inner fn — a vanished dir still fails the run there.
+        let scope_workspace = request
+            .workspace_override
+            .clone()
+            .unwrap_or_else(|| agent.workspace().to_path_buf());
+        // Team-worktree runs (dispatcher members) carry the parent repo root
+        // in metadata: build a rebasing worktree scope so the member's file
+        // tools anchor at the worktree root AND parent-repo absolute paths
+        // are redirected into the checkout — the same semantics the subagent
+        // spawner publishes for `IsolationMode::Worktree`. Everything else
+        // gets the plain workspace artifact scope.
+        let fs_scope = match request.metadata.get("team_worktree_repo_root") {
+            Some(repo_root) if request.workspace_override.is_some() => {
+                let wt = scope_workspace
+                    .canonicalize()
+                    .unwrap_or_else(|_| scope_workspace.clone());
+                let repo = std::path::PathBuf::from(repo_root);
+                let repo = repo.canonicalize().unwrap_or(repo);
+                crate::tools::fs_scope::FsScope::worktree(wt, repo)
+            }
+            _ => {
+                crate::tools::fs_scope::FsScope::workspace(scope_workspace.join("output/documents"))
+            }
+        };
         let mut result = crate::projects::with_project_root(
             request.workspace_override.clone(),
-            self.run_agent_loop_inner(
-                run_id,
-                request,
-                agent.clone(),
-                emitter,
-                deadline,
-                trace_task_id,
-                cancel_token,
-                extension_manager,
-                hook_executor.clone(),
-                hook_session_id.clone(),
+            crate::tools::fs_scope::with_fs_scope(
+                Some(fs_scope),
+                self.run_agent_loop_inner(
+                    run_id,
+                    request,
+                    agent.clone(),
+                    emitter,
+                    deadline,
+                    trace_task_id,
+                    cancel_token,
+                    extension_manager,
+                    hook_executor.clone(),
+                    hook_session_id.clone(),
+                ),
             ),
         )
         .await;
@@ -210,7 +247,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // resume, cron, heartbeat) having to remember to fire `projects.touch`
         // themselves. Best-effort: the run continues even when the store
         // write fails (read-only home dir, etc.).
-        if request.workspace_override.is_some() {
+        // Skip catalogue writes for team-worktree runs: their override points
+        // at an ephemeral `$TMPDIR` checkout that would otherwise pollute the
+        // Panel's recent-projects list with paths that vanish minutes later.
+        if request.workspace_override.is_some()
+            && !request.metadata.contains_key("team_worktree_path")
+        {
             let path = effective_workspace.clone();
             tokio::task::spawn_blocking(move || {
                 let store = crate::projects::ProjectStore::new();
@@ -326,7 +368,44 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let _agent_perms = agent.config().tool_permissions();
+        // Effective tool permission policy for this turn: global
+        // `[policies.tool_permissions]` (engine-held boot snapshot) merged with
+        // the agent's override, then with the originating channel's override
+        // (stamped into metadata by the inbound router — absent for Panel /
+        // CLI / cron turns). Most restrictive wins at every layer. `None` when
+        // everything is all-default so the ScopedToolService hot path stays a
+        // no-op — byte-identical to pre-wiring behavior for unconfigured
+        // installs.
+        let tool_permissions = {
+            use crate::config::types::policies::ToolPermissionsConfig;
+            let mut merged = ToolPermissionsConfig::merge(
+                &self.global_tool_permissions,
+                &agent.config().tool_permissions(),
+            );
+            if let Some(raw) = request.metadata.get(super::CHANNEL_TOOL_PERMISSIONS_KEY) {
+                match serde_json::from_str::<ToolPermissionsConfig>(raw) {
+                    Ok(channel_perms) => {
+                        merged = ToolPermissionsConfig::merge(&merged, &channel_perms)
+                    }
+                    Err(e) => warn!(
+                        run_id = run_id,
+                        error = %e,
+                        "Malformed channel tool_permissions metadata — channel layer skipped"
+                    ),
+                }
+            }
+            let is_all_default = merged.default == crate::extension::PermissionAction::Allow
+                && merged.overrides.is_empty();
+            (!is_all_default).then(|| {
+                info!(
+                    run_id = run_id,
+                    default = ?merged.default,
+                    overrides = merged.overrides.len(),
+                    "Tool permission policy active for this turn"
+                );
+                merged
+            })
+        };
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
@@ -690,7 +769,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     joined += 1;
                 }
                 if joined > 0 {
-                    info!(run_id = run_id, count = joined, "MCP tools joined tool surface");
+                    info!(
+                        run_id = run_id,
+                        count = joined,
+                        "MCP tools joined tool surface"
+                    );
                 }
             }
 
@@ -731,6 +814,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     Some(turn_context.clone()),
                     hook_executor.clone(),
                     hook_session_id.clone(),
+                    tool_permissions.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -776,7 +860,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             // SubagentTool construction
             let subagent_tool = {
-                use crate::agents::background_tracker::BackgroundAgentTracker;
                 use crate::agents::subagent_tool::SubagentTool;
                 use crate::agents::AgentRegistry;
 
@@ -809,7 +892,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         );
                         Arc::new(AgentRegistry::with_builtins())
                     });
-                let background_tracker = Arc::new(BackgroundAgentTracker::new());
+                // Engine-lifetime tracker: background sub-agents must stay
+                // pollable (`check_status` / `list`) and cancellable on turns
+                // AFTER the one that spawned them. A per-request tracker here
+                // silently dropped every result once the spawning run returned.
+                let background_tracker = self.background_tracker.clone();
                 let run_chain = crate::harness::chain_context::ChainContext::new();
                 let sub_session = orchestrator.session_service.clone();
                 // Phase 3 — route spawned subagents through the same
@@ -842,6 +929,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .with_cancel_token(cancel_token.clone())
                 .with_trace_sink(trace_sink.clone())
                 .with_provider_overrides(agent_overrides);
+                // Stage 5a (#9) — inherit the main harness's guardrail
+                // registry so spawned subagents enforce the same
+                // Input/Output/ToolCall checks. `None` (mocks / simple
+                // engine / no [guardrails] config) leaves subagents
+                // unguarded, matching the main harness.
+                if let Some(g) = orchestrator.harness.guardrails() {
+                    t = t.with_guardrails(g);
+                }
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }
@@ -867,6 +962,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Some(turn_context.clone()),
                 hook_executor.clone(),
                 hook_session_id.clone(),
+                tool_permissions.clone(),
             );
 
             // Build FlowRequest. A resumed run carries no fresh input — the

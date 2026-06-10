@@ -51,13 +51,14 @@ where
             match super::BusyInputMode::from_metadata(&request.metadata) {
                 super::BusyInputMode::Interrupt => {
                     // Cancel the running sibling on THIS session, then let the
-                    // inbound router's existing busy/retry back-off restart this
-                    // message as a fresh run once the slot frees — the new run
-                    // reads the interrupted task's full context from the session
-                    // log plus this instruction. Reuses `cancel` + `AgentBusy`
-                    // retry; no new dispatch machinery (R10). If no same-session
-                    // sibling is running (e.g. cross-session busy), fall through
-                    // to plain busy/retry without cancelling anything.
+                    // inbound router's FIFO busy queue restart this message as
+                    // a fresh run once the slot frees — the new run reads the
+                    // interrupted task's full context from the session log
+                    // plus this instruction. Reuses `cancel` + the `AgentBusy`
+                    // delivery path; no new dispatch machinery (R10). If no
+                    // same-session sibling is running (e.g. cross-session
+                    // busy), fall through to plain busy-queue waiting without
+                    // cancelling anything.
                     let target = {
                         let runs = self.active_runs.read().await;
                         super::steering::find_steering_target_id(
@@ -68,12 +69,31 @@ where
                     };
                     if let Some(target_id) = target {
                         let _ = self.cancel(&target_id).await;
+                        // Persist an interruption marker so the successor run
+                        // sees the prior task was cut short by the user, not
+                        // completed (hermes `*[interrupted]*` parity). The
+                        // cancelled run never persists its in-flight assistant
+                        // message, so without this the log just stops dead.
+                        super::steering::inject_interrupt_marker(
+                            self.orchestrator.as_ref(),
+                            &request.session_key,
+                        )
+                        .await;
                         info!(
                             session = %request.session_key.to_key_string(),
                             target_run = %target_id,
-                            "busy-input interrupt: cancelled running sibling; message will restart as a fresh run via busy/retry",
+                            "busy-input interrupt: cancelled running sibling; message will restart as a fresh run via the busy queue",
                         );
                     }
+                    return Err(ExecutionError::AgentBusy(agent.id().to_string()));
+                }
+                super::BusyInputMode::Queue => {
+                    // Follow-up lane (openclaw `followup` / hermes `queue` /
+                    // Pi `followUp` / OpenSquilla `followup` parity): leave the
+                    // running task untouched — no mid-loop injection, no
+                    // cancellation — and let the inbound router's FIFO busy
+                    // queue deliver this message as a fresh run once the
+                    // current one finishes.
                     return Err(ExecutionError::AgentBusy(agent.id().to_string()));
                 }
                 super::BusyInputMode::Steer => {
