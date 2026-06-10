@@ -250,7 +250,20 @@ impl<S: NoteStore + Send + Sync + 'static> NoteFactRetrieval<S> {
         agent_id: &str,
         limit: usize,
     ) -> Result<Vec<ScoredFact>, AlephError> {
-        let embedding = self.embedder.embed(query).await?;
+        // Embedding requires a remote API call; when that endpoint is
+        // unreachable (network outage, provider down) the notes themselves
+        // are still local — degrade to FTS-only search instead of failing
+        // the whole retrieval.
+        let embedding = match self.embedder.embed(query).await {
+            Ok(e) => e,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "note retrieval: embedding unavailable, falling back to FTS-only search"
+                );
+                return self.text_retrieve(query, agent_id, limit).await;
+            }
+        };
         let dim = embedding.len() as u32;
 
         let results = self
@@ -449,6 +462,65 @@ mod tests {
         let embedder: Arc<dyn EmbeddingProvider> =
             Arc::new(MockEmbeddingProvider::new(1024, "mock"));
         (NoteFactRetrieval::new(indexer, embedder), dir)
+    }
+
+    /// Embedder that always fails — simulates the embedding API being
+    /// unreachable (network outage / provider down).
+    struct FailingEmbeddingProvider;
+
+    #[async_trait::async_trait]
+    impl EmbeddingProvider for FailingEmbeddingProvider {
+        async fn embed(&self, _text: &str) -> Result<Vec<f32>, AlephError> {
+            Err(AlephError::network("embedding endpoint unreachable"))
+        }
+
+        async fn embed_batch(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, AlephError> {
+            Err(AlephError::network("embedding endpoint unreachable"))
+        }
+
+        fn dimensions(&self) -> usize {
+            1024
+        }
+
+        fn model_name(&self) -> &str {
+            "failing"
+        }
+
+        fn provider_id(&self) -> &str {
+            "failing"
+        }
+    }
+
+    #[tokio::test]
+    async fn retrieve_falls_back_to_fts_when_embedding_fails() {
+        use crate::memory::notes::KnowledgeNote;
+
+        let dir = tempdir().unwrap();
+        let backend: Arc<SqliteMemoryBackend> =
+            Arc::new(SqliteMemoryBackend::new(dir.path()).unwrap());
+        let note = KnowledgeNote {
+            title: "dreame brand incident".to_string(),
+            category: "general".to_string(),
+            tags: vec!["test".to_string()],
+            facts: vec!["dreame brand incident fact".to_string()],
+            created_at: 1000,
+            updated_at: 1000,
+            content_hash: "hash_dreame".to_string(),
+            ..Default::default()
+        };
+        backend.index_note(&note, "default", "general").await.unwrap();
+
+        let indexer = Arc::new(NoteIndexer::new(dir.path().to_path_buf(), backend.clone()));
+        let retrieval = NoteFactRetrieval::new(indexer, Arc::new(FailingEmbeddingProvider));
+
+        let results = retrieval
+            .retrieve("dreame", "default", 10)
+            .await
+            .expect("embedding outage must degrade to FTS, not fail the whole search");
+        assert!(
+            !results.is_empty(),
+            "FTS fallback should surface the indexed note"
+        );
     }
 
     #[tokio::test]
