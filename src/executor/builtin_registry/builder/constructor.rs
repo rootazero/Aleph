@@ -143,6 +143,18 @@ impl BuiltinToolRegistry {
             tool
         };
 
+        // Doctor tool (self-diagnosis). Reuses the already-injected config +
+        // vault handles — when both are present the diagnostics engine gains
+        // the providers/connectivity runtime check, so the LLM repair loop
+        // can probe provider reachability and verify its own fixes.
+        let doctor_tool = {
+            let mut tool = crate::builtin_tools::DoctorTool::default();
+            if let (Some(cfg), Some(mgr)) = (&config.config, &config.shared_token_manager) {
+                tool = tool.with_runtime(Arc::clone(cfg), Arc::clone(mgr));
+            }
+            tool
+        };
+
         // Vault store tool (requires SharedTokenManager)
         let vault_store_tool = config.shared_token_manager.as_ref().map(|mgr| {
             info!("Creating VaultStoreTool");
@@ -465,7 +477,7 @@ impl BuiltinToolRegistry {
                 crate::builtin_tools::gateway_route::GatewayRouteTool::default();
             let google_meet_meta = crate::builtin_tools::google_meet::GoogleMeetTool::new(None);
             let select_model_meta = crate::builtin_tools::SelectModelTool;
-            let doctor_meta = crate::builtin_tools::DoctorTool;
+            let doctor_meta = crate::builtin_tools::DoctorTool::default();
             let extra_defs = [
                 apply_patch_tool.definition(),
                 desktop_ax_query_focused_tool.definition(),
@@ -1669,6 +1681,7 @@ impl BuiltinToolRegistry {
             self_manage_tool,
             self_config_tool,
             list_models_tool,
+            doctor_tool,
             vault_store_tool,
             desktop_tool,
             desktop_ax_query_focused_tool,

@@ -83,6 +83,7 @@ pub mod oauth_refresh;
 pub mod ollama;
 pub mod openai;
 pub mod presets;
+pub mod probe;
 pub mod profile_config;
 pub mod profile_manager;
 pub mod protocols;

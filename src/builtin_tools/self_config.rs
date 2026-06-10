@@ -152,6 +152,52 @@ fn validate_file_name(name: &str) -> std::result::Result<(), ToolError> {
     Ok(())
 }
 
+/// How many timestamped backups to keep per identity file.
+const MAX_IDENTITY_BACKUPS: usize = 5;
+
+/// Snapshot the current content of an identity file before it is overwritten,
+/// into `<agent_dir>/backups/<file>.<UTC timestamp>`. Returns the backup path,
+/// or `None` when the file does not exist yet (first write) or the snapshot
+/// could not be taken — backup is best-effort protection, never a write gate.
+fn backup_identity_file(
+    agent_dir: &std::path::Path,
+    file_name: &str,
+    path: &std::path::Path,
+) -> Option<PathBuf> {
+    if !path.exists() {
+        return None;
+    }
+    let backups_dir = agent_dir.join("backups");
+    std::fs::create_dir_all(&backups_dir).ok()?;
+    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%S%3fZ");
+    let backup_path = backups_dir.join(format!("{file_name}.{ts}"));
+    std::fs::copy(path, &backup_path).ok()?;
+    prune_identity_backups(&backups_dir, file_name, MAX_IDENTITY_BACKUPS);
+    Some(backup_path)
+}
+
+/// Keep only the newest `keep` backups for one identity file. The timestamp
+/// suffix is zero-padded UTC, so lexicographic order equals chronological.
+fn prune_identity_backups(backups_dir: &std::path::Path, file_name: &str, keep: usize) {
+    let Ok(entries) = std::fs::read_dir(backups_dir) else {
+        return;
+    };
+    let prefix = format!("{file_name}.");
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.starts_with(&prefix))
+        .collect();
+    if names.len() <= keep {
+        return;
+    }
+    names.sort();
+    let excess = names.len() - keep;
+    for name in names.into_iter().take(excess) {
+        let _ = std::fs::remove_file(backups_dir.join(name));
+    }
+}
+
 // =============================================================================
 // Operation Implementations
 // =============================================================================
@@ -245,16 +291,30 @@ impl SelfConfigTool {
         }
 
         let path = self.agent_dir.join(file_name);
+
+        // Identity files get the same overwrite protection as config.toml
+        // (which snapshots via ConfigPatcher): a destructive LLM rewrite of
+        // SOUL.md must always be recoverable. Best-effort — a failed backup
+        // never blocks the write itself.
+        let backup = backup_identity_file(&self.agent_dir, file_name, &path);
+
         match std::fs::write(&path, content) {
             Ok(()) => {
                 let bytes = content.len();
+                let backup_note = backup
+                    .as_ref()
+                    .map(|p| format!(" Previous version backed up to {}.", p.display()))
+                    .unwrap_or_default();
                 Ok(SelfConfigOutput {
                     success: true,
                     message: format!(
-                        "Written {} bytes to {}. Changes will take effect on the next turn.",
-                        bytes, file_name
+                        "Written {} bytes to {}. Changes will take effect on the next turn.{}",
+                        bytes, file_name, backup_note
                     ),
-                    data: Some(serde_json::json!({ "bytes_written": bytes })),
+                    data: Some(serde_json::json!({
+                        "bytes_written": bytes,
+                        "backup_path": backup.map(|p| p.display().to_string()),
+                    })),
                     preview_message: None,
                 })
             }
@@ -761,6 +821,79 @@ mod tests {
             read_result.data.unwrap().as_str().unwrap(),
             "test soul content"
         );
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_backs_up_previous_identity_file() {
+        let tmp = TempDir::new().unwrap();
+        let tool = tool_with_dir(tmp.path());
+
+        // First write: no prior content, so no backup is taken.
+        let first = AlephTool::call(
+            &tool,
+            SelfConfigArgs::WriteFile {
+                file_name: "SOUL.md".to_string(),
+                content: "version one".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(first.success);
+        assert!(!first.message.contains("backed up"));
+
+        // Overwrite: the previous content must be snapshotted.
+        let second = AlephTool::call(
+            &tool,
+            SelfConfigArgs::WriteFile {
+                file_name: "SOUL.md".to_string(),
+                content: "version two".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(second.success);
+        assert!(second.message.contains("backed up"), "{}", second.message);
+
+        let backups_dir = tmp.path().join("backups");
+        let backups: Vec<_> = std::fs::read_dir(&backups_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().starts_with("SOUL.md."))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        let saved = std::fs::read_to_string(backups[0].path()).unwrap();
+        assert_eq!(saved, "version one", "backup must hold the OLD content");
+        // The live file holds the new content.
+        let live = std::fs::read_to_string(tmp.path().join("SOUL.md")).unwrap();
+        assert_eq!(live, "version two");
+    }
+
+    #[test]
+    fn test_prune_keeps_newest_backups_only() {
+        let tmp = TempDir::new().unwrap();
+        let backups_dir = tmp.path().join("backups");
+        std::fs::create_dir_all(&backups_dir).unwrap();
+        // Seven fake backups with ascending (= chronological) suffixes,
+        // plus one for another file that must be untouched.
+        for i in 1..=7 {
+            std::fs::write(backups_dir.join(format!("SOUL.md.2026010100000{i}Z")), "x").unwrap();
+        }
+        std::fs::write(backups_dir.join("TOOLS.md.20260101000001Z"), "y").unwrap();
+
+        prune_identity_backups(&backups_dir, "SOUL.md", 5);
+
+        let mut remaining: Vec<String> = std::fs::read_dir(&backups_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("SOUL.md."))
+            .collect();
+        remaining.sort();
+        assert_eq!(remaining.len(), 5);
+        // The two OLDEST were pruned.
+        assert_eq!(remaining[0], "SOUL.md.20260101000003Z");
+        // Other files' backups are untouched.
+        assert!(backups_dir.join("TOOLS.md.20260101000001Z").exists());
     }
 
     #[tokio::test]

@@ -42,6 +42,16 @@ pub struct TestResult {
     pub latency_ms: Option<u64>,
 }
 
+impl From<crate::providers::probe::ProbeOutcome> for TestResult {
+    fn from(o: crate::providers::probe::ProbeOutcome) -> Self {
+        Self {
+            success: o.success,
+            error: o.error,
+            latency_ms: o.latency_ms,
+        }
+    }
+}
+
 /// One row in the concurrent `providers.healthcheck` result.
 ///
 /// Unlike `providers.test` (one provider, mutates `verified`), this is a
