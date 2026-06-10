@@ -222,7 +222,7 @@ impl Config {
     ///
     /// In AI-first mode, there are no builtin rules. This method is kept
     /// for backward compatibility but does minimal processing.
-    pub(crate) fn merge_builtin_rules(&mut self) {
+    pub(crate) fn merge_builtin_rules(&self) {
         // AI-first: no builtin rules to merge, just log user rules count
         debug!(
             user_rules_count = self.rules.len(),

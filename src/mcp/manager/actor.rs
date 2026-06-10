@@ -402,7 +402,7 @@ impl McpManagerActor {
     ///
     /// The cache is refreshed *before* the event is emitted so that the
     /// bridge's `sync_server` reads the server's current tool list.
-    async fn handle_list_changed(&mut self, server_id: &str, kind: ListChangeKind) {
+    async fn handle_list_changed(&self, server_id: &str, kind: ListChangeKind) {
         let Some(client) = self.clients.get(server_id).cloned() else {
             tracing::debug!(
                 server_id = %server_id,
