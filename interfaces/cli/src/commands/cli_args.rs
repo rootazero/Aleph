@@ -275,6 +275,15 @@ pub enum Commands {
     /// one-time bootstrap nonce. Same UX as the desktop app's "Open in Browser"
     /// menu item — no token typing.
     Open,
+
+    /// Watch live agent activity across all sessions as a timestamped feed
+    /// (run accepted, tool calls, provider retries, run receipts). Ctrl-C
+    /// stops and prints an observation summary.
+    Watch {
+        /// Only show runs belonging to this session key
+        #[arg(short, long)]
+        session: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

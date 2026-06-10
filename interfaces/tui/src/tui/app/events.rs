@@ -189,6 +189,30 @@ impl AppState {
                 ));
                 Action::ScrollToBottomIfAutoScroll
             }
+
+            StreamEvent::ModelResolved { model_info, .. } => {
+                // Only fallback selections are worth a system line — the
+                // happy path would announce the model on every run.
+                if model_info.is_fallback {
+                    let requested = model_info
+                        .original_model
+                        .as_deref()
+                        .filter(|orig| *orig != model_info.model);
+                    let line = match requested {
+                        Some(orig) => format!(
+                            "Model fallback: {orig} → {} (via {})",
+                            model_info.model, model_info.provider
+                        ),
+                        None => format!(
+                            "Model fallback: {} (via {})",
+                            model_info.model, model_info.provider
+                        ),
+                    };
+                    self.add_system_message(line);
+                    return Action::ScrollToBottomIfAutoScroll;
+                }
+                Action::None
+            }
         }
     }
 }

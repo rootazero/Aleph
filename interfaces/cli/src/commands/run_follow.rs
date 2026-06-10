@@ -40,6 +40,14 @@ pub struct FollowOptions {
     pub json: bool,
     /// Surface reasoning previews and tool result previews.
     pub verbose: bool,
+    /// Pin the loop to one run. The gateway broadcasts every `stream.*`
+    /// frame to every authenticated connection (SubscriptionManager default
+    /// = receive-all), so a concurrent cron/channel run would otherwise
+    /// interleave its tool lines and body chunks into this command's
+    /// output — and worse, its `RunComplete` would terminate the loop
+    /// early. `None` follows everything (legacy behaviour; `aleph watch`
+    /// is the intentional firehose consumer).
+    pub run_id: Option<String>,
 }
 
 pub struct FollowOutcome {
@@ -87,6 +95,14 @@ pub async fn follow_run(
                 None => break,
             }
         };
+
+        // Foreign-run events (concurrent cron / channel / Panel runs on the
+        // same broadcast bus) are not ours to render or terminate on.
+        if let Some(expected) = opts.run_id.as_deref() {
+            if event.run_id() != expected {
+                continue;
+            }
+        }
 
         // JSON mode: serialize every event before any presentation logic so
         // consumers see the raw protocol stream.
@@ -171,6 +187,20 @@ pub async fn follow_run(
                     eprintln!(
                         "{}",
                         exec_echo::render_retry_notice(&provider, attempt, max_attempts, &reason)
+                    );
+                }
+            }
+            StreamEvent::ModelResolved { model_info, .. } => {
+                // Only the fallback case is signal; the happy path would be
+                // noise on every run.
+                if !opts.json && model_info.is_fallback {
+                    eprintln!(
+                        "{}",
+                        exec_echo::render_fallback_notice(
+                            &model_info.model,
+                            &model_info.provider,
+                            model_info.original_model.as_deref(),
+                        )
                     );
                 }
             }

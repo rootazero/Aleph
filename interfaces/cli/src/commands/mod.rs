@@ -44,5 +44,6 @@ pub mod skills_cmd;
 pub mod tools;
 pub mod trace_cmd;
 pub mod vault_cmd;
+pub mod watch;
 pub mod webhook_cmd;
 pub mod workspace_cmd;

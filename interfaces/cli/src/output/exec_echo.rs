@@ -306,6 +306,23 @@ pub fn render_retry_notice(
     }
 }
 
+/// Amber notice when the router fell back to a different model than the one
+/// requested (`stream.model_resolved` with `is_fallback`). Mirrors the
+/// Panel's fallback chip so terminal users learn which model actually
+/// answered.
+pub fn render_fallback_notice(model: &str, provider: &str, original: Option<&str>) -> String {
+    let glyph = if use_unicode() { "⤷" } else { "[>]" };
+    let head = match original {
+        Some(orig) if orig != model => format!("{glyph} model fallback: {orig} → {model}"),
+        _ => format!("{glyph} model fallback: {model}"),
+    };
+    format!(
+        "  {}  {}",
+        paint(Style::Warning, &head),
+        paint(Style::Muted, &format!("via {provider}"))
+    )
+}
+
 /// Optional LLM-authored one-liner summarising a tool call.
 pub fn render_tool_summary(summary: &str) -> Option<String> {
     let txt = summary.trim();
@@ -442,7 +459,7 @@ pub fn format_duration(ms: u64) -> String {
 }
 
 /// Compact a token count: `820`, `12.3k`, `1.2M`.
-fn human_count(n: u64) -> String {
+pub fn human_count(n: u64) -> String {
     if n < 1000 {
         n.to_string()
     } else if n < 1_000_000 {
@@ -693,6 +710,19 @@ mod tests {
         // Newlines in the reason are flattened onto the single status line.
         assert!(!line.contains('\n'));
         assert!(line.contains("connect timeout"));
+    }
+
+    #[test]
+    fn fallback_notice_shows_requested_and_actual_model() {
+        let line = render_fallback_notice("haiku-4-5", "anthropic", Some("fable-5"));
+        assert!(line.contains("fable-5"));
+        assert!(line.contains("haiku-4-5"));
+        assert!(line.contains("anthropic"));
+        // When the original is unknown (or identical), only the resolved
+        // model is shown — no dangling arrow.
+        let bare = render_fallback_notice("haiku-4-5", "anthropic", None);
+        assert!(bare.contains("haiku-4-5"));
+        assert!(!bare.contains("→"));
     }
 
     #[test]

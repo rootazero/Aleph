@@ -191,6 +191,9 @@ async fn dispatch(
         Commands::Webhook { action } => dispatch_webhook(action, json).await,
         Commands::Proxy { action } => dispatch_proxy(action, json).await,
         Commands::Open => commands::open_cmd::run(server_url, json).await,
+        Commands::Watch { session } => {
+            commands::watch::run(server_url, session.as_deref(), config, json).await
+        }
     }
 }
 
