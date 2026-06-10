@@ -6,7 +6,13 @@
 //!
 //! - **Storage** ([`OAuthStorage`]): Secure credential storage
 //! - **Provider** ([`OAuthProvider`]): OAuth flow implementation
-//! - **Callback** (coming soon): Authorization code callback server
+//! - **Callback** ([`CallbackServer`]): Authorization code callback server
+//! - **Refresh** ([`TokenRefreshManager`]): Background token refresh
+//!
+//! Wiring: [`stored_bearer_token`] is consulted by
+//! `McpClient::start_remote_server` to inject `Authorization` headers from
+//! stored tokens; the interactive flow is driven by the `mcp_login` builtin
+//! tool (see `crate::builtin_tools::mcp_login`).
 //!
 //! # Usage
 //!
@@ -44,3 +50,44 @@ pub use callback::{
 pub use provider::{AuthorizationRequest, OAuthProvider, OAuthServerMetadata};
 pub use refresh::{TokenRefreshConfig, TokenRefreshManager};
 pub use storage::{ClientInfo, OAuthEntry, OAuthStorage, OAuthTokens};
+
+use crate::sync_primitives::Arc;
+
+/// Look up a usable OAuth access token for a remote MCP server.
+///
+/// Reads the default [`OAuthStorage`]; a still-valid token is returned as-is,
+/// an expired-but-refreshable one is refreshed (re-discovering server
+/// metadata for the token endpoint). Returns `None` when the server was never
+/// authorized or refresh fails — callers fall back to unauthenticated
+/// connection, and the `AuthExpired` error guidance points at `mcp_login`.
+pub async fn stored_bearer_token(server: &str, server_url: &str) -> Option<String> {
+    let storage = Arc::new(OAuthStorage::new(OAuthStorage::default_path()));
+    let entry = storage.get_entry(server).await.ok().flatten()?;
+    let tokens = entry.tokens.as_ref()?;
+
+    if !tokens.is_expired() {
+        return Some(tokens.access_token.clone());
+    }
+    if !tokens.can_refresh() {
+        return None;
+    }
+
+    let client_id = entry.client_info.as_ref()?.client_id.clone();
+    // Callback URL is irrelevant for the refresh grant.
+    let provider = OAuthProvider::new(storage, server, server_url, "");
+    let metadata = match provider.discover_metadata().await {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(server, error = %e, "OAuth metadata discovery failed during token refresh");
+            return None;
+        }
+    };
+    match provider.ensure_valid_token(&metadata, &client_id).await {
+        Ok(Some(tokens)) => Some(tokens.access_token),
+        Ok(None) => None,
+        Err(e) => {
+            tracing::warn!(server, error = %e, "OAuth token refresh failed");
+            None
+        }
+    }
+}
