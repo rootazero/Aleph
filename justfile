@@ -116,8 +116,9 @@ wasm:
     mkdir -p {{panel_dist}}
     # 1. Tailwind CSS
     (cd {{panel_dir}} && npm run build:css)
-    # 2. Compile Rust → WASM
-    cargo build -p aleph-panel --target wasm32-unknown-unknown --profile wasm-release
+    # 2. Compile Rust → WASM (lib only: the cdylib is the shipped artifact and
+    #    the vestigial src/main.rs bin breaks under fat LTO)
+    cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release
     # 3. Generate JS bindings
     wasm-bindgen --target web --no-typescript \
         --out-dir {{panel_dist}} --out-name aleph_panel \
