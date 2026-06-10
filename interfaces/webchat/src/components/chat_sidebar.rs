@@ -829,8 +829,8 @@ pub fn ChatSidebar() -> impl IntoView {
                                                 // Dropdown menu
                                                 {if is_menu_open {
                                                     view! {
-                                                        <div class="absolute right-0 top-full mt-1 z-50 min-w-[120px]
-                                                                    bg-surface-raised border border-border rounded-lg shadow-lg
+                                                        <div class="glass absolute right-0 top-full mt-1 z-50 min-w-[120px]
+                                                                    bg-surface-overlay/85 border border-border rounded-lg shadow-xl
                                                                     py-1 text-xs">
                                                             <button
                                                                 class="w-full text-left px-3 py-1.5 text-text-secondary
