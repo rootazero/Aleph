@@ -116,7 +116,7 @@ impl AgentEnvContext {
 
     /// Convenience constructor for the default owner context.
     ///
-    /// Uses `DEFAULT_AGENT` ("default") and `NamespaceScope::Owner`.
+    /// Uses `DEFAULT_AGENT` ("main") and `NamespaceScope::Owner`.
     pub fn default_owner() -> Self {
         Self {
             agent_id: DEFAULT_AGENT.to_string(),

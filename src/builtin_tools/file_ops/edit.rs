@@ -43,6 +43,68 @@ fn read_text_file(path: &Path) -> std::result::Result<String, ToolError> {
     })
 }
 
+/// Context lines shown on each side of the replacement in the result snippet.
+const SNIPPET_CONTEXT_LINES: usize = 2;
+/// Upper bound on snippet length; a larger window is elided in the middle.
+const SNIPPET_MAX_LINES: usize = 20;
+
+/// Render a `cat -n`-style excerpt of `new_content` around the first
+/// replacement, mirroring `file_read`'s format so line numbers line up with a
+/// later read.
+///
+/// `first_start` is the byte offset of the first applied range in the
+/// *pre-edit* content; the splice leaves everything before it unchanged, so it
+/// is also a valid offset (and char boundary) in `new_content`, and the line
+/// index it implies is the first edited line.
+fn render_edit_snippet(new_content: &str, first_start: usize, replacement: &str) -> String {
+    let lines: Vec<&str> = new_content.lines().collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    let edit_line = new_content[..first_start].matches('\n').count();
+    let span = replacement.matches('\n').count() + 1;
+    let start = edit_line.saturating_sub(SNIPPET_CONTEXT_LINES);
+    let end = (edit_line + span + SNIPPET_CONTEXT_LINES).min(lines.len());
+    let width = end.to_string().len();
+
+    let push = |out: &mut String, idx: usize| {
+        let line = lines[idx];
+        let lineno = idx + 1;
+        let char_count = line.chars().count();
+        if char_count <= super::text::MAX_LINE_CHARS {
+            out.push_str(&format!("{lineno:>width$}\t{line}\n"));
+        } else {
+            let head: String = line.chars().take(super::text::MAX_LINE_CHARS).collect();
+            out.push_str(&format!(
+                "{lineno:>width$}\t{head}… [line truncated — {char_count} chars total]\n"
+            ));
+        }
+    };
+
+    let mut out = String::new();
+    if end - start > SNIPPET_MAX_LINES {
+        // Huge replacement: show the head and tail of the window, elide the middle.
+        let head_end = start + SNIPPET_MAX_LINES / 2;
+        let tail_start = end - SNIPPET_MAX_LINES / 2;
+        for idx in start..head_end {
+            push(&mut out, idx);
+        }
+        out.push_str(&format!(
+            "{:>width$}\t… [{} lines elided] …\n",
+            "",
+            tail_start - head_end
+        ));
+        for idx in tail_start..end {
+            push(&mut out, idx);
+        }
+    } else {
+        for idx in start..end {
+            push(&mut out, idx);
+        }
+    }
+    out
+}
+
 // =============================================================================
 // Args & Output
 // =============================================================================
@@ -72,6 +134,10 @@ pub struct FileEditOutput {
     pub replacements: usize,
     /// Human-readable result message
     pub message: String,
+    /// Line-numbered excerpt of the file around the first replacement, as it
+    /// reads *after* the edit. Lets the model verify the result in place
+    /// instead of spending a follow-up file_read on it.
+    pub snippet: String,
 }
 
 // =============================================================================
@@ -157,11 +223,12 @@ impl FileEditTool {
             notify_tool_result("file_edit", &e.to_string(), false);
         })?;
 
-        // Locate the edit target: exact match, then a typographic-folding
-        // fallback, then an actionable diagnostic.
-        let (ranges, fuzzy) = match locate(&content, &args.old_string) {
-            LocateResult::Exact(r) => (r, false),
-            LocateResult::Folded(r) => (r, true),
+        // Locate the edit target: exact match, then CRLF / typographic-folding
+        // fallbacks, then an actionable diagnostic.
+        let (ranges, fuzzy, crlf) = match locate(&content, &args.old_string) {
+            LocateResult::Exact(r) => (r, false, false),
+            LocateResult::Folded(r) => (r, true, false),
+            LocateResult::Crlf(r) => (r, false, true),
             LocateResult::NotFound(diagnostic) => {
                 let err = ToolError::Execution(diagnostic);
                 notify_tool_result("file_edit", &err.to_string(), false);
@@ -178,6 +245,15 @@ impl FileEditTool {
             return Err(err);
         }
 
+        // When the match was bridged by CRLF expansion, the replacement's LF
+        // newlines must be expanded the same way, or the edit would splice
+        // LF lines into a CRLF file (mixed line endings).
+        let replacement = if crlf && !args.new_string.contains('\r') {
+            std::borrow::Cow::Owned(args.new_string.replace('\n', "\r\n"))
+        } else {
+            std::borrow::Cow::Borrowed(args.new_string.as_str())
+        };
+
         // `ranges` is non-empty here; apply all under `replace_all`, else the first.
         let applied = if args.replace_all {
             &ranges[..]
@@ -185,7 +261,7 @@ impl FileEditTool {
             &ranges[..1]
         };
         let replacements = applied.len();
-        let new_content = apply_ranges(&content, applied, &args.new_string);
+        let new_content = apply_ranges(&content, applied, &replacement);
 
         // Write back atomically: stage to a temp file in the same directory,
         // fsync, then rename. A crash mid-write must never leave the user's
@@ -204,12 +280,15 @@ impl FileEditTool {
             path_str,
             if fuzzy {
                 " (matched after normalizing typographic punctuation)"
+            } else if crlf {
+                " (matched after normalizing line endings; replacement written with CRLF)"
             } else {
                 ""
             },
         );
+        let snippet = render_edit_snippet(&new_content, applied[0].0, &replacement);
 
-        info!(replacements, fuzzy, path = %path_str, "FileEditTool: edit complete");
+        info!(replacements, fuzzy, crlf, path = %path_str, "FileEditTool: edit complete");
         notify_tool_result("file_edit", &message, true);
 
         Ok(FileEditOutput {
@@ -217,6 +296,7 @@ impl FileEditTool {
             path: path_str,
             replacements,
             message,
+            snippet,
         })
     }
 }
@@ -249,7 +329,8 @@ Finds `old_string` in the file and replaces it with `new_string`.
 - By default, `old_string` must match exactly once; if multiple matches exist the call fails.
 - Set `replace_all=true` to replace every occurrence.
 - `old_string` must be the raw file text — do NOT include the line-number prefixes shown by file_read.
-- Matching is exact; typographic punctuation (curly quotes, em-dashes) is tolerated, and on a miss the error explains how to fix your input.
+- Matching is exact; typographic punctuation (curly quotes, em-dashes) and CRLF/LF line-ending drift are tolerated, and on a miss the error explains how to fix your input.
+- The result includes a line-numbered `snippet` of the file around the edit — verify from it instead of re-reading the file.
 
 Use this tool for surgical edits — it only changes what you specify, leaving the rest of the file intact."#;
 
@@ -392,6 +473,75 @@ mod tests {
             result.message
         );
         assert_eq!(fs::read_to_string(&file).unwrap(), "it is here");
+    }
+
+    #[tokio::test]
+    async fn crlf_file_multiline_edit_succeeds() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("win.txt");
+        fs::write(&file, "alpha\r\nbeta\r\ngamma\r\n").unwrap();
+
+        // The model copies from file_read output, which strips '\r'.
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: "alpha\nbeta".to_string(),
+                new_string: "alpha\nBETA\nbeta".to_string(),
+                replace_all: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(result.success);
+        assert!(
+            result.message.contains("line endings"),
+            "msg: {}",
+            result.message
+        );
+        // The replacement's LF newlines must be written as CRLF — no mixing.
+        let written = fs::read_to_string(&file).unwrap();
+        assert_eq!(written, "alpha\r\nBETA\r\nbeta\r\ngamma\r\n");
+    }
+
+    #[tokio::test]
+    async fn edit_result_carries_verification_snippet() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("s.txt");
+        fs::write(&file, "l1\nl2\nl3\nl4\nl5\nl6\n").unwrap();
+
+        let result = AlephTool::call(
+            &FileEditTool::new(),
+            FileEditArgs {
+                file_path: file.to_string_lossy().to_string(),
+                old_string: "l4".to_string(),
+                new_string: "L4-EDITED".to_string(),
+                replace_all: false,
+            },
+        )
+        .await
+        .unwrap();
+        // Snippet shows the edited line with context, file_read-style numbering.
+        assert!(
+            result.snippet.contains("4\tL4-EDITED"),
+            "snippet: {}",
+            result.snippet
+        );
+        assert!(
+            result.snippet.contains("2\tl2"),
+            "snippet: {}",
+            result.snippet
+        );
+        assert!(
+            result.snippet.contains("6\tl6"),
+            "snippet: {}",
+            result.snippet
+        );
+        assert!(
+            !result.snippet.contains("l1\n"),
+            "snippet: {}",
+            result.snippet
+        );
     }
 
     #[tokio::test]

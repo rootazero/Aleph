@@ -247,6 +247,30 @@ where
             *sk_handle.write().await = request.session_key.to_key_string();
         }
 
+        // Propagate the active agent's memory scope + smart-recall profile to
+        // memory_search. Both handles were built for exactly this write (see
+        // MemorySearchTool::default_workspace_handle / smart_recall_config_handle)
+        // but previously had no writer: memory_search always searched the
+        // DEFAULT_AGENT workspace regardless of which agent was running, and
+        // the profile's [profiles.*.smart_recall] config never reached the
+        // Two-Phase Smart Recall gate.
+        let env_agent_id = request.session_key.agent_id().to_string();
+        if let Some(ws_handle) = self.tool_registry.workspace_handle() {
+            *ws_handle.write().await = env_agent_id.clone();
+        }
+        if let Some(sr_handle) = self.tool_registry.smart_recall_config_handle() {
+            let smart_recall = match self.workspace_manager {
+                Some(ref wm) => {
+                    crate::gateway::agent_env::ActiveAgentEnv::from_agent_id(wm, &env_agent_id)
+                        .await
+                        .profile
+                        .smart_recall
+                }
+                None => None,
+            };
+            *sr_handle.write().await = smart_recall;
+        }
+
         // Pre-extract skill context from the slash mode JSON so the agent
         // loop (run_loop.rs) can apply `allowed_tools` intersection without
         // re-parsing the envelope on every Think→Act iteration. Two keys are
@@ -651,8 +675,7 @@ where
                                     // goal stops surfacing as an active pursuit every turn
                                     // and the user is cued to take over. Structural
                                     // backstop, not a judgment about the work (R7).
-                                    let note =
-                                        crate::tasks::goal_pursuit::cap_reached_note(&goal);
+                                    let note = crate::tasks::goal_pursuit::cap_reached_note(&goal);
                                     let blocked = goal
                                         .clone()
                                         .with_status(crate::goal::GoalStatus::Blocked, now_ms)

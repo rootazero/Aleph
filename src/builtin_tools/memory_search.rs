@@ -152,8 +152,9 @@ pub struct MemorySearchTool {
     note_retrieval: Arc<NoteFactRetrieval<SqliteMemoryBackend>>,
     comptroller: Arc<ContextComptroller>,
     _indexer: Arc<TranscriptIndexer>,
-    /// Shared default workspace ID, set by the execution engine based on active workspace.
-    /// Falls back to DEFAULT_AGENT ("default") when not set.
+    /// Shared default workspace ID, written per-request by the execution engine
+    /// (`execute.rs`) from the session's agent id.
+    /// Falls back to DEFAULT_AGENT ("main") when not set.
     default_workspace: Arc<RwLock<String>>,
     /// Shared session key for the current session, set by the execution engine.
     /// Used to scope "current_session" searches to the active session's summaries.

@@ -531,17 +531,6 @@ impl BuiltinToolRegistry {
             tool_name,
         )
     }
-
-    /// Check if an operation is permitted
-    ///
-    /// Currently a pass-through; safety is enforced layered:
-    /// - `CommandChecker` (blocks dangerous shell commands)
-    /// - `PathPermissionChecker` (sandboxes file operations)
-    /// - See docs/reference/SANDBOX.md and docs/reference/SECURITY.md.
-    #[allow(unused_variables)]
-    pub(crate) fn check_capability(&self, tool_name: &str, arguments: &Value) -> Result<()> {
-        Ok(())
-    }
 }
 
 impl ToolRegistry for BuiltinToolRegistry {
@@ -602,11 +591,6 @@ impl ToolRegistry for BuiltinToolRegistry {
                     return Box::pin(async move { Err(AlephError::tool(msg)) });
                 }
             }
-        }
-
-        // Check capability before execution
-        if let Err(e) = self.check_capability(tool_name, &arguments) {
-            return Box::pin(async move { Err(e) });
         }
 
         // Use AlephTool::call_json directly for migrated tools

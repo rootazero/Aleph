@@ -27,14 +27,26 @@ pub(super) enum LocateResult {
     Exact(Vec<(usize, usize)>),
     /// Occurrences found only after folding typographic punctuation.
     Folded(Vec<(usize, usize)>),
+    /// Occurrences found only after expanding the needle's LF line endings to
+    /// the file's CRLF. Callers splicing a replacement must convert its `\n`
+    /// to `\r\n` too, or the edit writes mixed line endings into the file.
+    Crlf(Vec<(usize, usize)>),
     /// Not found — carries an actionable diagnostic for the model.
     NotFound(String),
 }
 
 /// Locate every occurrence of `needle` in `content`.
 ///
-/// Tries an exact pass first, then the typographic-folding fallback, and
-/// finally produces a diagnostic explaining the miss.
+/// Pass order: exact → CRLF-expanded exact → typographic fold (raw, then
+/// CRLF-expanded) → diagnostic.
+///
+/// The CRLF pass exists because `file_read` renders via `str::lines()`, which
+/// strips `\r` — so on a CRLF file the model *cannot* see or reproduce the
+/// `\r`, and every multi-line `old_string` it copies misses the exact pass.
+/// Worse, the whitespace-drift diagnostic then tells it to "re-copy the exact
+/// text", which can never help. Expanding the needle's `\n` to `\r\n` is a
+/// 1 char → 2 char rewrite of the *needle only*, so match offsets land
+/// directly in the original content with no mapping step.
 pub(super) fn locate(content: &str, needle: &str) -> LocateResult {
     let exact: Vec<(usize, usize)> = content
         .match_indices(needle)
@@ -44,10 +56,33 @@ pub(super) fn locate(content: &str, needle: &str) -> LocateResult {
         return LocateResult::Exact(exact);
     }
 
+    // Only a multi-line LF needle against a file that actually uses CRLF can
+    // benefit from the expansion; anything else would re-run the exact pass.
+    let crlf_needle = (needle.contains('\n') && !needle.contains('\r') && content.contains("\r\n"))
+        .then(|| needle.replace('\n', "\r\n"));
+    if let Some(ref expanded) = crlf_needle {
+        let crlf: Vec<(usize, usize)> = content
+            .match_indices(expanded.as_str())
+            .map(|(i, m)| (i, i + m.len()))
+            .collect();
+        if !crlf.is_empty() {
+            return LocateResult::Crlf(crlf);
+        }
+    }
+
     if content.len() <= FUZZY_MAX_BYTES {
         let folded = folded_match_ranges(content, needle);
         if !folded.is_empty() {
             return LocateResult::Folded(folded);
+        }
+        // Both drifts at once: CRLF file *and* typographic punctuation. Fold
+        // the CRLF-expanded needle so neither miss masks the other. Reported
+        // as Crlf because the replacement still needs its newlines converted.
+        if let Some(ref expanded) = crlf_needle {
+            let folded_crlf = folded_match_ranges(content, expanded);
+            if !folded_crlf.is_empty() {
+                return LocateResult::Crlf(folded_crlf);
+            }
         }
     }
 
@@ -326,6 +361,7 @@ mod tests {
                 "expected folded match, got {}",
                 match other {
                     LocateResult::Exact(_) => "exact",
+                    LocateResult::Crlf(_) => "crlf",
                     LocateResult::NotFound(_) => "not found",
                     LocateResult::Folded(_) => unreachable!(),
                 }
@@ -441,6 +477,47 @@ mod tests {
         let content = "foo \nfoo\n";
         // Exact "foo" is line 2 (byte 5); line 1 "foo " only matches under rstrip.
         assert_eq!(locate_lines(content, "foo", false), Some((5, 8)));
+    }
+
+    #[test]
+    fn crlf_pass_bridges_lf_needle_on_crlf_file() {
+        // file_read strips '\r', so the model's multi-line needle is LF-only.
+        let content = "fn a() {\r\n    let x = 1;\r\n}\r\n";
+        match locate(content, "fn a() {\n    let x = 1;") {
+            LocateResult::Crlf(ranges) => {
+                assert_eq!(ranges.len(), 1);
+                let (s, e) = ranges[0];
+                assert_eq!(&content[s..e], "fn a() {\r\n    let x = 1;");
+            }
+            _ => panic!("expected CRLF-expanded match"),
+        }
+    }
+
+    #[test]
+    fn crlf_pass_combines_with_typographic_fold() {
+        // CRLF file *and* a curly apostrophe the model typed as ASCII.
+        let content = "it\u{2019}s here\r\nnext line\r\n";
+        match locate(content, "it's here\nnext line") {
+            LocateResult::Crlf(ranges) => {
+                assert_eq!(ranges.len(), 1);
+                let (s, e) = ranges[0];
+                assert_eq!(&content[s..e], "it\u{2019}s here\r\nnext line");
+            }
+            _ => panic!("expected folded CRLF match"),
+        }
+    }
+
+    #[test]
+    fn crlf_pass_does_not_fire_on_lf_files() {
+        // LF file + absent needle must still produce the diagnostic path —
+        // the CRLF expansion must never conjure a match where none exists.
+        let content = "alpha\nbeta\n";
+        assert!(matches!(
+            locate(content, "alpha\ngamma"),
+            LocateResult::NotFound(_)
+        ));
+        // Single-line needles never take the CRLF pass (nothing to expand).
+        assert!(matches!(locate("a\r\nb\r\n", "a"), LocateResult::Exact(_)));
     }
 
     #[test]
