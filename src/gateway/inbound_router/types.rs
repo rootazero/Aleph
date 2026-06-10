@@ -88,6 +88,14 @@ pub struct ChannelPolicyConfig {
     /// config block to opt in.
     #[serde(default)]
     pub busy_input_mode: BusyInputMode,
+    /// Per-channel tool permission override (`tool_permissions` block in the
+    /// channel's config): merged by `run_loop` as the third layer over
+    /// global + agent permissions, most restrictive wins. Lets an operator
+    /// e.g. deny `bash` on a group channel while the same agent keeps it
+    /// elsewhere (openclaw per-group tools / opensquilla channel-matrix
+    /// parity). `None` → channel adds no tool restrictions.
+    #[serde(default)]
+    pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 }
 
 impl ChannelPolicyConfig {
@@ -98,6 +106,7 @@ impl ChannelPolicyConfig {
         self.permission_level == ChannelPermissionLevel::Chat
             && self.default_workspace.is_none()
             && self.busy_input_mode == BusyInputMode::Steer
+            && self.tool_permissions.is_none()
     }
 }
 
@@ -128,6 +137,10 @@ pub struct ChannelConfig {
     /// Stamped into each run's metadata so the execution engine's busy branch
     /// can dispatch without re-reading channel config.
     pub busy_input_mode: BusyInputMode,
+    /// Per-channel tool permission override. Stamped (JSON) into each run's
+    /// metadata so `run_loop` can merge it over global + agent permissions
+    /// without re-reading channel config. `None` → no channel restrictions.
+    pub tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 }
 
 /// Per-channel slash-command access tiering.
@@ -233,6 +246,7 @@ impl Default for ChannelConfig {
             permission_level: ChannelPermissionLevel::default(),
             default_workspace: None,
             busy_input_mode: BusyInputMode::default(),
+            tool_permissions: None,
         }
     }
 }
@@ -384,6 +398,9 @@ impl From<&crate::gateway::interfaces::imessage::IMessageConfig> for ChannelConf
             permission_level: ChannelPermissionLevel::default(),
             default_workspace: None,
             busy_input_mode: BusyInputMode::default(),
+            // Boot wiring overlays `tool_permissions` from the instance's flat
+            // config block (same ChannelPolicyConfig parse as other channels).
+            tool_permissions: None,
         }
     }
 }
@@ -647,5 +664,30 @@ mod permission_tier_tests {
             ..Default::default()
         };
         assert_eq!(cfg.resolved_default_workspace(), Some(std::env::temp_dir()));
+    }
+
+    /// A `tool_permissions` block in a channel's flat config parses into the
+    /// policy and disqualifies the channel from the skip-registration default
+    /// — otherwise the override would be silently dropped at boot.
+    #[test]
+    fn policy_tool_permissions_parse_and_break_default() {
+        use crate::extension::PermissionAction;
+
+        let raw = serde_json::json!({
+            "bot_token": "secret",
+            "tool_permissions": {
+                "default": "allow",
+                "overrides": { "bash": "deny", "file_write": "ask" }
+            }
+        });
+        let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
+        assert!(
+            !p.is_default(),
+            "tool_permissions alone must force registration"
+        );
+        let perms = p.tool_permissions.expect("block surfaces");
+        assert_eq!(perms.resolve("bash"), PermissionAction::Deny);
+        assert_eq!(perms.resolve("file_write"), PermissionAction::Ask);
+        assert_eq!(perms.resolve("read_file"), PermissionAction::Allow);
     }
 }

@@ -164,10 +164,10 @@ impl Default for ActionResult {
 /// Hook-emitted permission decision for tool execution.
 ///
 /// Follows the principle that hook `Allow` does NOT bypass settings-level
-/// deny rules — it only skips SafetyGuard blocked-pattern checks.
+/// deny rules — it only waives the hook-level Ask escalation; the permission policy still applies.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PermissionDecision {
-    /// Hook vouches for safety — skip SafetyGuard blocked-pattern check,
+    /// Hook vouches for safety — proceed without hook-forced confirmation,
     /// but NOT settings-level deny rules.
     Allow,
     /// Force user confirmation before execution.
@@ -260,7 +260,7 @@ impl HookResult {
 ///    independently:
 ///    - `block: <reason>` — block the tool call (retryable)
 ///    - `deny: <reason>` — deny the tool call (not retryable)
-///    - `allow` — skip SafetyGuard blocked-pattern checks
+///    - `allow` — proceed without hook-forced confirmation
 ///    - `ask: <reason>` — force user confirmation before execution
 ///    - `update_input: <json>` — replace tool input arguments
 ///    - `update_output: <text>` — replace tool output text
