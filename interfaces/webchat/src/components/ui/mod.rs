@@ -7,7 +7,6 @@ pub mod channel_status;
 pub mod confirm_button;
 pub mod secret_input;
 pub mod tag_list_input;
-pub mod tooltip;
 
 pub use agent_binding_selector::AgentBindingSelector;
 pub use badge::{Badge, BadgeVariant, StatusBadge};
@@ -18,4 +17,3 @@ pub use channel_status::{ChannelStatus, ChannelStatusBadge, ChannelStatusPill};
 pub use confirm_button::ConfirmButton;
 pub use secret_input::SecretInput;
 pub use tag_list_input::TagListInput;
-pub use tooltip::Tooltip;

@@ -178,7 +178,7 @@ pub fn ProjectMenu() -> impl IntoView {
                 // the viewport and a top-full dropdown would clip below the
                 // visible area.
                 <div
-                    class="absolute z-10 left-0 bottom-full mb-1 w-64 rounded-lg border border-border-subtle bg-surface-base shadow-lg py-1"
+                    class="glass absolute z-10 left-0 bottom-full mb-1 w-64 rounded-lg border border-border bg-surface-overlay/85 shadow-xl py-1"
                     on:mouseleave=move |_| menu_open.set(false)
                 >
                     <button

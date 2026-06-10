@@ -141,8 +141,8 @@ pub fn ClusterSection() -> impl IntoView {
             </Show>
 
             <Show when=move || show_enroll.get()>
-                <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                    <div class="bg-surface-raised rounded-lg border border-border p-6 max-w-md w-full space-y-4">
+                <div class="aleph-scrim fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                    <div class="glass bg-surface-overlay/85 rounded-lg border border-border p-6 max-w-md w-full space-y-4">
                         <h3 class="text-text-primary font-semibold">"登记新节点"</h3>
                         <Show
                             when=move || enroll_result.get().is_none()

@@ -543,7 +543,7 @@ fn SkillDetailDialog(
     let skill_for_info = skill.clone();
 
     view! {
-        <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50"
+        <div class="aleph-scrim fixed inset-0 bg-black/50 flex items-center justify-center z-50"
             on:click=move |ev: web_sys::MouseEvent| {
                 // Close on backdrop click
                 use wasm_bindgen::JsCast;
@@ -556,7 +556,7 @@ fn SkillDetailDialog(
                 }
             }
         >
-            <div class="bg-surface border border-border rounded-lg w-full max-w-lg mx-4 max-h-[85vh] flex flex-col overflow-hidden">
+            <div class="glass bg-surface-overlay/85 border border-border rounded-lg w-full max-w-lg mx-4 max-h-[85vh] flex flex-col overflow-hidden">
                 // Header
                 <div class="p-4 border-b border-border flex items-start justify-between gap-3 flex-shrink-0">
                     <div class="flex items-center gap-3">
@@ -1009,8 +1009,8 @@ fn AddSkillDialog(
     };
 
     view! {
-        <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div class="bg-surface border border-border rounded-lg p-6 max-w-md w-full mx-4">
+        <div class="aleph-scrim fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="glass bg-surface-overlay/85 border border-border rounded-lg p-6 max-w-md w-full mx-4">
                 <h2 class="text-lg font-semibold text-text-primary mb-2">{t!(i18n, skills_page.add_skill)}</h2>
                 <p class="text-sm text-text-secondary mb-4">
                     {t!(i18n, skills_page.add_skill_help)}

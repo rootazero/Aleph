@@ -374,8 +374,8 @@ fn EditMcpServerDialog(
     };
 
     view! {
-        <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div class="bg-surface border border-border rounded-lg p-6 max-w-md w-full mx-4">
+        <div class="aleph-scrim fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div class="glass bg-surface-overlay/85 border border-border rounded-lg p-6 max-w-md w-full mx-4">
                 <h2 class="text-lg font-semibold text-text-primary mb-2">
                     {if is_new { t_string!(i18n, settings.mcp.add_mcp_server).to_string() } else { t_string!(i18n, settings.mcp.edit_mcp_server).to_string() }}
                 </h2>

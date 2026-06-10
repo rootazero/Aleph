@@ -116,12 +116,20 @@ wasm:
     mkdir -p {{panel_dist}}
     # 1. Tailwind CSS
     (cd {{panel_dir}} && npm run build:css)
-    # 2. Compile Rust → WASM
-    cargo build -p aleph-panel --target wasm32-unknown-unknown --profile wasm-release
+    # 2. Compile Rust → WASM (lib only: the cdylib is the shipped artifact and
+    #    the vestigial src/main.rs bin breaks under fat LTO)
+    cargo build -p aleph-panel --lib --target wasm32-unknown-unknown --profile wasm-release
     # 3. Generate JS bindings
     wasm-bindgen --target web --no-typescript \
         --out-dir {{panel_dist}} --out-name aleph_panel \
         target/wasm32-unknown-unknown/wasm-release/aleph_panel.wasm
+    # 3.5 Shrink wasm (optional; -g keeps the name section for crash diagnostics)
+    if command -v wasm-opt >/dev/null 2>&1; then
+        wasm-opt -Oz -g {{panel_dist}}/aleph_panel_bg.wasm -o {{panel_dist}}/aleph_panel_bg.wasm
+        echo "✓ wasm-opt applied"
+    else
+        echo "⚠ wasm-opt not found; skipping (cargo install wasm-opt / brew install binaryen)"
+    fi
     # 4. Runtime index.html
     cat > {{panel_dist}}/index.html << 'HTMLEOF'
     <!DOCTYPE html>

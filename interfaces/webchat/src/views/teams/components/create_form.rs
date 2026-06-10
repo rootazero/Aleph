@@ -115,8 +115,8 @@ pub fn KanbanCreateForm(
 
             view! {
                 <div class="fixed inset-0 z-50 flex items-center justify-center">
-                    <div class="absolute inset-0 bg-black/40" on:click=move |_| close()></div>
-                    <div class="relative w-[26rem] max-w-[92vw] max-h-[90vh] bg-surface border border-border rounded-xl shadow-xl flex flex-col">
+                    <div class="aleph-scrim absolute inset-0 bg-black/40" on:click=move |_| close()></div>
+                    <div class="glass relative w-[26rem] max-w-[92vw] max-h-[90vh] bg-surface-overlay/85 border border-border rounded-xl shadow-xl flex flex-col">
                         <header class="px-4 py-3 border-b border-border flex items-center justify-between">
                             <h3 class="text-sm font-semibold text-text-primary">{title}</h3>
                             <button

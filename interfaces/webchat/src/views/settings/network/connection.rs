@@ -111,8 +111,8 @@ pub fn ConnectionSection() -> impl IntoView {
             </Show>
 
             <Show when=move || show_confirm.get()>
-                <div class="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                    <div class="bg-surface-raised rounded-lg border border-border p-6 max-w-md space-y-4">
+                <div class="aleph-scrim fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                    <div class="glass bg-surface-overlay/85 rounded-lg border border-border p-6 max-w-md space-y-4">
                         <p class="text-text-primary">
                             {t!(i18n, settings.network.confirm_switch,
                                 target = move || if use_remote.get() {
