@@ -510,7 +510,7 @@ impl SessionStore for SqliteSessionStore {
                 None => parse_rfc3339(&created_at)?,
             };
             let idle_secs = (now - last_activity).num_seconds();
-            let rounds_exhausted = turn_count >= max_rounds && idle_secs >= grace_secs;
+            let rounds_exhausted = turn_count >= i64::from(max_rounds) && idle_secs >= grace_secs;
             let stale = idle_secs >= stale_secs;
             if rounds_exhausted || stale {
                 // Guard on status again — a participant may have concluded

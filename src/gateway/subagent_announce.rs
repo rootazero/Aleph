@@ -78,10 +78,18 @@ async fn announce_one(
         return;
     };
 
+    // `request_id` is optional on the wire type; the broadcaster always sets
+    // it to the tracker's request id, with `child_session_id` (same value at
+    // the spawn site) as the defensive fallback.
+    let request_id = result
+        .request_id
+        .clone()
+        .unwrap_or_else(|| result.child_session_id.clone());
+
     let Some(session_key) = SessionKey::from_key_string(&global_event.source_session_id) else {
         debug!(
             session = %global_event.source_session_id,
-            request_id = %result.request_id,
+            request_id = %request_id,
             "subagent announce: parent session key not parseable; result stays poll-only"
         );
         return;
@@ -91,7 +99,7 @@ async fn announce_one(
     let Some(agent) = registry.get(&agent_id).await else {
         warn!(
             agent_id = %agent_id,
-            request_id = %result.request_id,
+            request_id = %request_id,
             "subagent announce: parent agent not registered; result stays poll-only"
         );
         return;
@@ -118,7 +126,6 @@ async fn announce_one(
          team member), and take any follow-up actions the original task \
          implies. Use the subagent tool's 'result' action with \
          request_id='{request_id}' if you need the full output.",
-        request_id = result.request_id,
     );
 
     // Mirror handlers::agent — Panel stream as base, fan the final reply out
@@ -141,7 +148,7 @@ async fn announce_one(
     };
 
     let mut metadata = HashMap::new();
-    metadata.insert("subagent_announce".to_string(), result.request_id.clone());
+    metadata.insert("subagent_announce".to_string(), request_id.clone());
 
     for delay_secs in RETRY_DELAYS_SECS {
         if delay_secs > 0 {
@@ -170,7 +177,7 @@ async fn announce_one(
             // the live run as steering" — either way the parent saw it.
             Ok(()) => {
                 debug!(
-                    request_id = %result.request_id,
+                    request_id = %request_id,
                     session = %global_event.source_session_id,
                     "subagent announce delivered to parent session"
                 );
@@ -181,7 +188,7 @@ async fn announce_one(
             }
             Err(e) => {
                 warn!(
-                    request_id = %result.request_id,
+                    request_id = %request_id,
                     session = %global_event.source_session_id,
                     error = %e,
                     "subagent announce run failed; result remains available via the subagent tool's list action"
@@ -192,7 +199,7 @@ async fn announce_one(
     }
 
     warn!(
-        request_id = %result.request_id,
+        request_id = %request_id,
         session = %global_event.source_session_id,
         "subagent announce: parent stayed busy through all retries; result remains available via the subagent tool's list action"
     );

@@ -141,22 +141,19 @@ impl SubagentTool {
             // — there is no session to announce into. Zero subscribers is
             // safe (library tests).
             let announce = announce_session_id.map(|sid| {
-                let result = match &outcome {
-                    CompletedOutcome::Ok {
-                        final_text,
-                        iterations,
-                        ..
-                    } => {
-                        let mut r = crate::agents::sub_agents::SubAgentResult::success(
-                            rid.clone(),
-                            final_text.clone(),
-                        );
-                        r.iterations_used = *iterations as u32;
-                        r
-                    }
-                    CompletedOutcome::Err(e) => {
-                        crate::agents::sub_agents::SubAgentResult::failure(rid.clone(), e.clone())
-                    }
+                let (success, summary, error) = match &outcome {
+                    CompletedOutcome::Ok { final_text, .. } => (true, final_text.clone(), None),
+                    CompletedOutcome::Err(e) => (false, String::new(), Some(e.clone())),
+                };
+                let result = crate::event::SubAgentResult {
+                    agent_id: announce_agent_id.clone(),
+                    child_session_id: rid.clone(),
+                    summary,
+                    success,
+                    error,
+                    request_id: Some(rid.clone()),
+                    tools_called: Vec::new(),
+                    execution_duration_ms: None,
                 };
                 (sid, result)
             });
