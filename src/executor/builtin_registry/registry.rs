@@ -876,19 +876,25 @@ impl ToolRegistry for BuiltinToolRegistry {
                 tool.call_json(arguments).await
             }),
 
-            // Sessions tools for cross-session communication
+            // Sessions tools for cross-session communication.
+            // Caller identity is derived from session context (fallback "main")
+            // so A2A policy filtering applies to the actual calling agent —
+            // a hardcoded "main" would evaluate every caller as the most
+            // privileged agent (same pattern as session_search below).
             "session_list" => Box::pin(async move {
                 let context = self.gateway_context.get().ok_or_else(|| {
                     AlephError::tool("session_list not available: GatewayContext not yet injected")
                 })?;
-                let tool = SessionsListTool::new(Arc::clone(context), "main");
+                let caller_id = self.caller_agent_id("main");
+                let tool = SessionsListTool::new(Arc::clone(context), caller_id);
                 tool.call_json(arguments).await
             }),
             "session_send" => Box::pin(async move {
                 let context = self.gateway_context.get().ok_or_else(|| {
                     AlephError::tool("session_send not available: GatewayContext not yet injected")
                 })?;
-                let tool = SessionsSendTool::with_context((**context).clone(), "main");
+                let caller_id = self.caller_agent_id("main");
+                let tool = SessionsSendTool::with_context((**context).clone(), caller_id);
                 tool.call_json(arguments).await
             }),
 
