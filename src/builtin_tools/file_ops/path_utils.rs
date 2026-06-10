@@ -95,7 +95,7 @@ pub fn get_denied_paths() -> Vec<String> {
 /// 3. Home paths (starting with `~`) - expanded to home directory
 /// 4. Relative paths - resolved relative to:
 ///    a. the per-run `FsScope` task-local base — per-run truth, immune to a
-///       concurrent run rewriting the shared `ToolContextHandle` mid-run
+///    concurrent run rewriting the shared `ToolContextHandle` mid-run
 ///    b. `output_dir_override` if provided (workspace-scoped output dir from ToolContext)
 ///    c. Error if neither is available — no global fallback
 ///

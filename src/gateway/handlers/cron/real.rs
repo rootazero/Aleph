@@ -191,9 +191,18 @@ pub async fn handle_create(request: JsonRpcRequest, cron: SharedCronService) -> 
     if let Some(tv) = params.get("timeout_ms") {
         match tv {
             Value::Null => {} // explicit null at create == default (no override)
-            Value::Number(n) if n.as_i64().is_some_and(|v| v > 0) => {
-                job.timeout_ms = Some(n.as_i64().unwrap());
-            }
+            Value::Number(n) => match n.as_i64() {
+                Some(v) if v > 0 => {
+                    job.timeout_ms = Some(v);
+                }
+                _ => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        "timeout_ms must be a positive integer (ms)",
+                    );
+                }
+            },
             _ => {
                 return JsonRpcResponse::error(
                     request.id,
@@ -272,9 +281,18 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
     if let Some(tv) = params.get("timeout_ms") {
         match tv {
             Value::Null => updates.timeout_ms = Some(None),
-            Value::Number(n) if n.as_i64().is_some_and(|v| v > 0) => {
-                updates.timeout_ms = Some(Some(n.as_i64().unwrap()));
-            }
+            Value::Number(n) => match n.as_i64() {
+                Some(v) if v > 0 => {
+                    updates.timeout_ms = Some(Some(v));
+                }
+                _ => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INVALID_PARAMS,
+                        "timeout_ms must be a positive integer (ms) or null to clear",
+                    );
+                }
+            },
             _ => {
                 return JsonRpcResponse::error(
                     request.id,

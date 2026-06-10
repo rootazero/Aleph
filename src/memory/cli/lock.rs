@@ -89,6 +89,9 @@ impl MemoryLock {
                 LockMode::Write => libc::LOCK_EX | libc::LOCK_NB,
             };
 
+            // SAFETY: `fd` is a valid raw file descriptor obtained from
+            // `lock_file.as_raw_fd()`. `flock` is a well-defined syscall for
+            // advisory file locking with no memory-unsafe side effects.
             let result = unsafe { libc::flock(fd, lock_type) };
 
             if result != 0 {
@@ -175,6 +178,9 @@ impl Drop for MemoryLock {
         {
             use std::os::unix::io::AsRawFd;
             let fd = self._lock_file.as_raw_fd();
+            // SAFETY: `fd` is a valid raw file descriptor. `flock` with
+            // `LOCK_UN` releases the advisory lock with no memory-unsafe
+            // side effects.
             unsafe { libc::flock(fd, libc::LOCK_UN) };
         }
     }

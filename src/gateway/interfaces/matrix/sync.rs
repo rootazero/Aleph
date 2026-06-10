@@ -44,13 +44,14 @@ pub async fn run_sync_loop(
             }
         };
 
-        if let Err(e) = response {
-            tracing::warn!("Matrix sync error: {e}");
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            continue;
-        }
-
-        let response = response.unwrap();
+        let response = match response {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Matrix sync error: {e}");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                continue;
+            }
+        };
 
         for (room_id, joined_room) in response.rooms.joined {
             let room_id_str = room_id.as_str();

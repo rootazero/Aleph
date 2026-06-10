@@ -308,7 +308,7 @@ impl WorkflowTool {
                 .max_by_key(|(rid, tasks)| {
                     (
                         tasks.iter().map(|t| t.created_at).max().unwrap_or(0),
-                        rid.clone(),
+                        *rid,
                     )
                 })
                 .map(|(rid, _)| rid.clone())

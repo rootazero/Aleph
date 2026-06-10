@@ -36,7 +36,9 @@ impl AiProvider for RecordingMockProvider {
         let canned = self.canned.clone();
         Box::pin(async move {
             if let Some(sys) = system {
-                *recorded.lock().unwrap() = Some(sys);
+                if let Ok(mut guard) = recorded.lock() {
+                    *guard = Some(sys);
+                }
             }
             Ok(ProviderResponse::text_only(canned))
         })
