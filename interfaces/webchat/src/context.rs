@@ -225,7 +225,7 @@ impl DashboardState {
         F: Fn(GatewayEvent) + Send + Sync + 'static,
     {
         let handlers = self.event_handlers.with_value(|h| h.clone());
-        let mut handlers = handlers.lock().expect("event handlers mutex poisoned");
+        let mut handlers = handlers.lock().unwrap_or_else(|e| e.into_inner());
         let id = handlers.len();
         handlers.push(Arc::new(handler));
         id
@@ -234,7 +234,7 @@ impl DashboardState {
     /// Unsubscribe from events
     pub fn unsubscribe_events(&self, id: usize) {
         let handlers = self.event_handlers.with_value(|h| h.clone());
-        let mut handlers = handlers.lock().expect("event handlers mutex poisoned");
+        let mut handlers = handlers.lock().unwrap_or_else(|e| e.into_inner());
         if id < handlers.len() {
             // Replace with a no-op handler instead of removing to preserve indices
             handlers[id] = Arc::new(|_| {});
@@ -263,7 +263,7 @@ impl DashboardState {
     /// Dispatch event to all subscribers
     fn dispatch_event(&self, event: GatewayEvent) {
         let handlers = self.event_handlers.with_value(|h| h.clone());
-        let handlers = handlers.lock().expect("event handlers mutex poisoned");
+        let handlers = handlers.lock().unwrap_or_else(|e| e.into_inner());
         for handler in handlers.iter() {
             handler(event.clone());
         }
@@ -298,7 +298,7 @@ impl DashboardState {
         // Generate unique ID
         let id = {
             let next_id = self.next_id.with_value(|n| n.clone());
-            let mut id_gen = next_id.lock().expect("RPC ID generator mutex poisoned");
+            let mut id_gen = next_id.lock().unwrap_or_else(|e| e.into_inner());
             let id = *id_gen;
             *id_gen += 1;
             id.to_string()
