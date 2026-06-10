@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Nodes are stored in ascending z-order (first = bottom, last = top), matching
 /// the spec; conversion helpers in the panel preserve that order.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 pub struct Document {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nodes: Vec<Node>,

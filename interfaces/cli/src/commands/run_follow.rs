@@ -41,7 +41,7 @@ pub struct FollowOptions {
     /// Surface reasoning previews and tool result previews.
     pub verbose: bool,
     /// Pin the loop to one run. The gateway broadcasts every `stream.*`
-    /// frame to every authenticated connection (SubscriptionManager default
+    /// frame to every authenticated connection (`SubscriptionManager` default
     /// = receive-all), so a concurrent cron/channel run would otherwise
     /// interleave its tool lines and body chunks into this command's
     /// output — and worse, its `RunComplete` would terminate the loop
