@@ -188,7 +188,28 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
         None
     };
 
-    let result: Result<LoopRunResult, String> = async {
+    // P3 Stage H deepening — when a worktree is provisioned, publish a per-run
+    // `FsScope` so the FILE tools (file_read / file_write / file_edit /
+    // apply_patch / file_ops) resolve inside the worktree too, not just bash:
+    // relative paths anchor at the worktree root and parent-repo absolute
+    // paths are rebased into the checkout. Both ends are canonicalized so the
+    // remap survives symlinked tmpdirs (macOS `/var` → `/private/var`).
+    // Without a worktree the body runs un-wrapped, inheriting whatever scope
+    // the parent run published — a non-isolated subagent intentionally shares
+    // the parent's workspace.
+    let fs_scope = worktree_handle.as_ref().map(|h| {
+        let wt = h
+            .path()
+            .canonicalize()
+            .unwrap_or_else(|_| h.path().to_path_buf());
+        let repo = h
+            .repo_root()
+            .canonicalize()
+            .unwrap_or_else(|_| h.repo_root().to_path_buf());
+        crate::tools::fs_scope::FsScope::worktree(wt, repo)
+    });
+
+    let run_body = async {
         // 2. Unique ephemeral session key for this sub-agent.
         let child_id = ephemeral_for(&req.agent_def.id);
 
@@ -409,8 +430,11 @@ pub async fn spawn(base: &SpawnerBase, req: SpawnRequest<'_>) -> Result<LoopRunR
                 Ok(result)
             }
         }
-    }
-    .await;
+    };
+    let result: Result<LoopRunResult, String> = match fs_scope {
+        Some(scope) => crate::tools::fs_scope::with_fs_scope(Some(scope), run_body).await,
+        None => run_body.await,
+    };
 
     // P3 Stage I — explicit MCP scope shutdown on the success path. Errors and
     // cancels leak the scope to the Drop safety net (which logs `leaked: true`).

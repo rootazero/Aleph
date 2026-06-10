@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 use super::path_utils::check_and_resolve_path;
-use super::state::record_written_file;
 use super::types::{FileInfo, FileOpsOutput};
 use crate::builtin_tools::error::ToolError;
 
@@ -137,6 +136,12 @@ pub(super) async fn execute_write(
 ) -> Result<(PathBuf, u64), ToolError> {
     let canonical = check_and_resolve_path(path, denied_paths, output_dir_override)?;
 
+    // Cross-agent write guard: serialize against any other harness (parent
+    // agent, concurrent subagent, team member) mutating the same canonical
+    // path — the in-batch concurrency claims gate cannot see across harness
+    // instances.
+    let _path_guard = crate::tools::path_locks::lock_path(&canonical).await;
+
     // Create parent directories if needed
     if create_parents {
         if let Some(parent) = canonical.parent() {
@@ -157,9 +162,6 @@ pub(super) async fn execute_write(
         .map_err(|e| ToolError::Execution(format!("Failed to write file: {}", e)))?;
 
     info!(path = %canonical.display(), bytes, "Wrote file");
-
-    // Record the written file for attachment tracking
-    record_written_file(canonical.clone(), bytes, "write");
 
     Ok((canonical, bytes))
 }
@@ -252,9 +254,6 @@ pub async fn execute_copy(
     };
 
     info!(from = %from_canonical.display(), to = %to_canonical.display(), bytes, "Copied");
-
-    // Record the copied file for attachment tracking
-    record_written_file(to_canonical.clone(), bytes, "copy");
 
     Ok(FileOpsOutput {
         success: true,

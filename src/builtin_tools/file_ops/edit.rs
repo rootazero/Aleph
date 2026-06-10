@@ -218,6 +218,13 @@ impl FileEditTool {
 
         info!(path = %canonical.display(), "FileEditTool: reading file");
 
+        // Cross-agent write guard: the read → locate → apply → write sequence
+        // below is a lost-update window when another harness (parent agent,
+        // concurrent subagent, team member sharing the workspace) edits the
+        // same file — the atomic rename only prevents torn writes. Hold the
+        // process-wide per-path lock for the whole critical section.
+        let _path_guard = crate::tools::path_locks::lock_path(&canonical).await;
+
         // Read current content — binary / non-UTF-8 files are refused.
         let content = read_text_file(&canonical).inspect_err(|e| {
             notify_tool_result("file_edit", &e.to_string(), false);

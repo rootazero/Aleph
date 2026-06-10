@@ -16,9 +16,11 @@
 //! abort. Isolation is best-effort: outside a git repository we silently
 //! fall back to the pre-G2 behaviour and log a warning.
 //!
-//! Sandbox-level isolation covers command execution (Bash / git / cargo).
-//! File-level tools (Edit / Write) still operate on the parent repo paths;
-//! deepening that isolation is a follow-up cycle.
+//! Isolation covers both surfaces: command execution runs at the worktree
+//! path via [`WorktreeSandbox`], and the member's `workspace_override` is
+//! pointed at the worktree so `run_agent_loop` roots the run's `FsScope` /
+//! `ToolContext` there — file-level tools (Edit / Write) resolve inside the
+//! isolated checkout instead of the parent repo.
 
 use std::collections::HashMap;
 
@@ -185,15 +187,31 @@ pub async fn execute_member_task(
                 "team_worktree_path".to_string(),
                 handle.path().display().to_string(),
             );
+            // Lets `run_agent_loop` build a rebasing `FsScope::worktree` so
+            // parent-repo absolute paths are redirected into the checkout,
+            // matching the subagent spawner's isolation semantics.
+            m.insert(
+                "team_worktree_repo_root".to_string(),
+                handle.repo_root().display().to_string(),
+            );
         }
         m
     };
 
-    // Inherit the dispatcher's project root so a team worker spawned
-    // inside a project-scoped chat lands in the same folder. Captured
-    // before the spawn boundary because tokio task-locals do not cross
-    // `tokio::spawn`.
-    let inherited_workspace = crate::projects::current_project_root();
+    // Workspace for the member run. With a provisioned worktree the member's
+    // ENTIRE run is rooted there — `run_agent_loop` derives its `FsScope`,
+    // `ToolContext` and project-skill discovery from `workspace_override`, so
+    // file tools now land inside the isolated checkout instead of the parent
+    // repo (previously only bash was redirected via `WorktreeSandbox`; the
+    // file-tool side of the isolation was a documented follow-up). Without a
+    // worktree, inherit the dispatcher's project root so a team worker
+    // spawned inside a project-scoped chat lands in the same folder.
+    // Captured before the spawn boundary because tokio task-locals do not
+    // cross `tokio::spawn`.
+    let inherited_workspace = worktree_handle
+        .as_ref()
+        .map(|h| h.path().to_path_buf())
+        .or_else(crate::projects::current_project_root);
 
     let request = RunRequest {
         run_id,
