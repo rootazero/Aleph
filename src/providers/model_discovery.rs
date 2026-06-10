@@ -217,15 +217,15 @@ mod tests {
 
     #[tokio::test]
     async fn from_preset_inherits_fallback_list() {
-        // `openai` preset declares `gpt-4o, gpt-4o-mini, o3-mini, o1-mini`.
+        // `openai` preset declares `gpt-5.4, gpt-5.4-mini, gpt-5.5, o4-mini`.
         let cached = CachedDiscovery::from_preset(
             Box::new(FailingDiscovery),
             "openai",
             Duration::from_secs(300),
         );
         let models = cached.discover().await.unwrap();
-        assert!(models.iter().any(|m| m.id == "gpt-4o"));
-        assert!(models.iter().any(|m| m.id == "gpt-4o-mini"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.4"));
+        assert!(models.iter().any(|m| m.id == "gpt-5.4-mini"));
     }
 
     #[tokio::test]

@@ -303,9 +303,8 @@ impl ModelCooldown {
             .read()
             .await
             .iter()
-            .filter_map(|((p, m), &until)| {
-                (until > now).then(|| (p.clone(), m.clone(), (until - now).as_secs()))
-            })
+            .filter(|&((_, _), &until)| until > now)
+            .map(|((p, m), &until)| (p.clone(), m.clone(), (until - now).as_secs()))
             .collect();
         out.sort();
         out
@@ -366,7 +365,8 @@ impl ProviderCooldown {
             .read()
             .await
             .iter()
-            .filter_map(|(p, &until)| (until > now).then(|| (p.clone(), (until - now).as_secs())))
+            .filter(|&(_, &until)| until > now)
+            .map(|(p, &until)| (p.clone(), (until - now).as_secs()))
             .collect();
         out.sort();
         out
