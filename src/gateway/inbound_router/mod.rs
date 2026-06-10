@@ -768,14 +768,12 @@ impl InboundMessageRouter {
             // Try unified command resolution first (async, all sources)
             if let Some(ref parser) = self.command_parser {
                 if let Some(parsed) = parser.parse_async(slash_text).await {
-                    if parsed.command_name == "groupchat" {
-                        return self.handle_groupchat_command(&msg).await;
-                    }
-                    if parsed.command_name == "session_new" || parsed.command_name == "new" {
-                        return self.handle_new_session(&msg, &ctx).await;
-                    }
                     // Slash-command access tiering — backward-compat: empty
                     // `allow_admin_from` keeps gating OFF for that scope.
+                    // Must run BEFORE the special-cased dispatches below:
+                    // /groupchat and /new used to early-return ahead of this
+                    // check, so a configured gate silently never applied to
+                    // them.
                     if let Some(cfg) = self.channel_configs.get(ctx.message.channel_id.as_str()) {
                         let decision = cfg.slash_command_gate(
                             &ctx.sender_normalized,
@@ -804,6 +802,12 @@ impl InboundMessageRouter {
                             let _ = self.channel_registry.send(&msg.channel_id, reply).await;
                             return Ok(());
                         }
+                    }
+                    if parsed.command_name == "groupchat" {
+                        return self.handle_groupchat_command(&msg).await;
+                    }
+                    if parsed.command_name == "session_new" || parsed.command_name == "new" {
+                        return self.handle_new_session(&msg, &ctx).await;
                     }
                     // Use the rich serializer so Skill / Custom / MCP fields
                     // (instructions, allowed_tools, system_prompt, server_name)
@@ -835,8 +839,10 @@ impl InboundMessageRouter {
                         .unwrap_or("");
                     // Skip namespace check for shorthand aliases — these are resolved
                     // by slash_command.rs fast-path (e.g. /image → image_generate).
+                    // Shares slash_command::SHORTHAND_ALIASES instead of keeping
+                    // a second hardcoded copy of the alias names here.
                     let is_shorthand =
-                        matches!(namespace, "image" | "video" | "audio" | "speech" | "rename");
+                        crate::gateway::execution_engine::is_shorthand_alias(namespace);
                     if !namespace.is_empty() && !is_shorthand {
                         let registry = parser.tool_registry();
                         if registry.is_namespace(namespace).await {
