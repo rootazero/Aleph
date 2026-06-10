@@ -124,31 +124,32 @@ progress via tool calls or delivers a final result.";
 const TOOL_PERSISTENCE_DOCTRINE: &str = "## Execution Discipline — Persistence\n\
 \n\
 **Tool persistence**\n\
-- Use tools whenever they improve correctness, completeness, or grounding.\n\
-- Do not stop early when another tool call would materially improve the result.\n\
-- If a tool returns empty / partial / error results (401, 403, 404, timeout, \
-rate-limit, empty body), retry with a DIFFERENT query, tool, or source before \
-giving up. A single source returning an error is a routing signal, not a \
-verdict on the goal.\n\
-- Distinguish *method failure* (one URL/tool/keyword failed) from *goal failure* \
-(every reasonable alternative has been tried). Only the latter justifies `fail`.\n\
-- Keep calling tools until (1) the task is complete AND (2) you have verified the result.\n\
+- Use tools whenever they improve correctness, completeness, or grounding; don't stop \
+early while another call would materially improve the result.\n\
+- On empty / partial / error results (401, 403, 404, timeout, rate-limit), retry with a \
+DIFFERENT query, tool, or source. One source erroring is a routing signal, not a verdict \
+on the goal.\n\
+- Distinguish *method failure* (one URL/tool/keyword failed) from *goal failure* (every \
+reasonable alternative tried). Only the latter justifies giving up.\n\
+- Keep going until the task is complete AND the result is verified.\n\
 \n\
 **Web/external-data fallback ladder** — when fetching online content:\n\
 1. `search` with refined keywords (synonyms, broader/narrower scope, other engines).\n\
 2. `web_fetch` a canonical URL of the same resource.\n\
 3. `web_fetch` an alternate reputable source (BBC, AP, Wikipedia, mirrors, official feeds).\n\
 4. Browser tools (chrome-devtools MCP, playwright, `autocli` skill) for API-/headless-gated sites.\n\
-Climb at least TWO rungs before `fail`.\n\
+Climb at least TWO rungs before conceding.\n\
 \n\
-**Ceiling** — when ~3 distinct routes for the same datum fail the same way (403/404/anti-bot/JS-only), it is gated; more same-class URLs aren't progress. Escalate tool CLASS once (browser/`autocli`/skill on the user's logged-in session); if still blocked, deliver what you DID obtain and state the gap. A blocked source is method failure — never grounds to abandon the task or loop forever switching sources.\n\
+**Ceiling** — ~3 distinct routes failing the same way (403/404/anti-bot/JS-only) means \
+the datum is gated; more same-class URLs aren't progress. Escalate tool CLASS once \
+(browser/`autocli`/skill on the user's logged-in session); if still blocked, deliver what \
+you DID obtain and state the gap. A blocked source is method failure — never grounds to \
+abandon the goal or loop forever switching sources.\n\
 \n\
-**Mandatory tool use** — NEVER answer from memory:\n\
-- Arithmetic / hashes / encodings → run via a tool.\n\
-- Time / date / timezone → query the system.\n\
-- File contents / sizes / line counts → read the files.\n\
-- System state (OS, CPU, processes, ports) → query live.\n\
-- Current facts (weather, news, versions) → search.";
+**Mandatory tool use** — NEVER answer from memory: arithmetic / hashes / encodings → run \
+a tool; time / date / timezone → query the system; file contents / sizes / line counts → \
+read the files; system state (OS, CPU, processes, ports) → query live; current facts \
+(weather, news, versions) → search.";
 
 /// OpenAI / Codex / Grok — tail of the original execution-discipline block.
 /// Holds the "act, don't ask" + "verify before finalizing" directives that

@@ -279,22 +279,37 @@ async fn execute_cron_job(
                 }
             }
 
+            // Honour ALEPH_* protocol tokens at the delivery boundary. The
+            // Background-paradigm prompt (`ProtocolTokensLayer`) teaches the
+            // model to answer with these sentinels when there is nothing worth
+            // notifying; without this gate the literal token text would reach
+            // the user's channel. History (`ExecutionResult.output`) keeps the
+            // raw text for auditability — only delivery is filtered.
+            let deliverable = final_response.as_deref().and_then(deliverable_text);
+
             // Deliver response to source channel if available
             let delivery_status = if let (Some(ref ch_id), Some(ref conv_id)) =
                 (&deliver_channel, &deliver_conversation)
             {
-                if let Some(ref response_text) = final_response {
-                    deliver_to_channel(
-                        &channel_registry_cell,
-                        ch_id,
-                        conv_id,
-                        response_text,
-                        &snapshot.id,
-                    )
-                    .await
-                } else {
-                    info!(job_id = %snapshot.id, "cron job produced no response text, skipping delivery");
-                    DeliveryStatus::NotDelivered
+                match deliverable {
+                    Some(ref response_text) => {
+                        deliver_to_channel(
+                            &channel_registry_cell,
+                            ch_id,
+                            conv_id,
+                            response_text,
+                            &snapshot.id,
+                        )
+                        .await
+                    }
+                    None if final_response.is_some() => {
+                        info!(job_id = %snapshot.id, "cron job replied with a silent protocol token, suppressing delivery");
+                        DeliveryStatus::NotDelivered
+                    }
+                    None => {
+                        info!(job_id = %snapshot.id, "cron job produced no response text, skipping delivery");
+                        DeliveryStatus::NotDelivered
+                    }
                 }
             } else {
                 DeliveryStatus::NotDelivered
@@ -524,6 +539,21 @@ async fn extract_final_response(collector: &CollectingEventEmitter) -> Option<St
     }
 }
 
+/// Map a run's final text to what (if anything) should reach the channel.
+///
+/// ALEPH_* protocol tokens (taught by `ProtocolTokensLayer` on the
+/// Background paradigm) are the model's way to opt out of user
+/// notification: silent variants suppress delivery, `NEEDS_ATTENTION`
+/// delivers just its payload. Normal text passes through unchanged.
+fn deliverable_text(text: &str) -> Option<String> {
+    use crate::thinker::protocol_tokens::ProtocolToken;
+    match ProtocolToken::parse(text) {
+        Some(ProtocolToken::NeedsAttention(msg)) => Some(msg),
+        Some(_) => None,
+        None => Some(text.to_string()),
+    }
+}
+
 /// Deliver the cron job response to the source channel via ChannelRegistry.
 async fn deliver_to_channel(
     cell: &ChannelRegistryCell,
@@ -668,6 +698,35 @@ mod tests {
     fn prepend_fallback_note_uses_note_as_output_when_output_is_none() {
         let out = prepend_fallback_note(None, "oldie");
         assert_eq!(out, fallback_note("oldie"));
+    }
+
+    #[test]
+    fn deliverable_text_suppresses_silent_protocol_tokens() {
+        assert_eq!(deliverable_text("ALEPH_SILENT_COMPLETE"), None);
+        assert_eq!(deliverable_text("  ALEPH_NO_REPLY \n"), None);
+        assert_eq!(deliverable_text("ALEPH_HEARTBEAT_OK"), None);
+    }
+
+    #[test]
+    fn deliverable_text_unwraps_needs_attention_payload() {
+        assert_eq!(
+            deliverable_text("ALEPH_NEEDS_ATTENTION: disk at 95%").as_deref(),
+            Some("disk at 95%")
+        );
+    }
+
+    #[test]
+    fn deliverable_text_passes_normal_text_through() {
+        // Mixed content is a normal reply, not a token (tokens must be the
+        // entire message) — it must reach the channel untouched.
+        assert_eq!(
+            deliverable_text("All good. ALEPH_HEARTBEAT_OK").as_deref(),
+            Some("All good. ALEPH_HEARTBEAT_OK")
+        );
+        assert_eq!(
+            deliverable_text("Weather: sunny, 22°C").as_deref(),
+            Some("Weather: sunny, 22°C")
+        );
     }
 
     async fn test_registry_with_main() -> (tempfile::TempDir, AgentRegistry) {

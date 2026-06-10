@@ -455,32 +455,7 @@ impl PromptBuilder {
         }
     }
 
-    /// Append silent behavior section for background/silent channels
-    ///
-    /// This section is only added when the environment supports silent replies
-    /// (e.g., background processing channels). It instructs the AI on proper
-    /// behavior for silent/heartbeat operations.
-    pub fn append_silent_behavior(&self, prompt: &mut String, contract: &EnvironmentContract) {
-        // Only add if SilentReply capability is active
-        if !contract
-            .active_capabilities
-            .contains(&Capability::SilentReply)
-        {
-            return;
-        }
-
-        prompt.push_str("## Silent Behavior\n\n");
-        prompt.push_str("You are running in a **background/silent context** where user notifications should be minimized.\n\n");
-        prompt.push_str("**Guidelines**:\n");
-        prompt.push_str("- Use `heartbeat_ok` for successful silent operations that need no user notification\n");
-        prompt.push_str("- Use `silent_complete` when a background task finishes successfully\n");
-        prompt.push_str("- Only use `ask_user` for critical decisions that cannot be automated\n");
-        prompt
-            .push_str("- Prefer logging results to files rather than generating verbose output\n");
-        prompt.push_str("- Keep reasoning concise as it may not be visible to the user\n\n");
-    }
-
-    /// Append protocol tokens section (replaces append_silent_behavior for protocol-aware mode)
+    /// Append protocol tokens section.
     ///
     /// When SilentReply capability is active, injects structured protocol tokens
     /// that the LLM can use as minimal-cost responses in background mode.
@@ -559,16 +534,6 @@ impl PromptBuilder {
             "- For real-time observations (current tool output, live data), no citation needed\n",
         );
         prompt.push_str("- For recalled facts, prior decisions, or historical context, citation is mandatory\n\n");
-    }
-
-    /// Append channel-specific behavioral guidance.
-    pub fn append_channel_behavior(
-        &self,
-        prompt: &mut String,
-        guide: &crate::thinker::channel_behavior::ChannelBehaviorGuide,
-    ) {
-        let section = sanitize_for_prompt(&guide.to_prompt_section(), SanitizeLevel::Light);
-        prompt.push_str(&section);
     }
 
     /// Append user profile section to the prompt.
