@@ -176,7 +176,13 @@ mod tests {
         // the colon-bearing double prefix `server__server:tool`.
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
-        let names = register_mcp_tools(&reg, None, client, "github", &[tool("github:create_issue", "d")]);
+        let names = register_mcp_tools(
+            &reg,
+            None,
+            client,
+            "github",
+            &[tool("github:create_issue", "d")],
+        );
         assert_eq!(names, vec!["github__create_issue"]);
         assert!(reg.snapshot().contains_key("github__create_issue"));
     }

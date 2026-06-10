@@ -53,7 +53,12 @@ impl McpHandler {
     }
 
     /// Attach annotation-derived scheduling/approval flags.
-    pub fn with_flags(mut self, read_only: bool, idempotent: bool, requires_approval: bool) -> Self {
+    pub fn with_flags(
+        mut self,
+        read_only: bool,
+        idempotent: bool,
+        requires_approval: bool,
+    ) -> Self {
         self.metadata.concurrent_safe = read_only;
         self.metadata.idempotent = idempotent;
         self.metadata.requires_approval = requires_approval;

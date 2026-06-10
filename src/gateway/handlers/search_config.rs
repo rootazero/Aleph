@@ -723,7 +723,10 @@ mod tests {
         };
         let config = Arc::new(RwLock::new(base));
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
-        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_search_haskey.vault"));
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            "/tmp/test_search_haskey.vault",
+        ));
         let _ = vault.generate_token();
         vault
             .store_secret(&vault_key("brave"), "super-secret-key")

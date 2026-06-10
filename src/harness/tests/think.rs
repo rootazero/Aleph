@@ -1,8 +1,8 @@
 //! Tests for `AgentHarness::run_turn` — Think phase (Task 8).
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};

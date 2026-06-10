@@ -70,7 +70,9 @@ pub fn RuntimesView() -> impl IntoView {
         on_cleanup(move || {
             state.unsubscribe_events(handler_id);
             spawn_local(async move {
-                let _ = state.unsubscribe_topic(RUNTIME_INSTALL_PROGRESS_TOPIC).await;
+                let _ = state
+                    .unsubscribe_topic(RUNTIME_INSTALL_PROGRESS_TOPIC)
+                    .await;
             });
         });
     }

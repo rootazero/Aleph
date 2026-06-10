@@ -162,7 +162,11 @@ impl CommandPolicy {
             while tail_start < command_text.len() && !command_text.is_char_boundary(tail_start) {
                 tail_start += 1;
             }
-            scan_buf = format!("{}\n{}", &command_text[..head_end], &command_text[tail_start..]);
+            scan_buf = format!(
+                "{}\n{}",
+                &command_text[..head_end],
+                &command_text[tail_start..]
+            );
             &scan_buf
         };
 

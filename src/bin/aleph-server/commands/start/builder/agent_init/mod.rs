@@ -1492,17 +1492,17 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // SessionCoordinator::sweep_deadlocked).
             if let Some(sweep_coord) = session_coordinator.clone() {
                 tokio::spawn(async move {
-                    let mut tick =
-                        tokio::time::interval(std::time::Duration::from_secs(300));
-                    tick.set_missed_tick_behavior(
-                        tokio::time::MissedTickBehavior::Skip,
-                    );
+                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+                    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     loop {
                         tick.tick().await;
                         match sweep_coord.sweep_deadlocked(600, 86_400).await {
                             Ok(0) => {}
                             Ok(n) => {
-                                tracing::info!(count = n, "session sweeper: marked deadlocked sessions");
+                                tracing::info!(
+                                    count = n,
+                                    "session sweeper: marked deadlocked sessions"
+                                );
                             }
                             Err(e) => {
                                 tracing::warn!(error = %e, "session sweeper: sweep failed");

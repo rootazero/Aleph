@@ -416,7 +416,9 @@ fn repair_json_emission_defects(raw: &str) -> Option<String> {
                     out.push(c);
                 }
                 '\\' => match chars.get(i + 1) {
-                    Some(&next) if matches!(next, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') => {
+                    Some(&next)
+                        if matches!(next, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') =>
+                    {
                         out.push('\\');
                         out.push(next);
                         i += 1;
@@ -774,10 +776,7 @@ mod tests {
         // open-weight emission defect (code or prose in arguments).
         let raw = "{\"content\": \"line one\nline two\tend\"}";
         let v = salvage_malformed_args(raw).expect("salvageable");
-        assert_eq!(
-            v,
-            serde_json::json!({"content": "line one\nline two\tend"})
-        );
+        assert_eq!(v, serde_json::json!({"content": "line one\nline two\tend"}));
     }
 
     #[test]

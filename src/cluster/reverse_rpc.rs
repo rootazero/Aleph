@@ -245,7 +245,11 @@ mod tests {
         let (_id1, rx1) = pending.register();
         let (_id2, rx2) = pending.register();
 
-        assert_eq!(pending.cancel_all(), 2, "should report both waiters cancelled");
+        assert_eq!(
+            pending.cancel_all(),
+            2,
+            "should report both waiters cancelled"
+        );
         assert!(rx1.await.is_err(), "sender dropped → receiver errors");
         assert!(rx2.await.is_err(), "sender dropped → receiver errors");
 
@@ -275,7 +279,10 @@ mod tests {
             tokio::task::yield_now().await;
         }
 
-        let err = call.await.expect("task joins").expect_err("must be cancelled");
+        let err = call
+            .await
+            .expect("task joins")
+            .expect_err("must be cancelled");
         assert!(matches!(err, ReverseRpcError::Cancelled));
     }
 

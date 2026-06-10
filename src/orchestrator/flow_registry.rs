@@ -1,7 +1,7 @@
 //! Flow catalog with atomic hot reload. See design §3.8, §5.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 use arc_swap::ArcSwap;
 

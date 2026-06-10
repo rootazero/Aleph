@@ -1,7 +1,7 @@
 //! Orchestrator metrics for monitoring flow execution, retry rates, and stall detection.
 
-use crate::sync_primitives::{AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Metrics collected by the orchestrator during flow execution.

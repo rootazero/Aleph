@@ -174,7 +174,10 @@ mod tests {
     #[test]
     fn exhausted_while_active_true_only_at_cap() {
         let mut g = active_goal(3);
-        assert!(!exhausted_while_active(&g, 0), "fresh goal can still continue");
+        assert!(
+            !exhausted_while_active(&g, 0),
+            "fresh goal can still continue"
+        );
         g.continuations_used = 3;
         assert!(exhausted_while_active(&g, 0), "at cap while still active");
     }
@@ -184,7 +187,10 @@ mod tests {
         let passive = Goal::new("s", "obj", 0, 0); // Passive
         assert!(!exhausted_while_active(&passive, 0));
         let done = active_goal(3).with_status(GoalStatus::Complete, 0);
-        assert!(!exhausted_while_active(&done, 0), "completed is not 'exhausted'");
+        assert!(
+            !exhausted_while_active(&done, 0),
+            "completed is not 'exhausted'"
+        );
     }
 
     #[test]

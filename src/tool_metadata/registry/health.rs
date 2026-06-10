@@ -24,10 +24,10 @@
 //!   catalog subscribes to [`crate::tools::registry::RegistryChange`]
 //!   and calls it on every tool registration / unregistration.
 
+use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;

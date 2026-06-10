@@ -191,9 +191,13 @@ mod tests {
     #[test]
     fn lead_review_reads_false_when_absent_or_wrong_shape() {
         assert!(!lead_review_required(&json!({})));
-        assert!(!lead_review_required(&json!({ LEAD_REVIEW_METADATA_KEY: "yes" })));
+        assert!(!lead_review_required(
+            &json!({ LEAD_REVIEW_METADATA_KEY: "yes" })
+        ));
         assert!(!lead_review_required(&json!(42)));
-        assert!(!lead_review_required(&json!({ LEAD_REVIEW_METADATA_KEY: false })));
+        assert!(!lead_review_required(
+            &json!({ LEAD_REVIEW_METADATA_KEY: false })
+        ));
     }
 
     #[test]

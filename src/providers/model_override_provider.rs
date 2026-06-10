@@ -12,9 +12,9 @@
 //! All trait methods except `process` delegate verbatim to the inner provider,
 //! so wrapping is transparent to name/color/protocol/tool-support.
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use crate::error::Result;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};

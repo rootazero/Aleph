@@ -84,7 +84,11 @@ async fn run_case(decision: Option<ApprovalDecisionType>, expect: ApprovalOutcom
 
 #[tokio::test]
 async fn approve_once_round_trip() {
-    run_case(Some(ApprovalDecisionType::AllowOnce), ApprovalOutcome::Approved).await;
+    run_case(
+        Some(ApprovalDecisionType::AllowOnce),
+        ApprovalOutcome::Approved,
+    )
+    .await;
 }
 
 #[tokio::test]

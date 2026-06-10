@@ -288,7 +288,9 @@ pub async fn handle_update(
         serde_json::to_value(&security_config.secrets_protection),
     );
     let sandbox_changed = json_changed(
-        serde_json::to_value(rate_limit::read_sandbox_rate_limit_from_toml(&config_patcher)),
+        serde_json::to_value(rate_limit::read_sandbox_rate_limit_from_toml(
+            &config_patcher,
+        )),
         serde_json::to_value(&security_config.sandbox_rate_limit),
     );
 

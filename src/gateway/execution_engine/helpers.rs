@@ -227,14 +227,12 @@ pub async fn run_dispatch_and_drain_classified(
         let summary = super::event_drain::build_run_summary(&outcome);
         let seq = emitter.next_seq();
         let _ = emitter
-            .emit(
-                crate::gateway::event_emitter::StreamEvent::RunComplete {
-                    run_id: run_id.to_string(),
-                    seq,
-                    summary,
-                    total_duration_ms: outcome.duration_ms,
-                },
-            )
+            .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
+                run_id: run_id.to_string(),
+                seq,
+                summary,
+                total_duration_ms: outcome.duration_ms,
+            })
             .await;
     }
 

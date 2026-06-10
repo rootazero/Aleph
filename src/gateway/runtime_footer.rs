@@ -97,12 +97,10 @@ fn fmt_tools(items: &[ToolSummaryItem]) -> Option<String> {
     let mut counts: std::collections::HashMap<&str, (u32, bool, &str)> =
         std::collections::HashMap::new();
     for item in items {
-        let entry = counts
-            .entry(item.tool_name.as_str())
-            .or_insert_with(|| {
-                order.push(item.tool_name.as_str());
-                (0, false, item.emoji.as_str())
-            });
+        let entry = counts.entry(item.tool_name.as_str()).or_insert_with(|| {
+            order.push(item.tool_name.as_str());
+            (0, false, item.emoji.as_str())
+        });
         entry.0 += 1;
         entry.1 |= !item.success;
     }

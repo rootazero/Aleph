@@ -23,8 +23,8 @@
 //! - Restarts go through [`ChannelRegistry::restart_channel`] (in-place
 //!   stop+start) to avoid spawning duplicate message forwarders.
 
-use std::collections::{HashMap, VecDeque};
 use crate::sync_primitives::Arc;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};

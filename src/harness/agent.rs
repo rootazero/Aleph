@@ -890,9 +890,9 @@ fn turn_token_total(usage: &Option<crate::providers::adapter::TokenUsage>) -> u6
 
 #[cfg(test)]
 mod tests {
+    use crate::sync_primitives::Arc;
     use std::future::Future;
     use std::pin::Pin;
-    use crate::sync_primitives::Arc;
 
     use crate::error::Result as AlephResult;
     use crate::harness::callback::NoopHarnessCallback;

@@ -904,7 +904,10 @@ mod tests {
         // A shared token must exist before the vault can encrypt/store secrets.
         vault.generate_token().unwrap();
         vault
-            .store_secret(&channel_vault_key("telegram", "bot_token"), "super-secret-bot-token")
+            .store_secret(
+                &channel_vault_key("telegram", "bot_token"),
+                "super-secret-bot-token",
+            )
             .unwrap();
 
         // Config as it would be after secrets were stripped to the vault on save.

@@ -24,9 +24,9 @@
 //! [`session_memory::SessionApprovalMemory`] so the two stores are structural
 //! mirrors and evict identically.
 
+use crate::sync_primitives::Mutex;
 use std::collections::{HashMap, VecDeque};
 use std::sync::LazyLock;
-use crate::sync_primitives::Mutex;
 
 /// Max distinct sessions retained before FIFO eviction kicks in. Matches
 /// [`session_memory`](super::session_memory)'s bound so the two stores have an

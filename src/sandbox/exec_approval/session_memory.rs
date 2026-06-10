@@ -9,9 +9,9 @@
 //! rare user action, so evicting an old session beyond the cap costs at most a
 //! re-prompt, never a wrong grant.
 
+use crate::sync_primitives::Mutex;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::LazyLock;
-use crate::sync_primitives::Mutex;
 
 /// Max distinct sessions retained before FIFO eviction kicks in.
 const MAX_SESSIONS: usize = 1024;

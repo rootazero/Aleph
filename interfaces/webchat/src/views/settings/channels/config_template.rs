@@ -534,8 +534,7 @@ fn render_field(
                     .unwrap_or("")
                     .to_string()
             };
-            let configured_ph =
-                t_string!(i18n, settings.providers.key_configured_hint).to_string();
+            let configured_ph = t_string!(i18n, settings.providers.key_configured_hint).to_string();
             let unset_ph = if placeholder.is_empty() {
                 t_string!(i18n, settings.providers.key_unset_hint).to_string()
             } else {

@@ -2,8 +2,8 @@
 //!
 //! See design §5 (TOML shape) and §3.8 (hot reload via FlowRegistry::replace).
 
-use std::path::Path;
 use crate::sync_primitives::Arc;
+use std::path::Path;
 
 use serde::Deserialize;
 

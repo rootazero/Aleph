@@ -1,6 +1,6 @@
+use crate::sync_primitives::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use crate::sync_primitives::{Mutex, RwLock};
 
 use async_trait::async_trait;
 

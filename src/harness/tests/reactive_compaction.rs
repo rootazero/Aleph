@@ -8,9 +8,9 @@
 //! owns this recovery path"). These tests pin the new behaviour so
 //! future churn cannot silently regress the connection.
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};

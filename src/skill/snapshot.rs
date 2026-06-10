@@ -311,8 +311,14 @@ mod tests {
             },
         );
 
-        let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries, &no_archived());
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &entries,
+            &no_archived(),
+        );
 
         assert!(
             snap.eligible.is_empty(),
@@ -346,8 +352,14 @@ mod tests {
             },
         );
 
-        let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries, &no_archived());
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &entries,
+            &no_archived(),
+        );
 
         // Still eligible (eligibility is independent of prompt scope)...
         assert!(snap.eligible.contains(&SkillId::new("git:commit")));

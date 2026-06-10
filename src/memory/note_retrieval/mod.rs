@@ -508,7 +508,10 @@ mod tests {
             content_hash: "hash_dreame".to_string(),
             ..Default::default()
         };
-        backend.index_note(&note, "default", "general").await.unwrap();
+        backend
+            .index_note(&note, "default", "general")
+            .await
+            .unwrap();
 
         let indexer = Arc::new(NoteIndexer::new(dir.path().to_path_buf(), backend.clone()));
         let retrieval = NoteFactRetrieval::new(indexer, Arc::new(FailingEmbeddingProvider));

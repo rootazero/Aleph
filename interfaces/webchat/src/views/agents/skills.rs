@@ -47,7 +47,10 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
         }
         let id = agent_id.get_value();
         spawn_local(async move {
-            if let Ok(result) = dash.rpc_call("skills.status", serde_json::Value::Null).await {
+            if let Ok(result) = dash
+                .rpc_call("skills.status", serde_json::Value::Null)
+                .await
+            {
                 if let Some(arr) = result.get("skills") {
                     if let Ok(skills) = serde_json::from_value::<Vec<SkillEntry>>(arr.clone()) {
                         all_skills.set(skills);

@@ -252,10 +252,15 @@ mod tests {
     async fn test_handle_get_reports_has_api_key_without_echoing_secret() {
         let config = Arc::new(RwLock::new(Config::default()));
         let store = Arc::new(crate::gateway::security::SecurityStore::in_memory().unwrap());
-        let vault = Arc::new(SharedTokenManager::new(store, "/tmp/test_rerank_haskey.vault"));
+        let vault = Arc::new(SharedTokenManager::new(
+            store,
+            "/tmp/test_rerank_haskey.vault",
+        ));
         let _ = vault.generate_token();
         // Active provider defaults to "jina"; seed its vault key.
-        vault.store_secret(&vault_key("jina"), "super-secret-key").unwrap();
+        vault
+            .store_secret(&vault_key("jina"), "super-secret-key")
+            .unwrap();
 
         let request = JsonRpcRequest::with_id("rerank_config.get", None, serde_json::json!(1));
         let response = handle_get(request, config, vault).await;

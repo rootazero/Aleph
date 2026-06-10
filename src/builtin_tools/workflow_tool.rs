@@ -306,10 +306,7 @@ impl WorkflowTool {
             None => groups
                 .iter()
                 .max_by_key(|(rid, tasks)| {
-                    (
-                        tasks.iter().map(|t| t.created_at).max().unwrap_or(0),
-                        *rid,
-                    )
+                    (tasks.iter().map(|t| t.created_at).max().unwrap_or(0), *rid)
                 })
                 .map(|(rid, _)| rid.clone())
                 .unwrap_or_default(),

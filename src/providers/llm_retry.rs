@@ -500,8 +500,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use crate::sync_primitives::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_classify_rate_limit_model_specific_fallback() {

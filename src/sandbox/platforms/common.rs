@@ -495,12 +495,21 @@ mod tests {
 
         // Head fragment (40% = 400 bytes) and tail fragment (60% = 600 bytes)
         // both present; the elided middle is gone.
-        assert!(text.starts_with("HEAD-"), "head opening must survive: {text:.40}");
+        assert!(
+            text.starts_with("HEAD-"),
+            "head opening must survive: {text:.40}"
+        );
         assert!(text.ends_with("-TAIL"), "tail ending must survive");
-        assert!(text.contains("bytes elided"), "marker must announce the gap");
+        assert!(
+            text.contains("bytes elided"),
+            "marker must announce the gap"
+        );
         assert!(dropped > 0, "the middle must be reported as dropped");
         // Retained real content (excluding the marker) honours the budget.
-        assert!(out.len() <= cap + 64, "retained content ~ cap + small marker");
+        assert!(
+            out.len() <= cap + 64,
+            "retained content ~ cap + small marker"
+        );
         assert_eq!(
             dropped as usize,
             orig_len - 400 - 600,

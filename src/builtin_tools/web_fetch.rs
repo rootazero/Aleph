@@ -7,6 +7,7 @@ use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
+use crate::sync_primitives::Mutex;
 use crate::tools::AlephTool;
 use async_trait::async_trait;
 use lru::LruCache;
@@ -16,7 +17,6 @@ use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
-use crate::sync_primitives::Mutex;
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 

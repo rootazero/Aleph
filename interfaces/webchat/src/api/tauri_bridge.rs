@@ -88,21 +88,33 @@ mod tests {
 
     #[test]
     fn bare_host_gets_http_and_default_port() {
-        assert_eq!(normalize_endpoint_preview("core.example"), "http://core.example:18790");
+        assert_eq!(
+            normalize_endpoint_preview("core.example"),
+            "http://core.example:18790"
+        );
     }
 
     #[test]
     fn explicit_port_preserved() {
-        assert_eq!(normalize_endpoint_preview("core.example:9000"), "http://core.example:9000");
+        assert_eq!(
+            normalize_endpoint_preview("core.example:9000"),
+            "http://core.example:9000"
+        );
     }
 
     #[test]
     fn https_scheme_preserved_and_port_added() {
-        assert_eq!(normalize_endpoint_preview("https://core.example"), "https://core.example:18790");
+        assert_eq!(
+            normalize_endpoint_preview("https://core.example"),
+            "https://core.example:18790"
+        );
     }
 
     #[test]
     fn https_with_port_unchanged() {
-        assert_eq!(normalize_endpoint_preview("https://core.example:443"), "https://core.example:443");
+        assert_eq!(
+            normalize_endpoint_preview("https://core.example:443"),
+            "https://core.example:443"
+        );
     }
 }

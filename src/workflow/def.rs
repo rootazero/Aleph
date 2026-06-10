@@ -444,7 +444,10 @@ mod tests {
         let s: WorkflowStepDef = serde_json::from_str(json).unwrap();
         assert!(!s.review);
         let out = serde_json::to_string(&s).unwrap();
-        assert!(!out.contains("review"), "non-reviewed step omits key: {out}");
+        assert!(
+            !out.contains("review"),
+            "non-reviewed step omits key: {out}"
+        );
     }
 
     #[test]

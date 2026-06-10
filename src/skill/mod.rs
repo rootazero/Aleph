@@ -490,8 +490,7 @@ impl SkillSystem {
                     "Cannot remove bundled skills",
                 ));
             }
-            deletable_on_disk =
-                matches!(m.source(), SkillSource::Global | SkillSource::Workspace);
+            deletable_on_disk = matches!(m.source(), SkillSource::Global | SkillSource::Workspace);
         }
         let removed = registry.remove(id);
         drop(registry);

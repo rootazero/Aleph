@@ -388,10 +388,18 @@ fn SettingsRouter() -> impl IntoView {
 
             // AI
             "/settings/search" => view! { <ConfigGate><SearchView /></ConfigGate> }.into_any(),
-            "/settings/providers" => view! { <ConfigGate><ProvidersView /></ConfigGate> }.into_any(),
-            "/settings/embedding-providers" => view! { <ConfigGate><EmbeddingProvidersView /></ConfigGate> }.into_any(),
-            "/settings/reranking-providers" => view! { <ConfigGate><RerankingProvidersView /></ConfigGate> }.into_any(),
-            "/settings/generation-providers" => view! { <ConfigGate><GenerationProvidersView /></ConfigGate> }.into_any(),
+            "/settings/providers" => {
+                view! { <ConfigGate><ProvidersView /></ConfigGate> }.into_any()
+            }
+            "/settings/embedding-providers" => {
+                view! { <ConfigGate><EmbeddingProvidersView /></ConfigGate> }.into_any()
+            }
+            "/settings/reranking-providers" => {
+                view! { <ConfigGate><RerankingProvidersView /></ConfigGate> }.into_any()
+            }
+            "/settings/generation-providers" => {
+                view! { <ConfigGate><GenerationProvidersView /></ConfigGate> }.into_any()
+            }
             "/settings/model-route" => view! { <ConfigGate><RouteView /></ConfigGate> }.into_any(),
             "/settings/memory" => view! { <ConfigGate><MemoryView /></ConfigGate> }.into_any(),
 
@@ -400,7 +408,9 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/network" => view! { <NetworkView /> }.into_any(),
 
             // Extensions
-            "/settings/routing" => view! { <ConfigGate><RoutingRulesView /></ConfigGate> }.into_any(),
+            "/settings/routing" => {
+                view! { <ConfigGate><RoutingRulesView /></ConfigGate> }.into_any()
+            }
             "/settings/mcp" => view! { <ConfigGate><McpView /></ConfigGate> }.into_any(),
             "/settings/plugins" => view! { <ConfigGate><PluginsView /></ConfigGate> }.into_any(),
             "/settings/skills" => view! { <ConfigGate><SkillsView /></ConfigGate> }.into_any(),
@@ -411,7 +421,9 @@ fn SettingsRouter() -> impl IntoView {
             "/settings/security" => view! { <ConfigGate><SecurityView /></ConfigGate> }.into_any(),
             "/settings/auth" => view! { <ConfigGate><AuthView /></ConfigGate> }.into_any(),
             "/settings/policies" => view! { <ConfigGate><PoliciesView /></ConfigGate> }.into_any(),
-            "/settings/execution" => view! { <ConfigGate><ExecutionView /></ConfigGate> }.into_any(),
+            "/settings/execution" => {
+                view! { <ConfigGate><ExecutionView /></ConfigGate> }.into_any()
+            }
             // Channels
             "/settings/channels" => view! { <ChannelsOverview /> }.into_any(),
             _ if path.starts_with("/settings/channels/") => {

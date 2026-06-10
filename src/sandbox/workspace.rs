@@ -779,11 +779,17 @@ mod tests {
         }
 
         fn env(&self) -> HashMap<String, String> {
-            self.captured_env.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.captured_env
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
 
         fn caps(&self) -> Option<SandboxCapabilities> {
-            self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.captured_caps
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
     }
 
@@ -804,7 +810,8 @@ mod tests {
         ) -> Result<OsSandboxProfile, SandboxError> {
             // Capture the (post-proxy-rewrite, post-DNS) capabilities at the
             // exact moment the OS driver would build its profile.
-            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) = Some(capabilities.clone());
+            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(capabilities.clone());
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,
@@ -850,10 +857,16 @@ mod tests {
             })
         }
         fn env(&self) -> HashMap<String, String> {
-            self.captured_env.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.captured_env
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
         fn caps(&self) -> Option<SandboxCapabilities> {
-            self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.captured_caps
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
     }
 
@@ -870,7 +883,8 @@ mod tests {
             capabilities: &SandboxCapabilities,
             _cwd: &Path,
         ) -> Result<OsSandboxProfile, SandboxError> {
-            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) = Some(capabilities.clone());
+            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(capabilities.clone());
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,

@@ -56,15 +56,17 @@ impl ClusterApi {
     ) -> Result<EnrollResult, String> {
         let params = serde_json::json!({ "node_name": node_name });
         let result = state.rpc_call("cluster.enroll", params).await?;
-        serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse enroll result: {e}"))
+        serde_json::from_value(result).map_err(|e| format!("Failed to parse enroll result: {e}"))
     }
 
     /// 注销一个节点(name 或 id):驱逐在线会话 + 撤 token/设备。
     /// RPC `cluster.deregister`(operator-only)。
     pub async fn deregister_node(state: &DashboardState, node: String) -> Result<(), String> {
         let params = serde_json::json!({ "node": node });
-        state.rpc_call("cluster.deregister", params).await.map(|_| ())
+        state
+            .rpc_call("cluster.deregister", params)
+            .await
+            .map(|_| ())
     }
 }
 
