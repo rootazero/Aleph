@@ -14,10 +14,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::skill::{PromptScope, SkillId, SkillSource};
+use crate::domain::Entity;
 use crate::error::{AlephError, Result};
 use crate::skill::{
-    install_allowed, parse_skill_content, scan_content, SkillConfigUpdate, SkillState,
-    SkillSystem, ThreatLevel, TrustLevel,
+    install_allowed, parse_skill_content, scan_content, SkillConfigUpdate, SkillState, SkillSystem,
+    ThreatLevel, TrustLevel,
 };
 use crate::tools::AlephTool;
 
@@ -219,9 +220,7 @@ impl SkillManageTool {
                 std::path::Component::Normal(seg) => {
                     let seg = seg.to_string_lossy();
                     if seg.starts_with('.') {
-                        return Err(AlephError::tool(
-                            "file_name segments cannot start with '.'",
-                        ));
+                        return Err(AlephError::tool("file_name segments cannot start with '.'"));
                     }
                     components.push(seg.to_string());
                 }
@@ -284,7 +283,12 @@ impl SkillManageTool {
         Ok(path)
     }
 
-    async fn persist_skill_md(&self, path: &std::path::Path, full: &str, id: &SkillId) -> Result<()> {
+    async fn persist_skill_md(
+        &self,
+        path: &std::path::Path,
+        full: &str,
+        id: &SkillId,
+    ) -> Result<()> {
         std::fs::write(path, full)
             .map_err(|e| AlephError::tool(format!("Failed to write SKILL.md: {e}")))?;
         self.system
