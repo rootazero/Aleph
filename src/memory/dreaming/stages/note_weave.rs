@@ -165,23 +165,37 @@ async fn weave_one(ctx: &mut DreamContext, path: &str) -> Result<u32, AlephError
     let mut written = 0u32;
     for idx in targets.into_iter().take(MAX_LINKS_PER_NOTE) {
         let target = candidates[idx].path.clone();
-        // Bidirectional, mirroring CompoundApplyTx::add_link.
-        ctx.indexer
+        // Bidirectional, mirroring CompoundApplyTx::add_link — and like
+        // add_link, each direction fails independently. Propagating a
+        // reverse-write failure with `?` would skip the remaining targets
+        // while the forward link is already on disk, leaving the note
+        // outgoing-linked (so never re-detected as an orphan) but with the
+        // backlink permanently missing.
+        if let Err(e) = ctx
+            .indexer
             .append_to_note(
                 &ctx.agent_id,
                 path,
                 &Vec::<String>::new(),
                 std::slice::from_ref(&target),
             )
-            .await?;
-        ctx.indexer
+            .await
+        {
+            warn!(target = %target, error = %e, "NoteWeave: forward link write failed");
+            continue;
+        }
+        if let Err(e) = ctx
+            .indexer
             .append_to_note(
                 &ctx.agent_id,
                 &target,
                 &Vec::<String>::new(),
                 &[path.to_string()],
             )
-            .await?;
+            .await
+        {
+            warn!(target = %target, error = %e, "NoteWeave: backlink write failed (forward link kept)");
+        }
         // Evict cached bodies so downstream stages re-read updated markdown.
         ctx.note_contents.remove(path);
         ctx.note_contents.remove(target.as_str());
