@@ -1,6 +1,6 @@
 //! Maps Gateway streaming events (run.*) to ChatState mutations.
 
-use super::state::{ChatState, ContextUsage, ModelInfo};
+use super::state::{ChatState, ContextUsage, ModelInfo, ProviderRetryNotice};
 use crate::context::{DashboardState, GatewayEvent};
 use crate::state::layout::WorkspaceState;
 use leptos::prelude::*;
@@ -271,6 +271,26 @@ pub fn subscribe_run_events(
                 if let Some(info) = model {
                     chat.set_model_info(run_id, info);
                 }
+            }
+            "run_retrying" => {
+                // Provider chain failed transiently; surface the retry under
+                // the thinking indicator instead of leaving minutes of
+                // silence. Cleared on the next chunk / run settle.
+                let provider = data
+                    .get("provider")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let attempt = data.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let max_attempts = data
+                    .get("max_attempts")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as u32;
+                chat.set_provider_retry(ProviderRetryNotice {
+                    provider,
+                    attempt,
+                    max_attempts,
+                });
             }
             "run_complete" => {
                 chat.complete_run(run_id);

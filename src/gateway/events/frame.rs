@@ -106,6 +106,14 @@ pub enum GatewayEventFrame {
         run_id: String,
         model_info: crate::providers::health::ModelInfo,
     },
+    RunRetrying {
+        run_id: String,
+        seq: u64,
+        provider: String,
+        attempt: u32,
+        max_attempts: u32,
+        reason: String,
+    },
     SessionUpdated {
         session_key: String,
         /// Channel that triggered the update (`metadata["channel_id"]` of the
@@ -369,6 +377,21 @@ impl From<StreamEvent> for GatewayEventFrame {
             StreamEvent::ModelResolved { run_id, model_info } => {
                 GatewayEventFrame::ModelResolved { run_id, model_info }
             }
+            StreamEvent::RunRetrying {
+                run_id,
+                seq,
+                provider,
+                attempt,
+                max_attempts,
+                reason,
+            } => GatewayEventFrame::RunRetrying {
+                run_id,
+                seq,
+                provider,
+                attempt,
+                max_attempts,
+                reason,
+            },
         }
     }
 }
@@ -389,6 +412,7 @@ impl GatewayEventFrame {
             GatewayEventFrame::ReasoningBlock { .. } => "agent.reasoning.block",
             GatewayEventFrame::UncertaintySignal { .. } => "agent.uncertainty",
             GatewayEventFrame::ModelResolved { .. } => "agent.model.resolved",
+            GatewayEventFrame::RunRetrying { .. } => "agent.run.retrying",
             GatewayEventFrame::SessionUpdated { .. } => "session.updated",
             GatewayEventFrame::ChannelMessage { .. } => "channel.message",
             GatewayEventFrame::ChannelTyping { .. } => "channel.typing",
@@ -433,6 +457,7 @@ impl GatewayEventFrame {
             GatewayEventFrame::ReasoningBlock { .. } => Some("stream.reasoning_block"),
             GatewayEventFrame::UncertaintySignal { .. } => Some("stream.uncertainty_signal"),
             GatewayEventFrame::ModelResolved { .. } => Some("stream.model_resolved"),
+            GatewayEventFrame::RunRetrying { .. } => Some("stream.run_retrying"),
             GatewayEventFrame::SessionUpdated { .. } => Some("stream.session_updated"),
             _ => None,
         }
@@ -475,6 +500,30 @@ mod surface_notify_tests {
         assert_eq!(v["audience"][0], "desktop");
         assert_eq!(v["title"], "Aleph finished");
         assert_eq!(v["source_topic"], "agent.run.complete");
+    }
+
+    #[test]
+    fn run_retrying_topic_and_wire_shape() {
+        let f = GatewayEventFrame::from(StreamEvent::RunRetrying {
+            run_id: "r1".to_string(),
+            seq: 7,
+            provider: "kimi-for-coding".to_string(),
+            attempt: 2,
+            max_attempts: 3,
+            reason: "Request timed out".to_string(),
+        });
+        // Streaming event → panel receives it as stream.run_retrying.
+        assert_eq!(f.topic_name(), "agent.run.retrying");
+        assert_eq!(f.stream_method(), Some("stream.run_retrying"));
+
+        // serde(tag = "type", rename_all = "snake_case")
+        let v = serde_json::to_value(&f).unwrap();
+        assert_eq!(v["type"], "run_retrying");
+        assert_eq!(v["run_id"], "r1");
+        assert_eq!(v["provider"], "kimi-for-coding");
+        assert_eq!(v["attempt"], 2);
+        assert_eq!(v["max_attempts"], 3);
+        assert_eq!(v["reason"], "Request timed out");
     }
 
     #[test]

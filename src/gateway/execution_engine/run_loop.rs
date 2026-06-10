@@ -1103,6 +1103,19 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         message = %message,
                         "Provider transient failure via Orchestrator::dispatch — retrying"
                     );
+                    // Surface the retry to the user — without this, a full
+                    // provider outage looks like minutes of silent "thinking"
+                    // before the run finally errors out.
+                    let reason: String = message.chars().take(200).collect();
+                    emitter
+                        .emit_run_retrying(
+                            run_id,
+                            &prov_name,
+                            (attempt + 1) as u32,
+                            MAX_FALLBACK_ATTEMPTS as u32,
+                            &reason,
+                        )
+                        .await;
                     continue;
                 }
                 Err(super::helpers::DispatchFailure::Transient {

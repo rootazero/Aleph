@@ -184,6 +184,24 @@ pub enum StreamEvent {
         run_id: String,
         model_info: ModelInfo,
     },
+
+    /// Provider chain failed transiently; the run is about to retry.
+    ///
+    /// Emitted at each run-loop fallback retry so interfaces can show
+    /// "provider unreachable, retrying" instead of a silent thinking
+    /// indicator while the retry ladder burns minutes.
+    RunRetrying {
+        run_id: String,
+        seq: u64,
+        /// Provider that just failed.
+        provider: String,
+        /// 1-based attempt about to run (2..=max_attempts).
+        attempt: u32,
+        /// Total dispatch attempts before the run gives up.
+        max_attempts: u32,
+        /// Short human-readable failure reason (truncated at emit site).
+        reason: String,
+    },
 }
 
 /// Suggested action for handling AI uncertainty

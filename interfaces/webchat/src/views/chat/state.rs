@@ -118,6 +118,21 @@ impl ChatSendError {
     }
 }
 
+/// Transient provider-retry status for the active run.
+///
+/// Set by `stream.run_retrying` (provider chain failed transiently, run-loop
+/// is retrying), cleared as soon as the provider responds (first chunk) or
+/// the run settles. Ephemeral — never part of [`SessionSnapshot`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderRetryNotice {
+    /// Provider that just failed (e.g. "kimi-for-coding").
+    pub provider: String,
+    /// 1-based dispatch attempt about to run.
+    pub attempt: u32,
+    /// Total attempts before the run gives up.
+    pub max_attempts: u32,
+}
+
 /// Context-window occupancy snapshot for the composer gauge.
 ///
 /// Populated from each `run_complete` summary (`token_breakdown.input` is the
@@ -293,6 +308,9 @@ pub struct ChatState {
     /// each on `run_complete` and plays its TTS audio. Ephemeral, like
     /// `is_dragging_files` / `retry_pulse` (excluded from session snapshots).
     pub voice_run_ids: RwSignal<Vec<String>>,
+    /// Provider-retry status shown under the thinking indicator while the
+    /// run-loop retries a transiently failing provider chain. Ephemeral.
+    pub provider_retry: RwSignal<Option<ProviderRetryNotice>>,
     /// Monotonic counter for generating unique user message IDs.
     next_msg_id: RwSignal<u64>,
 }
@@ -324,7 +342,21 @@ impl ChatState {
             active_project_name: RwSignal::new(None),
             selected_model: RwSignal::new(None),
             voice_run_ids: RwSignal::new(Vec::new()),
+            provider_retry: RwSignal::new(None),
             next_msg_id: RwSignal::new(0),
+        }
+    }
+
+    /// Record a provider-retry status (`stream.run_retrying`).
+    pub fn set_provider_retry(&self, notice: ProviderRetryNotice) {
+        self.provider_retry.set(Some(notice));
+    }
+
+    /// Clear the retry notice once the provider responds or the run settles.
+    /// Cheap no-op when nothing is set (called from the per-chunk hot path).
+    pub fn clear_provider_retry(&self) {
+        if self.provider_retry.with_untracked(|n| n.is_some()) {
+            self.provider_retry.set(None);
         }
     }
 
@@ -547,6 +579,8 @@ impl ChatState {
 
     /// Append a response text chunk to the current assistant message.
     pub fn append_chunk(&self, run_id: &str, content: &str) {
+        // Provider produced output — any pending retry notice is stale.
+        self.clear_provider_retry();
         let target_id = format!("assistant-{}", run_id);
         self.messages.update(|msgs| {
             if let Some(msg) = msgs.iter_mut().rev().find(|m| m.id == target_id) {
@@ -598,6 +632,7 @@ impl ChatState {
         });
         self.active_run_id.set(None);
         self.phase.set(ChatPhase::Idle);
+        self.clear_provider_retry();
     }
 
     /// Promote a completed run's authoritative final answer into its trailing
@@ -638,6 +673,7 @@ impl ChatState {
         });
         self.active_run_id.set(None);
         self.phase.set(ChatPhase::Error);
+        self.clear_provider_retry();
         let structured = ChatSendError::classify(error);
         self.error_message.set(Some(structured.message.clone()));
         self.send_error.set(Some(structured));
@@ -916,6 +952,44 @@ mod step_tests {
                 "tool call preserved for inline render"
             );
         });
+    }
+
+    #[test]
+    fn provider_retry_notice_cleared_on_first_chunk() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.set_provider_retry(ProviderRetryNotice {
+            provider: "kimi-for-coding".into(),
+            attempt: 2,
+            max_attempts: 3,
+        });
+        assert!(chat.provider_retry.with_untracked(|n| n.is_some()));
+
+        chat.append_chunk("r1", "hello");
+        assert!(
+            chat.provider_retry.with_untracked(|n| n.is_none()),
+            "provider responded — retry notice must clear"
+        );
+    }
+
+    #[test]
+    fn provider_retry_notice_cleared_when_run_settles() {
+        let owner = Owner::new();
+        owner.set();
+        let chat = ChatState::new();
+        chat.start_assistant_message("r1");
+        chat.set_provider_retry(ProviderRetryNotice {
+            provider: "302ai".into(),
+            attempt: 3,
+            max_attempts: 3,
+        });
+        chat.fail_run("r1", "provider 302ai transient: Request timed out");
+        assert!(
+            chat.provider_retry.with_untracked(|n| n.is_none()),
+            "run settled — retry notice must clear"
+        );
     }
 
     #[test]

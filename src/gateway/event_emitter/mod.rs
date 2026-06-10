@@ -157,6 +157,28 @@ pub trait EventEmitter: Send + Sync {
             .await;
     }
 
+    /// Emit a provider-retry status update (transient failure, retrying).
+    async fn emit_run_retrying(
+        &self,
+        run_id: &str,
+        provider: &str,
+        attempt: u32,
+        max_attempts: u32,
+        reason: &str,
+    ) {
+        let seq = self.next_seq();
+        let _ = self
+            .emit(StreamEvent::RunRetrying {
+                run_id: run_id.to_string(),
+                seq,
+                provider: provider.to_string(),
+                attempt,
+                max_attempts,
+                reason: reason.to_string(),
+            })
+            .await;
+    }
+
     /// Get the next sequence number (must be monotonically increasing)
     fn next_seq(&self) -> u64;
 }

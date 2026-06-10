@@ -192,6 +192,22 @@ pub(super) fn MessageList() -> impl IntoView {
                                     <span class="reading-dots"><span></span><span></span><span></span></span>
                                     {move || t_string!(i18n, chat.thinking).to_string()}
                                 </div>
+                                // Provider-retry status — replaces minutes of
+                                // silent "thinking" during a provider outage.
+                                <Show when=move || chat.provider_retry.get().is_some()>
+                                    <div class="flex items-center gap-2 text-warning text-xs px-3 py-1" role="status">
+                                        <span>"\u{26A0}"</span>
+                                        {move || {
+                                            chat.provider_retry.get().map(|n| format!(
+                                                "{} ({} \u{00B7} {}/{})",
+                                                t_string!(i18n, chat.provider_retrying),
+                                                n.provider,
+                                                n.attempt,
+                                                n.max_attempts,
+                                            ))
+                                        }}
+                                    </div>
+                                </Show>
                             </Show>
                         </div>
                     }

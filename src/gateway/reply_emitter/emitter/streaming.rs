@@ -588,11 +588,14 @@ impl EventEmitter for ReplyEmitter {
                 self.react_on_inbound("👀").await;
             }
 
-            // Other events are not routed to channels
+            // Other events are not routed to channels. RunRetrying is a
+            // transient Panel status line; channels already signal liveness
+            // via typing indicators and would render it as message spam.
             StreamEvent::RunAccepted { .. }
             | StreamEvent::ToolUpdate { .. }
             | StreamEvent::AgentTrace { .. }
-            | StreamEvent::UncertaintySignal { .. } => {
+            | StreamEvent::UncertaintySignal { .. }
+            | StreamEvent::RunRetrying { .. } => {
                 debug!("Ignoring event for channel routing: {:?}", event);
             }
         }
