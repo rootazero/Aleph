@@ -231,9 +231,9 @@ fn PairingModalInner() -> impl IntoView {
 
     view! {
         // Backdrop
-        <div class="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+        <div class="aleph-scrim fixed inset-0 bg-black/60 flex items-center justify-center z-50">
             // Modal card
-            <div class="bg-surface border border-border rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
+            <div class="glass bg-surface-overlay/85 border border-border rounded-xl p-8 max-w-md w-full mx-4 shadow-2xl">
                 // Header
                 <div class="flex items-center gap-3 mb-6">
                     <div class="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
