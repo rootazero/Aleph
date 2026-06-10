@@ -46,6 +46,11 @@ impl SkillRegistry {
         }
     }
 
+    /// Replace an existing manifest regardless of source priority.
+    pub fn replace(&mut self, manifest: SkillManifest) {
+        self.manifests.insert(manifest.id().clone(), manifest);
+    }
+
     /// Look up a manifest by id.
     pub fn get(&self, id: &SkillId) -> Option<&SkillManifest> {
         self.manifests.get(id)

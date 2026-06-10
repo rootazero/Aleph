@@ -181,12 +181,10 @@ impl SkillSystem {
         let event = SkillSystemEvent::loaded(manifest.id().as_str(), manifest.name());
 
         let mut registry = self.inner.registry.write().await;
-        let accepted = registry.register(manifest);
+        registry.replace(manifest);
         drop(registry);
 
-        if accepted {
-            self.emit_event(event);
-        }
+        self.emit_event(event);
         self.rebuild_snapshot().await;
 
         Ok(())
