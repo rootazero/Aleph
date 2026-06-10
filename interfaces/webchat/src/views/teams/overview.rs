@@ -418,7 +418,7 @@ pub fn OverviewView() -> impl IntoView {
                         on:click=move |_| close_from_template()
                     >
                         <div
-                            class="bg-surface-raised border border-border rounded-2xl shadow-xl w-full max-w-lg p-6 space-y-4"
+                            class="glass bg-surface-overlay/85 border border-border rounded-2xl shadow-xl w-full max-w-lg p-6 space-y-4"
                             on:click=|ev| ev.stop_propagation()
                         >
                             <h3 class="text-lg font-semibold text-text-primary">
