@@ -107,7 +107,7 @@ impl PimCapability for WindowsPim {
         folder: Option<&str>,
         limit: u32,
     ) -> Result<Vec<MailMessage>> {
-        let folder_path = folder.unwrap_or("Inbox");
+        let folder_path = folder.unwrap_or("Inbox").replace('"', "\"\"");
         let escaped_query = query.replace('"', "\"\"");
         let script = format!(
             r#"
