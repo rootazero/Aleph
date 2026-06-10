@@ -318,7 +318,7 @@ fn RadialCanvasView() -> impl IntoView {
     // -----------------------------------------------------------------------
     let nav_init = nav.clone();
     let gs_init = graph_state.clone();
-    let minimap_init = minimap;
+    let minimap_init = minimap.clone();
     let prefetch_init = prefetch.clone();
     Effect::new(move || {
         if !state.is_connected.get() {
