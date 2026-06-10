@@ -461,6 +461,10 @@ impl HookExecutor {
         // Set working directory
         cmd.current_dir(working_dir);
 
+        // Kill the child when the timeout drops the wait future, so a hung
+        // hook command does not keep running as an orphan past its deadline.
+        cmd.kill_on_drop(true);
+
         // Set environment variables
         cmd.env("PLUGIN_ROOT", plugin_root);
         cmd.env("CLAUDE_PLUGIN_ROOT", plugin_root);

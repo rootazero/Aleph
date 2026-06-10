@@ -66,6 +66,16 @@ impl MarketplaceManager {
             ));
         }
 
+        // Reject names that could traverse outside the cache directory —
+        // `name` may come from user input and is joined into a deletion path
+        // below, so a crafted value like `../../etc` must never reach
+        // `remove_dir_all`.
+        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+            return Err(format!(
+                "Invalid marketplace name '{name}': must not be empty or contain path separators or '..'."
+            ));
+        }
+
         self.marketplaces.remove(name);
 
         // Delete local cache directory if it exists.
