@@ -36,8 +36,14 @@ impl PromptLayer for VoiceModeLayer {
         matches!(mode, PromptMode::Full | PromptMode::Compact)
     }
     fn inject(&self, output: &mut String, input: &LayerInput) {
+        // Read from the ResolvedContext — the per-request context actually
+        // threaded through the production cached prompt path (the same channel
+        // `StandingGoalLayer` / `ExecutionPlanLayer` use). The legacy
+        // `input.inbound` is never populated in production (no
+        // `PromptBuilder.inbound` field, no production caller), so reading it
+        // left this layer permanently dead.
         let active = input
-            .inbound
+            .context
             .map(|ctx| ctx.voice_mode_active)
             .unwrap_or(false);
         if active {
@@ -50,9 +56,29 @@ impl PromptLayer for VoiceModeLayer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::thinker::inbound_context::InboundContext;
+    use crate::thinker::context::{ContextAggregator, ResolvedContext};
+    use crate::thinker::interaction::{InteractionManifest, InteractionParadigm};
     use crate::thinker::prompt_builder::PromptConfig;
     use crate::thinker::prompt_layer::LayerInput;
+    use crate::thinker::security_context::SecurityContext;
+
+    fn ctx_with_voice(active: bool) -> ResolvedContext {
+        let mut ctx = ContextAggregator::resolve(
+            &InteractionManifest::new(InteractionParadigm::Background),
+            &SecurityContext::permissive(),
+            &[],
+        );
+        ctx.voice_mode_active = active;
+        ctx
+    }
+
+    fn render(ctx: &ResolvedContext) -> String {
+        let config = PromptConfig::default();
+        let input = LayerInput::basic(&config, &[]).with_resolved_context_opt(Some(ctx));
+        let mut out = String::new();
+        VoiceModeLayer.inject(&mut out, &input);
+        out
+    }
 
     #[test]
     fn metadata() {
@@ -64,35 +90,19 @@ mod tests {
 
     #[test]
     fn injects_when_voice_active() {
-        let layer = VoiceModeLayer;
-        let config = PromptConfig::default();
-        let inbound = InboundContext {
-            voice_mode_active: true,
-            ..Default::default()
-        };
-        let input = LayerInput::basic(&config, &[]).with_inbound(&inbound);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
+        let out = render(&ctx_with_voice(true));
         assert!(out.contains("## Voice Mode"));
         assert!(out.contains("voice mode enabled"));
     }
 
     #[test]
     fn skips_when_voice_inactive() {
-        let layer = VoiceModeLayer;
-        let config = PromptConfig::default();
-        let inbound = InboundContext {
-            voice_mode_active: false,
-            ..Default::default()
-        };
-        let input = LayerInput::basic(&config, &[]).with_inbound(&inbound);
-        let mut out = String::new();
-        layer.inject(&mut out, &input);
+        let out = render(&ctx_with_voice(false));
         assert!(out.is_empty());
     }
 
     #[test]
-    fn skips_when_no_inbound() {
+    fn skips_when_no_context() {
         let layer = VoiceModeLayer;
         let config = PromptConfig::default();
         let input = LayerInput::basic(&config, &[]);

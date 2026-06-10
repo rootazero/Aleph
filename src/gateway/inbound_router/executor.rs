@@ -307,9 +307,16 @@ impl InboundMessageRouter {
         if ctx.is_mentioned {
             metadata.insert("is_mentioned".to_string(), "true".to_string());
         }
-        if voice_enabled {
-            metadata.insert("voice_mode_active".to_string(), "true".to_string());
-        }
+        // Record voice mode for this turn in the session-keyed registry the
+        // harness bridge reads at prompt-assembly time. Request metadata never
+        // reaches `build_system_prompt`, so the old `metadata["voice_mode_active"]`
+        // stamp had no reader and `VoiceModeLayer` never fired — this is the
+        // wire that makes voice mode actually change agent behavior. Set on both
+        // edges so disabling voice clears stale state.
+        crate::gateway::voice::session_mode::set(
+            &ctx.session_key.to_key_string(),
+            voice_enabled,
+        );
 
         // Channel-routed messages run in the channel's configured workspace
         // (Layer-1 lock): a Chat-tier channel pins its `default_workspace`; a

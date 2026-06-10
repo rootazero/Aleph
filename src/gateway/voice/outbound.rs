@@ -71,19 +71,36 @@ pub async fn generate_tts(
         }
     };
 
+    // Defensively strip speech-hostile markdown/code/URLs and clamp to the
+    // provider's character ceiling. The VoiceModeLayer *asks* the model to
+    // avoid these, but R7/P7 forbid trusting compliance — a stray `**` or a
+    // bare URL would otherwise be read aloud verbatim, and an over-long reply
+    // would hard-error at the provider.
+    let spoken = super::sanitize::sanitize_for_tts(text);
+    if spoken.trim().is_empty() {
+        debug!("TTS: reply has no speakable content after sanitization, skipping");
+        return None;
+    }
+
     // Build request with optional voice param
     let mut params = GenerationParams::default();
     if let Some(ref voice) = voice_state.voice {
         params.voice = Some(voice.clone());
     }
 
-    let request = GenerationRequest::new(GenerationType::Speech, text).with_params(params);
+    let request = GenerationRequest::new(GenerationType::Speech, &spoken).with_params(params);
 
-    // Execute TTS
-    let output = match provider.generate(request).await {
-        Ok(o) => o,
-        Err(e) => {
+    // Execute TTS under a length-aware deadline so a wedged provider can't hang
+    // the reply path indefinitely (the provider's own timeout may be minutes).
+    let timeout = std::time::Duration::from_millis(tts_timeout_ms(&spoken));
+    let output = match tokio::time::timeout(timeout, provider.generate(request)).await {
+        Ok(Ok(o)) => o,
+        Ok(Err(e)) => {
             warn!(provider = %provider_id, error = %e, "TTS generation failed");
+            return None;
+        }
+        Err(_) => {
+            warn!(provider = %provider_id, timeout_ms = timeout.as_millis(), "TTS generation timed out");
             return None;
         }
     };

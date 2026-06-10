@@ -136,6 +136,20 @@ pub async fn process_inbound_voice(
     // Transcribe the first audio attachment.
     let first_audio = &audio_attachments[0];
     match transcribe_attachment(first_audio, stt_config).await {
+        Ok(transcription) if transcription.trim().is_empty() => {
+            // Whisper returned nothing usable — empty audio or a hallucination
+            // that the filter nulled. Don't claim a transcription (no
+            // voice-reply hint, no spurious agent turn on phantom text).
+            debug!("Voice transcription empty after hallucination filter");
+            msg.attachments = other_attachments;
+            if msg.text.is_empty() {
+                msg.text = "[No speech detected in audio]".to_string();
+            }
+            VoiceProcessResult {
+                message: msg,
+                transcribed: false,
+            }
+        }
         Ok(transcription) => {
             debug!(chars = transcription.len(), "Voice transcription succeeded");
             let new_text = if msg.text.is_empty() {
@@ -238,7 +252,11 @@ pub async fn transcribe_bytes(
         .await
         .map_err(|e| format!("Failed to parse Whisper response: {}", e))?;
 
-    Ok(result.text)
+    // Drop Whisper boilerplate hallucinations (silence/noise decode to "Thanks
+    // for watching!" etc.) before the transcript becomes agent context.
+    // Conservative: only nulls a transcript that is *entirely* boilerplate or a
+    // degenerate repetition loop, so genuine speech is never eaten.
+    Ok(super::hallucination::filter_transcript(&result.text))
 }
 
 /// Get audio bytes from attachment (inline data, local file, or URL download).
