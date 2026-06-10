@@ -26,7 +26,8 @@ pub struct NativeScreen {
 
 impl NativeScreen {
     /// Create a new `NativeScreen` instance.
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self { _private: () }
     }
 }

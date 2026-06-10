@@ -37,22 +37,17 @@ pub async fn show_token(server_url: &str, json: bool) -> CliResult<()> {
     let result: Value = client.call("auth.show_token", None::<()>).await?;
     if json {
         output::print_json(&result);
-    } else {
-        match result.get("token").and_then(|v| v.as_str()) {
-            Some(token) => {
-                println!("token  : {token}");
-                if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
-                    println!("notes  : {msg}");
-                }
-            }
-            None => {
-                let msg = result
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("(no token loaded)");
-                println!("{msg}");
-            }
+    } else if let Some(token) = result.get("token").and_then(|v| v.as_str()) {
+        println!("token  : {token}");
+        if let Some(msg) = result.get("message").and_then(|v| v.as_str()) {
+            println!("notes  : {msg}");
         }
+    } else {
+        let msg = result
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("(no token loaded)");
+        println!("{msg}");
     }
     client.close().await?;
     Ok(())
@@ -149,7 +144,7 @@ pub async fn login(server_url: &str, provider: &str, json: bool) -> CliResult<()
     } else {
         let connected = result
             .get("connected")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let canonical = result
             .get("provider")
@@ -157,11 +152,11 @@ pub async fn login(server_url: &str, provider: &str, json: bool) -> CliResult<()
             .unwrap_or(provider);
         if connected {
             println!("✓ Connected to {canonical}");
-            if let Some(secs) = result.get("expires_in_seconds").and_then(|v| v.as_u64()) {
+            if let Some(secs) = result.get("expires_in_seconds").and_then(serde_json::Value::as_u64) {
                 println!("  token expires in {secs}s");
             }
         } else {
-            println!("Login flow returned: {}", result);
+            println!("Login flow returned: {result}");
         }
     }
     client.close().await?;
@@ -190,7 +185,7 @@ pub async fn oauth_status(server_url: &str, provider: &str, json: bool) -> CliRe
     } else {
         let connected = result
             .get("connected")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let canonical = result
             .get("provider")
@@ -198,7 +193,7 @@ pub async fn oauth_status(server_url: &str, provider: &str, json: bool) -> CliRe
             .unwrap_or(provider);
         if connected {
             print!("✓ {canonical}: connected");
-            if let Some(secs) = result.get("expires_in_seconds").and_then(|v| v.as_u64()) {
+            if let Some(secs) = result.get("expires_in_seconds").and_then(serde_json::Value::as_u64) {
                 print!(" (expires in {secs}s)");
             }
             println!();

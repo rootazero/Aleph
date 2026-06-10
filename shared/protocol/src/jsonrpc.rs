@@ -96,7 +96,8 @@ impl JsonRpcRequest {
     }
 
     /// Check if this is a notification (no ID)
-    pub fn is_notification(&self) -> bool {
+    #[must_use]
+    pub const fn is_notification(&self) -> bool {
         self.id.is_none()
     }
 }
@@ -118,6 +119,7 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     /// Create a success response
+    #[must_use]
     pub fn success(id: Value, result: Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -128,6 +130,7 @@ impl JsonRpcResponse {
     }
 
     /// Create an error response
+    #[must_use]
     pub fn error(id: Value, error: JsonRpcError) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -138,7 +141,8 @@ impl JsonRpcResponse {
     }
 
     /// Check if this response is an error
-    pub fn is_error(&self) -> bool {
+    #[must_use]
+    pub const fn is_error(&self) -> bool {
         self.error.is_some()
     }
 }
@@ -188,8 +192,9 @@ impl JsonRpcError {
     }
 
     /// Create a method not found error
+    #[must_use]
     pub fn method_not_found(method: &str) -> Self {
-        Self::new(METHOD_NOT_FOUND, format!("Method not found: {}", method))
+        Self::new(METHOD_NOT_FOUND, format!("Method not found: {method}"))
     }
 
     /// Create an invalid params error
@@ -283,7 +288,8 @@ impl ToolCallResult {
     }
 
     /// Add duration to result
-    pub fn with_duration(mut self, duration_ms: u64) -> Self {
+    #[must_use]
+    pub const fn with_duration(mut self, duration_ms: u64) -> Self {
         self.duration_ms = Some(duration_ms);
         self
     }

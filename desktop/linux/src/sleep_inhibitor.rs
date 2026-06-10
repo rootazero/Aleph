@@ -6,7 +6,8 @@ use aleph_desktop::{
 pub struct LinuxPower;
 
 impl LinuxPower {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 }

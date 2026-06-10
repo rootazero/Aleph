@@ -279,7 +279,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         harness,
     )
     .with_subagent_routing(provider_chain)
-    .with_agent_registry(agent_registry.clone());
+    .with_agent_registry(agent_registry);
 
     tracing::info!("Orchestrator assembled (Phase 5)");
     Ok(Arc::new(orchestrator))

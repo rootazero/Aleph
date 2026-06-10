@@ -109,7 +109,7 @@ pub(super) fn ProviderDetailPanel(
     };
 
     // Save handler
-    let build_config_for_save = build_config.clone();
+    let build_config_for_save = build_config;
     let handle_save = move |_| {
         set_saving.set(true);
         set_action_error.set(None);
@@ -187,10 +187,10 @@ pub(super) fn ProviderDetailPanel(
                 <div class="flex items-center justify-between">
                     <div>
                         <h2 class="text-lg font-semibold text-text-primary">
-                            {provider_name.clone()}
+                            {provider_name}
                         </h2>
                         <p class="text-sm text-text-tertiary mt-0.5">
-                            {format!("ID: {}", provider_id.clone())}
+                            {format!("ID: {}", provider_id)}
                         </p>
                     </div>
                     <div class="flex gap-1">
@@ -215,7 +215,7 @@ pub(super) fn ProviderDetailPanel(
                         value=api_key
                         has_api_key=Signal::derive(move || provider_has_api_key)
                     />
-                    {provider_api_key_env.clone().map(|env_var| view! {
+                    {provider_api_key_env.map(|env_var| view! {
                         <p class="mt-1 text-xs text-text-tertiary">
                             {format!("Env var: {}", env_var)}
                         </p>

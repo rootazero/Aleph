@@ -91,7 +91,7 @@ pub fn render_command_palette(frame: &mut Frame, palette: &PaletteState, area: R
 
             // Pad label to align descriptions
             let label_str = format!("{}{}", ns_marker, entry.label);
-            let padded_label = format!("{:<16}", label_str);
+            let padded_label = format!("{label_str:<16}");
             let line_str = format!("{}{}{}", indicator, padded_label, entry.hint);
 
             let style = if is_selected {

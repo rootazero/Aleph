@@ -366,7 +366,7 @@ where
                         <line x1="8" y1="21" x2="16" y2="21"/>
                         <line x1="12" y1="17" x2="12" y2="21"/>
                     </svg>
-                    <span class="font-mono text-sm text-text-primary">{short_id.clone()}</span>
+                    <span class="font-mono text-sm text-text-primary">{short_id}</span>
                     <span class="text-xs px-1.5 py-0.5 rounded bg-success-subtle text-success">{t!(i18n, settings.auth.session_active)}</span>
                 </div>
                 <div class="flex gap-4 mt-1.5 text-xs text-text-tertiary">

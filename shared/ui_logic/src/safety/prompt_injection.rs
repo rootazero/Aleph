@@ -167,6 +167,7 @@ fn looks_base64_blob(s: &str) -> bool {
 }
 
 /// Run the heuristic. Pure function; safe to call on every keystroke.
+#[must_use]
 pub fn check_prompt_injection(input: &str) -> PromptInjectionCheck {
     if input.is_empty() {
         return PromptInjectionCheck {
@@ -249,7 +250,8 @@ pub fn check_prompt_injection(input: &str) -> PromptInjectionCheck {
 }
 
 /// Human-readable banner text. Empty when the verdict is `Allow`.
-pub fn prompt_guard_message(check: &PromptInjectionCheck) -> &'static str {
+#[must_use]
+pub const fn prompt_guard_message(check: &PromptInjectionCheck) -> &'static str {
     match check.verdict {
         PromptInjectionVerdict::Block => {
             "This message looks like a prompt-injection attempt and will likely be blocked by server-side security checks."

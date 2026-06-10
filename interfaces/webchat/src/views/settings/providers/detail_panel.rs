@@ -810,7 +810,7 @@ pub(super) fn ProviderDetailPanel(
                                                             </svg>
                                                             <span class="font-medium">{t!(i18n, settings.providers.connection_failed)}</span>
                                                         </div>
-                                                        {result.error.clone().map(|e| view! {
+                                                        {result.error.map(|e| view! {
                                                             <p class="mt-1 text-xs text-danger">{e}</p>
                                                         })}
                                                     </div>

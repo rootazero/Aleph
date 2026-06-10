@@ -5,10 +5,10 @@
 //!
 //! - **Camera** (`camera_snap` / `camera_clip`): `ffmpeg` reading a V4L2
 //!   device (`/dev/video0` by default).
-//! - **Audio recording** (`record_audio`): `ffmpeg` capturing from PulseAudio /
-//!   PipeWire (`-f pulse`), falling back to ALSA (`-f alsa`).
+//! - **Audio recording** (`record_audio`): `ffmpeg` capturing from `PulseAudio` /
+//!   `PipeWire` (`-f pulse`), falling back to ALSA (`-f alsa`).
 //! - **Audio device listing** (`list_audio_devices`): `pactl list short
-//!   sources` (works on both PulseAudio and PipeWire's `pipewire-pulse`).
+//!   sources` (works on both `PulseAudio` and `PipeWire`'s `pipewire-pulse`).
 //!
 //! No heavy native bindings are introduced — this keeps the crate light (R3)
 //! and works across X11 and Wayland sessions alike. `mic_level` is reported as
@@ -33,7 +33,8 @@ const DEFAULT_CAMERA_DEVICE: &str = "/dev/video0";
 pub struct LinuxMedia;
 
 impl LinuxMedia {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -56,8 +57,7 @@ fn camera_device() -> String {
 fn temp_path(ext: &str) -> std::path::PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_nanos());
     std::env::temp_dir().join(format!("aleph-media-{}-{nanos}.{ext}", std::process::id()))
 }
 
@@ -66,7 +66,7 @@ fn temp_path(ext: &str) -> std::path::PathBuf {
 fn quality_to_qv(quality: f32) -> u32 {
     let q = quality.clamp(0.05, 1.0);
     // q=1.0 -> 2, q=0.05 -> ~30
-    (2.0 + (1.0 - q) * 29.0).round() as u32
+    (1.0 - q).mul_add(29.0, 2.0).round() as u32
 }
 
 /// Run an ffmpeg invocation, mapping a missing binary / non-zero exit to a
@@ -129,11 +129,10 @@ impl MediaCapability for LinuxMedia {
             })?;
 
         let (width, height) = image::load_from_memory(&bytes)
-            .map(|img| {
+            .map_or((0, 0), |img| {
                 use image::GenericImageView as _;
                 img.dimensions()
-            })
-            .unwrap_or((0, 0));
+            });
 
         let _ = std::fs::remove_file(&out_str);
 

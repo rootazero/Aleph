@@ -40,6 +40,7 @@ pub struct WindowsPlatform {
 
 impl WindowsPlatform {
     /// Create a new `WindowsPlatform` instance.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             screen: NativeScreen::new(),
@@ -62,7 +63,7 @@ impl Default for WindowsPlatform {
 }
 
 impl DesktopPlatform for WindowsPlatform {
-    fn platform_name(&self) -> &str {
+    fn platform_name(&self) -> &'static str {
         "Windows"
     }
 

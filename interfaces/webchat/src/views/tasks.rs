@@ -295,7 +295,7 @@ fn HeartbeatListItem(
     let interval_ms = task.interval_ms;
     let next_due_ms = task.state.next_due_ms;
     let has_errors = task.state.consecutive_errors > 0;
-    let last_l2 = task.state.last_l2_status.clone().unwrap_or_default();
+    let last_l2 = task.state.last_l2_status.unwrap_or_default();
 
     let interval_str = format_interval(interval_ms);
 
@@ -512,7 +512,7 @@ fn HeartbeatEditor(
             // Update existing task
             let task_id = existing.id.clone();
             let patch = UpdateHeartbeatTask {
-                task_id: task_id.clone(),
+                task_id: task_id,
                 name: Some(name),
                 interval: Some(interval),
                 enabled: Some(enabled),
@@ -902,7 +902,7 @@ fn HeartbeatRunHistory(runs: RwSignal<Vec<HeartbeatRunInfo>>) -> impl IntoView {
                                     let l2 = run.l2_status.clone().unwrap_or_default();
                                     let trigger = run.trigger_source.clone();
                                     let ts = format_timestamp_ms(run.created_at);
-                                    let err = run.error.clone().unwrap_or_default();
+                                    let err = run.error.unwrap_or_default();
 
                                     // Clone for use in closures vs text nodes
                                     let l1_cls = l1.clone();

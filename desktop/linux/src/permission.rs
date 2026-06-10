@@ -1,7 +1,7 @@
 //! Linux `PermissionCapability` mapped onto freedesktop idioms.
 //!
 //! Linux has no monolithic permission database like macOS TCC and no per-app
-//! ConsentStore like Windows. Access is governed by a mix of:
+//! `ConsentStore` like Windows. Access is governed by a mix of:
 //!
 //! - **Display server** — under X11 a desktop process can screen-capture and
 //!   inject synthetic input (XTEST) with no prompt, so those report `Granted`.
@@ -41,7 +41,8 @@ pub struct LinuxPermission {
 }
 
 impl LinuxPermission {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self { _private: () }
     }
 }
@@ -59,7 +60,7 @@ impl Default for LinuxPermission {
 /// The active display-server session, which decides whether screen capture and
 /// input injection are freely available (X11) or compositor-gated (Wayland).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SessionType {
+pub enum SessionType {
     X11,
     Wayland,
     Unknown,
@@ -95,7 +96,7 @@ fn detect_session() -> SessionType {
 /// on the display server (or not at all). Camera/Microphone are resolved by the
 /// device probes before this is reached; they are listed here so the match
 /// stays exhaustive and a newly added kind fails the compile.
-fn ungated_status(kind: PermissionKind, session: SessionType) -> PermissionStatus {
+const fn ungated_status(kind: PermissionKind, session: SessionType) -> PermissionStatus {
     match kind {
         // D-Bus desktop notifications work regardless of display server.
         PermissionKind::Notifications => PermissionStatus::Granted,
@@ -144,7 +145,7 @@ fn groups_contain(id_output: &str, group: &str) -> bool {
 /// - device present + not in group → `Unknown` (per-session udev ACLs may still
 ///   grant access, so we avoid a false `Denied`; the guide tells the user how
 ///   to ensure access).
-fn classify_camera(present: bool, in_video_group: bool) -> PermissionStatus {
+const fn classify_camera(present: bool, in_video_group: bool) -> PermissionStatus {
     match (present, in_video_group) {
         (false, _) => PermissionStatus::Unknown,
         (true, true) => PermissionStatus::Granted,
@@ -152,10 +153,10 @@ fn classify_camera(present: bool, in_video_group: bool) -> PermissionStatus {
     }
 }
 
-/// Classify microphone access from `/dev/snd` presence. Modern PipeWire grants
+/// Classify microphone access from `/dev/snd` presence. Modern `PipeWire` grants
 /// audio to the active session without `audio`-group membership, so device
 /// presence is the honest signal; absence is `Unknown` (no sound hardware).
-fn classify_microphone(present: bool) -> PermissionStatus {
+const fn classify_microphone(present: bool) -> PermissionStatus {
     if present {
         PermissionStatus::Granted
     } else {
@@ -164,7 +165,7 @@ fn classify_microphone(present: bool) -> PermissionStatus {
 }
 
 /// One-sentence rationale relayed to the user when a permission is missing.
-fn rationale(kind: PermissionKind) -> &'static str {
+const fn rationale(kind: PermissionKind) -> &'static str {
     match kind {
         PermissionKind::Camera => "Aleph needs camera access to capture photos on your behalf.",
         PermissionKind::Microphone => {
@@ -222,7 +223,7 @@ fn steps(kind: PermissionKind, session: SessionType) -> Vec<String> {
 /// Build a [`PermissionInfo`]. On Linux access is granted by group membership /
 /// session type, never by a programmatic prompt, so `can_request` is always
 /// `false` — mirroring the Windows desktop-app contract.
-fn build_info(permission: PermissionKind, status: PermissionStatus) -> PermissionInfo {
+const fn build_info(permission: PermissionKind, status: PermissionStatus) -> PermissionInfo {
     PermissionInfo {
         permission,
         status,
@@ -235,7 +236,7 @@ fn build_info(permission: PermissionKind, status: PermissionStatus) -> Permissio
 // ---------------------------------------------------------------------------
 
 /// `true` if at least one `/dev/video*` capture device exists.
-fn camera_present() -> bool {
+const fn camera_present() -> bool {
     #[cfg(target_os = "linux")]
     {
         std::fs::read_dir("/dev")
@@ -252,7 +253,7 @@ fn camera_present() -> bool {
 }
 
 /// `true` if the ALSA `/dev/snd` device tree exists.
-fn microphone_present() -> bool {
+const fn microphone_present() -> bool {
     #[cfg(target_os = "linux")]
     {
         std::path::Path::new("/dev/snd").exists()

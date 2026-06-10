@@ -131,9 +131,9 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                     let is_verified = configured_provider.is_some_and(|p| p.verified);
                                                     let configured_id = configured_provider.map(|p| p.id.clone());
 
-                                                    let sel_id = configured_id.clone().unwrap_or(preset_id.clone());
+                                                    let sel_id = configured_id.unwrap_or(preset_id.clone());
                                                     let sel_id_click = sel_id.clone();
-                                                    let sel_id_check = sel_id.clone();
+                                                    let sel_id_check = sel_id;
 
                                                     let icon_color = match preset_label.as_str() {
                                                         "silicon_flow" => "#6C5CE7",
@@ -144,10 +144,10 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
 
                                                     let preset_for_add = if !is_configured {
                                                         Some(EmbeddingProviderConfig {
-                                                            id: preset_id.clone(),
+                                                            id: preset_id,
                                                             name: preset_name.clone(),
                                                             preset: preset_label.clone(),
-                                                            api_base: preset.api_base.clone(),
+                                                            api_base: preset.api_base,
                                                             api_key_env: None,
                                                             api_key: None,
                                                             model: model.clone(),
@@ -225,7 +225,7 @@ pub fn EmbeddingProvidersView() -> impl IntoView {
                                                             let cp_is_active = cp.is_active;
                                                             let cp_verified = cp.verified;
                                                             let sel_id = cp.id.clone();
-                                                            let sel_id_check = cp.id.clone();
+                                                            let sel_id_check = cp.id;
 
                                                             view! {
                                                                 <ProviderRowCard

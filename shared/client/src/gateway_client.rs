@@ -30,6 +30,7 @@ pub struct GatewayClient {
 
 impl GatewayClient {
     /// Create a new client with default settings.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             url: DEFAULT_GATEWAY_URL.to_string(),
@@ -38,13 +39,15 @@ impl GatewayClient {
     }
 
     /// Set the Gateway URL.
+    #[must_use]
     pub fn with_url(mut self, url: &str) -> Self {
         self.url = url.to_string();
         self
     }
 
     /// Set the timeout in milliseconds.
-    pub fn with_timeout(mut self, timeout_ms: u64) -> Self {
+    #[must_use]
+    pub const fn with_timeout(mut self, timeout_ms: u64) -> Self {
         self.timeout_ms = timeout_ms;
         self
     }
@@ -57,13 +60,13 @@ impl GatewayClient {
     ) -> Result<T, CliError> {
         let result = self.call_raw(method, params).await?;
         serde_json::from_value(result)
-            .map_err(|e| CliError::Other(format!("Invalid response: {}", e)))
+            .map_err(|e| CliError::Other(format!("Invalid response: {e}")))
     }
 
     /// Call an RPC method and return the raw JSON value.
     pub async fn call_raw(&self, method: &str, params: Option<Value>) -> Result<Value, CliError> {
         // Connect to Gateway
-        let (ws_stream, _) = timeout(Duration::from_millis(5000), connect_async(&self.url))
+        let (ws_stream, _) = timeout(Duration::from_secs(5), connect_async(&self.url))
             .await
             .map_err(|e| CliError::Timeout(format!("Connection timeout: {e}")))?
             .map_err(|e| CliError::Connection(e.to_string()))?;
@@ -94,7 +97,7 @@ impl GatewayClient {
         // Parse response
         let text = response
             .to_text()
-            .map_err(|e| CliError::Other(format!("Invalid response: {}", e)))?;
+            .map_err(|e| CliError::Other(format!("Invalid response: {e}")))?;
 
         let json: Value = serde_json::from_str(text)?;
 
@@ -102,7 +105,7 @@ impl GatewayClient {
         if let Some(error) = json.get("error") {
             let code = error
                 .get("code")
-                .and_then(|c| c.as_i64())
+                .and_then(serde_json::Value::as_i64)
                 .and_then(|c| c.try_into().ok())
                 .unwrap_or(-1);
             let message = error

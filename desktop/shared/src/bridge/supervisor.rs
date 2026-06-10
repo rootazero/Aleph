@@ -17,7 +17,7 @@ pub struct Backoff {
 
 impl Backoff {
     /// Returns the next delay and advances the ladder one step.
-    pub fn next_delay(&mut self) -> Duration {
+    pub const fn next_delay(&mut self) -> Duration {
         let secs: u64 = match self.step {
             0 => 1,
             1 => 2,
@@ -30,7 +30,7 @@ impl Backoff {
         Duration::from_secs(secs)
     }
 
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.step = 0;
     }
 }
@@ -44,7 +44,8 @@ pub struct RestartWindow {
 }
 
 impl RestartWindow {
-    pub fn new(threshold: usize, window: Duration) -> Self {
+    #[must_use]
+    pub const fn new(threshold: usize, window: Duration) -> Self {
         Self {
             threshold,
             window,

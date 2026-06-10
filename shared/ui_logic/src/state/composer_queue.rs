@@ -17,7 +17,8 @@
 /// * `is_busy` — whether a run is active now.
 /// * `queue_len` — number of prompts waiting in the queue.
 /// * `user_interrupted` — whether the user pressed Stop since the last settle.
-pub fn should_auto_drain_on_settle(
+#[must_use]
+pub const fn should_auto_drain_on_settle(
     was_busy: bool,
     is_busy: bool,
     queue_len: usize,

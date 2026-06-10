@@ -50,7 +50,7 @@ pub async fn create(
     if json {
         output::print_json(&result);
     } else {
-        println!("Workspace '{}' created.", name);
+        println!("Workspace '{name}' created.");
     }
 
     client.close().await?;
@@ -67,7 +67,7 @@ pub async fn switch(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        println!("Switched to workspace '{}'.", name);
+        println!("Switched to workspace '{name}'.");
     }
 
     client.close().await?;
@@ -131,7 +131,7 @@ pub async fn archive(server_url: &str, name: &str, json: bool) -> CliResult<()> 
     if json {
         output::print_json(&result);
     } else {
-        println!("Workspace '{}' archived.", name);
+        println!("Workspace '{name}' archived.");
     }
 
     client.close().await?;

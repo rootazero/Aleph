@@ -137,7 +137,7 @@ pub async fn start(
     if json {
         output::print_json(&result);
     } else {
-        println!("Service '{}' started.", service_id);
+        println!("Service '{service_id}' started.");
     }
 
     client.close().await?;
@@ -159,7 +159,7 @@ pub async fn stop(
     if json {
         output::print_json(&result);
     } else {
-        println!("Service '{}' stopped.", service_id);
+        println!("Service '{service_id}' stopped.");
     }
 
     client.close().await?;

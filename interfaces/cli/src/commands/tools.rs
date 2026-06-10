@@ -67,7 +67,7 @@ pub async fn run(server_url: &str, category: Option<&str>, json: bool) -> CliRes
     src_names.sort();
 
     for src in src_names {
-        println!("[{}]", src);
+        println!("[{src}]");
         if let Some(cmds) = sources.get(&src) {
             for cmd in cmds {
                 print!("  • {}", cmd.key);
@@ -79,7 +79,7 @@ pub async fn run(server_url: &str, category: Option<&str>, json: bool) -> CliRes
                 } else {
                     cmd.description.clone()
                 };
-                print!(" - {}", desc);
+                print!(" - {desc}");
                 println!();
             }
         }
@@ -189,7 +189,7 @@ pub async fn invoke(
     if json {
         output::print_json(&result);
     } else {
-        let ok = result.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+        let ok = result.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if ok {
             if let Some(inner) = result.get("result") {
                 println!("{}", serde_json::to_string_pretty(inner)?);

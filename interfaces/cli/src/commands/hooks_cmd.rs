@@ -23,7 +23,7 @@ pub async fn list(server_url: &str, json_out: bool) -> CliResult<()> {
     let path = result.get("path").and_then(|v| v.as_str()).unwrap_or("?");
     let exists = result
         .get("exists")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     let events = result
         .get("events")
@@ -46,7 +46,7 @@ pub async fn list(server_url: &str, json_out: bool) -> CliResult<()> {
     event_names.sort();
     for event in event_names {
         let groups = events.get(event).and_then(|v| v.as_array());
-        let count = groups.map(|g| g.len()).unwrap_or(0);
+        let count = groups.map_or(0, std::vec::Vec::len);
         println!();
         println!("[{event}] {count} group(s)");
         if let Some(groups) = groups {
@@ -68,7 +68,7 @@ pub async fn list(server_url: &str, json_out: bool) -> CliResult<()> {
                         .or_else(|| a.get("agent"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
-                    let timeout = a.get("timeout_secs").and_then(|v| v.as_u64());
+                    let timeout = a.get("timeout_secs").and_then(serde_json::Value::as_u64);
                     if let Some(t) = timeout {
                         println!("      - {kind}: {label}  (timeout {t}s)");
                     } else {
@@ -168,7 +168,7 @@ pub async fn remove(
     if json_out {
         output::print_json(&result);
     } else {
-        let removed = result.get("removed").and_then(|v| v.as_u64()).unwrap_or(0);
+        let removed = result.get("removed").and_then(serde_json::Value::as_u64).unwrap_or(0);
         println!(
             "✓ Removed {removed} hook entr{}",
             if removed == 1 { "y" } else { "ies" }
@@ -186,7 +186,7 @@ pub async fn reload(server_url: &str, json_out: bool) -> CliResult<()> {
     } else {
         let count = result
             .get("loaded_plugins")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
         println!("✓ Extensions reloaded ({count} plugins loaded)");
     }

@@ -71,8 +71,7 @@ pub async fn run(
     if let Some(path) = output_last_message {
         if let Err(e) = std::fs::write(path, &outcome.final_text) {
             eprintln!(
-                "warning: failed to write --output-last-message to {}: {}",
-                path, e
+                "warning: failed to write --output-last-message to {path}: {e}"
             );
         }
     }
@@ -108,7 +107,7 @@ async fn resolve_last_session(client: &AlephClient) -> CliResult<String> {
     }
 
     best_key
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
         .ok_or_else(|| CliError::Other("--last: no sessions available to resume".to_string()))
 }
 

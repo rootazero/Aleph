@@ -24,7 +24,7 @@ use crate::{MouseButton, PressAction};
 /// ydotool button code layout: the low nibble selects the button
 /// (0 = left, 1 = right, 2 = middle), `0x40` adds a press, `0x80` adds a
 /// release; a full click sets both (`0xC0`).
-pub(crate) fn click_code(button: MouseButton, action: PressAction) -> u8 {
+pub(crate) const fn click_code(button: MouseButton, action: PressAction) -> u8 {
     let idx: u8 = match button {
         MouseButton::Left => 0x00,
         MouseButton::Right => 0x01,
@@ -191,7 +191,7 @@ pub(crate) fn evdev_keycode(name: &str) -> Option<u16> {
 }
 
 /// evdev keycodes for single ASCII letters, digits, and space.
-fn ascii_char_keycode(ch: char) -> Option<u16> {
+const fn ascii_char_keycode(ch: char) -> Option<u16> {
     let code = match ch.to_ascii_lowercase() {
         'a' => 30,
         'b' => 48,

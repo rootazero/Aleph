@@ -25,7 +25,7 @@ pub async fn status(server_url: &str, json: bool) -> CliResult<()> {
                     Value::Null => "-".to_string(),
                     other => other.to_string(),
                 };
-                println!("  {}: {}", k, display);
+                println!("  {k}: {display}");
             }
         }
     }
@@ -41,12 +41,12 @@ pub async fn store(server_url: &str, json: bool) -> CliResult<()> {
         let mut key = String::new();
         std::io::stdin()
             .read_line(&mut key)
-            .map_err(|e| CliError::Other(format!("Failed to read from stdin: {}", e)))?;
+            .map_err(|e| CliError::Other(format!("Failed to read from stdin: {e}")))?;
         key.trim().to_string()
     } else {
         // Interactive: prompt with hidden input
         rpassword::prompt_password("Enter master key: ")
-            .map_err(|e| CliError::Other(format!("Failed to read password: {}", e)))?
+            .map_err(|e| CliError::Other(format!("Failed to read password: {e}")))?
     };
 
     if master_key.is_empty() {
@@ -68,7 +68,7 @@ pub async fn store(server_url: &str, json: bool) -> CliResult<()> {
     } else {
         let success = result
             .get("success")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if success {
             println!("Master key stored in vault.");
@@ -92,7 +92,7 @@ pub async fn delete(server_url: &str, json: bool) -> CliResult<()> {
     } else {
         let was_present = result
             .get("was_present")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if was_present {
             println!("Master key deleted from vault.");
@@ -116,13 +116,13 @@ pub async fn verify(server_url: &str, json: bool) -> CliResult<()> {
     } else {
         let verified = result
             .get("verified")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let message = result.get("message").and_then(|v| v.as_str()).unwrap_or("");
         if verified {
-            println!("Vault verified: {}", message);
+            println!("Vault verified: {message}");
         } else {
-            println!("Vault verification failed: {}", message);
+            println!("Vault verification failed: {message}");
         }
     }
 

@@ -191,7 +191,7 @@ pub(in crate::commands::start) fn initialize_auth(
         security_store,
         invitation_manager: invitation_manager.clone(),
         guest_session_manager: guest_session_manager.clone(),
-        event_bus: event_bus.clone(),
+        event_bus: event_bus,
         auth_mode,
         allow_guest,
         enable_pairing,

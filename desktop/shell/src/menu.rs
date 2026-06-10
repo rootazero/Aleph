@@ -196,7 +196,7 @@ fn reload_panel(app: &AppHandle) {
     }
 }
 
-/// Open Tauri's WebView devtools for the main window. Only wired in
+/// Open Tauri's `WebView` devtools for the main window. Only wired in
 /// debug builds — the menu item itself is hidden in release.
 #[cfg(debug_assertions)]
 fn open_devtools(app: &AppHandle) {

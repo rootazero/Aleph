@@ -38,7 +38,7 @@ pub struct SystemInfo {
     pub os_version: String,
     /// Hostname.
     pub hostname: String,
-    /// CPU architecture (e.g. "aarch64", "x86_64").
+    /// CPU architecture (e.g. "aarch64", "`x86_64`").
     pub arch: String,
     /// Current user's username.
     pub username: String,

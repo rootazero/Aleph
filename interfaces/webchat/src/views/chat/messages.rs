@@ -392,7 +392,7 @@ fn MessageBubble(
 
     let tool_calls_view = if has_tools {
         let tools = message.tool_calls.clone();
-        let run_for_cards = message_run_id.clone();
+        let run_for_cards = message_run_id;
         Some(view! {
             <div class="mb-2 flex flex-col gap-1">
                 {tools.into_iter().map(|tc| {
@@ -400,7 +400,7 @@ fn MessageBubble(
                         <ToolCard
                             run_id=run_for_cards.clone()
                             tool_id=tc.tool_id.clone()
-                            tool_name=tc.tool_name.clone()
+                            tool_name=tc.tool_name
                         />
                     }
                 }).collect::<Vec<_>>()}
@@ -515,16 +515,16 @@ fn MessageBubble(
                 {if is_user {
                     view! {
                         <div class="whitespace-pre-wrap break-words text-sm leading-relaxed">
-                            {content.clone()}
+                            {content}
                         </div>
                     }.into_any()
                 } else if is_streaming {
                     view! {
-                        <StreamingRenderer content=content.clone() />
+                        <StreamingRenderer content=content />
                     }.into_any()
                 } else {
                     view! {
-                        <MarkdownRenderer content=content.clone() />
+                        <MarkdownRenderer content=content />
                     }.into_any()
                 }}
 

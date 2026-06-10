@@ -18,9 +18,8 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
             let ptype = p.get("type").and_then(|v| v.as_str()).unwrap_or("-");
             let default = p
                 .get("default")
-                .and_then(|v| v.as_bool())
-                .map(|b| if b { "yes" } else { "no" })
-                .unwrap_or("no");
+                .and_then(serde_json::Value::as_bool)
+                .map_or("no", |b| if b { "yes" } else { "no" });
             rows.push(vec![
                 name.to_string(),
                 ptype.to_string(),
@@ -63,9 +62,8 @@ pub async fn get(server_url: &str, name: &str, json: bool) -> CliResult<()> {
             "Default",
             result
                 .get("default")
-                .and_then(|v| v.as_bool())
-                .map(|b| if b { "yes" } else { "no" })
-                .unwrap_or("no")
+                .and_then(serde_json::Value::as_bool)
+                .map_or("no", |b| if b { "yes" } else { "no" })
                 .to_string(),
         ),
         (
@@ -80,14 +78,12 @@ pub async fn get(server_url: &str, name: &str, json: bool) -> CliResult<()> {
             "Models",
             result
                 .get("models")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
+                .and_then(|v| v.as_array()).map_or_else(|| "-".to_string(), |arr| {
                     arr.iter()
                         .filter_map(|m| m.as_str())
                         .collect::<Vec<_>>()
                         .join(", ")
-                })
-                .unwrap_or_else(|| "-".to_string()),
+                }),
         ),
     ];
 
@@ -122,7 +118,7 @@ pub async fn add(
     if json {
         output::print_json(&result);
     } else {
-        println!("Provider '{}' added successfully.", name);
+        println!("Provider '{name}' added successfully.");
     }
 
     client.close().await?;
@@ -141,16 +137,16 @@ pub async fn test(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     } else {
         let success = result
             .get("success")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if success {
-            println!("Provider '{}' is reachable.", name);
+            println!("Provider '{name}' is reachable.");
         } else {
             let error = result
                 .get("error")
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown error");
-            println!("Provider '{}' test failed: {}", name, error);
+            println!("Provider '{name}' test failed: {error}");
         }
     }
 
@@ -168,7 +164,7 @@ pub async fn set_default(server_url: &str, name: &str, json: bool) -> CliResult<
     if json {
         output::print_json(&result);
     } else {
-        println!("Provider '{}' set as default.", name);
+        println!("Provider '{name}' set as default.");
     }
 
     client.close().await?;
@@ -185,7 +181,7 @@ pub async fn remove(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        println!("Provider '{}' removed.", name);
+        println!("Provider '{name}' removed.");
     }
 
     client.close().await?;

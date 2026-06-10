@@ -71,7 +71,7 @@ pub async fn approve(
     if json {
         output::print_json(&result);
     } else {
-        println!("Approval '{}' approved.", request_id);
+        println!("Approval '{request_id}' approved.");
     }
 
     client.close().await?;
@@ -100,7 +100,7 @@ pub async fn reject(
     if json {
         output::print_json(&result);
     } else {
-        println!("Approval '{}' rejected.", request_id);
+        println!("Approval '{request_id}' rejected.");
     }
 
     client.close().await?;
@@ -117,7 +117,7 @@ pub async fn cancel(server_url: &str, request_id: &str, json: bool) -> CliResult
     if json {
         output::print_json(&result);
     } else {
-        println!("Approval '{}' cancelled.", request_id);
+        println!("Approval '{request_id}' cancelled.");
     }
 
     client.close().await?;

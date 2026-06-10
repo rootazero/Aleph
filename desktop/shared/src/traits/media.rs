@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::media_types::*;
+use crate::media_types::{CameraSnapConfig, CameraSnapResult, CameraClipConfig, CameraClipResult, AudioDeviceInfo, AudioRecordConfig, AudioRecordResult, SpeechToTextConfig, SpeechToTextResult};
 use crate::Result;
 
 /// Camera capture and audio device management.
@@ -42,7 +42,7 @@ pub trait MediaCapability: Send + Sync {
     /// Begin an open-ended push-to-talk recording (stop via [`Self::record_audio_stop`]).
     ///
     /// Powers the Panel mic button on platforms whose webview cannot reach the
-    /// microphone via `getUserMedia` (unsigned macOS WKWebView). The default
+    /// microphone via `getUserMedia` (unsigned macOS `WKWebView`). The default
     /// `NotImplemented` is the signal callers use to fall back to browser
     /// capture on platforms without a native helper (Windows/Linux).
     async fn record_audio_start(&self) -> Result<()> {

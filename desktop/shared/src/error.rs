@@ -46,7 +46,7 @@ pub enum DesktopError {
     #[error("desktop bridge disabled: {0}")]
     BridgeDisabled(String),
 
-    /// A platform-level error occurred (e.g. IOPMAssertion failure).
+    /// A platform-level error occurred (e.g. `IOPMAssertion` failure).
     #[error("platform error: {0}")]
     PlatformError(String),
 

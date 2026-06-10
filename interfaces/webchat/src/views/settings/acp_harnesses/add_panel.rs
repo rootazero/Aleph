@@ -104,7 +104,7 @@ pub(super) fn AddHarnessPanel(
             preset: None,
         };
 
-        let create_id = id_val.clone();
+        let create_id = id_val;
         let state = expect_context::<DashboardState>();
         spawn_local(async move {
             match AcpApi::create(&state, &create_id, &config).await {
@@ -312,8 +312,8 @@ pub(super) fn AddHarnessPanel(
                     </label>
                     <div class="space-y-2">
                         {move || env_pairs.get().into_iter().enumerate().map(|(i, (k, v))| {
-                            let k_val = k.clone();
-                            let v_val = v.clone();
+                            let k_val = k;
+                            let v_val = v;
                             view! {
                                 <div class="flex gap-2 items-center">
                                     <input

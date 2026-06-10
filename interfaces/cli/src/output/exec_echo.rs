@@ -162,16 +162,13 @@ fn scratchpad_preview(input: &Value) -> String {
             let n = input
                 .get("items")
                 .and_then(Value::as_array)
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .map_or(0, std::vec::Vec::len);
             format!("set_plan · {n} step(s)")
         }
         "start_item" | "complete_item" => {
             let idx = input
                 .get("item_index")
-                .and_then(Value::as_u64)
-                .map(|i| i.to_string())
-                .unwrap_or_else(|| "?".into());
+                .and_then(Value::as_u64).map_or_else(|| "?".into(), |i| i.to_string());
             format!("{action} #{idx}")
         }
         "set_objective" | "initialize" => {

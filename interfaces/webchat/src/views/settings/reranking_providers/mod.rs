@@ -144,8 +144,8 @@ pub fn RerankingProvidersView() -> impl IntoView {
 
                                                 let is_active_provider = current_provider == key;
                                                 let key_click = key.clone();
-                                                let key_check = key.clone();
-                                                let key_check_for_class = key_check.clone();
+                                                let key_check = key;
+                                                let key_check_for_class = key_check;
 
                                                 view! {
                                                     <ProviderRowCard

@@ -1,11 +1,11 @@
 //! ANSI theme palette for Aleph CLI rendering.
 //!
 //! Pure ANSI escape strings — no extra dependency. Honors:
-//! - `NO_COLOR` env var (https://no-color.org/)
+//! - `NO_COLOR` env var (<https://no-color.org>/)
 //! - `ALEPH_COLOR=always|never|auto`
 //! - stdout `IsTerminal` (no escapes when piped)
 //!
-//! The colour gate is cached once via `OnceLock` so paint() is cheap.
+//! The colour gate is cached once via `OnceLock` so `paint()` is cheap.
 
 use std::io::IsTerminal;
 use std::sync::OnceLock;
@@ -32,16 +32,16 @@ pub enum Style {
 }
 
 impl Style {
-    fn sgr(self) -> &'static str {
+    const fn sgr(self) -> &'static str {
         match self {
-            Style::Default => "",
-            Style::Header => "\x1b[1;36m", // bold cyan
-            Style::Success => "\x1b[32m",  // green
-            Style::Error => "\x1b[31m",    // red
-            Style::Warning => "\x1b[33m",  // yellow
-            Style::Info => "\x1b[36m",     // cyan
-            Style::Muted => "\x1b[90m",    // bright black / grey
-            Style::Bold => "\x1b[1m",      // bold
+            Self::Default => "",
+            Self::Header => "\x1b[1;36m", // bold cyan
+            Self::Success => "\x1b[32m",  // green
+            Self::Error => "\x1b[31m",    // red
+            Self::Warning => "\x1b[33m",  // yellow
+            Self::Info => "\x1b[36m",     // cyan
+            Self::Muted => "\x1b[90m",    // bright black / grey
+            Self::Bold => "\x1b[1m",      // bold
         }
     }
 }

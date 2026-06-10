@@ -1343,7 +1343,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     }
                 });
 
-                let trace_by_runs_db = trace_db.clone();
+                let trace_by_runs_db = trace_db;
                 server.handlers_mut().register("trace.by_runs", move |req| {
                     let db = trace_by_runs_db.clone();
                     async move {
@@ -1935,7 +1935,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         alephcore::gateway::handlers::tools_cancel::handle_cancel(req, r).await
                     }
                 });
-            let reg_list = reg.clone();
+            let reg_list = reg;
             server
                 .handlers_mut()
                 .register("tools.in_flight", move |req| {

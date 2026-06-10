@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ScriptLanguage {
-    /// AppleScript (macOS).
+    /// `AppleScript` (macOS).
     AppleScript,
     /// JXA — JavaScript for Automation (macOS).
     Jxa,

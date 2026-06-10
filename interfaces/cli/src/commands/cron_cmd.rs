@@ -1,7 +1,7 @@
 //! Cron job management commands.
 //!
 //! All actions are thin envelopes around `cron.*` JSON-RPC. The server enforces
-//! every business rule (schedule validation, ScheduleKind tagging, persistence);
+//! every business rule (schedule validation, `ScheduleKind` tagging, persistence);
 //! the CLI just transports flags into JSON and renders responses.
 
 use serde::Deserialize;
@@ -93,7 +93,7 @@ pub async fn run(server_url: &str, job_id: &str, config: &CliConfig, json: bool)
     if json {
         output::print_json(&result);
     } else {
-        println!("Triggered job: {}", job_id);
+        println!("Triggered job: {job_id}");
     }
 
     client.close().await?;
@@ -147,7 +147,7 @@ pub async fn runs(
 /// Extracted so we can unit-test the schedule-resolution logic without an
 /// actual gateway.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_create_body(
+pub fn build_create_body(
     name: &str,
     schedule_expr: Option<&str>,
     schedule_kind_json: Option<&str>,
@@ -182,7 +182,7 @@ pub(crate) fn build_create_body(
     if let Some(tags) = tags_csv {
         let arr: Vec<Value> = tags
             .split(',')
-            .map(|s| s.trim())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| Value::String(s.to_string()))
             .collect();
@@ -231,7 +231,7 @@ pub async fn create(
 
 /// Build the JSON body for `cron.update`. Only non-None fields are included.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn build_update_body(
+pub fn build_update_body(
     job_id: &str,
     name: Option<&str>,
     agent: Option<&str>,
@@ -275,7 +275,7 @@ pub(crate) fn build_update_body(
     if let Some(tags) = tags_csv {
         let arr: Vec<Value> = tags
             .split(',')
-            .map(|s| s.trim())
+            .map(str::trim)
             .filter(|s| !s.is_empty())
             .map(|s| Value::String(s.to_string()))
             .collect();
@@ -400,7 +400,7 @@ pub async fn toggle(
     if json {
         output::print_json(&result);
     } else {
-        let new_enabled = result.get("enabled").and_then(|v| v.as_bool());
+        let new_enabled = result.get("enabled").and_then(serde_json::Value::as_bool);
         match new_enabled {
             Some(v) => println!("{job_id}: enabled={v}"),
             None => println!("{}", serde_json::to_string_pretty(&result)?),

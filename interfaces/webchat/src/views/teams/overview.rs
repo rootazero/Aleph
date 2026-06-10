@@ -282,7 +282,7 @@ pub fn OverviewView() -> impl IntoView {
                                     let team_id_delete = team_id.clone();
                                     let is_active = team.status == "active";
                                     let team_id_check = team_id.clone();
-                                    let team_id_check2 = team_id.clone();
+                                    let team_id_check2 = team_id;
                                     let confirming = RwSignal::new(false);
 
                                     view! {

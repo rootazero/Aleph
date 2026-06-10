@@ -9,7 +9,8 @@ pub struct ReconnectStrategy {
 }
 
 impl ReconnectStrategy {
-    pub fn new(max_attempts: u32, base_delay_ms: u64) -> Self {
+    #[must_use]
+    pub const fn new(max_attempts: u32, base_delay_ms: u64) -> Self {
         Self {
             max_attempts,
             current_attempt: 0,
@@ -30,7 +31,7 @@ impl ReconnectStrategy {
         Some(delay)
     }
 
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.current_attempt = 0;
     }
 }

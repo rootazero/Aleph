@@ -119,7 +119,7 @@ pub fn SkillsTab(agent_id: String) -> impl IntoView {
                                             <div class="flex items-center justify-between p-3">
                                                 <div>
                                                     <div class="text-sm font-medium text-text-primary">{skill.name.clone()}</div>
-                                                    <div class="text-xs text-text-tertiary">{skill.description.clone()}</div>
+                                                    <div class="text-xs text-text-tertiary">{skill.description}</div>
                                                 </div>
                                                 <input
                                                     type="checkbox"

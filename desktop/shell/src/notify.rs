@@ -1,6 +1,6 @@
 //! OS-notification bridge.
 //!
-//! Subscribes to the daemon's EventBus over `ws://127.0.0.1:18790/ws` and
+//! Subscribes to the daemon's `EventBus` over `ws://127.0.0.1:18790/ws` and
 //! turns "the AI needs you" events into native desktop notifications — the
 //! last mile of R5 ("AI comes to you"). Pure I/O: it forwards events, it
 //! never interprets or acts on them.
@@ -26,7 +26,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 const WS_URL: &str = "ws://127.0.0.1:18790/ws";
 const INITIAL_BACKOFF: Duration = Duration::from_secs(2);
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
+const MAX_BACKOFF: Duration = Duration::from_mins(1);
 
 /// Core-decided approval banner, already gated operator-only by the gateway
 /// (`event_scope` `surface.approval`) and addressed to this desktop surface.
@@ -93,7 +93,7 @@ async fn session(
     Ok(())
 }
 
-/// Build the EventBus WS URL for a target. Local → the loopback default;
+/// Build the `EventBus` WS URL for a target. Local → the loopback default;
 /// Remote → `ws(s)://host:port/ws` derived from the target origin (https→wss).
 fn ws_url(target: &crate::connection::ConnectionTarget) -> String {
     match target {

@@ -71,10 +71,10 @@ impl AlephClient {
         };
 
         // Spawn read task with write access for responding to Server requests
-        let pending_clone = pending.clone();
-        let event_tx_clone = event_tx.clone();
-        let connected_clone = connected.clone();
-        let write_clone = write.clone();
+        let pending_clone = pending;
+        let event_tx_clone = event_tx;
+        let connected_clone = connected;
+        let write_clone = write;
 
         tokio::spawn(async move {
             Self::read_loop(

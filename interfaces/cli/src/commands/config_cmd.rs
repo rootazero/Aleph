@@ -61,8 +61,8 @@ pub async fn set(
 
     if json {
         output::print_json(&result);
-    } else if result.get("success").and_then(|v| v.as_bool()) == Some(true) {
-        println!("Set {} = {}", path, value);
+    } else if result.get("success").and_then(serde_json::Value::as_bool) == Some(true) {
+        println!("Set {path} = {value}");
     } else {
         println!("{}", serde_json::to_string_pretty(&result)?);
     }
@@ -83,14 +83,14 @@ pub async fn validate(server_url: &str, config: &CliConfig, json: bool) -> CliRe
     } else {
         let valid = result
             .get("valid")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if valid {
             println!("Configuration is valid.");
         } else {
             println!("Configuration has errors:");
             if let Some(error) = result.get("error").and_then(|v| v.as_str()) {
-                println!("  - {}", error);
+                println!("  - {error}");
             }
             if let Some(errors) = result.get("errors").and_then(|v| v.as_array()) {
                 for err in errors {
@@ -137,7 +137,7 @@ pub async fn schema(
     if let Some(path) = output_path {
         let content = serde_json::to_string_pretty(&schema)?;
         std::fs::write(path, content)?;
-        println!("Schema written to {}", path);
+        println!("Schema written to {path}");
     } else if json {
         output::print_json(&schema);
     } else {
@@ -159,7 +159,7 @@ pub fn edit() -> CliResult<()> {
     let status = std::process::Command::new(&editor)
         .arg(&config_path)
         .status()
-        .map_err(|e| aleph_client::CliError::Other(format!("Failed to launch editor: {}", e)))?;
+        .map_err(|e| aleph_client::CliError::Other(format!("Failed to launch editor: {e}")))?;
 
     if status.success() {
         println!("Config file saved.");

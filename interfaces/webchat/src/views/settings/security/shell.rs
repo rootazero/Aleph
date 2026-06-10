@@ -134,7 +134,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                         {move || {
                             let patterns = config
                                 .get()
-                                .map(|c| c.shell_security.custom_blocked.clone())
+                                .map(|c| c.shell_security.custom_blocked)
                                 .unwrap_or_default();
                             patterns
                                 .into_iter()
@@ -169,7 +169,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                 />
                                                 <input
                                                     type="text"
-                                                    prop:value=p.reason.clone().unwrap_or_default()
+                                                    prop:value=p.reason.unwrap_or_default()
                                                     on:input=move |ev| {
                                                         update_pattern(
                                                             "blocked",
@@ -210,7 +210,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                         {move || {
                             let patterns = config
                                 .get()
-                                .map(|c| c.shell_security.custom_danger.clone())
+                                .map(|c| c.shell_security.custom_danger)
                                 .unwrap_or_default();
                             patterns
                                 .into_iter()
@@ -245,7 +245,7 @@ pub(super) fn ShellSecuritySection(config: RwSignal<Option<SecurityConfig>>) -> 
                                                 />
                                                 <input
                                                     type="text"
-                                                    prop:value=p.reason.clone().unwrap_or_default()
+                                                    prop:value=p.reason.unwrap_or_default()
                                                     on:input=move |ev| {
                                                         update_pattern(
                                                             "danger",

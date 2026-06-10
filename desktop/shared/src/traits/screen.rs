@@ -56,8 +56,8 @@ pub trait ScreenCapability: Send + Sync {
         Err(crate::DesktopError::NotImplemented("double_click".into()))
     }
 
-    /// Drag from (start_x, start_y) to (end_x, end_y).
-    /// duration_ms controls drag animation; None for instant.
+    /// Drag from (`start_x`, `start_y`) to (`end_x`, `end_y`).
+    /// `duration_ms` controls drag animation; None for instant.
     async fn drag(
         &self,
         start_x: f64,

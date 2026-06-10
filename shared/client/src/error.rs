@@ -38,12 +38,12 @@ pub type CliResult<T> = Result<T, CliError>;
 
 impl From<anyhow::Error> for CliError {
     fn from(err: anyhow::Error) -> Self {
-        CliError::Other(err.to_string())
+        Self::Other(err.to_string())
     }
 }
 
 impl From<tokio_tungstenite::tungstenite::Error> for CliError {
     fn from(err: tokio_tungstenite::tungstenite::Error) -> Self {
-        CliError::WebSocket(err.to_string())
+        Self::WebSocket(err.to_string())
     }
 }

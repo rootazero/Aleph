@@ -1,4 +1,4 @@
-//! macOS PIM capability via SwiftBridge (long-lived JSON-RPC client).
+//! macOS PIM capability via `SwiftBridge` (long-lived JSON-RPC client).
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -6,11 +6,11 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 
-use aleph_desktop::pim_types::*;
+use aleph_desktop::pim_types::{NoteInfo, CalendarInfo, Reminder, ReminderList, ContactGroup, MailFolder, NoteContent, CalendarEvent, NewCalendarEvent, NewReminder, Contact, ContactDetail, MailMessage, MailMessageDetail};
 use aleph_desktop::traits::PimCapability;
 use aleph_desktop::SwiftBridge;
 use aleph_desktop::{DesktopError, Result};
-use aleph_protocol::desktop_bridge::methods::pim::*;
+use aleph_protocol::desktop_bridge::methods::pim::{NotesListResult, METHOD_NOTES_LIST, NotesListParams, METHOD_NOTES_GET, NotesGetParams, NotesCreateResult, METHOD_NOTES_CREATE, NotesCreateParams, METHOD_NOTES_UPDATE, NotesUpdateParams, METHOD_NOTES_DELETE, NotesDeleteParams, NotesFoldersResult, METHOD_NOTES_FOLDERS, CalendarEventsResult, METHOD_CALENDAR_EVENTS, CalendarEventsParams, METHOD_CALENDAR_GET, CalendarGetParams, CalendarCreateResult, METHOD_CALENDAR_CREATE, CalendarCreateParams, METHOD_CALENDAR_UPDATE, CalendarUpdateParams, METHOD_CALENDAR_DELETE, CalendarDeleteParams, CalendarListsResult, METHOD_CALENDAR_LISTS, RemindersListResult, METHOD_REMINDERS_LIST, RemindersListParams, METHOD_REMINDERS_GET, RemindersGetParams, RemindersCreateResult, METHOD_REMINDERS_CREATE, RemindersCreateParams, METHOD_REMINDERS_COMPLETE, RemindersCompleteParams, METHOD_REMINDERS_DELETE, RemindersDeleteParams, RemindersListsResult, METHOD_REMINDERS_LISTS, ContactsSearchResult, METHOD_CONTACTS_SEARCH, ContactsSearchParams, METHOD_CONTACTS_GET, ContactsGetParams, ContactsGroupsResult, METHOD_CONTACTS_GROUPS, MailSearchResult, METHOD_MAIL_SEARCH, MailSearchParams, MailGetResult, METHOD_MAIL_GET, MailGetParams, MailFoldersResult, METHOD_MAIL_FOLDERS};
 
 /// Simple TTL cache for PIM list data.
 ///
@@ -123,7 +123,7 @@ impl PimCapability for MacOSPim {
             .call_pim(
                 METHOD_NOTES_LIST,
                 NotesListParams {
-                    folder: folder.map(|f| f.to_string()),
+                    folder: folder.map(std::string::ToString::to_string),
                 },
                 "notes_list",
             )
@@ -170,8 +170,8 @@ impl PimCapability for MacOSPim {
                 METHOD_NOTES_UPDATE,
                 NotesUpdateParams {
                     id: note_id.to_string(),
-                    title: title.map(|t| t.to_string()),
-                    body: body.map(|b| b.to_string()),
+                    title: title.map(std::string::ToString::to_string),
+                    body: body.map(std::string::ToString::to_string),
                 },
                 "notes_update",
             )
@@ -220,7 +220,7 @@ impl PimCapability for MacOSPim {
                 CalendarEventsParams {
                     from,
                     to,
-                    calendar_id: calendar_id.map(|c| c.to_string()),
+                    calendar_id: calendar_id.map(std::string::ToString::to_string),
                 },
                 "calendar_list_events",
             )
@@ -316,7 +316,7 @@ impl PimCapability for MacOSPim {
         list_id: Option<&str>,
         include_completed: bool,
     ) -> Result<Vec<Reminder>> {
-        let cache_key = format!("reminders_list:{:?}:{}", list_id, include_completed);
+        let cache_key = format!("reminders_list:{list_id:?}:{include_completed}");
         if let Some(cached) = self.cache.reminders_list.get(&cache_key) {
             return Ok(cached);
         }
@@ -324,7 +324,7 @@ impl PimCapability for MacOSPim {
             .call_pim(
                 METHOD_REMINDERS_LIST,
                 RemindersListParams {
-                    list_id: list_id.map(|l| l.to_string()),
+                    list_id: list_id.map(std::string::ToString::to_string),
                     include_completed,
                 },
                 "reminders_list",
@@ -469,7 +469,7 @@ impl PimCapability for MacOSPim {
                 METHOD_MAIL_SEARCH,
                 MailSearchParams {
                     query: query.to_string(),
-                    folder: folder.map(|f| f.to_string()),
+                    folder: folder.map(std::string::ToString::to_string),
                     limit,
                 },
                 "mail_search",
