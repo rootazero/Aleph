@@ -1,5 +1,7 @@
-//! Stage 1: concurrent candidate gather. Fans out to all four sources and
-//! assembles a single pool of [`Candidate`]s with a [`SlotKind`] hint on each.
+//! Stage 1: concurrent candidate gather. Fans out to all sources (notes,
+//! prior-session snapshot, raw fragments, user profile, feedback floor,
+//! daily insight) and assembles a single pool of [`Candidate`]s with a
+//! [`SlotKind`] hint on each.
 
 use super::envelope::{ItemSource, SlotKind};
 use super::fallback::Candidate;
@@ -39,15 +41,16 @@ pub(crate) struct Gatherer {
 
 impl Gatherer {
     pub async fn gather(&self, input: &GatherInputs) -> Vec<Candidate> {
-        let (notes, snapshot, raws, profile, feedback_floor) = tokio::join!(
+        let (notes, snapshot, raws, profile, feedback_floor, daily_insight) = tokio::join!(
             self.fetch_notes(&input.query, &input.agent_id, input.pool_limit),
             self.fetch_snapshot(input.session_id.as_deref()),
             self.fetch_raws(&input.agent_id, input.session_id.as_deref(), &input.filter),
             self.profile.load(&input.agent_id),
             self.feedback_floor.load(&input.agent_id),
+            self.fetch_daily_insight(),
         );
 
-        let mut pool = Vec::with_capacity(notes.len() + raws.len() + feedback_floor.len() + 2);
+        let mut pool = Vec::with_capacity(notes.len() + raws.len() + feedback_floor.len() + 3);
         // Track feedback notes the query already surfaced so the always-on
         // floor only ADDS the High/Critical rules retrieval missed — query
         // matches keep their real relevance score.
@@ -59,6 +62,7 @@ impl Gatherer {
         pool.extend(notes);
         pool.extend(snapshot);
         pool.extend(raws);
+        pool.extend(daily_insight);
         for entry in feedback_floor {
             let id = format!("note://{}", entry.path);
             if !seen_feedback.insert(id.clone()) {
@@ -217,6 +221,33 @@ impl Gatherer {
         }
     }
 
+    /// Fetch the most recent daily digest written by the dream daemon's
+    /// `DailyDigestStage` (today's, falling back to yesterday's). Before this
+    /// arm existed the digest was write-only: `upsert_daily_insight` ran
+    /// nightly but `get_daily_insight` had no production caller, so the
+    /// LLM-generated summary never reached a prompt.
+    async fn fetch_daily_insight(&self) -> Vec<Candidate> {
+        use crate::memory::store::DreamStore;
+
+        let now = chrono::Utc::now();
+        let today = now.format("%Y-%m-%d").to_string();
+        let yesterday = (now - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string();
+
+        for date in [today, yesterday] {
+            match self.backend.get_daily_insight(&date).await {
+                Ok(Some(insight)) => return vec![insight_to_candidate(insight)],
+                Ok(None) => {}
+                Err(e) => {
+                    warn!(error = %e, date = %date, "assembler.gather: daily insight fetch failed");
+                    return Vec::new();
+                }
+            }
+        }
+        Vec::new()
+    }
+
     /// Fetch all `SessionCompressed` raw memories for an agent, regardless of
     /// session. Used by the cross-session `session_search` path.
     ///
@@ -285,6 +316,25 @@ fn feedback_entry_to_candidate(id: String, entry: FeedbackFloorEntry) -> Candida
         updated_at: entry.updated_at,
         slot_hint: SlotKind::Feedback,
         fact_source: FactSource::Extracted,
+    }
+}
+
+/// Convert a dream-daemon [`DailyInsight`] into a `SessionRecent`-slotted
+/// candidate. Relevance sits below the prior-session snapshot (0.9) — the
+/// digest is ambient daily context, not a direct continuation of this session.
+fn insight_to_candidate(insight: crate::memory::dreaming::DailyInsight) -> Candidate {
+    Candidate {
+        id: format!("aleph://insight/{}", insight.date),
+        title: format!("Daily digest {}", insight.date),
+        full_content: insight.content,
+        source: ItemSource::Summary {
+            layer: "daily_digest".into(),
+            session_id: insight.date,
+        },
+        relevance: 0.7,
+        updated_at: insight.created_at,
+        slot_hint: SlotKind::SessionRecent,
+        fact_source: FactSource::Summary,
     }
 }
 
@@ -364,6 +414,26 @@ mod tests {
             slot_hint_for_path("reference/rust-ownership"),
             SlotKind::RelevantNotes
         );
+    }
+
+    #[test]
+    fn insight_to_candidate_routes_to_session_recent_slot() {
+        let insight = crate::memory::dreaming::DailyInsight::new(
+            "2026-06-10".into(),
+            "Worked on compaction caching.".into(),
+            4,
+        );
+        let c = insight_to_candidate(insight);
+        assert_eq!(c.slot_hint, SlotKind::SessionRecent);
+        assert_eq!(c.fact_source, FactSource::Summary);
+        assert_eq!(c.id, "aleph://insight/2026-06-10");
+        match &c.source {
+            ItemSource::Summary { layer, session_id } => {
+                assert_eq!(layer, "daily_digest");
+                assert_eq!(session_id, "2026-06-10");
+            }
+            _ => panic!("expected ItemSource::Summary"),
+        }
     }
 
     #[test]
