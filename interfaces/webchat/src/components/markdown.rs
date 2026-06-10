@@ -53,7 +53,7 @@ fn render_markdown(content: &str) -> String {
                 };
 
                 html_output.push_str(&format!(
-                    r#"<div class="code-block-wrapper relative group my-3"><div class="flex items-center justify-between px-3 py-1.5 bg-surface-sunken/50 rounded-t-lg border border-b-0 border-border text-xs text-text-tertiary"><span>{lang_label}</span><button class="copy-btn opacity-0 group-hover:opacity-100 transition-opacity px-2 py-0.5 rounded text-text-secondary hover:text-text-primary hover:bg-surface-raised" onclick="navigator.clipboard.writeText(this.closest('.code-block-wrapper').querySelector('code').textContent);var b=this;if(b._t)clearTimeout(b._t);b.textContent='Copied!';b.classList.add('copied');b._t=setTimeout(function(){{b.textContent='Copy';b.classList.remove('copied')}},1500)">Copy</button></div><pre class="rounded-b-lg border border-border bg-surface-sunken overflow-x-auto p-3 text-sm leading-relaxed"><code>{highlighted}</code></pre></div>"#,
+                    r#"<div class="code-block-wrapper"><div class="code-block-header"><span>{lang_label}</span><button class="copy-btn" onclick="navigator.clipboard.writeText(this.closest('.code-block-wrapper').querySelector('code').textContent);var b=this;if(b._t)clearTimeout(b._t);b.textContent='Copied!';b.classList.add('copied');b._t=setTimeout(function(){{b.textContent='Copy';b.classList.remove('copied')}},1500)">Copy</button></div><pre><code>{highlighted}</code></pre></div>"#,
                 ));
             }
             Event::Text(text) if in_code_block => {
@@ -176,7 +176,7 @@ fn render_streaming(content: &str) -> String {
                     html_escape(&fence_lang)
                 };
                 html.push_str(&format!(
-                    r#"<div class="code-block-wrapper relative group my-3"><div class="flex items-center justify-between px-3 py-1.5 bg-surface-sunken/50 rounded-t-lg border border-b-0 border-border text-xs text-text-tertiary"><span>{lang_label}</span></div><pre class="rounded-b-lg border border-border bg-surface-sunken overflow-x-auto p-3 text-sm leading-relaxed"><code>"#,
+                    r#"<div class="code-block-wrapper"><div class="code-block-header"><span>{lang_label}</span></div><pre><code>"#,
                 ));
                 in_fence = true;
             }
@@ -218,5 +218,46 @@ pub fn MarkdownRenderer(content: String) -> impl IntoView {
 
     view! {
         <div class="markdown-body text-sm leading-relaxed" inner_html=html />
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{render_markdown, render_streaming};
+
+    // ⚠️ Host-test safety: render_markdown with a *language-tagged* fence
+    // calls is_dark_mode() → web_sys::window(), which panics off-wasm.
+    // Markdown-side tests therefore use bare ``` fences only (the empty
+    // lang takes highlight_code's early escape path); the info-string
+    // escape regression is covered via render_streaming, which never
+    // touches web_sys.
+
+    #[test]
+    fn markdown_code_block_emits_semantic_classes() {
+        let html = render_markdown("```\nlet x = 1;\n```");
+        assert!(html.contains(r#"<div class="code-block-wrapper">"#));
+        assert!(html.contains(r#"<div class="code-block-header">"#));
+        assert!(html.contains(r#"<button class="copy-btn""#));
+        assert!(html.contains("<pre><code>"));
+        // legacy inline utility soup must be gone
+        assert!(!html.contains("bg-surface-sunken"));
+    }
+
+    #[test]
+    fn streaming_code_block_matches_semantic_classes() {
+        let html = render_streaming("```rust\nlet x = 1;\n");
+        assert!(html.contains(r#"<div class="code-block-wrapper">"#));
+        assert!(html.contains(r#"<div class="code-block-header">"#));
+        // streaming variant has no copy button
+        assert!(!html.contains("copy-btn"));
+        // unclosed fence is auto-closed
+        assert!(html.ends_with("</code></pre></div>"));
+    }
+
+    #[test]
+    fn streaming_escapes_fence_info_string() {
+        let html = render_streaming("```<script>alert(1)</script>\ncode\n```");
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;"));
     }
 }

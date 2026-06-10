@@ -794,8 +794,46 @@ html.theme-switching::view-transition-new(root) {
 .markdown-body img { border-radius: 0.5rem; max-width: 100%; margin: 0.5rem 0; }
 .markdown-body input[type="checkbox"] { margin-right: 0.375rem; accent-color: var(--color-primary); }
 
-/* Code block - syntect inline styles handle colors, we just handle layout */
-.code-block-wrapper pre { overflow-x: auto; }
+/* ── Code block — refined header bar on faux glass ── */
+.code-block-wrapper {
+  position: relative;
+  margin: 0.75rem 0;
+  border-radius: 10px;
+  border: 1px solid var(--glass-inset-border);
+  border-top-color: var(--glass-inset-border-top);
+  overflow: hidden;
+}
+.code-block-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.3rem 0.75rem;
+  background-image: linear-gradient(180deg, oklch(1 0 0 / 0.05), transparent);
+  background-color: var(--code-header-bg);
+  border-bottom: 1px solid var(--glass-inset-border);
+  font-size: 0.75rem;
+  color: var(--color-text-tertiary);
+}
+.code-block-wrapper pre {
+  margin: 0;
+  padding: 0.75rem;
+  background: var(--code-pre-bg);
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+.copy-btn {
+  opacity: 0;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--glass-inset-border);
+  color: var(--color-text-secondary);
+  transition: opacity 0.2s, color 0.2s, background-color 0.2s;
+}
+.code-block-wrapper:hover .copy-btn,
+.copy-btn:focus-visible { opacity: 1; }
+.copy-btn:hover { color: var(--color-text-primary); background-color: var(--glass-inset-bg); }
+.copy-btn.copied { color: var(--color-success); background-color: var(--color-success-subtle); opacity: 1; }
 
 /* ════════════════════════════════════════════════════════════
    Aleph Atmosphere
@@ -1575,9 +1613,3 @@ html.glass .aleph-shell::after,
   animation: aleph-spin-once 0.5s var(--ease-out);
 }
 
-/* Code-block copy button — green confirmation flash after a successful copy. */
-.copy-btn.copied {
-  color: var(--color-success);
-  background-color: var(--color-success-subtle);
-  opacity: 1;
-}
