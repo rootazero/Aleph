@@ -195,6 +195,12 @@ pub struct ToolCallParams {
 }
 
 /// Tool call result content
+///
+/// Wire-format content blocks from `tools/call` responses. Field names follow
+/// the MCP spec's camelCase JSON (`mimeType`), embedded resources nest their
+/// payload under a `resource` key, and unrecognized `type` tags degrade to
+/// [`ToolResultContent::Unknown`] instead of failing the whole result — a
+/// server speaking a newer spec revision must not brick every tool call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ToolResultContent {
@@ -203,10 +209,49 @@ pub enum ToolResultContent {
     Text { text: String },
     /// Image content (base64)
     #[serde(rename = "image")]
-    Image { data: String, mime_type: String },
-    /// Resource reference
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    /// Audio content (base64), spec revision 2025-03-26
+    #[serde(rename = "audio")]
+    Audio {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    /// Link to a resource the client may read later, spec revision 2025-06-18
+    #[serde(rename = "resource_link")]
+    ResourceLink {
+        uri: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    /// Embedded resource (payload nested under `resource` per spec)
     #[serde(rename = "resource")]
-    Resource { uri: String, text: Option<String> },
+    Resource { resource: EmbeddedResource },
+    /// Forward-compat fallback for unrecognized content types
+    #[serde(other)]
+    Unknown,
+}
+
+/// Embedded resource payload inside a `resource` content block
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbeddedResource {
+    /// Resource URI
+    pub uri: String,
+    /// MIME type
+    #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
+    pub mime_type: Option<String>,
+    /// Text contents (text resources)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Base64 contents (binary resources)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob: Option<String>,
 }
 
 /// Tool call result
@@ -253,22 +298,24 @@ pub struct ResourceReadParams {
 }
 
 /// Resource content in read response
+///
+/// The spec's `resources/read` contents carry NO `type` discriminator — text
+/// and binary entries are distinguished by which of `text` / `blob` is
+/// present, so this enum must be untagged.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(untagged)]
 pub enum ResourceContentItem {
-    /// Text content
-    #[serde(rename = "text")]
+    /// Text content (has a `text` key)
     Text {
         uri: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
         mime_type: Option<String>,
         text: String,
     },
-    /// Binary/blob content (base64)
-    #[serde(rename = "blob")]
+    /// Binary/blob content (has a `blob` key, base64)
     Blob {
         uri: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
         mime_type: Option<String>,
         blob: String,
     },
@@ -336,6 +383,10 @@ pub enum PromptRole {
 }
 
 /// Content in a prompt message
+///
+/// Same wire rules as [`ToolResultContent`]: camelCase field names, embedded
+/// resources nested under a `resource` key, unknown types degrade instead of
+/// failing the whole `prompts/get` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum PromptContentItem {
@@ -344,16 +395,24 @@ pub enum PromptContentItem {
     Text { text: String },
     /// Image content
     #[serde(rename = "image")]
-    Image { data: String, mime_type: String },
-    /// Resource reference
-    #[serde(rename = "resource")]
-    Resource {
-        uri: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        text: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mime_type: Option<String>,
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
     },
+    /// Audio content (base64), spec revision 2025-03-26
+    #[serde(rename = "audio")]
+    Audio {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
+    /// Embedded resource (payload nested under `resource` per spec)
+    #[serde(rename = "resource")]
+    Resource { resource: EmbeddedResource },
+    /// Forward-compat fallback for unrecognized content types
+    #[serde(other)]
+    Unknown,
 }
 
 /// Message in prompt response
@@ -386,7 +445,11 @@ pub enum SamplingContent {
     Text { text: String },
     /// Image content (base64)
     #[serde(rename = "image")]
-    Image { data: String, mime_type: String },
+    Image {
+        data: String,
+        #[serde(rename = "mimeType")]
+        mime_type: String,
+    },
 }
 
 /// Message in a sampling request
@@ -520,11 +583,15 @@ impl SamplingChunk {
     }
 }
 
+/// MCP protocol revision Aleph speaks. Sent in the `initialize` body and as
+/// the `MCP-Protocol-Version` HTTP header on Streamable HTTP requests.
+pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
+
 impl InitializeParams {
     /// Create default initialize params for Aleph
     pub fn aleph_default() -> Self {
         Self {
-            protocol_version: "2024-11-05".to_string(),
+            protocol_version: MCP_PROTOCOL_VERSION.to_string(),
             capabilities: ClientCapabilities::default(),
             client_info: ClientInfo {
                 name: "Aleph".to_string(),
@@ -678,7 +745,8 @@ mod tests {
 
     #[test]
     fn test_resource_content_text() {
-        let json = r#"{"type": "text", "uri": "file:///test.txt", "text": "Hello"}"#;
+        // Real wire shape: resources/read contents have NO "type" field.
+        let json = r#"{"uri": "file:///test.txt", "text": "Hello"}"#;
         let content: ResourceContentItem = serde_json::from_str(json).unwrap();
         assert!(matches!(content, ResourceContentItem::Text { .. }));
     }
@@ -688,6 +756,80 @@ mod tests {
         let json = r#"{"role": "user", "content": {"type": "text", "text": "Hello"}}"#;
         let msg: PromptMessage = serde_json::from_str(json).unwrap();
         assert!(matches!(msg.role, PromptRole::User));
+    }
+
+    #[test]
+    fn tool_result_content_parses_spec_camelcase_and_unknown() {
+        let json = r#"{
+            "content": [
+                {"type": "text", "text": "ok"},
+                {"type": "image", "data": "aGk=", "mimeType": "image/png"},
+                {"type": "audio", "data": "aGk=", "mimeType": "audio/wav"},
+                {"type": "resource_link", "uri": "file:///a.txt", "name": "a"},
+                {"type": "resource", "resource": {"uri": "file:///b.txt", "mimeType": "text/plain", "text": "body"}},
+                {"type": "hologram", "data": "future"}
+            ],
+            "isError": false
+        }"#;
+        let result: ToolCallResult = serde_json::from_str(json).unwrap();
+        assert_eq!(result.content.len(), 6);
+        assert!(matches!(
+            &result.content[1],
+            ToolResultContent::Image { mime_type, .. } if mime_type == "image/png"
+        ));
+        assert!(matches!(
+            &result.content[2],
+            ToolResultContent::Audio { .. }
+        ));
+        assert!(matches!(
+            &result.content[3],
+            ToolResultContent::ResourceLink { .. }
+        ));
+        assert!(matches!(
+            &result.content[4],
+            ToolResultContent::Resource { resource } if resource.text.as_deref() == Some("body")
+        ));
+        assert!(matches!(&result.content[5], ToolResultContent::Unknown));
+    }
+
+    #[test]
+    fn resource_read_contents_parse_without_type_tag() {
+        let json = r#"{"contents": [{"uri": "file:///t.txt", "mimeType": "text/plain", "text": "hello"}]}"#;
+        let result: ResourceReadResult = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            &result.contents[0],
+            ResourceContentItem::Text { mime_type, text, .. }
+                if text == "hello" && mime_type.as_deref() == Some("text/plain")
+        ));
+
+        let json = r#"{"contents": [{"uri": "file:///b.bin", "mimeType": "application/octet-stream", "blob": "aGk="}]}"#;
+        let result: ResourceReadResult = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            &result.contents[0],
+            ResourceContentItem::Blob { blob, .. } if blob == "aGk="
+        ));
+    }
+
+    #[test]
+    fn prompt_message_embedded_resource_parses_nested_shape() {
+        let json = r#"{"role": "user", "content": {"type": "resource", "resource": {"uri": "db://x", "text": "row"}}}"#;
+        let msg: PromptMessage = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            &msg.content,
+            PromptContentItem::Resource { resource } if resource.uri == "db://x"
+        ));
+    }
+
+    #[test]
+    fn sampling_image_content_uses_camelcase_mime_type() {
+        let json = r#"{"type": "image", "data": "aGk=", "mimeType": "image/jpeg"}"#;
+        let content: SamplingContent = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            &content,
+            SamplingContent::Image { mime_type, .. } if mime_type == "image/jpeg"
+        ));
+        let ser = serde_json::to_string(&content).unwrap();
+        assert!(ser.contains("mimeType"));
     }
 
     #[test]

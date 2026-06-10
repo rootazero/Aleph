@@ -185,32 +185,6 @@ impl McpPromptManager {
 
         Ok(all_prompts)
     }
-
-    /// Find a prompt by name across all servers
-    ///
-    /// Searches all connected servers for a prompt with the given name.
-    /// Returns the first match found.
-    ///
-    /// # Arguments
-    ///
-    /// * `name` - The prompt name to search for
-    ///
-    /// # Returns
-    ///
-    /// The prompt and its server name, if found
-    pub async fn find(&self, name: &str) -> Option<(String, McpPrompt)> {
-        let all_prompts = self.list_all().await.ok()?;
-
-        for (server, prompts) in all_prompts {
-            for prompt in prompts {
-                if prompt.name == name {
-                    return Some((server, prompt));
-                }
-            }
-        }
-
-        None
-    }
 }
 
 #[cfg(test)]
@@ -245,15 +219,6 @@ mod tests {
         // With no servers, getting a prompt should return NotFound
         let result = manager.get("server", "test-prompt", None).await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_prompt_manager_find_not_found() {
-        let client = Arc::new(McpClient::new());
-        let manager = McpPromptManager::new(client);
-
-        let result = manager.find("nonexistent-prompt").await;
-        assert!(result.is_none());
     }
 
     #[test]

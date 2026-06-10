@@ -514,6 +514,25 @@ impl McpClient {
     /// * `Ok(())` - If the connection was established successfully
     /// * `Err(AlephError)` - If connection failed
     pub async fn start_remote_server(&self, config: McpRemoteServerConfig) -> Result<()> {
+        // OAuth wiring: when no explicit Authorization header is configured,
+        // fall back to tokens stored by the `mcp_login` flow (refreshing
+        // expired ones). Injected before preflight so auth-gated endpoints
+        // are probed with credentials.
+        let mut config = config;
+        if !config.headers.contains_key("Authorization") {
+            if let Some(token) =
+                crate::mcp::auth::stored_bearer_token(&config.name, &config.url).await
+            {
+                tracing::info!(
+                    server = %config.name,
+                    "Using stored OAuth token for remote MCP server"
+                );
+                config
+                    .headers
+                    .insert("Authorization".to_string(), format!("Bearer {}", token));
+            }
+        }
+
         // Fail fast if the URL clearly serves a web page rather than an MCP
         // endpoint, instead of burning the full connect timeout on a doomed
         // handshake. Lenient: only an unambiguous HTML response is rejected.

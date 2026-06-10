@@ -44,8 +44,9 @@ impl McpRegistryTool {
     /// Wrap a registry entry. `name` is the registry key (the provider-safe
     /// qualified name `server__tool`); the definition supplies everything
     /// else. Returns `None` for non-MCP handlers — builtins that share the
-    /// bridge registry (`mcp_read_resource`, `mcp_get_prompt`) are wrapped
-    /// too, but with their declared source rather than a fabricated one.
+    /// bridge registry (`mcp_read_resource`, `mcp_get_prompt`, `mcp_login`)
+    /// are wrapped too, but with their declared source rather than a
+    /// fabricated one.
     pub fn from_registry_entry(name: &str, handler: Arc<dyn ToolHandler>) -> Self {
         let def = handler.definition();
         let server_id = match def.source {
@@ -273,7 +274,10 @@ mod tests {
     #[tokio::test]
     async fn execute_success_wraps_external_content() {
         let a = adapter(FakeHandler::success());
-        match a.execute(json!({"query": "hi"}), CancellationToken::new()).await {
+        match a
+            .execute(json!({"query": "hi"}), CancellationToken::new())
+            .await
+        {
             ToolResult::Success { output } => {
                 let text = output.as_str().expect("wrapped output is a string");
                 assert!(text.contains("EXTERNAL_UNTRUSTED_CONTENT"));
