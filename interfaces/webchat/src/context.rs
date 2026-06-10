@@ -1034,7 +1034,9 @@ pub fn DashboardContext(children: Children) -> impl IntoView {
                             on:click=|_| {
                                 #[cfg(target_arch = "wasm32")]
                                 {
-                                    let _ = web_sys::window().unwrap().location().reload();
+                                    if let Some(w) = web_sys::window() {
+                                        let _ = w.location().reload();
+                                    }
                                 }
                             }
                             class="mt-8 w-full py-3 bg-surface-sunken hover:bg-surface-raised rounded-xl transition-colors font-semibold"

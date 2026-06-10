@@ -38,13 +38,29 @@ pub fn RoutingRulesView() -> impl IntoView {
         }
     });
 
-    // Subscribe to config events
-    Effect::new(move || {
-        if state.is_connected.get() {
-            // TODO: Subscribe to config.routing_rules.* events
-            // and reload rules when changes occur
-        }
-    });
+    // Reload when routing rules change elsewhere (another client / CLI).
+    // The panel's connection already subscribes to `config.**` globally
+    // (context.rs), so only a local event handler is needed here.
+    {
+        let handler_id = state.subscribe_events(move |ev| {
+            if ev.topic != "config.changed" {
+                return;
+            }
+            let section = ev.data.get("section").and_then(|s| s.as_str());
+            if section != Some("routing_rules") {
+                return;
+            }
+            spawn_local(async move {
+                if let Ok(list) = RoutingRulesApi::list(&state).await {
+                    rules.set(list);
+                }
+            });
+        });
+
+        on_cleanup(move || {
+            state.unsubscribe_events(handler_id);
+        });
+    }
 
     view! {
         <div class="flex flex-col h-full aleph-content-top">
