@@ -479,6 +479,17 @@ pub trait HarnessRunner: Send + Sync {
         // and falls through to the legacy resolution chain.
         max_iterations_override: Option<u32>,
     ) -> Result<FlowOutcome, FlowError>;
+
+    /// The guardrail registry this runner installs on its own harness, if
+    /// any. The gateway threads it into `SubagentTool` so spawned subagents
+    /// enforce the same Input/Output/ToolCall checks as the main harness
+    /// (Stage 5a inheritance — previously the spawner's `guardrails` field
+    /// existed but no production caller ever populated it). Default `None`
+    /// keeps test mocks and the simple engine unguarded, matching their
+    /// main-harness behavior.
+    fn guardrails(&self) -> Option<Arc<crate::guardrails::GuardrailRegistry>> {
+        None
+    }
 }
 
 impl Orchestrator {

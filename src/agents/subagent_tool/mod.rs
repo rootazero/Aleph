@@ -95,6 +95,12 @@ pub struct SubagentTool {
     /// Phase 3 — `provider_hint` → pinned-then-fall-through provider. An empty
     /// map (the `new()` default) means every subagent uses `provider`.
     pub(super) provider_overrides: HashMap<String, Arc<dyn AiProvider>>,
+    /// Stage 5a (#9) — the main harness's guardrail registry, threaded into
+    /// every child `AgentRuntime` so subagents enforce the same
+    /// Input/Output/ToolCall checks as the spawning harness. `None` (the
+    /// `new()` default) keeps subagents unguarded, matching a main harness
+    /// that has no registry configured.
+    pub(super) guardrails: Option<Arc<crate::guardrails::GuardrailRegistry>>,
 }
 
 impl SubagentTool {
@@ -139,7 +145,14 @@ impl SubagentTool {
             consecutive_failure_cap: None,
             turn_timeout: None,
             provider_overrides: HashMap::new(),
+            guardrails: None,
         }
+    }
+
+    /// Stage 5a (#9) — wire the guardrail registry inherited by subagents.
+    pub fn with_guardrails(mut self, registry: Arc<crate::guardrails::GuardrailRegistry>) -> Self {
+        self.guardrails = Some(registry);
+        self
     }
 
     /// Phase 3 — wire the per-`provider_hint` override registry. A subagent
