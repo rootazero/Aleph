@@ -81,8 +81,13 @@ pub async fn revoke(server_url: &str, device_id: &str, json: bool) -> CliResult<
 /// table layouts. Anything that doesn't look like an ISO timestamp is
 /// returned verbatim.
 fn short_ts(s: String) -> String {
+    // Char-safe prefix: the server response is external data, so a non-ISO
+    // string that happens to be ≥19 bytes with a `T` byte at index 10 but a
+    // multibyte scalar straddling byte 19 would panic on `&s[..19]`. `get`
+    // returns `None` on a non-char-boundary, in which case we fall back to the
+    // verbatim string rather than truncate.
     if s.len() >= 19 && s.as_bytes()[10] == b'T' {
-        s[..19].to_string()
+        s.get(..19).map_or(s.clone(), str::to_string)
     } else {
         s
     }
