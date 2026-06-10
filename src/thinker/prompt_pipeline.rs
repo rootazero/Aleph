@@ -292,6 +292,7 @@ impl PromptPipeline {
     /// 1710  VoiceModeLayer
     /// 1720  RuntimeContextLayer
     /// 1730  IdentityFilesLayer
+    /// 1735  ExtraFilesLayer
     /// 1740  MemoryAugmentationLayer
     /// 1745  MemoryProtocolLayer
     /// 1750  SessionContextGuideLayer
@@ -334,6 +335,7 @@ impl PromptPipeline {
             Box::new(SkillModeLayer),
             Box::new(CustomInstructionsLayer),
             Box::new(IdentityFilesLayer),
+            Box::new(ExtraFilesLayer),
             Box::new(MemoryAugmentationLayer),
             Box::new(MemoryProtocolLayer),
             Box::new(SessionContextGuideLayer),
@@ -527,13 +529,14 @@ mod tests {
     #[test]
     fn test_default_layers_count() {
         let pipeline = PromptPipeline::default_layers();
-        // 39 after StandingGoalLayer was added (2026-06-08).
+        // 40 after ExtraFilesLayer was added (2026-06-10).
         // Previous counts: 36 → 37 (SessionBudgetLayer, Phase 4, 2026-05-20)
         // → 38 (ToolRuntimeStateLayer) → 37 (McpToolIndexLayer removed as dead
         // code, 2026-05-31) → 38 (ExecutionPlanLayer re-surfaces the active
         // scratchpad plan per turn) → 39 (StandingGoalLayer re-surfaces the
-        // active standing goal per turn, 2026-06-08). See `default_layers`.
-        assert_eq!(pipeline.layer_count(), 39);
+        // active standing goal per turn, 2026-06-08) → 40 (ExtraFilesLayer
+        // renders `[prompt.extra_files]`, 2026-06-10). See `default_layers`.
+        assert_eq!(pipeline.layer_count(), 40);
     }
 
     #[test]
@@ -903,10 +906,13 @@ mod stability_tests {
         assert!(dynamic_names.contains(&"execution_plan"));
         // StandingGoalLayer re-surfaces the active standing goal per turn.
         assert!(dynamic_names.contains(&"standing_goal"));
+        // ExtraFilesLayer renders user-configured `[prompt.extra_files]`
+        // content, re-read off disk per prompt build — naturally dynamic.
+        assert!(dynamic_names.contains(&"extra_files"));
         assert_eq!(
             dynamic_names.len(),
-            13,
-            "Exactly 13 dynamic layers expected"
+            14,
+            "Exactly 14 dynamic layers expected"
         );
     }
 

@@ -260,6 +260,10 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         session_epoch_registrar,
         cheap_provider: None,
         mcp_handle,
+        // Wire `[prompt.extra_files]` so the documented config section has a
+        // production consumer (`ExtraFilesLayer` via `build_system_prompt`).
+        // Disabled / empty config keeps prompts byte-identical.
+        prompt_extra_files: Some(config.prompt.extra_files.clone()),
     });
 
     // PHASE-6: thread routing overrides from `aleph.toml [flow_routing]`.

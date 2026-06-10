@@ -58,6 +58,9 @@ mod voice_mode;
 // --- Identity files layer ---
 mod identity_files;
 
+// --- Extra files layer ([prompt.extra_files]) ---
+mod extra_files;
+
 // --- Curated memory layer ---
 mod curated_memory;
 
@@ -101,6 +104,7 @@ pub use tools::ToolsLayer;
 pub use chain_context::ChainContextLayer;
 pub use curated_memory::CuratedMemoryLayer;
 pub use environment::EnvironmentLayer;
+pub use extra_files::ExtraFilesLayer;
 pub use heartbeat::HeartbeatLayer;
 pub use identity_files::IdentityFilesLayer;
 pub use inbound_context::InboundContextLayer;

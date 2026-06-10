@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 
 /// Configuration for extra files injected into system prompt.
 ///
-/// Equivalent to registering an `ExtraFilesHook` without writing code.
+/// Loaded (size-capped) by the harness bridge on every prompt build and
+/// rendered by `ExtraFilesLayer`. Relative paths resolve against the
+/// per-run workspace when one is set, else the daemon working directory.
 ///
 /// ```toml
 /// [prompt.extra_files]
