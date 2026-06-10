@@ -753,12 +753,6 @@ impl AgentHarness {
                 }
             };
         }
-        if is_empty_response(&response) {
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::EmptyResponseExhausted,
-            );
-        }
-
         // 3b-pre. Context-window-exceeded recovery (claude-code parity).
         // `model_context_window_exceeded` means the *context window* — not
         // the output cap — filled mid-generation. The resume-nudge loop in
@@ -867,14 +861,21 @@ impl AgentHarness {
                 }
             };
         }
-        if matches!(
+        // Exit-point reason fidelity. Capture the surviving response's
+        // degradation verdicts here — after every bounded recovery loop has
+        // had its chance to replace `response`, and before tool-call
+        // promotion / output guardrails may rewrite it. The Done branch below
+        // converts a verdict into a terminate reason only when this turn
+        // actually ends the run: setting them mid-turn (the previous shape)
+        // left a stale `MaxOutputTokensExhausted` behind whenever a truncated
+        // response still carried tool calls and the run later completed
+        // cleanly, and a stale `EmptyResponseExhausted` whenever a rescue
+        // replaced an empty response or a verifier veto forced a continue.
+        let empty_after_retries = is_empty_response(&response);
+        let max_tokens_after_recovery = matches!(
             response.stop_reason,
             crate::providers::adapter::StopReason::MaxTokens
-        ) {
-            self.set_terminate_reason(
-                crate::orchestrator::dispatch::TerminateReason::MaxOutputTokensExhausted,
-            );
-        }
+        );
 
         // 3c. Plain-text tool-call promotion (openclaw tool-call-repair
         // parity). When the provider returned text that *encodes* a tool call
@@ -1145,6 +1146,19 @@ impl AgentHarness {
             metrics_for_trace = zero_metrics;
             result = Ok((TurnState::Continue, 0, true, None));
         } else if response.tool_calls.is_empty() {
+            // This turn ends the run, so a degraded final response IS the
+            // loop-exit cause. Both flags were captured right after their
+            // bounded recovery loops; a clean final turn leaves the default
+            // `Completed` untouched.
+            if max_tokens_after_recovery {
+                self.set_terminate_reason(
+                    crate::orchestrator::dispatch::TerminateReason::MaxOutputTokensExhausted,
+                );
+            } else if empty_after_retries {
+                self.set_terminate_reason(
+                    crate::orchestrator::dispatch::TerminateReason::EmptyResponseExhausted,
+                );
+            }
             outcome_for_trace = crate::harness::trace::LoopTraceTurnOutcome::Stop;
             metrics_for_trace = zero_metrics;
             result = Ok((TurnState::Done, 0, false, None));
@@ -1199,6 +1213,12 @@ impl AgentHarness {
             };
             if matches!(after_directive, Some(LoopDirective::StopDiminishing)) {
                 self.hit_limit.store(true, Ordering::Relaxed);
+                // Every other cap path records its exit cause; without this
+                // the run reported whatever reason was last set (usually the
+                // default `Completed`) despite exiting on diminishing returns.
+                self.set_terminate_reason(
+                    crate::orchestrator::dispatch::TerminateReason::DiminishingReturns,
+                );
                 self.fire_grace_turn(
                     session_id,
                     &events,

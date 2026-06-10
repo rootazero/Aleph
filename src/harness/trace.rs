@@ -39,8 +39,6 @@ pub enum LoopTraceEvent {
         call: ToolCallEndEvent,
         result: crate::tools::runtime::ToolResult,
     },
-    /// Tool summary generated
-    ToolSummary { iteration: usize, summary: String },
     /// Turn started
     TurnStarted { iteration: usize },
     /// Turn state entered
@@ -119,17 +117,20 @@ pub enum LoopTraceEvent {
     },
 }
 
-/// Kind of text stream
+/// Kind of text stream. Live incremental text travels through the
+/// `HarnessCallback::on_delta` seam, not the trace — so the loop only ever
+/// emits authoritative `Final` text here. (The protocol-side
+/// `AgentTraceTextKind::Intermediate` survives for stored legacy blobs.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LoopTraceTextKind {
     /// Final text (no more coming)
     Final,
-    /// Intermediate text (more to come)
-    Intermediate,
 }
 
-/// State entered during turn execution.
+/// State entered during turn execution. Only the two phases the loop
+/// actually has — Think → Act (R10 dumb loop). The protocol-side
+/// `AgentTraceState` keeps its wider set for stored legacy blobs.
 ///
 /// `#[non_exhaustive]`: pre-emptive forward-compat for new turn states
 /// (e.g. future `Compact`, `Verify`, `Recover` sub-phases). External
@@ -138,11 +139,8 @@ pub enum LoopTraceTextKind {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum LoopTraceState {
-    Prepare,
     Think,
-    Resolve,
     Act,
-    Finalize,
 }
 
 /// Outcome of a turn.
@@ -240,9 +238,6 @@ impl From<LoopTraceEvent> for aleph_protocol::AgentTraceEvent {
                     }
                 },
             },
-            LoopTraceEvent::ToolSummary { iteration, summary } => {
-                aleph_protocol::AgentTraceEvent::ToolSummary { iteration, summary }
-            }
             LoopTraceEvent::TurnStarted { iteration } => {
                 aleph_protocol::AgentTraceEvent::TurnStarted { iteration }
             }
@@ -342,7 +337,6 @@ impl From<LoopTraceTextKind> for aleph_protocol::AgentTraceTextKind {
     fn from(kind: LoopTraceTextKind) -> Self {
         match kind {
             LoopTraceTextKind::Final => aleph_protocol::AgentTraceTextKind::Final,
-            LoopTraceTextKind::Intermediate => aleph_protocol::AgentTraceTextKind::Intermediate,
         }
     }
 }
@@ -350,11 +344,8 @@ impl From<LoopTraceTextKind> for aleph_protocol::AgentTraceTextKind {
 impl From<LoopTraceState> for aleph_protocol::AgentTraceState {
     fn from(state: LoopTraceState) -> Self {
         match state {
-            LoopTraceState::Prepare => aleph_protocol::AgentTraceState::Prepare,
             LoopTraceState::Think => aleph_protocol::AgentTraceState::Think,
-            LoopTraceState::Resolve => aleph_protocol::AgentTraceState::Resolve,
             LoopTraceState::Act => aleph_protocol::AgentTraceState::Act,
-            LoopTraceState::Finalize => aleph_protocol::AgentTraceState::Finalize,
         }
     }
 }

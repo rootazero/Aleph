@@ -266,18 +266,11 @@ mod tests {
     #[test]
     fn forwarding_other_turn_states_not_translated() {
         let (_inner, tracker, wrapper) = setup();
-        for state in [
-            LoopTraceState::Prepare,
-            LoopTraceState::Resolve,
-            LoopTraceState::Act,
-            LoopTraceState::Finalize,
-        ] {
-            wrapper.on_trace(&LoopTraceEvent::TurnStateEntered {
-                iteration: 1,
-                state,
-            });
-        }
-        // Only Think translates; others are forwarded but not stored.
+        wrapper.on_trace(&LoopTraceEvent::TurnStateEntered {
+            iteration: 1,
+            state: LoopTraceState::Act,
+        });
+        // Only Think translates; Act is forwarded but not stored.
         assert!(tracker.progress_snapshot("rid", 10).is_empty());
     }
 }
