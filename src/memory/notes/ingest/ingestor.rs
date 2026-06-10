@@ -16,8 +16,8 @@ use crate::memory::notes::governance::gate::{
 };
 use crate::memory::notes::indexer::NoteIndexer;
 use crate::memory::notes::ingest::plan::{IngestPlan, PageOp, SchemaProposal};
-use crate::memory::notes::ingest::prompts::build_compound_system_prompt;
-use crate::memory::notes::ingest::ref_table::RefTable;
+use crate::memory::notes::ingest::prompts::{build_compound_system_prompt, PROMPT_LINK_REPAIR};
+use crate::memory::notes::ingest::ref_table::{RefTable, ResolveStats};
 use crate::memory::notes::ingest::retrieve::{RelatedBudget, RelatedPage};
 use crate::memory::notes::orientation::NoteOrientation;
 use crate::memory::notes::store::NoteStore;
@@ -368,6 +368,11 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
             .dedup_redirect_creates(agent_id, plan.ops, &related)
             .await;
 
+        // Link-contract harmony gate: repair linkless Creates (or accept an
+        // explicit isolation) before governance gating. Runs after dedup so a
+        // Create already redirected into an Append is not re-examined.
+        plan.ops = self.enforce_link_contract(plan.ops, &related).await;
+
         // Governance gate: scoped to PageOp::Create in this commit. Other
         // PageOp variants (Append/Update/Contradict/Link/Supersede) pass
         // through unchanged and will be gated in a follow-up commit. When
@@ -400,6 +405,7 @@ impl<S: NoteStore + Send + Sync + 'static> CompoundIngestor for DefaultCompoundI
                 plan2.ops = self
                     .dedup_redirect_creates(agent_id, plan2.ops, &related)
                     .await;
+                plan2.ops = self.enforce_link_contract(plan2.ops, &related).await;
                 if self.gate.is_some() {
                     plan2.ops = self.filter_ops_through_gate(agent_id, plan2.ops).await?;
                     if plan2.ops.is_empty() {
@@ -656,6 +662,137 @@ impl<S: NoteStore + Send + Sync + 'static> DefaultCompoundIngestor<S> {
                 }
             })
             .collect()
+    }
+
+    /// Link-contract harmony gate. When the related set is non-empty, a
+    /// `Create` with neither `links` nor `relations` violates the mandatory
+    /// linking contract in `PROMPT_COMPOUND_PLAN` rule 6. One lightweight
+    /// repair LLM call asks for `[P<n>]` links (anti-hallucination via
+    /// `RefTable`) or an explicit `isolated` declaration. Repaired links
+    /// merge back into the op; every failure degrades to pass-through —
+    /// linking is an enhancement and must never block memory persistence.
+    async fn enforce_link_contract(
+        &self,
+        ops: Vec<PageOp>,
+        related: &[RelatedPage],
+    ) -> Vec<PageOp> {
+        if related.is_empty() {
+            return ops;
+        }
+        let violating: Vec<usize> = ops
+            .iter()
+            .enumerate()
+            .filter_map(|(i, op)| match op {
+                PageOp::Create {
+                    links, relations, ..
+                } if links.is_empty() && relations.is_empty() => Some(i),
+                _ => None,
+            })
+            .collect();
+        if violating.is_empty() {
+            return ops;
+        }
+
+        // Repair prompt input: the violating notes plus the same [P<n>]
+        // table the planner saw.
+        let mut user = String::from("## New notes with no links\n\n");
+        for (slot, &i) in violating.iter().enumerate() {
+            if let PageOp::Create {
+                note_path,
+                title,
+                summary,
+                facts,
+                ..
+            } = &ops[i]
+            {
+                user.push_str(&format!(
+                    "[note {slot}] path={note_path} title={title}\nsummary: {summary}\nfacts:\n"
+                ));
+                for f in facts.iter().take(6) {
+                    user.push_str(&format!("- {f}\n"));
+                }
+                user.push('\n');
+            }
+        }
+        user.push_str("## Related existing pages\n\n");
+        for (i, rp) in related.iter().enumerate() {
+            user.push_str(&format!(
+                "{} {} — {}\n",
+                RefTable::token(i),
+                rp.path,
+                rp.summary
+            ));
+        }
+
+        let msgs = [UnifiedMessage::user(&user)];
+        let resp = match self
+            .provider
+            .process(RequestPayload::new(&msgs).with_system(Some(PROMPT_LINK_REPAIR)))
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                warn!("link contract repair LLM failed (pass-through): {e}");
+                return ops;
+            }
+        };
+        let Some(json) = extract_json_robust(&resp.text_content()) else {
+            warn!("link contract repair: no JSON in response (pass-through)");
+            return ops;
+        };
+
+        let refs = RefTable::from_related(related);
+        let mut ops = ops;
+        let repairs = json
+            .get("repairs")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let mut repaired = 0usize;
+        for rep in &repairs {
+            let Some(slot) = rep.get("note_index").and_then(|v| v.as_u64()) else {
+                continue;
+            };
+            let Some(&op_i) = violating.get(slot as usize) else {
+                continue;
+            };
+            if rep
+                .get("isolated")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                continue; // explicit isolation accepted
+            }
+            let mut new_links: Vec<String> = rep
+                .get("links")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|l| l.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut stats = ResolveStats::default();
+            refs.resolve_links(&mut new_links, &mut stats);
+            if stats.dropped_links > 0 {
+                warn!(
+                    dropped = stats.dropped_links,
+                    "link contract repair: dropped hallucinated tokens"
+                );
+            }
+            if new_links.is_empty() {
+                continue;
+            }
+            if let PageOp::Create { links, .. } = &mut ops[op_i] {
+                links.extend(new_links);
+                links.dedup();
+                repaired += 1;
+            }
+        }
+        if repaired > 0 {
+            info!(repaired, "link contract: repaired linkless creates");
+        }
+        ops
     }
 
     /// Run each `PageOp::Create` through `self.gate` and drop ops whose
@@ -1920,5 +2057,149 @@ mod plan_tests {
             matches!(out.as_slice(), [PageOp::Create { .. }]),
             "noop floored to >= dedup_threshold, so a 0.625 match stays ADD, not NOOP"
         );
+    }
+}
+
+#[cfg(test)]
+mod link_contract_tests {
+    use super::*;
+    use crate::memory::embedding_provider::tests::MockEmbeddingProvider;
+    use crate::memory::store::SqliteMemoryBackend;
+    use crate::providers::recording_mock::RecordingMockProvider;
+
+    fn related_page(path: &str) -> RelatedPage {
+        RelatedPage {
+            path: path.to_string(),
+            title: path.to_string(),
+            summary: "a related page".into(),
+            content_preview: String::new(),
+            tags: vec![],
+            content_hash: "h".into(),
+            score: 0.5,
+        }
+    }
+
+    fn linkless_create(path: &str) -> PageOp {
+        PageOp::Create {
+            note_path: path.to_string(),
+            title: "T".into(),
+            summary: "S".into(),
+            facts: vec!["f1".into()],
+            links: vec![],
+            tags: vec![],
+            relations: vec![],
+        }
+    }
+
+    fn mk_ingestor(
+        canned: &str,
+    ) -> (
+        tempfile::TempDir,
+        DefaultCompoundIngestor<SqliteMemoryBackend>,
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let indexer = Arc::new(NoteIndexer::new(dir.path().join("note"), backend.clone()));
+        let ing = DefaultCompoundIngestor {
+            store: backend,
+            indexer,
+            provider: Arc::new(RecordingMockProvider::new(canned.into())),
+            embedder: Arc::new(MockEmbeddingProvider::new(1024, "mock")),
+            orientation: None,
+            memory_dir: dir.path().join("note"),
+            budget: RelatedBudget::default(),
+            embedding_manager: None,
+            gate: None,
+        };
+        (dir, ing)
+    }
+
+    #[tokio::test]
+    async fn repairs_linkless_create_with_valid_token() {
+        let (_d, ing) =
+            mk_ingestor(r#"{"repairs":[{"note_index":0,"links":["[P1]"],"isolated":false}]}"#);
+        let related = vec![related_page("learning/a"), related_page("learning/b")];
+        let ops = ing
+            .enforce_link_contract(vec![linkless_create("learning/new")], &related)
+            .await;
+        match &ops[0] {
+            PageOp::Create { links, .. } => assert_eq!(links, &vec!["learning/b".to_string()]),
+            _ => panic!("expected create"),
+        }
+    }
+
+    #[tokio::test]
+    async fn out_of_range_token_dropped_and_op_passes_through() {
+        let (_d, ing) =
+            mk_ingestor(r#"{"repairs":[{"note_index":0,"links":["[P9]"],"isolated":false}]}"#);
+        let related = vec![related_page("learning/a")];
+        let ops = ing
+            .enforce_link_contract(vec![linkless_create("learning/new")], &related)
+            .await;
+        match &ops[0] {
+            PageOp::Create { links, .. } => assert!(links.is_empty()),
+            _ => panic!("expected create"),
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_isolation_is_accepted() {
+        let (_d, ing) =
+            mk_ingestor(r#"{"repairs":[{"note_index":0,"links":[],"isolated":true}]}"#);
+        let related = vec![related_page("learning/a")];
+        let ops = ing
+            .enforce_link_contract(vec![linkless_create("learning/new")], &related)
+            .await;
+        match &ops[0] {
+            PageOp::Create { links, .. } => assert!(links.is_empty()),
+            _ => panic!("expected create"),
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_related_skips_repair_entirely() {
+        // The canned response is a valid repair — if the gate wrongly fired
+        // and applied it, links would no longer be empty and this fails.
+        let (_d, ing) =
+            mk_ingestor(r#"{"repairs":[{"note_index":0,"links":["[P0]"],"isolated":false}]}"#);
+        let ops = ing
+            .enforce_link_contract(vec![linkless_create("learning/new")], &[])
+            .await;
+        match &ops[0] {
+            PageOp::Create { links, .. } => assert!(links.is_empty()),
+            _ => panic!("expected create"),
+        }
+    }
+
+    #[tokio::test]
+    async fn malformed_llm_response_passes_through() {
+        let (_d, ing) = mk_ingestor("not json at all");
+        let related = vec![related_page("learning/a")];
+        let ops = ing
+            .enforce_link_contract(vec![linkless_create("learning/new")], &related)
+            .await;
+        assert_eq!(ops.len(), 1);
+        match &ops[0] {
+            PageOp::Create { links, .. } => assert!(links.is_empty()),
+            _ => panic!("expected create"),
+        }
+    }
+
+    #[tokio::test]
+    async fn already_linked_create_not_touched() {
+        let (_d, ing) =
+            mk_ingestor(r#"{"repairs":[{"note_index":0,"links":["[P0]"],"isolated":false}]}"#);
+        let related = vec![related_page("learning/a")];
+        let mut op = linkless_create("learning/new");
+        if let PageOp::Create { links, .. } = &mut op {
+            links.push("learning/existing".into());
+        }
+        let ops = ing.enforce_link_contract(vec![op], &related).await;
+        match &ops[0] {
+            PageOp::Create { links, .. } => {
+                assert_eq!(links, &vec!["learning/existing".to_string()])
+            }
+            _ => panic!("expected create"),
+        }
     }
 }
