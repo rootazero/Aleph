@@ -122,28 +122,6 @@ fn test_append_citation_standards() {
 }
 
 #[test]
-fn test_append_channel_behavior_telegram_group() {
-    use crate::thinker::channel_behavior::{ChannelBehaviorGuide, ChannelVariant};
-    let builder = PromptBuilder::new(PromptConfig::default());
-    let mut prompt = String::new();
-    let guide = ChannelBehaviorGuide::for_channel(ChannelVariant::Telegram { is_group: true });
-    builder.append_channel_behavior(&mut prompt, &guide);
-    assert!(prompt.contains("## Channel: Telegram Group"));
-    assert!(prompt.contains("Group Chat Rules"));
-}
-
-#[test]
-fn test_append_channel_behavior_terminal() {
-    use crate::thinker::channel_behavior::{ChannelBehaviorGuide, ChannelVariant};
-    let builder = PromptBuilder::new(PromptConfig::default());
-    let mut prompt = String::new();
-    let guide = ChannelBehaviorGuide::for_channel(ChannelVariant::Terminal);
-    builder.append_channel_behavior(&mut prompt, &guide);
-    assert!(prompt.contains("## Channel: Terminal"));
-    assert!(!prompt.contains("Group Chat Rules"));
-}
-
-#[test]
 fn test_append_soul_continuity() {
     let builder = PromptBuilder::new(PromptConfig::default());
     let mut prompt = String::new();

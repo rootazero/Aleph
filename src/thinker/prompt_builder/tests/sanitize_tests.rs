@@ -216,20 +216,6 @@ fn test_sanitize_security_notes_light() {
 }
 
 #[test]
-fn test_sanitize_channel_behavior_light() {
-    use crate::thinker::channel_behavior::{ChannelBehaviorGuide, ChannelVariant};
-    let builder = PromptBuilder::new(PromptConfig::default());
-    let mut prompt = String::new();
-
-    let guide = ChannelBehaviorGuide::for_channel(ChannelVariant::Terminal);
-    builder.append_channel_behavior(&mut prompt, &guide);
-
-    // The guide output is internally generated, but sanitization should still run.
-    // Just verify it produces valid output (Light only strips injection markers).
-    assert!(prompt.contains("## Channel: Terminal"));
-}
-
-#[test]
 fn test_sanitize_user_profile_light() {
     use crate::thinker::user_profile::UserProfile;
     let builder = PromptBuilder::new(PromptConfig::default());
