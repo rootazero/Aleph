@@ -580,7 +580,9 @@ html.glass {
     background-color: var(--msg-glass-bg);
     border: 1px solid var(--msg-glass-border);
     border-top-color: var(--msg-glass-border-top);
-    box-shadow: var(--msg-glass-shadow);
+    --tw-shadow: var(--msg-glass-shadow);
+    box-shadow: var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+                var(--tw-ring-offset-shadow), var(--tw-ring-shadow), var(--tw-shadow);
   }
   /* User bubble — accent-tinted glass. Every colour derives from
      --color-primary via color-mix so the four accent palettes
