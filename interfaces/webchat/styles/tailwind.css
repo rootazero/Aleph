@@ -508,6 +508,109 @@ html.glass .glass::after { opacity: 0.5; }
 }
 
 /* ============================================================
+   Message glass — faux-glass materials for the chat message flow.
+   NO backdrop-filter by design: bubbles sit in the scroll flow over a
+   static panel background, so blur would cost compositor time for an
+   invisible effect (hundreds of bubbles × per-frame cost). The look is
+   layered instead: translucent fill + 160° sheen + bright top edge +
+   soft shadow. Real backdrop-filter stays reserved for transient
+   surfaces (.glass on modals/menus).
+   Token states: light default → .dark / html.glass overrides → a
+   media-query branch for System mode (no class on <html>), mirroring
+   the reduced-transparency block below.
+   ============================================================ */
+:root {
+  --msg-glass-bg: oklch(1 0 0 / 0.62);
+  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.35), transparent 42%);
+  --msg-glass-border: oklch(0.40 0.02 295 / 0.14);
+  --msg-glass-border-top: oklch(0.40 0.02 295 / 0.20);
+  --msg-glass-shadow: 0 4px 16px oklch(0.35 0.02 295 / 0.10);
+  --glass-inset-bg: oklch(0.45 0.02 295 / 0.06);
+  --glass-inset-border: oklch(0.40 0.02 295 / 0.12);
+  --glass-inset-border-top: oklch(0.40 0.02 295 / 0.16);
+  --code-header-bg: oklch(0.45 0.02 295 / 0.08);
+  --code-pre-bg: oklch(0.45 0.02 295 / 0.05);
+}
+.dark {
+  --msg-glass-bg: oklch(0.24 0.02 310 / 0.75);
+  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.05), transparent 42%);
+  --msg-glass-border: oklch(1 0 0 / 0.10);
+  --msg-glass-border-top: oklch(1 0 0 / 0.22);
+  --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.25);
+  --glass-inset-bg: oklch(0.19 0.02 310 / 0.7);
+  --glass-inset-border: oklch(1 0 0 / 0.07);
+  --glass-inset-border-top: oklch(1 0 0 / 0.13);
+  --code-header-bg: oklch(0.19 0.02 310 / 0.9);
+  --code-pre-bg: oklch(0.15 0.02 310 / 0.85);
+}
+/* Glass theme: dark-adjacent values with a brighter specular top edge. */
+html.glass {
+  --msg-glass-bg: oklch(0.24 0.02 310 / 0.65);
+  --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.07), transparent 42%);
+  --msg-glass-border: oklch(1 0 0 / 0.12);
+  --msg-glass-border-top: oklch(1 0 0 / 0.35);
+  --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.30);
+  --glass-inset-bg: oklch(0.19 0.02 310 / 0.6);
+  --glass-inset-border: oklch(1 0 0 / 0.09);
+  --glass-inset-border-top: oklch(1 0 0 / 0.18);
+  --code-header-bg: oklch(0.17 0.02 310 / 0.85);
+  --code-pre-bg: oklch(0.14 0.02 310 / 0.8);
+}
+/* System mode (no explicit class) + OS dark — same values as .dark. */
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark):not(.glass) {
+    --msg-glass-bg: oklch(0.24 0.02 310 / 0.75);
+    --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.05), transparent 42%);
+    --msg-glass-border: oklch(1 0 0 / 0.10);
+    --msg-glass-border-top: oklch(1 0 0 / 0.22);
+    --msg-glass-shadow: 0 4px 16px oklch(0 0 0 / 0.25);
+    --glass-inset-bg: oklch(0.19 0.02 310 / 0.7);
+    --glass-inset-border: oklch(1 0 0 / 0.07);
+    --glass-inset-border-top: oklch(1 0 0 / 0.13);
+    --code-header-bg: oklch(0.19 0.02 310 / 0.9);
+    --code-pre-bg: oklch(0.15 0.02 310 / 0.85);
+  }
+}
+
+@layer components {
+  /* Assistant bubble — faux glass. Text colour comes from the caller's
+     text-* utility; this class owns only the material. */
+  .msg-glass {
+    background-image: var(--msg-glass-sheen);
+    background-color: var(--msg-glass-bg);
+    border: 1px solid var(--msg-glass-border);
+    border-top-color: var(--msg-glass-border-top);
+    box-shadow: var(--msg-glass-shadow);
+  }
+  /* User bubble — accent-tinted glass. Every colour derives from
+     --color-primary via color-mix so the four accent palettes
+     (ocean/forest/sunset/rose) follow automatically. */
+  .msg-glass-user {
+    color: white;
+    background-image: linear-gradient(160deg, oklch(1 0 0 / 0.10), transparent 45%);
+    background-color: color-mix(in oklch, var(--color-primary) 68%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-primary) 45%, transparent);
+    border-top-color: color-mix(in oklch, white 28%, var(--color-primary));
+    box-shadow: 0 4px 14px color-mix(in oklch, var(--color-primary) 25%, transparent);
+  }
+  /* Errored final answer — danger-tinted glass (same recipe, danger hue). */
+  .msg-glass-danger {
+    background-image: linear-gradient(160deg, oklch(1 0 0 / 0.06), transparent 45%);
+    background-color: color-mix(in oklch, var(--color-danger) 16%, transparent);
+    border: 1px solid color-mix(in oklch, var(--color-danger) 35%, transparent);
+  }
+  /* Inset surface — the lightest tier, for second-level surfaces nested
+     inside bubbles (tool cards, reasoning panel, step strip, date pill,
+     hero chips). Material hierarchy: panel atmosphere → msg-glass →
+     glass-inset. */
+  .glass-inset {
+    background-color: var(--glass-inset-bg);
+    border: 1px solid var(--glass-inset-border);
+    border-top-color: var(--glass-inset-border-top);
+  }
+}
+
+/* ============================================================
    Accessibility: macOS "Reduce transparency" (and the CSS media query it
    maps to) → drop all glass to opaque solids. No backdrop-filter, no
    see-through. !important on the token overrides wins the cascade
@@ -537,6 +640,22 @@ html.glass .glass::after { opacity: 0.5; }
     --aleph-canvas-base: var(--aleph-solid-ground) !important;
     --color-surface-raised: oklch(0.25 0.020 300) !important;
   }
+  /* Message-flow faux glass → opaque solids. */
+  .msg-glass {
+    background-color: var(--color-surface-raised) !important;
+    background-image: none !important;
+    box-shadow: none !important;
+  }
+  .msg-glass-user {
+    background-color: var(--color-primary) !important;
+    background-image: none !important;
+    box-shadow: none !important;
+  }
+  .msg-glass-danger {
+    background-color: var(--color-danger-subtle) !important;
+    background-image: none !important;
+  }
+  .glass-inset { background-color: var(--color-surface-sunken) !important; }
 }
 @media (prefers-reduced-transparency: reduce) and (prefers-color-scheme: dark) {
   :root:not(.light):not(.glass) { --color-surface-raised: oklch(0.20 0.018 310) !important; }
