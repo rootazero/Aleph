@@ -1,0 +1,12 @@
+# Shared build settings for the main repo and every .claude/worktrees/* checkout
+# (cargo discovers this file by walking up parent directories from each worktree).
+
+[build]
+# Single shared target dir: cargo's file lock serializes builds from parallel
+# Claude Code sessions. On 2026-06-10 this 16GB machine froze three times when
+# several worktrees each ran their own full alephcore build (~7GB per rustc).
+target-dir = "/Volumes/TBU4/Workspace/Aleph/target"
+
+[profile.dev]
+# Line tables only: full debuginfo (2) is what pushed rustc peaks to ~7GB.
+debug = 1
