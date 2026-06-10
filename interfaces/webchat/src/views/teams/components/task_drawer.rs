@@ -188,8 +188,8 @@ pub fn TaskDetailDrawer(
 
                 view! {
                     <div class="fixed inset-0 z-40 flex justify-end">
-                        <div class="absolute inset-0 bg-black/30" on:click=close></div>
-                        <aside class="relative w-96 h-full bg-surface border-l border-border shadow-xl flex flex-col">
+                        <div class="aleph-scrim absolute inset-0 bg-black/30" on:click=close></div>
+                        <aside class="glass relative w-96 h-full bg-surface-overlay/85 border-l border-border shadow-xl flex flex-col">
                             <header class="px-4 py-3 border-b border-border flex items-start justify-between gap-2">
                                 <div class="min-w-0">
                                     <h3 class="text-sm font-semibold text-text-primary truncate">{subject}</h3>
