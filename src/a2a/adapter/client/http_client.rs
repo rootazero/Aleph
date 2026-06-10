@@ -311,6 +311,12 @@ impl A2AClient {
         self.auth_token.is_some()
     }
 
+    /// Whether the configured auth token equals `token` (`None` = no auth).
+    /// Used by the client pool to detect rotated credentials.
+    pub(crate) fn auth_token_matches(&self, token: Option<&str>) -> bool {
+        self.auth_token.as_deref() == token
+    }
+
     /// Construct the agent card URL for this client's base URL
     #[allow(dead_code)] // test-only helper
     fn agent_card_url(&self) -> String {

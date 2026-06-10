@@ -98,8 +98,10 @@ impl Default for A2AClientPool {
 /// auth state. `A2AClient` trims trailing slashes off `base_url` at
 /// construction, so compare against the trimmed form.
 fn client_matches(client: &A2AClient, agent: &RegisteredAgent) -> bool {
+    // Compare token *values*, not just presence — a rotated token with the
+    // same presence would otherwise keep serving stale credentials.
     client.base_url() == agent.base_url.trim_end_matches('/')
-        && client.has_auth() == agent.auth_token.is_some()
+        && client.auth_token_matches(agent.auth_token.as_deref())
 }
 
 #[cfg(test)]
