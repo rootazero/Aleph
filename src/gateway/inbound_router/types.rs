@@ -82,10 +82,12 @@ pub struct ChannelPolicyConfig {
     #[serde(default)]
     pub default_workspace: Option<PathBuf>,
     /// What to do when a message arrives while this channel's session is already
-    /// running a loop: `steer` (default — inject at the next turn boundary) or
+    /// running a loop: `steer` (default — inject at the next turn boundary),
     /// `interrupt` (cancel the in-flight run; the message restarts as a fresh
-    /// run via busy/retry). Set `busy_input_mode = "interrupt"` in the channel's
-    /// config block to opt in.
+    /// run via the busy queue), or `queue` (never disturb the running task; the
+    /// message is delivered as a fresh run once it finishes). Set
+    /// `busy_input_mode = "interrupt"` / `"queue"` in the channel's config
+    /// block to opt in.
     #[serde(default)]
     pub busy_input_mode: BusyInputMode,
 }
@@ -124,9 +126,9 @@ pub struct ChannelConfig {
     /// Working directory the Chat tier is locked into (absolute). `None` → the
     /// agent's own default workspace.
     pub default_workspace: Option<PathBuf>,
-    /// Busy-input policy for this channel: `Steer` (default) or `Interrupt`.
-    /// Stamped into each run's metadata so the execution engine's busy branch
-    /// can dispatch without re-reading channel config.
+    /// Busy-input policy for this channel: `Steer` (default), `Interrupt`, or
+    /// `Queue`. Stamped into each run's metadata so the execution engine's
+    /// busy branch can dispatch without re-reading channel config.
     pub busy_input_mode: BusyInputMode,
 }
 
@@ -248,7 +250,8 @@ impl ChannelConfig {
 
     /// Wire string for this channel's busy-input policy, stamped into the run's
     /// `busy_input_mode` metadata so the execution engine's busy branch can
-    /// dispatch (`steer` / `interrupt`) without re-reading channel config.
+    /// dispatch (`steer` / `interrupt` / `queue`) without re-reading channel
+    /// config.
     #[must_use]
     pub fn busy_input_mode_wire(&self) -> &'static str {
         self.busy_input_mode.as_wire()
@@ -558,8 +561,14 @@ mod permission_tier_tests {
 
     #[test]
     fn default_tier_is_chat() {
-        assert_eq!(ChannelPermissionLevel::default(), ChannelPermissionLevel::Chat);
-        assert_eq!(ChannelConfig::default().permission_level, ChannelPermissionLevel::Chat);
+        assert_eq!(
+            ChannelPermissionLevel::default(),
+            ChannelPermissionLevel::Chat
+        );
+        assert_eq!(
+            ChannelConfig::default().permission_level,
+            ChannelPermissionLevel::Chat
+        );
         // Safe default: an unconfigured channel maps to the gated "guest" role.
         assert_eq!(ChannelConfig::default().caller_role_str(), "guest");
     }
@@ -579,7 +588,10 @@ mod permission_tier_tests {
         });
         let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
         assert_eq!(p.permission_level, ChannelPermissionLevel::Config);
-        assert_eq!(p.default_workspace.as_deref(), Some(std::path::Path::new("/srv/work")));
+        assert_eq!(
+            p.default_workspace.as_deref(),
+            Some(std::path::Path::new("/srv/work"))
+        );
         assert!(!p.is_default());
     }
 
@@ -606,6 +618,31 @@ mod permission_tier_tests {
             "interrupt"
         );
         assert_eq!(ChannelConfig::default().busy_input_mode_wire(), "steer");
+    }
+
+    #[test]
+    fn policy_parses_queue_busy_input_mode() {
+        // The follow-up lane: queue mode must parse, register as non-default
+        // (so the metadata stamp fires), and round-trip its wire string.
+        let raw = serde_json::json!({
+            "bot_token": "secret",
+            "busy_input_mode": "queue",
+        });
+        let p: ChannelPolicyConfig = serde_json::from_value(raw).expect("parses");
+        assert_eq!(p.busy_input_mode, BusyInputMode::Queue);
+        assert!(!p.is_default());
+        assert_eq!(
+            ChannelConfig {
+                busy_input_mode: BusyInputMode::Queue,
+                ..Default::default()
+            }
+            .busy_input_mode_wire(),
+            "queue"
+        );
+        assert_eq!(
+            BusyInputMode::from_wire(Some("queue")),
+            BusyInputMode::Queue
+        );
     }
 
     #[test]

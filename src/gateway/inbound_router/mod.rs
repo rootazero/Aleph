@@ -5,6 +5,7 @@
 
 mod agent_resolver;
 pub mod approval_callback;
+mod busy_queue;
 mod command_handler;
 mod dedup;
 mod executor;
