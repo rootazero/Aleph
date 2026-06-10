@@ -15,6 +15,16 @@ impl ExtensionManager {
         let registration = self
             .find_service_registration(plugin_id, service_id)
             .await?;
+        // Manifest-declared services can exist before their plugin runtime is
+        // loaded — load it on demand (no-op when already loaded). A failure
+        // still flows into start_service, which records the Failed state.
+        if let Err(e) = self.ensure_plugin_loaded(plugin_id).await {
+            tracing::warn!(
+                plugin = %plugin_id,
+                error = %e,
+                "start_service: failed to load plugin runtime"
+            );
+        }
         let mut service_manager = self.service_manager.write().await;
         let loader = self.plugin_loader.read().await;
         service_manager.start_service(&registration, &loader)
@@ -32,6 +42,125 @@ impl ExtensionManager {
         let mut service_manager = self.service_manager.write().await;
         let loader = self.plugin_loader.read().await;
         service_manager.stop_service(&registration, &loader)
+    }
+
+    /// Start the `auto_start` services declared by a single (already-loaded)
+    /// plugin. Idempotent — services already Running are left alone.
+    ///
+    /// Returns the number of services that are Running afterwards.
+    pub(crate) async fn start_autostart_services(&self, plugin_id: &str) -> usize {
+        let pending: Vec<crate::extension::registry::ServiceRegistration> = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .list_services()
+                .into_iter()
+                .filter(|s| s.plugin_id == plugin_id && s.auto_start)
+                .cloned()
+                .collect()
+        };
+        if pending.is_empty() {
+            return 0;
+        }
+
+        let mut running = 0;
+        let mut service_manager = self.service_manager.write().await;
+        let loader = self.plugin_loader.read().await;
+        for registration in &pending {
+            match service_manager.start_service(registration, &loader) {
+                Ok(info) if info.state == crate::extension::types::ServiceState::Running => {
+                    running += 1;
+                }
+                Ok(info) => {
+                    tracing::warn!(
+                        plugin = %plugin_id,
+                        service = %registration.id,
+                        state = ?info.state,
+                        error = ?info.error,
+                        "autostart service did not reach Running state"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        plugin = %plugin_id,
+                        service = %registration.id,
+                        error = %e,
+                        "failed to autostart service"
+                    );
+                }
+            }
+        }
+        running
+    }
+
+    /// Load active plugins that declare `auto_start` services and start those
+    /// services. Idempotent; called at daemon boot and after hot-reloads —
+    /// mirrors the MCP transient-server auto-registration in
+    /// [`Self::sync_mcp_plugin_servers`].
+    ///
+    /// Returns the number of services Running afterwards.
+    pub async fn sync_plugin_services(&self) -> usize {
+        let plugin_ids: Vec<String> = {
+            let registry = self.plugin_registry.read().await;
+            let mut ids: Vec<String> = registry
+                .list_services()
+                .into_iter()
+                .filter(|s| s.auto_start)
+                .filter(|s| {
+                    registry
+                        .get_plugin(&s.plugin_id)
+                        .map(|r| r.status.is_active())
+                        .unwrap_or(false)
+                })
+                .map(|s| s.plugin_id.clone())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+
+        let mut running = 0;
+        for plugin_id in &plugin_ids {
+            // No-op when the plugin is already loaded; needs the loader write
+            // lock, so it must run before start_autostart_services takes the
+            // read lock.
+            if let Err(e) = self.ensure_plugin_loaded(plugin_id).await {
+                tracing::warn!(
+                    plugin = %plugin_id,
+                    error = %e,
+                    "sync_plugin_services: failed to load plugin for autostart services"
+                );
+                continue;
+            }
+            running += self.start_autostart_services(plugin_id).await;
+        }
+        running
+    }
+
+    /// Stop every running plugin service (best-effort). Called at daemon
+    /// shutdown so plugin background work is torn down before process exit.
+    pub async fn stop_all_services(&self) -> usize {
+        let mut service_manager = self.service_manager.write().await;
+        let loader = self.plugin_loader.read().await;
+        service_manager.stop_all(&loader).len()
+    }
+
+    /// Stop running services whose plugin is no longer active (removed or
+    /// disabled on disk). Called after hot-reloads rebuild the registry.
+    pub async fn stop_orphaned_services(&self) -> usize {
+        let active: std::collections::HashSet<String> = {
+            let registry = self.plugin_registry.read().await;
+            registry
+                .list_plugins()
+                .into_iter()
+                .filter(|r| r.status.is_active())
+                .map(|r| r.id.clone())
+                .collect()
+        };
+        let mut service_manager = self.service_manager.write().await;
+        let loader = self.plugin_loader.read().await;
+        service_manager
+            .stop_orphaned(|id| active.contains(id), &loader)
+            .len()
     }
 
     /// Get service status.

@@ -66,6 +66,13 @@ pub struct ServiceRegistration {
     pub stop_handler: String,
     /// ID of the plugin that registered this service
     pub plugin_id: String,
+    /// Start automatically when the plugin is loaded
+    #[serde(default = "default_service_auto_start")]
+    pub auto_start: bool,
+}
+
+fn default_service_auto_start() -> bool {
+    true
 }
 
 // ============================================================================
@@ -474,6 +481,7 @@ mod tests {
             start_handler: "start_worker".to_string(),
             stop_handler: "stop_worker".to_string(),
             plugin_id: "worker-plugin".to_string(),
+            auto_start: true,
         };
         assert_ne!(service.start_handler, service.stop_handler);
     }

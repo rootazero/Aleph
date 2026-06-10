@@ -408,6 +408,7 @@ mod tests {
             start_handler: "start".into(),
             stop_handler: "stop".into(),
             plugin_id: "test-mcp".into(),
+            auto_start: true,
         })];
 
         assert!(registrar.batch_register(caps, &mut registry).is_err());
