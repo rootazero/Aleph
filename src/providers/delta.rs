@@ -224,11 +224,15 @@ impl DeltaCollector {
 
     /// Consume the collector and produce a [`ProviderResponse`].
     ///
-    /// Malformed tool arguments are handled gracefully: if `serde_json::from_str` fails,
-    /// a warning is logged (including the full raw payload for telemetry) and an
-    /// empty object `Value::Object({})` is returned. The tool schema
-    /// validation then reports the missing fields, producing a structured
-    /// ToolError that the model can react to on the next turn.
+    /// Malformed tool arguments are handled gracefully: if `serde_json::from_str`
+    /// fails, a salvage pass ([`salvage_malformed_args`]) first repairs the
+    /// *emission defects* models are known to produce (raw control characters
+    /// inside string literals, invalid escape sequences, trailing commas) and
+    /// retries the parse. Only when the payload is still unparseable — the
+    /// signature of genuine mid-stream truncation — is a warning logged
+    /// (including the full raw payload for telemetry) and an empty object
+    /// `Value::Object({})` returned with `truncated_tool_call` flagged, so the
+    /// consumer promotes the turn to a retryable transient error.
     pub fn finish(mut self) -> ProviderResponse {
         // First non-empty-but-unparseable tool call: the signature of a stream
         // truncated mid-arguments (a complete tool call is always well-formed
@@ -252,18 +256,29 @@ impl DeltaCollector {
                 } else {
                     match serde_json::from_str::<Value>(&raw_args) {
                         Ok(v) => v,
-                        Err(e) => {
-                            warn!(
-                                tool_id = %id,
-                                tool_name = %name,
-                                error = %e,
-                                raw_args = %raw_args,
-                                "Malformed tool arguments — defaulting to empty object ((the tool layer will report missing fields))"
-                            );
-                            truncated_tool_call
-                                .get_or_insert_with(|| format!("{name}: {e}"));
-                            Value::Object(serde_json::Map::new())
-                        }
+                        Err(e) => match salvage_malformed_args(&raw_args) {
+                            Some(v) => {
+                                warn!(
+                                    tool_id = %id,
+                                    tool_name = %name,
+                                    error = %e,
+                                    "Malformed tool arguments salvaged by emission-defect repair"
+                                );
+                                v
+                            }
+                            None => {
+                                warn!(
+                                    tool_id = %id,
+                                    tool_name = %name,
+                                    error = %e,
+                                    raw_args = %raw_args,
+                                    "Malformed tool arguments — defaulting to empty object ((the tool layer will report missing fields))"
+                                );
+                                truncated_tool_call
+                                    .get_or_insert_with(|| format!("{name}: {e}"));
+                                Value::Object(serde_json::Map::new())
+                            }
+                        },
                     }
                 };
                 NativeToolCall {
@@ -347,6 +362,118 @@ impl DeltaCollector {
             thought_signature: None,
         })
     }
+}
+
+// =============================================================================
+// Malformed-argument salvage (emission-defect repair)
+// =============================================================================
+
+/// Conservative, non-additive salvage of model-emitted malformed argument JSON.
+///
+/// Open-weight models (and occasionally frontier ones) emit argument payloads
+/// with *emission defects* that are syntactically invalid JSON but semantically
+/// complete: literal newlines/tabs inside string values, invalid escape
+/// sequences like `\x` or `\'`, and trailing commas before a closing brace.
+/// Without salvage these burn a full provider retry through the
+/// `truncated_tool_call` path even though the payload is fully present.
+///
+/// Repairs are strictly non-additive — each either re-encodes a character that
+/// is already there or removes a redundant comma. The function **never closes
+/// unbalanced braces or brackets**: force-completing a truncated stream would
+/// execute the tool with silently-amputated arguments (e.g. a half-written
+/// `file_write` body), so genuine truncation must keep flowing to the typed
+/// retryable-error path the consumer already has.
+///
+/// Returns `Some(value)` only when a repair changed the payload *and* the
+/// repaired payload parses; `None` preserves the existing fallback behaviour.
+fn salvage_malformed_args(raw: &str) -> Option<Value> {
+    let repaired = repair_json_emission_defects(raw)?;
+    serde_json::from_str::<Value>(&repaired).ok()
+}
+
+/// Single-pass repair of the three known emission defects. Returns `None`
+/// when the input needed no repair (so the caller skips a pointless reparse).
+///
+/// Inside string literals:
+/// * raw ASCII control characters are escaped (`\n`, `\r`, `\t`, `\u00XX`)
+/// * a backslash followed by anything other than a valid JSON escape
+///   introducer (`" \ / b f n r t u`) has its backslash doubled
+///
+/// Outside string literals:
+/// * a comma whose next non-whitespace character is `}` or `]` is dropped
+fn repair_json_emission_defects(raw: &str) -> Option<String> {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out = String::with_capacity(raw.len() + 16);
+    let mut changed = false;
+    let mut in_string = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            match c {
+                '"' => {
+                    in_string = false;
+                    out.push(c);
+                }
+                '\\' => match chars.get(i + 1) {
+                    Some(&next) if matches!(next, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') => {
+                        out.push('\\');
+                        out.push(next);
+                        i += 1;
+                    }
+                    Some(&next) => {
+                        // Invalid escape introducer — double the backslash so
+                        // the literal character survives (`\x` → `\\x`).
+                        out.push_str("\\\\");
+                        out.push(next);
+                        changed = true;
+                        i += 1;
+                    }
+                    None => {
+                        // Dangling backslash at EOF: a truncation signature,
+                        // not an emission defect. Leave it so the reparse
+                        // fails and the truncation path engages.
+                        out.push('\\');
+                    }
+                },
+                c if (c as u32) < 0x20 => {
+                    match c {
+                        '\n' => out.push_str("\\n"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        other => {
+                            out.push_str(&format!("\\u{:04x}", other as u32));
+                        }
+                    }
+                    changed = true;
+                }
+                c => out.push(c),
+            }
+        } else {
+            match c {
+                '"' => {
+                    in_string = true;
+                    out.push(c);
+                }
+                ',' => {
+                    // Trailing comma: drop it when the next non-whitespace
+                    // character closes the container.
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j].is_whitespace() {
+                        j += 1;
+                    }
+                    if matches!(chars.get(j), Some(&'}') | Some(&']')) {
+                        changed = true; // skip the comma entirely
+                    } else {
+                        out.push(c);
+                    }
+                }
+                c => out.push(c),
+            }
+        }
+        i += 1;
+    }
+    changed.then_some(out)
 }
 
 // =============================================================================
@@ -638,6 +765,70 @@ mod tests {
         assert_eq!(
             resp.tool_calls[0].arguments,
             serde_json::json!({"q": "rust"})
+        );
+    }
+
+    #[test]
+    fn salvage_repairs_raw_control_chars_in_strings() {
+        // Literal newline/tab inside a string value — the most common
+        // open-weight emission defect (code or prose in arguments).
+        let raw = "{\"content\": \"line one\nline two\tend\"}";
+        let v = salvage_malformed_args(raw).expect("salvageable");
+        assert_eq!(
+            v,
+            serde_json::json!({"content": "line one\nline two\tend"})
+        );
+    }
+
+    #[test]
+    fn salvage_repairs_trailing_comma_and_invalid_escape() {
+        let raw = r#"{"path": "C:\xtemp", "flag": true,}"#;
+        let v = salvage_malformed_args(raw).expect("salvageable");
+        assert_eq!(v, serde_json::json!({"path": "C:\\xtemp", "flag": true}));
+    }
+
+    #[test]
+    fn salvage_never_completes_truncated_json() {
+        // Unbalanced braces are a truncation signature — salvage must refuse
+        // so the typed retryable-error path stays in charge.
+        assert!(salvage_malformed_args("{\"file_path\": \"/foo").is_none());
+        // Dangling backslash at EOF likewise.
+        assert!(salvage_malformed_args("{\"s\": \"a\\").is_none());
+    }
+
+    #[test]
+    fn salvage_declines_when_nothing_to_repair() {
+        // Valid JSON never reaches salvage in production, but the helper must
+        // not claim a repair when no defect was found.
+        assert!(salvage_malformed_args(r#"{"q": "rust"}"#).is_none());
+        assert!(salvage_malformed_args("not json at all").is_none());
+    }
+
+    #[test]
+    fn collector_salvages_control_char_args_instead_of_flagging_truncation() {
+        let mut c = DeltaCollector::new();
+        c.push(ProviderDelta::ToolCallStart {
+            signature: None,
+            id: "tc1".to_string(),
+            name: "file_write".to_string(),
+        });
+        c.push(ProviderDelta::ToolCallArgDelta {
+            id: "tc1".to_string(),
+            delta: "{\"content\": \"a\nb\"}".to_string(),
+        });
+        c.push(ProviderDelta::ToolCallEnd {
+            id: "tc1".to_string(),
+        });
+        c.push(ProviderDelta::Done(StopReason::ToolUse));
+
+        let resp = c.finish();
+        assert_eq!(
+            resp.tool_calls[0].arguments,
+            serde_json::json!({"content": "a\nb"})
+        );
+        assert!(
+            resp.truncated_tool_call.is_none(),
+            "salvaged args must not flag truncation"
         );
     }
 

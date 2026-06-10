@@ -232,50 +232,92 @@ pub trait AlephTool: Clone + Send + Sync + 'static {
 
 /// Best-effort recovery for model type-confusion in tool arguments.
 ///
-/// When strict deserialization of `args` fails, the model has often sent a JSON
-/// string where the schema declares a scalar (`{"count": "5"}` for an integer
-/// field, `{"enabled": "true"}` for a boolean). This walks the **top-level**
-/// properties of `schema` and, for each arg value that is a string but whose
-/// declared type is integer / number / boolean, parses the string into that
-/// scalar. Returns `Some(coerced)` only when at least one field actually
-/// changed, so the caller can retry deserialization; `None` means there was
-/// nothing safe to coerce (preserve the original validation error).
+/// When strict deserialization of `args` fails, the model has often sent a
+/// value of the wrong JSON kind for a top-level field:
 ///
-/// Conservative by construction — it never touches string-typed fields, nested
-/// objects / arrays, or fields without an explicit scalar type. A successful
-/// re-parse of the result against the concrete `Args` type is therefore the
-/// real safety gate: if coercion produced a shape the type rejects, the caller
-/// discards it and reports the original error.
+/// * a string where the schema declares a scalar — `{"count": "5"}` for an
+///   integer field, `{"enabled": "true"}` for a boolean;
+/// * a number or boolean where the schema declares a string —
+///   `{"port": 8080}` for a string field;
+/// * a bare value where the schema declares an array — open-weight models
+///   (DeepSeek/Qwen/GLM) routinely emit `{"paths": "src/a.rs"}` (or the
+///   JSON-encoded `{"paths": "[\"src/a.rs\"]"}`) for an array field. The
+///   string form is first tried as embedded JSON; otherwise the value is
+///   wrapped in a single-element array.
+///
+/// This walks the **top-level** properties of `schema` and applies the
+/// matching conversion. Returns `Some(coerced)` only when at least one field
+/// actually changed, so the caller can retry deserialization; `None` means
+/// there was nothing safe to coerce (preserve the original validation error).
+///
+/// Conservative by construction — it never touches nested objects, fields
+/// whose value already matches the declared kind, or fields without an
+/// explicit declared type. A successful re-parse of the result against the
+/// concrete `Args` type is the real safety gate: if coercion produced a shape
+/// the type rejects, the caller discards it and reports the original error.
 fn coerce_scalar_args(args: &Value, schema: &Value) -> Option<Value> {
     let obj = args.as_object()?;
     let props = schema.get("properties")?.as_object()?;
     let mut changed = false;
     let mut out = serde_json::Map::with_capacity(obj.len());
     for (key, val) in obj {
-        let next = match (val.as_str(), props.get(key).and_then(scalar_schema_type)) {
-            (Some(s), Some(ty)) => match coerce_str_to_scalar(s, ty) {
+        let next = match props.get(key).and_then(declared_prop_type) {
+            Some(ty) => match coerce_value_to_type(val, ty) {
                 Some(coerced) => {
                     changed = true;
                     coerced
                 }
                 None => val.clone(),
             },
-            _ => val.clone(),
+            None => val.clone(),
         };
         out.insert(key.clone(), next);
     }
     changed.then_some(Value::Object(out))
 }
 
-/// Declared scalar kind of a JSON-Schema property, if it is integer / number /
-/// boolean. Handles both `"type": "integer"` and the nullable
-/// `"type": ["integer", "null"]` shape schemars emits for `Option<T>`.
-fn scalar_schema_type(prop: &Value) -> Option<&'static str> {
+/// Convert `val` toward the declared JSON-Schema `ty`, or `None` when the
+/// value already matches or no safe conversion exists (leave it unchanged).
+fn coerce_value_to_type(val: &Value, ty: &'static str) -> Option<Value> {
+    match ty {
+        "integer" | "number" | "boolean" => val.as_str().and_then(|s| coerce_str_to_scalar(s, ty)),
+        "string" => match val {
+            // The model emitted a bare scalar for a string field — stringify.
+            Value::Number(n) => Some(Value::String(n.to_string())),
+            Value::Bool(b) => Some(Value::String(b.to_string())),
+            _ => None,
+        },
+        "array" => {
+            if val.is_array() || val.is_null() {
+                return None;
+            }
+            // A string may be a JSON-encoded array (double-encoding drift);
+            // anything else gets wrapped as a single-element array.
+            if let Some(s) = val.as_str() {
+                if let Ok(parsed) = serde_json::from_str::<Value>(s.trim()) {
+                    if parsed.is_array() {
+                        return Some(parsed);
+                    }
+                }
+            }
+            Some(Value::Array(vec![val.clone()]))
+        }
+        _ => None,
+    }
+}
+
+/// Declared kind of a JSON-Schema property, for the kinds coercion can act on
+/// (integer / number / boolean / string / array). Handles both
+/// `"type": "integer"` and the nullable `"type": ["integer", "null"]` shape
+/// schemars emits for `Option<T>`.
+fn declared_prop_type(prop: &Value) -> Option<&'static str> {
     fn pick(s: &str) -> Option<&'static str> {
         match s {
             "integer" => Some("integer"),
             "number" => Some("number"),
             "boolean" => Some("boolean"),
+            "string" => Some("string"),
+            "array" => Some("array"),
             _ => None,
         }
     }
@@ -626,19 +668,69 @@ mod tests {
     }
 
     #[test]
-    fn scalar_schema_type_reads_array_and_string() {
+    fn declared_prop_type_reads_array_and_string() {
         assert_eq!(
-            scalar_schema_type(&serde_json::json!({"type": "integer"})),
+            declared_prop_type(&serde_json::json!({"type": "integer"})),
             Some("integer")
         );
         assert_eq!(
-            scalar_schema_type(&serde_json::json!({"type": ["number", "null"]})),
+            declared_prop_type(&serde_json::json!({"type": ["number", "null"]})),
             Some("number")
         );
         assert_eq!(
-            scalar_schema_type(&serde_json::json!({"type": "string"})),
+            declared_prop_type(&serde_json::json!({"type": "string"})),
+            Some("string")
+        );
+        assert_eq!(
+            declared_prop_type(&serde_json::json!({"type": "array"})),
+            Some("array")
+        );
+        assert_eq!(declared_prop_type(&serde_json::json!({})), None);
+        // Object-typed fields are never coercion targets.
+        assert_eq!(
+            declared_prop_type(&serde_json::json!({"type": "object"})),
             None
         );
-        assert_eq!(scalar_schema_type(&serde_json::json!({})), None);
+    }
+
+    #[test]
+    fn coerce_wraps_bare_value_for_array_field() {
+        let schema = serde_json::json!({"properties": {"paths": {"type": "array"}}});
+        // Bare string → single-element array.
+        let out = coerce_scalar_args(&serde_json::json!({"paths": "src/a.rs"}), &schema).unwrap();
+        assert_eq!(out["paths"], serde_json::json!(["src/a.rs"]));
+        // Bare number → single-element array.
+        let out = coerce_scalar_args(&serde_json::json!({"paths": 5}), &schema).unwrap();
+        assert_eq!(out["paths"], serde_json::json!([5]));
+        // Already an array → nothing to change.
+        assert!(coerce_scalar_args(&serde_json::json!({"paths": ["a"]}), &schema).is_none());
+        // Null (e.g. omitted Option) → nothing to change.
+        assert!(coerce_scalar_args(&serde_json::json!({"paths": null}), &schema).is_none());
+    }
+
+    #[test]
+    fn coerce_parses_json_encoded_array_string() {
+        // Double-encoding drift: the model wrapped the array in a string.
+        let schema = serde_json::json!({"properties": {"paths": {"type": "array"}}});
+        let out = coerce_scalar_args(
+            &serde_json::json!({"paths": "[\"src/a.rs\", \"src/b.rs\"]"}),
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(out["paths"], serde_json::json!(["src/a.rs", "src/b.rs"]));
+        // A string that parses to a non-array still gets wrapped, not parsed.
+        let out = coerce_scalar_args(&serde_json::json!({"paths": "{\"x\":1}"}), &schema).unwrap();
+        assert_eq!(out["paths"], serde_json::json!(["{\"x\":1}"]));
+    }
+
+    #[test]
+    fn coerce_stringifies_bare_scalar_for_string_field() {
+        let schema = serde_json::json!({"properties": {"port": {"type": "string"}}});
+        let out = coerce_scalar_args(&serde_json::json!({"port": 8080}), &schema).unwrap();
+        assert_eq!(out["port"], "8080");
+        let out = coerce_scalar_args(&serde_json::json!({"port": true}), &schema).unwrap();
+        assert_eq!(out["port"], "true");
+        // A string value for a string field stays untouched.
+        assert!(coerce_scalar_args(&serde_json::json!({"port": "8080"}), &schema).is_none());
     }
 }

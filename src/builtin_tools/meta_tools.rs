@@ -265,18 +265,11 @@ impl GetToolSchemaTool {
         debug!(tool_name = %args.tool_name, "Tool not found, searching for similar");
 
         let all_tools = registry.list_all().await;
-        let query_lower = args.tool_name.to_lowercase();
-
-        let suggestions: Vec<String> = all_tools
-            .iter()
-            .filter(|t| {
-                t.name.to_lowercase().contains(&query_lower)
-                    || query_lower.contains(&t.name.to_lowercase())
-                    || levenshtein_distance(&t.name.to_lowercase(), &query_lower) <= 3
-            })
-            .take(5)
-            .map(|t| t.name.clone())
-            .collect();
+        // Single suggestion source shared with the dispatch ToolNotFound hint
+        // (containment + bounded edit distance, ranked best-first).
+        let offered: Vec<&str> = all_tools.iter().map(|t| t.name.as_str()).collect();
+        let suggestions =
+            crate::tools::name_repair::suggest_candidates(&args.tool_name, &offered, 5);
 
         let error_msg = format!("Tool not found: {}", args.tool_name);
         notify_tool_result(Self::NAME, &error_msg, false);
