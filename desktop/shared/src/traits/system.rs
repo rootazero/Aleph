@@ -14,6 +14,14 @@ pub trait SystemCapability: Send + Sync {
     /// Quit a running application by name or bundle ID.
     async fn quit_app(&self, app_name: &str) -> Result<()>;
 
+    /// Restart an application by name or bundle ID.
+    async fn restart_app(&self, app_name: &str) -> Result<()> {
+        self.quit_app(app_name).await?;
+        // Brief delay so the app can release locks / ports before relaunch.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        self.launch_app(app_name).await
+    }
+
     /// List currently running applications.
     async fn list_running_apps(&self) -> Result<Vec<AppInfo>>;
 

@@ -778,6 +778,40 @@ impl super::DesktopTool {
                     })),
                 }
             }
+            "restart_app" => {
+                let bundle_id = match args.bundle_id.as_deref() {
+                    Some(id) if !id.is_empty() => id,
+                    _ => {
+                        return Ok(Some(DesktopOutput {
+                            success: false,
+                            data: None,
+                            message: Some("restart_app requires 'bundle_id'".to_string()),
+                        }))
+                    }
+                };
+                match screen.quit_app(bundle_id).await {
+                    Ok(()) => {
+                        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        match screen.launch_app(bundle_id).await {
+                            Ok(()) => Ok(Some(DesktopOutput {
+                                success: true,
+                                data: Some(serde_json::json!({"restarted": true, "bundle_id": bundle_id})),
+                                message: None,
+                            })),
+                            Err(e) => Ok(Some(DesktopOutput {
+                                success: false,
+                                data: None,
+                                message: Some(format!("Launch failed after quit: {e}")),
+                            })),
+                        }
+                    }
+                    Err(e) => Ok(Some(DesktopOutput {
+                        success: false,
+                        data: None,
+                        message: Some(format!("Quit failed: {e}")),
+                    })),
+                }
+            }
             "clipboard_read" => match platform.system() {
                 // Prefer the system capability: macOS (NSPasteboard PNG/TIFF)
                 // and Linux (wl-paste/xclip image/*) surface clipboard images as

@@ -331,7 +331,7 @@ fn classify_approval(args: &DesktopArgs) -> Option<(ActionType, String)> {
             args.keys.as_ref().map(|k| k.join("+")).unwrap_or_default(),
         )),
 
-        "launch_app" | "quit_app" => Some((
+        "launch_app" | "quit_app" | "restart_app" => Some((
             ActionType::DesktopLaunchApp,
             args.bundle_id.clone().unwrap_or_default(),
         )),
@@ -498,6 +498,7 @@ Actions:
 - scroll: Scroll via delta_x/delta_y.
 - launch_app: Launch app by bundle_id.
 - quit_app: Close app by bundle_id.
+- restart_app: Restart app by bundle_id (quit then relaunch).
 - window_list: List open windows.
 - focus_window: Bring window to front by window_id.
 - move_window: Move a window's top-left corner to (x, y) by window_id.
