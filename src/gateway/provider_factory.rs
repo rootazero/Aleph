@@ -20,9 +20,11 @@ pub enum ProviderFactoryError {
     ProviderCreationFailed(String),
 }
 
-/// Default model to use when not specified
-const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-20250514";
-const DEFAULT_OPENAI_MODEL: &str = "gpt-4o";
+/// Default model to use when not specified. Kept on date-less aliases so a
+/// vendor snapshot retirement (sonnet-4-20250514 retires 2026-06-15) can't
+/// brick the env-var bootstrap path.
+const DEFAULT_CLAUDE_MODEL: &str = "claude-sonnet-4-6";
+const DEFAULT_OPENAI_MODEL: &str = "gpt-5.4";
 
 /// Brand colors
 const CLAUDE_COLOR: &str = "#d97757";
@@ -32,7 +34,7 @@ const OPENAI_COLOR: &str = "#10a37f";
 ///
 /// Environment variables:
 /// - `ANTHROPIC_API_KEY` (required): API key for Anthropic
-/// - `ANTHROPIC_MODEL` (optional): Model to use, defaults to claude-sonnet-4-20250514
+/// - `ANTHROPIC_MODEL` (optional): Model to use, defaults to claude-sonnet-4-6
 /// - `ANTHROPIC_BASE_URL` (optional): Custom API endpoint
 ///
 /// # Returns
@@ -106,7 +108,7 @@ pub fn create_claude_provider_from_env() -> Result<Arc<dyn AiProvider>, Provider
 ///
 /// Environment variables:
 /// - `OPENAI_API_KEY` (required): API key for OpenAI
-/// - `OPENAI_MODEL` (optional): Model to use, defaults to gpt-4o
+/// - `OPENAI_MODEL` (optional): Model to use, defaults to gpt-5.4
 /// - `OPENAI_BASE_URL` (optional): Custom API endpoint (for OpenAI-compatible APIs)
 ///
 /// # Returns

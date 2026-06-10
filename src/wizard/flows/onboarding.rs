@@ -55,25 +55,30 @@ impl OnboardingFlow {
     /// Get model options for a provider
     fn model_options(provider: &str) -> Vec<WizardOption> {
         match provider {
+            // Date-less aliases: the old dated picks here included ids that
+            // were already retired (claude-3-5-haiku) or days from retirement
+            // (claude-sonnet-4-20250514, gone 2026-06-15).
             "anthropic" => vec![
-                WizardOption::new(json!("claude-opus-4-5-20251101"), "Claude Opus 4.5")
+                WizardOption::new(json!("claude-opus-4-8"), "Claude Opus 4.8")
                     .with_hint("Most capable, best for complex tasks"),
-                WizardOption::new(json!("claude-sonnet-4-20250514"), "Claude Sonnet 4")
+                WizardOption::new(json!("claude-sonnet-4-6"), "Claude Sonnet 4.6")
                     .with_hint("Fast and capable (Recommended)"),
-                WizardOption::new(json!("claude-3-5-haiku-20241022"), "Claude 3.5 Haiku")
+                WizardOption::new(json!("claude-haiku-4-5"), "Claude Haiku 4.5")
                     .with_hint("Fastest, good for simple tasks"),
             ],
             "openai" => vec![
-                WizardOption::new(json!("gpt-4o"), "GPT-4o").with_hint("Best overall performance"),
-                WizardOption::new(json!("gpt-4o-mini"), "GPT-4o Mini")
+                WizardOption::new(json!("gpt-5.5"), "GPT-5.5")
+                    .with_hint("Most capable, 1M context"),
+                WizardOption::new(json!("gpt-5.4"), "GPT-5.4")
+                    .with_hint("Best overall performance (Recommended)"),
+                WizardOption::new(json!("gpt-5.4-mini"), "GPT-5.4 Mini")
                     .with_hint("Faster, more economical"),
-                WizardOption::new(json!("o3-mini"), "o3-mini").with_hint("Reasoning model"),
             ],
             "google" => vec![
-                WizardOption::new(json!("gemini-2.0-flash"), "Gemini 2.0 Flash")
+                WizardOption::new(json!("gemini-2.5-pro"), "Gemini 2.5 Pro")
+                    .with_hint("Most capable"),
+                WizardOption::new(json!("gemini-2.5-flash"), "Gemini 2.5 Flash")
                     .with_hint("Fast and capable"),
-                WizardOption::new(json!("gemini-pro"), "Gemini Pro")
-                    .with_hint("Balanced performance"),
             ],
             "ollama" => vec![
                 WizardOption::new(json!("llama3.3:70b"), "Llama 3.3 70B")
@@ -85,14 +90,17 @@ impl OnboardingFlow {
             ],
             "openrouter" => vec![
                 WizardOption::new(
-                    json!("anthropic/claude-opus-4-5"),
-                    "Claude Opus 4.5 (via OpenRouter)",
+                    json!("anthropic/claude-opus-4-8"),
+                    "Claude Opus 4.8 (via OpenRouter)",
                 )
                 .with_hint("Anthropic's flagship"),
-                WizardOption::new(json!("openai/gpt-4o"), "GPT-4o (via OpenRouter)")
+                WizardOption::new(json!("openai/gpt-5.4"), "GPT-5.4 (via OpenRouter)")
                     .with_hint("OpenAI's flagship"),
-                WizardOption::new(json!("google/gemini-pro"), "Gemini Pro (via OpenRouter)")
-                    .with_hint("Google's flagship"),
+                WizardOption::new(
+                    json!("google/gemini-2.5-pro"),
+                    "Gemini 2.5 Pro (via OpenRouter)",
+                )
+                .with_hint("Google's flagship"),
             ],
             _ => vec![WizardOption::new(json!("auto"), "Auto-detect")
                 .with_hint("Let Aleph choose the best model")],

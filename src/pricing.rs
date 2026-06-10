@@ -118,11 +118,54 @@ struct PriceTier {
 /// Static price table. Entries are scanned in declaration order; the first
 /// `model_prefix` that prefix-matches wins. Order more-specific prefixes
 /// before broader catch-alls. Sources are vendor pricing pages as of
-/// 2026-05; refresh by bumping the literals here and recompiling.
+/// 2026-06; refresh by bumping the literals here and recompiling.
 const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "anthropic",
         &[
+            Rates {
+                // Generation-5 flagship.
+                model_prefix: "claude-fable-5",
+                input_per_mtok: Some(10.0),
+                output_per_mtok: Some(50.0),
+                cache_read_per_mtok: Some(1.0),
+                cache_creation_per_mtok: Some(12.50),
+                reasoning_per_mtok: None,
+            },
+            // Opus 4.5+ dropped to $5/$25; the broad `claude-opus-4`
+            // fallback below keeps the 4.0/4.1-era $15/$75.
+            Rates {
+                model_prefix: "claude-opus-4-8",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(25.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: Some(6.25),
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "claude-opus-4-7",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(25.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: Some(6.25),
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "claude-opus-4-6",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(25.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: Some(6.25),
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "claude-opus-4-5",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(25.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: Some(6.25),
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "claude-opus-4",
                 input_per_mtok: Some(15.0),
@@ -137,6 +180,14 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 output_per_mtok: Some(15.0),
                 cache_read_per_mtok: Some(0.30),
                 cache_creation_per_mtok: Some(3.75),
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "claude-haiku-4-5",
+                input_per_mtok: Some(1.0),
+                output_per_mtok: Some(5.0),
+                cache_read_per_mtok: Some(0.10),
+                cache_creation_per_mtok: Some(1.25),
                 reasoning_per_mtok: None,
             },
             Rates {
@@ -161,11 +212,96 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "openai",
         &[
+            // GPT-5 family (openclaw catalog, 2026-03 snapshot). Dotted
+            // specifics precede the broad `gpt-5` fallback.
+            Rates {
+                model_prefix: "gpt-5.5",
+                input_per_mtok: Some(5.0),
+                output_per_mtok: Some(30.0),
+                cache_read_per_mtok: Some(0.50),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "gpt-5.4-mini",
+                input_per_mtok: Some(0.75),
+                output_per_mtok: Some(4.50),
+                cache_read_per_mtok: Some(0.075),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "gpt-5.4-nano",
+                input_per_mtok: Some(0.20),
+                output_per_mtok: Some(1.25),
+                cache_read_per_mtok: Some(0.02),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "gpt-5.4",
+                input_per_mtok: Some(2.50),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: Some(0.25),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // gpt-5.3-codex and gpt-5.3-chat-latest share one rate.
+                model_prefix: "gpt-5.3",
+                input_per_mtok: Some(1.75),
+                output_per_mtok: Some(14.0),
+                cache_read_per_mtok: Some(0.175),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "gpt-5",
+                input_per_mtok: Some(2.50),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: Some(0.25),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "o4-mini",
+                input_per_mtok: Some(1.10),
+                output_per_mtok: Some(4.40),
+                cache_read_per_mtok: Some(0.28),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "o3-mini",
                 input_per_mtok: Some(1.10),
                 output_per_mtok: Some(4.40),
                 cache_read_per_mtok: Some(0.55),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "o3-pro",
+                input_per_mtok: Some(20.0),
+                output_per_mtok: Some(80.0),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "o3-deep-research",
+                input_per_mtok: Some(10.0),
+                output_per_mtok: Some(40.0),
+                cache_read_per_mtok: Some(2.50),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // o3 base was missing entirely — estimates degraded to
+                // Unknown despite the capability table knowing the family.
+                model_prefix: "o3",
+                input_per_mtok: Some(2.0),
+                output_per_mtok: Some(8.0),
+                cache_read_per_mtok: Some(0.50),
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -244,6 +380,22 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
         "deepseek",
         &[
             Rates {
+                model_prefix: "deepseek-v4-pro",
+                input_per_mtok: Some(1.74),
+                output_per_mtok: Some(3.48),
+                cache_read_per_mtok: Some(0.145),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "deepseek-v4-flash",
+                input_per_mtok: Some(0.14),
+                output_per_mtok: Some(0.28),
+                cache_read_per_mtok: Some(0.028),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
                 model_prefix: "deepseek-reasoner",
                 input_per_mtok: Some(0.55),
                 output_per_mtok: Some(2.19),
@@ -264,14 +416,34 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     ),
     (
         "xai",
-        &[Rates {
-            model_prefix: "grok",
-            input_per_mtok: Some(3.0),
-            output_per_mtok: Some(15.0),
-            cache_read_per_mtok: Some(0.75),
-            cache_creation_per_mtok: None,
-            reasoning_per_mtok: None,
-        }],
+        &[
+            // Grok 4.x generations: dotted/suffixed specifics precede the
+            // `grok-4` base, which precedes the grok-3-era broad fallback.
+            Rates {
+                model_prefix: "grok-4.3",
+                input_per_mtok: Some(1.25),
+                output_per_mtok: Some(2.50),
+                cache_read_per_mtok: Some(0.20),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "grok-4-fast",
+                input_per_mtok: Some(0.20),
+                output_per_mtok: Some(0.50),
+                cache_read_per_mtok: Some(0.05),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "grok",
+                input_per_mtok: Some(3.0),
+                output_per_mtok: Some(15.0),
+                cache_read_per_mtok: Some(0.75),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
     ),
     (
         "mistral",
@@ -297,6 +469,24 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
     (
         "moonshot",
         &[
+            // K2.5/K2.6 published rates differ from the legacy family
+            // fallback below.
+            Rates {
+                model_prefix: "kimi-k2.6",
+                input_per_mtok: Some(0.95),
+                output_per_mtok: Some(4.0),
+                cache_read_per_mtok: Some(0.15),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "kimi-k2.5",
+                input_per_mtok: Some(0.38),
+                output_per_mtok: Some(1.72),
+                cache_read_per_mtok: Some(0.15),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
             Rates {
                 model_prefix: "kimi",
                 input_per_mtok: Some(0.60),
@@ -310,6 +500,69 @@ const PRICE_TABLE: &[(&str, &[Rates])] = &[
                 input_per_mtok: Some(0.60),
                 output_per_mtok: Some(2.50),
                 cache_read_per_mtok: Some(0.15),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
+    // ── Zhipu / Z.AI ─────────────────────────────────────────────────────
+    // Previously absent even though the alias layer and capability table
+    // already knew the vendor — estimates silently degraded to Unknown.
+    (
+        "zai",
+        &[
+            Rates {
+                model_prefix: "glm-5.1",
+                input_per_mtok: Some(1.20),
+                output_per_mtok: Some(4.0),
+                cache_read_per_mtok: Some(0.24),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "glm-5",
+                input_per_mtok: Some(1.0),
+                output_per_mtok: Some(3.20),
+                cache_read_per_mtok: Some(0.20),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                // GLM-4.x family fallback.
+                model_prefix: "glm",
+                input_per_mtok: Some(0.60),
+                output_per_mtok: Some(2.20),
+                cache_read_per_mtok: Some(0.11),
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+        ],
+    ),
+    // ── Alibaba / Qwen (DashScope) ───────────────────────────────────────
+    (
+        "qwen",
+        &[
+            Rates {
+                model_prefix: "qwen3.6-flash",
+                input_per_mtok: Some(0.029),
+                output_per_mtok: Some(0.287),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "qwen3.6-plus",
+                input_per_mtok: Some(0.115),
+                output_per_mtok: Some(0.688),
+                cache_read_per_mtok: None,
+                cache_creation_per_mtok: None,
+                reasoning_per_mtok: None,
+            },
+            Rates {
+                model_prefix: "qwen3-max",
+                input_per_mtok: Some(0.359),
+                output_per_mtok: Some(1.434),
+                cache_read_per_mtok: None,
                 cache_creation_per_mtok: None,
                 reasoning_per_mtok: None,
             },
@@ -857,6 +1110,160 @@ mod tests {
             (est.usd - 90.0).abs() < 1e-6,
             "expected $90.00 (flat opus), got ${}",
             est.usd
+        );
+    }
+
+    #[test]
+    fn current_generation_anthropic_priced() {
+        // Fable 5: 1M in @ $10 + 1M out @ $50 = $60.
+        let breakdown = TokenBreakdown {
+            input: 1_000_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        let fable = estimate("anthropic", "claude-fable-5", &breakdown);
+        assert_eq!(fable.status, CostStatus::Complete);
+        assert!(
+            (fable.usd - 60.0).abs() < 1e-6,
+            "expected $60.00, got ${}",
+            fable.usd
+        );
+
+        // Opus 4.8 dropped to $5/$25; the 4.0/4.1-era fallback stays $15/$75
+        // (covered by flat_priced_model_ignores_tier_table).
+        let opus48 = estimate("anthropic", "claude-opus-4-8", &breakdown);
+        assert!(
+            (opus48.usd - 30.0).abs() < 1e-6,
+            "expected $30.00, got ${}",
+            opus48.usd
+        );
+
+        let haiku = rate_card("anthropic", "claude-haiku-4-5-20251001").expect("priced");
+        assert_eq!(haiku.input_per_mtok, Some(1.0));
+        assert_eq!(haiku.output_per_mtok, Some(5.0));
+        assert_eq!(haiku.cache_read_per_mtok, Some(0.10));
+    }
+
+    #[test]
+    fn gpt5_family_and_o_series_priced() {
+        let breakdown = TokenBreakdown {
+            input: 1_000_000,
+            output: 1_000_000,
+            ..Default::default()
+        };
+        // gpt-5.5: $5 + $30 = $35.
+        let gpt55 = estimate("openai", "gpt-5.5", &breakdown);
+        assert_eq!(gpt55.status, CostStatus::Complete);
+        assert!(
+            (gpt55.usd - 35.0).abs() < 1e-6,
+            "expected $35.00, got ${}",
+            gpt55.usd
+        );
+
+        // Specific dotted prefixes win over the broad gpt-5 fallback.
+        let nano = rate_card("openai", "gpt-5.4-nano").expect("priced");
+        assert_eq!(nano.input_per_mtok, Some(0.20));
+        let broad = rate_card("openai", "gpt-5-experimental").expect("priced via fallback");
+        assert_eq!(broad.input_per_mtok, Some(2.50));
+
+        // o3 base was previously Unknown; o3-mini keeps its own rate.
+        let o3 = estimate(
+            "openai",
+            "o3",
+            &TokenBreakdown {
+                input: 1_000_000,
+                ..Default::default()
+            },
+        );
+        assert_eq!(o3.status, CostStatus::Complete);
+        assert!((o3.usd - 2.0).abs() < 1e-6, "expected $2.00, got ${}", o3.usd);
+        assert_eq!(
+            rate_card("openai", "o3-mini").unwrap().input_per_mtok,
+            Some(1.10)
+        );
+        assert_eq!(
+            rate_card("openai", "o4-mini").unwrap().cache_read_per_mtok,
+            Some(0.28)
+        );
+    }
+
+    #[test]
+    fn zai_and_qwen_providers_priced() {
+        // Zhipu aliases resolve through canonical_provider_id ("zhipu"/"zai"
+        // /"glm") — previously these all returned Unknown.
+        let breakdown = TokenBreakdown {
+            input: 1_000_000,
+            ..Default::default()
+        };
+        let glm51 = estimate("zhipu", "glm-5.1", &breakdown);
+        assert_eq!(glm51.status, CostStatus::Complete);
+        assert!(
+            (glm51.usd - 1.20).abs() < 1e-6,
+            "expected $1.20, got ${}",
+            glm51.usd
+        );
+        // GLM-4.x falls back to the family rate.
+        let glm46 = estimate(
+            "zai",
+            "glm-4.6",
+            &TokenBreakdown {
+                output: 1_000_000,
+                ..Default::default()
+            },
+        );
+        assert!(
+            (glm46.usd - 2.20).abs() < 1e-6,
+            "expected $2.20, got ${}",
+            glm46.usd
+        );
+
+        // DashScope provider alias resolves to the qwen table.
+        let qwen = estimate("dashscope", "qwen3-max", &breakdown);
+        assert_eq!(qwen.status, CostStatus::Complete);
+        assert!(
+            (qwen.usd - 0.359).abs() < 1e-6,
+            "expected $0.359, got ${}",
+            qwen.usd
+        );
+    }
+
+    #[test]
+    fn grok4x_deepseek_v4_kimi_k2_priced() {
+        let input_1m = TokenBreakdown {
+            input: 1_000_000,
+            ..Default::default()
+        };
+        // grok-4.3 has the new cheap rate; legacy grok-4 keeps $3 via the
+        // broad fallback (covered by the synonym test above).
+        let grok43 = estimate("xai", "grok-4.3", &input_1m);
+        assert!(
+            (grok43.usd - 1.25).abs() < 1e-6,
+            "expected $1.25, got ${}",
+            grok43.usd
+        );
+        assert_eq!(
+            rate_card("xai", "grok-4-fast").unwrap().input_per_mtok,
+            Some(0.20)
+        );
+
+        // deepseek-v4-flash: $0.14 + $0.28 = $0.42.
+        let ds = estimate(
+            "deepseek",
+            "deepseek-v4-flash",
+            &TokenBreakdown {
+                input: 1_000_000,
+                output: 1_000_000,
+                ..Default::default()
+            },
+        );
+        assert_eq!(ds.status, CostStatus::Complete);
+        assert!((ds.usd - 0.42).abs() < 1e-6, "expected $0.42, got ${}", ds.usd);
+
+        let k26 = estimate("moonshot", "kimi-k2.6", &input_1m);
+        assert!(
+            (k26.usd - 0.95).abs() < 1e-6,
+            "expected $0.95, got ${}",
+            k26.usd
         );
     }
 
