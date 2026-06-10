@@ -738,13 +738,13 @@ mod tests {
 
     #[test]
     fn derive_falls_back_to_catalog_when_unset() {
-        // Kimi is in the catalog (200k window, 8_192 max output) but the
+        // Kimi K2 is in the catalog (256k window, 32_768 max output) but the
         // provider declares neither field.
         let pc = ProviderConfig::test_config("kimi-k2");
         let d = derive_token_budget(Some(&pc), Some("kimi-k2"));
-        assert_eq!(d.window, 200_000);
-        assert_eq!(d.reserve, 8_192);
-        assert_eq!(d.usable, 200_000 - 8_192);
+        assert_eq!(d.window, 262_144);
+        assert_eq!(d.reserve, 32_768);
+        assert_eq!(d.usable, 262_144 - 32_768);
         assert_eq!(d.source, "catalog");
     }
 
@@ -775,7 +775,7 @@ mod tests {
         };
         let cfg = cfg_with_primary("kimi", ProviderConfig::test_config("kimi-k2"), cb);
         let bc = build_context_budget_config(&cfg, "kimi").expect("enabled → Some");
-        assert_eq!(bc.token_budget, 200_000 - 8_192);
+        assert_eq!(bc.token_budget, 262_144 - 32_768);
     }
 
     #[test]
@@ -836,7 +836,7 @@ mod tests {
 
     #[test]
     fn chain_min_budget_picks_smallest_window_in_explicit_chain() {
-        // A 1M primary that can migrate (rate-limit) to a 200k kimi must budget
+        // A 1M primary that can migrate (rate-limit) to a 256k kimi must budget
         // for kimi's window, not its own — else the migrated turn overflows.
         let fb = FallbackProviderToml {
             chain: vec!["small".to_string()],
@@ -849,7 +849,7 @@ mod tests {
             vec![("small", ProviderConfig::test_config("kimi-k2"))],
         );
         let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
-        assert_eq!(bc.token_budget, 200_000 - 8_192);
+        assert_eq!(bc.token_budget, 262_144 - 32_768);
     }
 
     #[test]
@@ -862,7 +862,7 @@ mod tests {
             vec![("small", ProviderConfig::test_config("kimi-k2"))],
         );
         let bc = build_context_budget_config(&cfg, "big").expect("enabled → Some");
-        assert_eq!(bc.token_budget, 200_000 - 8_192);
+        assert_eq!(bc.token_budget, 262_144 - 32_768);
     }
 
     #[test]

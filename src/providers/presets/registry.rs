@@ -23,12 +23,12 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
     // ─── OpenAI family ────────────────────────────────────────────────────────
     (
         "openai",
-        ProviderPreset::new("https://api.openai.com/v1", "openai", "#10a37f", "gpt-4o")
+        ProviderPreset::new("https://api.openai.com/v1", "openai", "#10a37f", "gpt-5.4")
             .with_display("OpenAI")
             .with_homepage("https://platform.openai.com")
             .with_signup("https://platform.openai.com/api-keys")
-            .with_aux_model("gpt-4o-mini")
-            .with_fallback_models(&["gpt-4o", "gpt-4o-mini", "o3-mini", "o1-mini"]),
+            .with_aux_model("gpt-5.4-mini")
+            .with_fallback_models(&["gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "o4-mini"]),
     ),
     (
         "chatgpt",
@@ -60,17 +60,20 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://api.anthropic.com",
             "anthropic",
             "#d97757",
-            "claude-sonnet-4-5-20250514",
+            // Date-less aliases are the vendor-recommended form; the old
+            // dated ids here mixed generations ("claude-sonnet-4-5-20250514"
+            // never existed — that stamp belongs to sonnet-4-0) and 404'd.
+            "claude-sonnet-4-6",
         )
         .with_display("Anthropic Claude")
         .with_homepage("https://docs.anthropic.com")
         .with_signup("https://console.anthropic.com/settings/keys")
-        .with_aux_model("claude-haiku-4-5-20251001")
+        .with_aux_model("claude-haiku-4-5")
         .with_models_url("https://api.anthropic.com/v1/models")
         .with_fallback_models(&[
-            "claude-sonnet-4-5-20250514",
-            "claude-opus-4-5-20250514",
-            "claude-haiku-4-5-20251001",
+            "claude-sonnet-4-6",
+            "claude-opus-4-8",
+            "claude-haiku-4-5",
         ]),
     ),
     (
@@ -79,7 +82,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://bedrock-runtime.us-east-1.amazonaws.com",
             "anthropic",
             "#ff9900",
-            "anthropic.claude-3-7-sonnet-20250219-v1:0",
+            // Sonnet 3.7 was retired 2026-02-19; Bedrock serves the bare
+            // dot-tagged 4.6 id (hermes bedrock pricing table).
+            "anthropic.claude-sonnet-4-6",
         )
         .with_aliases(&["bedrock"])
         .with_display("Amazon Bedrock")
@@ -94,7 +99,9 @@ const PROFILES: &[(&str, ProviderPreset)] = &[
             "https://us-east5-aiplatform.googleapis.com/v1",
             "anthropic",
             "#4285f4",
-            "claude-sonnet-4@20250514",
+            // Sonnet 4.0 retires 2026-06-15; Vertex serves the date-less id
+            // (openclaw ANTHROPIC_VERTEX_DEFAULT_MODEL_ID).
+            "claude-sonnet-4-6",
         )
         .with_display("Vertex AI — Anthropic")
         .with_homepage(

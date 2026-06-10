@@ -170,7 +170,7 @@ fn test_get_merged_preset_builtin_only() {
     assert_eq!(preset.base_url, "https://api.openai.com/v1");
     assert_eq!(preset.protocol, "openai");
     assert_eq!(preset.color, "#10a37f");
-    assert_eq!(preset.default_model, "gpt-4o");
+    assert_eq!(preset.default_model, "gpt-5.4");
 }
 
 #[test]
@@ -341,7 +341,7 @@ fn aux_model_falls_back_to_default_model_when_unset() {
 
     // OpenAI declares a dedicated cheap model.
     let openai = get_preset("openai").unwrap();
-    assert_eq!(openai.aux_model(), "gpt-4o-mini");
+    assert_eq!(openai.aux_model(), "gpt-5.4-mini");
     assert_ne!(openai.aux_model(), openai.default_model);
 }
 

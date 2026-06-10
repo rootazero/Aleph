@@ -23,6 +23,11 @@
 /// (`x-ai/openai/…`) peel one layer per matching entry.
 const VENDOR_TAGS: &[&str] = &[
     "anthropic/",
+    // Bedrock-style dot tag ("anthropic.claude-sonnet-4-6") — stripping it
+    // lets the capability catalog resolve Bedrock-hosted Claude ids. Pricing
+    // stays gated on the *provider* id, so this cannot mis-price a
+    // Bedrock-named provider.
+    "anthropic.",
     "openai/",
     "google/",
     "models/",
@@ -137,8 +142,10 @@ pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
         Some("mistral")
     } else if p.contains("moonshot") || p.contains("kimi") {
         Some("moonshot")
-    } else if p.contains("qwen") {
+    } else if p.contains("qwen") || p.contains("dashscope") {
         Some("qwen")
+    } else if p.contains("zhipu") || p.contains("glm") || p.contains("z-ai") || p.contains("zai") {
+        Some("zai")
     } else {
         None
     }
@@ -207,5 +214,23 @@ mod tests {
         assert_eq!(canonical_provider_id("gemini"), Some("google"));
         assert_eq!(canonical_provider_id("xai"), Some("xai"));
         assert_eq!(canonical_provider_id("nonexistent"), None);
+    }
+
+    #[test]
+    fn canonical_provider_resolves_zai_and_dashscope() {
+        assert_eq!(canonical_provider_id("zhipu"), Some("zai"));
+        assert_eq!(canonical_provider_id("z-ai"), Some("zai"));
+        assert_eq!(canonical_provider_id("zai"), Some("zai"));
+        assert_eq!(canonical_provider_id("glm"), Some("zai"));
+        assert_eq!(canonical_provider_id("dashscope"), Some("qwen"));
+    }
+
+    #[test]
+    fn canonicalize_strips_bedrock_dot_tag() {
+        assert_eq!(
+            canonicalize_model_id("anthropic.claude-sonnet-4-6"),
+            "claude-sonnet-4-6"
+        );
+        assert_eq!(infer_vendor("anthropic.claude-opus-4-8"), Some("anthropic"));
     }
 }
