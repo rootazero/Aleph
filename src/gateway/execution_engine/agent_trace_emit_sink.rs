@@ -45,7 +45,6 @@ pub(crate) fn is_step_event(event: &LoopTraceEvent) -> bool {
             | LoopTraceEvent::TextEmitted { .. }
             | LoopTraceEvent::ToolCallStarted { .. }
             | LoopTraceEvent::ToolCallCompleted { .. }
-            | LoopTraceEvent::ToolSummary { .. }
     )
 }
 
@@ -105,10 +104,7 @@ mod tests {
             stream: LoopTraceTextKind::Final,
             text: "hi".into(),
         }));
-        assert!(is_step_event(&LoopTraceEvent::ToolSummary {
-            iteration: 1,
-            summary: "did a thing".into(),
-        }));
+        assert!(is_step_event(&LoopTraceEvent::TurnStarted { iteration: 2 }));
     }
 
     #[test]

@@ -2,10 +2,10 @@
 //! cap-grace + empty-then-text + later regressions. Shares mock types
 //! with [`super`] via `use super::*;`.
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::Mutex as AsyncMutex;
@@ -969,6 +969,137 @@ async fn max_output_tokens_recovery_exhausted_sets_dedicated_terminate_reason() 
             crate::orchestrator::dispatch::TerminateReason::MaxOutputTokensExhausted
         ),
         "after exhausting recovery, terminate_reason must be MaxOutputTokensExhausted; got {:?}",
+        reason
+    );
+}
+
+/// Exhausts the MaxTokens recovery on the FIRST turn but keeps a tool call in
+/// the truncated response (so the loop continues), then answers cleanly on the
+/// next turn. Drives the exit-point reason-fidelity regression below.
+struct MaxTokensToolCallThenTextProvider {
+    calls: AtomicUsize,
+    max_tokens_calls: usize,
+}
+
+impl MaxTokensToolCallThenTextProvider {
+    fn new(max_tokens_calls: usize) -> Arc<Self> {
+        Arc::new(Self {
+            calls: AtomicUsize::new(0),
+            max_tokens_calls,
+        })
+    }
+    fn call_count(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl AiProvider for MaxTokensToolCallThenTextProvider {
+    fn process<'a>(
+        &'a self,
+        _payload: RequestPayload<'a>,
+    ) -> Pin<Box<dyn Future<Output = AlephResult<ProviderResponse>> + Send + 'a>> {
+        Box::pin(async move {
+            let n = self.calls.fetch_add(1, Ordering::SeqCst);
+            if n < self.max_tokens_calls {
+                // Truncated mid-stream, but a complete tool call survived —
+                // the loop must keep running it, not stop.
+                Ok(ProviderResponse {
+                    tool_calls: vec![NativeToolCall {
+                        thought_signature: None,
+                        id: format!("call-{n}"),
+                        name: "noop_tool".to_string(),
+                        arguments: serde_json::json!({}),
+                    }],
+                    stop_reason: StopReason::MaxTokens,
+                    ..ProviderResponse::text_only(format!("partial-{n}"))
+                })
+            } else {
+                Ok(ProviderResponse::text_only(
+                    "final clean response".to_string(),
+                ))
+            }
+        })
+    }
+    fn name(&self) -> &str {
+        "max-tokens-toolcall-then-text"
+    }
+    fn color(&self) -> &str {
+        "#000000"
+    }
+}
+
+/// Exit-point reason fidelity: a mid-run turn that exhausts the MaxTokens
+/// recovery but still carries tool calls keeps the loop alive; when a later
+/// turn completes cleanly the run must report `Completed`, not the stale
+/// `MaxOutputTokensExhausted` from the truncated intermediate turn.
+#[tokio::test]
+async fn max_output_tokens_mid_run_does_not_stain_terminate_reason() {
+    let session = MockSession::new(vec![
+        turn_started_event(),
+        user_message_event("research then answer"),
+    ]);
+    // 4 MaxTokens+tool-call responses exhaust RECOVERY_LIMIT=3 on turn 1;
+    // call 5 (turn 2) returns clean text.
+    let provider = MaxTokensToolCallThenTextProvider::new(4);
+    let deps = HarnessDeps {
+        session: session.clone(),
+        tools: Arc::new(NoopTools),
+        sandbox: MockSandbox::new(noop_sandbox_output()),
+        llm: provider.clone(),
+        verifier_chain: None,
+        context_budget: None,
+        context_compactor: None,
+        preflight_pipeline: None,
+        trace_sink: None,
+        system_prompt: None,
+        system_prompt_parts: None,
+        chain_context: crate::harness::chain_context::ChainContext::default(),
+        guardrails: None,
+        max_iterations: None,
+        power: None,
+        stall_config: None,
+        consecutive_failure_cap: None,
+        turn_timeout: None,
+        turn_budget: None,
+        result_store: None,
+        session_epoch_registrar: None,
+        tool_signal_sink: Arc::new(crate::memory::tool_signal_sink::NoopToolSignalSink),
+        in_flight_tool_calls: None,
+        parallel_tool_concurrency: None,
+    };
+    let harness = AgentHarness::new(deps);
+
+    // Turn 1: recovery exhausts, but the surviving tool call keeps the loop
+    // alive — no terminate reason may be recorded yet.
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("turn 1 should succeed");
+    assert_eq!(
+        state,
+        TurnState::Continue,
+        "tool call must continue the run"
+    );
+    assert_eq!(
+        provider.call_count(),
+        4,
+        "turn 1 = 1 initial + RECOVERY_LIMIT(=3) retries",
+    );
+
+    // Turn 2: clean text ends the run.
+    let state = harness
+        .run_turn(&sample_session_id(), &mut NoopHarnessCallback)
+        .await
+        .expect("turn 2 should succeed");
+    assert_eq!(state, TurnState::Done);
+
+    let reason = harness.terminate_reason();
+    assert!(
+        matches!(
+            reason,
+            crate::orchestrator::dispatch::TerminateReason::Completed
+        ),
+        "a clean final turn must supersede the mid-run truncation; got {:?}",
         reason
     );
 }

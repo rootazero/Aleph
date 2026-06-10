@@ -304,7 +304,6 @@ async fn recording_sink_captures_full_lifecycle() {
             LoopTraceEvent::TextEmitted { .. } => "TextEmitted",
             LoopTraceEvent::ToolCallStarted { .. } => "ToolCallStarted",
             LoopTraceEvent::ToolCallCompleted { .. } => "ToolCallCompleted",
-            LoopTraceEvent::ToolSummary { .. } => "ToolSummary",
             LoopTraceEvent::TurnCompleted { .. } => "TurnCompleted",
             LoopTraceEvent::SessionCompleted { .. } => "SessionCompleted",
             LoopTraceEvent::WorktreeCreated { .. } => "WorktreeCreated",
