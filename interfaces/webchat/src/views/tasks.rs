@@ -512,7 +512,7 @@ fn HeartbeatEditor(
             // Update existing task
             let task_id = existing.id.clone();
             let patch = UpdateHeartbeatTask {
-                task_id: task_id,
+                task_id,
                 name: Some(name),
                 interval: Some(interval),
                 enabled: Some(enabled),

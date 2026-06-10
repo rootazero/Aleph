@@ -249,7 +249,7 @@ fn RuleEditor(
 
         let rule_config = RoutingRuleConfig {
             rule_type: Some(form_rule_type.get()),
-            regex: regex,
+            regex,
             provider: {
                 let p = form_provider.get();
                 if p.is_empty() {
