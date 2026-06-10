@@ -15,12 +15,17 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::agents::swarm::tasks::CoordTaskStore;
+use crate::agents::swarm::tasks::{
+    CoordTask, CoordTaskFilter, CoordTaskStatus, CoordTaskStore, CoordTaskUpdate,
+};
 use crate::error::{AlephError, Result};
 use crate::sync_primitives::Arc;
 use crate::tools::turn_context::current_turn_context;
 use crate::tools::AlephTool;
-use crate::workflow::{self, ClarifyContext, WorkflowDef, WorkflowManifest};
+use crate::workflow::{
+    self, ClarifyContext, WorkflowDef, WorkflowManifest, WORKFLOW_NAME_KEY, WORKFLOW_RUN_ID_KEY,
+    WORKFLOW_STEP_KEY,
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "action")]
@@ -44,6 +49,32 @@ pub enum WorkflowArgs {
         /// Run input substituted for `{input}` in each step's prompt.
         #[serde(default)]
         input: String,
+    },
+    /// Report the live status of a workflow run: one row per step with the
+    /// backing task id, status, and owner. Defaults to the most recently
+    /// started run of `name` on `team_id`; pass `run_id` (returned by `run`)
+    /// to inspect an older one.
+    Status {
+        /// Name of the workflow template the run was started from.
+        name: String,
+        /// Team hosting the run.
+        team_id: String,
+        /// Specific run to inspect; omitted → the latest run.
+        #[serde(default)]
+        run_id: Option<String>,
+    },
+    /// Cancel the remaining steps of a workflow run: every not-yet-finished
+    /// task (pending / blocked / paused / waiting_review / in_progress) is
+    /// marked Cancelled. An in-progress step's member run finishes on its own
+    /// but cannot resurrect the task; finished steps keep their results.
+    Cancel {
+        /// Name of the workflow template the run was started from.
+        name: String,
+        /// Team hosting the run.
+        team_id: String,
+        /// Specific run to cancel; omitted → the latest run.
+        #[serde(default)]
+        run_id: Option<String>,
     },
     /// Render a saved template into a Claude-Code-compatible `.workflow.js`.
     Export {
@@ -73,6 +104,25 @@ pub enum WorkflowArgs {
     },
 }
 
+/// One step of a workflow run in a `status` report — a mechanical projection
+/// of the backing coord_task (R7: data for the LLM to reason over, no
+/// judgement of its own).
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowRunStep {
+    /// Step-local id from the template (`workflow_step` metadata).
+    pub step: String,
+    /// Backing coordination-task id — feed to `workflow_step_review` /
+    /// `team_task_control` for per-step intervention.
+    pub task_id: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// For failed steps: the (bounded) error text, so the LLM can decide
+    /// retry / skip / cancel without an extra lookup.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct WorkflowToolOutput {
     pub action: String,
@@ -83,9 +133,18 @@ pub struct WorkflowToolOutput {
     /// Populated by `describe`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definition: Option<WorkflowDef>,
-    /// Populated by `run` — the created coordination-task ids.
+    /// Populated by `run` — the created coordination-task ids — and by
+    /// `cancel` — the task ids actually cancelled.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_ids: Option<Vec<String>>,
+    /// Populated by `run` / `status` / `cancel` — the run identity grouping
+    /// the materialised tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Populated by `status` — one row per step in creation (topological)
+    /// order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<WorkflowRunStep>>,
     /// Populated by `export` — the rendered `.workflow.js` text.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rendered: Option<String>,
@@ -102,6 +161,8 @@ impl WorkflowToolOutput {
             names: None,
             definition: None,
             task_ids: None,
+            run_id: None,
+            steps: None,
             rendered: None,
             dropped: None,
         }
@@ -188,6 +249,129 @@ impl WorkflowTool {
             missing.join(", "),
         )))
     }
+
+    /// Resolve the tasks of one materialised run of `name` on `team_id`.
+    ///
+    /// Tasks are grouped by the `workflow_run_id` the compiler stamped at
+    /// materialisation; `run_id=None` selects the most recently started group
+    /// (max `created_at`). Returns the resolved run id plus its tasks in
+    /// creation (topological) order. Runs materialised before run ids existed
+    /// group under the empty id and stay reachable as the latest run.
+    async fn run_tasks(
+        &self,
+        name: &str,
+        team_id: &str,
+        run_id: Option<&str>,
+    ) -> Result<(String, Vec<CoordTask>)> {
+        let tasks = self
+            .coord_store
+            .list_tasks(CoordTaskFilter {
+                team_id: Some(team_id.to_string()),
+                ..Default::default()
+            })
+            .await?;
+
+        let mut groups: std::collections::HashMap<String, Vec<CoordTask>> =
+            std::collections::HashMap::new();
+        for task in tasks {
+            if task
+                .metadata
+                .get(WORKFLOW_NAME_KEY)
+                .and_then(|v| v.as_str())
+                != Some(name)
+            {
+                continue;
+            }
+            let rid = task
+                .metadata
+                .get(WORKFLOW_RUN_ID_KEY)
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            groups.entry(rid).or_default().push(task);
+        }
+        if groups.is_empty() {
+            return Err(AlephError::invalid_input(format!(
+                "no runs of workflow '{name}' found on team '{team_id}' — start one with \
+                 action='run'"
+            )));
+        }
+
+        let selected = match run_id {
+            Some(rid) => rid.to_string(),
+            // Latest run = the group whose newest task was created last.
+            // created_at is epoch *seconds*, so two runs started within the
+            // same second tie; the run id breaks the tie deterministically
+            // (arbitrary but stable — pass run_id explicitly to disambiguate).
+            None => groups
+                .iter()
+                .max_by_key(|(rid, tasks)| {
+                    (
+                        tasks.iter().map(|t| t.created_at).max().unwrap_or(0),
+                        rid.clone(),
+                    )
+                })
+                .map(|(rid, _)| rid.clone())
+                .unwrap_or_default(),
+        };
+        let mut tasks = groups.remove(&selected).ok_or_else(|| {
+            AlephError::invalid_input(format!(
+                "no run '{selected}' of workflow '{name}' on team '{team_id}' — omit run_id for \
+                 the latest run"
+            ))
+        })?;
+        tasks.sort_by_key(|t| t.created_at);
+        Ok((selected, tasks))
+    }
+}
+
+/// Project one backing task into its `status` row (pure).
+fn step_row(task: &CoordTask) -> WorkflowRunStep {
+    WorkflowRunStep {
+        step: task
+            .metadata
+            .get(WORKFLOW_STEP_KEY)
+            .and_then(|v| v.as_str())
+            .unwrap_or(&task.subject)
+            .to_string(),
+        task_id: task.id.clone(),
+        status: task.status.as_str().to_string(),
+        owner: task.owner.clone(),
+        error: match task.status {
+            CoordTaskStatus::Failed => task
+                .result
+                .as_deref()
+                .filter(|r| !r.trim().is_empty())
+                .map(|r| bound_chars(r, 400)),
+            _ => None,
+        },
+    }
+}
+
+/// Count tasks per status into a compact "2 completed, 1 failed, ..." summary
+/// (pure aggregation — interpreting it is the LLM's job, R7).
+fn summarize_statuses(tasks: &[CoordTask]) -> String {
+    let mut counts: Vec<(&'static str, usize)> = Vec::new();
+    for task in tasks {
+        let key = task.status.as_str();
+        match counts.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, n)) => *n += 1,
+            None => counts.push((key, 1)),
+        }
+    }
+    let parts: Vec<String> = counts
+        .into_iter()
+        .map(|(k, n)| format!("{n} {k}"))
+        .collect();
+    format!("{} step(s): {}", tasks.len(), parts.join(", "))
+}
+
+/// Truncate to at most `max` characters on a char boundary (P7 UTF-8 safety).
+fn bound_chars(s: &str, max: usize) -> String {
+    match s.char_indices().nth(max) {
+        Some((byte_idx, _)) => format!("{}…", &s[..byte_idx]),
+        None => s.to_string(),
+    }
 }
 
 #[async_trait]
@@ -198,8 +382,12 @@ impl AlephTool for WorkflowTool {
          declarative multi-step pipeline (each step = one agent + a prompt + \
          dependencies); running it compiles the steps into a coordination-task \
          DAG that executes concurrently where dependencies allow. \
-         Actions: save / list / describe / delete / run / export / import / \
-         proposals / accept_proposal. \
+         Actions: save / list / describe / delete / run / status / cancel / \
+         export / import / proposals / accept_proposal. \
+         `run` returns a run_id; `status` reports the per-step task states of \
+         a run (latest by default) and `cancel` aborts its unfinished steps — \
+         finished steps keep their results, and a step caught mid-execution \
+         finishes its member run but stays cancelled. \
          `export` renders a template to a Claude-Code-compatible .workflow.js; \
          `import` parses one back into a template. `proposals` lists MetaSkill \
          drafts the dream pipeline auto-grew from recurring skill use; \
@@ -215,6 +403,8 @@ impl AlephTool for WorkflowTool {
             "workflow(action='list')".into(),
             "workflow(action='describe', name='research-report')".into(),
             "workflow(action='run', name='research-report', team_id='team-42', input='quantum error correction')".into(),
+            "workflow(action='status', name='research-report', team_id='team-42')".into(),
+            "workflow(action='cancel', name='research-report', team_id='team-42', run_id='1f2e…')".into(),
             "workflow(action='delete', name='research-report')".into(),
             "workflow(action='export', name='research-report')".into(),
             r#"workflow(action='import', source='export const meta = { name: \"x\" }\nawait agent(\"do it\")', save=true)"#.into(),
@@ -241,14 +431,10 @@ impl AlephTool for WorkflowTool {
                     .into_iter()
                     .map(|m| m.name)
                     .collect();
+                let message = format!("{} workflow(s)", names.len());
                 Ok(WorkflowToolOutput {
-                    action: "list".into(),
-                    message: format!("{} workflow(s)", names.len()),
                     names: Some(names),
-                    definition: None,
-                    task_ids: None,
-                    rendered: None,
-                    dropped: None,
+                    ..WorkflowToolOutput::msg("list", message)
                 })
             }
             WorkflowArgs::Describe { name } => {
@@ -256,14 +442,10 @@ impl AlephTool for WorkflowTool {
                 // Output the executable projection — the tool's `definition`
                 // field is a `WorkflowDef`; the extra metadata is reachable via
                 // `export`.
+                let message = format!("workflow '{name}' has {} step(s)", manifest.steps.len());
                 Ok(WorkflowToolOutput {
-                    action: "describe".into(),
-                    message: format!("workflow '{name}' has {} step(s)", manifest.steps.len()),
-                    names: None,
                     definition: Some(manifest.to_def()),
-                    task_ids: None,
-                    rendered: None,
-                    dropped: None,
+                    ..WorkflowToolOutput::msg("describe", message)
                 })
             }
             WorkflowArgs::Delete { name } => {
@@ -314,17 +496,84 @@ impl AlephTool for WorkflowTool {
                 if let Some(signal) = &self.dispatch_signal {
                     signal.notify_one();
                 }
+                let message = format!(
+                    "started workflow '{name}' on team '{team_id}': {} task(s) queued \
+                     (run_id {}; inspect with action='status', abort with action='cancel')",
+                    mat.task_ids.len(),
+                    mat.run_id
+                );
                 Ok(WorkflowToolOutput {
-                    action: "run".into(),
-                    message: format!(
-                        "started workflow '{name}' on team '{team_id}': {} task(s) queued",
-                        mat.task_ids.len()
-                    ),
-                    names: None,
-                    definition: None,
                     task_ids: Some(mat.task_ids),
-                    rendered: None,
-                    dropped: None,
+                    run_id: Some(mat.run_id),
+                    ..WorkflowToolOutput::msg("run", message)
+                })
+            }
+            WorkflowArgs::Status {
+                name,
+                team_id,
+                run_id,
+            } => {
+                debug!(name = %name, team_id = %team_id, "workflow: status");
+                let (run_id, tasks) = self.run_tasks(&name, &team_id, run_id.as_deref()).await?;
+                let steps: Vec<WorkflowRunStep> = tasks.iter().map(step_row).collect();
+                let message = format!(
+                    "workflow '{name}' run {run_id}: {}",
+                    summarize_statuses(&tasks)
+                );
+                Ok(WorkflowToolOutput {
+                    run_id: Some(run_id),
+                    steps: Some(steps),
+                    ..WorkflowToolOutput::msg("status", message)
+                })
+            }
+            WorkflowArgs::Cancel {
+                name,
+                team_id,
+                run_id,
+            } => {
+                debug!(name = %name, team_id = %team_id, "workflow: cancel");
+                let (run_id, tasks) = self.run_tasks(&name, &team_id, run_id.as_deref()).await?;
+                let mut cancelled: Vec<String> = Vec::new();
+                let mut in_flight = 0usize;
+                let mut finished = 0usize;
+                for task in &tasks {
+                    match task.status {
+                        // Terminal — already settled, leave untouched.
+                        CoordTaskStatus::Completed
+                        | CoordTaskStatus::Failed
+                        | CoordTaskStatus::Cancelled
+                        | CoordTaskStatus::Skipped => finished += 1,
+                        status => {
+                            if status == CoordTaskStatus::InProgress {
+                                in_flight += 1;
+                            }
+                            self.coord_store
+                                .update_task(
+                                    &task.id,
+                                    CoordTaskUpdate {
+                                        status: Some(CoordTaskStatus::Cancelled),
+                                        ..Default::default()
+                                    },
+                                )
+                                .await?;
+                            cancelled.push(task.id.clone());
+                        }
+                    }
+                }
+                let mut message = format!(
+                    "cancelled {} step(s) of workflow '{name}' run {run_id} ({finished} already finished)",
+                    cancelled.len()
+                );
+                if in_flight > 0 {
+                    message.push_str(&format!(
+                        "; {in_flight} in-flight member run(s) will finish on their own but \
+                         cannot resurrect their cancelled task(s)"
+                    ));
+                }
+                Ok(WorkflowToolOutput {
+                    task_ids: Some(cancelled),
+                    run_id: Some(run_id),
+                    ..WorkflowToolOutput::msg("cancel", message)
                 })
             }
             WorkflowArgs::Export { name, write_file } => {
@@ -341,13 +590,8 @@ impl AlephTool for WorkflowTool {
                     format!("rendered workflow '{name}' ({} bytes)", rendered.len())
                 };
                 Ok(WorkflowToolOutput {
-                    action: "export".into(),
-                    message,
-                    names: None,
-                    definition: None,
-                    task_ids: None,
                     rendered: Some(rendered),
-                    dropped: None,
+                    ..WorkflowToolOutput::msg("export", message)
                 })
             }
             WorkflowArgs::Import { source, save } => {
@@ -386,13 +630,9 @@ impl AlephTool for WorkflowTool {
                     )
                 };
                 Ok(WorkflowToolOutput {
-                    action: "import".into(),
-                    message,
-                    names: None,
                     definition: Some(def),
-                    task_ids: None,
-                    rendered: None,
                     dropped: Some(outcome.dropped),
+                    ..WorkflowToolOutput::msg("import", message)
                 })
             }
             WorkflowArgs::Proposals {} => {
@@ -400,18 +640,14 @@ impl AlephTool for WorkflowTool {
                     .into_iter()
                     .map(|m| m.name)
                     .collect();
+                let message = format!(
+                    "{} gated MetaSkill proposal(s); describe one with action='describe' is \
+                     for active workflows — accept with action='accept_proposal'",
+                    names.len()
+                );
                 Ok(WorkflowToolOutput {
-                    action: "proposals".into(),
-                    message: format!(
-                        "{} gated MetaSkill proposal(s); describe one with action='describe' is \
-                         for active workflows — accept with action='accept_proposal'",
-                        names.len()
-                    ),
                     names: Some(names),
-                    definition: None,
-                    task_ids: None,
-                    rendered: None,
-                    dropped: None,
+                    ..WorkflowToolOutput::msg("proposals", message)
                 })
             }
             WorkflowArgs::AcceptProposal { name } => {
@@ -433,9 +669,9 @@ impl AlephTool for WorkflowTool {
 mod tests {
     use super::*;
     use crate::agents::swarm::tasks::{store::SqliteCoordTaskStore, CoordTaskStatus};
+    use crate::sync_primitives::Mutex;
     use crate::workflow::def::WorkflowStepDef;
     use rusqlite::Connection;
-    use crate::sync_primitives::Mutex;
     use tempfile::TempDir;
 
     // `ALEPH_HOME` is process-global; the file-backed actions (save/list/
@@ -713,14 +949,232 @@ mod tests {
         assert!(res.is_err(), "loading a missing template surfaces an error");
     }
 
+    // --- status / cancel: run-grouped lifecycle (no ALEPH_HOME needed) ---
+
+    /// Materialise `def` directly (bypassing the file store) and return the run.
+    async fn materialize_run(
+        t: &WorkflowTool,
+        def: &WorkflowDef,
+        team: &str,
+    ) -> (String, Vec<String>) {
+        let mat = workflow::materialize(def, "x", team, t.coord_store.as_ref(), None)
+            .await
+            .expect("materialise");
+        (mat.run_id, mat.task_ids)
+    }
+
+    #[tokio::test]
+    async fn status_reports_per_step_rows_for_run() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (run_id, ids) = materialize_run(&t, &linear_def(), "team-9").await;
+
+        // Fail the root with an error so the row surfaces it.
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Failed),
+                    result: Some("provider exploded".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let out = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: None,
+            })
+            .await
+            .expect("status");
+        assert_eq!(out.action, "status");
+        assert_eq!(out.run_id.as_deref(), Some(run_id.as_str()));
+        let steps = out.steps.as_ref().expect("status populates steps");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0].step, "gather");
+        assert_eq!(steps[0].status, "failed");
+        assert_eq!(steps[0].error.as_deref(), Some("provider exploded"));
+        // Root failed → dependent is terminally unsatisfiable (derived).
+        assert_eq!(steps[1].step, "write");
+        assert_eq!(steps[1].status, "unsatisfiable");
+        assert!(steps[1].error.is_none(), "error only for failed steps");
+        assert!(
+            out.message.contains("1 failed"),
+            "summary counts: {}",
+            out.message
+        );
+    }
+
+    #[tokio::test]
+    async fn status_selects_explicit_run_among_several() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (first_run, first_ids) = materialize_run(&t, &linear_def(), "team-9").await;
+        let (second_run, _) = materialize_run(&t, &linear_def(), "team-9").await;
+        assert_ne!(first_run, second_run);
+
+        // Complete the first run's root so the two runs are distinguishable.
+        t.coord_store
+            .update_task(
+                &first_ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let out = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: Some(first_run.clone()),
+            })
+            .await
+            .expect("status of explicit run");
+        assert_eq!(out.run_id.as_deref(), Some(first_run.as_str()));
+        let steps = out.steps.as_ref().unwrap();
+        assert_eq!(
+            steps[0].status, "completed",
+            "rows come from the requested run"
+        );
+
+        // An unknown run id errors with guidance instead of guessing.
+        let err = t
+            .call(WorkflowArgs::Status {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: Some("no-such-run".into()),
+            })
+            .await
+            .expect_err("unknown run id");
+        assert!(err.to_string().contains("no run 'no-such-run'"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn status_errors_when_workflow_never_ran() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let err = t
+            .call(WorkflowArgs::Status {
+                name: "ghost".into(),
+                team_id: "team-9".into(),
+                run_id: None,
+            })
+            .await
+            .expect_err("no runs");
+        assert!(
+            err.to_string().contains("no runs of workflow 'ghost'"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_marks_unfinished_steps_cancelled_and_keeps_finished() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (run_id, ids) = materialize_run(&t, &linear_def(), "team-9").await;
+
+        // Root already finished; dependent now pending.
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    result: Some("done".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let out = t
+            .call(WorkflowArgs::Cancel {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: Some(run_id.clone()),
+            })
+            .await
+            .expect("cancel");
+        assert_eq!(out.action, "cancel");
+        let cancelled = out.task_ids.as_ref().expect("cancel lists cancelled ids");
+        assert_eq!(cancelled, &vec![ids[1].clone()], "only the unfinished step");
+        assert!(
+            out.message.contains("1 already finished"),
+            "{}",
+            out.message
+        );
+
+        // The finished step keeps its result; the rest is terminally cancelled.
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(root.status, CoordTaskStatus::Completed);
+        assert_eq!(root.result.as_deref(), Some("done"));
+        let dep = t.coord_store.get_task(&ids[1]).await.unwrap().unwrap();
+        assert_eq!(dep.status, CoordTaskStatus::Cancelled);
+
+        // Cancel is idempotent: a second call finds nothing left to cancel.
+        let again = t
+            .call(WorkflowArgs::Cancel {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: Some(run_id),
+            })
+            .await
+            .expect("cancel again");
+        assert_eq!(again.task_ids.as_deref(), Some(&[][..]));
+        assert!(
+            again.message.contains("cancelled 0 step(s)"),
+            "{}",
+            again.message
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_reports_in_flight_member_runs() {
+        let store = setup_store().await;
+        let t = tool(store, None);
+        let (run_id, ids) = materialize_run(&t, &linear_def(), "team-9").await;
+        t.coord_store
+            .update_task(
+                &ids[0],
+                crate::agents::swarm::tasks::CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+
+        let out = t
+            .call(WorkflowArgs::Cancel {
+                name: "pipeline".into(),
+                team_id: "team-9".into(),
+                run_id: Some(run_id),
+            })
+            .await
+            .expect("cancel with in-flight step");
+        assert_eq!(out.task_ids.as_ref().map(|v| v.len()), Some(2));
+        assert!(
+            out.message.contains("1 in-flight member run(s)"),
+            "in-flight semantics surfaced: {}",
+            out.message
+        );
+        let root = t.coord_store.get_task(&ids[0]).await.unwrap().unwrap();
+        assert_eq!(root.status, CoordTaskStatus::Cancelled);
+    }
+
     // --- run pre-flight: team coverage validation ---
 
     /// In-memory team store seeded with `members` (each an in-process agent).
     /// Returns the store plus the freshly-minted team id to target.
     async fn team_with(members: &[&str]) -> (Arc<dyn crate::teams::TeamStore>, String) {
         // Trait in scope so create_team/add_member resolve on the concrete store.
-        use crate::teams::TeamStore;
         use crate::teams::types::{NewTeam, NewTeamMember};
+        use crate::teams::TeamStore;
         let conn = Connection::open_in_memory().expect("open team db");
         let store = crate::teams::SqliteTeamStore::new(conn);
         store.migrate().await.expect("migrate teams");

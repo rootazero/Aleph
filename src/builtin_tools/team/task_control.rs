@@ -37,6 +37,12 @@ pub enum TeamTaskControlArgs {
     /// Mark as Skipped — satisfies downstream dependencies. Works at
     /// any non-terminal state.
     Skip { task_id: String },
+    /// Cancel a not-yet-finished task. Unlike `skip`, Cancelled does NOT
+    /// satisfy downstream dependencies — dependents become unsatisfiable.
+    /// An in_progress task's running attempt finishes on its own but cannot
+    /// resurrect the task. Idempotent on already-cancelled tasks; rejects
+    /// completed / failed / skipped (already settled — use retry instead).
+    Cancel { task_id: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,7 +77,9 @@ impl AlephTool for TeamTaskControlTool {
     const NAME: &'static str = "team_task_control";
     const DESCRIPTION: &'static str = "Admin-context task control. Pause/resume to gate dispatch; \
          hard-retry to re-queue a terminal task without going through review; \
-         skip to mark a task as not required. Distinct from \
+         skip to mark a task as not required (satisfies dependents); cancel \
+         to abort it (dependents become unsatisfiable; an in-progress run \
+         finishes but cannot resurrect the task). Distinct from \
          `workflow_step_review` which is reviewer-context (requires a \
          finished run).";
 
@@ -84,6 +92,7 @@ impl AlephTool for TeamTaskControlTool {
             "team_task_control(action='resume', task_id='task-3')".into(),
             "team_task_control(action='retry', task_id='task-3')".into(),
             "team_task_control(action='skip', task_id='task-3')".into(),
+            "team_task_control(action='cancel', task_id='task-3')".into(),
         ])
     }
 
@@ -188,6 +197,46 @@ impl AlephTool for TeamTaskControlTool {
                     task_id,
                     status: "skipped".into(),
                     action: "skip".into(),
+                })
+            }
+            TeamTaskControlArgs::Cancel { task_id } => {
+                debug!(task_id = %task_id, "team_task_control: cancel");
+                let current = self.fetch_status(&task_id).await?;
+                match current {
+                    CoordTaskStatus::Cancelled => {
+                        return Ok(TeamTaskControlOutput {
+                            task_id,
+                            status: "cancelled".into(),
+                            action: "cancel".into(),
+                        });
+                    }
+                    CoordTaskStatus::Completed
+                    | CoordTaskStatus::Failed
+                    | CoordTaskStatus::Skipped => {
+                        return Err(AlephError::invalid_input(format!(
+                            "cannot cancel task in status '{current}' — it already finished \
+                             (use retry for a fresh attempt)"
+                        )));
+                    }
+                    // Pending / Blocked / Unsatisfiable / InProgress /
+                    // WaitingReview / Paused are all cancellable. An
+                    // in-progress member run finishes on its own; the
+                    // dispatcher's finalize guard keeps the task cancelled.
+                    _ => {}
+                }
+                self.coord_store
+                    .update_task(
+                        &task_id,
+                        CoordTaskUpdate {
+                            status: Some(CoordTaskStatus::Cancelled),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                Ok(TeamTaskControlOutput {
+                    task_id,
+                    status: "cancelled".into(),
+                    action: "cancel".into(),
                 })
             }
         }
@@ -313,6 +362,75 @@ mod tests {
             .await
             .unwrap_err();
         assert!(format!("{err}").contains("in-progress"));
+    }
+
+    #[tokio::test]
+    async fn cancel_marks_pending_cancelled() {
+        let (store, tool) = setup().await;
+        let task_id = make_task(&store, "T1").await;
+        let out = tool
+            .call(TeamTaskControlArgs::Cancel {
+                task_id: task_id.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.status, "cancelled");
+        assert_eq!(
+            store.get_task(&task_id).await.unwrap().unwrap().status,
+            CoordTaskStatus::Cancelled
+        );
+
+        // Idempotent on an already-cancelled task.
+        let again = tool
+            .call(TeamTaskControlArgs::Cancel {
+                task_id: task_id.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(again.status, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn cancel_allows_in_progress_but_rejects_settled() {
+        let (store, tool) = setup().await;
+        let task_id = make_task(&store, "T1").await;
+        store
+            .update_task(
+                &task_id,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::InProgress),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        // In-progress is cancellable — the dispatcher's finalize guard keeps
+        // the terminal status from being overwritten by the in-flight run.
+        let out = tool
+            .call(TeamTaskControlArgs::Cancel {
+                task_id: task_id.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.status, "cancelled");
+
+        // A settled task cannot be cancelled.
+        let done = make_task(&store, "T2").await;
+        store
+            .update_task(
+                &done,
+                CoordTaskUpdate {
+                    status: Some(CoordTaskStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let err = tool
+            .call(TeamTaskControlArgs::Cancel { task_id: done })
+            .await
+            .unwrap_err();
+        assert!(format!("{err}").contains("already finished"), "{err}");
     }
 
     #[tokio::test]
