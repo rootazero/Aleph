@@ -684,16 +684,22 @@ impl ScopedToolService {
     /// the LLM. The fence labels the source as `tool_error:<tool>` so the
     /// model can pattern-match consistently with `tool_error` outputs
     /// from other channels.
+    ///
+    /// The untrusted body is also length-bounded first: unlike success
+    /// output, errors bypass the Layer 2 result budget entirely (they never
+    /// reach `apply_layer_two`), so an upstream that embeds a whole HTML
+    /// error page or a giant stack trace would otherwise ride into the
+    /// model's context verbatim on every subsequent turn.
     fn sanitize_tool_error(name: &str, err: ToolError) -> ToolError {
         use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
         // Preserve the original variant so callers can keep matching on
         // `Timeout` / `Transport` / `Execution`; only the `cause` /
-        // message string is sanitized.
+        // message string is bounded and sanitized.
         match err {
             ToolError::Execution { name: n, cause } => ToolError::Execution {
                 name: n,
                 cause: wrap_external_content(
-                    &cause,
+                    &bound_error_body(&cause),
                     ContentSource::ToolError {
                         tool: name.to_string(),
                     },
@@ -702,7 +708,7 @@ impl ScopedToolService {
             ToolError::Transport { name: n, cause } => ToolError::Transport {
                 name: n,
                 cause: wrap_external_content(
-                    &cause,
+                    &bound_error_body(&cause),
                     ContentSource::ToolError {
                         tool: name.to_string(),
                     },
@@ -717,9 +723,77 @@ impl ScopedToolService {
     }
 }
 
+/// Max chars of an untrusted tool-error body the model ever sees. Sized so a
+/// real diagnostic (multi-frame trace, HTTP error with response excerpt)
+/// survives intact while a dumped HTML page or megabyte stack does not.
+const ERROR_BODY_MAX_CHARS: usize = 4000;
+/// Head/tail split when bounding: the head carries the error type and message,
+/// the tail carries the summary/caused-by chain — keep both, elide the middle.
+const ERROR_BODY_HEAD_CHARS: usize = 2600;
+const ERROR_BODY_TAIL_CHARS: usize = 1200;
+
+/// Bound an error body to [`ERROR_BODY_MAX_CHARS`], keeping head + tail with
+/// an explicit elision marker. Char-based (never splits a UTF-8 code point).
+fn bound_error_body(body: &str) -> std::borrow::Cow<'_, str> {
+    let total = body.chars().count();
+    if total <= ERROR_BODY_MAX_CHARS {
+        return std::borrow::Cow::Borrowed(body);
+    }
+    let head_end = body
+        .char_indices()
+        .nth(ERROR_BODY_HEAD_CHARS)
+        .map(|(i, _)| i)
+        .unwrap_or(body.len());
+    let tail_start = body
+        .char_indices()
+        .nth(total - ERROR_BODY_TAIL_CHARS)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let elided = total - ERROR_BODY_HEAD_CHARS - ERROR_BODY_TAIL_CHARS;
+    std::borrow::Cow::Owned(format!(
+        "{}\n…[{} chars elided]…\n{}",
+        &body[..head_end],
+        elided,
+        &body[tail_start..]
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bound_error_body_passes_short_bodies_through_borrowed() {
+        let short = "connection refused (os error 61)";
+        assert!(matches!(
+            bound_error_body(short),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // Exactly at the limit still passes through.
+        let at_limit = "x".repeat(ERROR_BODY_MAX_CHARS);
+        assert_eq!(bound_error_body(&at_limit).as_ref(), at_limit);
+    }
+
+    #[test]
+    fn bound_error_body_keeps_head_and_tail_with_elision_marker() {
+        let body = format!("HEAD-MARKER {} TAIL-MARKER", "y".repeat(10_000));
+        let bounded = bound_error_body(&body);
+        assert!(bounded.starts_with("HEAD-MARKER"));
+        assert!(bounded.ends_with("TAIL-MARKER"));
+        assert!(bounded.contains("chars elided"));
+        // The bounded body must be dramatically smaller than the input.
+        assert!(bounded.chars().count() < ERROR_BODY_MAX_CHARS + 100);
+    }
+
+    #[test]
+    fn bound_error_body_is_utf8_boundary_safe() {
+        // Multi-byte chars across both cut points must not panic or split.
+        let body = "汉".repeat(ERROR_BODY_MAX_CHARS + 500);
+        let bounded = bound_error_body(&body);
+        assert!(bounded.contains("chars elided"));
+        assert!(bounded.starts_with('汉'));
+        assert!(bounded.ends_with('汉'));
+    }
 
     #[test]
     fn escape_reminder_boundary_neutralizes_both_fence_tokens() {

@@ -175,6 +175,67 @@ fn fuzzy_match(needle_lower: &str, offered: &[&str]) -> Option<String> {
     best_name.filter(|_| best_is_unique).map(str::to_string)
 }
 
+/// Widest Levenshtein distance the suggestion tier accepts. Parity with the
+/// `get_tool_schema` not-found path, which has always suggested at ≤ 3 edits.
+const SUGGEST_MAX_DISTANCE: usize = 3;
+
+/// Minimum emitted-name length before substring containment counts as a
+/// suggestion signal — below this, almost every offered name "contains" the
+/// needle and the list degrades to noise.
+const SUGGEST_CONTAIN_MIN_LEN: usize = 3;
+
+/// Loose "did you mean?" candidates for an emitted name that
+/// [`repair_tool_name`] could not resolve.
+///
+/// Unlike the repair tiers — which must abstain on any ambiguity because they
+/// rewrite the *dispatched* name — suggestions are advisory text rendered into
+/// the `ToolNotFound` error for the model to read, so this tier can afford to
+/// be permissive: substring containment in either direction plus a wider
+/// edit-distance bound, ranked best-first (exact-fold < containment < edit
+/// distance, ties broken lexicographically for determinism).
+///
+/// This is the single suggestion source for both the dispatch `ToolNotFound`
+/// hint and the `get_tool_schema` not-found path, mirroring how
+/// [`repair_tool_name`] unified the repair tiers.
+pub fn suggest_candidates(emitted: &str, offered: &[&str], max: usize) -> Vec<String> {
+    use crate::builtin_tools::meta_tools::levenshtein_distance;
+
+    if emitted.is_empty() || offered.is_empty() || max == 0 {
+        return Vec::new();
+    }
+    let needle = emitted.to_ascii_lowercase();
+    // Short needles only fuzzy-match at one edit; longer ones get the full bound.
+    let distance_bound = if needle.len() < FUZZY_MIN_LEN {
+        1
+    } else {
+        SUGGEST_MAX_DISTANCE
+    };
+
+    let mut scored: Vec<(usize, &str)> = offered
+        .iter()
+        .filter_map(|&o| {
+            let cand = o.to_ascii_lowercase();
+            if cand == needle {
+                return Some((0, o)); // pure case drift
+            }
+            if needle.len() >= SUGGEST_CONTAIN_MIN_LEN
+                && cand.len() >= SUGGEST_CONTAIN_MIN_LEN
+                && (cand.contains(&needle) || needle.contains(&cand))
+            {
+                return Some((1, o));
+            }
+            let d = levenshtein_distance(&cand, &needle);
+            (d <= distance_bound).then_some((1 + d, o))
+        })
+        .collect();
+    scored.sort_by_key(|&(score, name)| (score, name));
+    scored
+        .into_iter()
+        .map(|(_, name)| name.to_string())
+        .take(max)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,6 +333,43 @@ mod tests {
     fn empty_inputs_return_none() {
         assert_eq!(tier("", &["read"]), None);
         assert_eq!(tier("read", &[]), None);
+    }
+
+    #[test]
+    fn suggest_ranks_containment_over_distance() {
+        // "search" is contained in both search tools; "read_file" is too far.
+        let got = suggest_candidates("search", &["web_search", "session_search", "read_file"], 3);
+        assert_eq!(got, vec!["session_search", "web_search"]);
+    }
+
+    #[test]
+    fn suggest_surfaces_ambiguous_near_matches_repair_declined() {
+        // repair abstains on the tie; suggestions list both for the model.
+        assert_eq!(tier("reaf", &["read", "real"]), None);
+        let got = suggest_candidates("reaf", &["read", "real", "write"], 3);
+        assert_eq!(got, vec!["read", "real"]);
+    }
+
+    #[test]
+    fn suggest_respects_max_and_empty_inputs() {
+        let got = suggest_candidates("search", &["web_search", "session_search"], 1);
+        assert_eq!(got.len(), 1);
+        assert!(suggest_candidates("", &["read"], 3).is_empty());
+        assert!(suggest_candidates("read", &[], 3).is_empty());
+        assert!(suggest_candidates("read", &["read"], 0).is_empty());
+    }
+
+    #[test]
+    fn suggest_short_needles_do_not_match_everything() {
+        // 2-char needle: containment is disabled and distance bound is 1, so
+        // unrelated tools never appear.
+        let got = suggest_candidates("rd", &["read", "write", "bash"], 5);
+        assert!(got.is_empty(), "got {got:?}");
+    }
+
+    #[test]
+    fn suggest_returns_empty_for_unrelated_name() {
+        assert!(suggest_candidates("totally_unrelated", &["read", "write"], 3).is_empty());
     }
 
     #[test]

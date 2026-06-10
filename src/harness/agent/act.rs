@@ -1061,7 +1061,30 @@ impl AgentHarness {
         // very next Think turn — same channel claude-code uses, no
         // new wiring required.
         let hint = crate::tools::fallback_registry::render_persistence_hint(&e, &call.name);
-        let error_msg = format!("{}{}", e, hint);
+        // `NotFound` carries zero routing signal on its own (the fallback
+        // registry deliberately stays silent for it — the call shape, not the
+        // tool choice, is wrong). Name repair already rewrote unambiguous
+        // drift before dispatch, so reaching here means the name was either
+        // unknown or ambiguous; surface the near-matches the repair tier had
+        // to abstain from, so the model self-corrects in one turn instead of
+        // groping via `list_tools`. Advisory text only — never auto-dispatch
+        // (R7: the model picks).
+        let did_you_mean = if let crate::tools::service::ToolError::NotFound { name } = &e {
+            let defs = self.deps.tools.metadata_schema();
+            let offered: Vec<&str> = defs.iter().map(|d| d.name.as_str()).collect();
+            let candidates = crate::tools::name_repair::suggest_candidates(name, &offered, 3);
+            if candidates.is_empty() {
+                " No similarly-named tool is available — call `list_tools` to see the live tool list.".to_string()
+            } else {
+                format!(
+                    " Did you mean: {}? Call `list_tools` to see the live tool list.",
+                    candidates.join(", ")
+                )
+            }
+        } else {
+            String::new()
+        };
+        let error_msg = format!("{}{}{}", e, hint, did_you_mean);
         let error_event = SessionEvent::ToolError {
             turn_id,
             call_id: call.id.clone(),

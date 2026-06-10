@@ -1,9 +1,9 @@
 //! Pure helpers for applying the tool-result budget pipeline:
 //! `compress → persist-if-large → truncate-if-small`.
 //!
-//! Extracted from `pipeline/helpers.rs` so it can be consumed by the
-//! production `ScopedToolService::execute` path (which is not routed
-//! through the still-orphaned `ToolPipeline`).
+//! Consumed by the production `ScopedToolService::execute` path (Layer 2 of
+//! the result-budget stack; the Phase-2 `ToolPipeline` decorator chain these
+//! helpers were originally extracted for was deleted, this is the only home).
 //!
 //! Layering:
 //! - `resolve_result_budget(name, explicit)` resolves the per-tool token
