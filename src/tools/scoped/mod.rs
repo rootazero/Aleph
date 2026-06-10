@@ -99,6 +99,13 @@ pub struct ScopedToolService {
     /// attachment order from `list()` and (on cache miss) from
     /// `metadata_schema()`. See [`ToolDefinitionRewriter`].
     pub(super) definition_rewriters: Vec<Arc<dyn ToolDefinitionRewriter>>,
+    /// Merged tool permission policy (global → agent → channel, most
+    /// restrictive wins; see `ToolPermissionsConfig::merge`). `Deny` tools are
+    /// hidden from `list()` / `describe()` and rejected at `execute()`;
+    /// `Ask` tools route through the confirmation gate exactly like
+    /// `confirm_tools`. `None` = no policy configured (allow-all default,
+    /// byte-identical to pre-wiring behavior).
+    pub(super) tool_permissions: Option<crate::config::types::policies::ToolPermissionsConfig>,
 }
 
 // =============================================================================
@@ -151,6 +158,10 @@ impl ToolService for ScopedToolService {
             defs.retain(|d| self.is_allowed(&d.name));
         }
 
+        // Permission-policy gate: a `Deny` tool is invisible to the LLM —
+        // listing it would only invite calls that `execute()` rejects.
+        defs.retain(|d| !self.is_permission_denied(&d.name));
+
         // Health gate: strip any tool whose probe reports a non-expired
         // Unhealthy. Tools without a registered probe pass through (the
         // snapshot reports them healthy by default).
@@ -170,6 +181,11 @@ impl ToolService for ScopedToolService {
     async fn describe(&self, name: &str) -> Option<ToolDefinition> {
         // Enforce allowed filter first.
         if !self.is_allowed(name) {
+            return None;
+        }
+        // Permission-policy gate mirrors list(): Deny tools don't exist
+        // from the consumer's point of view.
+        if self.is_permission_denied(name) {
             return None;
         }
 
@@ -267,11 +283,14 @@ impl ToolService for ScopedToolService {
         }
         // Confirmation-gated tools require user approval — they must be
         // routed through the serial path so the prompt is visible in input
-        // order; never run them in parallel. Honors both the static
-        // `confirm_tools` set and per-tool `requires_confirmation()`
-        // declarations so a self-declared dangerous tool is never silently
-        // parallelized past its approval prompt.
-        if self.confirm_tools.contains(name) || self.inner.requires_confirmation(name) {
+        // order; never run them in parallel. Honors the static
+        // `confirm_tools` set, per-tool `requires_confirmation()`
+        // declarations, and permission-policy `Ask` so a confirmation-bound
+        // tool is never silently parallelized past its approval prompt.
+        if self.confirm_tools.contains(name)
+            || self.inner.requires_confirmation(name)
+            || self.is_permission_ask(name)
+        {
             return false;
         }
         self.inner
@@ -298,7 +317,10 @@ impl ToolService for ScopedToolService {
         if !self.is_allowed(name) {
             return ConcurrencyClaim::global();
         }
-        if self.confirm_tools.contains(name) || self.inner.requires_confirmation(name) {
+        if self.confirm_tools.contains(name)
+            || self.inner.requires_confirmation(name)
+            || self.is_permission_ask(name)
+        {
             return ConcurrencyClaim::global();
         }
         self.inner
@@ -365,6 +387,8 @@ impl ToolService for ScopedToolService {
             // Mirror list() — subagent is exempt from allow-filter via is_allowed.
             defs.retain(|d| self.is_allowed(&d.name));
         }
+        // Mirror list() — Deny tools never reach the LLM-visible schema.
+        defs.retain(|d| !self.is_permission_denied(&d.name));
         if let Some(snap) = &health_snap {
             defs.retain(|d| snap.is_healthy(&d.name));
         }

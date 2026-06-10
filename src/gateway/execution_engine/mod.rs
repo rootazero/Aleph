@@ -123,6 +123,13 @@ pub enum BusyInputMode {
 /// `ChannelPolicyConfig`; absent on Panel/CLI paths (which default to `Steer`).
 pub const BUSY_INPUT_MODE_KEY: &str = "busy_input_mode";
 
+/// Metadata key carrying the originating channel's tool permission override as
+/// a JSON-serialized `ToolPermissionsConfig`. Stamped by the inbound router
+/// from the channel's `ChannelPolicyConfig` (`tool_permissions` block); absent
+/// for unconfigured channels and Panel/CLI/cron paths. `run_loop` merges it as
+/// the third (most specific) layer over global + agent permissions.
+pub const CHANNEL_TOOL_PERMISSIONS_KEY: &str = "channel_tool_permissions";
+
 impl BusyInputMode {
     /// Wire string stored in run metadata. Inverse of [`BusyInputMode::from_wire`].
     #[must_use]

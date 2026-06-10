@@ -4,11 +4,10 @@
 
 use crate::discovery::DiscoverySource;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 // Forward declarations for types from other modules
-use super::{PermissionRule, PromptScope};
+use super::PromptScope;
 
 // =============================================================================
 // Skill Tool Types
@@ -41,16 +40,6 @@ pub struct SkillMetadata {
 
     /// Discovery source
     pub source: DiscoverySource,
-}
-
-/// Context for skill tool invocation (passed from agent loop)
-#[derive(Debug, Clone, Default)]
-pub struct SkillContext {
-    /// Session identifier
-    pub session_id: String,
-
-    /// Agent-level permission rules (if any)
-    pub agent_permissions: Option<HashMap<String, PermissionRule>>,
 }
 
 /// Direct command execution result

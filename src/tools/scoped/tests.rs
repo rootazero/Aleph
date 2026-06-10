@@ -1484,3 +1484,138 @@ async fn chat_tier_config_tool_denied_rejected() {
         "operator-denied config tool must be PermissionDenied, got {err:?}"
     );
 }
+
+// =============================================================================
+// Tool permission policy (`[policies.tool_permissions]`) gating
+// =============================================================================
+
+fn perms(
+    default: crate::extension::PermissionAction,
+    overrides: &[(&str, crate::extension::PermissionAction)],
+) -> crate::config::types::policies::ToolPermissionsConfig {
+    crate::config::types::policies::ToolPermissionsConfig {
+        default,
+        overrides: overrides
+            .iter()
+            .map(|(n, a)| ((*n).to_string(), *a))
+            .collect(),
+    }
+}
+
+#[tokio::test]
+async fn deny_tool_hidden_from_list_and_describe() {
+    use crate::extension::PermissionAction;
+    let svc = ScopedToolService::new(make_registry(&["alpha", "beta"]), BTreeSet::new())
+        .with_tool_permissions(perms(
+            PermissionAction::Allow,
+            &[("beta", PermissionAction::Deny)],
+        ));
+    let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+    assert!(names.contains(&"alpha".to_string()));
+    assert!(
+        !names.contains(&"beta".to_string()),
+        "Deny tool must be invisible to the LLM"
+    );
+    assert!(svc.describe("beta").await.is_none());
+    // metadata_schema mirrors list().
+    let schema_names: Vec<&str> = svc
+        .metadata_schema()
+        .iter()
+        .map(|d| d.name.as_str())
+        .collect();
+    assert!(!schema_names.contains(&"beta"));
+}
+
+#[tokio::test]
+async fn deny_tool_execute_rejected_with_permission_denied() {
+    use crate::extension::PermissionAction;
+    let svc = ScopedToolService::new(make_registry(&["alpha", "beta"]), BTreeSet::new())
+        .with_tool_permissions(perms(
+            PermissionAction::Allow,
+            &[("beta", PermissionAction::Deny)],
+        ));
+    let err = svc.execute("beta", json!({})).await.unwrap_err();
+    assert!(
+        matches!(err, ToolError::PermissionDenied { .. }),
+        "policy-denied tool must be PermissionDenied, got {err:?}"
+    );
+    // Non-denied sibling still runs.
+    assert!(svc.execute("alpha", json!({})).await.is_ok());
+}
+
+#[tokio::test]
+async fn ask_tool_routes_through_confirmation_gate() {
+    use crate::extension::PermissionAction;
+    use crate::sandbox::exec_approval::gate::ApprovalOutcome;
+    let requester = StdArc::new(FakeRequester {
+        outcome: ApprovalOutcome::Approved,
+        calls: AtomicUsize::new(0),
+    });
+    let svc = ScopedToolService::new(make_registry(&["alpha"]), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-perm-ask"))
+        .with_tool_permissions(perms(
+            PermissionAction::Allow,
+            &[("alpha", PermissionAction::Ask)],
+        ))
+        .with_confirmation(BTreeSet::new(), StdArc::clone(&requester) as _);
+    svc.execute("alpha", json!({}))
+        .await
+        .expect("approved Ask tool runs");
+    assert_eq!(
+        requester.calls.load(Ordering::SeqCst),
+        1,
+        "Ask policy must prompt exactly once"
+    );
+}
+
+#[tokio::test]
+async fn ask_tool_without_requester_fails_closed() {
+    use crate::extension::PermissionAction;
+    let svc = ScopedToolService::new(make_registry(&["alpha"]), BTreeSet::new())
+        .with_turn_context(turn_ctx("agent-perm-ask-closed"))
+        .with_tool_permissions(perms(
+            PermissionAction::Allow,
+            &[("alpha", PermissionAction::Ask)],
+        ));
+    let err = svc.execute("alpha", json!({})).await.unwrap_err();
+    assert!(
+        matches!(err, ToolError::Execution { .. }),
+        "Ask without approval transport must fail closed, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn default_deny_exposes_only_explicit_allow() {
+    use crate::extension::PermissionAction;
+    let svc = ScopedToolService::new(make_registry(&["alpha", "beta"]), BTreeSet::new())
+        .with_tool_permissions(perms(
+            PermissionAction::Deny,
+            &[("alpha", PermissionAction::Allow)],
+        ));
+    let names: Vec<String> = svc.list().await.into_iter().map(|d| d.name).collect();
+    assert_eq!(names, vec!["alpha".to_string()]);
+    let err = svc.execute("beta", json!({})).await.unwrap_err();
+    assert!(matches!(err, ToolError::PermissionDenied { .. }));
+}
+
+#[tokio::test]
+async fn ask_policy_tool_is_never_parallelized() {
+    use crate::extension::PermissionAction;
+    let svc =
+        ScopedToolService::new(make_registry(&["alpha"]), BTreeSet::new()).with_tool_permissions(
+            perms(PermissionAction::Allow, &[("alpha", PermissionAction::Ask)]),
+        );
+    assert!(
+        !svc.is_call_concurrent_safe("alpha", &json!({})).await,
+        "Ask-gated tool must route through the serial path"
+    );
+}
+
+#[tokio::test]
+async fn no_policy_means_pre_wiring_behavior() {
+    // Without `with_tool_permissions`, everything lists and executes —
+    // byte-identical to the pre-wiring default for unconfigured installs.
+    let svc = ScopedToolService::new(make_registry(&["alpha"]), BTreeSet::new());
+    assert!(svc.describe("alpha").await.is_some());
+    assert!(svc.execute("alpha", json!({})).await.is_ok());
+}

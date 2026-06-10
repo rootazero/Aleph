@@ -30,7 +30,8 @@ pub(super) use super::tool_refresh::{active_plugin_tools_for_agent, ExtensionToo
 impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionEngine<P, R> {
     /// Run the agent loop (think->act two-step, Claude Code-inspired).
     ///
-    /// Uses the flat `LoopToolRegistry` and single-layer `SafetyGuard`.
+    /// Uses the flat `LoopToolRegistry`; tool permissions are enforced by
+    /// `ScopedToolService` (merged global → agent → channel policy).
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn run_agent_loop<E: EventEmitter + Send + Sync + 'static>(
         &self,
@@ -326,7 +327,44 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
         }
 
-        let _agent_perms = agent.config().tool_permissions();
+        // Effective tool permission policy for this turn: global
+        // `[policies.tool_permissions]` (engine-held boot snapshot) merged with
+        // the agent's override, then with the originating channel's override
+        // (stamped into metadata by the inbound router — absent for Panel /
+        // CLI / cron turns). Most restrictive wins at every layer. `None` when
+        // everything is all-default so the ScopedToolService hot path stays a
+        // no-op — byte-identical to pre-wiring behavior for unconfigured
+        // installs.
+        let tool_permissions = {
+            use crate::config::types::policies::ToolPermissionsConfig;
+            let mut merged = ToolPermissionsConfig::merge(
+                &self.global_tool_permissions,
+                &agent.config().tool_permissions(),
+            );
+            if let Some(raw) = request.metadata.get(super::CHANNEL_TOOL_PERMISSIONS_KEY) {
+                match serde_json::from_str::<ToolPermissionsConfig>(raw) {
+                    Ok(channel_perms) => {
+                        merged = ToolPermissionsConfig::merge(&merged, &channel_perms)
+                    }
+                    Err(e) => warn!(
+                        run_id = run_id,
+                        error = %e,
+                        "Malformed channel tool_permissions metadata — channel layer skipped"
+                    ),
+                }
+            }
+            let is_all_default = merged.default == crate::extension::PermissionAction::Allow
+                && merged.overrides.is_empty();
+            (!is_all_default).then(|| {
+                info!(
+                    run_id = run_id,
+                    default = ?merged.default,
+                    overrides = merged.overrides.len(),
+                    "Tool permission policy active for this turn"
+                );
+                merged
+            })
+        };
         let _max_loops = agent.config().max_loops as usize;
         let token_budget = agent.config().max_tokens.unwrap_or(500_000);
 
@@ -731,6 +769,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     Some(turn_context.clone()),
                     hook_executor.clone(),
                     hook_session_id.clone(),
+                    tool_permissions.clone(),
                 );
 
             // Trace sink — built before SubagentTool so it can be inherited by
@@ -867,6 +906,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 Some(turn_context.clone()),
                 hook_executor.clone(),
                 hook_session_id.clone(),
+                tool_permissions.clone(),
             );
 
             // Build FlowRequest. A resumed run carries no fresh input — the

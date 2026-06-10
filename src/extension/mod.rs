@@ -60,7 +60,6 @@ pub use manager_global::{
 pub use manifest::*;
 pub use registry::*;
 pub use service_manager::ServiceManager;
-pub use skill_tool::{check_skill_permission, request_skill_permission_async};
 pub use template::SkillTemplate;
 pub use types::*;
 

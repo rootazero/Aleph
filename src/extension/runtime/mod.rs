@@ -8,4 +8,4 @@
 pub mod wasm;
 
 // Re-export WASM runtime types
-pub use wasm::{PermissionChecker, WasmRuntime, WasmToolInput, WasmToolOutput};
+pub use wasm::{WasmRuntime, WasmToolInput, WasmToolOutput};

@@ -116,14 +116,13 @@ impl ExtensionManager {
         &self,
         qualified_name: &str,
         arguments: &str,
-        ctx: &SkillContext,
     ) -> ExtensionResult<SkillToolResult> {
         self.ensure_loaded().await?;
         let skill = self
             .get_skill(qualified_name)
             .await
             .ok_or_else(|| ExtensionError::SkillNotFound(qualified_name.to_string()))?;
-        super::skill_tool::invoke_skill(&skill, arguments, ctx).await
+        super::skill_tool::invoke_skill(&skill, arguments).await
     }
 
     // ── Hook Execution ────────────────────────────────────────────────────────
