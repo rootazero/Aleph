@@ -634,6 +634,10 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         match AgentEnvStore::with_defaults() {
             Ok(wm) => {
                 let wm = Arc::new(wm);
+                // Feed config.toml's [profiles.*] into the store. Without this
+                // every get_profile() falls back to ProfileConfig::default(),
+                // silently discarding model/tool/smart_recall profile settings.
+                wm.load_profiles(app_config.read().await.profiles.clone());
                 if !args.daemon {
                     println!("Workspace manager initialized (SQLite persistence)");
                 }

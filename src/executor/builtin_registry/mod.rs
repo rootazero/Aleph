@@ -75,20 +75,6 @@ mod tests {
         assert!(err.to_string().contains("Unknown tool"));
     }
 
-    // TODO: Capability tests removed - will be reimplemented with OpenClaw-style tool policy
-    // See: /Volumes/TBU4/Workspace/openclaw/src/agents/pi-tools.policy.ts
-
-    #[tokio::test]
-    async fn test_capability_check_allows_all() {
-        // Currently all operations are permitted (capability system removed)
-        // Safety is enforced by CommandChecker and PathPermissionChecker
-        let registry = BuiltinToolRegistry::new().await;
-
-        let check =
-            registry.check_capability("file_ops", &serde_json::json!({"operation": "delete"}));
-        assert!(check.is_ok(), "All operations should be allowed currently");
-    }
-
     #[tokio::test]
     async fn test_meta_tools_not_registered_without_tool_catalog() {
         // Without tool catalog, meta tools should not be registered

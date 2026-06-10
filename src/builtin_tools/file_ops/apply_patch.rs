@@ -730,7 +730,12 @@ fn current_mut(slot: &mut Option<Hunk>) -> &mut Hunk {
 /// occurrence is ever applied.
 fn first_range(result: &LocateResult) -> Option<(usize, usize)> {
     match result {
-        LocateResult::Exact(ranges) | LocateResult::Folded(ranges) => ranges.first().copied(),
+        // Crlf is accepted as-is: the spliced hunk text keeps its LF newlines,
+        // matching the long-standing behaviour of the `locate_lines` rstrip
+        // fallback on CRLF files (see `edit_match::locate_lines`).
+        LocateResult::Exact(ranges) | LocateResult::Folded(ranges) | LocateResult::Crlf(ranges) => {
+            ranges.first().copied()
+        }
         LocateResult::NotFound(_) => None,
     }
 }
