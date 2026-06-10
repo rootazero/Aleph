@@ -291,7 +291,15 @@ pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Rece
     let pid_file = args.pid_file.clone();
     let daemon_mode = args.daemon;
     tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
+        if let Err(e) = tokio::signal::ctrl_c().await {
+            // Must NOT fall through to the shutdown path on registration
+            // failure: sending on — or even dropping — `shutdown_tx` both
+            // trigger graceful shutdown (`run_until_shutdown` treats a
+            // closed channel as a signal). Park forever to keep the sender
+            // alive; the server just loses Ctrl-C handling.
+            tracing::warn!("Failed to listen for Ctrl-C: {e}; Ctrl-C shutdown disabled");
+            std::future::pending::<()>().await;
+        }
         // Forensics: capture context before tearing anything down. Skip
         // `with_parent_command` here — the Ctrl-C path is the interactive
         // case where the operator already knows who sent it.
