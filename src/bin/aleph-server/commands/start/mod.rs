@@ -1047,6 +1047,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         };
     }
 
+    // Register the subagent completion announcer — background subagent
+    // results proactively drive one turn on the parent session instead of
+    // waiting for the LLM to poll the tracker (R5; see
+    // gateway::subagent_announce module docs).
+    if let (Some(announce_adapter), Some(announce_registry)) = (
+        agent_result.execution_adapter.clone(),
+        agent_result.agent_registry.clone(),
+    ) {
+        alephcore::gateway::subagent_announce::spawn_subagent_announce(
+            announce_adapter,
+            announce_registry,
+            server.event_bus().clone(),
+        );
+    }
+
     // Wire OpenAI-compatible API dependencies into GatewayServer
     server.execution_adapter = agent_result.execution_adapter.clone();
     server.openai_agent_registry = agent_result.agent_registry.clone();

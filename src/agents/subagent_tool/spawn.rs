@@ -87,6 +87,11 @@ impl SubagentTool {
         let deleg_parent_session_id = self.parent_session_id.clone();
         let deleg_task = task.clone();
 
+        // R5 announce inputs — the gateway subscriber needs the parent's
+        // agent id and session key to proactively deliver the result.
+        let announce_agent_id = self.parent_agent_id.clone();
+        let announce_session_id = self.parent_session_id.clone();
+
         let tracker = self.background_tracker.clone();
         let rid = request_id.clone();
         tokio::spawn(async move {
@@ -127,7 +132,41 @@ impl SubagentTool {
                 };
                 reg.dispatch_on_delegation(&ctx).await;
             }
+
+            // R5 announce: build the completion event before `outcome` moves
+            // into the tracker. Broadcast AFTER `mark_completed` so an
+            // announce-triggered parent turn already observes the completed
+            // state through the subagent tool's `list`/`result` actions.
+            // Skipped when no parent session is wired (CLI / direct callers)
+            // — there is no session to announce into. Zero subscribers is
+            // safe (library tests).
+            let announce = announce_session_id.map(|sid| {
+                let (success, summary, error) = match &outcome {
+                    CompletedOutcome::Ok { final_text, .. } => (true, final_text.clone(), None),
+                    CompletedOutcome::Err(e) => (false, String::new(), Some(e.clone())),
+                };
+                let result = crate::event::SubAgentResult {
+                    agent_id: announce_agent_id.clone(),
+                    child_session_id: rid.clone(),
+                    summary,
+                    success,
+                    error,
+                    request_id: Some(rid.clone()),
+                    tools_called: Vec::new(),
+                    execution_duration_ms: None,
+                };
+                (sid, result)
+            });
             tracker.mark_completed(&rid, outcome);
+            if let Some((session_id, result)) = announce {
+                crate::event::GlobalBus::global()
+                    .broadcast(
+                        &announce_agent_id,
+                        &session_id,
+                        crate::event::AlephEvent::SubAgentCompleted(result),
+                    )
+                    .await;
+            }
         });
 
         request_id

@@ -216,11 +216,85 @@ impl SessionCoordinator {
         Ok(())
     }
 
-    /// Cancel a session.
-    pub async fn cancel(&self, session_id: &str) -> Result<()> {
+    /// Cancel a session. Only a declared participant may abandon a session
+    /// (same authorization rule as `submit_turn` / `finalize`).
+    pub async fn cancel(&self, session_id: &str, agent_id: &str) -> Result<()> {
+        let session = self
+            .session_store
+            .get_session(session_id)
+            .await?
+            .ok_or_else(|| AlephError::other(format!("Session not found: {session_id}")))?;
+
+        if !session.participants.iter().any(|p| p == agent_id) {
+            return Err(AlephError::other(format!(
+                "agent '{agent_id}' is not a participant of session {session_id}"
+            )));
+        }
+
         self.session_store.cancel_session(session_id).await?;
         debug!(session_id = %session_id, "Session cancelled");
         Ok(())
+    }
+
+    /// Mark stuck sessions Deadlocked and nudge their participants.
+    ///
+    /// Sessions whose transcript reached `max_rounds` without a conclusion
+    /// (further turns are rejected by the store) or that have been silent for
+    /// `stale_secs` would otherwise stay Active forever — `Deadlocked` was a
+    /// declared status with no writer. For each swept session this logs a
+    /// `SessionDeadlocked` team event and asks participants to conclude or
+    /// cancel. Returns the number of sessions marked.
+    pub async fn sweep_deadlocked(&self, grace_secs: i64, stale_secs: i64) -> Result<usize> {
+        let ids = self
+            .session_store
+            .sweep_deadlocked(grace_secs, stale_secs)
+            .await?;
+
+        for id in &ids {
+            let Some(session) = self.session_store.get_session(id).await? else {
+                continue;
+            };
+
+            let _ = self
+                .event_store
+                .log_event(NewTeamEvent {
+                    team_id: session.team_id.clone(),
+                    event_type: TeamEventType::SessionDeadlocked,
+                    agent_id: "system".to_string(),
+                    payload: serde_json::json!({
+                        "session_id": id,
+                        "topic": session.topic,
+                        "turns": session.transcript.len(),
+                        "max_rounds": session.max_rounds,
+                    }),
+                })
+                .await;
+
+            let _ = self
+                .msg_router
+                .send(SendRequest {
+                    team_id: session.team_id.clone(),
+                    from_agent: "system".to_string(),
+                    to: session.participants.clone(),
+                    cc: vec![],
+                    msg_type: MessageType::SystemNotification,
+                    subject: format!("Session deadlocked: {}", session.topic),
+                    content: format!(
+                        "Session '{}' (session_id: {id}) was marked deadlocked after \
+                         {} of {} rounds with no conclusion. Please wrap it up: \
+                         session_turn(mode='conclude') to record the outcome, or \
+                         session_turn(mode='cancel') to abandon it.",
+                        session.topic,
+                        session.transcript.len(),
+                        session.max_rounds
+                    ),
+                    reply_to: None,
+                    attachments: vec![],
+                })
+                .await;
+        }
+
+        Ok(ids.len())
     }
 }
 
@@ -426,7 +500,10 @@ mod tests {
             .await
             .unwrap();
 
-        coord.cancel(&session.id).await.unwrap();
+        // A stranger cannot cancel someone else's session.
+        assert!(coord.cancel(&session.id, "agent-x").await.is_err());
+
+        coord.cancel(&session.id, "agent-a").await.unwrap();
 
         let fetched = coord
             .session_store
@@ -438,5 +515,56 @@ mod tests {
             fetched.status,
             crate::teams::sessions::types::SessionStatus::Cancelled
         );
+    }
+
+    #[tokio::test]
+    async fn test_sweep_deadlocked_logs_event_and_notifies() {
+        let coord = make_coordinator().await;
+
+        let session = coord
+            .start_session(
+                NewSession {
+                    team_id: "team-1".to_string(),
+                    participants: vec!["agent-a".to_string(), "agent-b".to_string()],
+                    topic: "Stuck debate".to_string(),
+                    trigger: SessionTrigger::Explicit {
+                        requested_by: "agent-a".to_string(),
+                    },
+                    thread_id: None,
+                    max_rounds: 1,
+                },
+                "agent-a",
+            )
+            .await
+            .unwrap();
+
+        coord
+            .submit_turn(&session.id, "agent-a", "only round")
+            .await
+            .unwrap();
+
+        let swept = coord.sweep_deadlocked(0, 86_400).await.unwrap();
+        assert_eq!(swept, 1);
+
+        let fetched = coord
+            .session_store
+            .get_session(&session.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            fetched.status,
+            crate::teams::sessions::types::SessionStatus::Deadlocked
+        );
+
+        // SessionDeadlocked event logged.
+        let events = coord
+            .event_store
+            .get_events("team-1", None, None)
+            .await
+            .unwrap();
+        assert!(events
+            .iter()
+            .any(|e| e.event_type == TeamEventType::SessionDeadlocked));
     }
 }
