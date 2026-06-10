@@ -32,6 +32,9 @@ pub struct DreamReport {
     pub links_purged: u32,
     pub notes_archived: u32,
     pub notes_protected: u32,
+    /// Orphan notes successfully woven into the link graph by `NoteWeave`.
+    #[serde(default)]
+    pub notes_woven: u32,
     pub errors: Option<String>,
     /// Per-action provenance produced by the `SkillDistill` and
     /// `FeedbackDistill` stages. Preserves which `DistillAction` variant

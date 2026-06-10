@@ -175,6 +175,11 @@ impl DreamPipeline {
                 }),
                 Box::new(stages::NoteDriftStage),
                 Box::new(stages::IndexRefresherStage),
+                // Weave orphan notes into the link graph BEFORE decay scores
+                // them: a freshly woven link immediately counts toward
+                // link_weight / the >=3-incoming-links protection, breaking
+                // the orphan→no-link-weight→archived vicious cycle.
+                Box::new(stages::NoteWeaveStage::default()),
                 Box::new(note_decay()),
                 // System-level skill aging (rule-based Active→Stale at
                 // `skill_stale_after_days`). The Stale→Archived / merge
@@ -1151,6 +1156,7 @@ mod tests {
                 "feedback_distill",
                 "note_drift",
                 "index_refresher",
+                "note_weave",
                 "note_decay",
                 "skill_lifecycle",
             ]
