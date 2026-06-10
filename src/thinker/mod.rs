@@ -8,7 +8,6 @@
 //! - Security context and interaction paradigms
 
 pub mod cache;
-pub mod channel_behavior;
 pub mod context;
 pub mod identity;
 pub mod identity_files;

@@ -561,6 +561,38 @@ pub fn parse_v2_tool_prompts(
     Ok(caps)
 }
 
+/// Convert manifest `[[services]]` declarations into Service capabilities.
+///
+/// Only services that declare BOTH `start_handler` and `stop_handler` are
+/// emitted — without a stop handler a background service could never be torn
+/// down, and guessing handler names would hide manifest mistakes.
+pub fn parse_v2_services(
+    services: &[crate::extension::manifest::ServiceSection],
+    plugin_id: &str,
+) -> Vec<CapabilityDeclaration> {
+    use crate::extension::registry::ServiceRegistration;
+
+    let mut caps = Vec::new();
+    for service in services {
+        let (Some(start), Some(stop)) = (&service.start_handler, &service.stop_handler) else {
+            warn!(
+                "Service '{}' in plugin '{}' is missing start_handler/stop_handler — skipped",
+                service.name, plugin_id
+            );
+            continue;
+        };
+        caps.push(CapabilityDeclaration::Service(ServiceRegistration {
+            id: service.name.clone(),
+            name: service.name.clone(),
+            start_handler: start.clone(),
+            stop_handler: stop.clone(),
+            plugin_id: plugin_id.to_string(),
+            auto_start: service.auto_start,
+        }));
+    }
+    caps
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================

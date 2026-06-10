@@ -564,7 +564,7 @@ You have access to your human's context. That doesn't mean you _share_ it. In gr
 
 ## Heartbeat
 
-When you receive a heartbeat poll, check `HEARTBEAT.md` for pending tasks. If nothing needs attention, reply `HEARTBEAT_OK`.
+When you receive a heartbeat poll, check `HEARTBEAT.md` for pending tasks. Report findings that need the user's attention via the `heartbeat_report` tool; if nothing does, simply end the turn — silence means all clear.
 
 You can proactively: read/organize files, check project status, update documentation, review and distill curated memory via the `remember` tool.
 

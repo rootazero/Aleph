@@ -536,7 +536,9 @@ impl McpServerConnection {
             )));
         }
 
-        // Extract text content from result
+        // Extract content from result. Unknown blocks become an explicit
+        // marker so the model knows something was elided rather than silently
+        // seeing a shorter result.
         let content: Vec<Value> = call_result
             .content
             .into_iter()
@@ -547,8 +549,27 @@ impl McpServerConnection {
                 mcp_types::ToolResultContent::Image { data, mime_type } => {
                     json!({"type": "image", "data": data, "mimeType": mime_type})
                 }
-                mcp_types::ToolResultContent::Resource { uri, text } => {
-                    json!({"type": "resource", "uri": uri, "text": text})
+                mcp_types::ToolResultContent::Audio { data, mime_type } => {
+                    json!({"type": "audio", "data": data, "mimeType": mime_type})
+                }
+                mcp_types::ToolResultContent::ResourceLink {
+                    uri,
+                    name,
+                    description,
+                } => {
+                    json!({"type": "resource_link", "uri": uri, "name": name, "description": description})
+                }
+                mcp_types::ToolResultContent::Resource { resource } => {
+                    json!({
+                        "type": "resource",
+                        "uri": resource.uri,
+                        "mimeType": resource.mime_type,
+                        "text": resource.text,
+                        "blob": resource.blob,
+                    })
+                }
+                mcp_types::ToolResultContent::Unknown => {
+                    json!({"type": "text", "text": "[unsupported MCP content type omitted]"})
                 }
             })
             .collect();
@@ -738,8 +759,23 @@ impl McpServerConnection {
                     mcp_types::PromptContentItem::Image { data, mime_type } => {
                         crate::mcp::prompts::PromptContent::Image { data, mime_type }
                     }
-                    mcp_types::PromptContentItem::Resource { uri, text, .. } => {
-                        crate::mcp::prompts::PromptContent::Resource { uri, text }
+                    // Audio has no internal counterpart; degrade to a text
+                    // marker rather than dropping the message.
+                    mcp_types::PromptContentItem::Audio { mime_type, .. } => {
+                        crate::mcp::prompts::PromptContent::Text {
+                            text: format!("[audio content: {}]", mime_type),
+                        }
+                    }
+                    mcp_types::PromptContentItem::Resource { resource } => {
+                        crate::mcp::prompts::PromptContent::Resource {
+                            uri: resource.uri,
+                            text: resource.text,
+                        }
+                    }
+                    mcp_types::PromptContentItem::Unknown => {
+                        crate::mcp::prompts::PromptContent::Text {
+                            text: "[unsupported MCP content type omitted]".to_string(),
+                        }
                     }
                 };
                 crate::mcp::prompts::PromptMessage {

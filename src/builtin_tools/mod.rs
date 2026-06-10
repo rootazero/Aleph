@@ -57,6 +57,7 @@ pub mod google_meet;
 pub mod heartbeat_manage;
 pub mod invalid;
 pub mod list_models;
+pub mod mcp_login;
 pub mod mcp_prompt;
 pub mod mcp_resource;
 pub mod media_send;
@@ -68,9 +69,9 @@ pub mod memory_reflect;
 pub mod memory_search;
 pub mod memory_timeline;
 pub mod meta_tools;
+pub mod node_file;
 pub mod node_invoke;
 pub mod node_invoke_many;
-pub mod node_file;
 pub mod node_list;
 pub mod note_manage;
 pub mod note_orient;
@@ -173,6 +174,8 @@ pub use heartbeat_manage::{
     HeartbeatUpdateArgs, HeartbeatUpdateOutput, HeartbeatUpdateTool,
 };
 pub use invalid::{InvalidTool, InvalidToolArgs, InvalidToolOutput};
+pub use list_models::{ListModelsArgs, ListModelsOutput, ListModelsTool};
+pub use mcp_login::{McpLoginArgs, McpLoginOutput, McpLoginTool};
 pub use mcp_prompt::{McpGetPromptArgs, McpGetPromptOutput, McpGetPromptTool, PromptOutputMessage};
 pub use mcp_resource::{McpReadResourceArgs, McpReadResourceOutput, McpReadResourceTool};
 pub use media_tool::{MediaArgs, MediaOutput, MediaTool};
@@ -190,10 +193,10 @@ pub use meta_tools::{
     GetToolSchemaArgs, GetToolSchemaOutput, GetToolSchemaTool, ListToolsArgs, ListToolsOutput,
     ListToolsTool, SearchToolHit, SearchToolsArgs, SearchToolsOutput, SearchToolsTool,
 };
-pub use node_invoke::{NodeInvokeArgs, NodeInvokeTool};
-pub use node_list::{NodeListArgs, NodeListTool};
-pub use node_invoke_many::{NodeInvokeManyArgs, NodeInvokeManyTool};
 pub use node_file::{NodeFileArgs, NodeFileTool};
+pub use node_invoke::{NodeInvokeArgs, NodeInvokeTool};
+pub use node_invoke_many::{NodeInvokeManyArgs, NodeInvokeManyTool};
+pub use node_list::{NodeListArgs, NodeListTool};
 pub use pdf_generate::{PdfGenerateArgs, PdfGenerateTool};
 pub use permission_tool::{PermissionArgs, PermissionOutput, PermissionTool};
 pub use pim::{PimArgs, PimOutput, PimTool};
@@ -202,7 +205,6 @@ pub use recall_events::{RecallEventsArgs, RecallEventsOutput, RecallEventsTool};
 pub use remember::{RememberArgs, RememberOutput, RememberTool};
 pub use scratchpad::{ScratchpadAction, ScratchpadArgs, ScratchpadOutput, ScratchpadTool};
 pub use search::{SearchArgs, SearchTool};
-pub use list_models::{ListModelsArgs, ListModelsOutput, ListModelsTool};
 pub use select_model::{SelectModelArgs, SelectModelOutput, SelectModelTool};
 pub use self_manage::{SelfManageArgs, SelfManageOutput, SelfManageTool};
 pub use session_complete::{SessionCompleteArgs, SessionCompleteResult, SessionCompleteTool};

@@ -45,6 +45,22 @@ pub async fn handle_uninstall(request: JsonRpcRequest) -> JsonRpcResponse {
         );
     }
 
+    // Tear down the runtime BEFORE deleting files: once the plugin dir is
+    // gone its service stop handlers can no longer run, which would orphan
+    // background services and transient MCP servers for the process lifetime.
+    if let Ok(manager) = get_extension_manager() {
+        match manager.unload_runtime_plugin(&params.name).await {
+            Ok(()) => {}
+            // Never loaded into the runtime — nothing to tear down.
+            Err(crate::extension::ExtensionError::PluginNotFound(_)) => {}
+            Err(e) => tracing::warn!(
+                plugin = %params.name,
+                error = %e,
+                "Failed to unload plugin runtime before uninstall"
+            ),
+        }
+    }
+
     match std::fs::remove_dir_all(&plugin_path) {
         Ok(()) => {
             if let Ok(manager) = get_extension_manager() {
@@ -94,9 +110,11 @@ pub async fn handle_enable(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     }
 
-    // Sync with PluginRegistry
+    // Sync with PluginRegistry, then bring declared autostart services up
+    // (no-op for plugins without services; idempotent otherwise).
     if let Ok(manager) = get_extension_manager() {
         manager.set_plugin_enabled(&params.name, true).await;
+        manager.sync_plugin_services().await;
     }
 
     tracing::info!(plugin = %params.name, "Plugin enabled");
@@ -135,9 +153,21 @@ pub async fn handle_disable(request: JsonRpcRequest) -> JsonRpcResponse {
         }
     }
 
-    // Sync with PluginRegistry
+    // Sync with PluginRegistry, then tear down the runtime — a disabled
+    // plugin must not keep background services or transient MCP servers
+    // running (the `.disabled` marker only affects the next scan).
     if let Ok(manager) = get_extension_manager() {
         manager.set_plugin_enabled(&params.name, false).await;
+        match manager.unload_runtime_plugin(&params.name).await {
+            Ok(()) => {}
+            // Never loaded into the runtime — nothing to tear down.
+            Err(crate::extension::ExtensionError::PluginNotFound(_)) => {}
+            Err(e) => tracing::warn!(
+                plugin = %params.name,
+                error = %e,
+                "Failed to unload plugin runtime on disable"
+            ),
+        }
     }
 
     tracing::info!(plugin = %params.name, "Plugin disabled");

@@ -1,8 +1,11 @@
 //! Aleph Protocol Tokens for structured LLM-to-system communication
 //!
 //! Defines protocol tokens that LLM returns as its ENTIRE response in
-//! background/automated scenarios. These are intercepted by the DecisionParser
-//! before JSON parsing, enabling minimal-cost responses.
+//! background/automated scenarios. Taught to the model by
+//! `ProtocolTokensLayer` (Background paradigm / `SilentReply` capability)
+//! and honoured at the delivery boundary
+//! (`tasks::cron::executor::deliverable_text`), so a deliberate silent
+//! outcome never reaches the user as literal token text.
 
 /// Protocol tokens for structured LLM-to-system communication.
 ///

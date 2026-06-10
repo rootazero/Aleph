@@ -86,6 +86,7 @@ entry = "target/wasm32-wasi/release/x.wasm" # 仅 WASM
 network = true
 filesystem = "read"                         # true | "read" | "write" | false
 shell = false
+background = true                           # [[aleph.services]] 需要此权限
 
 [[aleph.channels]]
 id = "telegram"
@@ -99,6 +100,7 @@ name = "Custom LLM"
 name = "metrics-collector"
 start_handler = "startCollector"
 stop_handler = "stopCollector"
+auto_start = true                           # 默认 true：插件加载后自动启动
 ```
 
 ### 与 Claude Code plugin.json 的对应关系

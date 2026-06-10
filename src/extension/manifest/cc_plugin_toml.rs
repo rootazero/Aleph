@@ -358,6 +358,26 @@ impl ManifestAdapter for ClaudeCodeTomlAdapter {
             }
         }
 
+        // Background services declared in the [aleph] section's [[services]] —
+        // gated on the `background` permission so a missing grant degrades to
+        // a warning instead of failing the whole plugin at the registrar.
+        if let Some(ref aleph_ext) = manifest.aleph_extensions {
+            if !aleph_ext.services.is_empty() {
+                if manifest
+                    .permissions
+                    .contains(&crate::extension::manifest::PluginPermission::Background)
+                {
+                    capabilities
+                        .extend(parsers::parse_v2_services(&aleph_ext.services, &plugin_id));
+                } else {
+                    tracing::warn!(
+                        plugin = %plugin_id,
+                        "[[services]] declared but permissions.background is not granted — services skipped"
+                    );
+                }
+            }
+        }
+
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
             name: Some(manifest.name),

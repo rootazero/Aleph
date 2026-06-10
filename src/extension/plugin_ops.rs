@@ -144,6 +144,12 @@ impl ExtensionManager {
         // X1: bind memory caller for the hot-loaded plugin (idempotent).
         self.bind_memory_callers().await;
 
+        // Autostart any background services this plugin declared, now that
+        // its runtime is loaded (mirrors MCP servers' auto_start behavior).
+        if result.is_ok() {
+            self.start_autostart_services(&manifest.id).await;
+        }
+
         result
     }
 

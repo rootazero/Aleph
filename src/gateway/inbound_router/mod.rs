@@ -922,30 +922,38 @@ impl InboundMessageRouter {
         let raw = strip_bot_mention(ctx.message.text.trim());
         let lower = raw.trim().to_lowercase();
 
-        // Approval reply: `/approve` or `/deny` (optionally with trailing text).
+        // Approval reply: `/approve [once|session|always]` or `/deny`.
+        // A bare `/approve` (or any unrecognized suffix) stays the
+        // least-privilege `AllowOnce`; `session` / `always` widen the grant
+        // scope (hermes' once/session/always tiers). The manager clamps an
+        // `always` on a Danger-classified command down to a session grant.
         let is_approve = lower == "/approve" || lower.starts_with("/approve ");
         let is_deny = lower == "/deny" || lower.starts_with("/deny ");
         if is_approve || is_deny {
             if let Some(ref mgr) = self.exec_approval_manager {
                 use crate::exec::socket::ApprovalDecisionType;
                 let decision = if is_approve {
-                    ApprovalDecisionType::AllowOnce
+                    match lower.strip_prefix("/approve").map(str::trim) {
+                        Some("once") => ApprovalDecisionType::AllowOnce,
+                        Some("session") => ApprovalDecisionType::AllowSession,
+                        Some("always") => ApprovalDecisionType::AllowAlways,
+                        _ => ApprovalDecisionType::AllowOnce,
+                    }
                 } else {
                     ApprovalDecisionType::Deny
                 };
-                let resolved = mgr.resolve_for_session(
+                // Reply with the EFFECTIVE decision: the manager may clamp an
+                // `always` on a Danger-classified command to a session grant.
+                let reply = match mgr.resolve_for_session(
                     &session_key,
                     decision,
                     ctx.message.sender_name.clone(),
-                );
-                let reply = if resolved {
-                    if is_approve {
-                        "✅ Approved."
-                    } else {
-                        "❌ Denied."
-                    }
-                } else {
-                    "Nothing is awaiting your approval right now."
+                ) {
+                    Some(ApprovalDecisionType::AllowOnce) => "✅ Approved (once).",
+                    Some(ApprovalDecisionType::AllowSession) => "✅ Approved for this session.",
+                    Some(ApprovalDecisionType::AllowAlways) => "✅ Approved (always).",
+                    Some(ApprovalDecisionType::Deny) => "❌ Denied.",
+                    None => "Nothing is awaiting your approval right now.",
                 };
                 let _ = self
                     .channel_registry

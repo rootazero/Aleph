@@ -1657,8 +1657,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             id: s.id().as_str().to_string(),
                             name: s.name().to_string(),
                             description: s.description().to_string(),
-                            triggers: Vec::new(),
-                            allowed_tools: Vec::new(),
                             ecosystem: "aleph".to_string(),
                         })
                         .collect();
@@ -1687,8 +1685,6 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                                 id,
                                 name: cmd.name.clone(),
                                 description: cmd.description.clone(),
-                                triggers: Vec::new(),
-                                allowed_tools: Vec::new(),
                                 ecosystem: "plugin".to_string(),
                             }
                         })

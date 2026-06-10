@@ -66,6 +66,13 @@ pub struct ServiceRegistration {
     pub stop_handler: String,
     /// ID of the plugin that registered this service
     pub plugin_id: String,
+    /// Start automatically when the plugin is loaded
+    #[serde(default = "default_service_auto_start")]
+    pub auto_start: bool,
+}
+
+fn default_service_auto_start() -> bool {
+    true
 }
 
 // ============================================================================
@@ -195,18 +202,6 @@ impl SkillRegistration {
     /// Substitute $ARGUMENTS placeholder
     pub fn with_arguments(&self, arguments: &str) -> String {
         self.content.replace("$ARGUMENTS", arguments)
-    }
-
-    /// Convert to SkillInfo for compatibility with ToolCatalog
-    pub fn to_skill_info(&self) -> crate::skill::SkillInfo {
-        crate::skill::SkillInfo {
-            id: self.qualified_name(),
-            name: self.name.clone(),
-            description: self.description.clone(),
-            triggers: self.triggers.clone(),
-            allowed_tools: self.allowed_tools.clone(),
-            ecosystem: "aleph".to_string(),
-        }
     }
 
     /// Get the base directory for this skill (for file references)
@@ -474,6 +469,7 @@ mod tests {
             start_handler: "start_worker".to_string(),
             stop_handler: "stop_worker".to_string(),
             plugin_id: "worker-plugin".to_string(),
+            auto_start: true,
         };
         assert_ne!(service.start_handler, service.stop_handler);
     }

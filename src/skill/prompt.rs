@@ -5,13 +5,21 @@ use crate::thinker::xml_util::escape_xml;
 use std::borrow::Cow;
 
 /// Deferred loading guidance appended after skill index in system prompts.
-/// Tells the LLM to call `skill_read` before executing a skill.
+/// Tells the LLM to call `skill_read` before executing a skill, and carries
+/// the self-improvement doctrine (mirrors hermes-agent): the model authors
+/// and repairs skills through `skill_manage` instead of relying on a
+/// deterministic curator (R7/R9 — the judgment lives in the prompt).
 pub const DEFERRED_LOADING_GUIDANCE: &str =
     "To use a skill, first call the `skill_read` tool with the skill name \
      to load its full instructions, then follow those instructions. \
      Use `skill_list` to discover available skills if needed.\n\n\
      When a user's request matches a skill's <when> trigger, proactively \
-     invoke that skill without waiting for an explicit request.";
+     invoke that skill without waiting for an explicit request.\n\n\
+     After completing a complex or novel task, consider saving the \
+     methodology as a reusable skill via `skill_manage(action='create')`. \
+     If a skill's instructions turn out to be outdated or wrong while you \
+     use them, repair the skill immediately with `skill_manage` \
+     (action='patch' for a targeted fix, action='edit' for a rewrite).";
 
 /// Default cap on the number of skills listed in the injected prompt index.
 ///

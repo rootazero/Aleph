@@ -100,6 +100,10 @@ impl ChannelApprovalBridge {
             crate::exec::approval::types::CommandApprovalRequest {
                 command: request.command.clone(),
                 cwd: request.cwd.clone(),
+                reason: request.reason.clone(),
+                allowed_decisions: crate::exec::allowed_decisions::assess_command_decisions(
+                    &request.command,
+                ),
             },
         );
 
@@ -201,6 +205,10 @@ impl ChannelApprovalBridge {
                     crate::exec::approval::types::CommandApprovalRequest {
                         command: request.command.clone(),
                         cwd: request.cwd.clone(),
+                        reason: request.reason.clone(),
+                        allowed_decisions: crate::exec::allowed_decisions::assess_command_decisions(
+                            &request.command,
+                        ),
                     },
                 );
 
@@ -352,6 +360,8 @@ impl ChannelApprovalBridge {
                 crate::exec::approval::types::CommandApprovalRequest {
                     command: String::new(),
                     cwd: None,
+                    reason: None,
+                    allowed_decisions: crate::exec::allowed_decisions::full_set(),
                 },
             ),
             &pending.channel_id,
@@ -411,6 +421,13 @@ impl ChannelApprovalBridge {
     ///
     /// `channel_id` / `conversation_id` 为结构化路由参数（来自调用方解析的
     /// `SessionKey`），不再 parse 有损的字符串 session_key。
+    ///
+    /// `session_key` 是发起会话的结构化 key 字符串（router 侧
+    /// `ctx.session_key.to_string()` 的同一形态）：record 必须携带它，
+    /// `/approve`/`/deny` 文本回复才能经 `resolve_for_session` 命中这条
+    /// 审批（FIFO）。传空则回退为 `channel:conversation` 合成 key（仅按钮
+    /// 回调可达）。
+    #[allow(clippy::too_many_arguments)]
     pub async fn request_for_tool(
         &self,
         approval_manager: &crate::exec::manager::ExecApprovalManager,
@@ -418,6 +435,7 @@ impl ChannelApprovalBridge {
         reason: &str,
         channel_id: &ChannelId,
         conversation_id: &ConversationId,
+        session_key: &str,
         timeout_ms: u64,
     ) -> ApprovalOutcome {
         #[cfg(test)]
@@ -425,19 +443,31 @@ impl ChannelApprovalBridge {
             return outcome;
         }
 
+        let record_session_key = if session_key.is_empty() {
+            format!("{}:{}", channel_id.as_str(), conversation_id.as_str())
+        } else {
+            session_key.to_string()
+        };
+
         let request = ApprovalRequest {
             id: uuid::Uuid::new_v4().to_string(),
             command: tool_name.to_string(),
             cwd: None,
-            analysis: crate::exec::analysis::CommandAnalysis::error(reason),
+            analysis: crate::exec::analysis::CommandAnalysis {
+                ok: true,
+                reason: None,
+                segments: vec![],
+                chains: None,
+            },
             agent_id: String::new(),
-            session_key: format!("{}:{}", channel_id.as_str(), conversation_id.as_str()),
+            session_key: record_session_key,
+            reason: Some(reason.to_string()),
         };
 
         let record = approval_manager.create(&request, timeout_ms);
 
         match self
-            .deliver_routed(channel_id, conversation_id, tool_name, &record.id)
+            .deliver_routed(channel_id, conversation_id, tool_name, reason, &record.id)
             .await
         {
             Some(true) => {
@@ -487,23 +517,63 @@ impl ChannelApprovalBridge {
     }
 
     /// 按结构化 `channel_id` 投递审批提示。返回 `Some(true)` 已投递、
-    /// `Some(false)` 投递失败、`None` 无通道 / 无审批能力。
+    /// `Some(false)` 投递失败、`None` 无通道。
+    ///
+    /// 无原生审批能力的通道走纯文本回退：发一条带 `/approve` / `/deny`
+    /// 指引的消息，由 inbound router 的文本拦截按 session FIFO 解析。
+    /// 此前这些通道会被直接 `Denied`，确认门工具在非 Telegram 通道上
+    /// 等于全部静默拒绝。
+    ///
+    /// 授权语义：回退路径没有 capability 路径的 `authorize_actor` 逐人
+    /// 校验，信任边界与既有 `/approve` 文本命令一致 —— 依赖通道入站层
+    /// 的 allowlist / pairing 把关（能与 bot 对话的人即被信任）。提示只
+    /// 投递到发起会话本身，不广播。
     async fn deliver_routed(
         &self,
         channel_id: &ChannelId,
         conversation_id: &ConversationId,
         tool_name: &str,
+        reason: &str,
         approval_id: &str,
     ) -> Option<bool> {
         let channel = self.registry.get(channel_id).await?;
         let capability = {
             let ch = channel.read().await;
-            ch.approval_capability()?
+            ch.approval_capability()
         };
+
+        let Some(capability) = capability else {
+            let text = format!(
+                "⚠️ 工具 `{tool_name}` 需要你的授权。\n{reason}\n\n\
+                 回复 /approve 批准本次、/approve session 本会话内不再询问、\
+                 /deny 拒绝。"
+            );
+            let ch = channel.read().await;
+            return match ch
+                .send(OutboundMessage::text(conversation_id.as_str(), text))
+                .await
+            {
+                Ok(_) => Some(true),
+                Err(e) => {
+                    tracing::warn!(error = %e, "plain-text approval fallback send failed");
+                    Some(false)
+                }
+            };
+        };
+
+        // Confirm-gated tools can honor at most a session-scoped grant (no
+        // on-disk allowlist on this path), so the rendered decision set stops
+        // at the session tier — offering "always" here would be a lie.
         let approval_req = crate::exec::approval::types::ApprovalRequest::Command(
             crate::exec::approval::types::CommandApprovalRequest {
                 command: tool_name.to_string(),
                 cwd: None,
+                reason: Some(reason.to_string()),
+                allowed_decisions: vec![
+                    ApprovalDecisionType::AllowOnce,
+                    ApprovalDecisionType::AllowSession,
+                    ApprovalDecisionType::Deny,
+                ],
             },
         );
         match timeout(

@@ -49,7 +49,7 @@ impl OperatorApprovalRequester {
 
 #[async_trait]
 impl ApprovalRequester for OperatorApprovalRequester {
-    async fn request_approval(&self, tool_name: &str, _reason: &str) -> ApprovalOutcome {
+    async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
         let turn = crate::tools::turn_context::current_turn_context();
         let (session_key_str, agent_id, channel_id, conversation_id) = match &turn {
             Some(t) => (
@@ -73,6 +73,10 @@ impl ApprovalRequester for OperatorApprovalRequester {
             },
             agent_id,
             session_key: session_key_str.clone(),
+            // Carried on the pending record so the operator's resolving
+            // surface (panel pending list) can show WHY the tool is gated,
+            // not just its name.
+            reason: (!reason.is_empty()).then(|| reason.to_string()),
         };
         let record = self.manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
         // Register the pending entry BEFORE publishing the event, so an operator

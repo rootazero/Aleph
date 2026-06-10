@@ -884,6 +884,12 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 if n > 0 {
                     tracing::info!(count = n, "plugin MCP servers registered at boot");
                 }
+                // Autostart manifest-declared plugin services now that the
+                // runtime is wired (idempotent; no-op without [[services]]).
+                let running = em.sync_plugin_services().await;
+                if running > 0 {
+                    tracing::info!(count = running, "plugin services autostarted at boot");
+                }
             });
         }
         // Sibling publisher: subscribe to the same manager event stream and
@@ -2352,6 +2358,15 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         ],
     )
     .await;
+
+    // Stop plugin background services (best-effort) — mirrors the
+    // heartbeat/ACP/mDNS teardown below so plugin work is never orphaned.
+    if let Some(em) = alephcore::extension::try_extension_manager() {
+        let stopped = em.stop_all_services().await;
+        if stopped > 0 {
+            tracing::info!(count = stopped, "plugin services stopped at shutdown");
+        }
+    }
 
     // Graceful shutdown: stop heartbeat, ACP harnesses, and mDNS. Run these
     // BEFORE propagating `run_result` so a fatal run error still tears down

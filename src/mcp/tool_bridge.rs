@@ -16,9 +16,10 @@ use crate::sync_primitives::Arc;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::task::JoinHandle;
 
+use crate::builtin_tools::mcp_login::McpLoginTool;
 use crate::builtin_tools::mcp_prompt::McpGetPromptTool;
 use crate::builtin_tools::mcp_resource::McpReadResourceTool;
-use crate::mcp::manager::{McpManagerEvent, McpManagerHandle};
+use crate::mcp::manager::{McpManagerEvent, McpManagerHandle, McpTransportType};
 use crate::tool_metadata::ToolCatalog;
 use crate::tools::handlers::builtin::BuiltinHandler;
 use crate::tools::handlers::registration::{register_mcp_tools, unregister_mcp_tools};
@@ -30,6 +31,8 @@ use crate::tools::AlephToolDyn;
 const RESOURCE_TOOL: &str = "mcp_read_resource";
 /// Registry name of the capability-gated prompt-fetching builtin.
 const PROMPT_TOOL: &str = "mcp_get_prompt";
+/// Registry name of the OAuth login builtin (present only with remote servers).
+const LOGIN_TOOL: &str = "mcp_login";
 
 /// Spawn the MCP → `ToolHandlerRegistry` bridge task.
 ///
@@ -48,6 +51,7 @@ pub fn spawn_tool_bridge(
         // Whether each capability builtin is currently in the registry.
         let mut resource_live = false;
         let mut prompt_live = false;
+        let mut login_live = false;
         let catalog = tool_catalog.as_ref();
         loop {
             match events.recv().await {
@@ -58,6 +62,7 @@ pub fn spawn_tool_bridge(
                         &registry,
                         &mut resource_live,
                         &mut prompt_live,
+                        &mut login_live,
                     )
                     .await;
                 }
@@ -72,6 +77,7 @@ pub fn spawn_tool_bridge(
                         &registry,
                         &mut resource_live,
                         &mut prompt_live,
+                        &mut login_live,
                     )
                     .await;
                 }
@@ -174,6 +180,7 @@ async fn reconcile_capability_tools(
     registry: &ToolHandlerRegistry,
     resource_live: &mut bool,
     prompt_live: &mut bool,
+    login_live: &mut bool,
 ) {
     let servers = match handle.list_servers().await {
         Ok(s) => s,
@@ -184,6 +191,11 @@ async fn reconcile_capability_tools(
     };
     let want_resource = servers.iter().any(|s| s.resource_count > 0);
     let want_prompt = servers.iter().any(|s| s.prompt_count > 0);
+    // OAuth only applies to remote transports; with stdio-only servers the
+    // login tool would be pure noise in the tool surface.
+    let want_login = servers
+        .iter()
+        .any(|s| !matches!(s.transport, McpTransportType::Stdio));
 
     if want_resource != *resource_live {
         let tool: Arc<dyn AlephToolDyn> = Arc::new(McpReadResourceTool::new(handle.clone()));
@@ -192,6 +204,10 @@ async fn reconcile_capability_tools(
     if want_prompt != *prompt_live {
         let tool: Arc<dyn AlephToolDyn> = Arc::new(McpGetPromptTool::new(handle.clone()));
         *prompt_live = set_builtin(registry, PROMPT_TOOL, want_prompt, tool);
+    }
+    if want_login != *login_live {
+        let tool: Arc<dyn AlephToolDyn> = Arc::new(McpLoginTool::new(handle.clone()));
+        *login_live = set_builtin(registry, LOGIN_TOOL, want_login, tool);
     }
 }
 

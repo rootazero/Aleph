@@ -170,6 +170,7 @@ mod tests {
             start_handler: "start".to_string(),
             stop_handler: "stop".to_string(),
             plugin_id: "test-plugin".to_string(),
+            auto_start: true,
         })
     }
 

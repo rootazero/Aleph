@@ -21,6 +21,7 @@ fn request(id: &str) -> ApprovalRequest {
         analysis: CommandAnalysis::error("danger-tier"),
         agent_id: "main".to_string(),
         session_key: "telegram:123456".to_string(),
+        reason: None,
     }
 }
 

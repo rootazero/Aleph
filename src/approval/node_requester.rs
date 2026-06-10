@@ -54,6 +54,7 @@ pub async fn run_node_approval(
         },
         agent_id: format!("node:{node_id}"),
         session_key: String::new(),
+        reason: (!reason.is_empty()).then(|| reason.to_string()),
     };
     let record = manager.create(&request, DEFAULT_APPROVAL_TIMEOUT_MS);
     // Register BEFORE publishing so an instantly-resolving operator cannot race
@@ -98,7 +99,10 @@ mod tests {
 
     #[test]
     fn decision_mapping() {
-        assert_eq!(decision_to_wire(Some(ApprovalDecisionType::AllowOnce)), "approved");
+        assert_eq!(
+            decision_to_wire(Some(ApprovalDecisionType::AllowOnce)),
+            "approved"
+        );
         assert_eq!(
             decision_to_wire(Some(ApprovalDecisionType::AllowSession)),
             "approved_session"
@@ -131,7 +135,10 @@ mod tests {
             else {
                 break;
             };
-            if let GatewayEventFrame::ApprovalRequested { approval_id: id, .. } = frame {
+            if let GatewayEventFrame::ApprovalRequested {
+                approval_id: id, ..
+            } = frame
+            {
                 approval_id = Some(id);
                 break;
             }
@@ -147,7 +154,10 @@ mod tests {
                 .iter()
                 .any(|p| p.record.command == "node 'worker': bash — needs network"),
             "pending record must carry node-context command, got {:?}",
-            pending.iter().map(|p| &p.record.command).collect::<Vec<_>>()
+            pending
+                .iter()
+                .map(|p| &p.record.command)
+                .collect::<Vec<_>>()
         );
         assert!(manager.resolve(&id, ApprovalDecisionType::AllowSession, None));
 

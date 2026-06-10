@@ -751,7 +751,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "skill_manage",
-        description: "Toggle or configure a skill (enable/disable, change prompt scope)",
+        description: "Configure, author, and curate skills — enable/disable, change scope, create/edit/patch skills, write supporting files, pin/archive/delete",
         requires_config: false,
     },
     BuiltinToolDefinition {

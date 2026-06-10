@@ -45,9 +45,9 @@ impl McpErrorKind {
     /// add noise to the error".
     pub fn guidance(&self) -> Option<&'static str> {
         match self {
-            McpErrorKind::AuthExpired => {
-                Some("the MCP server rejected credentials — re-authenticate it")
-            }
+            McpErrorKind::AuthExpired => Some(
+                "the MCP server rejected credentials — re-authenticate with the mcp_login tool",
+            ),
             McpErrorKind::SessionExpired => {
                 Some("the MCP session expired — it will reconnect on the next health probe")
             }

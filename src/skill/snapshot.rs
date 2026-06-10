@@ -4,7 +4,7 @@
 //! and the pre-rendered prompt XML for system prompt injection. Each snapshot is
 //! versioned; version increments indicate cache invalidation.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 
@@ -57,6 +57,11 @@ impl SkillSnapshot {
     /// map when no user config is available — the result is then identical to a
     /// manifest-only evaluation.
     ///
+    /// `archived` holds skill ids whose `.usage.json` lifecycle state is
+    /// `archived`. Archived skills remain *eligible* (status surfaces and
+    /// explicit `skill_read` still work) but are excluded from the injected
+    /// prompt index so dormant skills stop consuming prompt budget.
+    ///
     /// Iterates every skill, evaluates eligibility, and collects:
     /// - eligible skill IDs
     /// - ineligible skill IDs with reasons
@@ -67,6 +72,7 @@ impl SkillSnapshot {
         version: u64,
         config: &serde_json::Value,
         entries: &HashMap<String, SkillEntryConfig>,
+        archived: &HashSet<String>,
     ) -> Self {
         let mut eligible = Vec::new();
         let mut ineligible: HashMap<SkillId, Vec<IneligibilityReason>> = HashMap::new();
@@ -89,6 +95,11 @@ impl SkillSnapshot {
             match eligibility.evaluate(manifest, config) {
                 EligibilityResult::Eligible => {
                     eligible.push(id.clone());
+                    // Archived skills stay eligible but never reach the
+                    // injected prompt index.
+                    if archived.contains(id.as_str()) {
+                        continue;
+                    }
                     // Apply the user's scope override (if any) on a clone so the
                     // downstream prompt layer, which reads `manifest.scope()`,
                     // honours it. Without an override this is a plain clone.
@@ -136,6 +147,11 @@ mod tests {
         HashMap::new()
     }
 
+    /// Helper: an empty archived-skill set.
+    fn no_archived() -> HashSet<String> {
+        HashSet::new()
+    }
+
     /// Helper: create a simple eligible manifest.
     fn make_manifest(name: &str, source: SkillSource) -> SkillManifest {
         SkillManifest::new(
@@ -179,6 +195,7 @@ mod tests {
             1,
             &serde_json::json!({}),
             &no_overrides(),
+            &no_archived(),
         );
 
         assert_eq!(snap.version, 1);
@@ -197,9 +214,9 @@ mod tests {
 
         let cfg = serde_json::json!({});
         let ov = no_overrides();
-        let snap1 = SkillSnapshot::build(&registry, &eligibility, 1, &cfg, &ov);
-        let snap2 = SkillSnapshot::build(&registry, &eligibility, 2, &cfg, &ov);
-        let snap3 = SkillSnapshot::build(&registry, &eligibility, 5, &cfg, &ov);
+        let snap1 = SkillSnapshot::build(&registry, &eligibility, 1, &cfg, &ov, &no_archived());
+        let snap2 = SkillSnapshot::build(&registry, &eligibility, 2, &cfg, &ov, &no_archived());
+        let snap3 = SkillSnapshot::build(&registry, &eligibility, 5, &cfg, &ov, &no_archived());
 
         assert_eq!(snap1.version, 1);
         assert_eq!(snap2.version, 2);
@@ -234,6 +251,7 @@ mod tests {
             1,
             &serde_json::json!({}),
             &no_overrides(),
+            &no_archived(),
         );
 
         // All three are eligible (no eligibility constraints)
@@ -269,6 +287,7 @@ mod tests {
             1,
             &serde_json::json!({}),
             &no_overrides(),
+            &no_archived(),
         );
         assert_eq!(snap.eligible.len(), 3);
         assert_eq!(snap.eligible_manifests.len(), 1);
@@ -293,7 +312,7 @@ mod tests {
         );
 
         let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries);
+            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries, &no_archived());
 
         assert!(
             snap.eligible.is_empty(),
@@ -328,7 +347,7 @@ mod tests {
         );
 
         let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries);
+            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries, &no_archived());
 
         // Still eligible (eligibility is independent of prompt scope)...
         assert!(snap.eligible.contains(&SkillId::new("git:commit")));
@@ -336,5 +355,35 @@ mod tests {
         // from both eligible_manifests and the rendered prompt.
         assert!(snap.eligible_manifests.is_empty());
         assert!(!snap.prompt_xml.contains("git:commit"));
+    }
+
+    #[test]
+    fn archived_skills_excluded_from_prompt_but_stay_eligible() {
+        let mut registry = SkillRegistry::new();
+        let eligibility = EligibilityService::new();
+        registry.register(make_manifest("alive:skill", SkillSource::Global));
+        registry.register(make_manifest("dormant:skill", SkillSource::Global));
+
+        let mut archived = HashSet::new();
+        archived.insert("dormant:skill".to_string());
+
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &no_overrides(),
+            &archived,
+        );
+
+        // Both remain eligible — archive is a prompt-budget decision, not
+        // an eligibility one. skill_read on the dormant skill still works.
+        assert_eq!(snap.eligible.len(), 2);
+        assert!(snap.prompt_xml.contains("alive:skill"));
+        assert!(
+            !snap.prompt_xml.contains("dormant:skill"),
+            "archived skill must not occupy prompt budget"
+        );
+        assert_eq!(snap.eligible_manifests.len(), 1);
     }
 }

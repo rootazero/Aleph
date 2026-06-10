@@ -65,25 +65,35 @@ impl ChannelApprovalBridgeAdapter {
         self.timeout_ms = timeout_ms;
     }
 
-    /// Resolve `(ChannelId, ConversationId)` for the current task.
+    /// Resolve `(ChannelId, ConversationId, session_key)` for the current task.
     ///
     /// Tries `TURN_CONTEXT` first (gateway path — scoped by
     /// `ScopedToolService`), then `SESSION_ID` + `channel_route` fallback
     /// (legacy `invoke_with_session_trace` consumers). Returns `None` when
     /// neither is set or neither has a routable channel.
-    fn resolve_channel_route() -> Option<(ChannelId, ConversationId)> {
+    ///
+    /// The session key string matches the inbound router's
+    /// `ctx.session_key.to_string()` form, so the approval record it stamps
+    /// is resolvable by `/approve` / `/deny` text replies
+    /// (`resolve_for_session`), not only by button callbacks.
+    fn resolve_channel_route() -> Option<(ChannelId, ConversationId, String)> {
         // 1. TURN_CONTEXT — the gateway production path (HITL P3).
         if let Some(turn) = crate::tools::turn_context::current_turn_context() {
             if turn.is_channel_routable() {
                 return Some((
                     ChannelId::new(turn.channel_id),
                     ConversationId::new(turn.conversation_id),
+                    turn.session_key.to_key_string(),
                 ));
             }
         }
         // 2. SESSION_ID → channel_route — cron/heartbeat/legacy paths.
         crate::sandbox::context::SESSION_ID
-            .try_with(channel_route)
+            .try_with(|sid| {
+                channel_route(sid).map(|(channel_id, conversation_id)| {
+                    (channel_id, conversation_id, sid.to_key_string())
+                })
+            })
             .ok()
             .flatten()
     }
@@ -92,7 +102,7 @@ impl ChannelApprovalBridgeAdapter {
 #[async_trait]
 impl ApprovalRequester for ChannelApprovalBridgeAdapter {
     async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
-        let Some((channel_id, conversation_id)) = Self::resolve_channel_route() else {
+        let Some((channel_id, conversation_id, session_key)) = Self::resolve_channel_route() else {
             warn!(
                 tool = %tool_name,
                 "ChannelApprovalBridgeAdapter: no channel route from TURN_CONTEXT \
@@ -108,6 +118,7 @@ impl ApprovalRequester for ChannelApprovalBridgeAdapter {
                 reason,
                 &channel_id,
                 &conversation_id,
+                &session_key,
                 self.timeout_ms,
             )
             .await

@@ -25,9 +25,21 @@ use crate::teams::dispatcher::{MANAGED_BY_DISPATCHER, MANAGED_BY_KEY};
 use crate::workflow::clarify::{ClarifyContext, ClarifyTaskMeta, CLARIFY_META_KEY, CLARIFY_OWNER};
 use crate::workflow::def::{render_prompt, WorkflowDef};
 
+/// Metadata key carrying the workflow template name on every materialised task.
+pub const WORKFLOW_NAME_KEY: &str = "workflow";
+/// Metadata key carrying the step-local id on every materialised task.
+pub const WORKFLOW_STEP_KEY: &str = "workflow_step";
+/// Metadata key carrying the per-run identity on every materialised task.
+/// Two runs of the same template on the same team are only distinguishable by
+/// this id — it is what `workflow(action='status'|'cancel')` groups on.
+pub const WORKFLOW_RUN_ID_KEY: &str = "workflow_run_id";
+
 /// The set of `coord_task` ids minted for one workflow run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MaterializedWorkflow {
+    /// Identity of this run, stamped into every task's metadata under
+    /// [`WORKFLOW_RUN_ID_KEY`].
+    pub run_id: String,
     /// Task ids in creation (topological) order.
     pub task_ids: Vec<CoordTaskId>,
 }
@@ -55,6 +67,10 @@ pub async fn materialize(
 ) -> Result<MaterializedWorkflow> {
     def.validate()?;
     let order = def.topo_order()?;
+
+    // One identity per materialisation: stamped into every task so the run
+    // can be observed and cancelled as a unit after the launching turn ends.
+    let run_id = uuid::Uuid::new_v4().to_string();
 
     // step-local id → freshly-minted coord_task id.
     let mut id_map: std::collections::HashMap<&str, CoordTaskId> =
@@ -103,16 +119,18 @@ pub async fn materialize(
                 CLARIFY_OWNER.to_string(),
                 json!({
                     MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
-                    "workflow": def.name,
-                    "workflow_step": step.id,
+                    WORKFLOW_NAME_KEY: def.name,
+                    WORKFLOW_STEP_KEY: step.id,
+                    WORKFLOW_RUN_ID_KEY: run_id,
                     CLARIFY_META_KEY: clarify_meta.to_value(),
                 }),
             )
         } else {
             let mut meta = json!({
                 MANAGED_BY_KEY: MANAGED_BY_DISPATCHER,
-                "workflow": def.name,
-                "workflow_step": step.id,
+                WORKFLOW_NAME_KEY: def.name,
+                WORKFLOW_STEP_KEY: step.id,
+                WORKFLOW_RUN_ID_KEY: run_id,
             });
             // Review-gated step: stamp the flag the dispatcher reads at
             // completion time to park the run in WaitingReview instead of
@@ -151,7 +169,7 @@ pub async fn materialize(
         task_ids.push(created.id);
     }
 
-    Ok(MaterializedWorkflow { task_ids })
+    Ok(MaterializedWorkflow { run_id, task_ids })
 }
 
 /// Best-effort rollback: mark already-created tasks `Cancelled` so a failed
@@ -249,6 +267,30 @@ mod tests {
             first.metadata.get("workflow_step").and_then(|v| v.as_str()),
             Some("gather")
         );
+    }
+
+    #[tokio::test]
+    async fn materialize_stamps_one_run_id_on_every_task() {
+        let store = setup_store().await;
+        let first = materialize(&linear_def(), "x", "team-1", &store, None)
+            .await
+            .unwrap();
+        assert!(!first.run_id.is_empty(), "run id is minted");
+        for id in &first.task_ids {
+            let task = store.get_task(id).await.unwrap().unwrap();
+            assert_eq!(
+                task.metadata
+                    .get(WORKFLOW_RUN_ID_KEY)
+                    .and_then(|v| v.as_str()),
+                Some(first.run_id.as_str()),
+                "every task carries the run id"
+            );
+        }
+        // A second run of the same template mints a distinct identity.
+        let second = materialize(&linear_def(), "x", "team-1", &store, None)
+            .await
+            .unwrap();
+        assert_ne!(first.run_id, second.run_id, "runs are distinguishable");
     }
 
     #[tokio::test]
@@ -382,7 +424,9 @@ mod tests {
         let store = setup_store().await;
         let mut def = linear_def();
         def.steps[1].review = true;
-        let mat = materialize(&def, "x", "team-1", &store, None).await.unwrap();
+        let mat = materialize(&def, "x", "team-1", &store, None)
+            .await
+            .unwrap();
 
         // Non-reviewed step: no flag key at all (byte-identical to legacy rows).
         let first = store.get_task(&mat.task_ids[0]).await.unwrap().unwrap();

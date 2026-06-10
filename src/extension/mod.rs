@@ -527,6 +527,13 @@ impl ExtensionManager {
         // No-op when no MCP handle is attached (CLI/test paths).
         self.sync_mcp_plugin_servers().await;
 
+        // Service lifecycle across hot-reloads: tear down services whose
+        // plugin vanished or was disabled (their registry entries are gone —
+        // the ServiceManager's registration snapshots keep them stoppable),
+        // then autostart services of the now-active plugin set.
+        self.stop_orphaned_services().await;
+        self.sync_plugin_services().await;
+
         Ok(summary)
     }
 
