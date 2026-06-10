@@ -361,9 +361,8 @@ impl AcpSession {
                 .request_streaming(&req, timeout, |notif| {
                     if let Some(chunk) = notif.streaming_text() {
                         cb(&chunk);
-                        if let Ok(mut acc) = accumulated.lock() {
-                            acc.push_str(&chunk);
-                        }
+                        let mut acc = accumulated.lock().unwrap_or_else(|e| e.into_inner());
+                        acc.push_str(&chunk);
                     }
                 })
                 .await;
