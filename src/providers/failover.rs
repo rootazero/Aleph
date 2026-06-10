@@ -200,6 +200,57 @@ impl Default for FailoverHealth {
     }
 }
 
+/// Read-only view of one provider's circuit-breaker state, surfaced by the
+/// `self_config` `route_status` diagnostic (see
+/// [`route_observe`](crate::providers::route_observe)).
+#[derive(Debug, Clone)]
+pub struct ProviderHealthView {
+    /// Provider name (the circuit-breaker key).
+    pub provider: String,
+    /// Circuit state: `"closed"`, `"open"`, or `"half_open"`.
+    pub circuit: &'static str,
+    /// Consecutive failures recorded since the last success.
+    pub failure_count: u32,
+    /// The error that drove the most recent failure, if any.
+    pub last_error: Option<String>,
+    /// Seconds until an `Open` circuit allows a probe; `0` means the next
+    /// request probes immediately (effectively half-open). `None` when the
+    /// circuit is not open.
+    pub cooldown_remaining_secs: Option<u64>,
+}
+
+impl FailoverHealth {
+    /// Snapshot every tracked provider's breaker state, name-sorted.
+    /// Diagnostic only — the hot path keeps using `circuit_allows`.
+    pub async fn snapshot(&self) -> Vec<ProviderHealthView> {
+        let map = self.0.read().await;
+        let mut out: Vec<ProviderHealthView> = map
+            .iter()
+            .map(|(name, st)| {
+                let circuit = match st.circuit {
+                    CircuitState::Closed => "closed",
+                    CircuitState::Open => "open",
+                    CircuitState::HalfOpen => "half_open",
+                };
+                let cooldown_remaining_secs = (st.circuit == CircuitState::Open).then(|| {
+                    st.last_failure
+                        .map(|at| st.cooldown.saturating_sub(at.elapsed()).as_secs())
+                        .unwrap_or(0)
+                });
+                ProviderHealthView {
+                    provider: name.clone(),
+                    circuit,
+                    failure_count: st.failure_count,
+                    last_error: st.last_error.clone(),
+                    cooldown_remaining_secs,
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.provider.cmp(&b.provider));
+        out
+    }
+}
+
 /// Per-(provider, model) rate-limit cooldown.
 ///
 /// A model that returned a *model-specific* 429 is sidelined until its cooldown
@@ -238,6 +289,26 @@ impl ModelCooldown {
             .await
             .get(&key)
             .is_some_and(|&until| until > Instant::now())
+    }
+
+    /// Snapshot every `(provider, model)` pair still inside its cooldown
+    /// window as `(provider, model, remaining_secs)`, sorted. Expired entries
+    /// are omitted — same strict `until > now` reading as
+    /// [`is_cooling`](Self::is_cooling). Diagnostic only — feeds the
+    /// `route_status` snapshot.
+    pub async fn snapshot(&self) -> Vec<(String, String, u64)> {
+        let now = Instant::now();
+        let mut out: Vec<(String, String, u64)> = self
+            .0
+            .read()
+            .await
+            .iter()
+            .filter_map(|((p, m), &until)| {
+                (until > now).then(|| (p.clone(), m.clone(), (until - now).as_secs()))
+            })
+            .collect();
+        out.sort();
+        out
     }
 }
 
@@ -282,6 +353,23 @@ impl ProviderCooldown {
             .await
             .get(provider)
             .and_then(|&until| until.checked_duration_since(now))
+    }
+
+    /// Snapshot every provider still inside its pacing window as
+    /// `(provider, remaining_secs)`, name-sorted. Expired entries are omitted
+    /// — same strict `until > now` reading as [`remaining`](Self::remaining).
+    /// Diagnostic only — feeds the `route_status` snapshot.
+    pub async fn snapshot(&self) -> Vec<(String, u64)> {
+        let now = Instant::now();
+        let mut out: Vec<(String, u64)> = self
+            .0
+            .read()
+            .await
+            .iter()
+            .filter_map(|(p, &until)| (until > now).then(|| (p.clone(), (until - now).as_secs())))
+            .collect();
+        out.sort();
+        out
     }
 }
 
@@ -852,8 +940,9 @@ impl FailoverProvider {
         }
     }
 
-    /// Whether `name`'s circuit is currently open. Diagnostic accessor —
-    /// used by tests and (later) a provider-health status tool.
+    /// Whether `name`'s circuit is currently open. Diagnostic accessor used by
+    /// tests; the provider-health status surface is [`FailoverHealth::snapshot`]
+    /// (rendered by `route_observe` for the `route_status` tool action).
     pub async fn circuit_open(&self, name: &str) -> bool {
         self.health
             .0
@@ -1569,6 +1658,65 @@ mod tests {
         pc.cool("p", Duration::from_millis(5)).await;
         tokio::time::sleep(Duration::from_millis(25)).await;
         assert!(pc.remaining("p").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn health_snapshot_reports_open_circuit_with_remaining() {
+        let health = FailoverHealth::default();
+        {
+            let mut map = health.0.write().await;
+            let st = map.entry("p".to_string()).or_default();
+            st.circuit = CircuitState::Open;
+            st.failure_count = 3;
+            st.last_error = Some("boom".to_string());
+            st.last_failure = Some(Instant::now());
+            st.cooldown = Duration::from_secs(300);
+        }
+        let snap = health.snapshot().await;
+        assert_eq!(snap.len(), 1);
+        let v = &snap[0];
+        assert_eq!(v.provider, "p");
+        assert_eq!(v.circuit, "open");
+        assert_eq!(v.failure_count, 3);
+        assert_eq!(v.last_error.as_deref(), Some("boom"));
+        let rem = v.cooldown_remaining_secs.expect("open carries remaining");
+        assert!(rem <= 300);
+    }
+
+    #[tokio::test]
+    async fn health_snapshot_closed_circuit_has_no_cooldown() {
+        let health = FailoverHealth::default();
+        health.0.write().await.entry("p".to_string()).or_default();
+        let snap = health.snapshot().await;
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].circuit, "closed");
+        assert!(snap[0].cooldown_remaining_secs.is_none());
+        assert!(snap[0].last_error.is_none());
+    }
+
+    #[tokio::test]
+    async fn model_cooldown_snapshot_lists_active_and_skips_expired() {
+        let cd = ModelCooldown::default();
+        cd.cool("p", "hot", Duration::from_secs(60)).await;
+        cd.cool("p", "stale", Duration::from_millis(5)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let snap = cd.snapshot().await;
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].0, "p");
+        assert_eq!(snap[0].1, "hot");
+        assert!(snap[0].2 <= 60);
+    }
+
+    #[tokio::test]
+    async fn provider_cooldown_snapshot_lists_active_and_skips_expired() {
+        let pc = ProviderCooldown::default();
+        pc.cool("hot", Duration::from_secs(60)).await;
+        pc.cool("stale", Duration::from_millis(5)).await;
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        let snap = pc.snapshot().await;
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].0, "hot");
+        assert!(snap[0].1 <= 60);
     }
 
     #[tokio::test]

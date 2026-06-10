@@ -219,7 +219,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "self_config",
-        description: "Read/write Aleph identity files and config.toml with validation and natural-language preview",
+        description: "Read/write Aleph identity files and config.toml with validation and natural-language preview; route_status surfaces live provider health (circuit breakers, cooldowns, load)",
         requires_config: true, // Requires per-agent agent_id (injected at construction)
     },
     BuiltinToolDefinition {

@@ -1,0 +1,285 @@
+//! Read-only runtime observability for the failover routing chain.
+//!
+//! `build_failover_chain` assembles rich runtime state — the circuit breaker
+//! ([`FailoverHealth`]), the per-model and per-provider rate-limit cooldowns,
+//! and the live load registry ([`LoadStats`]) — but that state previously had
+//! no exit: it shaped every candidate ordering yet was invisible to the model
+//! and the operator ("why did my request fall back / stall / which provider
+//! is throttled" was unanswerable). [`RouteObservability`] bundles cheap
+//! clones of those shared handles (cloning shares the same `Arc` maps, so a
+//! snapshot is always live) plus the boot-time chain composition, and renders
+//! one JSON snapshot for the `self_config` `route_status` tool action.
+//!
+//! R7/R8 stance: this surfaces HARD runtime facts (circuit states, cooldown
+//! windows, in-flight counts, EWMA latency, rolling RPM/TPM usage) so the
+//! *model* can reason about provider health when it picks models or diagnoses
+//! a stall. It decides nothing itself — pure read-only 赋能层. Mirrors the
+//! reference routers' status surfaces (LiteLLM's health-state cache, the
+//! semantic-router's `x-vsr-*` decision headers, RouteLLM's per-route model
+//! counts) without any of their classifier machinery.
+
+use std::sync::OnceLock;
+
+use serde_json::json;
+
+use crate::config::types::{LoadBalanceStrategy, RouteMode};
+use crate::providers::default_handle::DefaultProviderHandle;
+use crate::providers::failover::{FailoverHealth, ModelCooldown, ProviderCooldown};
+use crate::providers::load_stats::LoadStats;
+use crate::providers::route_handle::RouteHandle;
+use crate::providers::route_policy::{EndpointTier, RateLimits, RouteTargets};
+use crate::sync_primitives::Arc;
+
+/// Boot-time composition of one fallback candidate: name, model walk order,
+/// and endpoint tier. The live per-request ordering additionally applies the
+/// route mode, pins, and load-balancing on top of this configured baseline.
+#[derive(Debug, Clone)]
+pub struct ChainCandidate {
+    pub name: String,
+    pub models: Vec<String>,
+    pub tier: EndpointTier,
+}
+
+/// Shared handles onto the failover chain's live runtime state.
+///
+/// Built once by `build_failover_chain` alongside the chain itself; every
+/// handle is a clone that shares the same underlying `Arc` map the chain
+/// mutates, so [`snapshot`](Self::snapshot) always reads the live picture.
+#[derive(Clone)]
+pub struct RouteObservability {
+    /// Live primary slot (hot-reload aware): `current().name()` is the
+    /// provider the next request dials first.
+    pub primary: Arc<dyn DefaultProviderHandle>,
+    /// Boot-time fallback chain composition, in configured order.
+    pub fallbacks: Vec<ChainCandidate>,
+    /// Shared circuit-breaker map (same instance the chains mutate).
+    pub health: FailoverHealth,
+    /// Shared per-(provider, model) 429 sideline map.
+    pub model_cooldown: ModelCooldown,
+    /// Shared per-provider rate-limit pacing map.
+    pub provider_cooldown: ProviderCooldown,
+    /// Shared in-flight / latency / rolling-usage registry.
+    pub load: Arc<LoadStats>,
+    /// Live route handle (mode / strategy / pins / limits). `None` in tests —
+    /// the snapshot then reports the safe defaults (auto / ordered / no pins).
+    pub route: Option<Arc<RouteHandle>>,
+}
+
+fn tier_str(tier: EndpointTier) -> &'static str {
+    match tier {
+        EndpointTier::Local => "local",
+        EndpointTier::Cloud => "cloud",
+        EndpointTier::Unknown => "unknown",
+    }
+}
+
+fn mode_str(mode: RouteMode) -> &'static str {
+    match mode {
+        RouteMode::Auto => "auto",
+        RouteMode::AlwaysLocal => "always_local",
+        RouteMode::AlwaysCloud => "always_cloud",
+    }
+}
+
+fn lb_str(strategy: LoadBalanceStrategy) -> &'static str {
+    match strategy {
+        LoadBalanceStrategy::Ordered => "ordered",
+        LoadBalanceStrategy::RoundRobin => "round_robin",
+        LoadBalanceStrategy::LeastBusy => "least_busy",
+        LoadBalanceStrategy::LatencyAware => "latency_aware",
+        LoadBalanceStrategy::UsageBased => "usage_based",
+    }
+}
+
+impl RouteObservability {
+    /// Render the live routing picture as one JSON value: route knobs, the
+    /// chain composition, per-provider runtime health/load, and any active
+    /// model cooldowns. Consumed by the `self_config` `route_status` action.
+    pub async fn snapshot(&self) -> serde_json::Value {
+        // Live route knobs; safe defaults when no handle is wired (tests).
+        let (mode, allow_escalation, strategy, targets, limits) = match &self.route {
+            Some(h) => {
+                let (mode, esc) = h.load();
+                (mode, esc, h.load_balance(), h.targets(), h.limits())
+            }
+            None => (
+                RouteMode::Auto,
+                false,
+                LoadBalanceStrategy::Ordered,
+                Arc::new(RouteTargets::default()),
+                Arc::new(RateLimits::default()),
+            ),
+        };
+
+        let primary_name = self.primary.current().name().to_string();
+        let health = self.health.snapshot().await;
+        let pacing = self.provider_cooldown.snapshot().await;
+        let cooling = self.model_cooldown.snapshot().await;
+        let loads = self.load.all_metrics();
+
+        // Union of every provider name any signal knows about, so a provider
+        // that only ever appears in (say) the breaker map still shows up.
+        let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        names.insert(primary_name.clone());
+        names.extend(self.fallbacks.iter().map(|c| c.name.clone()));
+        names.extend(health.iter().map(|h| h.provider.clone()));
+        names.extend(pacing.iter().map(|(n, _)| n.clone()));
+        names.extend(loads.iter().map(|(n, _)| n.clone()));
+
+        let health_by: std::collections::HashMap<
+            &str,
+            &crate::providers::failover::ProviderHealthView,
+        > = health.iter().map(|h| (h.provider.as_str(), h)).collect();
+        let pacing_by: std::collections::HashMap<&str, u64> =
+            pacing.iter().map(|(n, s)| (n.as_str(), *s)).collect();
+        let loads_by: std::collections::HashMap<&str, crate::providers::route_policy::LoadMetric> =
+            loads.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+
+        let providers: serde_json::Map<String, serde_json::Value> = names
+            .iter()
+            .map(|name| {
+                let h = health_by.get(name.as_str()).copied();
+                let m = loads_by.get(name.as_str()).copied().unwrap_or_default();
+                let (util_permille, over_limit) = limits.assess(name, m.rpm_used, m.tpm_used);
+                let (rpm_limit, tpm_limit) = limits.ceiling(name).unwrap_or((None, None));
+                let entry = json!({
+                    "circuit": h.map(|h| h.circuit).unwrap_or("closed"),
+                    "failure_count": h.map(|h| h.failure_count).unwrap_or(0),
+                    "last_error": h.and_then(|h| h.last_error.clone()),
+                    "breaker_cooldown_remaining_secs": h.and_then(|h| h.cooldown_remaining_secs),
+                    "rate_pacing_remaining_secs": pacing_by.get(name.as_str()).copied(),
+                    "in_flight": m.in_flight,
+                    "latency_ms": m.latency_us / 1000,
+                    "rpm_used": m.rpm_used,
+                    "tpm_used": m.tpm_used,
+                    "rpm_limit": rpm_limit,
+                    "tpm_limit": tpm_limit,
+                    "utilization_percent": util_permille / 10,
+                    "over_limit": over_limit,
+                });
+                (name.clone(), entry)
+            })
+            .collect();
+
+        json!({
+            "mode": mode_str(mode),
+            "allow_cloud_escalation": allow_escalation,
+            "load_balance": lb_str(strategy),
+            "pins": {
+                "local": targets.local_provider.clone(),
+                "cloud": targets.cloud_provider.clone(),
+            },
+            "primary": primary_name,
+            "fallback_chain": self
+                .fallbacks
+                .iter()
+                .map(|c| {
+                    json!({
+                        "provider": c.name,
+                        "tier": tier_str(c.tier),
+                        "models": c.models,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            "providers": providers,
+            "cooling_models": cooling
+                .iter()
+                .map(|(p, m, s)| {
+                    json!({ "provider": p, "model": m, "remaining_secs": s })
+                })
+                .collect::<Vec<_>>(),
+        })
+    }
+}
+
+/// Process-global observability bundle. The daemon is an OS-level singleton
+/// (flock), so one cell per process is the whole world — same contract as
+/// [`route_handle`](crate::providers::route_handle)'s global. Registered by
+/// the production boot path only (`orchestrator_init`), so library tests
+/// never see a populated global.
+static GLOBAL: OnceLock<RouteObservability> = OnceLock::new();
+
+/// Register the boot-assembled bundle. First call wins (one chain assembly
+/// per boot); later calls are ignored.
+pub fn set_global_route_observability(obs: RouteObservability) {
+    let _ = GLOBAL.set(obs);
+}
+
+/// The boot-registered bundle, if the production chain has been assembled.
+/// `None` in tests / before boot — callers degrade to config-only output.
+pub fn global_route_observability() -> Option<&'static RouteObservability> {
+    GLOBAL.get()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::error::Result;
+    use crate::providers::adapter::{ProviderResponse, RequestPayload};
+    use crate::providers::default_handle::StaticDefault;
+    use crate::providers::AiProvider;
+    use std::future::Future;
+    use std::pin::Pin;
+
+    struct NamedProvider(&'static str);
+
+    impl AiProvider for NamedProvider {
+        fn process<'a>(
+            &'a self,
+            _req: RequestPayload<'a>,
+        ) -> Pin<Box<dyn Future<Output = Result<ProviderResponse>> + Send + 'a>> {
+            Box::pin(async { Ok(ProviderResponse::text_only("ok".to_string())) })
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+        fn color(&self) -> &str {
+            "#000000"
+        }
+    }
+
+    fn observability(fallbacks: Vec<ChainCandidate>) -> RouteObservability {
+        RouteObservability {
+            primary: Arc::new(StaticDefault::new(Arc::new(NamedProvider("kimi")))),
+            fallbacks,
+            health: FailoverHealth::default(),
+            model_cooldown: ModelCooldown::default(),
+            provider_cooldown: ProviderCooldown::default(),
+            load: Arc::new(LoadStats::new()),
+            route: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn snapshot_reports_safe_defaults_without_route_handle() {
+        let obs = observability(vec![]);
+        let snap = obs.snapshot().await;
+        assert_eq!(snap["mode"], "auto");
+        assert_eq!(snap["allow_cloud_escalation"], false);
+        assert_eq!(snap["load_balance"], "ordered");
+        assert_eq!(snap["primary"], "kimi");
+        // The primary always appears in the providers map, breaker closed.
+        assert_eq!(snap["providers"]["kimi"]["circuit"], "closed");
+        assert_eq!(snap["providers"]["kimi"]["in_flight"], 0);
+        assert!(snap["cooling_models"].as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn snapshot_includes_chain_composition_and_live_load() {
+        let obs = observability(vec![ChainCandidate {
+            name: "x302".to_string(),
+            models: vec!["gpt-5".to_string()],
+            tier: EndpointTier::Cloud,
+        }]);
+        let _g = obs.load.begin("x302");
+        let snap = obs.snapshot().await;
+        let chain = snap["fallback_chain"].as_array().unwrap();
+        assert_eq!(chain.len(), 1);
+        assert_eq!(chain[0]["provider"], "x302");
+        assert_eq!(chain[0]["tier"], "cloud");
+        assert_eq!(chain[0]["models"][0], "gpt-5");
+        // Live load registry feeds the provider entry.
+        assert_eq!(snap["providers"]["x302"]["in_flight"], 1);
+        assert_eq!(snap["providers"]["x302"]["rpm_used"], 1);
+    }
+}

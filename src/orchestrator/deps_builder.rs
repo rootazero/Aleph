@@ -14,6 +14,7 @@ use crate::config::Config;
 use crate::context::budget::ContextBudgetConfig;
 use crate::harness::StallConfig;
 use crate::providers::model_catalog::{capabilities_for, endpoint_kind_for_base_url};
+use crate::providers::route_observe::{ChainCandidate, RouteObservability};
 use crate::providers::route_policy::EndpointTier;
 use crate::providers::{
     create_provider, AiProvider, DefaultProviderHandle, FailoverConfig, FailoverHealth,
@@ -85,6 +86,11 @@ pub(crate) fn provider_tier(pc: &ProviderConfig) -> EndpointTier {
 pub struct ProviderChain {
     pub default: Arc<dyn DefaultProviderHandle>,
     pub agent_overrides: HashMap<String, Arc<dyn AiProvider>>,
+    /// Live handles onto the chain's shared runtime state (breaker, cooldowns,
+    /// load) plus the boot-time chain composition. The production boot path
+    /// registers a clone as the process-global `route_observe` bundle so the
+    /// `self_config` `route_status` action can render live diagnostics.
+    pub observability: RouteObservability,
 }
 
 /// Build the provider routing: the global failover chain plus the
@@ -189,6 +195,27 @@ pub fn build_failover_chain(
         "failover chain assembled"
     );
 
+    // Capture the chain composition + shared-state handles for the read-only
+    // observability bundle before `fallbacks` moves into the provider. Each
+    // handle clone shares the same live `Arc` map the chains mutate, so a
+    // later snapshot always reads the current breaker/cooldown/load picture.
+    let observability = RouteObservability {
+        primary: default_provider.clone(),
+        fallbacks: fallbacks
+            .iter()
+            .map(|n| ChainCandidate {
+                name: n.name.clone(),
+                models: n.models.clone(),
+                tier: n.tier,
+            })
+            .collect(),
+        health: health.clone(),
+        model_cooldown: model_cooldown.clone(),
+        provider_cooldown: provider_cooldown.clone(),
+        load: load.clone(),
+        route: route_handle.clone(),
+    };
+
     let global_provider = FailoverProvider::new(
         default_provider,
         fallbacks,
@@ -254,6 +281,7 @@ pub fn build_failover_chain(
     ProviderChain {
         default,
         agent_overrides,
+        observability,
     }
 }
 

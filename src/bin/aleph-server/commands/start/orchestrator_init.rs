@@ -198,6 +198,15 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
         Some(route_handle),
     );
     let default_provider = provider_chain.default.clone();
+    // Surface the chain's live runtime state (circuit breakers, cooldowns,
+    // load, chain composition) as the process-global observability bundle the
+    // `self_config` `route_status` action renders — the provider-health status
+    // surface the breaker's diagnostic accessor was built to feed. First-set-
+    // wins OnceLock, mirroring `global_route_handle`; production-only, so
+    // library tests never see a populated global.
+    alephcore::providers::route_observe::set_global_route_observability(
+        provider_chain.observability.clone(),
+    );
     // Wire the per-provider pin chains as the harness `named_providers` so the
     // dynamic-routing model directive composes with failover, not around it:
     // `BrainRef::Strict`/`Preferred` and a `select_model(provider=…)` pick now
