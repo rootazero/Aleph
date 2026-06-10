@@ -8,7 +8,7 @@
 //! chain_id` — those continue to pass and now reflect the same chain
 //! the inner harness sees.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::harness::agent::AgentHarness;
 use crate::harness::chain_context::ChainContext;

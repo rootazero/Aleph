@@ -123,7 +123,7 @@ mod tests {
         Screenshot, WindowInfo,
     };
     use async_trait::async_trait;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     /// A scripted screen that returns a fixed sequence of base64 strings.
     /// Other capability methods are unimplemented — the polling loop only
@@ -145,8 +145,8 @@ mod tests {
     #[async_trait]
     impl ScreenCapability for ScriptedScreen {
         async fn screenshot(&self, _region: Option<DesktopRegion>) -> Result<Screenshot> {
-            let mut idx = self.idx.lock().unwrap();
-            let frames = self.frames.lock().unwrap();
+            let mut idx = self.idx.lock().unwrap_or_else(|e| e.into_inner());
+            let frames = self.frames.lock().unwrap_or_else(|e| e.into_inner());
             let i = (*idx).min(frames.len() - 1);
             *idx = (*idx + 1).min(frames.len() - 1);
             Ok(Screenshot {

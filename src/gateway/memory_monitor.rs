@@ -19,7 +19,7 @@
 //! - Cross-platform via `sysinfo` (already a dependency).
 //! - `interval_secs = 0` disables the monitor.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::Notify;

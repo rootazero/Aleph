@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::orchestrator::flow_spec::SandboxKind;
 use crate::orchestrator::sandbox_factory::{build_sandbox_factory, DenyAllSandbox};

@@ -7,7 +7,7 @@
 //! threads `flow_dir` through the builder.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::Serialize;
 

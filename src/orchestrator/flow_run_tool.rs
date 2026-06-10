@@ -4,7 +4,7 @@
 //! (requires an `AlephTool` adapter). Phase 5 defines the tool's shape and
 //! dispatch logic so downstream wiring lands on a stable API.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::Deserialize;
 

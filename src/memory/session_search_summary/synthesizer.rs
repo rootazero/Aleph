@@ -13,7 +13,7 @@
 //!    wins in a concurrent race).
 //! 5. Re-read to return the winning row.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 
@@ -139,7 +139,7 @@ impl SummarySynthesizer {
 pub(crate) mod test_support {
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex as StdMutex;
+    use crate::sync_primitives::Mutex as StdMutex;
 
     use async_trait::async_trait;
 

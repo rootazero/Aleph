@@ -52,7 +52,7 @@ proptest! {
 #[cfg(test)]
 mod concurrency_tests {
     use super::super::store::{CuratedError, CuratedMemoryStore, WriteOutcome};
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use tempfile::tempdir;
     use tokio::task::JoinSet;
 

@@ -1,7 +1,7 @@
 //! LLM provider selection logic for harness bridge.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::orchestrator::errors::FlowError;
 use crate::orchestrator::flow_spec::BrainRef;
@@ -59,7 +59,7 @@ mod tests {
     use crate::providers::StaticDefault;
     use std::future::Future;
     use std::pin::Pin;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     /// Provider that records the model it was handed and reports its name.
     struct Recorder {

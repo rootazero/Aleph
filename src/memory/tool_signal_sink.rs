@@ -11,7 +11,7 @@
 //! Default impl is `NoopToolSignalSink` — zero overhead when the production
 //! wiring path is not in place (tests, simple-engine fixtures).
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 
@@ -187,7 +187,7 @@ mod tests {
     use super::*;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource};
     use async_trait::async_trait;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     /// Minimal in-memory store used for sink-write verification.
     struct MemStore {

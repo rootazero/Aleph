@@ -1,7 +1,7 @@
 //! Bridge-level smoke tests. Full end-to-end coverage lives in
 //! tests/orchestrator_e2e.rs (Task 13).
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::orchestrator::harness_bridge::{
     active_execution_plan, compute_runtime_state_blocks, AgentHarnessRunner,

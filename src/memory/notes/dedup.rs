@@ -62,7 +62,7 @@ pub async fn find_similar_notes<S: NoteStore>(
 mod tests {
     use super::*;
     use crate::memory::store::SqliteMemoryBackend;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use uuid::Uuid;
 
     fn test_db() -> Arc<SqliteMemoryBackend> {

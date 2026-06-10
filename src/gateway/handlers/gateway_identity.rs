@@ -5,7 +5,7 @@
 //! the AI soul/persona. This handler reports the *gateway process*
 //! identity, not the assistant's.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde_json::json;
 

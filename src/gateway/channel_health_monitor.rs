@@ -24,7 +24,7 @@
 //!   stop+start) to avoid spawning duplicate message forwarders.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};

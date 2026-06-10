@@ -501,7 +501,7 @@ where
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     #[test]
     fn test_classify_rate_limit_model_specific_fallback() {

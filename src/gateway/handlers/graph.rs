@@ -13,7 +13,7 @@ use crate::memory::notes::store::{NoteIndexEntry, NoteStore};
 use crate::memory::notes::NoteIndexer;
 use crate::memory::store::sqlite::SqliteMemoryBackend;
 use crate::memory::store::MemoryBackend;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 /// Convert a NoteIndexEntry into a NoteNodeDto.
 fn entry_to_dto(entry: &NoteIndexEntry) -> NoteNodeDto {

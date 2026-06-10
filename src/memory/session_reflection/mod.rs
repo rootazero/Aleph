@@ -20,7 +20,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 
 use crate::config::types::memory::ReflectionConfig;
 use crate::error::AlephError;

@@ -1,7 +1,7 @@
 //! Unified raw → note write gate. Concentrates Accept/Defer/Reject routing
 //! plus the side effects of writing review queue / archive rows.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -137,7 +137,7 @@ impl DefaultNoteWriteGate {
 mod tests {
     use super::*;
     use crate::memory::notes::KnowledgeNote;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     fn make_candidate(severity: Severity, confidence: f32) -> CandidateNote {
         CandidateNote {

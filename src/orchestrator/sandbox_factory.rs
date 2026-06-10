@@ -5,7 +5,7 @@
 //! builder in a closure that also knows how to produce `DenyAllSandbox`
 //! for `SandboxKind::None`.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 

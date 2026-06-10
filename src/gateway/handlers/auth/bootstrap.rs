@@ -8,7 +8,7 @@
 //! because the gateway dispatcher only invokes non-anonymous-allow-listed
 //! handlers for authenticated callers.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 

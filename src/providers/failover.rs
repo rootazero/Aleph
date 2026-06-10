@@ -1248,7 +1248,7 @@ mod tests {
     use crate::providers::StaticDefault;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     /// Test provider: each `process()` call consumes the next scripted
     /// outcome. `Ok(())` → a text response tagged with the provider name;

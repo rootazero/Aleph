@@ -14,7 +14,7 @@
 //!   expose `select_model` at this layer yet.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};

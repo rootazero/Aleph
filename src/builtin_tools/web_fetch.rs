@@ -16,7 +16,7 @@ use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 

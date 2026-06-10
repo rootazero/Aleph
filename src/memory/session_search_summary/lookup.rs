@@ -6,7 +6,7 @@
 //! Naming note: the plan calls this "retrieve_summary_fact" / "MemoryFact"
 //! but actual storage is `RawMemory` in the `raw_memories` table.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::AlephError;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
@@ -27,7 +27,7 @@ pub async fn retrieve_summary_fact(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
 
     use super::*;
     use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};

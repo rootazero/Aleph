@@ -174,7 +174,7 @@ mod tests {
     async fn try_reuse_finds_summaries_for_the_owning_agent() {
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
         use crate::memory::store::sqlite::SqliteMemoryBackend;
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
         // Seed a d0 session summary the way `post_turn_compress` writes it.
@@ -206,7 +206,7 @@ mod tests {
     async fn try_reuse_returns_none_for_a_different_agent() {
         use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
         use crate::memory::store::sqlite::SqliteMemoryBackend;
-        use std::sync::Arc;
+        use crate::sync_primitives::Arc;
 
         let backend: MemoryBackend = Arc::new(SqliteMemoryBackend::in_memory().unwrap());
         let raw = RawMemory::new("summary".to_string(), RawMemorySource::SessionCompressed)

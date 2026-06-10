@@ -4,7 +4,7 @@
 //! `desktop` connections; the shell's `notify.rs` renders the OS banner and
 //! owns the focus-gate. No rendering happens in core.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;

@@ -5,7 +5,7 @@
 //! consistency with field-by-field manual conversion).
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use proptest::prelude::*;

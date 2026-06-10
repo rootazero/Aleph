@@ -12,7 +12,7 @@
 //! gated `surface.approval` frame; the raw `approval.requested` frame still
 //! drives the Panel card and the inbound `manager.resolve` correlation.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::gateway::event_bus::GatewayEventBus;
 use crate::gateway::events::GatewayEventFrame;
@@ -228,7 +228,7 @@ mod tests {
     async fn run_delivers_approval_to_registered_surface() {
         use crate::gateway::surface::delivery::{DeliveryError, DeliverySurface, SurfaceApproval};
         use crate::gateway::surface::SurfaceKind;
-        use std::sync::Mutex;
+        use crate::sync_primitives::Mutex;
 
         struct ApprovalCapture(Arc<Mutex<Vec<SurfaceApproval>>>);
         impl DeliverySurface for ApprovalCapture {
@@ -274,7 +274,7 @@ mod tests {
     async fn run_delivers_to_registered_surface() {
         use crate::gateway::surface::delivery::{DeliveryError, DeliverySurface};
         use crate::gateway::surface::SurfaceKind;
-        use std::sync::Mutex;
+        use crate::sync_primitives::Mutex;
 
         struct Capture(Arc<Mutex<Vec<SurfaceNotification>>>);
         impl DeliverySurface for Capture {

@@ -6,7 +6,7 @@
 //!
 //! Lives on the Query lane (registered in `Lane::override_for`).
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde_json::json;
 

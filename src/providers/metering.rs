@@ -14,7 +14,7 @@ use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 pub struct MeteringProvider {
     inner: Arc<dyn AiProvider>,
@@ -111,7 +111,7 @@ impl AiProvider for MeteringProvider {
 mod tests {
     use super::*;
     use crate::providers::adapter::TokenUsage;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     struct FakeProvider {
         usage: TokenUsage,

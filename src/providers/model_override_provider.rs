@@ -14,7 +14,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::Result;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
@@ -68,7 +68,7 @@ impl AiProvider for ModelOverrideProvider {
 mod tests {
     use super::*;
     use crate::providers::message::UnifiedMessage;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     /// Inner provider that records the `model` it was handed.
     struct Recorder {

@@ -41,7 +41,7 @@ static ACTIVE: Lazy<Mutex<Bindings>> = Lazy::new(|| Mutex::new(HashMap::new()));
 /// pre-persistence behavior); `init_persistence` sets it at boot.
 static STORE_PATH: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
-fn active_lock() -> std::sync::MutexGuard<'static, Bindings> {
+fn active_lock() -> crate::sync_primitives::MutexGuard<'static, Bindings> {
     ACTIVE.lock().unwrap_or_else(|e| e.into_inner())
 }
 

@@ -89,7 +89,7 @@ mod tests {
     use super::*;
     use axum::body::{to_bytes, Body};
     use axum::http::Request;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use tempfile::TempDir;
     use tower::ServiceExt;
 

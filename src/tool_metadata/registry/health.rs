@@ -27,7 +27,7 @@
 use crate::sync_primitives::{AtomicU64, Ordering};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;

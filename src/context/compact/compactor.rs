@@ -589,12 +589,12 @@ mod tests {
     impl CapturingProvider {
         fn new(response: impl Into<String>) -> Self {
             Self {
-                last_prompt: Arc::new(std::sync::Mutex::new(String::new())),
+                last_prompt: Arc::new(crate::sync_primitives::Mutex::new(String::new())),
                 response: response.into(),
             }
         }
         fn prompt(&self) -> String {
-            self.last_prompt.lock().unwrap().clone()
+            self.last_prompt.lock().unwrap_or_else(|e| e.into_inner()).clone()
         }
     }
 
@@ -611,7 +611,7 @@ mod tests {
             >,
         > {
             if let Some(first) = payload.messages.first() {
-                *self.last_prompt.lock().unwrap() = first.text_content();
+                *self.last_prompt.lock().unwrap_or_else(|e| e.into_inner()) = first.text_content();
             }
             let resp = self.response.clone();
             Box::pin(

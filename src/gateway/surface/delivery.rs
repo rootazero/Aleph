@@ -5,7 +5,7 @@
 //! line is the whole point of Approach A (see the Phase 0/1 spec). Phase 1
 //! carries only R5 notifications; approval回投 joins in Phase 2.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde_json::Value;
 

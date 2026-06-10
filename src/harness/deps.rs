@@ -19,7 +19,7 @@ use crate::session::service::SessionService;
 use crate::tools::service::ToolService;
 use crate::verification::VerifierChain;
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 

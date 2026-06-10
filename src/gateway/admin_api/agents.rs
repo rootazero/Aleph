@@ -61,7 +61,7 @@ mod tests {
     use crate::config::agent_manager::AgentManager;
     use axum::body::Body;
     use axum::http::Request;
-    use std::sync::Arc;
+    use crate::sync_primitives::Arc;
     use tempfile::TempDir;
     use tower::ServiceExt;
 

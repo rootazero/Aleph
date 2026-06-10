@@ -208,7 +208,7 @@ fn mean(sum: u64, count: u64) -> u64 {
 mod tests {
     use super::*;
     use async_trait::async_trait;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
 
     fn tool_row(
         id: &str,

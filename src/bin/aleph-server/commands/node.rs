@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::RwLock;
+use alephcore::sync_primitives::RwLock;
 use std::time::Duration;
 
 use alephcore::cluster::{

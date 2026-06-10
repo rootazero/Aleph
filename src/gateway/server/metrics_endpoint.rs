@@ -26,7 +26,7 @@
 //! are monotonic **counters**; in-flight states rise and fall, so they are
 //! **gauges**.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use axum::extract::State;
 use axum::http::header::CONTENT_TYPE;

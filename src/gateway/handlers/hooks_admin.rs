@@ -22,7 +22,7 @@
 
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::extension::{try_extension_manager, ExtensionManager, HookEvent};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};

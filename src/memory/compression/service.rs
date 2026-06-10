@@ -710,7 +710,7 @@ mod tests {
     #[tokio::test]
     async fn compress_to_notes_excludes_tool_invocation_telemetry() {
         use crate::memory::notes::ingest::{ApplyReport, CompoundIngestor};
-        use std::sync::Mutex;
+        use crate::sync_primitives::Mutex;
 
         // Recording ingestor: captures the source of every row handed to it.
         struct RecordingIngestor {

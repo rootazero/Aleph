@@ -11,7 +11,7 @@
 //! R10-safe: `src/harness/` is untouched. The harness already replays the
 //! event log on every `run()`; resume only re-triggers it.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use tokio::sync::Semaphore;
 

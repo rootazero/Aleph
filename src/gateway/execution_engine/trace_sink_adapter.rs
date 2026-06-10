@@ -7,7 +7,7 @@
 //! orchestrator-side flush invocation to the same persistence layer by
 //! holding a shared `TraceFlushHandle` trait object.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;

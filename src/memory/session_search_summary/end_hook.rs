@@ -6,7 +6,7 @@
 //!   2. Reuse highest-depth aleph://session/{sid}/d{depth}/{seq} fact (zero-LLM).
 //!   3. Fall back to SummarySynthesizer::lazy_for (one LLM call).
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::error::AlephError;
 use crate::memory::store::raw_memory::{RawMemory, RawMemorySource, RawMemoryStore};
@@ -95,7 +95,7 @@ mod tests {
 
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Mutex as StdMutex;
+    use crate::sync_primitives::Mutex as StdMutex;
 
     use async_trait::async_trait;
 

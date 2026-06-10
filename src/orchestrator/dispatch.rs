@@ -1,7 +1,7 @@
 //! Orchestrator core + seven-step dispatch. See design §6.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use crate::sync_primitives::Mutex;
 

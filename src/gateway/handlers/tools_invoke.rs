@@ -18,7 +18,7 @@
 //! ## Response (tool error)
 //! Returns RPC error with `INTERNAL_ERROR` code and the tool's error message.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

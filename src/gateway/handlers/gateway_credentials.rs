@@ -5,7 +5,7 @@
 //! `Lane::override_for`). No secrets leave this handler — only flags
 //! and counts.
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use super::super::config::GatewayServerConfig;
 use super::super::credential_planner::build_credential_plan;

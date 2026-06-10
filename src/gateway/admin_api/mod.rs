@@ -9,7 +9,7 @@
 pub mod agents;
 pub mod secrets;
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use axum::Router;
 

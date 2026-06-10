@@ -3,7 +3,7 @@
 //! `environments.list`（read，枚举在线节点）。形态为 gateway RPC 而非 builtin
 //! 工具——凭证操作的既有模式（同 devices.*/pairing.*）。
 
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 
 use serde::Deserialize;
 use tracing::warn;

@@ -46,7 +46,7 @@
 //! loading required.
 
 use std::path::Path;
-use std::sync::Mutex;
+use crate::sync_primitives::Mutex;
 
 use rusqlite::{params, Connection};
 
@@ -151,7 +151,7 @@ impl ContentIndex {
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Connection> {
+    fn lock(&self) -> crate::sync_primitives::MutexGuard<'_, Connection> {
         // Poison-safe per project rule P7: a panic in another holder must not
         // wedge the index.
         self.conn.lock().unwrap_or_else(|e| e.into_inner())

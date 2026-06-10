@@ -6,7 +6,7 @@
 //! override params are accepted (per P1 zero-override decision).
 
 use std::collections::HashMap;
-use std::sync::Arc;
+use crate::sync_primitives::Arc;
 use std::time::Duration;
 
 use crate::config::types::ProviderConfig;

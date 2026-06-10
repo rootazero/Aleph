@@ -435,7 +435,7 @@ mod tests {
     use crate::agents::swarm::tasks::{store::SqliteCoordTaskStore, CoordTaskStatus};
     use crate::workflow::def::WorkflowStepDef;
     use rusqlite::Connection;
-    use std::sync::Mutex;
+    use crate::sync_primitives::Mutex;
     use tempfile::TempDir;
 
     // `ALEPH_HOME` is process-global; the file-backed actions (save/list/
