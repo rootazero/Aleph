@@ -71,6 +71,20 @@ pub trait SessionStore: Send + Sync {
 
     /// Cancel all active sessions for a team. Returns count of cancelled sessions.
     async fn cancel_all_for_team(&self, team_id: &str) -> crate::error::Result<usize>;
+
+    /// Mark stuck active sessions as Deadlocked and return their ids.
+    ///
+    /// A session is deadlocked when it is still `active` and either:
+    /// - its transcript has reached `max_rounds` but nobody concluded it for
+    ///   at least `grace_secs` (further turns are rejected by [`add_turn`],
+    ///   so without intervention it would stay Active forever), or
+    /// - it has seen no activity (last turn, or creation when empty) for
+    ///   `stale_secs`.
+    async fn sweep_deadlocked(
+        &self,
+        grace_secs: i64,
+        stale_secs: i64,
+    ) -> crate::error::Result<Vec<String>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,16 +399,20 @@ impl SessionStore for SqliteSessionStore {
         let outcome_json = serde_json::to_string(&outcome)
             .map_err(|e| db_err(format!("serialize outcome: {e}")))?;
 
+        // Deadlocked sessions remain concludable: the sweeper's notification
+        // explicitly asks participants to conclude, and `add_turn`'s
+        // max_rounds error suggests the same — both would be dead ends if
+        // conclusion required `active`.
         let affected = conn
             .execute(
-                "UPDATE collaborative_sessions SET status = 'concluded', outcome_json = ?1 WHERE id = ?2 AND status = 'active'",
+                "UPDATE collaborative_sessions SET status = 'concluded', outcome_json = ?1 WHERE id = ?2 AND status IN ('active', 'deadlocked')",
                 params![outcome_json, session_id],
             )
             .map_err(db_err)?;
 
         if affected == 0 {
             return Err(db_err(format!(
-                "cannot conclude session (not found or not active): {session_id}"
+                "cannot conclude session (not found or not active/deadlocked): {session_id}"
             )));
         }
 
@@ -456,6 +474,61 @@ impl SessionStore for SqliteSessionStore {
             .map_err(db_err)?;
 
         Ok(affected)
+    }
+
+    async fn sweep_deadlocked(
+        &self,
+        grace_secs: i64,
+        stale_secs: i64,
+    ) -> crate::error::Result<Vec<String>> {
+        let conn = self.conn.lock().await;
+
+        // Candidates: every active session plus its turn count and last
+        // activity. Timestamps are stored as RFC3339 TEXT, so the age check
+        // happens in Rust rather than SQL.
+        let rows: Vec<(String, u32, i64, Option<String>, String)> = conn
+            .prepare_cached(
+                "SELECT s.id, s.max_rounds, \
+                        (SELECT COUNT(*) FROM session_turns t WHERE t.session_id = s.id), \
+                        (SELECT MAX(t.timestamp) FROM session_turns t WHERE t.session_id = s.id), \
+                        s.created_at \
+                 FROM collaborative_sessions s WHERE s.status = 'active'",
+            )
+            .map_err(db_err)?
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .map_err(db_err)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(db_err)?;
+
+        let now = Utc::now();
+        let mut deadlocked = Vec::new();
+        for (id, max_rounds, turn_count, last_turn_at, created_at) in rows {
+            let last_activity = match last_turn_at.as_deref() {
+                Some(ts) => parse_rfc3339(ts)?,
+                None => parse_rfc3339(&created_at)?,
+            };
+            let idle_secs = (now - last_activity).num_seconds();
+            let rounds_exhausted = turn_count >= max_rounds && idle_secs >= grace_secs;
+            let stale = idle_secs >= stale_secs;
+            if rounds_exhausted || stale {
+                // Guard on status again — a participant may have concluded
+                // or cancelled between the SELECT above and this UPDATE.
+                let affected = conn
+                    .execute(
+                        "UPDATE collaborative_sessions SET status = 'deadlocked' \
+                         WHERE id = ?1 AND status = 'active'",
+                        params![id],
+                    )
+                    .map_err(db_err)?;
+                if affected > 0 {
+                    deadlocked.push(id);
+                }
+            }
+        }
+
+        Ok(deadlocked)
     }
 }
 
@@ -697,5 +770,57 @@ mod tests {
             }
             _ => panic!("expected AutoEscalation trigger"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_sweep_deadlocked_marks_exhausted_sessions() {
+        let store = SqliteSessionStore::new_in_memory().await;
+
+        // Session A: max_rounds reached, nobody concluded → deadlocked.
+        let exhausted = store
+            .create_session(NewSession {
+                max_rounds: 1,
+                ..make_new_session("team-1")
+            })
+            .await
+            .unwrap();
+        store
+            .add_turn(&exhausted.id, make_turn("agent-a", 1))
+            .await
+            .unwrap();
+
+        // Session B: fresh active session with room left → untouched.
+        let fresh = store
+            .create_session(make_new_session("team-1"))
+            .await
+            .unwrap();
+
+        let swept = store.sweep_deadlocked(0, 86_400).await.unwrap();
+        assert_eq!(swept, vec![exhausted.id.clone()]);
+
+        let a = store.get_session(&exhausted.id).await.unwrap().unwrap();
+        assert_eq!(a.status, SessionStatus::Deadlocked);
+        let b = store.get_session(&fresh.id).await.unwrap().unwrap();
+        assert_eq!(b.status, SessionStatus::Active);
+
+        // A deadlocked session must still be concludable — the sweeper's
+        // notification asks participants to do exactly that.
+        store
+            .conclude_session(
+                &exhausted.id,
+                SessionOutcome {
+                    conclusion: "wrapped up after deadlock".into(),
+                    agreed_by: vec!["agent-a".into()],
+                    dissent: None,
+                },
+            )
+            .await
+            .unwrap();
+        let a = store.get_session(&exhausted.id).await.unwrap().unwrap();
+        assert_eq!(a.status, SessionStatus::Concluded);
+
+        // Idempotent: nothing left to sweep.
+        let swept_again = store.sweep_deadlocked(0, 86_400).await.unwrap();
+        assert!(swept_again.is_empty());
     }
 }

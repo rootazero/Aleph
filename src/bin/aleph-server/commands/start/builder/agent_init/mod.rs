@@ -1483,6 +1483,35 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 }
             }
 
+            // Collaborative-session deadlock sweeper — `Deadlocked` was a
+            // declared SessionStatus with no writer: a session whose
+            // transcript filled `max_rounds` (or that went silent) stayed
+            // Active forever. Sweep every 5 minutes; grace 10 min after the
+            // final round, 24 h of silence for the stale path. The sweep
+            // notifies participants to conclude or cancel (see
+            // SessionCoordinator::sweep_deadlocked).
+            if let Some(sweep_coord) = session_coordinator.clone() {
+                tokio::spawn(async move {
+                    let mut tick =
+                        tokio::time::interval(std::time::Duration::from_secs(300));
+                    tick.set_missed_tick_behavior(
+                        tokio::time::MissedTickBehavior::Skip,
+                    );
+                    loop {
+                        tick.tick().await;
+                        match sweep_coord.sweep_deadlocked(600, 86_400).await {
+                            Ok(0) => {}
+                            Ok(n) => {
+                                tracing::info!(count = n, "session sweeper: marked deadlocked sessions");
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "session sweeper: sweep failed");
+                            }
+                        }
+                    }
+                });
+            }
+
             if let Err(e) = gateway_context_cell.set(gateway_ctx) {
                 tracing::warn!("Failed to set gateway context cell: {}", e);
             }

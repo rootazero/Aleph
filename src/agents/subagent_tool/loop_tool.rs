@@ -28,7 +28,9 @@ impl LoopTool for SubagentTool {
         "Delegate tasks to autonomous sub-agents. For simple single tasks, use 'task'. \
          For complex goals that can be broken into independent sub-tasks, use 'batch_tasks' \
          to launch multiple sub-agents in parallel — the system automatically runs them \
-         in background and returns request_ids for status polling."
+         in background and returns request_ids. Background completions are announced \
+         back to you proactively as a system message — no need to poll; check_status/list \
+         remain available for on-demand inspection."
     }
 
     fn schema(&self) -> Value {
@@ -460,7 +462,7 @@ impl LoopTool for SubagentTool {
                             "request_ids": request_ids,
                             "count": request_ids.len(),
                             "message": format!(
-                                "{} sub-agents started in background. Use check_status with each request_id to retrieve results.",
+                                "{} sub-agents started in background. Completions will be announced to you; check_status with a request_id retrieves a result on demand.",
                                 request_ids.len()
                             )
                         }),
@@ -630,7 +632,7 @@ impl LoopTool for SubagentTool {
                 output: json!({
                     "status": "running_in_background",
                     "request_id": request_id,
-                    "message": format!("Sub-agent started in background. Use request_id '{}' to check status.", request_id)
+                    "message": format!("Sub-agent started in background. Its completion will be announced to you; request_id '{}' checks status on demand.", request_id)
                 }),
             }
         } else {
