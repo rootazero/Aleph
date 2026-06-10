@@ -16,6 +16,21 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn};
 
+/// Render the additional-context directive for a `HookAction::Agent`.
+///
+/// The hook executor never spawns agents inline (R10) — the directive asks
+/// the calling LLM to delegate via the `subagent` tool, the same next-best
+/// semantic the Prompt action documents. Flows to the model through the
+/// existing `additional_contexts` plumbing (system-reminder blocks on the
+/// tool-dispatch and run-loop consumption paths).
+fn agent_invoke_directive(plugin_name: &str, event: HookEvent, agent: &str) -> String {
+    format!(
+        "Hook '{plugin_name}' ({event:?}) requests delegating to agent '{agent}'. \
+         Invoke the `subagent` tool with agent_type=\"{agent}\", passing the \
+         relevant event context as the task."
+    )
+}
+
 /// Build a Claude Code-style event payload JSON for stdin / HTTP body.
 ///
 /// Schema (keyed `snake_case` to match the rest of the hook surface):
@@ -239,6 +254,16 @@ impl HookExecutor {
                             }
                             HookAction::Agent { agent } => {
                                 result.agents_to_invoke.push(agent.clone());
+                                // No spawner handle exists at hook depth (R10:
+                                // the executor never runs agents inline), so
+                                // surface the request to the calling LLM as
+                                // context — it delegates via the `subagent`
+                                // tool. Same next-best semantic as Prompt.
+                                result.additional_contexts.push(agent_invoke_directive(
+                                    &hook.plugin_name,
+                                    event,
+                                    agent,
+                                ));
                             }
                             HookAction::Command { .. } | HookAction::Http { .. } => {
                                 if let Some(ref output) = ar.output {
@@ -686,6 +711,14 @@ impl HookExecutor {
                             }
                             HookAction::Agent { agent } => {
                                 accumulated.agents_to_invoke.push(agent.clone());
+                                // Mirror the observer path: deliver the
+                                // delegation request to the LLM via the
+                                // existing additional-context plumbing.
+                                accumulated.additional_contexts.push(agent_invoke_directive(
+                                    &hook.plugin_name,
+                                    event,
+                                    agent,
+                                ));
                             }
                         }
                         accumulated.action_results.push(ar);

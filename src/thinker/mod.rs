@@ -10,7 +10,6 @@
 pub mod cache;
 pub mod channel_behavior;
 pub mod context;
-pub mod hooks;
 pub mod identity;
 pub mod identity_files;
 pub mod inbound_context;
@@ -19,8 +18,6 @@ pub mod layers;
 pub mod memory_context_provider;
 pub mod prompt_budget;
 pub mod prompt_builder;
-pub mod prompt_hooks;
-pub mod prompt_hooks_v2;
 pub mod prompt_layer;
 pub mod prompt_mode;
 pub mod prompt_pipeline;

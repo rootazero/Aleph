@@ -13,8 +13,8 @@
 //! * Honour [`BrainRef::Strict`] model selection — `AiProvider` does not
 //!   expose `select_model` at this layer yet.
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};
@@ -191,6 +191,14 @@ pub struct AgentHarnessRunner {
     /// handle is a cheap clone of channel senders, so holding it here adds no
     /// per-turn cost beyond one actor round-trip during prompt assembly.
     pub mcp_handle: Option<McpManagerHandle>,
+
+    /// Boot-time `[prompt.extra_files]` config. When enabled with non-empty
+    /// paths, `build_system_prompt` loads each file (size-capped) and threads
+    /// it through `PromptBuilder` so `ExtraFilesLayer` renders it into the
+    /// system prompt. This is the production consumer of the documented
+    /// `[prompt.extra_files]` TOML section — `None` / disabled keeps prompts
+    /// byte-identical to the prior behaviour.
+    pub prompt_extra_files: Option<crate::config::PromptExtraFilesConfig>,
 }
 
 #[async_trait]
@@ -321,6 +329,7 @@ impl HarnessRunner for AgentHarnessRunner {
                 resolved_max_iterations,
                 interaction_manifest.as_ref(),
                 sandbox.as_ref(),
+                workspace_override.as_deref(),
             )
             .await
         {
@@ -757,7 +766,10 @@ pub async fn active_standing_goal(session_key: &str) -> Option<String> {
     // continuations (R9 — intelligence in the prompt).
     let pursuit = match goal.pursuit {
         crate::goal::PursuitMode::Active { max_iterations } => {
-            format!(", autonomous iteration {}/{}", goal.continuations_used, max_iterations)
+            format!(
+                ", autonomous iteration {}/{}",
+                goal.continuations_used, max_iterations
+            )
         }
         crate::goal::PursuitMode::Passive => String::new(),
     };
@@ -851,6 +863,73 @@ impl AgentHarnessRunner {
         Some(available.min(u32::MAX as usize) as u32)
     }
 
+    /// Load `[prompt.extra_files]` content off disk, size-capped.
+    ///
+    /// Relative paths resolve against `workspace` (the per-run workspace
+    /// override) when present, else the daemon's working directory. Missing,
+    /// unreadable, or blank files are skipped with a debug log so a stale
+    /// config entry never blocks prompt assembly (P7 graceful degradation).
+    /// Caps mirror `IdentityFilesConfig` (20k chars/file, 100k total) so a
+    /// runaway file cannot blow the context budget. Returns `None` when the
+    /// section is absent, disabled, or yields no content.
+    fn load_prompt_extra_files(
+        &self,
+        workspace: Option<&std::path::Path>,
+    ) -> Option<Vec<crate::thinker::prompt_layer::ExtraPromptFile>> {
+        use crate::thinker::prompt_layer::ExtraPromptFile;
+
+        const PER_FILE_MAX_CHARS: usize = 20_000;
+        const TOTAL_MAX_CHARS: usize = 100_000;
+
+        let cfg = self.prompt_extra_files.as_ref()?;
+        if !cfg.enabled || cfg.paths.is_empty() {
+            return None;
+        }
+
+        let mut out = Vec::new();
+        let mut total = 0usize;
+        for raw in &cfg.paths {
+            if total >= TOTAL_MAX_CHARS {
+                tracing::warn!(
+                    path = %raw,
+                    "[prompt.extra_files] total budget exhausted; skipping remaining files"
+                );
+                break;
+            }
+            let path = std::path::Path::new(raw);
+            let resolved = if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                match workspace {
+                    Some(ws) => ws.join(path),
+                    None => path.to_path_buf(),
+                }
+            };
+            let content = match std::fs::read_to_string(&resolved) {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::debug!(
+                        path = %resolved.display(),
+                        error = %e,
+                        "[prompt.extra_files] unreadable; skipping"
+                    );
+                    continue;
+                }
+            };
+            if content.trim().is_empty() {
+                continue;
+            }
+            let budget = PER_FILE_MAX_CHARS.min(TOTAL_MAX_CHARS - total);
+            let capped = truncate_chars(&content, budget);
+            total += capped.chars().count();
+            out.push(ExtraPromptFile {
+                name: raw.clone(),
+                content: capped,
+            });
+        }
+        (!out.is_empty()).then_some(out)
+    }
+
     /// Assemble the per-turn system prompt with curated memory + hybrid
     /// retrieval. Returns `None` when no `MemoryContextProvider` is wired
     /// (test envs without a memory backend) or when both memory builders
@@ -870,6 +949,7 @@ impl AgentHarnessRunner {
         iteration_cap: usize,
         channel_manifest: Option<&crate::thinker::InteractionManifest>,
         sandbox: &dyn Sandbox,
+        workspace: Option<&std::path::Path>,
     ) -> Option<(
         String,
         Vec<crate::thinker::prompt_builder::SystemPromptPart>,
@@ -954,6 +1034,11 @@ impl AgentHarnessRunner {
             .map(|s| !s.eligible_manifests.is_empty())
             .unwrap_or(false);
 
+        // Load `[prompt.extra_files]` content (size-capped). `None` when the
+        // section is absent / disabled / yields no readable content, so the
+        // default config keeps the assembled prompt byte-identical.
+        let extra_files = self.load_prompt_extra_files(workspace);
+
         // Aggregate connected MCP servers' advertised `instructions`. One actor
         // round-trip per prompt build (negligible next to the file/skill IO
         // above) keeps the data always-fresh without a shared mutable snapshot.
@@ -968,13 +1053,14 @@ impl AgentHarnessRunner {
         };
 
         // Skip prompt assembly entirely when there is nothing to inject:
-        // no memory, no AgentDef, no eligible skills, no identity files, and no
-        // MCP server instructions.
+        // no memory, no AgentDef, no eligible skills, no identity files, no
+        // extra files, and no MCP server instructions.
         if curated_text.is_none()
             && memory_text.is_none()
             && agent_def.is_none()
             && !has_skills
             && !has_identity
+            && extra_files.is_none()
             && mcp_instructions.is_none()
         {
             return None;
@@ -1019,6 +1105,9 @@ impl AgentHarnessRunner {
             if has_identity {
                 builder = builder.with_identity_files(files);
             }
+        }
+        if let Some(files) = extra_files {
+            builder = builder.with_extra_files(files);
         }
         // Phase 4 (F4): channel-aware `ResolvedContext`. When the
         // caller (Gateway, subagent dispatcher, etc.) supplies a
@@ -1181,6 +1270,20 @@ fn resolve_max_iterations(
         .or_else(|| positive_or_none(flow_override))
         .or(Some(default).filter(|&n| n > 0))
         .unwrap_or(FALLBACK_MAX_ITERATIONS)
+}
+
+/// Truncate `s` to at most `max_chars` characters, appending a marker when
+/// content was dropped. Cuts on a `char_indices` boundary so multi-byte
+/// UTF-8 content never panics the slice.
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => {
+            let mut t = s[..idx].to_string();
+            t.push_str("\n…[truncated]");
+            t
+        }
+        None => s.to_string(),
+    }
 }
 
 /// Extract the user's most recent prompt text from a `FlowInput` for use as

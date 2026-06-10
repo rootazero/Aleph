@@ -588,22 +588,3 @@ fn test_interactive_prompt_minimal_token_overhead() {
     // Standard sections should be present
     assert!(prompt.contains("Your Role"), "Missing role section");
 }
-
-#[test]
-fn test_build_system_prompt_with_hooks() {
-    use crate::thinker::prompt_hooks::PromptHook;
-
-    struct AppendHook;
-    impl PromptHook for AppendHook {
-        fn after_prompt_build(&self, prompt: &mut String) -> crate::error::Result<()> {
-            prompt.push_str("\n## Custom Section\n");
-            Ok(())
-        }
-    }
-
-    let builder = PromptBuilder::new(PromptConfig::default());
-    let soul = SoulManifest::default();
-    let hooks: Vec<Box<dyn PromptHook>> = vec![Box::new(AppendHook)];
-    let prompt = builder.build_system_prompt_with_hooks(&[], &soul, None, &hooks);
-    assert!(prompt.contains("## Custom Section"));
-}

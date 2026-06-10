@@ -190,10 +190,11 @@ pub struct HookResult {
     /// actually reaches the LLM next turn. Kept for back-compat with
     /// external inspectors.
     pub messages: Vec<String>,
-    /// Names of agents requested by `agent`-type hooks. Currently
-    /// informational only — wiring this list to actually spawn the named
-    /// subagent is a future enhancement (the SubagentTool registry is the
-    /// natural seam).
+    /// Names of agents requested by `agent`-type hooks. The executor never
+    /// spawns agents inline (R10) — each entry is also rendered as an
+    /// `additional_contexts` directive asking the calling LLM to delegate
+    /// via the `subagent` tool. This list stays as the structured record
+    /// for diagnostics and tests.
     pub agents_to_invoke: Vec<String>,
     /// Individual action results
     pub action_results: Vec<ActionResult>,
@@ -685,6 +686,11 @@ mod tests {
 
         assert_eq!(result.hooks_executed, 1);
         assert_eq!(result.agents_to_invoke, vec!["review-agent"]);
+        // The delegation request must also reach the LLM via the existing
+        // additional-context plumbing (the list alone has no consumer).
+        assert_eq!(result.additional_contexts.len(), 1);
+        assert!(result.additional_contexts[0].contains("review-agent"));
+        assert!(result.additional_contexts[0].contains("subagent"));
     }
 
     #[test]

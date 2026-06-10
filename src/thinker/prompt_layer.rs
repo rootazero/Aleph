@@ -55,6 +55,20 @@ pub enum AssemblyPath {
     Cached,
 }
 
+/// A user-configured extra file loaded for system-prompt injection.
+///
+/// Sourced from `[prompt.extra_files]` in config (loaded size-capped by the
+/// harness bridge) and rendered by `ExtraFilesLayer` @1735. Content crosses
+/// the same user-editable-file trust boundary as identity files and is
+/// sanitized by the layer before injection.
+#[derive(Debug, Clone)]
+pub struct ExtraPromptFile {
+    /// Display name (the configured path string).
+    pub name: String,
+    /// File content, already truncated to the loader's per-file cap.
+    pub content: String,
+}
+
 /// Everything a layer might need to produce its output.
 ///
 /// Each constructor pre-fills only the fields relevant to a given
@@ -129,6 +143,10 @@ pub struct LayerInput<'a> {
     /// `SessionBudgetLayer` to surface the cap to the LLM as a planning
     /// hint. `None` or `Some(0)` keeps the layer silent.
     pub iteration_cap: Option<u32>,
+    /// User-configured extra files from `[prompt.extra_files]`, loaded
+    /// (size-capped) by the harness bridge. `ExtraFilesLayer` renders each
+    /// as a named section; `None` / empty keeps the layer silent.
+    pub extra_files: Option<&'a [ExtraPromptFile]>,
 }
 
 impl<'a> LayerInput<'a> {
@@ -153,6 +171,7 @@ impl<'a> LayerInput<'a> {
             chain_context: None,
             provider_protocol: None,
             iteration_cap: None,
+            extra_files: None,
         }
     }
 
@@ -177,6 +196,7 @@ impl<'a> LayerInput<'a> {
             chain_context: None,
             provider_protocol: None,
             iteration_cap: None,
+            extra_files: None,
         }
     }
 
@@ -201,6 +221,7 @@ impl<'a> LayerInput<'a> {
             chain_context: None,
             provider_protocol: None,
             iteration_cap: None,
+            extra_files: None,
         }
     }
 
@@ -225,6 +246,7 @@ impl<'a> LayerInput<'a> {
             chain_context: None,
             provider_protocol: None,
             iteration_cap: None,
+            extra_files: None,
         }
     }
 
@@ -261,6 +283,12 @@ impl<'a> LayerInput<'a> {
     /// Attach optional agent identity files to this input.
     pub fn with_identity_files_opt(mut self, files: Option<&'a IdentityFiles>) -> Self {
         self.identity_files = files;
+        self
+    }
+
+    /// Attach optional `[prompt.extra_files]` content to this input.
+    pub fn with_extra_files_opt(mut self, files: Option<&'a [ExtraPromptFile]>) -> Self {
+        self.extra_files = files;
         self
     }
 

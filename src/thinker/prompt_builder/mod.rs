@@ -180,6 +180,10 @@ pub struct PromptBuilder {
     /// `resolve_max_iterations(...)` (`FlowOverrides.max_iterations`
     /// override winning over the boot-time default).
     iteration_cap: Option<u32>,
+    /// User-configured `[prompt.extra_files]` content, loaded size-capped
+    /// by the harness bridge. Threaded into every `LayerInput` so
+    /// `ExtraFilesLayer` can render each file as a named section.
+    extra_files: Option<Vec<crate::thinker::prompt_layer::ExtraPromptFile>>,
 }
 
 impl PromptBuilder {
@@ -198,6 +202,7 @@ impl PromptBuilder {
             resolved_context: None,
             provider_protocol: None,
             iteration_cap: None,
+            extra_files: None,
         }
     }
 
@@ -231,6 +236,19 @@ impl PromptBuilder {
     /// render them into the system prompt.
     pub fn with_identity_files(mut self, files: IdentityFiles) -> Self {
         self.identity_files = Some(files);
+        self
+    }
+
+    /// Attach user-configured `[prompt.extra_files]` content.
+    ///
+    /// The harness bridge loads the configured paths (size-capped) and
+    /// threads them here so `ExtraFilesLayer` renders each file as a
+    /// named section in the system prompt.
+    pub fn with_extra_files(
+        mut self,
+        files: Vec<crate::thinker::prompt_layer::ExtraPromptFile>,
+    ) -> Self {
+        self.extra_files = Some(files);
         self
     }
 
@@ -311,7 +329,9 @@ impl PromptBuilder {
             ),
             None => (AssemblyPath::Basic, LayerInput::basic(&self.config, tools)),
         };
-        let input = input.with_identity_files_opt(self.identity_files.as_ref());
+        let input = input
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.agent_def {
             Some(agent) => input.with_agent_def(agent),
             None => input,
@@ -363,7 +383,8 @@ impl PromptBuilder {
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
-            .with_identity_files_opt(self.identity_files.as_ref());
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -374,60 +395,6 @@ impl PromptBuilder {
         let input = input.with_provider_protocol_opt(self.provider_protocol.as_deref());
         let input = input.with_iteration_cap_opt(self.iteration_cap);
         self.pipeline.execute_cached(AssemblyPath::Soul, &input)
-    }
-
-    /// Build system prompt with hooks applied.
-    ///
-    /// Hooks are called in order: before_prompt_build on each hook,
-    /// then normal prompt building, then after_prompt_build on each hook.
-    pub fn build_system_prompt_with_hooks(
-        &self,
-        tools: &[ToolInfo],
-        soul: &SoulManifest,
-        profile: Option<&ProfileConfig>,
-        hooks: &[Box<dyn crate::thinker::prompt_hooks::PromptHook>],
-    ) -> String {
-        // Clone config so hooks can modify it
-        let mut config = self.config.clone();
-
-        // Before hooks
-        for hook in hooks {
-            if let Err(e) = hook.before_prompt_build(&mut config) {
-                tracing::warn!(hook = hook.name(), error = %e, "Prompt hook before_build failed");
-            }
-        }
-
-        // Build with potentially modified config; carry over identity_files
-        // so SoulLayer / IdentityFilesLayer see the agent identity directory,
-        // chain_context so subagents still surface their delegation depth,
-        // and resolved_context so the Phase 2 widened layers still see the
-        // environment envelope — all even when hooks rewrite the config.
-        let mut builder = PromptBuilder::new(config);
-        if let Some(files) = self.identity_files.clone() {
-            builder = builder.with_identity_files(files);
-        }
-        if let Some(chain) = self.chain_context.clone() {
-            builder = builder.with_chain_context(chain);
-        }
-        if let Some(ctx) = self.resolved_context.clone() {
-            builder = builder.with_resolved_context(ctx);
-        }
-        if let Some(protocol) = self.provider_protocol.clone() {
-            builder = builder.with_provider_protocol(protocol);
-        }
-        if let Some(cap) = self.iteration_cap {
-            builder = builder.with_iteration_cap(cap);
-        }
-        let mut prompt = builder.build_system_prompt_with_soul(tools, soul, profile);
-
-        // After hooks
-        for hook in hooks {
-            if let Err(e) = hook.after_prompt_build(&mut prompt) {
-                tracing::warn!(hook = hook.name(), error = %e, "Prompt hook after_build failed");
-            }
-        }
-
-        prompt
     }
 
     /// Build system prompt for a sub-agent.
@@ -442,7 +409,8 @@ impl PromptBuilder {
     ) -> String {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_agent_def(agent_def)
-            .with_identity_files_opt(self.identity_files.as_ref());
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -465,7 +433,8 @@ impl PromptBuilder {
     ) -> String {
         let input = LayerInput::basic(&self.config, tools)
             .with_agent_def(agent_def)
-            .with_identity_files_opt(self.identity_files.as_ref());
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -488,7 +457,9 @@ impl PromptBuilder {
             Some(soul) => LayerInput::soul(&self.config, tools, soul),
             None => LayerInput::basic(&self.config, tools),
         };
-        let input = input.with_identity_files_opt(self.identity_files.as_ref());
+        let input = input
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -517,7 +488,8 @@ impl PromptBuilder {
             None => LayerInput::basic(&self.config, tools),
         }
         .with_agent_def(agent_def)
-        .with_identity_files_opt(self.identity_files.as_ref());
+        .with_identity_files_opt(self.identity_files.as_ref())
+        .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -556,7 +528,8 @@ impl PromptBuilder {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
             .with_mode(mode)
-            .with_identity_files_opt(self.identity_files.as_ref());
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,
@@ -586,7 +559,8 @@ impl PromptBuilder {
         let input = LayerInput::soul(&self.config, tools, soul)
             .with_profile(profile)
             .with_mode(mode)
-            .with_identity_files_opt(self.identity_files.as_ref());
+            .with_identity_files_opt(self.identity_files.as_ref())
+            .with_extra_files_opt(self.extra_files.as_deref());
         let input = match &self.config.mcp_instructions {
             Some(instructions) => input.with_mcp_instructions(instructions),
             None => input,

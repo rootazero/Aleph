@@ -247,7 +247,9 @@ pub enum HookAction {
     /// Provide a prompt template. The resolved prompt is injected as
     /// `additional_context` for the next LLM turn (no separate LLM call).
     Prompt { prompt: String },
-    /// Invoke a named subagent. (Lookup at the call site; no inline run.)
+    /// Request delegation to a named subagent. The executor never runs the
+    /// agent inline — it emits an `additional_contexts` directive asking the
+    /// calling LLM to invoke the `subagent` tool with this agent name.
     Agent { agent: String },
     /// POST the event JSON to a URL. The response body is parsed using the
     /// same line-prefix protocol as Command, so HTTP hooks can return
