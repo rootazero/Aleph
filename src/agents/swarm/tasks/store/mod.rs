@@ -281,8 +281,10 @@ impl CoordTaskStore for SqliteCoordTaskStore {
             let mut idx = 1usize;
 
             if let Some(ref status) = update.status {
-                // Never store 'blocked' — map to pending
-                let store_status = if *status == CoordTaskStatus::Blocked {
+                // Never store 'blocked' or 'unsatisfiable' (both derived at
+                // query time; from_stored rejects them) — map to pending so
+                // the row stays readable.
+                let store_status = if status.is_blocked_like() {
                     "pending"
                 } else {
                     status.as_str()
