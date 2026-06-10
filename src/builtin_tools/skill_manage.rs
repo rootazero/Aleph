@@ -263,12 +263,25 @@ impl SkillManageTool {
             }
             SkillSource::Global | SkillSource::Workspace => {}
         }
-        self.system.locate_skill_file(id).await.ok_or_else(|| {
+        let path = self.system.locate_skill_file(id).await.ok_or_else(|| {
             AlephError::tool(format!(
                 "Skill '{}' has no editable SKILL.md in a registered skills directory.",
                 id.as_str()
             ))
-        })
+        })?;
+        // Defense in depth: never write *through* a symlinked SKILL.md —
+        // std::fs::write follows symlinks, so a crafted link could redirect
+        // the write outside the skills tree.
+        let is_symlink = std::fs::symlink_metadata(&path)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if is_symlink {
+            return Err(AlephError::tool(format!(
+                "Skill '{}' SKILL.md is a symlink; refusing to write through it.",
+                id.as_str()
+            )));
+        }
+        Ok(path)
     }
 
     async fn persist_skill_md(&self, path: &std::path::Path, full: &str, id: &SkillId) -> Result<()> {
@@ -503,6 +516,20 @@ impl SkillManageTool {
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| AlephError::tool(format!("Failed to create directory: {e}")))?;
+            // Defense in depth: a symlinked subdirectory inside the skill
+            // could redirect the write outside the skills tree. Compare the
+            // resolved parent against the resolved skill dir.
+            let canonical_dir = skill_dir
+                .canonicalize()
+                .map_err(|e| AlephError::tool(format!("Failed to resolve skill dir: {e}")))?;
+            let canonical_parent = parent
+                .canonicalize()
+                .map_err(|e| AlephError::tool(format!("Failed to resolve target dir: {e}")))?;
+            if !canonical_parent.starts_with(&canonical_dir) {
+                return Err(AlephError::tool(
+                    "file_name resolves outside the skill directory; refusing to write.",
+                ));
+            }
         }
         std::fs::write(&target, file_content)
             .map_err(|e| AlephError::tool(format!("Failed to write file: {e}")))?;
