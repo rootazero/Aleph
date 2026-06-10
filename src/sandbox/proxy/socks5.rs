@@ -75,6 +75,11 @@ pub(super) async fn handle(inbound: TcpStream, allowlist: AllowList) -> Result<(
         return Ok(()); // protocol mismatch; drop silently.
     }
     let nmethods = prelude[1] as usize;
+    if nmethods > 16 {
+        // SOCKS5 spec allows up to 255, but >16 is pathological — drop to
+        // avoid unnecessary allocation from a malformed or malicious greeting.
+        return Ok(());
+    }
     let mut methods = vec![0u8; nmethods];
     rd.read_exact(&mut methods).await?;
     if !methods.contains(&NO_AUTH) {
