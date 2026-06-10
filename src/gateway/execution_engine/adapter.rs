@@ -36,6 +36,13 @@ where
         ExecutionEngine::cancel(self, run_id).await
     }
 
+    async fn cancel_session(
+        &self,
+        session_key: &crate::routing::session_key::SessionKey,
+    ) -> Result<Option<String>, ExecutionError> {
+        ExecutionEngine::cancel_session(self, session_key).await
+    }
+
     async fn get_status(&self, run_id: &str) -> Option<RunStatus> {
         ExecutionEngine::get_status(self, run_id).await
     }

@@ -9,7 +9,22 @@
 //! always `Ok`), so this is now an infallible sync fn.
 
 use crate::providers::message::{ContentBlock, UnifiedMessage};
-use crate::session::events::{SessionEvent, SessionEventRecord};
+use crate::session::events::{RunOutcome, SessionEvent, SessionEventRecord};
+
+/// Replayed at the position of a user-cancelled run's terminal marker
+/// (codex `<turn_aborted>` parity). Without it the interruption is invisible:
+/// the cancelled run's orphan `tool_use` blocks are dropped during replay
+/// (Anthropic rejects them with HTTP 400), so the model sees a turn that
+/// simply stops and may assume its in-flight tool calls completed. Steering
+/// messages the cancelled run never answered stay in the log right before
+/// this note — the model judges whether they still apply (R7); the harness
+/// never deletes them.
+const INTERRUPTION_NOTE: &str = "<system-reminder>\n\
+    The previous run was interrupted by the user before it finished. Tool \
+    calls still in flight were aborted and produced no results — do not \
+    assume they completed. Re-evaluate any earlier unanswered instructions \
+    in light of the interruption before continuing.\n\
+    </system-reminder>";
 
 /// Build the per-turn message vector handed to the provider. Walks the
 /// session log slice and:
@@ -112,6 +127,16 @@ pub(crate) fn build_prompt(
                     }],
                     is_error: true,
                 });
+            }
+            SessionEvent::RunFinished {
+                outcome: RunOutcome::Cancelled,
+                ..
+            } => {
+                // User interruption marker — see `INTERRUPTION_NOTE`. Other
+                // outcomes stay invisible: Completed is the normal seam
+                // between turns, and Errored already left its error in the
+                // visible tool/assistant trail.
+                messages.push(UnifiedMessage::user(INTERRUPTION_NOTE));
             }
             _ => {}
         }
@@ -295,8 +320,8 @@ mod tests {
     use super::*;
     use crate::providers::message::ContentBlock;
     use crate::session::events::{
-        now_ms, MessageContent, SessionEvent, SessionEventRecord, ToolOutput, ToolOutputMetadata,
-        TurnTrigger,
+        now_ms, MessageContent, RunOutcome, SessionEvent, SessionEventRecord, ToolOutput,
+        ToolOutputMetadata, TurnTrigger,
     };
     use serde_json::json;
 
@@ -383,6 +408,79 @@ mod tests {
         assert!(
             has_task,
             "autonomous continuation dropped the original user task; messages={messages:#?}",
+        );
+    }
+
+    /// codex `<turn_aborted>` parity: a user-cancelled run must leave a
+    /// visible interruption note at its position in the replayed
+    /// conversation; Completed/Errored terminal markers stay invisible.
+    #[test]
+    fn cancelled_run_marker_surfaces_interruption_note() {
+        let turn = uuid::Uuid::new_v4();
+        let user_msg = |text: &str| {
+            mk_record(SessionEvent::UserMessage {
+                turn_id: turn,
+                content: MessageContent {
+                    text: text.into(),
+                    blocks: vec![],
+                    thinking: None,
+                    thinking_signature: None,
+                },
+                at: now_ms(),
+                synthetic: false,
+            })
+        };
+        let finished = |outcome: RunOutcome| {
+            mk_record(SessionEvent::RunFinished {
+                run_id: "r1".into(),
+                outcome,
+                at: now_ms(),
+            })
+        };
+        let assistant = mk_record(SessionEvent::AssistantMessage {
+            turn_id: turn,
+            content: MessageContent {
+                text: "working on the big task".into(),
+                blocks: vec![],
+                thinking: None,
+                thinking_signature: None,
+            },
+            at: now_ms(),
+        });
+
+        let note_present = |events: &[SessionEventRecord]| {
+            build_prompt(events, 0).iter().any(|m| match m {
+                UnifiedMessage::User { content } => content.iter().any(|b| {
+                    matches!(b, ContentBlock::Text { text, .. }
+                        if text.contains("interrupted by the user"))
+                }),
+                _ => false,
+            })
+        };
+
+        // Interrupt-mode restart shape: task → partial answer → user /stop →
+        // replacement instruction. The new run must see the interruption.
+        let cancelled = vec![
+            user_msg("do the big task"),
+            assistant.clone(),
+            finished(RunOutcome::Cancelled),
+            user_msg("actually, do something else"),
+        ];
+        assert!(
+            note_present(&cancelled),
+            "cancelled run left no interruption note in the replayed prompt",
+        );
+
+        // A normally-completed run is the ordinary seam between turns — no note.
+        let completed = vec![
+            user_msg("do the big task"),
+            assistant,
+            finished(RunOutcome::Completed),
+            user_msg("thanks, next topic"),
+        ];
+        assert!(
+            !note_present(&completed),
+            "completed run must not fabricate an interruption note",
         );
     }
 

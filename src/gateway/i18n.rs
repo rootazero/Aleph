@@ -31,6 +31,10 @@ pub enum Msg<'a> {
     // --- /new command ---
     NewSessionStarted { topic_suffix: &'a str },
 
+    // --- /stop command ---
+    RunStopped,
+    NoActiveRun,
+
     // --- execution errors ---
     ErrRateLimit,
     ErrAuth,
@@ -55,6 +59,14 @@ pub fn t(msg: Msg<'_>, locale: Locale) -> String {
         (Msg::NewSessionStarted { topic_suffix }, Locale::En) => {
             format!("New conversation started{topic_suffix}")
         }
+
+        // ============================================================
+        // /stop command
+        // ============================================================
+        (Msg::RunStopped, Locale::Zh) => "⏹ 已停止当前任务。".into(),
+        (Msg::RunStopped, Locale::En) => "⏹ Stopped the current task.".into(),
+        (Msg::NoActiveRun, Locale::Zh) => "当前没有正在执行的任务。".into(),
+        (Msg::NoActiveRun, Locale::En) => "No task is currently running.".into(),
 
         // ============================================================
         // Execution errors

@@ -78,6 +78,22 @@ pub trait ExecutionAdapter: Send + Sync {
     /// - Run is not active (`RunNotActive`)
     async fn cancel(&self, run_id: &str) -> Result<(), ExecutionError>;
 
+    /// Cancel the `Running` run on `session_key`, if any.
+    ///
+    /// Channel-facing variant of [`ExecutionAdapter::cancel`]: a channel user
+    /// (`/stop`) knows their session, not the engine-internal run id. Returns
+    /// the cancelled run's id, or `Ok(None)` when no run is active on the
+    /// session — "nothing to stop" is an answer, not an error.
+    ///
+    /// Default implementation reports no active run, so adapters without a
+    /// per-session run table (mocks, schedulers) need no changes.
+    async fn cancel_session(
+        &self,
+        _session_key: &crate::routing::session_key::SessionKey,
+    ) -> Result<Option<String>, ExecutionError> {
+        Ok(None)
+    }
+
     /// Get the status of a run by its ID.
     ///
     /// Returns the current status including state, timing, and progress info.
