@@ -394,7 +394,12 @@ impl NoteManageTool {
         );
         let mut rel: Vec<NoteListEntry> = Vec::new();
         for kw in related_keywords(&query_text) {
-            match self.indexer.store().search_notes_fts(&kw, agent_id, 3).await {
+            match self
+                .indexer
+                .store()
+                .search_notes_fts(&kw, agent_id, 3)
+                .await
+            {
                 Ok(hits) => {
                     for e in hits {
                         if e.path == note_path || rel.iter().any(|r| r.path == e.path) {
@@ -931,7 +936,10 @@ mod tests {
     async fn create_surfaces_related_notes() {
         let (_d, tool) = mk_tool();
         let r1 = tool
-            .call(create_args("tokio-basics", "- tokioruntime event loop basics"))
+            .call(create_args(
+                "tokio-basics",
+                "- tokioruntime event loop basics",
+            ))
             .await
             .unwrap();
         assert!(r1.success);
@@ -960,7 +968,10 @@ mod tests {
     async fn create_with_no_related_notes_omits_field() {
         let (_d, tool) = mk_tool();
         let r = tool
-            .call(create_args("zzz-unique", "- completely unrelated xyzzy fact"))
+            .call(create_args(
+                "zzz-unique",
+                "- completely unrelated xyzzy fact",
+            ))
             .await
             .unwrap();
         assert!(r.success);

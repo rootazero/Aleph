@@ -167,7 +167,12 @@ async fn weave_one(ctx: &mut DreamContext, path: &str) -> Result<u32, AlephError
         let target = candidates[idx].path.clone();
         // Bidirectional, mirroring CompoundApplyTx::add_link.
         ctx.indexer
-            .append_to_note(&ctx.agent_id, path, &Vec::<String>::new(), &[target.clone()])
+            .append_to_note(
+                &ctx.agent_id,
+                path,
+                &Vec::<String>::new(),
+                std::slice::from_ref(&target),
+            )
             .await?;
         ctx.indexer
             .append_to_note(
@@ -195,7 +200,11 @@ fn parse_weave_targets(json: &serde_json::Value, n_candidates: usize) -> Vec<usi
     };
     for v in arr {
         let Some(s) = v.as_str() else { continue };
-        let Some(inner) = s.trim().strip_prefix("[C").and_then(|r| r.strip_suffix(']')) else {
+        let Some(inner) = s
+            .trim()
+            .strip_prefix("[C")
+            .and_then(|r| r.strip_suffix(']'))
+        else {
             continue;
         };
         if inner.is_empty() || !inner.bytes().all(|b| b.is_ascii_digit()) {

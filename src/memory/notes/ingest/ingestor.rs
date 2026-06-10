@@ -2144,8 +2144,7 @@ mod link_contract_tests {
 
     #[tokio::test]
     async fn explicit_isolation_is_accepted() {
-        let (_d, ing) =
-            mk_ingestor(r#"{"repairs":[{"note_index":0,"links":[],"isolated":true}]}"#);
+        let (_d, ing) = mk_ingestor(r#"{"repairs":[{"note_index":0,"links":[],"isolated":true}]}"#);
         let related = vec![related_page("learning/a")];
         let ops = ing
             .enforce_link_contract(vec![linkless_create("learning/new")], &related)
