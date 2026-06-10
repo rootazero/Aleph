@@ -51,7 +51,7 @@ use serde::{Deserialize, Serialize};
 /// A capability that this desktop implementation supports.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capability {
-    /// Capability name (e.g. "screen_capture", "ocr", "keyboard_control").
+    /// Capability name (e.g. "`screen_capture`", "ocr", "`keyboard_control`").
     pub name: String,
     /// Capability version string.
     pub version: String,

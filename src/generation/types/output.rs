@@ -24,6 +24,7 @@ pub enum GenerationData {
 
 impl GenerationData {
     /// Create a Bytes variant
+    #[must_use]
     pub fn bytes(data: Vec<u8>) -> Self {
         GenerationData::Bytes(data)
     }
@@ -39,21 +40,25 @@ impl GenerationData {
     }
 
     /// Check if this is raw bytes
+    #[must_use]
     pub fn is_bytes(&self) -> bool {
         matches!(self, GenerationData::Bytes(_))
     }
 
     /// Check if this is a URL
+    #[must_use]
     pub fn is_url(&self) -> bool {
         matches!(self, GenerationData::Url(_))
     }
 
     /// Check if this is a local path
+    #[must_use]
     pub fn is_local_path(&self) -> bool {
         matches!(self, GenerationData::LocalPath(_))
     }
 
     /// Get the URL if this is a URL variant
+    #[must_use]
     pub fn as_url(&self) -> Option<&str> {
         match self {
             GenerationData::Url(url) => Some(url),
@@ -62,6 +67,7 @@ impl GenerationData {
     }
 
     /// Get the bytes if this is a Bytes variant
+    #[must_use]
     pub fn as_bytes(&self) -> Option<&[u8]> {
         match self {
             GenerationData::Bytes(bytes) => Some(bytes),
@@ -70,6 +76,7 @@ impl GenerationData {
     }
 
     /// Get the local path if this is a LocalPath variant
+    #[must_use]
     pub fn as_local_path(&self) -> Option<&str> {
         match self {
             GenerationData::LocalPath(path) => Some(path),
@@ -110,6 +117,7 @@ pub struct GenerationMetadata {
 
 impl GenerationMetadata {
     /// Create new empty metadata
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -127,12 +135,14 @@ impl GenerationMetadata {
     }
 
     /// Set the generation duration
+    #[must_use]
     pub fn with_duration(mut self, duration: Duration) -> Self {
         self.duration = Some(duration);
         self
     }
 
     /// Set the seed
+    #[must_use]
     pub fn with_seed(mut self, seed: i64) -> Self {
         self.seed = Some(seed);
         self
@@ -151,12 +161,14 @@ impl GenerationMetadata {
     }
 
     /// Set the file size
+    #[must_use]
     pub fn with_size_bytes(mut self, size: u64) -> Self {
         self.size_bytes = Some(size);
         self
     }
 
     /// Set dimensions
+    #[must_use]
     pub fn with_dimensions(mut self, width: u32, height: u32) -> Self {
         self.width = Some(width);
         self.height = Some(height);
@@ -164,6 +176,7 @@ impl GenerationMetadata {
     }
 
     /// Set duration in seconds
+    #[must_use]
     pub fn with_duration_seconds(mut self, seconds: f32) -> Self {
         self.duration_seconds = Some(seconds);
         self
@@ -205,6 +218,7 @@ impl GenerationOutput {
     ///
     /// * `generation_type` - Type of media that was generated
     /// * `data` - The generated content
+    #[must_use]
     pub fn new(generation_type: GenerationType, data: GenerationData) -> Self {
         Self {
             generation_type,
@@ -216,12 +230,14 @@ impl GenerationOutput {
     }
 
     /// Add metadata to the output
+    #[must_use]
     pub fn with_metadata(mut self, metadata: GenerationMetadata) -> Self {
         self.metadata = metadata;
         self
     }
 
     /// Add additional outputs
+    #[must_use]
     pub fn with_additional_outputs(mut self, outputs: Vec<GenerationData>) -> Self {
         self.additional_outputs = outputs;
         self
@@ -234,6 +250,7 @@ impl GenerationOutput {
     }
 
     /// Get the total number of outputs (primary + additional)
+    #[must_use]
     pub fn output_count(&self) -> usize {
         1 + self.additional_outputs.len()
     }

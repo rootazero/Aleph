@@ -18,6 +18,7 @@ pub struct TimestampedEvent {
 
 impl TimestampedEvent {
     /// Create a new timestamped event with the given sequence number.
+    #[must_use]
     pub fn new(event: AlephEvent, sequence: u64) -> Self {
         Self {
             event,
@@ -204,6 +205,7 @@ pub enum AlephEvent {
 
 impl AlephEvent {
     /// Get the event type discriminant
+    #[must_use]
     pub fn event_type(&self) -> EventType {
         match self {
             Self::InputReceived(_) => EventType::InputReceived,
@@ -246,6 +248,7 @@ impl AlephEvent {
     }
 
     /// Get a human-readable name for the event
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             Self::InputReceived(_) => "InputReceived",

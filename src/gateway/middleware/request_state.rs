@@ -30,6 +30,7 @@ pub fn set_global_registry(registry: Arc<RequestStateRegistry>) {
 /// Get the global state registry.
 ///
 /// Returns None if not yet initialized.
+#[must_use]
 pub fn get_global_registry() -> Option<Arc<RequestStateRegistry>> {
     let guard = state_registry().read().unwrap_or_else(|e| e.into_inner());
     guard.clone()
@@ -50,16 +51,19 @@ pub enum RequestState {
 
 impl RequestState {
     /// Returns true if this is a terminal state.
+    #[must_use]
     pub fn is_terminal(self) -> bool {
         matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
     }
 
     /// Returns the state as a u8 for atomic storage.
+    #[must_use]
     pub fn as_u8(self) -> u8 {
         self as u8
     }
 
     /// Try to create a RequestState from a u8 value.
+    #[must_use]
     pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0 => Some(Self::Pending),
@@ -74,6 +78,7 @@ impl RequestState {
     }
 
     /// Returns the name of the state for metrics.
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -87,6 +92,7 @@ impl RequestState {
     }
 
     /// Check if transition from current state to target is valid.
+    #[must_use]
     pub fn can_transition_to(self, target: RequestState) -> bool {
         use RequestState::*;
         match self {
@@ -144,6 +150,7 @@ impl Clone for RequestStateData {
 
 impl RequestStateData {
     /// Create a new RequestStateData in the Pending state.
+    #[must_use]
     pub fn new(_request_id: Uuid) -> Self {
         let now = current_timestamp_ms();
         Self {
@@ -192,7 +199,7 @@ impl RequestStateData {
 
         // If entering a terminal state, record total duration
         if new_state.is_terminal() {
-            let duration = now - self.created_at.load(Ordering::SeqCst);
+            let duration = now.saturating_sub(self.created_at.load(Ordering::SeqCst));
             self.total_duration.store(duration, Ordering::SeqCst);
         }
 
@@ -221,6 +228,7 @@ pub struct RequestStateRegistry {
 
 impl RequestStateRegistry {
     /// Create a new empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             states: DashMap::new(),
@@ -248,6 +256,7 @@ impl RequestStateRegistry {
     /// Transition a request to a new state.
     ///
     /// Returns the new state on success, or None if the request is not found.
+    #[must_use]
     pub fn transition(
         &self,
         request_id: Uuid,
@@ -268,29 +277,34 @@ impl RequestStateRegistry {
     }
 
     /// Mark a request as completed.
+    #[must_use]
     pub fn complete(&self, request_id: Uuid) -> Option<RequestState> {
         let result = self.transition(request_id, RequestState::Completed);
         result.and_then(|r| r.ok())
     }
 
     /// Mark a request as failed.
+    #[must_use]
     pub fn fail(&self, request_id: Uuid) -> Option<RequestState> {
         let result = self.transition(request_id, RequestState::Failed);
         result.and_then(|r| r.ok())
     }
 
     /// Mark a request as cancelled.
+    #[must_use]
     pub fn cancel(&self, request_id: Uuid) -> Option<RequestState> {
         let result = self.transition(request_id, RequestState::Cancelled);
         result.and_then(|r| r.ok())
     }
 
     /// Get the count of requests in a specific state.
+    #[must_use]
     pub fn count(&self, state: RequestState) -> u64 {
         self.state_counts[state as usize].load(Ordering::SeqCst)
     }
 
     /// Get the total number of in-flight requests (non-terminal states).
+    #[must_use]
     pub fn in_flight(&self) -> u64 {
         self.state_counts[RequestState::Pending as usize].load(Ordering::SeqCst)
             + self.state_counts[RequestState::Validating as usize].load(Ordering::SeqCst)
@@ -299,11 +313,13 @@ impl RequestStateRegistry {
     }
 
     /// Get the count of completed requests.
+    #[must_use]
     pub fn completed(&self) -> u64 {
         self.state_counts[RequestState::Completed as usize].load(Ordering::SeqCst)
     }
 
     /// Get a snapshot of the current state distribution.
+    #[must_use]
     pub fn snapshot(&self) -> StateSnapshot {
         StateSnapshot {
             pending: self.count(RequestState::Pending),
@@ -333,6 +349,7 @@ impl RequestStateRegistry {
     /// Cleanup old terminal state entries.
     ///
     /// Returns the number of entries removed.
+    #[must_use]
     pub fn cleanup(&self, max_age_ms: u64) -> usize {
         let now = current_timestamp_ms();
         let mut removed = 0;
@@ -363,11 +380,13 @@ impl RequestStateRegistry {
     }
 
     /// Get the number of registered requests (for debugging/testing).
+    #[must_use]
     pub fn len(&self) -> usize {
         self.states.len()
     }
 
     /// Check if the registry is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.states.is_empty()
     }

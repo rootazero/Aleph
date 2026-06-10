@@ -23,6 +23,7 @@
 ///
 /// Fail-open: when `bot_username` is unknown we cannot detect mentions, so we
 /// treat the message as addressed rather than silently dropping everything.
+#[must_use]
 pub fn group_message_addresses_bot(
     text: Option<&str>,
     reply_to_bot: bool,

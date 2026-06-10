@@ -27,7 +27,11 @@ pub fn extract_provenance_markers(body: &str, facts: &[String]) -> Vec<FactProve
             break;
         }
         let trimmed = raw_line.trim_start();
-        if trimmed.starts_with("- ") {
+        // Only top-level bullets start a fact — mirrors `extract_facts`, which
+        // attaches indented `- ` lines to the parent fact. Counting indented
+        // bullets here shifted every subsequent provenance assignment by one.
+        let indent = raw_line.len() - trimmed.len();
+        if indent == 0 && trimmed.starts_with("- ") {
             let prov = PROVENANCE_RE
                 .captures(raw_line)
                 .map(|c| FactProvenance {

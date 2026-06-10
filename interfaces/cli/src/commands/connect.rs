@@ -60,7 +60,7 @@ pub async fn run(
                 "To save this token for future sessions, add to your config:"
             )
         );
-        println!("  auth_token = \"{}\"", token);
+        println!("  auth_token = \"{token}\"");
     }
 
     // Save token to config

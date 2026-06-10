@@ -389,6 +389,7 @@ fn check_page_break(
 }
 
 /// Check if a character is CJK (Chinese, Japanese, Korean) or full-width
+#[must_use]
 pub fn is_cjk(c: char) -> bool {
     matches!(c,
         '\u{4E00}'..='\u{9FFF}'   // CJK Unified Ideographs
@@ -405,6 +406,7 @@ pub fn is_cjk(c: char) -> bool {
 }
 
 /// Find a suitable font for text rendering
+#[must_use]
 pub fn find_system_font() -> Option<PathBuf> {
     // Try common font locations — CJK-capable fonts FIRST
     // (PingFang/Hiragino/STHeiti support both Latin AND CJK characters)
@@ -442,6 +444,7 @@ pub fn find_system_font() -> Option<PathBuf> {
 }
 
 /// Text wrapping that handles both Latin (word-boundary) and CJK (character-boundary)
+#[must_use]
 pub fn wrap_text(text: &str, max_width_mm: f32, font_size: f32) -> Vec<String> {
     // Approximate column units per mm (CJK char = 2 units, Latin char = 1 unit)
     let units_per_mm = 0.4 / (font_size / 12.0);

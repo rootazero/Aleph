@@ -293,6 +293,7 @@ pub(crate) fn map_tool_choice(choice: Option<&ToolChoice>) -> Option<serde_json:
 }
 
 /// Extract text content from a completed ResponseResource
+#[must_use]
 pub fn extract_text(response: &ResponseResource) -> Option<String> {
     let mut texts = Vec::new();
     for item in &response.output {

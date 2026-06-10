@@ -19,6 +19,7 @@ impl Default for PairingTracker {
 }
 
 impl PairingTracker {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             requests: Arc::new(Mutex::new(HashMap::new())),
@@ -42,6 +43,7 @@ impl PairingTracker {
         Ok(())
     }
 
+    #[must_use]
     pub fn approve(&self, sender_id: &str) -> bool {
         self.requests
             .lock()
@@ -50,6 +52,7 @@ impl PairingTracker {
             .is_some()
     }
 
+    #[must_use]
     pub fn is_approved_or_pending(&self, sender_id: &str) -> bool {
         let req = self.requests.lock().unwrap_or_else(|e| e.into_inner());
         req.contains_key(sender_id)

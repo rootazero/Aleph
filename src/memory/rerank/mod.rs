@@ -31,6 +31,7 @@ use vllm::VllmRerankProvider;
 use voyage::VoyageRerankProvider;
 
 /// Build a rerank provider from configuration
+#[must_use]
 pub fn build_provider(config: &RerankConfig) -> Box<dyn RerankProvider> {
     match config.provider {
         RerankProviderType::Jina => Box::new(JinaRerankProvider::new(config.clone())),
@@ -47,6 +48,7 @@ pub fn build_provider(config: &RerankConfig) -> Box<dyn RerankProvider> {
 ///
 /// Documents not present in `reranked` results get a rerank_score of 0.0.
 /// Results are sorted descending by blended score.
+#[must_use]
 pub fn blend_scores(
     originals: &[(String, f32)],
     reranked: &[RerankResult],

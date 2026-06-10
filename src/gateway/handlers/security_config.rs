@@ -32,6 +32,7 @@ pub enum NetworkAccess {
 }
 
 impl NetworkAccess {
+    #[must_use]
     pub fn to_bind_address(&self) -> &str {
         match self {
             Self::Localhost => "127.0.0.1",
@@ -39,6 +40,7 @@ impl NetworkAccess {
         }
     }
 
+    #[must_use]
     pub fn from_bind_address(addr: &str) -> Self {
         if addr == "0.0.0.0" || addr == "::" {
             Self::AllNetworks
@@ -288,7 +290,9 @@ pub async fn handle_update(
         serde_json::to_value(&security_config.secrets_protection),
     );
     let sandbox_changed = json_changed(
-        serde_json::to_value(rate_limit::read_sandbox_rate_limit_from_toml(&config_patcher)),
+        serde_json::to_value(rate_limit::read_sandbox_rate_limit_from_toml(
+            &config_patcher,
+        )),
         serde_json::to_value(&security_config.sandbox_rate_limit),
     );
 

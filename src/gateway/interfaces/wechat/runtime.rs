@@ -50,7 +50,7 @@ impl WeChatRuntime {
             *running = true;
         }
 
-        let sync_buf = load_sync_buf(&self.config.account_id, &self.config.account_id).await;
+        let sync_buf = load_sync_buf(&self.config.data_dir, &self.config.account_id).await;
         {
             let mut buf = self.sync_buf.write().await;
             *buf = sync_buf;
@@ -79,7 +79,7 @@ impl WeChatRuntime {
                         let mut buf = self.sync_buf.write().await;
                         *buf = new_buf.clone();
                         drop(buf);
-                        save_sync_buf(&self.config.account_id, &self.config.account_id, &new_buf)
+                        save_sync_buf(&self.config.data_dir, &self.config.account_id, &new_buf)
                             .await;
                     }
 

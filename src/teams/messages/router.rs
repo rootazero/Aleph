@@ -90,6 +90,7 @@ impl MessageRouter {
     }
 
     /// Attach an event bus for publishing team events.
+    #[must_use]
     pub fn with_bus(mut self, bus: EventBus) -> Self {
         self.bus = Some(bus);
         self

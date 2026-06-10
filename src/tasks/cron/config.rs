@@ -133,6 +133,7 @@ impl Default for CronConfig {
 
 impl CronConfig {
     /// Expand the database path (resolve ~)
+    #[must_use]
     pub fn expand_db_path(&self) -> String {
         if self.db_path.starts_with("~/") {
             if let Some(home) = dirs::home_dir() {
@@ -234,6 +235,7 @@ impl ErrorReason {
     /// This is the wire form the `cron_runs.error_reason` column stores and
     /// that history consumers filter on — never the Rust `Debug` rendering
     /// (`Transient("…")`), which would make rows unqueryable by category.
+    #[must_use]
     pub fn category(&self) -> &'static str {
         match self {
             Self::Transient(_) => "transient",
@@ -266,6 +268,7 @@ pub enum TriggerSource {
 }
 
 impl TriggerSource {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Schedule => "schedule",
@@ -275,6 +278,7 @@ impl TriggerSource {
         }
     }
 
+    #[must_use]
     pub fn parse(s: &str) -> Self {
         match s {
             "chain" => Self::Chain,
@@ -469,6 +473,7 @@ impl CronJob {
     /// Used by the catchup stale-marker threshold; runtime execution gets the
     /// timeout via `JobSnapshot.timeout_ms` threaded by `phase1_mark_due_jobs`,
     /// which honours the per-job override against the *configured* default.
+    #[must_use]
     pub fn effective_timeout_ms(&self) -> i64 {
         self.timeout_ms.unwrap_or(900_000)
     }
@@ -476,6 +481,7 @@ impl CronJob {
     /// Construct a generic `DeliveryPayload` from this job and its output.
     ///
     /// Used when handing off results to the shared delivery pipeline.
+    #[must_use]
     pub fn to_delivery_payload(
         &self,
         output: String,
@@ -654,12 +660,14 @@ impl JobRun {
     }
 
     /// Set the trigger source
+    #[must_use]
     pub fn with_trigger(mut self, source: TriggerSource) -> Self {
         self.trigger_source = source;
         self
     }
 
     /// Mark as success
+    #[must_use]
     pub fn success(mut self, response: Option<String>) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         self.status = RunStatus::Ok;
@@ -670,6 +678,7 @@ impl JobRun {
     }
 
     /// Mark as failed
+    #[must_use]
     pub fn failed(mut self, error: String) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         self.status = RunStatus::Error;
@@ -680,6 +689,7 @@ impl JobRun {
     }
 
     /// Mark as timeout
+    #[must_use]
     pub fn timeout(mut self) -> Self {
         let now = chrono::Utc::now().timestamp_millis();
         self.status = RunStatus::Timeout;

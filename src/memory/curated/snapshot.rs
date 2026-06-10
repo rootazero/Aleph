@@ -16,6 +16,7 @@ pub struct CuratedSnapshot {
 }
 
 /// Render the agent-side MEMORY.md as an XML envelope. Empty entries → empty string.
+#[must_use]
 pub fn render_agent_block(entries: &[String], char_limit: usize, near_threshold: f32) -> String {
     if entries.is_empty() {
         return String::new();
@@ -28,6 +29,7 @@ pub fn render_agent_block(entries: &[String], char_limit: usize, near_threshold:
 /// Render the user-profile body as an XML envelope with a budget header.
 /// `body` is the synthesized USER.md content (already markdown). Truncated
 /// to `char_limit` to enforce budget on synthesizer output.
+#[must_use]
 pub fn render_user_block(body: &str, char_limit: usize, near_threshold: f32) -> String {
     if body.trim().is_empty() {
         return String::new();
@@ -46,6 +48,7 @@ pub fn render_user_block(body: &str, char_limit: usize, near_threshold: f32) -> 
 /// (R5 — "AI 主动到达"). `body` is the persisted `OPEN_LOOPS.md` markdown,
 /// truncated to `char_limit` (counted in chars, CJK-safe) to bound the prompt.
 /// Empty body → empty string (caller omits the block).
+#[must_use]
 pub fn render_open_loops_block(body: &str, char_limit: usize) -> String {
     if body.trim().is_empty() {
         return String::new();

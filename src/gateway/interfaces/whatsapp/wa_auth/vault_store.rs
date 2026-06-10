@@ -73,12 +73,14 @@ impl WaAuthManager {
         Ok(data)
     }
 
+    #[must_use]
     pub fn exists(&self) -> bool {
         let vault = self.vault.lock().unwrap_or_else(|e| e.into_inner());
         vault.exists(&self.key())
     }
 
     /// Returns the SQLite database path for whatsapp-rust backend storage.
+    #[must_use]
     pub fn db_path(&self) -> String {
         let base = dirs::data_dir()
             .map(|p| p.join("aleph").join("whatsapp"))

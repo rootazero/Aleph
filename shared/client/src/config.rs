@@ -92,6 +92,7 @@ impl Default for CliConfig {
 
 impl CliConfig {
     /// Get the default config file path
+    #[must_use]
     pub fn default_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -101,14 +102,14 @@ impl CliConfig {
 
     /// Load configuration from file
     pub fn load(path: Option<&str>) -> CliResult<Self> {
-        let config_path = path.map(PathBuf::from).unwrap_or_else(Self::default_path);
+        let config_path = path.map_or_else(Self::default_path, PathBuf::from);
 
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)
-                .map_err(|e| CliError::Config(format!("Failed to read config: {}", e)))?;
+                .map_err(|e| CliError::Config(format!("Failed to read config: {e}")))?;
 
             toml::from_str(&content)
-                .map_err(|e| CliError::Config(format!("Failed to parse config: {}", e)))
+                .map_err(|e| CliError::Config(format!("Failed to parse config: {e}")))
         } else {
             // Return default config if file doesn't exist
             Ok(Self::default())
@@ -117,19 +118,19 @@ impl CliConfig {
 
     /// Save configuration to file
     pub fn save(&self, path: Option<&str>) -> CliResult<()> {
-        let config_path = path.map(PathBuf::from).unwrap_or_else(Self::default_path);
+        let config_path = path.map_or_else(Self::default_path, PathBuf::from);
 
         // Create parent directory if needed
         if let Some(parent) = config_path.parent() {
             std::fs::create_dir_all(parent)
-                .map_err(|e| CliError::Config(format!("Failed to create config dir: {}", e)))?;
+                .map_err(|e| CliError::Config(format!("Failed to create config dir: {e}")))?;
         }
 
         let content = toml::to_string_pretty(self)
-            .map_err(|e| CliError::Config(format!("Failed to serialize config: {}", e)))?;
+            .map_err(|e| CliError::Config(format!("Failed to serialize config: {e}")))?;
 
         std::fs::write(&config_path, content)
-            .map_err(|e| CliError::Config(format!("Failed to write config: {}", e)))?;
+            .map_err(|e| CliError::Config(format!("Failed to write config: {e}")))?;
 
         // The config may hold an auth token — restrict to owner read/write so it
         // isn't world-readable (default file mode is 0644).

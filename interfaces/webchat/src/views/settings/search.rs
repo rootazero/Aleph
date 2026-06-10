@@ -1129,7 +1129,7 @@ fn AddCustomSearchProviderPanel(
         let mut cfg = config.get();
         // Add backend entry
         cfg.backends.push(SearchBackendEntry {
-            name: name.clone(),
+            name,
             api_key: {
                 let v = form_api_key.get();
                 if v.is_empty() {

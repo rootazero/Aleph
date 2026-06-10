@@ -20,6 +20,7 @@ use crate::a2a::port::A2AResult;
 /// event: artifact-update
 /// data: {"jsonrpc":"2.0","id":1,"result":{...}}
 /// ```
+#[must_use]
 pub fn parse_sse_response(
     response: reqwest::Response,
     idle: Duration,

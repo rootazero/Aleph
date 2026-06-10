@@ -558,6 +558,10 @@ mod tests {
     fn test_migrate_add_experience_replays_idempotent() {
         // Register sqlite-vec extension BEFORE opening connection
         unsafe {
+            // SAFETY: sqlite3_vec_init is the C entrypoint for the sqlite-vec extension.
+            // sqlite3_auto_extension registers it to be loaded for all new connections.
+            // The function item is cast to a data pointer then transmuted to the target
+            // function pointer type, which is the standard FFI pattern.
             rusqlite::ffi::sqlite3_auto_extension(Some(std::mem::transmute(
                 sqlite_vec::sqlite3_vec_init as *const (),
             )));

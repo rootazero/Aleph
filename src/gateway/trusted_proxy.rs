@@ -58,11 +58,13 @@ impl TrustedProxies {
     }
 
     /// Whether the allowlist is empty (no proxies trusted).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.nets.is_empty()
     }
 
     /// Whether `ip` is a configured trusted proxy.
+    #[must_use]
     pub fn contains(&self, ip: IpAddr) -> bool {
         self.nets.iter().any(|n| n.contains(&ip))
     }
@@ -76,6 +78,7 @@ impl TrustedProxies {
     /// proxies, and returns the first non-proxy address — the real client as
     /// seen just past our own proxy layer. Falls back to `peer` when the
     /// header is absent, malformed, or lists only proxy hops.
+    #[must_use]
     pub fn real_client_ip(&self, peer: IpAddr, headers: &HeaderMap) -> IpAddr {
         if self.nets.is_empty() || !self.contains(peer) {
             return peer;

@@ -73,7 +73,7 @@ pub fn ProviderRowCard(
         .to_uppercase()
         .to_string();
     let icon_content = icon_glyph.unwrap_or(first_char);
-    let name_for_view = name.clone();
+    let name_for_view = name;
     view! {
         <button
             on:click=move |_| on_click()

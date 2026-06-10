@@ -25,6 +25,7 @@ pub struct MiddlewareChain {
 }
 
 impl MiddlewareChain {
+    #[must_use]
     pub fn new(handlers: Arc<HandlerRegistry>, rate_limiter: Arc<RateLimiter>) -> Self {
         let state_registry = Arc::new(RequestStateRegistry::new());
         set_global_registry(state_registry.clone());
@@ -41,6 +42,7 @@ impl MiddlewareChain {
         }
     }
 
+    #[must_use]
     pub fn state_registry(&self) -> Arc<RequestStateRegistry> {
         self.state_registry.clone()
     }

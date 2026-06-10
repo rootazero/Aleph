@@ -504,6 +504,7 @@ const CAPABILITY_TABLE: &[(&str, ModelCapabilities)] = &[
 ///
 /// Returns `None` when no family prefix matches — callers treat that as
 /// "capabilities unknown" and fall back to their own defaults.
+#[must_use]
 pub fn capabilities_for(model: &str) -> Option<ModelCapabilities> {
     let canon = canonicalize_model_id(model);
     CAPABILITY_TABLE

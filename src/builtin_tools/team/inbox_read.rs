@@ -67,6 +67,7 @@ pub struct InboxReadTool {
 }
 
 impl InboxReadTool {
+    #[must_use]
     pub fn new(inbox: Arc<Inbox>, current_agent_id: String) -> Self {
         Self {
             inbox,

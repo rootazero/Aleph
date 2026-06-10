@@ -38,6 +38,7 @@ const BROWSER_PROBE_TTL: Duration = Duration::from_secs(300);
 pub struct BrowserRuntimeProbe;
 
 impl BrowserRuntimeProbe {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

@@ -63,6 +63,7 @@ impl Default for AdapterRegistry {
 
 impl AdapterRegistry {
     /// Create an empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self { adapters: vec![] }
     }
@@ -76,6 +77,7 @@ impl AdapterRegistry {
     /// - Codex CLI (80)
     /// - Cursor IDE (70)
     /// - Auto-discover (-100)
+    #[must_use]
     pub fn with_defaults() -> Self {
         let mut registry = Self::new();
         registry.register(Box::new(super::cc_plugin_toml::ClaudeCodeTomlAdapter));
@@ -115,11 +117,13 @@ impl AdapterRegistry {
     }
 
     /// Number of registered adapters.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.adapters.len()
     }
 
     /// Returns true if no adapters are registered.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.adapters.is_empty()
     }

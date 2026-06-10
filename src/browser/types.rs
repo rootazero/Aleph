@@ -97,6 +97,7 @@ pub enum ColorScheme {
 
 impl ColorScheme {
     /// Value accepted by chrome-devtools-mcp's `emulate.colorScheme`.
+    #[must_use]
     pub fn as_mcp(self) -> &'static str {
         match self {
             ColorScheme::Dark => "dark",
@@ -125,6 +126,7 @@ impl NetworkCondition {
     /// Value for chrome-devtools-mcp's `emulate.networkConditions`, or `None`
     /// when the condition is expressed by *omitting* the field (`Online` =
     /// no throttling per the MCP contract).
+    #[must_use]
     pub fn as_mcp(self) -> Option<&'static str> {
         match self {
             NetworkCondition::Offline => Some("Offline"),
@@ -138,6 +140,7 @@ impl NetworkCondition {
 
     /// `playwright-cli network-state-set` argument for the conditions the
     /// managed backend can express natively; `None` for throttled tiers it cannot.
+    #[must_use]
     pub fn as_playwright_state(self) -> Option<&'static str> {
         match self {
             NetworkCondition::Offline => Some("offline"),
@@ -187,6 +190,7 @@ pub struct EmulateOptions {
 
 impl EmulateOptions {
     /// Whether no override at all was requested.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.color_scheme.is_none()
             && self.geolocation.is_none()
@@ -233,6 +237,7 @@ pub enum SameSite {
 
 impl SameSite {
     /// Canonical value accepted by `playwright-cli cookie-set --sameSite`.
+    #[must_use]
     pub fn as_cli(self) -> &'static str {
         match self {
             SameSite::Strict => "Strict",

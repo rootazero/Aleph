@@ -42,12 +42,14 @@ impl StdioTransport {
     ///
     /// Spawns a background tokio task that reads lines from stdout,
     /// parses them as `AcpResponse`, and sends via an mpsc channel (capacity 256).
+    #[must_use]
     pub fn new(stdin: ChildStdin, stdout: ChildStdout) -> Self {
         Self::with_handler(stdin, stdout, None)
     }
 
     /// Like [`new`](Self::new) but wires an [`IncomingHandler`] so agent→client
     /// requests received mid-prompt are answered instead of dropped.
+    #[must_use]
     pub fn with_handler(
         stdin: ChildStdin,
         stdout: ChildStdout,
@@ -113,6 +115,7 @@ impl StdioTransport {
     /// Used by `AcpSession::cancel_handle()` so the manager can send
     /// `session/cancel` notifications without blocking on the per-session
     /// mutex held by an in-flight prompt.
+    #[must_use]
     pub fn stdin_handle(&self) -> SharedStdin {
         Arc::clone(&self.stdin)
     }

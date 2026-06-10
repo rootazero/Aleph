@@ -39,6 +39,7 @@ pub struct DreamValidationReport {
 
 impl DreamValidationReport {
     /// Overall OK if L1 and L2 both passed. L3/L4 failures are warnings.
+    #[must_use]
     pub fn overall_ok(&self) -> bool {
         self.l1_format.passed && self.l2_consistency.passed
     }
@@ -49,6 +50,7 @@ impl DreamValidationReport {
 // ---------------------------------------------------------------------------
 
 /// Validate frontmatter and content of a single note's markdown.
+#[must_use]
 pub fn validate_frontmatter(content: &str, note_path: &str) -> Vec<ValidationIssue> {
     let mut issues = Vec::new();
     let tier = "L1".to_string();
@@ -120,6 +122,7 @@ fn extract_yaml_value(yaml: &str, key: &str) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Check for duplicate content hashes across notes.
+#[must_use]
 pub fn check_duplicate_hashes(notes: &[(String, String)]) -> Vec<ValidationIssue> {
     let mut seen: HashMap<&str, Vec<&str>> = HashMap::new();
     for (path, hash) in notes {
@@ -136,7 +139,7 @@ pub fn check_duplicate_hashes(notes: &[(String, String)]) -> Vec<ValidationIssue
                 note_path: paths.join(", "),
                 message: format!(
                     "duplicate content_hash '{}' across {} notes",
-                    &hash[..hash.len().min(16)],
+                    hash.get(..hash.len().min(16)).unwrap_or(hash),
                     paths.len()
                 ),
             });
@@ -146,6 +149,7 @@ pub fn check_duplicate_hashes(notes: &[(String, String)]) -> Vec<ValidationIssue
 }
 
 /// Run L1 format validation on a batch of notes.
+#[must_use]
 pub fn run_l1_validation(note_contents: &HashMap<String, String>) -> ValidationTier {
     let mut issues = Vec::new();
     let mut checks_run = 0u32;
@@ -170,6 +174,7 @@ pub fn run_l1_validation(note_contents: &HashMap<String, String>) -> ValidationT
 }
 
 /// Run L2 consistency validation on note hashes.
+#[must_use]
 pub fn run_l2_validation(note_hashes: &[(String, String)]) -> ValidationTier {
     let dup_issues = check_duplicate_hashes(note_hashes);
     let checks_run = 1u32; // duplicate hash check

@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 pub struct EchoParams(pub Option<Value>);
 
 impl EchoParams {
+    #[must_use]
     pub fn new(value: Option<Value>) -> Self {
         Self(value)
     }

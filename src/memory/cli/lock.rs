@@ -160,11 +160,13 @@ impl MemoryLock {
     }
 
     /// Get the lock mode
+    #[must_use]
     pub fn mode(&self) -> LockMode {
         self.mode
     }
 
     /// Get the lock file path
+    #[must_use]
     pub fn path(&self) -> &PathBuf {
         &self.path
     }

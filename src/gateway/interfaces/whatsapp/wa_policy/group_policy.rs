@@ -7,6 +7,7 @@ pub struct GroupPolicyEngine {
 }
 
 impl GroupPolicyEngine {
+    #[must_use]
     pub fn new(access: AccessConfig) -> Self {
         Self { access }
     }

@@ -19,6 +19,7 @@ pub struct McpRegistrar {
 }
 
 impl McpRegistrar {
+    #[must_use]
     pub fn new(plugin_id: String, permissions: Vec<PluginPermission>) -> Self {
         Self {
             plugin_id,
@@ -238,6 +239,7 @@ impl McpScope {
     /// - **Inline tool surfacing is deferred to a follow-up** — see concern below.
     ///
     /// Result is layered UNDER `AllowlistToolService` by the spawner.
+    #[must_use]
     pub fn tools(&self) -> Vec<crate::extension::registry::ToolRegistration> {
         let mut out = Vec::new();
         for plugin_id in &self.references {

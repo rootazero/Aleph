@@ -1,6 +1,6 @@
 //! Gateway RPC command handlers
 //!
-//! Spec C policy: **NoLock**. `gateway call` is a pure JSON-RPC client
+//! Spec C policy: **`NoLock`**. `gateway call` is a pure JSON-RPC client
 //! over WebSocket; it does not touch `~/.aleph/data/` and therefore
 //! never contends for the singleton lock. Marker call to `run_no_lock`
 //! at handler entry preserves the policy classification for the

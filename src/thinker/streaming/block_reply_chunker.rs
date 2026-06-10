@@ -41,6 +41,7 @@ impl Default for ChunkerConfig {
 /// Configuration matching Moltbot defaults for channel streaming
 impl ChunkerConfig {
     /// Create config with Moltbot-style defaults (800-1200 chars)
+    #[must_use]
     pub fn moltbot_defaults() -> Self {
         Self {
             min_block_size: 800,
@@ -77,6 +78,7 @@ impl Default for BlockReplyChunker {
 
 impl BlockReplyChunker {
     /// Create a new chunker with configuration
+    #[must_use]
     pub fn new(config: ChunkerConfig) -> Self {
         Self {
             config,
@@ -319,11 +321,13 @@ impl BlockReplyChunker {
     }
 
     /// Get current buffer length
+    #[must_use]
     pub fn buffer_len(&self) -> usize {
         self.buffer.len()
     }
 
     /// Check if buffer is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }

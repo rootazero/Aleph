@@ -55,11 +55,11 @@ pub struct Args {
     #[arg(long, default_value = "1000")]
     pub max_connections: usize,
 
-    /// WebChat UI directory (serves static files)
+    /// `WebChat` UI directory (serves static files)
     #[arg(long)]
     pub webchat_dir: Option<PathBuf>,
 
-    /// WebChat HTTP port (default: same as WebSocket port)
+    /// `WebChat` HTTP port (default: same as WebSocket port)
     #[arg(long)]
     pub webchat_port: Option<u16>,
 }
@@ -155,7 +155,7 @@ pub enum Command {
     ///
     /// Used by the desktop shell to silently bootstrap the embedded Panel —
     /// reads `~/.aleph/data/security.db` directly (same-UID gate). Exits with
-    /// code 64 (EX_USAGE) and a stderr message if no token has been provisioned
+    /// code 64 (`EX_USAGE`) and a stderr message if no token has been provisioned
     /// yet (i.e. the server has never started).
     BootstrapToken,
     /// Issue a one-time bootstrap nonce against a running daemon and print
@@ -165,13 +165,13 @@ pub enum Command {
     /// ever putting a token in a URL.
     ///
     /// Requires the daemon to be running and a shared token provisioned.
-    /// Exits with EX_USAGE (64) if either precondition fails.
+    /// Exits with `EX_USAGE` (64) if either precondition fails.
     BootstrapUrl,
     /// SP-2 internal: apply landlock + seccomp then exec target. Invoked
-    /// by BubblewrapDriver inside the bwrap namespace; not for users.
+    /// by `BubblewrapDriver` inside the bwrap namespace; not for users.
     #[command(hide = true)]
     SandboxInit {
-        /// Remaining argv passed through to sandbox_init::run_init.
+        /// Remaining argv passed through to `sandbox_init::run_init`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -204,7 +204,7 @@ pub enum Command {
     /// Run as a cluster node: dial out to a center, serve reverse-RPC tool.call,
     /// run bash in a LOCAL sandbox. Pure execution arm (no DB/LLM).
     Node {
-        /// Center WebSocket base URL, e.g. ws://127.0.0.1:18790
+        /// Center WebSocket base URL, e.g. <ws://127.0.0.1:18790>
         #[arg(long, value_name = "URL")]
         center: String,
         /// Node auth token (minted via center `cluster.enroll`). Optional:
@@ -222,11 +222,11 @@ pub enum Command {
         tags: Vec<String>,
     },
     /// SP-3a internal: apply restricted token + Low IL then spawn target
-    /// via CreateProcessAsUserW. Invoked by WindowsSandboxDriver; not
+    /// via `CreateProcessAsUserW`. Invoked by `WindowsSandboxDriver`; not
     /// for users.
     #[command(hide = true)]
     SandboxInitWindows {
-        /// Remaining argv passed through to windows_init::run_init.
+        /// Remaining argv passed through to `windows_init::run_init`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
@@ -807,11 +807,16 @@ mod tests {
     #[test]
     fn node_command_collects_repeated_tags() {
         let cli = Args::try_parse_from([
-            "aleph-server", "node",
-            "--center", "ws://127.0.0.1:18790",
-            "--name", "gpu-1",
-            "--tag", "gpu",
-            "--tag", "region=us",
+            "aleph-server",
+            "node",
+            "--center",
+            "ws://127.0.0.1:18790",
+            "--name",
+            "gpu-1",
+            "--tag",
+            "gpu",
+            "--tag",
+            "region=us",
         ])
         .expect("parses");
         match cli.command {
@@ -824,8 +829,8 @@ mod tests {
 
     #[test]
     fn node_command_defaults_to_no_tags() {
-        let cli = Args::try_parse_from(["aleph-server", "node", "--center", "ws://c"])
-            .expect("parses");
+        let cli =
+            Args::try_parse_from(["aleph-server", "node", "--center", "ws://c"]).expect("parses");
         match cli.command {
             Some(Command::Node { tags, .. }) => assert!(tags.is_empty()),
             _ => panic!("Expected Node command"),

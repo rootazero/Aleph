@@ -1,6 +1,6 @@
+use crate::sync_primitives::{Mutex, RwLock};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use crate::sync_primitives::{Mutex, RwLock};
 
 use async_trait::async_trait;
 
@@ -26,6 +26,7 @@ pub enum ApprovalOutcome {
 }
 
 impl ApprovalOutcome {
+    #[must_use]
     pub fn is_approved(&self) -> bool {
         matches!(
             self,
@@ -35,6 +36,7 @@ impl ApprovalOutcome {
 
     /// True only for a session-scoped grant — the caller should remember it so
     /// subsequent calls to the same tool skip the prompt.
+    #[must_use]
     pub fn is_session_grant(&self) -> bool {
         matches!(self, ApprovalOutcome::ApprovedForSession)
     }
@@ -50,6 +52,7 @@ pub struct ApprovalGate {
 }
 
 impl ApprovalGate {
+    #[must_use]
     pub fn new(config: ApprovalConfig, requester: Option<Arc<dyn ApprovalRequester>>) -> Self {
         Self {
             config,
@@ -178,6 +181,7 @@ impl ApprovalGate {
     }
 }
 
+#[must_use]
 pub fn check_always_confirm(tool_name: &str, always_confirm: &HashSet<String>) -> bool {
     always_confirm.contains(tool_name)
 }

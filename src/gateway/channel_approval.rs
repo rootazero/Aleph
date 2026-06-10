@@ -84,6 +84,7 @@ impl PendingApproval {
     }
 
     /// Check if the approval has expired
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         self.expires_at < Utc::now()
     }
@@ -182,7 +183,8 @@ pub trait ChannelApprovalCapability: Send + Sync {
             AuthorizationResult::Authorized => Ok(rendered),
             AuthorizationResult::Denied | AuthorizationResult::NotAuthenticated => {
                 // Return rendered message without inline keyboard buttons
-                let message = rendered.message.clone();
+                let mut message = rendered.message.clone();
+                message.inline_keyboard = None;
                 Ok(RenderedApproval {
                     message,
                     callback_prefix: rendered.callback_prefix,

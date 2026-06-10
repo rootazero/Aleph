@@ -196,11 +196,13 @@ impl SecretVault {
     }
 
     /// Check if a secret exists.
+    #[must_use]
     pub fn exists(&self, name: &str) -> bool {
         self.data.entries.contains_key(name)
     }
 
     /// List all secret names with their metadata.
+    #[must_use]
     pub fn list(&self) -> Vec<(String, &EntryMetadata)> {
         self.data
             .entries
@@ -210,11 +212,13 @@ impl SecretVault {
     }
 
     /// List all entry names.
+    #[must_use]
     pub fn list_names(&self) -> Vec<String> {
         self.data.entries.keys().cloned().collect()
     }
 
     /// Get all entries (for re-encryption during token reset).
+    #[must_use]
     pub fn entries(&self) -> &HashMap<String, EncryptedEntry> {
         &self.data.entries
     }
@@ -229,16 +233,19 @@ impl SecretVault {
     }
 
     /// Get the vault file path.
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
     /// Get the number of entries.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.data.entries.len()
     }
 
     /// Check if vault is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.data.entries.is_empty()
     }
@@ -249,6 +256,7 @@ impl SecretVault {
     /// when the platform config directory cannot be determined (extremely
     /// rare). Callers that need a guaranteed absolute path should verify
     /// the result.
+    #[must_use]
     pub fn default_path() -> PathBuf {
         crate::utils::paths::get_config_dir()
             .map(|d| d.join("secrets.vault"))

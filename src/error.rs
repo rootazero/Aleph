@@ -352,6 +352,7 @@ impl AlephError {
     /// Get the suggestion for this error, if available
     ///
     /// Returns a user-friendly actionable suggestion for how to resolve the error.
+    #[must_use]
     pub fn suggestion(&self) -> Option<&str> {
         match self {
             AlephError::HotkeyError { suggestion, .. }
@@ -405,6 +406,7 @@ impl AlephError {
     ///     "Authentication failed. Please check your API key in settings."
     /// );
     /// ```
+    #[must_use]
     pub fn user_friendly_message(&self) -> String {
         match self {
             AlephError::AuthenticationError { .. } => {
@@ -611,6 +613,7 @@ impl AlephError {
     /// Create a cancelled error
     ///
     /// Used when an operation is cancelled by the user via CancellationToken.
+    #[must_use]
     pub fn cancelled() -> Self {
         AlephError::Cancelled
     }
@@ -654,6 +657,7 @@ impl AlephError {
     /// vocabulary and the Stage 1 design doc
     /// (`docs/superpowers/specs/2026-05-05-harness-stage1-error-class-plan.md`)
     /// for the rationale.
+    #[must_use]
     pub fn class(&self) -> ErrorClass {
         match self {
             // Transient — retry typically resolves
@@ -711,6 +715,7 @@ impl AlephError {
     /// `McpTimeout`. New code should prefer `self.class() == ErrorClass::Transient`
     /// for retry decisions; this method is retained for backwards compatibility
     /// with existing call sites that have not yet migrated.
+    #[must_use]
     pub fn is_transient(&self) -> bool {
         matches!(
             self,

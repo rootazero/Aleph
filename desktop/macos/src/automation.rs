@@ -14,7 +14,7 @@ pub struct MacOSAutomation {
 
 impl MacOSAutomation {
     /// Create a new `MacOSAutomation` instance.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self { _private: () }
     }
 }

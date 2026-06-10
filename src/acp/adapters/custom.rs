@@ -23,6 +23,7 @@ pub struct CustomAcpAdapter {
 
 impl CustomAcpAdapter {
     /// Create a new custom harness from config.
+    #[must_use]
     pub fn new(harness_id: String, config: AcpAdapterEntry) -> Self {
         Self { harness_id, config }
     }

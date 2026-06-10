@@ -84,7 +84,7 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
     if json {
         output::print_json(&result);
     } else {
-        println!("Skill installed from '{}'.", source);
+        println!("Skill installed from '{source}'.");
     }
 
     client.close().await?;
@@ -101,7 +101,7 @@ pub async fn reload(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        println!("Skill '{}' reloaded.", name);
+        println!("Skill '{name}' reloaded.");
     }
 
     client.close().await?;
@@ -125,7 +125,7 @@ pub async fn delete(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        println!("Skill '{}' deleted.", name);
+        println!("Skill '{name}' deleted.");
     }
 
     client.close().await?;

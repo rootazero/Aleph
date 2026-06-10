@@ -25,6 +25,7 @@ pub enum LeakDecision {
 }
 
 impl LeakDecision {
+    #[must_use]
     pub fn is_blocked(&self) -> bool {
         matches!(self, Self::Block { .. })
     }
@@ -76,6 +77,7 @@ pub const BLOCK_CLASS_SECRETS: &[&str] = &["private_key"];
 
 /// Whether a named secret pattern (from [`SECRET_PATTERN_SOURCES`]) is
 /// block-class. Cheap linear scan over the tiny frozen [`BLOCK_CLASS_SECRETS`].
+#[must_use]
 pub fn is_block_class_secret(name: &str) -> bool {
     BLOCK_CLASS_SECRETS.contains(&name)
 }
@@ -88,6 +90,7 @@ pub fn is_block_class_secret(name: &str) -> bool {
 /// The legacy `SECRET_PATTERN_SOURCES` entries run first so their named
 /// redaction tags win for inputs they already matched (byte-identical scrub for
 /// pre-existing patterns); the vendor catalog only widens coverage.
+#[must_use]
 pub fn default_patterns_bytes() -> Vec<(&'static str, regex::bytes::Regex)> {
     SECRET_PATTERN_SOURCES
         .iter()
@@ -168,6 +171,7 @@ pub struct LeakDetector {
 }
 
 impl LeakDetector {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             injected_hashes: std::collections::HashSet::new(),
@@ -250,6 +254,7 @@ impl LeakDetector {
     }
 
     /// Scan outbound content for known secret patterns.
+    #[must_use]
     pub fn scan_outbound(&self, content: &str) -> LeakDecision {
         let (found_labels, redacted) = self.scan_patterns(content);
 
@@ -264,6 +269,7 @@ impl LeakDetector {
     }
 
     /// Scan inbound content for echoed secret values.
+    #[must_use]
     pub fn scan_inbound(&self, content: &str) -> LeakDecision {
         let (found_labels, redacted) = self.scan_patterns(content);
 

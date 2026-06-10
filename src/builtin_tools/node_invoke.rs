@@ -122,7 +122,10 @@ mod tests {
             channel: channel.clone(),
             declared_commands: commands
                 .into_iter()
-                .map(|c| CommandDescriptor { name: c.to_string(), schema: json!({}) })
+                .map(|c| CommandDescriptor {
+                    name: c.to_string(),
+                    schema: json!({}),
+                })
                 .collect(),
             tags: vec![],
             connected_at: 1,
@@ -223,7 +226,10 @@ mod tests {
             .expect_err("ambiguous node errors");
         let msg = err.to_string();
         assert!(msg.contains("ambiguous"), "{msg}");
-        assert!(msg.contains("worker-1") && msg.contains("worker-2"), "{msg}");
+        assert!(
+            msg.contains("worker-1") && msg.contains("worker-2"),
+            "{msg}"
+        );
     }
 
     #[tokio::test]

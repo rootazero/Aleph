@@ -1,4 +1,4 @@
-use super::*;
+use super::{GatewayServer, MemoryBackend, memory_handlers};
 
 /// Rebuild the embedder from the *current* config so a provider switched via
 /// `embedding_providers.setActive` takes effect for reembed without restarting
@@ -13,8 +13,8 @@ async fn resolve_active_embedder(
     shared_token_mgr: &std::sync::Arc<alephcore::gateway::security::SharedTokenManager>,
 ) -> Option<std::sync::Arc<dyn alephcore::memory::EmbeddingProvider>> {
     let mut settings = app_config.read().await.memory.embedding.clone();
-    for p in settings.providers.iter_mut() {
-        if p.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+    for p in &mut settings.providers {
+        if p.api_key.as_ref().is_none_or(std::string::String::is_empty) {
             if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("embed:{}", p.id)) {
                 p.api_key = Some(secret.expose().to_string());
             }

@@ -18,6 +18,7 @@ pub struct NoParams;
 
 impl NoParams {
     /// Create an empty params object for handlers that don't need any.
+    #[must_use]
     pub fn empty() -> Self {
         Self
     }
@@ -31,12 +32,14 @@ pub struct ParamParseError {
 }
 
 impl ParamParseError {
+    #[must_use]
     pub fn missing() -> Self {
         Self {
             message: "Missing params".to_string(),
         }
     }
 
+    #[must_use]
     pub fn invalid(e: serde_json::Error) -> Self {
         Self {
             message: format!("Invalid params: {}", e),
@@ -87,6 +90,7 @@ pub trait HandlerSchema: Send + Sync {
     ///
     /// The default implementation parses params from the request and delegates
     /// to `handle_with_params`. Override if you need direct request access.
+    #[must_use]
     fn handle(
         request: &JsonRpcRequest,
     ) -> Pin<Box<dyn Future<Output = JsonRpcResponse> + Send + '_>>
@@ -136,6 +140,7 @@ pub struct HandlerInfo {
 
 impl HandlerInfo {
     /// Generate a JSON Schema object for this handler's parameters.
+    #[must_use]
     pub fn params_schema_json(&self) -> &Value {
         &self.params_schema
     }
@@ -148,6 +153,7 @@ pub struct TypedHandler<H: HandlerSchema> {
 
 impl<H: HandlerSchema> TypedHandler<H> {
     /// Create a new typed handler wrapper.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             _marker: std::marker::PhantomData,
@@ -155,6 +161,7 @@ impl<H: HandlerSchema> TypedHandler<H> {
     }
 
     /// Get handler metadata (method, description, schema).
+    #[must_use]
     pub fn info() -> HandlerInfo {
         let schema = schemars::schema_for!(H::Params);
         let schema_json = serde_json::to_value(&schema).unwrap_or(Value::Null);
@@ -204,6 +211,7 @@ pub struct TypedHandlerRegistry {
 
 impl TypedHandlerRegistry {
     /// Create a new empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             handlers: Vec::new(),
@@ -227,26 +235,31 @@ impl TypedHandlerRegistry {
     }
 
     /// Get information about a specific handler by method name.
+    #[must_use]
     pub fn get(&self, method: &str) -> Option<&HandlerInfo> {
         self.handlers.iter().find(|h| h.method == method)
     }
 
     /// Get all registered handler information.
+    #[must_use]
     pub fn all(&self) -> &[HandlerInfo] {
         &self.handlers
     }
 
     /// Get all method names registered in this registry.
+    #[must_use]
     pub fn methods(&self) -> Vec<&str> {
         self.handlers.iter().map(|h| h.method.as_str()).collect()
     }
 
     /// Get the total number of registered handlers.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.handlers.len()
     }
 
     /// Check if the registry is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.handlers.is_empty()
     }
@@ -255,6 +268,7 @@ impl TypedHandlerRegistry {
     ///
     /// This creates a schema that documents all available methods,
     /// their parameters, and their descriptions.
+    #[must_use]
     pub fn protocol_schema(&self) -> Value {
         let mut methods_schema = serde_json::Map::new();
 
@@ -284,6 +298,7 @@ impl TypedHandlerRegistry {
         })
     }
 
+    #[must_use]
     pub fn openapi_schema(&self) -> Value {
         let mut paths = serde_json::Map::new();
 
@@ -362,7 +377,9 @@ impl TypedHandlerRegistry {
                 }
             });
 
-            paths.insert(rpc_path, serde_json::json!({ "post": operation }));
+            // `operation` already carries the `"post"` key — inserting it
+            // directly avoids the invalid `{"post": {"post": …}}` nesting.
+            paths.insert(rpc_path, operation);
         }
 
         serde_json::json!({

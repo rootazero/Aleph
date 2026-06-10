@@ -65,11 +65,13 @@ pub struct ReadConfigGuideTool {
 }
 
 impl ReadConfigGuideTool {
+    #[must_use]
     pub fn new(guides_dir: PathBuf) -> Self {
         Self { guides_dir }
     }
 
     /// Default guides directory: ~/.aleph/guides/
+    #[must_use]
     pub fn default_dir() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("/tmp"))

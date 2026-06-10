@@ -7,6 +7,7 @@ use crate::gateway::interfaces::qq::types::{
     C2CMessageEvent, GroupMessageEvent, QQAttachment, QQEvent,
 };
 
+#[must_use]
 pub fn convert_event(event: &QQEvent, channel_id: &ChannelId) -> Option<InboundMessage> {
     match event {
         QQEvent::C2CMessage(e) => Some(convert_c2c(e, channel_id)),

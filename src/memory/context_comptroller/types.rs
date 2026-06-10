@@ -8,14 +8,17 @@ pub struct TokenBudget {
 }
 
 impl TokenBudget {
+    #[must_use]
     pub fn new(total: usize) -> Self {
         Self { total, used: 0 }
     }
 
+    #[must_use]
     pub fn remaining(&self) -> usize {
         self.total.saturating_sub(self.used)
     }
 
+    #[must_use]
     pub fn usage_percent(&self) -> f32 {
         if self.total == 0 {
             return 0.0;

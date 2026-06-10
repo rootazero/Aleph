@@ -32,6 +32,7 @@ pub struct SkillInstallTool {
 }
 
 impl SkillInstallTool {
+    #[must_use]
     pub fn new(system: SkillSystem) -> Self {
         Self { system }
     }

@@ -21,15 +21,18 @@ pub struct InstanceLock {
 }
 
 impl InstanceLock {
+    #[must_use]
     pub fn lock_path(&self) -> &Path {
         &self.path
     }
+    #[must_use]
     pub fn holder_pid(&self) -> u32 {
         self.holder_pid
     }
 
     /// Consume the lock and return the underlying file handle. The OS-level
     /// fs2 lock is released only when this `File` is dropped.
+    #[must_use]
     pub fn into_file(self) -> File {
         self.file
     }
@@ -119,6 +122,7 @@ pub fn try_acquire(data_dir: &Path) -> std::io::Result<AcquireOutcome> {
 
 /// Read holder metadata from the lock file WITHOUT competing for the lock.
 /// Returns None if the lock file does not exist.
+#[must_use]
 pub fn diagnose_holder(data_dir: &Path) -> Option<HolderDiagnostic> {
     let lock_path = data_dir.join(LOCK_FILENAME);
     let mut file = std::fs::File::open(&lock_path).ok()?;

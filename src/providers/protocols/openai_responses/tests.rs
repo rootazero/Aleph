@@ -1398,7 +1398,9 @@ fn build_request_codex_sends_session_id_header() {
         .build()
         .expect("finalize request");
     assert_eq!(
-        req.headers().get("session-id").and_then(|v| v.to_str().ok()),
+        req.headers()
+            .get("session-id")
+            .and_then(|v| v.to_str().ok()),
         Some("sess-codex-1"),
     );
 }

@@ -89,6 +89,7 @@ impl<'a> Default for RequestPayload<'a> {
 
 impl<'a> RequestPayload<'a> {
     /// Create payload from messages
+    #[must_use]
     pub fn new(messages: &'a [UnifiedMessage]) -> Self {
         Self {
             messages,
@@ -97,54 +98,63 @@ impl<'a> RequestPayload<'a> {
     }
 
     /// Add system prompt (single-string form, legacy).
+    #[must_use]
     pub fn with_system(mut self, prompt: Option<&'a str>) -> Self {
         self.system_prompt = prompt;
         self
     }
 
     /// Attach the stable/dynamic split. Cache-first providers prefer this.
+    #[must_use]
     pub fn with_system_blocks(mut self, blocks: Option<&'a [SystemPromptPart]>) -> Self {
         self.system_blocks = blocks;
         self
     }
 
     /// Add tools
+    #[must_use]
     pub fn with_tools(mut self, tools: Option<&'a [ToolDefinition]>) -> Self {
         self.tools = tools;
         self
     }
 
     /// Set thinking level
+    #[must_use]
     pub fn with_think_level(mut self, level: Option<ThinkLevel>) -> Self {
         self.think_level = level;
         self
     }
 
     /// Set temperature
+    #[must_use]
     pub fn with_temperature(mut self, temperature: Option<f32>) -> Self {
         self.temperature = temperature;
         self
     }
 
     /// Set max_tokens
+    #[must_use]
     pub fn with_max_tokens(mut self, max_tokens: Option<u32>) -> Self {
         self.max_tokens = max_tokens;
         self
     }
 
     /// Set tool choice
+    #[must_use]
     pub fn with_tool_choice(mut self, choice: Option<ToolChoice>) -> Self {
         self.tool_choice = choice;
         self
     }
 
     /// Set model override
+    #[must_use]
     pub fn with_model(mut self, model: Option<String>) -> Self {
         self.model = model;
         self
     }
 
     /// Set metadata for provider-specific features
+    #[must_use]
     pub fn with_metadata(
         mut self,
         metadata: Option<std::collections::HashMap<String, String>>,
@@ -256,6 +266,7 @@ pub struct ProviderResponse {
 
 impl ProviderResponse {
     /// Create a text-only response (for fallback providers)
+    #[must_use]
     pub fn text_only(text: String) -> Self {
         Self {
             text: Some(text),
@@ -265,11 +276,13 @@ impl ProviderResponse {
     }
 
     /// Whether this response contains native tool calls
+    #[must_use]
     pub fn has_tool_calls(&self) -> bool {
         !self.tool_calls.is_empty()
     }
 
     /// Extract text content (convenience for callers migrating from String return)
+    #[must_use]
     pub fn text_content(&self) -> String {
         self.text.clone().unwrap_or_default()
     }
@@ -347,6 +360,7 @@ pub struct TokenCost {
 }
 
 impl TokenCost {
+    #[must_use]
     pub fn calculate(&self, usage: &TokenUsage) -> f64 {
         let input_cost = usage.input_tokens as f64 * self.input_cost_per_million / 1_000_000.0;
         let output_cost = usage.output_tokens as f64 * self.output_cost_per_million / 1_000_000.0;
@@ -392,6 +406,7 @@ impl TokenUsage {
     /// The branch detects which convention applies from the magnitudes: when
     /// `cache_read_tokens > input_tokens` the inputs are clearly disjoint
     /// (Anthropic), otherwise they are treated as overlapping (OpenAI-family).
+    #[must_use]
     pub fn cache_hit_ratio(&self) -> Option<f64> {
         let cache_read = self.cache_read_tokens?;
         if cache_read == 0 {
@@ -430,6 +445,7 @@ impl TokenUsage {
     ///   tokens) as the total already, with `cache_read` a subset → `input_tokens`.
     ///
     /// Returns 0 when the provider reported no usage (all counters zero).
+    #[must_use]
     pub fn prompt_tokens_total(&self) -> u64 {
         let input = u64::from(self.input_tokens);
         let cache_read = u64::from(self.cache_read_tokens.unwrap_or(0));

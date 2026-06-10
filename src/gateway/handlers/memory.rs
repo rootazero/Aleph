@@ -443,6 +443,7 @@ impl Default for ReembedState {
 }
 
 impl ReembedState {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             running: Arc::new(AtomicBool::new(false)),

@@ -19,6 +19,7 @@ pub const PRESET_PATHS: &[(&str, &str)] = &[
 /// "aleph://user/preferences/coding/" -> "aleph://user/preferences/"
 /// "aleph://user/preferences/" -> "aleph://user/"
 /// "aleph://user/" -> "aleph://"
+#[must_use]
 pub fn compute_parent_path(path: &str) -> String {
     let trimmed = path.trim_end_matches('/');
     match trimmed.rfind('/') {
@@ -31,6 +32,7 @@ pub fn compute_parent_path(path: &str) -> String {
 ///
 /// Given `aleph://user/preferences/coding`, returns `("user", "preferences")`.
 /// Returns `("", "")` for empty or non-conforming paths.
+#[must_use]
 pub fn parse_domain_topic(path: &str) -> (&str, &str) {
     const PREFIX: &str = "aleph://";
 

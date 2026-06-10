@@ -46,6 +46,7 @@ pub const WINDOWED_BACKOFF_FLOOR_MS: i64 = 300_000; // 5 min
 /// - `now == anchor` → returns `anchor` (fire at anchor point)
 /// - Future anchor (anchor > now) → returns `anchor`
 /// - Future manual trigger (last_run_at > now) → returns `last_run_at + every`
+#[must_use]
 pub fn compute_next_every(
     now_ms: i64,
     every_ms: i64,
@@ -89,6 +90,7 @@ pub fn compute_next_every(
 ///
 /// Returns `max(next_run_ms, last_ended_ms + MIN_REFIRE_GAP_MS)`,
 /// or `next_run_ms` if `last_ended_ms` is None.
+#[must_use]
 pub fn apply_min_gap(next_run_ms: i64, last_ended_ms: Option<i64>) -> i64 {
     match last_ended_ms {
         Some(ended) => next_run_ms.max(ended + MIN_REFIRE_GAP_MS),
@@ -97,6 +99,7 @@ pub fn apply_min_gap(next_run_ms: i64, last_ended_ms: Option<i64>) -> i64 {
 }
 
 /// Resolve the anchor timestamp: use explicit if provided, else fall back to created_at.
+#[must_use]
 pub fn resolve_anchor(explicit: Option<i64>, created_at_ms: i64) -> i64 {
     explicit.unwrap_or(created_at_ms)
 }
@@ -138,6 +141,7 @@ pub fn compute_next_cron(
 ///
 /// - 0 errors → 0ms (no delay)
 /// - 1 error → 30s, 2 → 60s, 3 → 5min, 4 → 15min, 5+ → 60min
+#[must_use]
 pub fn compute_backoff_ms(consecutive_errors: u32) -> i64 {
     if consecutive_errors == 0 {
         return 0;
@@ -157,6 +161,7 @@ pub fn compute_backoff_ms(consecutive_errors: u32) -> i64 {
 ///
 /// [`RateLimit`]: RetryCategory::RateLimit
 /// [`Overloaded`]: RetryCategory::Overloaded
+#[must_use]
 pub fn compute_backoff_ms_for(category: Option<RetryCategory>, consecutive_errors: u32) -> i64 {
     let base = compute_backoff_ms(consecutive_errors);
     if base == 0 {

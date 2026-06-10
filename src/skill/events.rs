@@ -32,15 +32,18 @@ impl SkillSystemEvent {
             skill_id: skill_id.into(),
         }
     }
+    #[must_use]
     pub fn all_reloaded(count: usize, skill_ids: Vec<String>) -> Self {
         Self::AllReloaded { count, skill_ids }
     }
+    #[must_use]
     pub fn skill_id(&self) -> Option<&str> {
         match self {
             Self::SkillLoaded { skill_id, .. } | Self::SkillRemoved { skill_id } => Some(skill_id),
             Self::AllReloaded { .. } => None,
         }
     }
+    #[must_use]
     pub fn is_bulk_reload(&self) -> bool {
         matches!(self, Self::AllReloaded { .. })
     }

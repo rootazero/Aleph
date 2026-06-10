@@ -136,6 +136,7 @@ pub struct BrowserSsrfGuard {
 }
 
 impl BrowserSsrfGuard {
+    #[must_use]
     pub fn new(config: SsrfConfig) -> Self {
         Self { config }
     }
@@ -227,6 +228,7 @@ impl BrowserSsrfGuard {
     /// guards above are the IN half (model context → navigation URL). Returns
     /// the input unchanged (zero-copy) when redaction is disabled or no secret
     /// is present.
+    #[must_use]
     pub fn redact_content<'a>(&self, text: &'a str) -> Cow<'a, str> {
         if self.config.redact_secrets_in_content {
             super::secret_guard::redact_secrets(text)

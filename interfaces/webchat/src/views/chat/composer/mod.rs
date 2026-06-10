@@ -343,12 +343,12 @@ pub(super) fn InputArea() -> impl IntoView {
             current_namespace.set(Some(entry.label.clone()));
             input_text.set(format!("/{} ", entry.label));
             let cmds = all_commands.get_untracked();
-            let ns = Some(entry.label.clone());
+            let ns = Some(entry.label);
             let entries = build_palette_entries(&cmds, &ns, "", &labels);
             palette_entries.set(entries);
             selected_index.set(0);
         } else {
-            input_text.set(entry.full_command.clone());
+            input_text.set(entry.full_command);
             show_palette.set(false);
             current_namespace.set(None);
         }

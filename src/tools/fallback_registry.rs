@@ -120,6 +120,7 @@ impl ToolFamily {
 /// The returned list is ordered most-promising-first. Empty when the
 /// kind doesn't admit a sensible alternative (e.g. `Duplicate` is a
 /// developer error, not a routing signal).
+#[must_use]
 pub fn suggest_alternatives(tool_name: &str, kind: ToolErrorKind) -> Vec<FallbackSuggestion> {
     // Validation / Permission / ToolNotFound / Duplicate are not
     // routing signals — they need the caller to fix the call shape,
@@ -290,6 +291,7 @@ fn family_suggestions(family: ToolFamily, kind: ToolErrorKind) -> Vec<FallbackSu
 ///
 /// The output is intentionally compact (single line, ~200 chars typ.)
 /// so it doesn't dominate the tool_result body in the next prompt.
+#[must_use]
 pub fn render_persistence_hint(err: &ToolError, tool_name: &str) -> String {
     let kind = err.kind();
     let alternatives = suggest_alternatives(tool_name, kind);

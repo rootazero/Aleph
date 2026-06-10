@@ -38,12 +38,14 @@ pub struct MinimaxBaseResp {
 
 impl MinimaxBaseResp {
     /// True for the canonical "everything is fine" code (0).
+    #[must_use]
     pub fn is_success(&self) -> bool {
         self.status_code == 0
     }
 
     /// Best-effort message — falls back to a stringified status code when
     /// the upstream omits a status_msg.
+    #[must_use]
     pub fn best_message(&self) -> String {
         self.status_msg
             .clone()

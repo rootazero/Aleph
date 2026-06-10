@@ -46,6 +46,7 @@ pub struct GroupChatSession {
 
 impl GroupChatSession {
     /// Create a new group chat session.
+    #[must_use]
     pub fn new(
         id: String,
         topic: Option<String>,
@@ -88,6 +89,7 @@ impl GroupChatSession {
     /// Build a human-readable conversation history string.
     ///
     /// Format: `[SpeakerName]: content\n\n` for each turn.
+    #[must_use]
     pub fn build_history_text(&self) -> String {
         let mut text = String::new();
         for turn in &self.history {

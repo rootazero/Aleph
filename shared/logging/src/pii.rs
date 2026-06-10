@@ -51,10 +51,11 @@ fn get_patterns() -> &'static PiiPatterns {
 /// - Email addresses → [EMAIL]
 /// - Phone numbers → [PHONE]
 /// - SSN/Tax IDs → [SSN]
-/// - Credit card numbers → [CREDIT_CARD]
+/// - Credit card numbers → [`CREDIT_CARD`]
 /// - API keys → [REDACTED]
-/// - Chinese ID cards → [ID_CARD]
-/// - Bank card numbers → [BANK_CARD]
+/// - Chinese ID cards → [`ID_CARD`]
+/// - Bank card numbers → [`BANK_CARD`]
+#[must_use]
 pub fn scrub_pii(text: &str) -> String {
     let patterns = get_patterns();
     let mut scrubbed = text.to_string();

@@ -20,6 +20,7 @@ impl ApprovalBridge {
     /// `[Allow Once] [Allow Always]` / `[Deny]`; a destructive command omits
     /// the `Allow Always` button so it cannot be permanently allowlisted in one
     /// tap; a blocked command offers only `Deny`.
+    #[must_use]
     pub fn build_approval_keyboard(
         approval_id: &str,
         allowed: &[ApprovalDecisionType],
@@ -58,6 +59,7 @@ impl ApprovalBridge {
     ///
     /// Expected format: "approve:{id}:{decision}"
     /// where decision is "once", "session", "always", or "deny"
+    #[must_use]
     pub fn parse_callback(data: &str) -> Option<(String, ApprovalDecisionType)> {
         // Use split_once to be robust against IDs that might contain colons
         let (prefix, rest) = data.split_once(':')?;
@@ -82,6 +84,7 @@ impl ApprovalBridge {
     }
 
     /// Get the response text for a decision
+    #[must_use]
     pub fn decision_response_text(decision: &ApprovalDecisionType) -> &'static str {
         match decision {
             ApprovalDecisionType::AllowOnce => "✅ Allowed (once)",

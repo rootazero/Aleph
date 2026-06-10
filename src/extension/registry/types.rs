@@ -186,6 +186,7 @@ pub struct SkillRegistration {
 
 impl SkillRegistration {
     /// Get the fully qualified name (plugin:skill or just skill)
+    #[must_use]
     pub fn qualified_name(&self) -> String {
         match &self.plugin_name {
             Some(plugin) => format!("{}:{}", plugin, self.name),
@@ -194,17 +195,20 @@ impl SkillRegistration {
     }
 
     /// Check if this skill can be auto-invoked by the model
+    #[must_use]
     pub fn is_auto_invocable(&self) -> bool {
         !self.disable_model_invocation
             && self.skill_type == crate::extension::types::SkillType::Skill
     }
 
     /// Substitute $ARGUMENTS placeholder
+    #[must_use]
     pub fn with_arguments(&self, arguments: &str) -> String {
         self.content.replace("$ARGUMENTS", arguments)
     }
 
     /// Get the base directory for this skill (for file references)
+    #[must_use]
     pub fn base_dir(&self) -> PathBuf {
         self.source_path
             .parent()
@@ -289,6 +293,7 @@ pub struct AgentRegistration {
 
 impl AgentRegistration {
     /// Get the fully qualified name
+    #[must_use]
     pub fn qualified_name(&self) -> String {
         match &self.plugin_name {
             Some(plugin) => format!("{}:{}", plugin, self.name),
@@ -297,6 +302,7 @@ impl AgentRegistration {
     }
 
     /// Check if agent is a primary agent
+    #[must_use]
     pub fn is_primary(&self) -> bool {
         matches!(
             self.mode,
@@ -305,6 +311,7 @@ impl AgentRegistration {
     }
 
     /// Check if agent can be used as a sub-agent
+    #[must_use]
     pub fn is_subagent(&self) -> bool {
         matches!(
             self.mode,

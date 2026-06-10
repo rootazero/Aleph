@@ -42,6 +42,7 @@ pub struct OperatorApprovalRequester {
 }
 
 impl OperatorApprovalRequester {
+    #[must_use]
     pub fn new(manager: Arc<ExecApprovalManager>, event_bus: Arc<GatewayEventBus>) -> Self {
         Self { manager, event_bus }
     }

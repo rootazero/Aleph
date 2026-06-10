@@ -23,16 +23,19 @@ impl DecryptedSecret {
     }
 
     /// Expose the plaintext value. Use sparingly.
+    #[must_use]
     pub fn expose(&self) -> &str {
         self.value.expose_secret()
     }
 
     /// Get the length of the secret value in bytes.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.value.expose_secret().len()
     }
 
     /// Check if the secret is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.value.expose_secret().is_empty()
     }

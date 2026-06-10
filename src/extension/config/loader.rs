@@ -24,6 +24,7 @@ const CONFIG_FILES: &[&str] = &["aleph.toml", "aleph.jsonc", "aleph.json"];
 /// # Returns
 ///
 /// The path to the config file if found, or None if no config file exists.
+#[must_use]
 pub fn find_config_file(dir: &Path) -> Option<PathBuf> {
     for filename in CONFIG_FILES {
         let path = dir.join(filename);

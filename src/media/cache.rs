@@ -61,6 +61,7 @@ pub struct MediaCache {
 
 impl MediaCache {
     /// Create a new cache with a shared HTTP client.
+    #[must_use]
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(DOWNLOAD_TIMEOUT)
@@ -88,7 +89,7 @@ impl MediaCache {
             let filename =
                 sanitize_filename(attachment.filename.as_deref().unwrap_or(&attachment.id));
             let path = dir.join(filename);
-            std::fs::write(&path, data)?;
+            tokio::fs::write(&path, data).await?;
             debug!(path = %path.display(), "cached inline attachment");
             return Ok(CachedMedia {
                 local_path: path,
@@ -142,7 +143,8 @@ impl MediaCache {
 
             // Stream response body to file with incremental size check
             // (guards against servers that lie about Content-Length or omit it)
-            let mut file = std::fs::File::create(&path)?;
+            use tokio::io::AsyncWriteExt;
+            let mut file = tokio::fs::File::create(&path).await?;
             let mut stream = resp.bytes_stream();
             let mut total_size: u64 = 0;
 
@@ -151,12 +153,15 @@ impl MediaCache {
                 total_size += chunk.len() as u64;
                 if total_size > MAX_FILE_SIZE {
                     // Clean up partially-written file
+                    drop(file);
                     let _ = std::fs::remove_file(&path);
                     return Err(CacheError::TooLarge { size: total_size });
                 }
-                use std::io::Write;
-                file.write_all(&chunk)?;
+                file.write_all(&chunk).await?;
             }
+            // Flush buffered writes before the handle is dropped — tokio's
+            // File does not guarantee buffered data is submitted on drop.
+            file.flush().await?;
 
             debug!(path = %path.display(), size = total_size, "downloaded attachment from URL");
             return Ok(CachedMedia {

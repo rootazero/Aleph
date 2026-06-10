@@ -1,6 +1,6 @@
 //! Plugin management command handlers
 //!
-//! Spec C policy: **NoLock**. All plugin operations target
+//! Spec C policy: **`NoLock`**. All plugin operations target
 //! `~/.aleph/plugins/` (extension dir) or read `~/.aleph/config.toml`
 //! for marketplace metadata; none of them write to `~/.aleph/data/`.
 //! Each handler enters via a marker `run_no_lock` call to satisfy
@@ -17,7 +17,7 @@ pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load all plugins
     if let Err(e) = manager.load_all().await {
-        eprintln!("Warning: Some plugins failed to load: {}", e);
+        eprintln!("Warning: Some plugins failed to load: {e}");
     }
 
     let plugins = manager.get_plugin_info().await;
@@ -49,7 +49,7 @@ pub async fn handle_plugins_list() -> Result<(), Box<dyn std::error::Error>> {
             // Truncate description if too long
             let description = if description.chars().count() > 38 {
                 let truncated: String = description.chars().take(35).collect();
-                format!("{}...", truncated)
+                format!("{truncated}...")
             } else {
                 description
             };
@@ -69,7 +69,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     use alephcore::extension::default_plugins_dir;
     use alephcore::extension::manifest::adapter::AdapterRegistry;
 
-    println!("Installing plugin from {}...", url);
+    println!("Installing plugin from {url}...");
 
     let plugins_dir = default_plugins_dir();
 
@@ -81,8 +81,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
     let repo_name = url
         .split_once('?')
         .or_else(|| url.split_once('#'))
-        .map(|(path, _)| path)
-        .unwrap_or(url)
+        .map_or(url, |(path, _)| path)
         .trim_end_matches('/')
         .split('/')
         .next_back()
@@ -122,15 +121,15 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
                     let capabilities_count = output.capabilities.len();
                     println!();
                     println!("Plugin installed successfully!");
-                    println!("  Name:        {}", name);
-                    println!("  Version:     {}", version);
-                    println!("  Description: {}", description);
+                    println!("  Name:        {name}");
+                    println!("  Version:     {version}");
+                    println!("  Description: {description}");
                     println!("  Path:        {}", dest_path.display());
-                    println!("  Capabilities: {}", capabilities_count);
+                    println!("  Capabilities: {capabilities_count}");
                 }
                 Err(e) => {
                     // Cleanup on failure
-                    eprintln!("Warning: Plugin cloned but failed to load: {}", e);
+                    eprintln!("Warning: Plugin cloned but failed to load: {e}");
                     eprintln!(
                         "The plugin directory has been kept at: {}",
                         dest_path.display()
@@ -140,7 +139,7 @@ pub async fn handle_plugins_install(url: &str) -> Result<(), Box<dyn std::error:
             }
         }
         Err(e) => {
-            eprintln!("Error: Failed to clone repository: {}", e);
+            eprintln!("Error: Failed to clone repository: {e}");
             std::process::exit(1);
         }
     }
@@ -156,13 +155,13 @@ pub fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Er
     let plugin_path = plugins_dir.join(name);
 
     if !plugin_path.exists() {
-        eprintln!("Error: Plugin not found: {}", name);
+        eprintln!("Error: Plugin not found: {name}");
         eprintln!("Plugin directory: {}", plugin_path.display());
         std::process::exit(1);
     }
 
     // Confirm uninstall
-    println!("Uninstalling plugin: {}", name);
+    println!("Uninstalling plugin: {name}");
     println!("Path: {}", plugin_path.display());
 
     match std::fs::remove_dir_all(&plugin_path) {
@@ -170,7 +169,7 @@ pub fn handle_plugins_uninstall(name: &str) -> Result<(), Box<dyn std::error::Er
             println!("Plugin uninstalled successfully.");
         }
         Err(e) => {
-            eprintln!("Error: Failed to remove plugin: {}", e);
+            eprintln!("Error: Failed to remove plugin: {e}");
             std::process::exit(1);
         }
     }
@@ -186,7 +185,7 @@ pub fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error
     let plugin_path = plugins_dir.join(name);
 
     if !plugin_path.exists() {
-        eprintln!("Error: Plugin not found: {}", name);
+        eprintln!("Error: Plugin not found: {name}");
         std::process::exit(1);
     }
 
@@ -194,9 +193,9 @@ pub fn handle_plugins_enable(name: &str) -> Result<(), Box<dyn std::error::Error
     let disabled_marker = plugin_path.join(".disabled");
     if disabled_marker.exists() {
         std::fs::remove_file(&disabled_marker)?;
-        println!("Plugin enabled: {}", name);
+        println!("Plugin enabled: {name}");
     } else {
-        println!("Plugin is already enabled: {}", name);
+        println!("Plugin is already enabled: {name}");
     }
 
     Ok(())
@@ -210,17 +209,17 @@ pub fn handle_plugins_disable(name: &str) -> Result<(), Box<dyn std::error::Erro
     let plugin_path = plugins_dir.join(name);
 
     if !plugin_path.exists() {
-        eprintln!("Error: Plugin not found: {}", name);
+        eprintln!("Error: Plugin not found: {name}");
         std::process::exit(1);
     }
 
     // Create disabled marker file
     let disabled_marker = plugin_path.join(".disabled");
-    if !disabled_marker.exists() {
-        std::fs::write(&disabled_marker, "")?;
-        println!("Plugin disabled: {}", name);
+    if disabled_marker.exists() {
+        println!("Plugin is already disabled: {name}");
     } else {
-        println!("Plugin is already disabled: {}", name);
+        std::fs::write(&disabled_marker, "")?;
+        println!("Plugin disabled: {name}");
     }
 
     Ok(())
@@ -264,13 +263,13 @@ pub async fn handle_plugin_install(
         let manager = MarketplaceManager::new(marketplace_configs, None);
         let plugin_scope = parse_scope(scope)?;
 
-        println!("Searching for plugin '{}'...", source);
+        println!("Searching for plugin '{source}'...");
         match manager.install_to_scope(source, None, plugin_scope, None) {
             Ok(path) => {
-                println!("Plugin '{}' installed to {:?}", source, path);
+                println!("Plugin '{source}' installed to {path:?}");
             }
             Err(e) => {
-                eprintln!("Error: {}", e);
+                eprintln!("Error: {e}");
                 std::process::exit(1);
             }
         }
@@ -328,32 +327,29 @@ pub async fn handle_plugin_update(
     let plugin_scope = parse_scope(scope)?;
 
     // Resolve the set of plugin names to update.
-    let names: Vec<String> = match name {
-        Some(n) => vec![n],
-        None => {
-            let dir = scope_install_dir(plugin_scope, None)?;
-            let mut found = Vec::new();
-            if let Ok(entries) = std::fs::read_dir(&dir) {
-                for entry in entries.flatten() {
-                    if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+    let names: Vec<String> = if let Some(n) = name { vec![n] } else {
+        let dir = scope_install_dir(plugin_scope, None)?;
+        let mut found = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+                    continue;
+                }
+                if let Some(n) = entry.file_name().to_str() {
+                    // Skip staging/backup scratch dirs.
+                    if n.starts_with('.') {
                         continue;
                     }
-                    if let Some(n) = entry.file_name().to_str() {
-                        // Skip staging/backup scratch dirs.
-                        if n.starts_with('.') {
-                            continue;
-                        }
-                        found.push(n.to_string());
-                    }
+                    found.push(n.to_string());
                 }
             }
-            if found.is_empty() {
-                println!("No installed plugins to update in scope '{}'.", scope);
-                return Ok(());
-            }
-            found.sort();
-            found
         }
+        if found.is_empty() {
+            println!("No installed plugins to update in scope '{scope}'.");
+            return Ok(());
+        }
+        found.sort();
+        found
     };
 
     let mut updated = 0usize;
@@ -364,24 +360,23 @@ pub async fn handle_plugin_update(
             Ok(UpdateOutcome::Updated { from, to }) => {
                 let from = from.unwrap_or_else(|| "-".to_string());
                 let to = to.unwrap_or_else(|| "-".to_string());
-                println!("Updated '{}': {} → {}", plugin_name, from, to);
+                println!("Updated '{plugin_name}': {from} → {to}");
                 updated += 1;
             }
             Ok(UpdateOutcome::AlreadyLatest { version }) => {
                 let version = version.unwrap_or_else(|| "-".to_string());
-                println!("'{}' already up to date ({}).", plugin_name, version);
+                println!("'{plugin_name}' already up to date ({version}).");
                 unchanged += 1;
             }
             Err(e) => {
-                eprintln!("Failed to update '{}': {}", plugin_name, e);
+                eprintln!("Failed to update '{plugin_name}': {e}");
                 failed += 1;
             }
         }
     }
 
     println!(
-        "\nDone: {} updated, {} unchanged, {} failed.",
-        updated, unchanged, failed
+        "\nDone: {updated} updated, {unchanged} unchanged, {failed} failed."
     );
     if failed > 0 {
         std::process::exit(1);
@@ -475,29 +470,26 @@ pub async fn handle_marketplace_command(
             );
             config.save_incremental(&["plugin_marketplaces"])?;
 
-            println!("Added marketplace '{}' ({})", name, source);
+            println!("Added marketplace '{name}' ({source})");
 
             // Sync cache
             print!("Syncing cache...");
             match manager.update(&name) {
                 Ok(_) => println!(" done."),
-                Err(e) => println!(" failed: {}", e),
+                Err(e) => println!(" failed: {e}"),
             }
         }
-        MarketplaceAction::Update { name } => match name {
-            Some(n) => {
-                println!("Updating marketplace '{}'...", n);
-                match manager.update(&n) {
-                    Ok(path) => println!("Updated: {:?}", path),
-                    Err(e) => eprintln!("Error: {}", e),
-                }
+        MarketplaceAction::Update { name } => if let Some(n) = name {
+            println!("Updating marketplace '{n}'...");
+            match manager.update(&n) {
+                Ok(path) => println!("Updated: {path:?}"),
+                Err(e) => eprintln!("Error: {e}"),
             }
-            None => {
-                println!("Updating all marketplaces...");
-                match manager.update_all() {
-                    Ok(()) => println!("All marketplaces updated."),
-                    Err(e) => eprintln!("Some updates failed: {}", e),
-                }
+        } else {
+            println!("Updating all marketplaces...");
+            match manager.update_all() {
+                Ok(()) => println!("All marketplaces updated."),
+                Err(e) => eprintln!("Some updates failed: {e}"),
             }
         },
         MarketplaceAction::Remove { name } => {
@@ -508,7 +500,7 @@ pub async fn handle_marketplace_command(
             config.plugin_marketplaces.remove(&name);
             config.save_incremental(&["plugin_marketplaces"])?;
 
-            println!("Removed marketplace '{}'", name);
+            println!("Removed marketplace '{name}'");
         }
     }
     Ok(())

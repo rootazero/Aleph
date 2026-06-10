@@ -21,6 +21,7 @@ pub enum MediaImageFormat {
 }
 
 impl MediaImageFormat {
+    #[must_use]
     pub fn mime_type(&self) -> &'static str {
         match self {
             Self::Png => "image/png",
@@ -32,6 +33,7 @@ impl MediaImageFormat {
         }
     }
 
+    #[must_use]
     pub fn extension(&self) -> &'static str {
         match self {
             Self::Png => "png",
@@ -59,6 +61,7 @@ pub enum AudioFormat {
 }
 
 impl AudioFormat {
+    #[must_use]
     pub fn mime_type(&self) -> &'static str {
         match self {
             Self::Mp3 => "audio/mpeg",
@@ -69,6 +72,7 @@ impl AudioFormat {
         }
     }
 
+    #[must_use]
     pub fn extension(&self) -> &'static str {
         match self {
             Self::Mp3 => "mp3",
@@ -93,6 +97,7 @@ pub enum VideoFormat {
 }
 
 impl VideoFormat {
+    #[must_use]
     pub fn mime_type(&self) -> &'static str {
         match self {
             Self::Mp4 => "video/mp4",
@@ -101,6 +106,7 @@ impl VideoFormat {
         }
     }
 
+    #[must_use]
     pub fn extension(&self) -> &'static str {
         match self {
             Self::Mp4 => "mp4",
@@ -126,6 +132,7 @@ pub enum DocFormat {
 }
 
 impl DocFormat {
+    #[must_use]
     pub fn mime_type(&self) -> &'static str {
         match self {
             Self::Pdf => "application/pdf",
@@ -137,6 +144,7 @@ impl DocFormat {
         }
     }
 
+    #[must_use]
     pub fn extension(&self) -> &'static str {
         match self {
             Self::Pdf => "pdf",
@@ -179,6 +187,7 @@ pub enum MediaType {
 
 impl MediaType {
     /// Human-readable category name.
+    #[must_use]
     pub fn category(&self) -> &'static str {
         match self {
             Self::Image { .. } => "image",

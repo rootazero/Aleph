@@ -39,6 +39,7 @@ pub enum ChatType {
 impl ChatType {
     /// Classify from a teloxide `Chat` object using the same method-based
     /// approach as the rest of the codebase.
+    #[must_use]
     pub fn from_chat(ch: &teloxide::types::Chat) -> Self {
         if ch.is_private() {
             ChatType::Private
@@ -52,6 +53,7 @@ impl ChatType {
     }
 
     /// Returns `true` for supergroup or group (any chat that supports group policies).
+    #[must_use]
     pub fn is_group(self) -> bool {
         matches!(self, ChatType::Group | ChatType::Supergroup)
     }
@@ -80,6 +82,7 @@ pub enum AccessLevel {
 
 impl AccessLevel {
     /// Derive from Telegram member status if available.
+    #[must_use]
     pub fn from_telegram_status(
         is_creator: bool,
         is_administrator: bool,
@@ -116,6 +119,7 @@ impl ConversationKey {
     /// Parse a conversation key from a string returned by `ConversationId::as_str()`.
     ///
     /// Format: `"{chat_id}"` or `"{chat_id}:topic:{thread_id}"`
+    #[must_use]
     pub fn parse_from_conv_id(conv_id: &str) -> Self {
         if let Some((chat_str, topic_str)) = conv_id.split_once(":topic:") {
             let chat_id = chat_str.parse().unwrap_or(0);
@@ -131,6 +135,7 @@ impl ConversationKey {
     }
 
     /// Format into a `ConversationId` string.
+    #[must_use]
     pub fn to_conversation_id_string(&self) -> String {
         match self.thread_id {
             Some(tid) => format!("{}:topic:{}", self.chat_id, tid),
@@ -139,6 +144,7 @@ impl ConversationKey {
     }
 
     /// Create a new key from chat_id only (no thread).
+    #[must_use]
     pub fn new(chat_id: i64) -> Self {
         Self {
             chat_id,
@@ -147,6 +153,7 @@ impl ConversationKey {
     }
 
     /// Create a new key from chat_id and thread_id.
+    #[must_use]
     pub fn with_thread(chat_id: i64, thread_id: i64) -> Self {
         Self {
             chat_id,
@@ -175,6 +182,7 @@ pub struct SessionState {
 
 impl SessionState {
     /// Create a new session with a fresh UUID and current timestamp.
+    #[must_use]
     pub fn new(conversation_key: ConversationKey) -> Self {
         Self {
             session_id: uuid::Uuid::new_v4(),
@@ -190,6 +198,7 @@ impl SessionState {
     }
 
     /// Get a metadata value by key.
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&str> {
         self.metadata.get(key).map(|s| s.as_str())
     }
@@ -205,6 +214,7 @@ impl SessionState {
     }
 
     /// Returns `true` if the session has been inactive for longer than `timeout`.
+    #[must_use]
     pub fn is_expired(&self, timeout: std::time::Duration) -> bool {
         self.last_activity + timeout < Utc::now()
     }
@@ -263,6 +273,7 @@ impl TelegramInboundContext {
     ///
     /// This is called in `handlers.rs` after `convert_message()` succeeds and
     /// the access check has passed.
+    #[must_use]
     pub fn from_inbound(inbound: InboundMessage, tg_msg: &teloxide::types::Message) -> Self {
         let chat_type = ChatType::from_chat(&tg_msg.chat);
         let chat_id = tg_msg.chat.id.0;
@@ -290,44 +301,52 @@ impl TelegramInboundContext {
     }
 
     /// Update the access level (called after group policy evaluation).
+    #[must_use]
     pub fn with_access_level(mut self, level: AccessLevel) -> Self {
         self.access_level = level;
         self
     }
 
     /// Attach session state to this context.
+    #[must_use]
     pub fn with_session(mut self, session: SessionState) -> Self {
         self.session = Some(session);
         self
     }
 
     /// Attach media items to this context.
+    #[must_use]
     pub fn with_media(mut self, media: Vec<MediaItem>) -> Self {
         self.media = media;
         self
     }
 
     /// Returns `true` if this message is from a group/supergroup.
+    #[must_use]
     pub fn is_group(&self) -> bool {
         self.chat_type.is_group()
     }
 
     /// Returns the sender's `UserId` as a string.
+    #[must_use]
     pub fn sender_user_id(&self) -> UserId {
         self.message.sender_id.clone()
     }
 
     /// Returns the `ConversationId` for this message.
+    #[must_use]
     pub fn conversation_id(&self) -> &ConversationId {
         &self.message.conversation_id
     }
 
     /// Returns the `MessageId` for this message.
+    #[must_use]
     pub fn message_id(&self) -> MessageId {
         self.message.id.clone()
     }
 
     /// Returns the text content of the message.
+    #[must_use]
     pub fn text(&self) -> &str {
         &self.message.text
     }

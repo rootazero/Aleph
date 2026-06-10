@@ -36,6 +36,7 @@ pub fn build_send_payload(
 }
 
 /// Map OutboundMessage to iLink send payload.
+#[must_use]
 pub fn map_outbound_to_payload(
     outbound: &OutboundMessage,
     from_user_id: &str,

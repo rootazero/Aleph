@@ -173,6 +173,7 @@ impl GenerationError {
     }
 
     /// Create a timeout error
+    #[must_use]
     pub fn timeout(duration: Duration) -> Self {
         GenerationError::TimeoutError { duration }
     }
@@ -227,6 +228,7 @@ impl GenerationError {
     }
 
     /// Create a cancelled error
+    #[must_use]
     pub fn cancelled() -> Self {
         GenerationError::Cancelled
     }
@@ -315,6 +317,7 @@ impl GenerationError {
     /// let auth_error = GenerationError::authentication("Invalid key", "openai");
     /// assert!(!auth_error.is_retryable());
     /// ```
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -349,6 +352,7 @@ impl GenerationError {
     /// let timeout = GenerationError::timeout(std::time::Duration::from_secs(30));
     /// assert!(!timeout.needs_user_action());
     /// ```
+    #[must_use]
     pub fn needs_user_action(&self) -> bool {
         matches!(
             self,
@@ -380,6 +384,7 @@ impl GenerationError {
     /// let auth = GenerationError::authentication("Invalid key", "openai");
     /// assert!(!auth.should_fallback());
     /// ```
+    #[must_use]
     pub fn should_fallback(&self) -> bool {
         matches!(
             self,
@@ -409,6 +414,7 @@ impl GenerationError {
     ///
     /// assert_eq!(error.retry_after(), Some(Duration::from_secs(60)));
     /// ```
+    #[must_use]
     pub fn retry_after(&self) -> Option<Duration> {
         match self {
             GenerationError::RateLimitError { retry_after, .. } => *retry_after,
@@ -417,6 +423,7 @@ impl GenerationError {
     }
 
     /// Get the provider name if available
+    #[must_use]
     pub fn provider_name(&self) -> Option<&str> {
         match self {
             GenerationError::AuthenticationError { provider, .. } => Some(provider),
@@ -432,6 +439,7 @@ impl GenerationError {
     ///
     /// Returns a message suitable for display in the UI,
     /// with actionable suggestions where applicable.
+    #[must_use]
     pub fn user_friendly_message(&self) -> String {
         match self {
             GenerationError::AuthenticationError { provider, .. } => {

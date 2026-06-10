@@ -34,6 +34,7 @@ pub struct LinuxPlatform {
 }
 
 impl LinuxPlatform {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             screen: NativeScreen::new(),
@@ -55,7 +56,7 @@ impl Default for LinuxPlatform {
 }
 
 impl DesktopPlatform for LinuxPlatform {
-    fn platform_name(&self) -> &str {
+    fn platform_name(&self) -> &'static str {
         "Linux"
     }
 

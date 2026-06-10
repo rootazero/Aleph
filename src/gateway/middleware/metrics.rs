@@ -23,6 +23,7 @@ pub struct MetricsLayer {
 }
 
 impl MetricsLayer {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             requests_total: Arc::new(AtomicU64::new(0)),
@@ -33,6 +34,7 @@ impl MetricsLayer {
         }
     }
 
+    #[must_use]
     pub fn new_with_registry(state_registry: Arc<RequestStateRegistry>) -> Self {
         Self {
             requests_total: Arc::new(AtomicU64::new(0)),
@@ -43,6 +45,7 @@ impl MetricsLayer {
         }
     }
 
+    #[must_use]
     pub fn with_threshold(mut self, threshold: u64) -> Self {
         self.processing_threshold = threshold;
         self
@@ -56,30 +59,37 @@ impl MetricsLayer {
         self
     }
 
+    #[must_use]
     pub fn requests_total(&self) -> u64 {
         self.requests_total.load(Ordering::SeqCst)
     }
 
+    #[must_use]
     pub fn requests_in_flight(&self) -> u64 {
         self.requests_in_flight.load(Ordering::SeqCst)
     }
 
+    #[must_use]
     pub fn state_registry(&self) -> Arc<RequestStateRegistry> {
         self.state_registry.clone()
     }
 
+    #[must_use]
     pub fn processing_count(&self) -> u64 {
         self.state_registry.count(RequestState::Processing)
     }
 
+    #[must_use]
     pub fn pending_count(&self) -> u64 {
         self.state_registry.count(RequestState::Pending)
     }
 
+    #[must_use]
     pub fn validating_count(&self) -> u64 {
         self.state_registry.count(RequestState::Validating)
     }
 
+    #[must_use]
     pub fn awaiting_count(&self) -> u64 {
         self.state_registry.count(RequestState::AwaitingResponse)
     }
@@ -204,7 +214,7 @@ where
             match &result {
                 Ok(resp) => {
                     if resp.is_error() {
-                        state_registry.fail(request_id);
+                        let _ = state_registry.fail(request_id);
                         tracing::debug!(
                             method = %method,
                             elapsed_ms = %elapsed_ms,
@@ -212,7 +222,7 @@ where
                             "rpc request"
                         );
                     } else {
-                        state_registry.complete(request_id);
+                        let _ = state_registry.complete(request_id);
                         tracing::debug!(
                             method = %method,
                             elapsed_ms = %elapsed_ms,
@@ -222,7 +232,7 @@ where
                     }
                 }
                 Err(_) => {
-                    state_registry.fail(request_id);
+                    let _ = state_registry.fail(request_id);
                     tracing::debug!(
                         method = %method,
                         elapsed_ms = %elapsed_ms,

@@ -35,9 +35,17 @@ pub async fn run_webhook_server(state: WebhookState) {
         .route(&state.config.webhook_path, post(handle_webhook))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("Feishu webhook server failed to bind {}: {e}", addr);
+            return;
+        }
+    };
     tracing::info!("Feishu webhook server listening on {}", addr);
-    axum::serve(listener, app).await.unwrap();
+    if let Err(e) = axum::serve(listener, app).await {
+        tracing::error!("Feishu webhook server error: {e}");
+    }
 }
 
 async fn handle_webhook(

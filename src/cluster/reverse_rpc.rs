@@ -24,6 +24,7 @@ pub struct PendingInvokes {
 }
 
 impl PendingInvokes {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -120,6 +121,7 @@ pub struct ReverseRpcChannel {
 
 impl ReverseRpcChannel {
     /// 用一条连接的出站发送端构造通道（新建独立的 pending 表）。
+    #[must_use]
     pub fn new(outbound: mpsc::Sender<String>) -> Self {
         Self {
             outbound,
@@ -128,6 +130,7 @@ impl ReverseRpcChannel {
     }
 
     /// 拿到共享的 pending 表。连接的入站循环用它把响应帧 `resolve` 回来。
+    #[must_use]
     pub fn pending(&self) -> Arc<PendingInvokes> {
         self.pending.clone()
     }
@@ -245,7 +248,11 @@ mod tests {
         let (_id1, rx1) = pending.register();
         let (_id2, rx2) = pending.register();
 
-        assert_eq!(pending.cancel_all(), 2, "should report both waiters cancelled");
+        assert_eq!(
+            pending.cancel_all(),
+            2,
+            "should report both waiters cancelled"
+        );
         assert!(rx1.await.is_err(), "sender dropped → receiver errors");
         assert!(rx2.await.is_err(), "sender dropped → receiver errors");
 
@@ -275,7 +282,10 @@ mod tests {
             tokio::task::yield_now().await;
         }
 
-        let err = call.await.expect("task joins").expect_err("must be cancelled");
+        let err = call
+            .await
+            .expect("task joins")
+            .expect_err("must be cancelled");
         assert!(matches!(err, ReverseRpcError::Cancelled));
     }
 

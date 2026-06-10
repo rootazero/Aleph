@@ -40,6 +40,7 @@ static SKILL_PATHS: Lazy<Arc<RwLock<std::collections::HashMap<String, PathBuf>>>
     Lazy::new(|| Arc::new(RwLock::new(std::collections::HashMap::new())));
 
 /// Accessor for the shared markdown-skill server.
+#[must_use]
 pub fn markdown_skills_server() -> &'static AlephToolServer {
     &MARKDOWN_SKILLS_SERVER
 }
@@ -289,12 +290,27 @@ pub async fn handle_install(request: JsonRpcRequest) -> JsonRpcResponse {
                 return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
             }
         },
-        SourceType::Git => match install_from_git(&source, &skills_dir, params.flatten) {
-            Ok(path) => path,
-            Err(e) => {
-                return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
+        SourceType::Git => {
+            // git2 clone/fetch is blocking network I/O — keep it off the
+            // async executor (a slow clone can take minutes).
+            let src = source.clone();
+            let dir = skills_dir.clone();
+            let flatten = params.flatten;
+            match tokio::task::spawn_blocking(move || install_from_git(&src, &dir, flatten)).await
+            {
+                Ok(Ok(path)) => path,
+                Ok(Err(e)) => {
+                    return JsonRpcResponse::error(request.id, INTERNAL_ERROR, e);
+                }
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        request.id,
+                        INTERNAL_ERROR,
+                        format!("git install task failed: {e}"),
+                    );
+                }
             }
-        },
+        }
         SourceType::LocalPath => PathBuf::from(&source),
     };
 

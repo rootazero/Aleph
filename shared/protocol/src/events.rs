@@ -120,6 +120,56 @@ pub enum StreamEvent {
         /// Suggested action for handling the uncertainty
         suggested_action: UncertaintyAction,
     },
+
+    /// Provider chain failed transiently; the run is about to retry.
+    ///
+    /// Mirrors the gateway's `stream.run_retrying` frame so terminal clients
+    /// (CLI `ask`, TUI chat) can show "provider unreachable, retrying"
+    /// instead of a silent thinking indicator while the retry ladder burns
+    /// minutes. Field names/types must stay aligned with
+    /// `GatewayEventFrame::RunRetrying` (`src/gateway/events/frame.rs`).
+    RunRetrying {
+        run_id: String,
+        seq: u64,
+        /// Provider that just failed.
+        provider: String,
+        /// 1-based attempt about to run (`2..=max_attempts`).
+        attempt: u32,
+        /// Total dispatch attempts before the run gives up.
+        max_attempts: u32,
+        /// Short human-readable failure reason (truncated at emit site).
+        reason: String,
+    },
+
+    /// The provider router settled on a concrete model for this run.
+    ///
+    /// Mirrors the gateway's `stream.model_resolved` frame (no `seq` —
+    /// `GatewayEventFrame::ModelResolved` carries only `run_id` +
+    /// `model_info`). Lets terminal clients flag fallback selections the
+    /// way the Panel does, instead of silently answering with a different
+    /// model than the user asked for.
+    ModelResolved {
+        run_id: String,
+        model_info: ModelInfo,
+    },
+}
+
+/// Resolved model metadata attached to [`StreamEvent::ModelResolved`].
+///
+/// Field names/types must stay aligned with
+/// `crate::providers::health::ModelInfo` on the gateway side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelInfo {
+    /// Model identifier actually used.
+    pub model: String,
+    /// Provider name serving the model.
+    pub provider: String,
+    /// Whether this was a fallback selection (not the user's first choice).
+    #[serde(default)]
+    pub is_fallback: bool,
+    /// Original model requested, if different from `model`.
+    #[serde(default)]
+    pub original_model: Option<String>,
 }
 
 /// Suggested action for handling AI uncertainty
@@ -138,7 +188,8 @@ pub enum UncertaintyAction {
 
 impl UncertaintyAction {
     /// Get human-readable description
-    pub fn description(&self) -> &'static str {
+    #[must_use]
+    pub const fn description(&self) -> &'static str {
         match self {
             Self::ProceedWithCaution => "Proceeding with caution despite uncertainty",
             Self::AskForClarification => "Asking user for clarification",
@@ -192,14 +243,14 @@ pub enum AgentTraceSessionOutcome {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentTraceToolCallStart {
     pub tool_id: String,
     pub tool_name: String,
     pub input: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentTraceToolCallEnd {
     pub tool_id: String,
     pub tool_name: String,
@@ -207,17 +258,19 @@ pub struct AgentTraceToolCallEnd {
     pub duration_ms: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum AgentTraceToolResult {
     Success { output: Value },
     Error { error: String, retryable: bool },
 }
 
 impl AgentTraceToolResult {
-    pub fn is_success(&self) -> bool {
+    #[must_use]
+    pub const fn is_success(&self) -> bool {
         !matches!(self, Self::Error { .. })
     }
 
+    #[must_use]
     pub fn error_text(&self) -> Option<&str> {
         match self {
             Self::Error { error, .. } => Some(error),
@@ -226,7 +279,7 @@ impl AgentTraceToolResult {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentTraceEvent {
     TurnStarted {
@@ -322,7 +375,8 @@ pub enum AgentTraceEvent {
 }
 
 impl AgentTraceEvent {
-    pub fn kind(&self) -> &'static str {
+    #[must_use]
+    pub const fn kind(&self) -> &'static str {
         match self {
             Self::TurnStarted { .. } => "turn_started",
             Self::TurnStateEntered { .. } => "turn_state_entered",
@@ -343,7 +397,7 @@ impl AgentTraceEvent {
 }
 
 impl StreamEvent {
-    /// Create a new ReasoningBlock event
+    /// Create a new `ReasoningBlock` event
     pub fn reasoning_block(
         run_id: impl Into<String>,
         seq: u64,
@@ -363,7 +417,7 @@ impl StreamEvent {
         }
     }
 
-    /// Create a new ReasoningBlock event with confidence
+    /// Create a new `ReasoningBlock` event with confidence
     pub fn reasoning_block_with_confidence(
         run_id: impl Into<String>,
         seq: u64,
@@ -384,7 +438,7 @@ impl StreamEvent {
         }
     }
 
-    /// Create a new UncertaintySignal event
+    /// Create a new `UncertaintySignal` event
     pub fn uncertainty_signal(
         run_id: impl Into<String>,
         seq: u64,
@@ -408,7 +462,8 @@ impl StreamEvent {
         }
     }
 
-    /// Get the run_id from any event variant
+    /// Get the `run_id` from any event variant
+    #[must_use]
     pub fn run_id(&self) -> &str {
         match self {
             Self::RunAccepted { run_id, .. }
@@ -422,12 +477,15 @@ impl StreamEvent {
             | Self::RunError { run_id, .. }
             | Self::AskUser { run_id, .. }
             | Self::ReasoningBlock { run_id, .. }
-            | Self::UncertaintySignal { run_id, .. } => run_id,
+            | Self::UncertaintySignal { run_id, .. }
+            | Self::RunRetrying { run_id, .. }
+            | Self::ModelResolved { run_id, .. } => run_id,
         }
     }
 
     /// Get the JSON-RPC method name for this event
-    pub fn method_name(&self) -> &'static str {
+    #[must_use]
+    pub const fn method_name(&self) -> &'static str {
         match self {
             Self::RunAccepted { .. } => "stream.run_accepted",
             Self::Reasoning { .. } => "stream.reasoning",
@@ -441,6 +499,8 @@ impl StreamEvent {
             Self::AskUser { .. } => "stream.ask_user",
             Self::ReasoningBlock { .. } => "stream.reasoning_block",
             Self::UncertaintySignal { .. } => "stream.uncertainty_signal",
+            Self::RunRetrying { .. } => "stream.run_retrying",
+            Self::ModelResolved { .. } => "stream.model_resolved",
         }
     }
 }
@@ -474,6 +534,7 @@ impl ToolResult {
         }
     }
 
+    #[must_use]
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = Some(metadata);
         self
@@ -627,6 +688,68 @@ mod tests {
         let event =
             StreamEvent::agent_trace("run-1", 1, AgentTraceEvent::TurnStarted { iteration: 1 });
         assert_eq!(event.method_name(), "stream.agent_trace");
+    }
+
+    #[test]
+    fn run_retrying_deserializes_from_gateway_frame_shape() {
+        // Wire-compat guard: this is the exact params shape the gateway's
+        // `GatewayEventFrame::RunRetrying` serializes (tag = "type",
+        // snake_case). If either side drifts, terminal clients go blind to
+        // provider retries again.
+        let params = serde_json::json!({
+            "type": "run_retrying",
+            "run_id": "run-9",
+            "seq": 4,
+            "provider": "anthropic",
+            "attempt": 2,
+            "max_attempts": 12,
+            "reason": "connect timeout",
+        });
+        let event: StreamEvent = serde_json::from_value(params).unwrap();
+        match &event {
+            StreamEvent::RunRetrying {
+                provider,
+                attempt,
+                max_attempts,
+                ..
+            } => {
+                assert_eq!(provider, "anthropic");
+                assert_eq!(*attempt, 2);
+                assert_eq!(*max_attempts, 12);
+            }
+            other => panic!("expected RunRetrying, got {other:?}"),
+        }
+        assert_eq!(event.run_id(), "run-9");
+        assert_eq!(event.method_name(), "stream.run_retrying");
+    }
+
+    #[test]
+    fn model_resolved_deserializes_from_gateway_frame_shape() {
+        // Wire-compat guard: exact params shape of the gateway's
+        // `GatewayEventFrame::ModelResolved` (tag = "type", snake_case,
+        // no seq field; model_info nests providers::health::ModelInfo).
+        let params = serde_json::json!({
+            "type": "model_resolved",
+            "run_id": "run-3",
+            "model_info": {
+                "model": "claude-haiku-4-5-20251001",
+                "provider": "anthropic",
+                "is_fallback": true,
+                "original_model": "claude-fable-5",
+            },
+        });
+        let event: StreamEvent = serde_json::from_value(params).unwrap();
+        match &event {
+            StreamEvent::ModelResolved { model_info, .. } => {
+                assert_eq!(model_info.model, "claude-haiku-4-5-20251001");
+                assert_eq!(model_info.provider, "anthropic");
+                assert!(model_info.is_fallback);
+                assert_eq!(model_info.original_model.as_deref(), Some("claude-fable-5"));
+            }
+            other => panic!("expected ModelResolved, got {other:?}"),
+        }
+        assert_eq!(event.run_id(), "run-3");
+        assert_eq!(event.method_name(), "stream.model_resolved");
     }
 
     #[test]

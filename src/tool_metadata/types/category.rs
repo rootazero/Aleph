@@ -30,6 +30,7 @@ pub enum ToolCategory {
 
 impl ToolCategory {
     /// Get display name for UI
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             ToolCategory::Builtin => "Builtin",
@@ -41,6 +42,7 @@ impl ToolCategory {
     }
 
     /// Get SF Symbol icon name
+    #[must_use]
     pub fn icon(&self) -> &'static str {
         match self {
             ToolCategory::Builtin => "command.square.fill",

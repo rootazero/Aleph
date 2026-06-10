@@ -36,6 +36,7 @@ impl Default for PresenceConfig {
 
 impl PresenceConfig {
     /// Clamp interval to a sane range — anything below 5s would spam the bus.
+    #[must_use]
     pub fn effective_interval_secs(&self) -> u64 {
         self.interval_secs.max(5)
     }

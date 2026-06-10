@@ -139,6 +139,7 @@ impl McpManagerActor {
     /// Get a handle to this actor
     ///
     /// Creates a new handle that can be used to send commands.
+    #[must_use]
     pub fn handle(&self) -> McpManagerHandle {
         McpManagerHandle::new(self.cmd_tx.clone(), self.event_tx.clone())
     }
@@ -402,7 +403,7 @@ impl McpManagerActor {
     ///
     /// The cache is refreshed *before* the event is emitted so that the
     /// bridge's `sync_server` reads the server's current tool list.
-    async fn handle_list_changed(&mut self, server_id: &str, kind: ListChangeKind) {
+    async fn handle_list_changed(&self, server_id: &str, kind: ListChangeKind) {
         let Some(client) = self.clients.get(server_id).cloned() else {
             tracing::debug!(
                 server_id = %server_id,
@@ -724,8 +725,15 @@ impl McpManagerActor {
         // Store client and track start time
         self.clients.insert(config.id.clone(), client);
         self.start_times.insert(config.id.clone(), Instant::now());
+        // Mark healthy while preserving the restart-window bookkeeping
+        // (restart_count / restart_window_start). Re-inserting a fresh
+        // ServerHealth here would zero the counter on every successful spawn,
+        // letting a server that starts fine but dies between probes evade the
+        // max_restarts cap and restart-loop forever.
         self.health_states
-            .insert(config.id.clone(), ServerHealth::healthy());
+            .entry(config.id.clone())
+            .or_default()
+            .record_success();
 
         // Broadcast started event
         let _ = self.event_tx.send(McpManagerEvent::ServerStarted {

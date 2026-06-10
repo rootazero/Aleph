@@ -31,6 +31,7 @@ pub enum McpErrorKind {
 
 impl McpErrorKind {
     /// Stable lowercase tag for structured logging and tests.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             McpErrorKind::AuthExpired => "auth_expired",
@@ -43,6 +44,7 @@ impl McpErrorKind {
     /// A short, actionable hint for an operator or the agent. Only the
     /// recoverable kinds return guidance; `None` means "no useful hint, do not
     /// add noise to the error".
+    #[must_use]
     pub fn guidance(&self) -> Option<&'static str> {
         match self {
             McpErrorKind::AuthExpired => Some(
@@ -58,6 +60,7 @@ impl McpErrorKind {
 
     /// `" (hint: …)"` suffix for appending to a user-visible error message, or
     /// an empty string when there is no actionable hint.
+    #[must_use]
     pub fn guidance_suffix(&self) -> String {
         match self.guidance() {
             Some(hint) => format!(" (hint: {})", hint),
@@ -110,6 +113,7 @@ const TRANSIENT_MARKERS: &[&str] = &[
 ///
 /// Pure and case-insensitive. Precedence is auth → session → transient → unknown
 /// so the most specific, action-changing categories win.
+#[must_use]
 pub fn classify_mcp_error(message: &str) -> McpErrorKind {
     let haystack = message.to_lowercase();
     let any = |markers: &[&str]| markers.iter().any(|m| haystack.contains(m));

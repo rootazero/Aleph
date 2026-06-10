@@ -131,11 +131,13 @@ impl<S: NoteStore> NoteIndexer<S> {
     }
 
     /// Getter for the memory directory.
+    #[must_use]
     pub fn memory_dir(&self) -> &Path {
         &self.memory_dir
     }
 
     /// Getter for the underlying store.
+    #[must_use]
     pub fn store(&self) -> &Arc<S> {
         &self.store
     }
@@ -562,8 +564,10 @@ impl<S: NoteStore> NoteIndexer<S> {
 
                 let rewritten = rewrite_wikilinks(&content, old_title, new_title);
                 if rewritten != content {
-                    // Write the updated content
-                    if let Err(e) = fs::write(&path, &rewritten).await {
+                    // Write the updated content atomically — a plain fs::write
+                    // can leave a truncated source-of-truth file on a crash
+                    // (same rationale as `append_to_note`).
+                    if let Err(e) = atomic_write_file(&path, &rewritten).await {
                         tracing::warn!(path = %path.display(), error = %e, "Failed to rewrite wikilinks");
                         continue;
                     }
@@ -751,10 +755,16 @@ impl<S: NoteStore> NoteIndexer<S> {
                             suggestion: None,
                         })?;
                 let safe_old = sanitize_title(old_filename)?;
+                // Sanitize the category segment too: `old_note_path` is
+                // LLM-generated, and an unsanitized `old_cat` (e.g. "..")
+                // would let the remove_file below escape the agent directory.
+                // Mirrors `merge_source_notes_into_note` / `append_to_note`.
+                let safe_old_cat =
+                    sanitize_title(old_cat).unwrap_or_else(|_| "other".to_string());
                 let old_file = self
                     .memory_dir
                     .join(agent_id)
-                    .join(old_cat)
+                    .join(&safe_old_cat)
                     .join(format!("{safe_old}.md"));
                 if old_cat != category {
                     // Stages must validate `old_note_path` against their

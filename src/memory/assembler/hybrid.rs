@@ -361,9 +361,11 @@ fn hydrate(slots: &mut [EnvelopeSlot]) {
             item.tokens = estimate_tokens(&truncated);
             item.content = truncated;
             used = used.saturating_add(item.tokens);
-            if used >= slot.tokens_budget {
-                break;
-            }
+            // No early break: once the budget is exhausted, remaining_chars is
+            // 0, so later items truncate to empty and are dropped by the
+            // retain below. Breaking instead would leave them with their full
+            // untruncated content (tokens == 0), which the retain keeps —
+            // silently blowing the slot budget.
         }
         slot.tokens_used = used;
         slot.items.retain(|i| i.tokens > 0 || !i.content.is_empty());

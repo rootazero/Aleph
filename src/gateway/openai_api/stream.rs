@@ -20,11 +20,13 @@ use super::types::{ChatCompletionChunk, Delta, DeltaFunction, DeltaToolCall, Str
 pub const SSE_DONE: &str = "data: [DONE]\n\n";
 
 /// Generate a unique completion ID in the OpenAI format: `chatcmpl-{uuid}`.
+#[must_use]
 pub fn completion_id() -> String {
     format!("chatcmpl-{}", uuid::Uuid::new_v4())
 }
 
 /// Current Unix timestamp in seconds.
+#[must_use]
 pub fn now_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -33,6 +35,7 @@ pub fn now_timestamp() -> u64 {
 }
 
 /// Format a [`ChatCompletionChunk`] as an SSE `data:` frame.
+#[must_use]
 pub fn sse_data(chunk: &ChatCompletionChunk) -> String {
     // serde_json::to_string should not fail on well-formed structs
     let json = serde_json::to_string(chunk)
@@ -82,6 +85,7 @@ impl ToolCallTracker {
 /// false (the OpenAI default) no usage is sent in the stream at all. When true,
 /// usage is emitted as a dedicated terminal chunk with an empty `choices` array,
 /// after the finish chunk and before `[DONE]` — the shape OpenAI SDK clients read.
+#[must_use]
 pub fn provider_deltas_to_sse(
     deltas: BoxStream<'static, anyhow::Result<ProviderDelta>>,
     model: String,

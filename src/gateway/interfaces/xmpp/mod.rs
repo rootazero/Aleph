@@ -225,11 +225,19 @@ impl Channel for XmppChannel {
 
         let write_tx = self.write_tx.read().await;
         if let Some(write_tx) = write_tx.as_ref() {
+            // Escape the JID before interpolating into a single-quoted XML
+            // attribute — a crafted JID must not break out of the stanza.
+            let to = conversation_id
+                .as_str()
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('\'', "&apos;");
             let stanza = format!(
                 "<message to='{}' type='chat'>\
                  <composing xmlns='http://jabber.org/protocol/chatstates'/>\
                  </message>",
-                conversation_id.as_str()
+                to
             );
             let _ = write_tx.send(stanza).await;
         }

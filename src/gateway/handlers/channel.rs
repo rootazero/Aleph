@@ -754,7 +754,7 @@ pub async fn handle_delete(
     // Stop and unregister from registry (if present)
     if in_registry {
         let _ = registry.stop_channel(&channel_id).await;
-        registry.unregister(&channel_id).await;
+        let _ = registry.unregister(&channel_id).await;
     }
 
     // Remove from app config and persist to disk
@@ -904,7 +904,10 @@ mod tests {
         // A shared token must exist before the vault can encrypt/store secrets.
         vault.generate_token().unwrap();
         vault
-            .store_secret(&channel_vault_key("telegram", "bot_token"), "super-secret-bot-token")
+            .store_secret(
+                &channel_vault_key("telegram", "bot_token"),
+                "super-secret-bot-token",
+            )
             .unwrap();
 
         // Config as it would be after secrets were stripped to the vault on save.

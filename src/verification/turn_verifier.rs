@@ -83,12 +83,15 @@ pub enum VerifierVerdict {
 }
 
 impl VerifierVerdict {
+    #[must_use]
     pub fn is_continue(&self) -> bool {
         matches!(self, VerifierVerdict::Continue)
     }
+    #[must_use]
     pub fn is_veto(&self) -> bool {
         matches!(self, VerifierVerdict::Veto { .. })
     }
+    #[must_use]
     pub fn is_halt(&self) -> bool {
         matches!(self, VerifierVerdict::Halt { .. })
     }
@@ -116,6 +119,7 @@ pub struct VerifierChain {
 impl VerifierChain {
     /// Empty chain — `verify` short-circuits to `Continue`. Useful as
     /// a default when no verifiers are wired (rollback / test).
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             verifiers: Vec::new(),
@@ -123,6 +127,7 @@ impl VerifierChain {
         }
     }
 
+    #[must_use]
     pub fn builder() -> VerifierChainBuilder {
         VerifierChainBuilder::default()
     }
@@ -178,6 +183,7 @@ impl VerifierChainBuilder {
         self
     }
 
+    #[must_use]
     pub fn build(self) -> VerifierChain {
         VerifierChain {
             verifiers: self.verifiers,
@@ -196,6 +202,7 @@ impl VerifierChainBuilder {
 /// Two calls with identical argument trees collide; legitimate
 /// parameter differences produce different hashes. Used by
 /// `ToolLoopVerifier` for cheap repetition detection.
+#[must_use]
 pub fn hash_tool_args(args: &serde_json::Value) -> u64 {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};

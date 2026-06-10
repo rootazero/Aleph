@@ -90,6 +90,7 @@ impl Default for MediaPolicy {
 
 impl MediaPolicy {
     /// Temp file TTL as Duration.
+    #[must_use]
     pub fn temp_ttl(&self) -> Duration {
         Duration::from_secs(self.temp_ttl_secs)
     }

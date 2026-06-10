@@ -72,6 +72,7 @@ pub struct TruncationStat {
 ///
 /// Keeps `head_ratio` of chars from the start and `tail_ratio` from the end,
 /// inserting a truncation marker in between.
+#[must_use]
 pub fn truncate_with_head_tail(
     content: &str,
     max_chars: usize,
@@ -132,6 +133,7 @@ pub fn truncate_with_head_tail(
 ///
 /// Returns (trimmed prompt, truncation stats).
 /// Sections with priority in `protected_priorities` are never removed.
+#[must_use]
 pub fn enforce_budget(
     sections: &[(u32, &str, &str)], // (priority, layer_name, content)
     max_total: usize,
@@ -198,6 +200,7 @@ pub fn enforce_budget(
 /// Per-session dedup for `Once` would require session state that this pure
 /// layer does not own, so `Once` and `Always` both render here; the caller is
 /// free to suppress repeats. Returns `None` when nothing was trimmed.
+#[must_use]
 pub fn render_truncation_notice(mode: TruncationWarning, saved_chars: usize) -> Option<String> {
     if mode == TruncationWarning::Off || saved_chars == 0 {
         return None;
@@ -225,6 +228,7 @@ pub fn render_truncation_notice(mode: TruncationWarning, saved_chars: usize) -> 
 /// Returns `dynamic` unchanged when the assembled prompt is already within
 /// budget — the overwhelming common case, so this is a no-op (and byte-stable)
 /// for normal-sized prompts.
+#[must_use]
 pub fn fit_dynamic_suffix(stable_len: usize, dynamic: String, budget: &TokenBudget) -> String {
     if stable_len + dynamic.len() <= budget.max_total_chars {
         return dynamic;

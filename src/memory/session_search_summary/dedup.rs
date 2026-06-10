@@ -21,6 +21,7 @@ pub struct ScoredCandidate {
 
 /// Group by `session_key`, keep top score per group, take the top
 /// `max_sessions` groups by group-best-score.
+#[must_use]
 pub fn top_per_session(
     candidates: Vec<ScoredCandidate>,
     max_sessions: usize,

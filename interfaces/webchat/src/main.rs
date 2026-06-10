@@ -1,4 +1,4 @@
-use aleph_panel::app::*;
+use aleph_panel::app::App;
 use aleph_panel::panic_overlay;
 use leptos::prelude::*;
 

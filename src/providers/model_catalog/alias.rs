@@ -84,12 +84,22 @@ const MODEL_VENDOR_PREFIXES: &[(&str, &str)] = &[
 /// "anthropic/Claude-Sonnet-4-6-20250520" -> "claude-sonnet-4-6"
 /// "gpt-4o-2024-11-20"                     -> "gpt-4o-2024-11-20" (non-8-digit tail kept)
 /// ```
+#[must_use]
 pub fn canonicalize_model_id(model: &str) -> String {
     let mut m = model.trim().to_ascii_lowercase();
-    // Peel one layer per matching tag (handles nested aggregator tags).
-    for tag in VENDOR_TAGS {
-        if let Some(rest) = m.strip_prefix(tag) {
-            m = rest.to_string();
+    // Peel vendor tags until none match. A single in-order pass would miss
+    // nested aggregator tags whose inner tag precedes the outer in the table
+    // (e.g. "x-ai/openai/…" — "openai/" is scanned before "x-ai/"). Each peel
+    // strictly shortens the string, so the loop terminates.
+    loop {
+        let before = m.len();
+        for tag in VENDOR_TAGS {
+            if let Some(rest) = m.strip_prefix(tag) {
+                m = rest.to_string();
+            }
+        }
+        if m.len() == before {
+            break;
         }
     }
     // Drop a trailing 8-digit date stamp (e.g. "-20250520"). Arbitrary
@@ -109,6 +119,7 @@ pub fn canonicalize_model_id(model: &str) -> String {
 /// "unknown vendor" and fall back to their default. Superset of the legacy
 /// 4-vendor `resolve_provider_from_model`; the original outputs are
 /// byte-for-byte preserved.
+#[must_use]
 pub fn infer_vendor(model: &str) -> Option<&'static str> {
     let canon = canonicalize_model_id(model);
     MODEL_VENDOR_PREFIXES
@@ -121,6 +132,7 @@ pub fn infer_vendor(model: &str) -> Option<&'static str> {
 ///
 /// Substring-based (a provider name may embed the vendor, e.g.
 /// `vertex-anthropic`). Returns `None` for unrecognised providers.
+#[must_use]
 pub fn canonical_provider_id(provider: &str) -> Option<&'static str> {
     let p = provider.trim().to_ascii_lowercase();
     if p.contains("anthropic") || p.contains("claude") {

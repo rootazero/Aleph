@@ -131,6 +131,7 @@ impl ToolResultStore {
     /// `scoped`) that need a `ToolResultStore` without touching
     /// `~/.aleph/`.
     #[doc(hidden)]
+    #[must_use]
     pub fn with_dir_for_tests(base_dir: PathBuf) -> Self {
         Self {
             base_dir,
@@ -312,6 +313,7 @@ impl Drop for ToolResultStore {
 
 /// Scan `text` for a `[Full output persisted: ...]` reference line and return
 /// the first matching line if found.
+#[must_use]
 pub fn extract_persisted_ref(text: &str) -> Option<&str> {
     text.lines()
         .find(|line| line.starts_with(PERSISTED_REF_PREFIX))

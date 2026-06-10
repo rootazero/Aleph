@@ -111,6 +111,7 @@ pub struct ConfigAuditOutput {
 // =============================================================================
 
 /// Run every audit over `cfg`, returning the collected findings.
+#[must_use]
 pub fn audit_config(cfg: &Config) -> Vec<Finding> {
     let mut out = Vec::new();
     audit_ssrf(cfg, &mut out);

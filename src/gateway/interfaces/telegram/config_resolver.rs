@@ -30,6 +30,7 @@ pub struct ConfigResolver {
 }
 
 impl ConfigResolver {
+    #[must_use]
     pub fn from_v2(config: &TelegramConfigV2) -> Self {
         let mut lookup = HashMap::new();
         for account in &config.accounts {
@@ -53,6 +54,7 @@ impl ConfigResolver {
         Self { lookup }
     }
 
+    #[must_use]
     pub fn resolve(
         &self,
         account_id: &str,

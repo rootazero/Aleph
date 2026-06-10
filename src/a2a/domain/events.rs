@@ -34,6 +34,7 @@ pub struct TaskArtifactUpdateEvent {
 
 impl TaskStatusUpdateEvent {
     /// Create a new event with `is_final` derived from state
+    #[must_use]
     pub fn new(
         task_id: String,
         context_id: String,

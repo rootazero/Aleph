@@ -34,11 +34,13 @@ pub struct McpStartupReport {
 
 impl McpStartupReport {
     /// Check if all servers started successfully
+    #[must_use]
     pub fn all_succeeded(&self) -> bool {
         self.failed.is_empty()
     }
 
     /// Get total number of servers attempted
+    #[must_use]
     pub fn total(&self) -> usize {
         self.succeeded.len() + self.failed.len()
     }
@@ -83,6 +85,7 @@ pub struct McpClient {
 
 impl McpClient {
     /// Create a new empty MCP client
+    #[must_use]
     pub fn new() -> Self {
         Self {
             external_servers: tokio::sync::RwLock::new(HashMap::new()),
@@ -229,13 +232,19 @@ impl McpClient {
 
         let mut tools = Vec::new();
         for connection in &connections {
-            tools.extend(connection.list_tools().await);
-        }
-        // Gate advertised tools through the per-server allow/deny filter. A
-        // dropped tool is therefore never registered, aggregated, counted, or
-        // shown to the model (catalog-time filtering, not call-time).
-        if let Some(filter) = &self.tool_filter {
-            tools.retain(|t| filter.allows(&t.name));
+            let mut conn_tools = connection.list_tools().await;
+            // Gate advertised tools through the per-server allow/deny filter. A
+            // dropped tool is therefore never registered, aggregated, counted, or
+            // shown to the model (catalog-time filtering, not call-time). The
+            // filter contract matches the server's *unqualified* tool names, so
+            // strip the "{server}:" namespace prefix added by refresh_tools
+            // before testing.
+            if let Some(filter) = &self.tool_filter {
+                let prefix = format!("{}:", connection.name());
+                conn_tools
+                    .retain(|t| filter.allows(t.name.strip_prefix(&prefix).unwrap_or(&t.name)));
+            }
+            tools.extend(conn_tools);
         }
         tools
     }
@@ -794,6 +803,7 @@ pub struct McpClientBuilder {
 
 impl McpClientBuilder {
     /// Create a new builder
+    #[must_use]
     pub fn new() -> Self {
         Self {
             client: McpClient::new(),

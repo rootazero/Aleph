@@ -21,6 +21,7 @@ task_local! {
 
 /// The originating connection's role for the current task, or `None` outside a
 /// `CALLER_ROLE` scope (non-gateway / internal runs) — trusted by the gate.
+#[must_use]
 pub fn current_caller_role() -> Option<String> {
     CALLER_ROLE.try_with(|r| r.clone()).ok().flatten()
 }

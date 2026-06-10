@@ -31,8 +31,8 @@ pub use discovery::DiscoveredInstance;
 pub use events::{
     AgentTraceEvent, AgentTraceSessionOutcome, AgentTraceState, AgentTraceTextKind,
     AgentTraceToolCallEnd, AgentTraceToolCallStart, AgentTraceToolResult, AgentTraceTurnMetrics,
-    AgentTraceTurnOutcome, ConfigChangedEvent, RunSummary, StreamEvent, TokenBreakdownView,
-    ToolErrorItem, ToolResult, ToolSummaryItem, UncertaintyAction,
+    AgentTraceTurnOutcome, ConfigChangedEvent, ModelInfo, RunSummary, StreamEvent,
+    TokenBreakdownView, ToolErrorItem, ToolResult, ToolSummaryItem, UncertaintyAction,
 };
 pub use invitation::{ActivateInvitationRequest, CreateInvitationRequest, GuestToken, Invitation};
 pub use jsonrpc::{

@@ -21,6 +21,7 @@ pub struct SiliconFlowRerankProvider {
 
 impl SiliconFlowRerankProvider {
     /// Create a new SiliconFlow rerank provider
+    #[must_use]
     pub fn new(config: RerankConfig) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))

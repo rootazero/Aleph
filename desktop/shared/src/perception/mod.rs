@@ -2,7 +2,7 @@
 //!
 //! This module provides platform-specific implementations for:
 //! - Screenshot capture via `xcap`
-//! - OCR via platform APIs (WinRT on Windows; macOS OCR routes through the
+//! - OCR via platform APIs (`WinRT` on Windows; macOS OCR routes through the
 //!   Swift helper via `screen.ocr` RPC in `desktop/macos/src/screen.rs`)
 //! - Raw PNG capture for use as OCR input
 //!
@@ -33,7 +33,7 @@ use crate::OcrResult;
 ///
 /// # Platform support
 ///
-/// - **Windows**: Uses WinRT `OcrEngine` API (prefers zh-Hans, fallback to en-US).
+/// - **Windows**: Uses `WinRT` `OcrEngine` API (prefers zh-Hans, fallback to en-US).
 /// - **Linux**: Uses Tesseract CLI (requires `tesseract-ocr` package).
 /// - **macOS**: Returns [`DesktopError::NotImplemented`] — macOS OCR is routed
 ///   through the Swift helper via `screen.ocr` RPC in `desktop/macos/src/screen.rs`.

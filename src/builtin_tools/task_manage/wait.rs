@@ -211,7 +211,14 @@ impl AlephTool for TaskWaitTool {
                             debug!("Task wait: event received, re-checking task states");
                             continue;
                         }
-                        Err(_) => {
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                            // The subscriber fell behind and missed events —
+                            // the channel is still open. Re-check task states
+                            // instead of treating this as channel closure.
+                            debug!(skipped, "Task wait: receiver lagged, re-checking task states");
+                            continue;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             // Channel closed, no more events will arrive
                             debug!("Task wait: event channel closed, breaking out");
                             let tasks = fetch_tasks(

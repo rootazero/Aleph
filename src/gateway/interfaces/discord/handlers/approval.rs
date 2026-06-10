@@ -56,6 +56,7 @@ pub struct ApprovalQueue {
 
 impl ApprovalQueue {
     /// Create a new ApprovalQueue
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pending: Arc::new(RwLock::new(HashMap::new())),

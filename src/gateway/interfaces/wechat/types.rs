@@ -58,6 +58,9 @@ pub struct GetUpdatesResponse {
     pub ret: i32,
     pub errcode: Option<i32>,
     pub errmsg: Option<String>,
+    // Error responses (e.g. ret = -14 session expired) may omit `msgs`;
+    // without a default the decode fails before `ret` can be inspected.
+    #[serde(default)]
     pub msgs: Vec<Message>,
     #[serde(rename = "get_updates_buf")]
     pub get_updates_buf: Option<String>,

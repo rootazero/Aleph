@@ -265,7 +265,9 @@ mod tests {
             Some("node"),
             &node_id,
             "conn-1",
-            Some(&serde_json::json!({"device_name": "worker-1", "commands": [{"name":"bash","schema":{}}]})),
+            Some(
+                &serde_json::json!({"device_name": "worker-1", "commands": [{"name":"bash","schema":{}}]}),
+            ),
             &ch,
         );
         assert_eq!(ctx.node_registry.list_environments().len(), 1);

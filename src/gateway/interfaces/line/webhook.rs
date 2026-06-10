@@ -43,7 +43,14 @@ impl Clone for WebhookContext {
 /// Run the LINE webhook server.
 pub async fn run_webhook_server(ctx: WebhookContext) {
     let addr = format!("{}:{}", ctx.config.webhook_host, ctx.config.webhook_port);
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::error!("LINE webhook failed to bind {}: {}", addr, e);
+            *ctx.status_handle.write().await = ChannelStatus::Error;
+            return;
+        }
+    };
     tracing::info!("LINE webhook server listening on {}", addr);
 
     loop {
@@ -133,18 +140,48 @@ fn verify_signature(secret: &str, body: &[u8], signature: &str) -> bool {
     crate::security::secret_equal_bytes(&expected, &sig_bytes)
 }
 
+/// Returns `true` once `data` holds the complete header section and, when a
+/// Content-Length header is present, the complete body.
+fn request_is_complete(data: &[u8]) -> bool {
+    let Some(req) = parse_http_request(data) else {
+        return false;
+    };
+    let expected = req
+        .get_header("content-length")
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    req.body.len() >= expected
+}
+
 async fn handle_connection(
     mut stream: TcpStream,
     ctx: WebhookContext,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut buf = vec![0u8; WEBHOOK_BODY_LIMIT];
-
-    let bytes_read = stream.read(&mut buf).await?;
-    if bytes_read == 0 {
+    // Accumulate reads until the full request has arrived — TCP does not
+    // preserve message boundaries and LINE signs the exact body bytes, so a
+    // single read can truncate the body and fail signature verification.
+    let mut buf: Vec<u8> = Vec::with_capacity(4096);
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = stream.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.len() > WEBHOOK_BODY_LIMIT {
+            let response = b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\n\r\n";
+            stream.write_all(response).await?;
+            return Ok(());
+        }
+        if request_is_complete(&buf) {
+            break;
+        }
+    }
+    if buf.is_empty() {
         return Ok(());
     }
 
-    let data = &buf[..bytes_read];
+    let data = &buf[..];
 
     let req = match parse_http_request(data) {
         Some(r) => r,
@@ -179,18 +216,37 @@ async fn handle_connection(
         return Ok(());
     }
 
-    let event: LineEvent = match serde_json::from_slice(req.body) {
-        Ok(e) => e,
+    // LINE delivers webhooks as an envelope: {"destination": ..., "events": [...]}.
+    let payload: serde_json::Value = match serde_json::from_slice(req.body) {
+        Ok(v) => v,
         Err(e) => {
-            tracing::warn!("Failed to parse LINE event: {}", e);
+            tracing::warn!("Failed to parse LINE webhook body: {}", e);
             let response = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
             stream.write_all(response).await?;
             return Ok(());
         }
     };
 
-    if let Err(e) = dispatch_event(&event, &ctx).await {
-        tracing::warn!("Failed to dispatch LINE event: {}", e);
+    let events = payload.get("events").and_then(|e| e.as_array()).cloned();
+    if let Some(events) = events {
+        for raw_event in events {
+            match serde_json::from_value::<LineEvent>(raw_event) {
+                Ok(event) => {
+                    if let Err(e) = dispatch_event(&event, &ctx).await {
+                        tracing::warn!("Failed to dispatch LINE event: {}", e);
+                    }
+                }
+                // Unknown event types must not fail the rest of the batch.
+                Err(e) => tracing::debug!("Skipping unparseable LINE event: {}", e),
+            }
+        }
+    } else if let Ok(event) = serde_json::from_value::<LineEvent>(payload) {
+        // Bare event body (non-envelope callers, e.g. local testing).
+        if let Err(e) = dispatch_event(&event, &ctx).await {
+            tracing::warn!("Failed to dispatch LINE event: {}", e);
+        }
+    } else {
+        tracing::warn!("LINE webhook body has no events array");
     }
 
     let response = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";

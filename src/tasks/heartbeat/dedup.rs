@@ -21,6 +21,7 @@ use crate::tasks::heartbeat::config::DedupConfig;
 /// Returns 0.0 if either vector is a zero vector, or if the vectors have
 /// mismatched lengths (not comparable — `zip` would otherwise silently
 /// truncate to the shorter one and could spuriously suppress a real alert).
+#[must_use]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
@@ -89,6 +90,7 @@ impl DedupEngine {
     ///
     /// Used as a fallback when no DB is available. All operations degrade
     /// gracefully to no-ops.
+    #[must_use]
     pub fn noop(config: DedupConfig) -> Self {
         Self {
             config,

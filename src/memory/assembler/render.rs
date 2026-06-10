@@ -15,10 +15,12 @@ pub enum RenderStyle {
     Json,
 }
 
+#[must_use]
 pub fn render_envelope(env: &MemoryEnvelope) -> String {
     render_with(env, RenderStyle::default())
 }
 
+#[must_use]
 pub fn render_with(env: &MemoryEnvelope, style: RenderStyle) -> String {
     match style {
         RenderStyle::MarkdownV1 => render_markdown_v1(env),

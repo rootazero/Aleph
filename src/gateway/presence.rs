@@ -55,6 +55,7 @@ pub struct PresenceTracker {
 
 impl PresenceTracker {
     /// Create a new empty presence tracker.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: Arc::new(DashMap::new()),
@@ -67,16 +68,19 @@ impl PresenceTracker {
     }
 
     /// Remove a presence entry by connection ID, returning it if it existed.
+    #[must_use]
     pub fn remove(&self, conn_id: &str) -> Option<PresenceEntry> {
         self.entries.remove(conn_id).map(|(_, entry)| entry)
     }
 
     /// Get a clone of the presence entry for a given connection ID.
+    #[must_use]
     pub fn get(&self, conn_id: &str) -> Option<PresenceEntry> {
         self.entries.get(conn_id).map(|entry| entry.clone())
     }
 
     /// List all current presence entries.
+    #[must_use]
     pub fn list(&self) -> Vec<PresenceEntry> {
         self.entries
             .iter()
@@ -87,6 +91,7 @@ impl PresenceTracker {
     /// Update the last heartbeat timestamp for a connection.
     ///
     /// Returns `true` if the connection was found and updated, `false` otherwise.
+    #[must_use]
     pub fn update_heartbeat(&self, conn_id: &str) -> bool {
         if let Some(mut entry) = self.entries.get_mut(conn_id) {
             entry.last_heartbeat = Utc::now();
@@ -97,6 +102,7 @@ impl PresenceTracker {
     }
 
     /// Return the number of currently tracked connections.
+    #[must_use]
     pub fn count(&self) -> usize {
         self.entries.len()
     }

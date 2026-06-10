@@ -140,6 +140,7 @@ pub struct AgentDefinitionResolver {
 
 impl AgentDefinitionResolver {
     /// Create a new resolver with a fresh workspace file loader.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

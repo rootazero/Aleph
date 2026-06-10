@@ -32,7 +32,7 @@ pub async fn run(
 
     // Determine session key
     let session_key = session
-        .map(|s| s.to_owned())
+        .map(std::borrow::ToOwned::to_owned)
         .or_else(|| config.default_session.clone())
         .unwrap_or_else(|| {
             format!(

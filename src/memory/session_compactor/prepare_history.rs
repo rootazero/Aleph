@@ -106,7 +106,12 @@ impl SessionCompactor {
             let pb = b.path.as_deref().unwrap_or("");
             let da = extract_depth(pa);
             let db = extract_depth(pb);
-            db.cmp(&da).then_with(|| pa.cmp(pb))
+            // Within a depth, order chronologically. The path holds a decimal
+            // seq, so a lexicographic compare alone misorders seq >= 10
+            // ("d0/10" < "d0/2"); created_at preserves the true sequence.
+            db.cmp(&da)
+                .then_with(|| a.created_at.cmp(&b.created_at))
+                .then_with(|| pa.cmp(pb))
         });
 
         let tail_start = if raw_messages.len() > self.config.fresh_tail_count {

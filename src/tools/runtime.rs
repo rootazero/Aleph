@@ -154,6 +154,7 @@ pub struct LoopToolRegistry {
 
 impl LoopToolRegistry {
     /// Create an empty registry.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             tools: HashMap::new(),
@@ -166,6 +167,7 @@ impl LoopToolRegistry {
     }
 
     /// Look up a tool by name.
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&dyn LoopTool> {
         self.tools.get(name).map(|b| b.as_ref())
     }
@@ -174,6 +176,7 @@ impl LoopToolRegistry {
     ///
     /// Same resolution logic as `execute()`, but returns the tool reference
     /// without running it. Useful for pre-execution validation.
+    #[must_use]
     pub fn resolve(&self, name: &str) -> Option<&dyn LoopTool> {
         if let Some(tool) = self.get(name) {
             return Some(tool);
@@ -189,11 +192,13 @@ impl LoopToolRegistry {
     }
 
     /// Number of registered tools.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.tools.len()
     }
 
     /// Whether the registry is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.tools.is_empty()
     }
@@ -239,6 +244,7 @@ impl LoopToolRegistry {
     }
 
     /// Collect definitions for all registered tools (sorted by name for determinism).
+    #[must_use]
     pub fn tool_definitions(&self) -> Vec<ToolDefinition> {
         let mut defs: Vec<ToolDefinition> = self
             .tools
@@ -259,6 +265,7 @@ impl LoopToolRegistry {
     /// Check whether the named tool reports itself concurrent-safe for the
     /// given input. Returns `None` if the tool is unknown to this registry
     /// (callers should treat unknown as conservative `false`).
+    #[must_use]
     pub fn is_call_concurrent_safe(&self, name: &str, input: &Value) -> Option<bool> {
         self.resolve(name).map(|t| t.is_concurrent_safe(input))
     }
@@ -267,6 +274,7 @@ impl LoopToolRegistry {
     /// given input (see [`LoopTool::concurrency_claim`]). Returns `None` if the
     /// tool is unknown to this registry — callers should treat unknown as the
     /// conservative whole-world [`crate::tools::concurrency::ConcurrencyClaim::global`].
+    #[must_use]
     pub fn call_concurrency_claim(
         &self,
         name: &str,
@@ -281,6 +289,7 @@ impl LoopToolRegistry {
     /// filter rejects them with `NotFound` before any confirmation check).
     /// Uses dot/underscore alias resolution so a confirmation-required tool
     /// is still recognized when the LLM emits the aliased spelling.
+    #[must_use]
     pub fn requires_confirmation(&self, name: &str) -> bool {
         self.resolve(name)
             .map(|t| t.requires_confirmation())
@@ -291,6 +300,7 @@ impl LoopToolRegistry {
     /// [`LoopTool::max_result_tokens`], if the tool is registered. Used by
     /// `ScopedToolService::apply_layer_two` to look up the budget without
     /// rebuilding a full `ToolDefinition`.
+    #[must_use]
     pub fn max_result_tokens_for(&self, name: &str) -> Option<usize> {
         let tool = self.tools.get(name)?;
         tool.max_result_tokens()

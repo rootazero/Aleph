@@ -61,6 +61,7 @@ pub struct RateLimitKey {
 }
 
 impl RateLimitKey {
+    #[must_use]
     pub fn new(identity: &str, scope: RateLimitScope) -> Self {
         Self {
             identity: identity.to_owned(),
@@ -198,6 +199,7 @@ impl std::error::Error for RateLimitError {}
 
 impl RateLimitError {
     /// Convert to an HTTP 429 JSON body suitable for JSON-RPC error responses.
+    #[must_use]
     pub fn to_jsonrpc_error(&self) -> String {
         let (retry_after_ms, message) = match self {
             Self::Exceeded {
@@ -216,6 +218,7 @@ impl RateLimitError {
     }
 
     /// Return the retry-after value in seconds (for HTTP Retry-After header).
+    #[must_use]
     pub fn retry_after_secs(&self) -> u64 {
         let ms = match self {
             Self::Exceeded { retry_after_ms, .. } => *retry_after_ms,
@@ -262,6 +265,7 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     /// Create a new rate limiter with the given configuration.
+    #[must_use]
     pub fn new(config: RateLimitConfig) -> Self {
         Self {
             config,
@@ -273,6 +277,7 @@ impl RateLimiter {
     ///
     /// Read-only view used by the `/metrics` endpoint to surface limiter
     /// memory pressure relative to [`RateLimitConfig::max_entries`].
+    #[must_use]
     pub fn tracked_entries(&self) -> usize {
         self.windows.len()
     }
@@ -329,13 +334,16 @@ impl RateLimiter {
             sw.timestamps.clear();
         }
 
-        // 2. Evict expired timestamps
-        let cutoff = now - window_dur;
-        while let Some(&front) = sw.timestamps.front() {
-            if front < cutoff {
-                sw.timestamps.pop_front();
-            } else {
-                break;
+        // 2. Evict expired timestamps. `Instant - Duration` panics on
+        // underflow (monotonic clock younger than the window, e.g. right
+        // after boot); with no valid cutoff nothing can be expired yet.
+        if let Some(cutoff) = now.checked_sub(window_dur) {
+            while let Some(&front) = sw.timestamps.front() {
+                if front < cutoff {
+                    sw.timestamps.pop_front();
+                } else {
+                    break;
+                }
             }
         }
 
@@ -402,6 +410,7 @@ impl RateLimiter {
 // ---------------------------------------------------------------------------
 
 /// Map an RPC method name to its [`RateLimitScope`].
+#[must_use]
 pub fn scope_for_method(method: &str) -> RateLimitScope {
     match method {
         // State-changing writes

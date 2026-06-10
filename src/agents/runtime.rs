@@ -178,6 +178,7 @@ impl AgentRuntime {
 
     /// Phase 3 — wire the per-`provider_hint` override registry. Each spawn
     /// whose `agent_def.provider_hint` matches a key runs on that provider.
+    #[must_use]
     pub fn with_provider_overrides(
         mut self,
         overrides: HashMap<String, Arc<dyn AiProvider>>,
@@ -193,6 +194,7 @@ impl AgentRuntime {
     }
 
     /// B2 — wire the global plugin registry for per-agent MCP scope.
+    #[must_use]
     pub fn with_plugin_registry(
         mut self,
         registry: Arc<crate::extension::registry::PluginRegistry>,
@@ -212,18 +214,21 @@ impl AgentRuntime {
     // is wired in production at the run_loop.rs construction site.
 
     /// Stage A (P1) — wire the stall watchdog config.
+    #[must_use]
     pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
         self.stall_config = Some(config);
         self
     }
 
     /// Stage A (P1) — wire the consecutive-failure cap.
+    #[must_use]
     pub fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
         self.consecutive_failure_cap = Some(cap);
         self
     }
 
     /// Stage A (P1) — wire the per-turn wall-clock timeout.
+    #[must_use]
     pub fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.turn_timeout = Some(timeout);
         self
@@ -447,6 +452,7 @@ impl AgentRuntime {
 // =============================================================================
 
 /// Truncate a string for log output, appending "..." if truncated.
+#[must_use]
 pub fn truncate_for_log(s: &str, max_len: usize) -> String {
     let char_count = s.chars().count();
     if char_count <= max_len {
@@ -460,6 +466,7 @@ pub fn truncate_for_log(s: &str, max_len: usize) -> String {
 }
 
 /// Format a TranscriptOutcome for log output.
+#[must_use]
 pub fn format_outcome(outcome: &TranscriptOutcome) -> &str {
     match outcome {
         TranscriptOutcome::Success => "success",

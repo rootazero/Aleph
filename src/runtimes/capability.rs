@@ -27,6 +27,7 @@ impl RuntimeCapability {
     /// Format runtime capabilities for system prompt injection
     ///
     /// Generates a markdown-formatted section describing available runtimes.
+    #[must_use]
     pub fn format_for_prompt(capabilities: &[RuntimeCapability]) -> String {
         if capabilities.is_empty() {
             return String::new();
@@ -71,6 +72,7 @@ fn get_hint_from_spec(runtime_id: &str) -> Option<&'static str> {
 /// Takes a slice of `&CapabilityEntry` references (as returned by
 /// `CapabilityLedger::list_ready()`) and produces markdown text
 /// suitable for inclusion in the system prompt.
+#[must_use]
 pub fn format_entries_for_prompt(entries: &[&CapabilityEntry]) -> String {
     if entries.is_empty() {
         return String::new();

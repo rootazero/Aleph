@@ -21,6 +21,7 @@ pub struct VoyageRerankProvider {
 
 impl VoyageRerankProvider {
     /// Create a new Voyage rerank provider
+    #[must_use]
     pub fn new(config: RerankConfig) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_millis(config.timeout_ms))

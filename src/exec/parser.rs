@@ -93,6 +93,7 @@ fn contains_unquoted_redirect(command: &str) -> bool {
 }
 
 /// Analyze a shell command
+#[must_use]
 pub fn analyze_shell_command(
     command: &str,
     cwd: Option<&Path>,
@@ -288,6 +289,7 @@ fn split_pipeline(command: &str) -> Result<Vec<String>, String> {
 }
 
 /// Tokenize a single command segment
+#[must_use]
 pub fn tokenize_segment(segment: &str) -> Option<Vec<String>> {
     let mut tokens = Vec::new();
     let mut buf = String::new();

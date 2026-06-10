@@ -18,6 +18,7 @@ pub enum EligibilityResult {
 
 impl EligibilityResult {
     /// Convenience: is the skill eligible?
+    #[must_use]
     pub fn is_eligible(&self) -> bool {
         matches!(self, Self::Eligible)
     }
@@ -50,6 +51,7 @@ pub struct EligibilityService;
 
 impl EligibilityService {
     /// Create a new eligibility service.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -67,6 +69,7 @@ impl EligibilityService {
     /// 5. any_bins
     /// 6. required_env
     /// 7. required_config
+    #[must_use]
     pub fn evaluate(
         &self,
         manifest: &SkillManifest,
@@ -79,6 +82,7 @@ impl EligibilityService {
     /// Evaluate an eligibility spec directly.
     ///
     /// `config` is the Aleph main configuration serialized as a `serde_json::Value`.
+    #[must_use]
     pub fn evaluate_spec(
         &self,
         spec: &EligibilitySpec,
@@ -152,6 +156,7 @@ fn config_get_path<'a>(root: &'a serde_json::Value, path: &str) -> Option<&'a se
 }
 
 /// Detect the current operating system.
+#[must_use]
 pub fn current_os() -> Os {
     #[cfg(target_os = "macos")]
     {

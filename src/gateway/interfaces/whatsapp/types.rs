@@ -1,7 +1,9 @@
+#[must_use]
 pub fn is_group_jid(jid: &str) -> bool {
     jid.ends_with("@g.us")
 }
 
+#[must_use]
 pub fn normalize_e164_or_jid(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {

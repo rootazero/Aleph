@@ -145,7 +145,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                     <div class="md:col-span-2">
                         <label class="block text-sm font-medium text-text-secondary mb-1">{t!(i18n, agents.overview.agent_id)}</label>
                         <div class="w-full px-3 py-2 bg-surface-sunken border border-border rounded-lg text-text-tertiary font-mono text-sm select-all">
-                            {agent_id.clone()}
+                            {agent_id}
                         </div>
                     </div>
                     <div>
@@ -196,7 +196,7 @@ pub fn OverviewTab(agent_id: String) -> impl IntoView {
                             catalog.get().into_iter().flat_map(|entry: CatalogEntry| {
                                 let provider_id = entry.id.clone();
                                 let models = effective_models(&entry);
-                                let dn = entry.display_name.clone();
+                                let dn = entry.display_name;
                                 models.into_iter().map(move |m| {
                                     let val = format!("{}\u{1f}{}", provider_id, m);
                                     let label = format!("{} / {}", dn, m);

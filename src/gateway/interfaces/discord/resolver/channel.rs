@@ -23,6 +23,7 @@ pub struct ChannelSettingsResolver {
 }
 
 impl ChannelSettingsResolver {
+    #[must_use]
     pub fn new(config: DiscordChannelConfig) -> Self {
         Self { config }
     }
@@ -30,6 +31,7 @@ impl ChannelSettingsResolver {
     /// Resolve effective settings for a channel
     ///
     /// Override chain: default -> account -> guild -> channel
+    #[must_use]
     pub fn resolve(
         &self,
         account_id: &str,

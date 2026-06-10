@@ -154,7 +154,8 @@ async fn verify_or_repair(
 
 // Tests that modify HOME must run serially to avoid race conditions.
 #[cfg(test)]
-pub(crate) static HOME_LOCK: crate::sync_primitives::Mutex<()> = crate::sync_primitives::Mutex::new(());
+pub(crate) static HOME_LOCK: crate::sync_primitives::Mutex<()> =
+    crate::sync_primitives::Mutex::new(());
 
 /// RAII guard for tests that read or mutate the process-global `$HOME`.
 ///

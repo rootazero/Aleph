@@ -48,6 +48,7 @@ const NS_SEP: &str = "__";
 /// path cannot be canonicalised, e.g. it was deleted between resolution and
 /// here). 8 hex chars (32 bits) is ample to separate the handful of projects a
 /// single user touches while keeping on-disk directory names short.
+#[must_use]
 pub fn project_namespace(project_root: Option<&Path>) -> String {
     let Some(root) = project_root else {
         return GLOBAL_NS.to_string();
@@ -64,6 +65,7 @@ pub fn project_namespace(project_root: Option<&Path>) -> String {
 }
 
 /// Returns `true` when `ns` is the global sentinel (no project / feature off).
+#[must_use]
 pub fn is_global(ns: &str) -> bool {
     ns == GLOBAL_NS
 }
@@ -75,6 +77,7 @@ pub fn is_global(ns: &str) -> bool {
 /// project is appended with [`NS_SEP`] so the existing `(agent_id, …)` partition
 /// — DB rows and the `note/{agent_id}/…` directory alike — isolates the project
 /// automatically with no schema change.
+#[must_use]
 pub fn scoped_agent_id(base: &str, ns: &str) -> String {
     if is_global(ns) {
         base.to_string()
@@ -90,6 +93,7 @@ pub fn scoped_agent_id(base: &str, ns: &str) -> String {
 /// project (global namespace) reads see only the base id. The existing
 /// `NoteFactRetrieval::retrieve_multi_agent` consumes exactly this list, so the
 /// read side needs no new query machinery.
+#[must_use]
 pub fn read_scope_ids(base: &str, ns: &str) -> Vec<String> {
     if is_global(ns) {
         vec![base.to_string()]
@@ -105,6 +109,7 @@ pub fn read_scope_ids(base: &str, ns: &str) -> Vec<String> {
 /// `note_manage` tool and post-turn session compaction). With scoping off it
 /// returns the base id unchanged — byte-for-byte the pre-feature behaviour —
 /// so callers can route every write through it unconditionally.
+#[must_use]
 pub fn scoped_or_base(base: &str, project_scoped: bool, project_root: Option<&Path>) -> String {
     if project_scoped {
         scoped_agent_id(base, &project_namespace(project_root))
@@ -125,6 +130,7 @@ pub fn scoped_or_base(base: &str, project_scoped: bool, project_root: Option<&Pa
 /// the base directory itself is intentionally excluded (the caller maintains
 /// the base separately). Returns an empty vec when the dir is absent or
 /// unreadable, so an off / fresh install is a clean no-op.
+#[must_use]
 pub fn list_scoped_agent_ids(memory_dir: &Path, base: &str) -> Vec<String> {
     let prefix = format!("{base}{NS_SEP}proj-");
     let Ok(entries) = std::fs::read_dir(memory_dir) else {

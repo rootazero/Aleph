@@ -151,6 +151,7 @@ impl StdioTransport {
     ///
     /// A background read loop is spawned immediately to process incoming
     /// messages from the child's stdout.
+    #[must_use]
     pub fn from_child(
         stdin: tokio::process::ChildStdin,
         stdout: tokio::process::ChildStdout,
@@ -165,6 +166,7 @@ impl StdioTransport {
     ///
     /// The transport starts in a **disconnected** state. Call
     /// [`set_connected`](Self::set_connected) after the bridge reports ready.
+    #[must_use]
     pub fn from_streams(
         writer: Box<dyn tokio::io::AsyncWrite + Send + Unpin>,
         reader: Box<dyn tokio::io::AsyncBufRead + Send + Unpin>,

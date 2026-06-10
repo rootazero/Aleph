@@ -70,18 +70,21 @@ impl WorkspaceSandbox {
     }
 
     /// Override the default 60s per-command timeout.
+    #[must_use]
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
         self.default_timeout = timeout;
         self
     }
 
     /// Override the default 1 MB combined stdout+stderr truncation budget.
+    #[must_use]
     pub fn with_max_output_bytes(mut self, max_output_bytes: usize) -> Self {
         self.max_output_bytes = max_output_bytes;
         self
     }
 
     /// Override the default hooks (empty by default).
+    #[must_use]
     pub fn with_hooks(mut self, hooks: SandboxHooks) -> Self {
         self.hooks = hooks;
         self
@@ -148,6 +151,7 @@ fn normalize_path(path: &std::path::Path, workspace_root: &std::path::Path) -> s
 /// Compute the per-session workspace directory the same way `WorkspaceSandbox`
 /// does, without instantiating one. Lets out-of-band consumers (cluster node
 /// file commands) jail to the exact dir the node's bash sandbox uses.
+#[must_use]
 pub fn session_workspace_dir(workspace_root: &std::path::Path, sid: &SessionId) -> PathBuf {
     workspace_root.join(session_key_to_filename(sid))
 }
@@ -779,11 +783,17 @@ mod tests {
         }
 
         fn env(&self) -> HashMap<String, String> {
-            self.captured_env.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.captured_env
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
 
         fn caps(&self) -> Option<SandboxCapabilities> {
-            self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.captured_caps
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
     }
 
@@ -804,7 +814,8 @@ mod tests {
         ) -> Result<OsSandboxProfile, SandboxError> {
             // Capture the (post-proxy-rewrite, post-DNS) capabilities at the
             // exact moment the OS driver would build its profile.
-            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) = Some(capabilities.clone());
+            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(capabilities.clone());
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,
@@ -850,10 +861,16 @@ mod tests {
             })
         }
         fn env(&self) -> HashMap<String, String> {
-            self.captured_env.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.captured_env
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
         fn caps(&self) -> Option<SandboxCapabilities> {
-            self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.captured_caps
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
         }
     }
 
@@ -870,7 +887,8 @@ mod tests {
             capabilities: &SandboxCapabilities,
             _cwd: &Path,
         ) -> Result<OsSandboxProfile, SandboxError> {
-            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) = Some(capabilities.clone());
+            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(capabilities.clone());
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,

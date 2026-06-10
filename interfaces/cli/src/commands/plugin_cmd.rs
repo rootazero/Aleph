@@ -26,8 +26,7 @@ impl std::str::FromStr for PluginTemplate {
             "wasm" | "rust" => Ok(Self::Wasm),
             "static" | "markdown" | "md" => Ok(Self::Static),
             _ => Err(format!(
-                "Unknown template type: '{}'. Use: nodejs, wasm, or static",
-                s
+                "Unknown template type: '{s}'. Use: nodejs, wasm, or static"
             )),
         }
     }
@@ -39,9 +38,7 @@ impl std::str::FromStr for PluginTemplate {
 
 /// Scaffold a new plugin project.
 pub fn init(name: &str, template: PluginTemplate, target_dir: Option<&Path>) -> CliResult<()> {
-    let target = target_dir
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| PathBuf::from(name));
+    let target = target_dir.map_or_else(|| PathBuf::from(name), std::path::Path::to_path_buf);
 
     scaffold_plugin(&target, name, template)?;
 
@@ -166,7 +163,7 @@ fn scaffold_nodejs(target: &Path, name: &str) -> CliResult<()> {
     // src/index.ts
     std::fs::create_dir_all(target.join("src"))?;
     let index_ts = format!(
-        r#"// {name} — Aleph Plugin
+        r"// {name} — Aleph Plugin
 //
 // This is the entry point for your plugin. Edit the tool registration
 // below or add hooks, services, channels, etc.
@@ -186,7 +183,7 @@ export default async (api: any) => {{
     }},
   }});
 }};
-"#
+"
     );
     std::fs::write(target.join("src/index.ts"), index_ts)?;
 
@@ -278,13 +275,13 @@ pub fn validate(plugin_dir: &Path, json_mode: bool) -> CliResult<()> {
         println!("{}", serde_json::to_string_pretty(&json).unwrap());
     } else {
         for msg in &result.info {
-            println!("  [info] {}", msg);
+            println!("  [info] {msg}");
         }
         for msg in &result.warnings {
-            println!("  [warn] {}", msg);
+            println!("  [warn] {msg}");
         }
         for msg in &result.errors {
-            println!("  [error] {}", msg);
+            println!("  [error] {msg}");
         }
         if result.errors.is_empty() {
             println!("\nValidation passed.");
@@ -318,18 +315,15 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
     let toml: toml::Value = match content.parse() {
         Ok(v) => v,
         Err(e) => {
-            result.errors.push(format!("Invalid TOML: {}", e));
+            result.errors.push(format!("Invalid TOML: {e}"));
             return Ok(result);
         }
     };
 
     // Check [plugin] section
-    let plugin = match toml.get("plugin") {
-        Some(p) => p,
-        None => {
-            result.errors.push("Missing [plugin] section".to_string());
-            return Ok(result);
-        }
+    let plugin = if let Some(p) = toml.get("plugin") { p } else {
+        result.errors.push("Missing [plugin] section".to_string());
+        return Ok(result);
     };
 
     // Required fields
@@ -338,7 +332,7 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
             Some(val) if !val.is_empty() => {}
             _ => result
                 .errors
-                .push(format!("Missing or empty required field: plugin.{}", field)),
+                .push(format!("Missing or empty required field: plugin.{field}")),
         }
     }
 
@@ -350,15 +344,14 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
         .get("name")
         .and_then(|v| v.as_str())
         .unwrap_or("<unknown>");
-    result.info.push(format!("Plugin: {} ({})", name, id));
+    result.info.push(format!("Plugin: {name} ({id})"));
 
     // Check entry file
     if let Some(entry) = plugin.get("entry").and_then(|v| v.as_str()) {
         let entry_path = plugin_dir.join(entry);
         if !entry_path.exists() {
             result.warnings.push(format!(
-                "Entry file not found: {} (run build first?)",
-                entry
+                "Entry file not found: {entry} (run build first?)"
             ));
         }
     }
@@ -371,7 +364,7 @@ fn validate_plugin_dir(plugin_dir: &Path) -> CliResult<PluginValidation> {
                 if !names.insert(tool_name) {
                     result
                         .errors
-                        .push(format!("Duplicate tool name: '{}'", tool_name));
+                        .push(format!("Duplicate tool name: '{tool_name}'"));
                 }
             }
         }
@@ -442,10 +435,10 @@ pub fn doctor(json_mode: bool) -> CliResult<()> {
         if failed == 0 {
             println!("All required checks passed.");
             if warned > 0 {
-                println!("{} optional check(s) need attention.", warned);
+                println!("{warned} optional check(s) need attention.");
             }
         } else {
-            println!("{} required check(s) failed.", failed);
+            println!("{failed} required check(s) failed.");
         }
     }
 
@@ -467,7 +460,7 @@ fn check_node_available() -> DoctorCheck {
     DoctorCheck {
         name: "node".into(),
         description: "Node.js runtime (for Node.js plugins)".into(),
-        passed: result.as_ref().map(|o| o.status.success()).unwrap_or(false),
+        passed: result.as_ref().is_ok_and(|o| o.status.success()),
         required: false,
         message: match result {
             Ok(ref o) if o.status.success() => {
@@ -483,7 +476,7 @@ fn check_npm_available() -> DoctorCheck {
     DoctorCheck {
         name: "npm".into(),
         description: "npm package manager".into(),
-        passed: result.as_ref().map(|o| o.status.success()).unwrap_or(false),
+        passed: result.as_ref().is_ok_and(|o| o.status.success()),
         required: false,
         message: match result {
             Ok(ref o) if o.status.success() => {
@@ -500,11 +493,10 @@ fn check_wasm_target() -> DoctorCheck {
         .output();
     let has_wasi = result
         .as_ref()
-        .map(|o| {
+        .is_ok_and(|o| {
             let output = String::from_utf8_lossy(&o.stdout);
             output.contains("wasm32-wasi") || output.contains("wasm32-wasip1")
-        })
-        .unwrap_or(false);
+        });
     DoctorCheck {
         name: "wasm-target".into(),
         description: "WASM compilation target (for WASM plugins)".into(),
@@ -521,7 +513,7 @@ fn check_wasm_target() -> DoctorCheck {
 fn check_plugin_dir_exists() -> DoctorCheck {
     let home = dirs::home_dir();
     let plugin_dir = home.as_ref().map(|h| h.join(".aleph/extensions"));
-    let exists = plugin_dir.as_ref().map(|p| p.exists()).unwrap_or(false);
+    let exists = plugin_dir.as_ref().is_some_and(|p| p.exists());
     DoctorCheck {
         name: "plugin-dir".into(),
         description: "Global plugin directory (~/.aleph/extensions/)".into(),
@@ -541,7 +533,7 @@ fn check_plugin_dir_exists() -> DoctorCheck {
 
 fn scaffold_static(target: &Path, name: &str) -> CliResult<()> {
     let skill_md = format!(
-        r#"---
+        r"---
 name: {name}
 description: TODO — describe what this skill does
 ---
@@ -554,7 +546,7 @@ instructions when this skill is invoked.
 ## Usage
 
 Describe when and how to use this skill.
-"#
+"
     );
     std::fs::write(target.join("SKILL.md"), skill_md)?;
 
@@ -581,7 +573,7 @@ pub fn pack(plugin_dir: &Path, output: Option<&Path>) -> CliResult<()> {
     let validation = validate_plugin_dir(plugin_dir)?;
     if !validation.errors.is_empty() {
         for err in &validation.errors {
-            eprintln!("  [error] {}", err);
+            eprintln!("  [error] {err}");
         }
         return Err(CliError::Other(
             "Plugin validation failed. Fix errors before packing.".into(),
@@ -593,9 +585,7 @@ pub fn pack(plugin_dir: &Path, output: Option<&Path>) -> CliResult<()> {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("plugin");
-    let output_path = output
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| plugin_dir.join(format!("{}.aleph-plugin.zip", plugin_name)));
+    let output_path = output.map_or_else(|| plugin_dir.join(format!("{plugin_name}.aleph-plugin.zip")), std::path::Path::to_path_buf);
 
     // 3. Create zip
     let file = std::fs::File::create(&output_path).map_err(CliError::Io)?;
@@ -607,13 +597,12 @@ pub fn pack(plugin_dir: &Path, output: Option<&Path>) -> CliResult<()> {
     add_dir_to_zip(&mut zip, plugin_dir, plugin_dir, &options)?;
 
     zip.finish()
-        .map_err(|e| CliError::Other(format!("Failed to finalize zip: {}", e)))?;
+        .map_err(|e| CliError::Other(format!("Failed to finalize zip: {e}")))?;
 
     println!("Packed plugin to: {}", output_path.display());
     let size = std::fs::metadata(&output_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
-    println!("Archive size: {} bytes", size);
+        .map_or(0, |m| m.len());
+    println!("Archive size: {size} bytes");
 
     Ok(())
 }
@@ -644,7 +633,7 @@ fn add_dir_to_zip(
             add_dir_to_zip(zip, base, &path, options)?;
         } else {
             zip.start_file(&relative_str, *options)
-                .map_err(|e| CliError::Other(format!("Zip error: {}", e)))?;
+                .map_err(|e| CliError::Other(format!("Zip error: {e}")))?;
             let mut f = std::fs::File::open(&path).map_err(CliError::Io)?;
             let mut buf = Vec::new();
             f.read_to_end(&mut buf).map_err(CliError::Io)?;

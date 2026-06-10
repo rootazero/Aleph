@@ -59,8 +59,8 @@ pub(crate) fn new_enigo() -> Result<Enigo> {
         .map_err(|e| DesktopError::InputFailed(format!("Failed to create Enigo instance: {e}")))
 }
 
-/// Convert Aleph's MouseButton to enigo's Button.
-pub(crate) fn to_enigo_button(button: MouseButton) -> Button {
+/// Convert Aleph's `MouseButton` to enigo's Button.
+pub(crate) const fn to_enigo_button(button: MouseButton) -> Button {
     match button {
         MouseButton::Left => Button::Left,
         MouseButton::Right => Button::Right,

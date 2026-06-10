@@ -18,12 +18,15 @@ pub(super) fn telegram_html_to_markdown(html: &str) -> String {
     // <em>text</em> -> *text*
     s = replace_html_tag(&s, "em", "*", "*");
 
-    // <code>text</code> -> `text`
-    s = replace_html_tag(&s, "code", "`", "`");
-
     // <pre><code>text</code></pre> -> ```\ntext\n```
     // Also handles <pre><code class="language-xxx">
+    // Must run before the inline <code> replacement below: otherwise the
+    // <code> inside a plain <pre><code> pair is consumed first and the
+    // <pre> wrapper leaks into the normalized Markdown.
     s = replace_pre_code_blocks(&s);
+
+    // <code>text</code> -> `text`
+    s = replace_html_tag(&s, "code", "`", "`");
 
     // <a href="url">text</a> -> [text](url)
     s = replace_html_links(&s);

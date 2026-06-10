@@ -51,6 +51,7 @@ pub struct FilterResult {
 }
 
 impl FilterResult {
+    #[must_use]
     pub fn unchanged(text: &str) -> Self {
         Self {
             text: text.to_string(),
@@ -60,6 +61,7 @@ impl FilterResult {
     }
 
     /// True if any PII was detected (blocked or warned)
+    #[must_use]
     pub fn has_detections(&self) -> bool {
         self.blocked_count > 0 || self.warned_count > 0
     }
@@ -77,6 +79,7 @@ pub struct PiiEngine {
 
 impl PiiEngine {
     /// Create a new PII engine with the given configuration
+    #[must_use]
     pub fn new(config: PrivacyConfig) -> Self {
         let rules = crate::pii::rules::build_rules(&config.custom_rules);
         let allowlist = PiiAllowlist::default();
@@ -112,6 +115,7 @@ impl PiiEngine {
     }
 
     /// Check if a specific provider should be excluded from filtering
+    #[must_use]
     pub fn is_provider_excluded(&self, provider_name: &str) -> bool {
         self.config
             .exclude_providers
@@ -120,6 +124,7 @@ impl PiiEngine {
     }
 
     /// Check whether a provider is excluded, considering platform overrides.
+    #[must_use]
     pub fn is_platform_excluded(&self, platform: Option<&str>, provider: &str) -> bool {
         if self.is_provider_excluded(provider) {
             return true;
@@ -288,11 +293,13 @@ impl PiiEngine {
     }
 
     /// Filter PII from text using the global config.
+    #[must_use]
     pub fn filter(&self, text: &str) -> FilterResult {
         self.filter_with_config(text, &self.config)
     }
 
     /// Filter PII from text, applying platform-specific overrides if provided.
+    #[must_use]
     pub fn filter_with_platform(&self, text: &str, platform: Option<&str>) -> FilterResult {
         let config = self.effective_config(platform);
         self.filter_with_config(text, &config)

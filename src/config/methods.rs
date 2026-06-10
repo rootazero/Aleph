@@ -19,6 +19,7 @@ impl Config {
     /// - Otherwise, creates unified config from legacy `tools` + `mcp` sections
     ///
     /// This enables gradual migration from legacy config format to unified format.
+    #[must_use]
     pub fn get_effective_tools_config(&self) -> UnifiedToolsConfig {
         if let Some(unified) = &self.unified_tools {
             unified.clone()
@@ -28,6 +29,7 @@ impl Config {
     }
 
     /// Check if using new unified tools configuration
+    #[must_use]
     pub fn is_using_unified_tools(&self) -> bool {
         self.unified_tools.is_some()
     }
@@ -46,6 +48,7 @@ impl Config {
     /// # Returns
     /// * `Some(String)` - The name of the enabled default provider
     /// * `None` - No valid default provider
+    #[must_use]
     pub fn get_default_provider(&self) -> Option<String> {
         self.general.default_provider.as_ref().and_then(|name| {
             self.providers.get(name).and_then(|config| {
@@ -100,6 +103,7 @@ impl Config {
     ///
     /// # Returns
     /// * `Vec<String>` - List of enabled provider names
+    #[must_use]
     pub fn get_enabled_providers(&self) -> Vec<String> {
         let mut providers: Vec<String> = self
             .providers
@@ -257,6 +261,7 @@ impl Config {
     ///     println!("First rule: {}", rule.regex);
     /// }
     /// ```
+    #[must_use]
     pub fn get_rule(&self, index: usize) -> Option<&RoutingRuleConfig> {
         self.rules.get(index)
     }
@@ -265,6 +270,7 @@ impl Config {
     ///
     /// # Returns
     /// * `usize` - Number of routing rules configured
+    #[must_use]
     pub fn rule_count(&self) -> usize {
         self.rules.len()
     }

@@ -25,6 +25,7 @@ impl ScopedToolService {
     /// Create a new `ScopedToolService`.
     ///
     /// `allowed` — set of tool names visible through this service. Empty = allow all.
+    #[must_use]
     pub fn new(inner: Arc<LoopToolRegistry>, allowed: BTreeSet<String>) -> Self {
         Self {
             inner,

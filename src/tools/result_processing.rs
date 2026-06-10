@@ -39,6 +39,7 @@ pub const DEFAULT_RESULT_BUDGET_TOKENS: usize = 8_000;
 ///
 /// `None` from this function means "do not persist this tool's output;
 /// just truncate when it exceeds the global default".
+#[must_use]
 pub fn resolve_result_budget(name: &str, explicit: Option<usize>) -> Option<usize> {
     match name {
         "read_file" | "Read" | "file_read" => return None,
@@ -192,6 +193,7 @@ fn inline_error_digest(text: &str) -> Option<String> {
 /// Head + tail truncation under the budget. Mirrors
 /// `pipeline/helpers.rs::truncate_tool_result_with_budget`, which is
 /// removed in the same cycle that ships this module.
+#[must_use]
 pub fn truncate_with_budget(text: &str, budget_tokens: usize) -> String {
     let estimated = estimate_tokens_smart(text);
     if estimated <= budget_tokens {

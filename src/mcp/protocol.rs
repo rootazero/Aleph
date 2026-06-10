@@ -158,6 +158,7 @@ pub struct ToolAnnotations {
 impl ToolAnnotations {
     /// Explicitly declared read-only. Absent → `false` (conservative:
     /// unknown tools stay whole-world exclusive under parallel dispatch).
+    #[must_use]
     pub fn is_read_only(&self) -> bool {
         self.read_only_hint == Some(true)
     }
@@ -166,12 +167,14 @@ impl ToolAnnotations {
     /// other way: confirmation friction is only added when the server
     /// asks for it, so wiring annotations doesn't suddenly gate every
     /// legacy MCP tool behind approval prompts).
+    #[must_use]
     pub fn is_destructive(&self) -> bool {
         self.destructive_hint == Some(true)
     }
 
     /// Safe to retry with the same arguments: explicitly idempotent, or
     /// read-only (reads are idempotent by definition).
+    #[must_use]
     pub fn is_idempotent(&self) -> bool {
         self.idempotent_hint == Some(true) || self.is_read_only()
     }
@@ -573,6 +576,7 @@ impl SamplingChunk {
     }
 
     /// Create a final chunk
+    #[must_use]
     pub fn final_chunk(model: Option<String>, stop_reason: StopReason) -> Self {
         Self {
             delta: String::new(),
@@ -589,6 +593,7 @@ pub const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 
 impl InitializeParams {
     /// Create default initialize params for Aleph
+    #[must_use]
     pub fn aleph_default() -> Self {
         Self {
             protocol_version: MCP_PROTOCOL_VERSION.to_string(),
@@ -638,12 +643,14 @@ impl ApprovalRequest {
     }
 
     /// Set details for the request
+    #[must_use]
     pub fn with_details(mut self, details: serde_json::Value) -> Self {
         self.details = Some(details);
         self
     }
 
     /// Set timeout
+    #[must_use]
     pub fn with_timeout(mut self, seconds: u32) -> Self {
         self.timeout_seconds = Some(seconds);
         self
@@ -663,6 +670,7 @@ pub struct ApprovalResponse {
 
 impl ApprovalResponse {
     /// Create an approved response
+    #[must_use]
     pub fn approved() -> Self {
         Self {
             approved: true,
@@ -671,6 +679,7 @@ impl ApprovalResponse {
     }
 
     /// Create a rejected response with optional reason
+    #[must_use]
     pub fn rejected(reason: Option<String>) -> Self {
         Self {
             approved: false,

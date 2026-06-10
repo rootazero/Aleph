@@ -19,6 +19,7 @@ impl Default for AgentRegistry {
 
 impl AgentRegistry {
     /// Create a new empty registry
+    #[must_use]
     pub fn new() -> Self {
         Self {
             agents: RwLock::new(HashMap::new()),
@@ -26,6 +27,7 @@ impl AgentRegistry {
     }
 
     /// Create a registry with built-in agents
+    #[must_use]
     pub fn with_builtins() -> Self {
         let registry = Self::new();
         for agent in builtin_agents() {
@@ -212,6 +214,7 @@ fn normalize_agent_alias(raw: &str) -> Option<&'static str> {
     }
 }
 
+#[must_use]
 pub fn builtin_agents() -> Vec<AgentDef> {
     vec![
         // Main agent - full access. Explicit "flow_run" alongside "*" marks the

@@ -21,6 +21,7 @@ pub enum MessageRole {
 }
 
 /// Turn a raw event stream into the message-view agent_loop expects.
+#[must_use]
 pub fn project_messages(events: &[SessionEventRecord]) -> Vec<ProjectedMessage> {
     events
         .iter()

@@ -55,6 +55,7 @@ impl GenerationProviderRegistry {
     /// let registry = GenerationProviderRegistry::new();
     /// assert!(registry.is_empty());
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self {
             providers: HashMap::new(),
@@ -133,6 +134,7 @@ impl GenerationProviderRegistry {
     /// let missing = registry.get("nonexistent");
     /// assert!(missing.is_none());
     /// ```
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn GenerationProvider>> {
         self.providers.get(name).cloned()
     }
@@ -193,6 +195,7 @@ impl GenerationProviderRegistry {
     /// let names = registry.names();
     /// assert_eq!(names, vec!["dalle", "midjourney"]);
     /// ```
+    #[must_use]
     pub fn names(&self) -> Vec<String> {
         let mut names: Vec<_> = self.providers.keys().cloned().collect();
         names.sort();
@@ -208,16 +211,19 @@ impl GenerationProviderRegistry {
     /// # Returns
     ///
     /// `true` if provider exists, `false` otherwise
+    #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.providers.contains_key(name)
     }
 
     /// Get the number of registered providers
+    #[must_use]
     pub fn len(&self) -> usize {
         self.providers.len()
     }
 
     /// Check if the registry is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
     }
@@ -246,6 +252,7 @@ impl GenerationProviderRegistry {
     /// let image_providers = registry.providers_for_type(GenerationType::Image);
     /// assert_eq!(image_providers.len(), 1);
     /// ```
+    #[must_use]
     pub fn providers_for_type(&self, gen_type: GenerationType) -> Vec<Arc<dyn GenerationProvider>> {
         self.providers
             .values()
@@ -278,6 +285,7 @@ impl GenerationProviderRegistry {
     /// let names = registry.names_for_type(GenerationType::Image);
     /// assert_eq!(names, vec!["dalle"]);
     /// ```
+    #[must_use]
     pub fn names_for_type(&self, gen_type: GenerationType) -> Vec<String> {
         let mut names: Vec<_> = self
             .providers
@@ -381,6 +389,7 @@ impl GenerationProviderRegistry {
     ///
     /// * `Some((name, provider))` - A provider that supports the type
     /// * `None` - No provider supports this type
+    #[must_use]
     pub fn first_for_type(
         &self,
         gen_type: GenerationType,

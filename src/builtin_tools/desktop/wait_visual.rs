@@ -118,12 +118,12 @@ pub async fn run_wait_visual(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::Mutex;
     use aleph_desktop::{
         DisplayInfo, MouseButton, OcrResult, PressAction, Result, ScreenRegion as DesktopRegion,
         Screenshot, WindowInfo,
     };
     use async_trait::async_trait;
-    use crate::sync_primitives::Mutex;
 
     /// A scripted screen that returns a fixed sequence of base64 strings.
     /// Other capability methods are unimplemented — the polling loop only

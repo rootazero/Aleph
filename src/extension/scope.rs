@@ -26,6 +26,7 @@ pub fn scope_install_dir(
 }
 
 /// Get all scope directories in priority order (highest first)
+#[must_use]
 pub fn scope_dirs_by_priority(
     project_dir: Option<&Path>,
     agent_id: Option<&str>,

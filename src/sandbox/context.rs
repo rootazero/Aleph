@@ -28,6 +28,7 @@ task_local! {
 /// Returns the current session id if we're inside a `SESSION_ID.scope(...)`,
 /// otherwise `None`. Outside a session scope, tools must fall back to a
 /// shared "no-session" workspace (policy owned by `WorkspaceSandbox`).
+#[must_use]
 pub fn current_session() -> Option<SessionId> {
     SESSION_ID.try_with(|id| id.clone()).ok()
 }
@@ -35,6 +36,7 @@ pub fn current_session() -> Option<SessionId> {
 /// Returns the model-supplied justification for the current exec call, if one
 /// was scoped via [`EXEC_JUSTIFICATION`]. `None` outside the scope (the common
 /// case — most calls don't escalate and pass no justification).
+#[must_use]
 pub fn current_justification() -> Option<String> {
     EXEC_JUSTIFICATION.try_with(|j| j.clone()).ok()
 }

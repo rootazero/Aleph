@@ -26,6 +26,7 @@ pub struct AzureErrorDetail {
 }
 
 impl AzureSpeechError {
+    #[must_use]
     pub fn best_message(&self) -> Option<String> {
         if let Some(detail) = &self.error {
             if let Some(m) = &detail.message {

@@ -60,6 +60,7 @@ pub enum MatchedBy {
 }
 
 /// Resolve an agent route from input
+#[must_use]
 pub fn resolve_route(
     bindings: &[RouteBinding],
     session_cfg: &SessionConfig,

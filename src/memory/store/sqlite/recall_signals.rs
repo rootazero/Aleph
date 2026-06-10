@@ -42,6 +42,7 @@ pub struct RecallHit {
 // ---------------------------------------------------------------------------
 
 /// SHA-256 first 16 hex chars of the trimmed, lowercased query.
+#[must_use]
 pub fn query_hash(query: &str) -> String {
     let normalized = query.trim().to_lowercase();
     let digest = Sha256::digest(normalized.as_bytes());
@@ -49,6 +50,7 @@ pub fn query_hash(query: &str) -> String {
 }
 
 /// Today's date as `YYYY-MM-DD`.
+#[must_use]
 pub fn today_bucket() -> String {
     Utc::now().format("%Y-%m-%d").to_string()
 }

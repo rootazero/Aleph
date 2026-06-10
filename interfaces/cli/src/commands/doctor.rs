@@ -360,7 +360,7 @@ fn render_human(checks: &[DoctorCheck]) {
     for check in checks {
         if check.category != current_category {
             current_category = &check.category;
-            println!("[{}]", current_category);
+            println!("[{current_category}]");
         }
         let status = if check.passed {
             "OK"
@@ -386,13 +386,11 @@ fn render_human(checks: &[DoctorCheck]) {
         println!("All checks passed.");
     } else if failed == 0 {
         println!(
-            "All required checks passed. {} optional warning(s).",
-            warned
+            "All required checks passed. {warned} optional warning(s)."
         );
     } else {
         println!(
-            "{} required check(s) failed, {} optional warning(s).",
-            failed, warned
+            "{failed} required check(s) failed, {warned} optional warning(s)."
         );
     }
 }
@@ -413,7 +411,7 @@ fn check_cli_binary() -> DoctorCheck {
             "aleph-cli",
             "Path of the running aleph binary",
             true,
-            format!("current_exe() failed: {}", e),
+            format!("current_exe() failed: {e}"),
         ),
     }
 }
@@ -561,14 +559,14 @@ async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
                     "gateway",
                     "Aleph Gateway daemon (JSON-RPC over WS)",
                     false,
-                    format!("reachable at {}", server_url),
+                    format!("reachable at {server_url}"),
                 ),
                 Err(e) => DoctorCheck::fail(
                     "runtime",
                     "gateway",
                     "Aleph Gateway daemon (JSON-RPC over WS)",
                     false,
-                    format!("connected to {} but `health` failed: {}", server_url, e),
+                    format!("connected to {server_url} but `health` failed: {e}"),
                 ),
             }
         }
@@ -578,8 +576,7 @@ async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
             "Aleph Gateway daemon (JSON-RPC over WS)",
             false,
             format!(
-                "cannot reach {}: {} (start with `aleph daemon start`)",
-                server_url, e
+                "cannot reach {server_url}: {e} (start with `aleph daemon start`)"
             ),
         ),
         Err(_) => DoctorCheck::fail(
@@ -587,7 +584,7 @@ async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
             "gateway",
             "Aleph Gateway daemon (JSON-RPC over WS)",
             false,
-            format!("timeout connecting to {} (5s)", server_url),
+            format!("timeout connecting to {server_url} (5s)"),
         ),
     }
 }
@@ -598,11 +595,11 @@ async fn check_gateway_reachable(server_url: &str) -> DoctorCheck {
 ///
 /// Both sides MUST read the same authoritative source for the comparison to be
 /// meaningful: the daemon's `gateway.identity.get` reports `env!("ALEPH_VERSION")`
-/// (injected by `build.rs` from the `VERSION` file — the CalVer single source of
+/// (injected by `build.rs` from the `VERSION` file — the `CalVer` single source of
 /// truth), so the CLI compares against the same `ALEPH_VERSION` rather than
 /// `CARGO_PKG_VERSION`. The two coincide after `just release` (which mirrors
 /// VERSION into Cargo.toml) but diverge whenever VERSION is bumped ahead of the
-/// manifest — using CARGO_PKG_VERSION there would compare different sources and
+/// manifest — using `CARGO_PKG_VERSION` there would compare different sources and
 /// fire a spurious "restart the daemon" warning against an identical build.
 async fn check_daemon_version(server_url: &str) -> DoctorCheck {
     let cli = env!("ALEPH_VERSION");
@@ -674,13 +671,13 @@ async fn check_providers(server_url: &str) -> Vec<DoctorCheck> {
 fn provider_row_to_check(row: &Value) -> DoctorCheck {
     let name = row.get("name").and_then(|v| v.as_str()).unwrap_or("?");
     let row_name = format!("provider:{name}");
-    let latency = row.get("latency_ms").and_then(|v| v.as_u64());
+    let latency = row.get("latency_ms").and_then(serde_json::Value::as_u64);
     let lat = latency.map(|m| format!(" ({m}ms)")).unwrap_or_default();
     let skipped = row
         .get("skipped")
-        .and_then(|v| v.as_bool())
+        .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let ok = row.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
+    let ok = row.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let desc = "LLM provider connectivity";
 
     if skipped {
@@ -736,7 +733,7 @@ async fn check_mcp_servers(server_url: &str) -> DoctorCheck {
                 "mcp",
                 "Connected MCP servers",
                 false,
-                format!("{} configured", count),
+                format!("{count} configured"),
             )
         }
         Err(_) => DoctorCheck::ok(
@@ -770,7 +767,7 @@ async fn check_vault(server_url: &str) -> DoctorCheck {
             "vault",
             "Secret vault status",
             false,
-            format!("vault.status failed: {}", e),
+            format!("vault.status failed: {e}"),
         ),
     }
 }
@@ -845,8 +842,7 @@ fn count_array_or_obj_array(value: &Value, key: &str) -> usize {
     value
         .get(key)
         .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0)
+        .map_or(0, std::vec::Vec::len)
 }
 
 #[cfg(test)]

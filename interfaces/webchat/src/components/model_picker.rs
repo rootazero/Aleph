@@ -206,9 +206,9 @@ pub fn ModelPicker() -> impl IntoView {
                                         let color = entry.color.clone();
                                         // Models to show: user-extended list if any, otherwise the default.
                                         let models = if entry.models.is_empty() {
-                                            vec![entry.default_model.clone()]
+                                            vec![entry.default_model]
                                         } else {
-                                            entry.models.clone()
+                                            entry.models
                                         };
                                         view! {
                                             <div class="pt-1.5">
@@ -216,7 +216,7 @@ pub fn ModelPicker() -> impl IntoView {
                                                     <span class="w-2 h-2 rounded-full"
                                                           style=format!("background: {}", color) />
                                                     <span class="text-[10px] font-semibold uppercase tracking-wider text-text-tertiary">
-                                                        {display.clone()}
+                                                        {display}
                                                     </span>
                                                 </div>
                                                 {models.into_iter().map(|model_id| {
@@ -231,7 +231,7 @@ pub fn ModelPicker() -> impl IntoView {
                                                                 if provider == pid_active && model == mid_active
                                                         )
                                                     };
-                                                    let display_text = model_id.clone();
+                                                    let display_text = model_id;
                                                     view! {
                                                         <button
                                                             on:click=move |_| select_entry(pid.clone(), mid.clone())

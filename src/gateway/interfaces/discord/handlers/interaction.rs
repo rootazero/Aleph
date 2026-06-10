@@ -33,12 +33,14 @@ pub struct InteractionHandler {
 }
 
 impl InteractionHandler {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             approval_queue: None,
         }
     }
 
+    #[must_use]
     pub fn with_approval_queue(mut self, queue: Arc<ApprovalQueue>) -> Self {
         self.approval_queue = Some(queue);
         self

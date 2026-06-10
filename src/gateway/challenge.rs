@@ -92,11 +92,13 @@ impl Default for ChallengeManager {
 
 impl ChallengeManager {
     /// Create a new `ChallengeManager` with an auto-generated server id.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a new `ChallengeManager` with an explicit server id.
+    #[must_use]
     pub fn with_server_id(server_id: String) -> Self {
         Self {
             pending: DashMap::new(),
@@ -108,6 +110,7 @@ impl ChallengeManager {
     /// Generate a new [`Challenge`].
     ///
     /// The nonce is 64 hex characters derived from two UUID v4 values.
+    #[must_use]
     pub fn generate(&self) -> Challenge {
         // Two UUID v4 → 32 hex chars each → 64 hex chars total.
         let nonce = format!(
@@ -196,6 +199,7 @@ impl ChallengeManager {
     }
 
     /// Number of pending (un-verified) challenges.
+    #[must_use]
     pub fn pending_count(&self) -> usize {
         self.pending.len()
     }
@@ -225,6 +229,7 @@ impl ChallengeManager {
 /// msg = "{nonce}{timestamp}{device_id}"
 /// sig = HMAC-SHA256(key = token, msg)   → hex-encoded
 /// ```
+#[must_use]
 pub fn compute_signature(token: &str, nonce: &str, timestamp: u64, device_id: &str) -> String {
     let msg = format!("{nonce}{timestamp}{device_id}");
 

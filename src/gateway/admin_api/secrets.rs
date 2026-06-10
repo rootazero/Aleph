@@ -87,9 +87,9 @@ async fn delete_secret(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::Arc;
     use axum::body::{to_bytes, Body};
     use axum::http::Request;
-    use crate::sync_primitives::Arc;
     use tempfile::TempDir;
     use tower::ServiceExt;
 

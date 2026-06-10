@@ -257,6 +257,17 @@ impl AlephTool for HeartbeatUpdateTool {
     type Output = HeartbeatUpdateOutput;
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
+        // Mirror the create-path floor: a sub-second interval makes the probe
+        // (and any L2 agent run it triggers) fire on every tick.
+        if let Some(interval_ms) = args.interval_ms {
+            if interval_ms < 1000 {
+                return Err(crate::error::AlephError::tool(format!(
+                    "Interval too short: interval_ms={} is below the 1000ms minimum.",
+                    interval_ms
+                )));
+            }
+        }
+
         let updates = HeartbeatTaskUpdates {
             name: args.name,
             agent_id: args.agent_id,

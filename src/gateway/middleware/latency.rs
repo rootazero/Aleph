@@ -35,6 +35,7 @@ pub struct LatencyHistogram {
 }
 
 impl LatencyHistogram {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             buckets: (0..BUCKET_BOUNDS_MS.len())
@@ -102,6 +103,7 @@ fn slot() -> &'static RwLock<Option<Arc<LatencyHistogram>>> {
 /// registry has). Get-or-init instead returns the single shared instance, so
 /// every connection's metrics layer observes into — and `/metrics` reads from
 /// — the same aggregate.
+#[must_use]
 pub fn global_latency_or_init() -> Arc<LatencyHistogram> {
     let mut guard = slot().write().unwrap_or_else(|e| e.into_inner());
     guard
@@ -110,6 +112,7 @@ pub fn global_latency_or_init() -> Arc<LatencyHistogram> {
 }
 
 /// Fetch the process-wide latency histogram, or `None` before it is installed.
+#[must_use]
 pub fn get_global_latency() -> Option<Arc<LatencyHistogram>> {
     let guard = slot().read().unwrap_or_else(|e| e.into_inner());
     guard.clone()

@@ -78,6 +78,7 @@ pub const GATHER_BUDGET_THRESHOLD: usize = 12;
 /// [`attempt_summary`](crate::tools::attempt_summary), which measures failure
 /// kind. The tool name is on the request event itself, so no `call_id`
 /// resolution is needed.
+#[must_use]
 pub fn count_gather_calls(events: &[SessionEventRecord]) -> usize {
     events
         .iter()
@@ -96,6 +97,7 @@ pub fn count_gather_calls(events: &[SessionEventRecord]) -> usize {
 /// Returns `None` when no notice is warranted yet, so callers stay branch-free
 /// (`if let Some(text) = render_gather_notice(...)`). Wrapped in
 /// `<system-reminder>` to match Aleph's harness-injected channel.
+#[must_use]
 pub fn render_gather_notice(events: &[SessionEventRecord]) -> Option<String> {
     let n = count_gather_calls(events);
     if n < GATHER_BUDGET_THRESHOLD {

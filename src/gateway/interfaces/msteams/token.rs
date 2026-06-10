@@ -44,6 +44,7 @@ pub struct GraphTokenManager {
 }
 
 impl GraphTokenManager {
+    #[must_use]
     pub fn new(app_id: String, tenant_id: String, app_password: String) -> Self {
         Self {
             app_id: app_id.clone(),
@@ -57,6 +58,7 @@ impl GraphTokenManager {
         }
     }
 
+    #[must_use]
     pub fn with_federated(
         app_id: String,
         tenant_id: String,

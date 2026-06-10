@@ -102,6 +102,7 @@ impl UnifiedMessage {
     }
 
     /// Create a user message with pre-built content blocks (for multimodal)
+    #[must_use]
     pub fn user_with_content(content: Vec<ContentBlock>) -> Self {
         Self::User { content }
     }
@@ -150,6 +151,7 @@ impl UnifiedMessage {
     }
 
     /// Build an Assistant message from a ProviderResponse
+    #[must_use]
     pub fn from_provider_response(resp: &super::adapter::ProviderResponse) -> Self {
         let mut content = Vec::new();
         if let Some(ref thinking) = resp.thinking {
@@ -185,6 +187,7 @@ impl UnifiedMessage {
     }
 
     /// Get read access to content blocks
+    #[must_use]
     pub fn content_blocks(&self) -> &[ContentBlock] {
         match self {
             Self::User { content } => content,
@@ -194,6 +197,7 @@ impl UnifiedMessage {
     }
 
     /// Extract concatenated text from a slice of messages (for leak detection)
+    #[must_use]
     pub fn extract_all_text(messages: &[UnifiedMessage]) -> String {
         let mut parts = Vec::new();
         for msg in messages {
@@ -212,6 +216,7 @@ impl UnifiedMessage {
     /// Extract all text content from a message as a single concatenated string.
     ///
     /// Covers Text blocks and Json (serialized). Used for token estimation.
+    #[must_use]
     pub fn text_content(&self) -> String {
         let mut parts = Vec::new();
         for block in self.content_blocks() {
@@ -231,16 +236,19 @@ impl UnifiedMessage {
     }
 
     /// Returns true if this is an Assistant message.
+    #[must_use]
     pub fn is_assistant(&self) -> bool {
         matches!(self, Self::Assistant { .. })
     }
 
     /// Returns true if this is a User message.
+    #[must_use]
     pub fn is_user(&self) -> bool {
         matches!(self, Self::User { .. })
     }
 
     /// Returns true if this is a ToolResult message.
+    #[must_use]
     pub fn is_tool_result(&self) -> bool {
         matches!(self, Self::ToolResult { .. })
     }
@@ -248,6 +256,7 @@ impl UnifiedMessage {
     /// Extract (tool_name, content_text) from a ToolResult message.
     ///
     /// Returns `None` if this is not a ToolResult.
+    #[must_use]
     pub fn tool_result_info(&self) -> Option<(&str, String)> {
         match self {
             Self::ToolResult {
@@ -281,6 +290,7 @@ impl UnifiedMessage {
     }
 
     /// Check if this is a ToolCall-bearing Assistant message
+    #[must_use]
     pub fn has_tool_calls(&self) -> bool {
         match self {
             Self::Assistant { content } => content
@@ -291,6 +301,7 @@ impl UnifiedMessage {
     }
 
     /// Extract tool calls from an Assistant message
+    #[must_use]
     pub fn tool_calls(&self) -> Vec<(&str, &str, &Value)> {
         match self {
             Self::Assistant { content } => content
@@ -312,6 +323,7 @@ impl UnifiedMessage {
 
 impl ContentBlock {
     /// Extract text content if this is a Text block
+    #[must_use]
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text { text, .. } => Some(text),
@@ -328,6 +340,7 @@ impl ContentBlock {
 ///    [`normalize_tool_pairs`]) — the wire-level safety net that every provider
 ///    call passes through (`providers::bridge`).
 /// 2. Normalizes cross-model content (no-op for now, reserved for thinking signatures)
+#[must_use]
 pub fn transform_messages(
     messages: &[UnifiedMessage],
     _target_provider: Option<&str>,

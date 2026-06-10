@@ -66,10 +66,12 @@ impl MediaProvider for TextDocumentProvider {
         match input {
             MediaInput::FilePath { path } => {
                 const MAX_TEXT_FILE_BYTES: u64 = 10 * 1024 * 1024;
-                let meta = std::fs::metadata(path).map_err(|e| MediaError::ProviderError {
-                    provider: "text-document".into(),
-                    message: format!("Failed to read metadata for {}: {}", path.display(), e),
-                })?;
+                let meta = tokio::fs::metadata(path)
+                    .await
+                    .map_err(|e| MediaError::ProviderError {
+                        provider: "text-document".into(),
+                        message: format!("Failed to read metadata for {}: {}", path.display(), e),
+                    })?;
                 if meta.len() > MAX_TEXT_FILE_BYTES {
                     return Err(MediaError::ProviderError {
                         provider: "text-document".into(),
@@ -81,11 +83,12 @@ impl MediaProvider for TextDocumentProvider {
                         ),
                     });
                 }
-                let content =
-                    std::fs::read_to_string(path).map_err(|e| MediaError::ProviderError {
+                let content = tokio::fs::read_to_string(path).await.map_err(|e| {
+                    MediaError::ProviderError {
                         provider: "text-document".into(),
                         message: format!("Failed to read {}: {}", path.display(), e),
-                    })?;
+                    }
+                })?;
                 Ok(MediaOutput::Text { text: content })
             }
             MediaInput::Base64 { data, .. } => {

@@ -26,7 +26,8 @@ pub struct SessionTurnArgs {
     pub session_id: String,
     /// Message content for this turn
     pub content: String,
-    /// "respond" to add a turn, "conclude" to propose conclusion
+    /// "respond" to add a turn, "conclude" to propose conclusion,
+    /// "cancel" to abandon the session without an outcome
     #[serde(default = "default_respond")]
     pub mode: String,
     /// Conclusion summary (required when mode="conclude")
@@ -57,6 +58,7 @@ pub struct SessionTurnTool {
 }
 
 impl SessionTurnTool {
+    #[must_use]
     pub fn new(coordinator: Arc<SessionCoordinator>, current_agent_id: String) -> Self {
         Self {
             coordinator,
@@ -69,7 +71,7 @@ impl SessionTurnTool {
 impl AlephTool for SessionTurnTool {
     const NAME: &'static str = "session_turn";
     const DESCRIPTION: &'static str =
-        "Respond in a collaborative session or propose its conclusion";
+        "Respond in a collaborative session, propose its conclusion, or cancel it";
 
     type Args = SessionTurnArgs;
     type Output = SessionTurnOutput;
@@ -78,6 +80,7 @@ impl AlephTool for SessionTurnTool {
         Some(vec![
             "session_turn(session_id='sess-1', content='I think we should use approach A')".to_string(),
             "session_turn(session_id='sess-1', content='Final summary', mode='conclude', conclusion='Use approach A', agreed_by=['agent-a','agent-b'])".to_string(),
+            "session_turn(session_id='sess-1', content='No longer relevant', mode='cancel')".to_string(),
         ])
     }
 
@@ -123,8 +126,20 @@ impl AlephTool for SessionTurnTool {
                     message: "Session concluded successfully".to_string(),
                 })
             }
+            "cancel" => {
+                self.coordinator
+                    .cancel(&args.session_id, &self.current_agent_id)
+                    .await
+                    .map_err(|e| AlephError::other(format!("Failed to cancel session: {e}")))?;
+
+                Ok(SessionTurnOutput {
+                    session_id: args.session_id,
+                    action: "cancelled".to_string(),
+                    message: "Session cancelled".to_string(),
+                })
+            }
             other => Err(AlephError::other(format!(
-                "Unknown mode '{other}': expected 'respond' or 'conclude'"
+                "Unknown mode '{other}': expected 'respond', 'conclude' or 'cancel'"
             ))),
         }
     }

@@ -67,8 +67,7 @@ fn capture_js_stack() -> String {
 /// record count. No-op (returns 0) if localStorage is unavailable. Never
 /// panics — every fallible step degrades to a default.
 fn persist_crash(message: &str, stack: &str) -> usize {
-    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten())
-    else {
+    let Some(storage) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) else {
         return 0;
     };
     let existing = storage
@@ -234,8 +233,7 @@ fn escape_html(s: &str) -> String {
 ///
 /// Pure — no DOM/JS dependency — so it is unit-testable on the host.
 fn append_capped(existing_json: &str, new_record_json: &str, cap: usize) -> String {
-    let mut arr: Vec<serde_json::Value> =
-        serde_json::from_str(existing_json).unwrap_or_default();
+    let mut arr: Vec<serde_json::Value> = serde_json::from_str(existing_json).unwrap_or_default();
     if let Ok(record) = serde_json::from_str::<serde_json::Value>(new_record_json) {
         arr.push(record);
     }

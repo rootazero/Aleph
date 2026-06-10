@@ -84,6 +84,7 @@ pub fn parse_irc_line(line: &str) -> Option<IrcLine> {
 /// Extract the nickname from an IRC prefix like "nick!user@host".
 ///
 /// Returns the part before '!', or the entire string if no '!' is present.
+#[must_use]
 pub fn nick_from_prefix(prefix: &str) -> &str {
     prefix.split('!').next().unwrap_or(prefix)
 }
@@ -95,6 +96,7 @@ pub fn nick_from_prefix(prefix: &str) -> &str {
 /// - The message is from the bot itself (case-insensitive comparison)
 /// - The message body is empty
 /// - No prefix (sender info) is present
+#[must_use]
 pub fn convert_privmsg(
     parsed: &IrcLine,
     channel_id: &ChannelId,
@@ -166,6 +168,21 @@ impl IrcMessageOps {
     ) -> Result<SendResult, ChannelError> {
         let formatted = MessageFormatter::format(text, MarkupFormat::IrcFormatting);
         let chunks = MessageFormatter::split(&formatted, MAX_PRIVMSG_PAYLOAD);
+
+        // The target sits in the middle of the raw command line: embedded
+        // CR/LF would terminate the line and inject a new command, and a
+        // space would inject extra parameters (same injection class as the
+        // trailing text handled below). Legit IRC targets never contain
+        // control characters or spaces.
+        let target: String = target
+            .chars()
+            .filter(|c| !c.is_control() && *c != ' ')
+            .collect();
+        if target.is_empty() {
+            return Err(ChannelError::SendFailed(
+                "IRC target is empty after sanitization".to_string(),
+            ));
+        }
 
         for chunk in &chunks {
             // IRC messages are strictly single-line: a raw CR/LF inside the

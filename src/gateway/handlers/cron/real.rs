@@ -260,9 +260,18 @@ pub async fn handle_update(request: JsonRpcRequest, cron: SharedCronService) -> 
     if let Some(enabled) = params.get("enabled").and_then(|v| v.as_bool()) {
         updates.enabled = Some(enabled);
     }
-    if let Some(sk) = params.get("schedule_kind") {
-        if let Ok(kind) = serde_json::from_value::<ScheduleKind>(sk.clone()) {
-            updates.schedule_kind = Some(kind);
+    // Explicit null = no-op (back-compat); a present-but-malformed value is
+    // rejected to avoid a silent no-op that looks like a successful update.
+    if let Some(sk) = params.get("schedule_kind").filter(|v| !v.is_null()) {
+        match serde_json::from_value::<ScheduleKind>(sk.clone()) {
+            Ok(kind) => updates.schedule_kind = Some(kind),
+            Err(e) => {
+                return JsonRpcResponse::error(
+                    request.id,
+                    INVALID_PARAMS,
+                    format!("Invalid schedule_kind: {}", e),
+                );
+            }
         }
     }
     if let Some(tags) = params.get("tags").and_then(|v| v.as_array()) {

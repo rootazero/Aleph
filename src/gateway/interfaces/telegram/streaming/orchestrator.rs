@@ -22,6 +22,7 @@ pub struct StreamOrchestrator {
 }
 
 impl StreamOrchestrator {
+    #[must_use]
     pub fn new(
         delivery: TelegramDelivery,
         config: StreamingOptions,
@@ -57,6 +58,7 @@ impl StreamOrchestrator {
         )
     }
 
+    #[must_use]
     pub fn get_lane(&self, lane_id: LaneId) -> LaneHandle {
         LaneHandle::new(lane_id, self.tracker.clone(), self.delivery.clone())
     }

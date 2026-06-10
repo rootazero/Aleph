@@ -19,11 +19,13 @@ pub enum DiscoverySource {
 
 impl DiscoverySource {
     /// Whether this source is read-only (Claude Code directories)
+    #[must_use]
     pub fn is_read_only(&self) -> bool {
         matches!(self, Self::ClaudeGlobal | Self::Project)
     }
 
     /// Whether this source is from Claude Code
+    #[must_use]
     pub fn is_claude_source(&self) -> bool {
         matches!(self, Self::ClaudeGlobal | Self::Project)
     }
@@ -42,6 +44,7 @@ pub struct ScanDirectory {
 
 impl ScanDirectory {
     /// Create a new scan directory
+    #[must_use]
     pub fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
         Self {
             path,
@@ -51,6 +54,7 @@ impl ScanDirectory {
     }
 
     /// Check if the directory exists
+    #[must_use]
     pub fn exists(&self) -> bool {
         self.path.exists() && self.path.is_dir()
     }
@@ -71,6 +75,7 @@ pub struct DiscoveredPath {
 
 impl DiscoveredPath {
     /// Create a new discovered path
+    #[must_use]
     pub fn new(path: PathBuf, source: DiscoverySource, priority: u32) -> Self {
         let name = path
             .file_name()
@@ -87,6 +92,7 @@ impl DiscoveredPath {
     }
 
     /// Create with explicit name
+    #[must_use]
     pub fn with_name(path: PathBuf, source: DiscoverySource, priority: u32, name: String) -> Self {
         Self {
             path,

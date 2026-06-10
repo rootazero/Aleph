@@ -18,6 +18,7 @@ pub struct ImageMediaProvider {
 }
 
 impl ImageMediaProvider {
+    #[must_use]
     pub fn new(pipeline: Arc<VisionPipeline>, priority: u8) -> Self {
         Self { pipeline, priority }
     }

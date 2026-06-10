@@ -55,6 +55,7 @@ impl Default for CompressionConfig {
 
 impl CompressionConfig {
     /// Create from config policy
+    #[must_use]
     pub fn from_policy(policy: &crate::config::CompressionPolicy) -> Self {
         Self {
             batch_size: 50,
@@ -472,7 +473,9 @@ impl CompressionService {
         let interval_secs = self.config.background_interval_seconds;
 
         tokio::spawn(async move {
-            let mut interval = interval(Duration::from_secs(interval_secs as u64));
+            // `tokio::time::interval` panics on a zero period; clamp a
+            // misconfigured 0 from user config to 1s instead of killing the task.
+            let mut interval = interval(Duration::from_secs((interval_secs.max(1)) as u64));
 
             tracing::info!(
                 interval_seconds = interval_secs,
@@ -519,7 +522,9 @@ impl CompressionService {
         let interval_secs = self.config.background_interval_seconds;
 
         runtime.spawn(async move {
-            let mut hourly_interval = interval(Duration::from_secs(interval_secs as u64));
+            // `tokio::time::interval` panics on a zero period; clamp a
+            // misconfigured 0 from user config to 1s instead of killing the task.
+            let mut hourly_interval = interval(Duration::from_secs((interval_secs.max(1)) as u64));
 
             tracing::info!(
                 interval_seconds = interval_secs,

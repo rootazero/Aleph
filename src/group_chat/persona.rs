@@ -36,16 +36,19 @@ impl PersonaRegistry {
     }
 
     /// Look up a preset persona by ID.
+    #[must_use]
     pub fn get(&self, id: &str) -> Option<&Persona> {
         self.presets.get(id)
     }
 
     /// Returns the number of preset personas in the registry.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.presets.len()
     }
 
     /// Returns `true` if the registry contains no preset personas.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.presets.is_empty()
     }
@@ -79,6 +82,7 @@ impl PersonaRegistry {
 
     /// Return all preset personas in the registry, sorted by ID for
     /// deterministic output.
+    #[must_use]
     pub fn list_presets(&self) -> Vec<&Persona> {
         let mut presets: Vec<&Persona> = self.presets.values().collect();
         presets.sort_by(|a, b| a.id.cmp(&b.id));

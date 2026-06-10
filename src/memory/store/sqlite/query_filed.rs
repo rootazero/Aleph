@@ -1,6 +1,7 @@
 //! query_filed table access — dedup lookups and inserts for the query filer.
 
 use rusqlite::params;
+use rusqlite::OptionalExtension;
 
 use crate::error::AlephError;
 use crate::memory::notes::query_filer::types::QueryFiledRow;
@@ -27,7 +28,8 @@ impl SqliteMemoryBackend {
 
         let result = stmt
             .query_row(params![agent_id, query_hash], |row| row.get(0))
-            .ok();
+            .optional()
+            .map_err(|e| AlephError::other(format!("query_filed_lookup: {e}")))?;
 
         Ok(result)
     }

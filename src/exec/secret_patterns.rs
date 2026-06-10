@@ -21,6 +21,7 @@ pub struct LeakDetectorAssets {
     pub patterns: Vec<LeakPatternDef>,
 }
 
+#[must_use]
 pub fn secret_masker_patterns() -> Vec<SecretPattern> {
     vec![
         SecretPattern {
@@ -82,6 +83,7 @@ pub fn secret_masker_patterns() -> Vec<SecretPattern> {
     ]
 }
 
+#[must_use]
 pub fn leak_detector_assets() -> LeakDetectorAssets {
     let prefixes = vec![
         "sk-",

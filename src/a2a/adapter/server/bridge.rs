@@ -231,6 +231,9 @@ impl A2AMessageHandler for AgentLoopBridge {
                         .await
                     {
                         error!(task_id = %task_id_owned, error = %e, "Failed to update task to Completed");
+                        // Still release the broadcast channel — otherwise the
+                        // hub entry leaks and subscribers hang with no final event.
+                        let _ = streaming.cleanup_task(&task_id_owned).await;
                         return;
                     }
 
@@ -258,6 +261,9 @@ impl A2AMessageHandler for AgentLoopBridge {
                         .await
                     {
                         error!(task_id = %task_id_owned, error = %update_err, "Failed to update task to Failed");
+                        // Still release the broadcast channel — otherwise the
+                        // hub entry leaks and subscribers hang with no final event.
+                        let _ = streaming.cleanup_task(&task_id_owned).await;
                         return;
                     }
 

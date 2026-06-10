@@ -82,6 +82,7 @@ pub struct RecallEventsOutput {
 pub struct RecallEventsTool;
 
 impl RecallEventsTool {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

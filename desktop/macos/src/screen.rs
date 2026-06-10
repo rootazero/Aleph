@@ -1,7 +1,7 @@
 //! macOS screen capability.
 //!
 //! Routes `ocr()` and `screenshot()` / `display_list()` through the Swift
-//! helper (`screen.*` RPCs — backed by Vision + ScreenCaptureKit); falls
+//! helper (`screen.*` RPCs — backed by Vision + `ScreenCaptureKit`); falls
 //! back to `NativeScreen` (xcap) for screenshots when the bridge call fails
 //! (e.g. macOS 13 lacks `SCScreenshotManager`). All other input automation
 //! methods forward directly to `NativeScreen`.
@@ -25,7 +25,7 @@ pub struct MacOSScreen {
 }
 
 impl MacOSScreen {
-    pub fn new(bridge: Arc<SwiftBridge>) -> Self {
+    pub const fn new(bridge: Arc<SwiftBridge>) -> Self {
         Self {
             inner: NativeScreen::new(),
             bridge,
@@ -105,7 +105,7 @@ impl ScreenCapability for MacOSScreen {
                         w: pixel_w,
                         h: pixel_h,
                     }),
-                    confidence: Some(block.confidence as f64),
+                    confidence: Some(f64::from(block.confidence)),
                 }
             })
             .collect();
@@ -237,10 +237,10 @@ impl MacOSScreen {
         let params = CaptureParams {
             display_id: None,
             region: region.map(|r| Region {
-                x: r.x as f64,
-                y: r.y as f64,
-                width: r.width as f64,
-                height: r.height as f64,
+                x: f64::from(r.x),
+                y: f64::from(r.y),
+                width: f64::from(r.width),
+                height: f64::from(r.height),
             }),
         };
         let rpc: CaptureResult = self
@@ -301,7 +301,7 @@ fn png_dimensions(png_bytes: &[u8]) -> Option<(f64, f64)> {
     }
     let width = u32::from_be_bytes([png_bytes[16], png_bytes[17], png_bytes[18], png_bytes[19]]);
     let height = u32::from_be_bytes([png_bytes[20], png_bytes[21], png_bytes[22], png_bytes[23]]);
-    Some((width as f64, height as f64))
+    Some((f64::from(width), f64::from(height)))
 }
 
 #[cfg(test)]

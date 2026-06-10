@@ -27,6 +27,7 @@ pub enum SessionKind {
 
 impl SessionKind {
     /// Returns the string representation of the session kind.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Main => "main",
@@ -61,6 +62,7 @@ impl std::fmt::Display for SessionKind {
 /// let key = SessionKey::main("main");
 /// assert_eq!(classify_session_kind(&key), SessionKind::Main);
 /// ```
+#[must_use]
 pub fn classify_session_kind(key: &SessionKey) -> SessionKind {
     match key {
         SessionKey::Main { .. } => SessionKind::Main,
@@ -90,6 +92,7 @@ pub fn classify_session_kind(key: &SessionKey) -> SessionKind {
 /// let key = SessionKey::main("main");
 /// assert_eq!(resolve_display_key(&key), "agent:main:main");
 /// ```
+#[must_use]
 pub fn resolve_display_key(key: &SessionKey) -> String {
     key.to_key_string()
 }
@@ -144,6 +147,7 @@ pub fn parse_session_key(display: &str) -> Result<SessionKey, String> {
 /// let main_key = SessionKey::main("main");
 /// assert_eq!(derive_channel(&main_key), "unknown");
 /// ```
+#[must_use]
 pub fn derive_channel(key: &SessionKey) -> String {
     match key {
         SessionKey::DirectMessage { channel, .. } => {

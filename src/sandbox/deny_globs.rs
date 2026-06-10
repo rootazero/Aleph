@@ -52,6 +52,7 @@ const MAX_DENY_READ_WALK_ENTRIES: usize = 50_000;
 ///
 /// Cross-platform on purpose so the resolution logic unit-tests on macOS /
 /// Linux dev boxes; only the Windows ACE stamper consumes the result.
+#[must_use]
 pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) -> Vec<PathBuf> {
     let regexes: Vec<regex::Regex> = deny_read_globs
         .iter()
@@ -108,6 +109,7 @@ pub fn resolve_deny_read_paths_under(root: &Path, deny_read_globs: &[String]) ->
 /// Translate a single git-style glob into an anchored regex string, or `None`
 /// if the pattern is empty. The returned regex is anchored with `^`…`$` and is
 /// safe to embed in a Seatbelt `(regex #"…")` clause after quote-escaping.
+#[must_use]
 pub fn glob_to_anchored_regex(pattern: &str) -> Option<String> {
     if pattern.is_empty() {
         return None;

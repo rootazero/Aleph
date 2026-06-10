@@ -254,8 +254,8 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
             })
     });
 
-    let run_for_payload = run_id.clone();
-    let tid_for_payload = tool_id.clone();
+    let run_for_payload = run_id;
+    let tid_for_payload = tool_id;
     let payload = Memo::new(move |_| {
         workspace
             .as_ref()
@@ -425,7 +425,7 @@ fn CollapsibleText(text: String, extra_class: &'static str) -> impl IntoView {
         .into_any();
     }
     let show_all = RwSignal::new(false);
-    let full = text.clone();
+    let full = text;
     view! {
         <div>
             <pre class=format!("{MONO_BLOCK} {extra_class} overflow-x-auto")>
@@ -520,7 +520,7 @@ fn shell_body(p: &ToolPayload) -> AnyView {
 fn read_body(p: &ToolPayload) -> AnyView {
     let out = p.result.as_ref().and_then(success_output).cloned();
     let text = match out {
-        Some(Value::String(s)) => s.clone(),
+        Some(Value::String(s)) => s,
         Some(ref other) => other
             .get("content")
             .and_then(|v| v.as_str())

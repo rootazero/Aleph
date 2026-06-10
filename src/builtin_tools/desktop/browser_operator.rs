@@ -53,6 +53,7 @@ pub struct DesktopBrowserOperatorArgs {
 pub struct DesktopBrowserOperator;
 
 impl DesktopBrowserOperator {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

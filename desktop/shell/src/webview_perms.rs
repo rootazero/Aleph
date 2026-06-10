@@ -5,13 +5,13 @@
 //! concern (R1: the shell is the limb, the WASM panel only speaks standard Web
 //! APIs). The three webview engines diverge:
 //!
-//! - **macOS / iOS (WKWebView)**: wry's UI delegate already auto-grants the
+//! - **macOS / iOS (`WKWebView`)**: wry's UI delegate already auto-grants the
 //!   capture request; the only remaining gate is the TCC usage string in
 //!   `Info.plist`. Nothing to do here — [`grant_microphone`] is a no-op.
-//! - **Windows (WebView2)**: wry registers a `PermissionRequested` handler that
-//!   only grants the clipboard; microphone falls through to WebView2's default
+//! - **Windows (`WebView2`)**: wry registers a `PermissionRequested` handler that
+//!   only grants the clipboard; microphone falls through to `WebView2`'s default
 //!   (a prompt, at best). We attach our own handler granting the mic.
-//! - **Linux (WebKitGTK)**: wry installs no permission handler at all, and
+//! - **Linux (`WebKitGTK`)**: wry installs no permission handler at all, and
 //!   `enable-media-stream` defaults off, so `getUserMedia` is silently denied.
 //!   We enable the setting and allow `UserMediaPermissionRequest`.
 
@@ -20,7 +20,7 @@ use tauri::WebviewWindow;
 /// Grant the Panel webview microphone access on platforms where wry does not.
 /// Best-effort: failures are logged, never fatal — a missing grant just means
 /// the voice button surfaces a permission error (visible in the Panel).
-pub fn grant_microphone(window: &WebviewWindow) {
+pub const fn grant_microphone(window: &WebviewWindow) {
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     {
         if let Err(e) = window.with_webview(|pview| {

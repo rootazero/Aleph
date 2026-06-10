@@ -61,6 +61,7 @@ impl GenerationRequest {
     }
 
     /// Add parameters to the request
+    #[must_use]
     pub fn with_params(mut self, params: GenerationParams) -> Self {
         self.params = params;
         self

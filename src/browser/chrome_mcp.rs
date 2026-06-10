@@ -38,6 +38,7 @@ pub struct ChromeMcpDriver {
 }
 
 impl ChromeMcpDriver {
+    #[must_use]
     pub fn new(config: ChromeMcpConfig) -> Self {
         Self {
             sessions: RwLock::new(HashMap::new()),

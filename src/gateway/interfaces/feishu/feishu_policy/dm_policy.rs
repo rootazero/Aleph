@@ -12,10 +12,12 @@ pub struct DmPolicyEngine {
 }
 
 impl DmPolicyEngine {
+    #[must_use]
     pub fn new(config: FeishuConfig) -> Self {
         Self { config }
     }
 
+    #[must_use]
     pub fn evaluate(&self, msg: &InboundMessage) -> DmPolicyResult {
         if msg.is_group {
             return DmPolicyResult::Pass;

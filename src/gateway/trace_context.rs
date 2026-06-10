@@ -79,6 +79,7 @@ impl TraceContext {
 
     /// Render a `traceparent` header naming *this* span as the parent id, for
     /// echoing back to the caller / propagating to a downstream hop.
+    #[must_use]
     pub fn to_header(&self) -> String {
         format!("00-{}-{}-{:02x}", self.trace_id, self.span_id, self.flags)
     }

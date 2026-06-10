@@ -67,9 +67,7 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
                         t.name.clone().unwrap_or_default(),
                         t.agent_id.clone().unwrap_or_default(),
                         t.enabled.to_string(),
-                        t.interval_ms
-                            .map(format_interval)
-                            .unwrap_or_else(|| "-".into()),
+                        t.interval_ms.map_or_else(|| "-".into(), format_interval),
                     ]
                 })
                 .collect();
@@ -228,7 +226,7 @@ pub async fn toggle(
     if json {
         output::print_json(&result);
     } else {
-        let new_enabled = result.get("enabled").and_then(|v| v.as_bool());
+        let new_enabled = result.get("enabled").and_then(serde_json::Value::as_bool);
         match new_enabled {
             Some(v) => println!("{task_id}: enabled={v}"),
             None => println!("{}", serde_json::to_string_pretty(&result)?),

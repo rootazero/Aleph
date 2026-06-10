@@ -18,9 +18,9 @@
 //! produces the `/end-summary` digest for `session_search`): the two run from
 //! separate global cells so either can be removed without touching the other.
 
+use crate::sync_primitives::Mutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use crate::sync_primitives::Mutex;
 
 use crate::config::types::memory::ReflectionConfig;
 use crate::error::AlephError;

@@ -91,12 +91,14 @@ pub struct ScratchpadTool {
 }
 
 impl ScratchpadTool {
+    #[must_use]
     pub fn new() -> Self {
         Self { session_key: None }
     }
 
     /// Attach the shared live session-key handle. Pass the same handle the
     /// execution engine writes (see `execution_engine::execute`).
+    #[must_use]
     pub fn with_session_key_handle(mut self, handle: Option<Arc<RwLock<String>>>) -> Self {
         self.session_key = handle;
         self

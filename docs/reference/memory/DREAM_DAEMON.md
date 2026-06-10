@@ -194,6 +194,8 @@ link_weight    = min(incoming_count / 3.0, 1.0)
 
 `src/memory/dreaming/stages/daily_digest.rs`. `should_run` returns true if any note has `updated_at > now - 86400 || created_at > now - 86400`. Every note changed in the last 24 h contributes a 200-char preview; previews concatenate into a bulleted list sent to the LLM as "a concise daily activity summary (3-5 sentences) … key themes, decisions, and learnings. Write in third person." Output becomes a `DailyInsight { date, content, source_memory_count, created_at }` upserted via `DreamStore::upsert_daily_insight` (keyed by date; same-day re-runs overwrite).
 
+**Consumer.** `src/memory/assembler/gather.rs::fetch_daily_insight` reads the digest back (today's, falling back to yesterday's) as a sixth concurrent gather arm and surfaces it as a `SessionRecent`-slotted candidate (relevance 0.7, below the prior-session snapshot's 0.9) in the proactive memory envelope.
+
 ## 6. Pipelines
 
 Verbatim from `src/memory/dreaming/mod.rs`:

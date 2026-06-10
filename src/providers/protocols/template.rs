@@ -47,6 +47,7 @@ pub struct TemplateContext {
 
 impl TemplateContext {
     /// Create a new empty template context
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -54,6 +55,7 @@ impl TemplateContext {
     /// Add provider configuration to the context
     ///
     /// The config will be available as `{{config.model}}`, `{{config.temperature}}`, etc.
+    #[must_use]
     pub fn with_config(mut self, config: &ProviderConfig) -> Self {
         // Serialize config to JSON value
         let config_value = json!({
@@ -77,6 +79,7 @@ impl TemplateContext {
     /// Apply per-request overrides from RequestPayload (temperature, max_tokens)
     ///
     /// Must be called after `with_config()` to override config values.
+    #[must_use]
     pub fn with_payload_overrides(
         mut self,
         payload: &super::super::adapter::RequestPayload,
@@ -114,6 +117,7 @@ impl TemplateContext {
     /// Add messages array to the context
     ///
     /// Available as `{{messages}}` in templates.
+    #[must_use]
     pub fn with_messages(mut self, messages: Vec<Value>) -> Self {
         self.messages = Some(messages);
         self
@@ -122,6 +126,7 @@ impl TemplateContext {
     /// Build the final context as a serde_json::Value
     ///
     /// Returns a JSON object containing all context data.
+    #[must_use]
     pub fn build(self) -> Value {
         json!({
             "config": self.config.unwrap_or(Value::Null),

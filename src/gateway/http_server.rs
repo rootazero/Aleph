@@ -45,6 +45,7 @@ pub struct HttpServer {
 
 impl HttpServer {
     /// Create a new HTTP server
+    #[must_use]
     pub fn new(config: HttpServerConfig) -> Self {
         Self { config }
     }
@@ -82,6 +83,7 @@ impl HttpServer {
     }
 
     /// Get the static directory path
+    #[must_use]
     pub fn static_dir(&self) -> Option<&PathBuf> {
         self.config.static_dir.as_ref()
     }

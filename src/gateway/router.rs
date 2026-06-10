@@ -43,6 +43,7 @@ pub struct AgentRouter {
 
 impl AgentRouter {
     /// Create a new router with default "main" agent
+    #[must_use]
     pub fn new() -> Self {
         Self {
             bindings: Arc::new(RwLock::new(Vec::new())),
@@ -216,6 +217,7 @@ impl AgentRouter {
     }
 
     /// Get the default agent ID
+    #[must_use]
     pub fn default_agent(&self) -> &str {
         &self.default_agent
     }

@@ -20,6 +20,7 @@ pub struct ValidationResult {
 }
 
 impl ValidationResult {
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.errors.is_empty()
     }
@@ -34,6 +35,7 @@ impl ValidationResult {
 /// 4. No duplicate hook handlers for same event
 /// 5. Plugin ID is non-empty and reasonable
 /// 6. Version is valid semver (if present)
+#[must_use]
 pub fn validate_plugin(plugin_dir: &Path) -> ValidationResult {
     let mut result = ValidationResult::default();
 

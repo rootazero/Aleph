@@ -12,11 +12,13 @@ pub struct TemplateContext {
 
 impl TemplateContext {
     /// Create a new empty context
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Create a context with webhook-specific variables
+    #[must_use]
     pub fn for_webhook(
         webhook_id: &str,
         event_type: Option<&str>,
@@ -40,11 +42,13 @@ impl TemplateContext {
     }
 
     /// Get a variable
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&str> {
         self.variables.get(key).map(|s| s.as_str())
     }
 
     /// Add a variable (chainable)
+    #[must_use]
     pub fn with(mut self, key: &str, value: &str) -> Self {
         self.set(key, value);
         self
@@ -63,6 +67,7 @@ impl TemplateContext {
 /// let key = render_template("task:webhook:{webhook_id}:{event_type}", &ctx);
 /// assert_eq!(key, "task:webhook:github:push");
 /// ```
+#[must_use]
 pub fn render_template(template: &str, context: &TemplateContext) -> String {
     let mut result = template.to_string();
     let mut start = 0;
@@ -95,6 +100,7 @@ pub fn render_template(template: &str, context: &TemplateContext) -> String {
 /// Validate a template string
 ///
 /// Returns a list of variable names found in the template.
+#[must_use]
 pub fn extract_variables(template: &str) -> Vec<String> {
     let mut variables = Vec::new();
     let chars = template.chars().peekable();

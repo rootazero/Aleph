@@ -41,7 +41,7 @@ fn download_file(url: &str, dest: &std::path::Path) -> CliResult<()> {
 }
 
 /// Parse a `github:owner/repo[/plugin-name]` source string.
-/// Returns (owner, repo, optional plugin_name).
+/// Returns (owner, repo, optional `plugin_name`).
 fn parse_github_source(source: &str) -> CliResult<(String, String, Option<String>)> {
     let rest = source
         .strip_prefix("github:")
@@ -124,15 +124,13 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
             .find(|a| {
                 a.get("name")
                     .and_then(|n| n.as_str())
-                    .map(|n| n.ends_with(".aleph-plugin.zip"))
-                    .unwrap_or(false)
+                    .is_some_and(|n| n.ends_with(".aleph-plugin.zip"))
             })
             .or_else(|| {
                 assets.iter().find(|a| {
                     a.get("name")
                         .and_then(|n| n.as_str())
-                        .map(|n| n.ends_with(".zip"))
-                        .unwrap_or(false)
+                        .is_some_and(|n| n.ends_with(".zip"))
                 })
             })
             .ok_or_else(|| CliError::Other("No .zip asset found in release".into()))?;
@@ -150,7 +148,7 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
         let zip_path = tmp_dir.join(filename);
 
         if !json {
-            println!("Downloading plugin from {}...", download_url);
+            println!("Downloading plugin from {download_url}...");
         }
         download_file(&download_url, &zip_path)?;
 
@@ -162,7 +160,7 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
         if json {
             output::print_json(&result);
         } else {
-            println!("Plugin installed from '{}'.", source);
+            println!("Plugin installed from '{source}'.");
         }
 
         client.close().await?;
@@ -190,7 +188,7 @@ pub async fn install(server_url: &str, source: &str, json: bool) -> CliResult<()
     if json {
         output::print_json(&result);
     } else {
-        println!("Plugin installed from '{}'.", source);
+        println!("Plugin installed from '{source}'.");
     }
 
     client.close().await?;
@@ -207,7 +205,7 @@ pub async fn uninstall(server_url: &str, name: &str, json: bool) -> CliResult<()
     if json {
         output::print_json(&result);
     } else {
-        println!("Plugin '{}' uninstalled.", name);
+        println!("Plugin '{name}' uninstalled.");
     }
 
     client.close().await?;
@@ -224,7 +222,7 @@ pub async fn enable(server_url: &str, name: &str, json: bool) -> CliResult<()> {
     if json {
         output::print_json(&result);
     } else {
-        println!("Plugin '{}' enabled.", name);
+        println!("Plugin '{name}' enabled.");
     }
 
     client.close().await?;
@@ -241,7 +239,7 @@ pub async fn disable(server_url: &str, name: &str, json: bool) -> CliResult<()> 
     if json {
         output::print_json(&result);
     } else {
-        println!("Plugin '{}' disabled.", name);
+        println!("Plugin '{name}' disabled.");
     }
 
     client.close().await?;
@@ -260,7 +258,7 @@ pub async fn call(
 
     let tool_params: Value = match params_json {
         Some(s) => serde_json::from_str(s)
-            .map_err(|e| CliError::Other(format!("Invalid JSON params: {}", e)))?,
+            .map_err(|e| CliError::Other(format!("Invalid JSON params: {e}")))?,
         None => Value::Null,
     };
 
@@ -402,8 +400,8 @@ pub async fn info(server_url: &str, name: &str, json: bool) -> CliResult<()> {
                 let get_count = |key: &str| -> usize {
                     p.get(key)
                         .and_then(|v| v.as_array())
-                        .map(|a| a.len())
-                        .or_else(|| p.get(key).and_then(|v| v.as_u64()).map(|n| n as usize))
+                        .map(std::vec::Vec::len)
+                        .or_else(|| p.get(key).and_then(serde_json::Value::as_u64).map(|n| n as usize))
                         .unwrap_or(0)
                 };
 
@@ -423,7 +421,7 @@ pub async fn info(server_url: &str, name: &str, json: bool) -> CliResult<()> {
                     &serde_json::json!({ "error": format!("Plugin '{}' not found", name) }),
                 );
             } else {
-                println!("Plugin '{}' not found.", name);
+                println!("Plugin '{name}' not found.");
             }
         }
     }

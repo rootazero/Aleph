@@ -70,6 +70,7 @@ impl HandlerOutcome {
     }
 
     /// Wrap into a full JSON-RPC 2.0 response envelope addressed to `id`.
+    #[must_use]
     pub fn into_jsonrpc(self, id: u64) -> Value {
         match self {
             Self::Result(result) => json!({
@@ -107,6 +108,7 @@ impl IncomingHandler {
     /// Canonicalizing only the root would wrongly deny legitimate absolute
     /// paths the agent derives from the cwd string we handed it when that cwd
     /// contains a symlink (e.g. macOS `/tmp` → `/private/tmp`).
+    #[must_use]
     pub fn new(cwd: Option<&str>, policy: PermissionPolicy) -> Self {
         let root = match cwd {
             Some(c) => {

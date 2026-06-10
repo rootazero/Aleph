@@ -54,6 +54,7 @@ impl SignalMonitor {
     /// # Returns
     ///
     /// A `JoinHandle` for the background monitor task.
+    #[must_use]
     pub fn start(
         client: Client,
         config: SignalConfig,
@@ -94,6 +95,7 @@ impl SignalMonitor {
         let mut retry_count = 0u32;
 
         loop {
+            let connect_started = std::time::Instant::now();
             tokio::select! {
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
@@ -109,6 +111,14 @@ impl SignalMonitor {
                             break;
                         }
                         Err(e) => {
+                            // A connection that streamed for a while counts as a
+                            // success: reset the retry budget so transient drops
+                            // spread over a long uptime don't accumulate into a
+                            // permanent monitor stop.
+                            if connect_started.elapsed() > Duration::from_secs(60) {
+                                retry_count = 0;
+                            }
+
                             tracing::warn!(error = %e, retry_count, "Signal SSE stream error");
 
                             if retry_count >= max_retries {

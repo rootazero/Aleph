@@ -11,7 +11,7 @@ use crate::memory::store::MemoryBackend;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::message::UnifiedMessage;
 use crate::providers::AiProvider;
-use crate::sync_primitives::Arc;
+use crate::sync_primitives::{Arc, Mutex};
 
 /// Strategy used during compaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +22,9 @@ pub enum CompactStrategy {
     DeterministicTruncation,
     /// Reused existing session summaries — zero API cost.
     SessionMemoryReuse,
+    /// Reapplied this run's cached compaction over an unchanged window
+    /// fingerprint — zero API cost.
+    CacheReuse,
     /// Compaction was skipped entirely.
     Skipped { reason: String },
 }
@@ -69,6 +72,25 @@ struct SummaryReuse {
     agent_id: String,
 }
 
+/// Cached result of the last successful compaction, expressed in coordinates
+/// of the *rebuilt* (uncompacted) message list: `[start, end)` is the covered
+/// range, `hash` fingerprints the covered messages, and `summary` is the full
+/// `[Context Summary]…` text that replaces them.
+#[derive(Clone)]
+struct CompactionCache {
+    start: usize,
+    end: usize,
+    hash: u64,
+    summary: String,
+}
+
+/// Un-summarized pre-tail growth beyond the cached summary that triggers an
+/// incremental LLM merge instead of a pure cache reapply. Below both
+/// thresholds the gap rides along uncompacted (it is recent, small, and will
+/// be folded into the summary once it crosses either bound).
+const CACHE_EXTEND_MIN_MESSAGES: usize = 8;
+const CACHE_EXTEND_MIN_TOKENS: usize = 4096;
+
 /// LLM-based context compactor.
 ///
 /// Compresses older conversation history into a concise summary, keeping
@@ -88,6 +110,16 @@ pub struct ContextCompactor {
     /// almost never required; routing it to a flash-tier provider yields a
     /// 10–20× per-token cost reduction without measurable quality regression.
     cheap_provider: Option<Arc<dyn AiProvider>>,
+    /// Fingerprint cache of the last successful compaction (openteams
+    /// compression-cache parity). The harness rebuilds the message list from
+    /// the session log every turn, discarding the previous turn's in-place
+    /// compaction — without this cache a high-pressure run pays a fresh
+    /// side-channel summarization call for essentially the same window on
+    /// every Think turn, and the changing summary text thrashes the provider
+    /// prompt cache. Validated by content hash, so any prefix change (e.g.
+    /// preflight passes pruning differently) is a miss that falls through to
+    /// a full recompaction.
+    cache: Mutex<Option<CompactionCache>>,
 }
 
 impl ContextCompactor {
@@ -98,6 +130,7 @@ impl ContextCompactor {
             config,
             summary_reuse: None,
             cheap_provider: None,
+            cache: Mutex::new(None),
         }
     }
 
@@ -213,6 +246,34 @@ impl ContextCompactor {
             });
         }
 
+        // Fingerprint-cache fast path (openteams compression-cache parity).
+        // The harness rebuilds `messages` from the session log every turn, so
+        // the previous turn's in-place compaction is gone by the time we run
+        // again. If the last compaction's covered range still hashes to the
+        // same fingerprint in this rebuild, reapply the cached summary with
+        // zero API cost. When the un-summarized gap behind the summary has
+        // grown past the extension threshold, run one LLM merge over
+        // [summary + gap] — the transcript carries the old summary, so the
+        // new one absorbs it (openclaw "merge prior summaries") — and refresh
+        // the cache to cover the wider range.
+        let cached = self.cache.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        if let Some(c) = cached {
+            let fits = c.start < c.end && c.end <= cut_end;
+            if fits && hash_window(&messages[c.start..c.end]) == c.hash {
+                return self.reapply_cached(messages, c, cut_end).await;
+            }
+            // Stale fingerprint (prefix changed under a preflight pass, or the
+            // window shrank): drop the entry and fall through to a full
+            // recompaction, which refreshes the cache.
+            *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
+
+        // Fingerprint of the window in rebuilt coordinates, captured before
+        // any mutation below. Every success path stores it so the next turn's
+        // rebuilt prompt hits the cache fast path above instead of paying the
+        // side-channel LLM call again.
+        let window_hash = hash_window(&messages[window_start..cut_end]);
+
         // Fast path: reuse pre-existing hierarchical session summaries (zero
         // API cost). Active only when summary reuse is wired and the caller
         // supplied a session id; otherwise fall through to the LLM path.
@@ -220,6 +281,9 @@ impl ContextCompactor {
             let source =
                 SessionSummarySource::new(reuse.backend.clone(), sid, reuse.agent_id.clone());
             if let Some(reuse_result) = source.try_reuse(messages, window_start, cut_end).await {
+                if let Some(text) = first_message_text(&messages[window_start]) {
+                    self.store_cache(window_start, cut_end, window_hash, text.to_string());
+                }
                 tracing::info!(
                     tokens_before = reuse_result.tokens_before,
                     tokens_after = reuse_result.tokens_after,
@@ -264,12 +328,14 @@ impl ContextCompactor {
         match summary {
             Some(summary) => {
                 // Success: drain old window and insert the stripped summary.
-                let summary_msg = UnifiedMessage::user(format!("[Context Summary]\n{}", summary));
+                let summary_text = format!("[Context Summary]\n{}", summary);
+                let summary_msg = UnifiedMessage::user(summary_text.clone());
                 let tokens_after = estimate_tokens(&summary);
 
                 // Remove the compressed window and insert the summary at window_start
                 messages.drain(window_start..cut_end);
                 messages.insert(window_start, summary_msg);
+                self.store_cache(window_start, cut_end, window_hash, summary_text);
 
                 Ok(CompactResult {
                     tokens_before,
@@ -282,11 +348,12 @@ impl ContextCompactor {
                 if self.config.fallback_to_truncation {
                     let truncated = deterministic_truncation(window);
                     let tokens_after = estimate_tokens(&truncated);
-                    let summary_msg =
-                        UnifiedMessage::user(format!("[Context Summary]\n{}", truncated));
+                    let summary_text = format!("[Context Summary]\n{}", truncated);
+                    let summary_msg = UnifiedMessage::user(summary_text.clone());
 
                     messages.drain(window_start..cut_end);
                     messages.insert(window_start, summary_msg);
+                    self.store_cache(window_start, cut_end, window_hash, summary_text);
 
                     Ok(CompactResult {
                         tokens_before,
@@ -304,6 +371,113 @@ impl ContextCompactor {
                 }
             }
         }
+    }
+
+    /// Store a fresh cache entry covering `[start, end)` of the rebuilt
+    /// message list. `summary` is the full `[Context Summary]…` text.
+    fn store_cache(&self, start: usize, end: usize, hash: u64, summary: String) {
+        *self.cache.lock().unwrap_or_else(|e| e.into_inner()) = Some(CompactionCache {
+            start,
+            end,
+            hash,
+            summary,
+        });
+    }
+
+    /// Reapply a validated cache entry to the rebuilt message list, extending
+    /// it with one LLM merge when the un-summarized gap behind the summary has
+    /// grown past the extension threshold.
+    ///
+    /// Precondition (checked by the caller): `c.start < c.end <= cut_end` and
+    /// `hash_window(&messages[c.start..c.end]) == c.hash`.
+    async fn reapply_cached(
+        &self,
+        messages: &mut Vec<UnifiedMessage>,
+        c: CompactionCache,
+        cut_end: usize,
+    ) -> anyhow::Result<CompactResult> {
+        // Hash over the wider range BEFORE mutating: this is the fingerprint a
+        // future rebuild will present for the extended cover.
+        let extended_hash = hash_window(&messages[c.start..cut_end]);
+        let replaced = c.end - c.start;
+        let window_text: String = messages[c.start..cut_end]
+            .iter()
+            .map(|m| m.text_content())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tokens_before = estimate_tokens(&window_text);
+
+        messages.drain(c.start..c.end);
+        messages.insert(c.start, UnifiedMessage::user(c.summary.clone()));
+
+        // Mutated coordinates: the gap between the reapplied summary and the
+        // fresh tail.
+        let cut_end_m = cut_end - replaced + 1;
+        let gap_msgs = cut_end_m - (c.start + 1);
+        let gap_text: String = messages[c.start + 1..cut_end_m]
+            .iter()
+            .map(|m| m.text_content())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let gap_tokens = estimate_tokens(&gap_text);
+
+        if gap_msgs < CACHE_EXTEND_MIN_MESSAGES && gap_tokens < CACHE_EXTEND_MIN_TOKENS {
+            return Ok(CompactResult {
+                tokens_before,
+                tokens_after: estimate_tokens(&c.summary) + gap_tokens,
+                strategy_used: CompactStrategy::CacheReuse,
+            });
+        }
+
+        // Extension merge: one LLM call over [cached summary + gap]; the old
+        // summary is part of the transcript, so the merged summary absorbs it.
+        // Deterministic truncation mirrors the main path's failure handling.
+        // The merge window is small (1 summary + gap), so no max_window re-cap
+        // is needed here.
+        let merge_window = &messages[c.start..cut_end_m];
+        let transcript = serialize_transcript(merge_window);
+        let merge_tokens = estimate_tokens(&transcript);
+        let token_budget = (merge_tokens as f32 * self.config.target_ratio) as usize;
+        let focus = latest_user_task(&messages[cut_end_m..]);
+        let prompt = build_window_summary_prompt(&transcript, token_budget, focus.as_deref());
+
+        let llm_result = tokio::time::timeout(self.config.timeout, self.call_llm(&prompt)).await;
+        let merged = match llm_result {
+            Ok(Ok(raw)) => {
+                let stripped = strip_analysis_block(&raw);
+                (!stripped.trim().is_empty()).then_some(stripped)
+            }
+            Ok(Err(_)) | Err(_) => None,
+        };
+        let (body, strategy) = match merged {
+            Some(s) => (s, CompactStrategy::LlmSummary),
+            None if self.config.fallback_to_truncation => (
+                deterministic_truncation(merge_window),
+                CompactStrategy::DeterministicTruncation,
+            ),
+            None => {
+                // Merge failed and truncation is disabled: keep the reapplied
+                // summary + raw gap. The cache stays on its old (still valid)
+                // cover, so the next turn retries the merge.
+                return Ok(CompactResult {
+                    tokens_before,
+                    tokens_after: estimate_tokens(&c.summary) + gap_tokens,
+                    strategy_used: CompactStrategy::CacheReuse,
+                });
+            }
+        };
+
+        let summary_text = format!("[Context Summary]\n{}", body);
+        let tokens_after = estimate_tokens(&summary_text);
+        messages.drain(c.start..cut_end_m);
+        messages.insert(c.start, UnifiedMessage::user(summary_text.clone()));
+        self.store_cache(c.start, cut_end, extended_hash, summary_text);
+
+        Ok(CompactResult {
+            tokens_before,
+            tokens_after,
+            strategy_used: strategy,
+        })
     }
 
     /// Summarize a slice of messages and return the raw summary string.
@@ -377,6 +551,22 @@ fn snap_boundary_forward(messages: &[UnifiedMessage], idx: usize) -> usize {
         i += 1;
     }
     i
+}
+
+/// Content fingerprint of a message window: role discriminant + text content
+/// per message. Deterministic across turns because the prompt builder and the
+/// preflight cheap passes are deterministic functions of an append-only
+/// session log — when a pass *does* change an old message (e.g. a new file op
+/// supersedes an earlier result), the hash misses and the compactor falls
+/// back to a full recompaction.
+fn hash_window(messages: &[UnifiedMessage]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for m in messages {
+        std::mem::discriminant(m).hash(&mut h);
+        m.text_content().hash(&mut h);
+    }
+    h.finish()
 }
 
 /// Extract the text content of the first content block in a message (if Text).
@@ -583,6 +773,7 @@ mod tests {
     #[derive(Clone)]
     struct CapturingProvider {
         last_prompt: Arc<crate::sync_primitives::Mutex<String>>,
+        calls: Arc<crate::sync_primitives::Mutex<usize>>,
         response: String,
     }
 
@@ -590,11 +781,18 @@ mod tests {
         fn new(response: impl Into<String>) -> Self {
             Self {
                 last_prompt: Arc::new(crate::sync_primitives::Mutex::new(String::new())),
+                calls: Arc::new(crate::sync_primitives::Mutex::new(0)),
                 response: response.into(),
             }
         }
         fn prompt(&self) -> String {
-            self.last_prompt.lock().unwrap_or_else(|e| e.into_inner()).clone()
+            self.last_prompt
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone()
+        }
+        fn call_count(&self) -> usize {
+            *self.calls.lock().unwrap_or_else(|e| e.into_inner())
         }
     }
 
@@ -613,6 +811,7 @@ mod tests {
             if let Some(first) = payload.messages.first() {
                 *self.last_prompt.lock().unwrap_or_else(|e| e.into_inner()) = first.text_content();
             }
+            *self.calls.lock().unwrap_or_else(|e| e.into_inner()) += 1;
             let resp = self.response.clone();
             Box::pin(
                 async move { Ok(crate::providers::adapter::ProviderResponse::text_only(resp)) },
@@ -671,6 +870,104 @@ mod tests {
             "seed must not be empty after analysis-only output"
         );
         assert!(seed.contains("User message 0"));
+    }
+
+    #[tokio::test]
+    async fn cache_reapplies_summary_across_prompt_rebuilds_without_llm() {
+        // The harness rebuilds the message list from the session log every
+        // turn. The second compact() call sees the same (grown) history and
+        // must reapply the cached summary with zero LLM calls.
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nS1\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider.clone(), CompactorConfig::default());
+
+        let base = make_messages(12);
+        let mut turn1 = base.clone();
+        let r1 = compactor.compact(&mut turn1, 6, None).await.unwrap();
+        assert_eq!(r1.strategy_used, CompactStrategy::LlmSummary);
+        assert_eq!(provider.call_count(), 1);
+
+        // Turn 2: rebuilt prompt = same history + one new exchange.
+        let mut turn2 = base.clone();
+        turn2.push(UnifiedMessage::assistant("new assistant turn"));
+        turn2.push(UnifiedMessage::user("new user turn"));
+        let r2 = compactor.compact(&mut turn2, 6, None).await.unwrap();
+
+        assert_eq!(r2.strategy_used, CompactStrategy::CacheReuse);
+        assert_eq!(
+            provider.call_count(),
+            1,
+            "cache reapply must not call the LLM"
+        );
+        let first_text = first_message_text(&turn2[0]).unwrap();
+        assert!(first_text.starts_with("[Context Summary]"));
+        assert!(first_text.contains("S1"));
+    }
+
+    #[tokio::test]
+    async fn cache_extends_with_one_llm_merge_when_gap_grows() {
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nmerged\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider.clone(), CompactorConfig::default());
+
+        let base = make_messages(12);
+        let mut turn1 = base.clone();
+        compactor.compact(&mut turn1, 6, None).await.unwrap();
+        assert_eq!(provider.call_count(), 1);
+
+        // Turn N: the un-summarized gap behind the summary has grown past the
+        // extension threshold → exactly one merge call whose transcript
+        // carries the previous summary (openclaw "merge prior summaries").
+        let mut turn2 = base.clone();
+        for i in 0..(CACHE_EXTEND_MIN_MESSAGES + 2) {
+            turn2.push(UnifiedMessage::assistant(format!("extra turn {i}")));
+        }
+        let r2 = compactor.compact(&mut turn2, 6, None).await.unwrap();
+
+        assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
+        assert_eq!(provider.call_count(), 2);
+        assert!(
+            provider.prompt().contains("[Context Summary]"),
+            "merge transcript must include the previous summary"
+        );
+        let first_text = first_message_text(&turn2[0]).unwrap();
+        assert!(first_text.contains("merged"));
+
+        // Turn N+1: the merged cover reapplies with zero further LLM calls.
+        let mut turn3 = base.clone();
+        for i in 0..(CACHE_EXTEND_MIN_MESSAGES + 2) {
+            turn3.push(UnifiedMessage::assistant(format!("extra turn {i}")));
+        }
+        turn3.push(UnifiedMessage::user("fresh question"));
+        let r3 = compactor.compact(&mut turn3, 6, None).await.unwrap();
+        assert_eq!(r3.strategy_used, CompactStrategy::CacheReuse);
+        assert_eq!(provider.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn cache_invalidates_when_covered_prefix_changes() {
+        let provider = Arc::new(CapturingProvider::new(
+            "<summary>\n## Primary Request\nS\n</summary>",
+        ));
+        let compactor = ContextCompactor::new(provider.clone(), CompactorConfig::default());
+
+        let base = make_messages(12);
+        let mut turn1 = base.clone();
+        compactor.compact(&mut turn1, 6, None).await.unwrap();
+        assert_eq!(provider.call_count(), 1);
+
+        // A preflight pass rewrote a message inside the covered range — the
+        // fingerprint must miss and a full recompaction must run.
+        let mut turn2 = base.clone();
+        turn2[2] = UnifiedMessage::user("rewritten by a cheap pass");
+        turn2.push(UnifiedMessage::assistant("another turn"));
+        turn2.push(UnifiedMessage::user("another question"));
+        let r2 = compactor.compact(&mut turn2, 6, None).await.unwrap();
+
+        assert_eq!(r2.strategy_used, CompactStrategy::LlmSummary);
+        assert_eq!(provider.call_count(), 2, "stale fingerprint must recompact");
     }
 
     #[test]

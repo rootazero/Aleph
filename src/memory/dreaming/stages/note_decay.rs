@@ -501,12 +501,15 @@ mod tests {
         // archived even when it was being recalled every day.
         let now = 1_000_000_000_i64;
         let updated_at = now - 90 * 86400; // stale content
-        // Recalled yesterday → access ≈ 0.968*0.4 + recency 0.25*0.3 ≈ 0.462
+                                           // Recalled yesterday → access ≈ 0.968*0.4 + recency 0.25*0.3 ≈ 0.462
         let hot = compute_score(Some(now - 86400), updated_at, now, 0);
         assert!(hot > 0.2, "recently recalled note must survive, got {hot}");
         // Recalled a year ago → access ≈ 0.076*0.4 + 0.075 ≈ 0.105
         let cold = compute_score(Some(now - 365 * 86400), updated_at, now, 0);
-        assert!(cold < 0.2, "stale recall must not grant immunity, got {cold}");
+        assert!(
+            cold < 0.2,
+            "stale recall must not grant immunity, got {cold}"
+        );
     }
 
     #[test]

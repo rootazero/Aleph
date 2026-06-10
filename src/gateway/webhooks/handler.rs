@@ -204,7 +204,29 @@ async fn handle_webhook(
         .and_then(|name| headers.get(name))
         .and_then(|v| v.to_str().ok());
 
-    let secret = endpoint.secret.as_deref().unwrap_or("");
+    // Fail closed when signature verification is enabled but no secret is
+    // configured: HMAC with an empty (attacker-known) key would let anyone
+    // forge a valid signature. `WebhookEndpointConfig::validate()` rejects
+    // this combination, but `update_config` does not re-validate, so never
+    // fall back to an empty secret here.
+    let secret = match endpoint.secret.as_deref() {
+        Some(s) => s,
+        None if endpoint.signature_format != super::config::SignatureFormat::None => {
+            warn!(
+                webhook_id = %webhook_id,
+                "Webhook endpoint has signature verification enabled but no secret; rejecting"
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                Json(WebhookRejected {
+                    accepted: false,
+                    error: "Webhook endpoint misconfigured: signing secret missing".to_string(),
+                }),
+            )
+                .into_response();
+        }
+        None => "",
+    };
     let verification = verify_signature(endpoint.signature_format, secret, signature_header, &body);
 
     if verification.is_err() {

@@ -12,6 +12,7 @@ use super::state::VoiceState;
 /// Calculate a reasonable TTS timeout based on text length.
 ///
 /// Base 10 s, +5 s per 100 characters, capped at 30 s.
+#[must_use]
 pub fn tts_timeout_ms(text: &str) -> u64 {
     let char_count = text.chars().count() as u64;
     let extra = (char_count / 100) * 5000;

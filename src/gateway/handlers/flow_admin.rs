@@ -6,8 +6,8 @@
 //! `GatewayServer` construction. Phase 6 will wire it once the boot path
 //! threads `flow_dir` through the builder.
 
-use std::path::{Path, PathBuf};
 use crate::sync_primitives::Arc;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 

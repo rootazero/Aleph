@@ -78,9 +78,10 @@ impl SessionEndSummarizer {
 fn extract_depth_from_path(path: &str) -> u32 {
     // Split on "/d" — the last occurrence is the depth segment.
     // Path shape: aleph://session/<sid>/d<depth>/<seq>
-    // We split_once on the final "/d" by finding the prefix up to the last "/d".
-    path.split_once("/d")
-        .and_then(|(_, tail)| tail.split_once('/'))
+    // Use the LAST "/d" so a session id containing "/d" can never shadow the
+    // real depth segment. "/d" is ASCII, so `idx + 2` is a char boundary.
+    path.rfind("/d")
+        .and_then(|idx| path[idx + 2..].split_once('/'))
         .and_then(|(d, _)| d.parse::<u32>().ok())
         .unwrap_or(0)
 }
@@ -93,9 +94,9 @@ fn extract_depth_from_path(path: &str) -> u32 {
 mod tests {
     use super::*;
 
+    use crate::sync_primitives::Mutex as StdMutex;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use crate::sync_primitives::Mutex as StdMutex;
 
     use async_trait::async_trait;
 

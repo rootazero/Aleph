@@ -49,6 +49,7 @@ pub struct SamplingHandler {
 
 impl SamplingHandler {
     /// Create a new sampling handler
+    #[must_use]
     pub fn new() -> Self {
         Self {
             callback: Arc::new(RwLock::new(None)),
@@ -195,6 +196,7 @@ impl Default for SamplingHandler {
 /// Convert SamplingMessage to a format suitable for Thinker
 ///
 /// Returns a vector of (role, content) tuples.
+#[must_use]
 pub fn sampling_messages_to_chat(messages: &[SamplingMessage]) -> Vec<(String, String)> {
     messages
         .iter()
@@ -216,6 +218,7 @@ pub fn sampling_messages_to_chat(messages: &[SamplingMessage]) -> Vec<(String, S
 }
 
 /// Extract system prompt from sampling request
+#[must_use]
 pub fn extract_system_prompt(request: &SamplingRequest) -> Option<String> {
     // First check explicit system_prompt field
     if let Some(ref system) = request.system_prompt {

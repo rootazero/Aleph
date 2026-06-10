@@ -26,6 +26,7 @@ pub enum TaskRoute {
 }
 
 impl TaskRoute {
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Simple => "simple",

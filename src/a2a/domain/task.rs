@@ -28,6 +28,7 @@ pub enum TaskState {
 
 impl TaskState {
     /// Returns true if the task is in a terminal state (no further transitions)
+    #[must_use]
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
@@ -36,6 +37,7 @@ impl TaskState {
     }
 
     /// Returns true if the task can be canceled from this state
+    #[must_use]
     pub fn is_cancelable(&self) -> bool {
         matches!(
             self,
@@ -45,6 +47,7 @@ impl TaskState {
 
     /// Returns true if transitioning from this state to `target` is valid.
     /// Terminal states (Completed, Canceled, Failed, Rejected) cannot transition further.
+    #[must_use]
     pub fn can_transition_to(&self, target: &TaskState) -> bool {
         if self.is_terminal() {
             return false;

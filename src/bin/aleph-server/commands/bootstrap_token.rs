@@ -2,7 +2,7 @@
 //! so the desktop shell can silently authenticate the embedded Panel.
 //!
 //! Same threat model as `secret list`: reads `~/.aleph/data/security.db`
-//! directly (file mode 0600 enforced by SQLite + OS), no daemon required.
+//! directly (file mode 0600 enforced by `SQLite` + OS), no daemon required.
 
 use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
 use std::error::Error;
@@ -26,7 +26,7 @@ pub fn read_token_from_db(db_path: &Path, data_dir: &Path) -> Option<String> {
 ///
 /// Resolves the standard `~/.aleph/data/` paths via `alephcore::utils::paths`,
 /// then prints the token to stdout followed by a single newline (no banner,
-/// no decoration — the shell parses it). Exits with EX_USAGE (64) and a
+/// no decoration — the shell parses it). Exits with `EX_USAGE` (64) and a
 /// stderr message when no token exists.
 pub fn handle_bootstrap_token() -> Result<(), Box<dyn Error>> {
     use alephcore::utils::paths;
@@ -38,20 +38,17 @@ pub fn handle_bootstrap_token() -> Result<(), Box<dyn Error>> {
         .ok_or("security DB has no parent directory")?
         .to_path_buf();
 
-    match read_token_from_db(&db_path, &data_dir) {
-        Some(token) => {
-            let stdout = std::io::stdout();
-            let mut handle = stdout.lock();
-            writeln!(handle, "{token}")?;
-            Ok(())
-        }
-        None => {
-            eprintln!(
-                "aleph-server: no shared token provisioned yet — start the \
-                 server once (`aleph-server start`) to generate one."
-            );
-            std::process::exit(64); // EX_USAGE per sysexits.h
-        }
+    if let Some(token) = read_token_from_db(&db_path, &data_dir) {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        writeln!(handle, "{token}")?;
+        Ok(())
+    } else {
+        eprintln!(
+            "aleph-server: no shared token provisioned yet — start the \
+             server once (`aleph-server start`) to generate one."
+        );
+        std::process::exit(64); // EX_USAGE per sysexits.h
     }
 }
 

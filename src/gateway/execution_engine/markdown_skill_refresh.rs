@@ -23,6 +23,7 @@ pub struct MarkdownSkillRefreshSource {
 }
 
 impl MarkdownSkillRefreshSource {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             last_seen_revision: AtomicU64::new(markdown_skills_revision()),

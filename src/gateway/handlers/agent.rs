@@ -3,6 +3,7 @@
 //! RPC handlers for agent operations: run, wait, cancel, status.
 
 use crate::sync_primitives::Arc;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -285,13 +286,38 @@ impl AgentRunManager {
         // request — used below to decide cross-surface reply fan-out.
         let current_channel = metadata.get("channel_id").cloned().unwrap_or_default();
 
+        // Convert RPC attachments (base64 payload from chat.send / agent.run)
+        // into channel attachments so the engine's media processor sees them.
+        // Previously this was hardcoded to `vec![]`, silently dropping every
+        // attachment sent from the Panel. Undecodable entries are skipped with
+        // a warning rather than failing the whole run.
+        let attachments: Vec<crate::gateway::channel::Attachment> = params
+            .attachments
+            .iter()
+            .filter_map(|a| match BASE64.decode(a.data.as_bytes()) {
+                Ok(bytes) => Some(crate::gateway::channel::Attachment {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    mime_type: a.mime_type.clone(),
+                    filename: Some(a.name.clone()),
+                    size: Some(bytes.len() as u64),
+                    url: None,
+                    path: None,
+                    data: Some(bytes),
+                }),
+                Err(e) => {
+                    error!(name = %a.name, error = %e, "Dropping attachment with invalid base64 data");
+                    None
+                }
+            })
+            .collect();
+
         let request = RunRequest {
             run_id: run_id.clone(),
             input: params.input.clone(),
             session_key: session_key.clone(),
             timeout_secs: None,
             metadata,
-            attachments: vec![],
+            attachments,
             pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
             sandbox_override: None,
             workspace_override,

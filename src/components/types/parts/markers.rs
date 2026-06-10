@@ -26,6 +26,7 @@ pub struct CompactionMarker {
 
 impl CompactionMarker {
     /// Create a new basic compaction marker
+    #[must_use]
     pub fn new(auto: bool) -> Self {
         Self {
             timestamp: chrono::Utc::now().timestamp(),
@@ -37,6 +38,7 @@ impl CompactionMarker {
     }
 
     /// Create a basic compaction marker with explicit timestamp
+    #[must_use]
     pub fn with_timestamp(timestamp: i64, auto: bool) -> Self {
         Self {
             timestamp,
@@ -48,6 +50,7 @@ impl CompactionMarker {
     }
 
     /// Create a detailed compaction marker with full metadata
+    #[must_use]
     pub fn with_details(
         auto: bool,
         marker_id: String,

@@ -49,18 +49,21 @@ impl GroupChatExecutor {
     ///
     /// When a persona specifies a `provider` field, the executor looks it up
     /// in this registry. Falls back to the default provider if not found.
+    #[must_use]
     pub fn with_provider_registry(mut self, registry: Arc<ProviderRegistry>) -> Self {
         self.provider_registry = Some(registry);
         self
     }
 
     /// Set whether the coordinator's plan is included as a message.
+    #[must_use]
     pub fn with_coordinator_visible(mut self, visible: bool) -> Self {
         self.coordinator_visible = visible;
         self
     }
 
     /// Set the database for turn persistence.
+    #[must_use]
     pub fn with_database(mut self, db: Arc<StateDatabase>) -> Self {
         self.db = Some(db);
         self

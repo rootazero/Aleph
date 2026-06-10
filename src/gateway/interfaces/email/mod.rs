@@ -105,6 +105,7 @@ impl EmailChannel {
     }
 
     /// Take the inbound receiver (can only be called once)
+    #[must_use]
     pub fn take_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
         self.channel_state.take_receiver()
     }

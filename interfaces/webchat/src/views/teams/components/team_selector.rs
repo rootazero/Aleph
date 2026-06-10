@@ -33,7 +33,7 @@ pub fn TeamSelector() -> impl IntoView {
                 state.teams.get().into_iter().map(|t| {
                     let selected = state.selected_team_id.get() == Some(t.id.clone());
                     let id = t.id.clone();
-                    let name = t.name.clone();
+                    let name = t.name;
                     view! {
                         <option value=id selected=selected>{name}</option>
                     }

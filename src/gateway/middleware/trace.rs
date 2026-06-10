@@ -14,6 +14,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 pub struct TraceLayer;
 
 impl TraceLayer {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

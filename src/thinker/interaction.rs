@@ -44,6 +44,7 @@ pub enum InteractionParadigm {
 
 impl InteractionParadigm {
     /// Returns a human-readable description for use in prompts
+    #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
             Self::CLI => "Command-line interface with terminal output supporting ANSI formatting",
@@ -55,6 +56,7 @@ impl InteractionParadigm {
     }
 
     /// Returns the default capabilities for this paradigm
+    #[must_use]
     pub fn default_capabilities(&self) -> HashSet<Capability> {
         match self {
             Self::CLI => [
@@ -114,6 +116,7 @@ pub enum Capability {
 
 impl Capability {
     /// Returns a (name, hint) tuple for prompt generation
+    #[must_use]
     pub fn prompt_hint(&self) -> (&'static str, &'static str) {
         match self {
             Self::RichText => ("rich_text", "You can use markdown formatting for emphasis"),
@@ -162,23 +165,27 @@ pub struct InteractionConstraints {
 
 impl InteractionConstraints {
     /// Create new constraints with default values
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set maximum output characters
+    #[must_use]
     pub fn max_output_chars(mut self, limit: usize) -> Self {
         self.max_output_chars = Some(limit);
         self
     }
 
     /// Set streaming support
+    #[must_use]
     pub fn supports_streaming(mut self, supports: bool) -> Self {
         self.supports_streaming = supports;
         self
     }
 
     /// Set compact preference
+    #[must_use]
     pub fn prefer_compact(mut self, prefer: bool) -> Self {
         self.prefer_compact = prefer;
         self
@@ -198,6 +205,7 @@ pub struct InteractionManifest {
 
 impl InteractionManifest {
     /// Create a new manifest with paradigm defaults
+    #[must_use]
     pub fn new(paradigm: InteractionParadigm) -> Self {
         Self {
             capabilities: paradigm.default_capabilities(),
@@ -207,6 +215,7 @@ impl InteractionManifest {
     }
 
     /// Override capabilities with an explicit set
+    #[must_use]
     pub fn with_capabilities(mut self, capabilities: HashSet<Capability>) -> Self {
         self.capabilities = capabilities;
         self
@@ -223,11 +232,13 @@ impl InteractionManifest {
     }
 
     /// Check if a capability is supported
+    #[must_use]
     pub fn has_capability(&self, capability: &Capability) -> bool {
         self.capabilities.contains(capability)
     }
 
     /// Set constraints
+    #[must_use]
     pub fn with_constraints(mut self, constraints: InteractionConstraints) -> Self {
         self.constraints = constraints;
         self
@@ -237,6 +248,7 @@ impl InteractionManifest {
     ///
     /// Some tools require specific capabilities:
     /// - Canvas tool requires Canvas capability
+    #[must_use]
     pub fn supports_tool(&self, tool_name: &str) -> bool {
         match tool_name {
             "canvas" => self.has_capability(&Capability::Canvas),

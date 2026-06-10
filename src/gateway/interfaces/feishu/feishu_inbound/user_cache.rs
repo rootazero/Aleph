@@ -30,6 +30,7 @@ impl Default for UserProfileCache {
 }
 
 impl UserProfileCache {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             cache: StdMutex::new(HashMap::with_capacity(MAX_CAPACITY)),

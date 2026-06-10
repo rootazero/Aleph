@@ -134,6 +134,7 @@ impl StageTimer {
     /// returns `0`). Use this for coarse-grained reporting only.
     ///
     /// This method does not stop the timer or trigger logging.
+    #[must_use]
     pub fn elapsed_ms(&self) -> u64 {
         self.start
             .elapsed()

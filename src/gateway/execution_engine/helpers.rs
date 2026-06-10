@@ -36,6 +36,7 @@ use crate::session::events::MessageContent;
 /// separately via the `Multimodal(Vec<MessageContent>)` variant.
 ///
 /// `prompt` is the fresh user message that triggered this run.
+#[must_use]
 pub fn history_to_flow_input(history: Vec<UnifiedMessage>, prompt: String) -> FlowInput {
     let turns: Vec<FlowHistoryTurn> = history
         .into_iter()
@@ -207,12 +208,21 @@ pub async fn run_dispatch_and_drain_classified(
         }
     });
 
-    // 3. Await completion.
-    let outcome: FlowOutcome = handle
-        .completion
-        .await
-        .map_err(|e| DispatchFailure::Fatal(format!("completion dropped: {e}")))?
-        .map_err(map_flow_error)?;
+    // 3. Await completion. The propagate task must be reaped on the error
+    //    paths too: it waits on a cancel token that is never cancelled for a
+    //    Transient/Fatal failure, so an early `?` return here would leak one
+    //    task (pinned forever on `cancelled()`) per failed attempt.
+    let outcome: FlowOutcome = match handle.completion.await {
+        Ok(Ok(outcome)) => outcome,
+        Ok(Err(e)) => {
+            propagate.abort();
+            return Err(map_flow_error(e));
+        }
+        Err(e) => {
+            propagate.abort();
+            return Err(DispatchFailure::Fatal(format!("completion dropped: {e}")));
+        }
+    };
 
     // 4. Let the drain task finish forwarding any in-flight events. The
     //    drain is the single source of the terminal `RunComplete` (the
@@ -227,14 +237,12 @@ pub async fn run_dispatch_and_drain_classified(
         let summary = super::event_drain::build_run_summary(&outcome);
         let seq = emitter.next_seq();
         let _ = emitter
-            .emit(
-                crate::gateway::event_emitter::StreamEvent::RunComplete {
-                    run_id: run_id.to_string(),
-                    seq,
-                    summary,
-                    total_duration_ms: outcome.duration_ms,
-                },
-            )
+            .emit(crate::gateway::event_emitter::StreamEvent::RunComplete {
+                run_id: run_id.to_string(),
+                seq,
+                summary,
+                total_duration_ms: outcome.duration_ms,
+            })
             .await;
     }
 

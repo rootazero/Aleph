@@ -25,6 +25,7 @@ pub enum AuthProfileFailureReason {
 
 impl AuthProfileFailureReason {
     /// Classify HTTP status code into failure reason
+    #[must_use]
     pub fn from_status(status: u16) -> Self {
         match status {
             400 => Self::Format,
@@ -65,6 +66,7 @@ pub struct ProfileUsageStats {
 
 impl ProfileUsageStats {
     /// Get the timestamp when this profile becomes usable again
+    #[must_use]
     pub fn unusable_until(&self) -> Option<u64> {
         let values: Vec<u64> = [self.cooldown_until, self.disabled_until]
             .into_iter()
@@ -80,6 +82,7 @@ impl ProfileUsageStats {
     }
 
     /// Check if profile is currently in cooldown
+    #[must_use]
     pub fn is_in_cooldown(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

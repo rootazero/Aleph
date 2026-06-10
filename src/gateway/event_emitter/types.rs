@@ -220,6 +220,7 @@ pub enum UncertaintyAction {
 
 impl UncertaintyAction {
     /// Get human-readable description
+    #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
             Self::ProceedWithCaution => "Proceeding with caution despite uncertainty",
@@ -389,6 +390,7 @@ pub struct RunSequenceManager {
 }
 
 impl RunSequenceManager {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             sequences: DashMap::new(),
@@ -396,6 +398,7 @@ impl RunSequenceManager {
     }
 
     /// Get next sequence number for a run
+    #[must_use]
     pub fn next_seq(&self, run_id: &str) -> u64 {
         self.sequences
             .entry(run_id.to_string())
@@ -426,6 +429,7 @@ pub enum OutputMode {
 
 impl OutputMode {
     /// Parse from config string value
+    #[must_use]
     pub fn from_config(s: &str) -> Self {
         match s {
             "instant" => Self::Instant,

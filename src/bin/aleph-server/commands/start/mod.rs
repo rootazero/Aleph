@@ -24,7 +24,7 @@ use alephcore::tasks::heartbeat::{HeartbeatService, SharedHeartbeatService};
 use alephcore::ProviderRegistry as _; // trait needed for .default_provider()
 
 mod builder;
-use builder::*;
+use builder::{load_app_config, initialize_auth, register_auth_handlers, register_guest_handlers, register_cron_handlers, register_heartbeat_handlers, register_agent_handlers, register_arena_handlers, register_config_handlers, register_voice_capability_handlers, register_session_handlers, register_memory_handlers, register_daemon_handlers, register_oauth_handlers, register_workspace_handlers, register_projects_handlers, register_fs_handlers, register_agents_handlers, register_mcp_handlers, register_teams_handlers, register_graph_handlers, register_identity_handlers, register_group_chat_handlers, initialize_channels, initialize_inbound_router, setup_config_watcher, start_webchat_server};
 
 mod orchestrator_init;
 use orchestrator_init::initialize_orchestrator;
@@ -96,7 +96,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
         }
         Err(e) => {
-            return Err(format!("Error: cannot resolve config directory: {}", e).into());
+            return Err(format!("Error: cannot resolve config directory: {e}").into());
         }
     }
 
@@ -126,8 +126,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // 2026-04-19 Bug #1).
     let harness_v2_opt_in = std::env::var("ALEPH_HARNESS_V2")
         .ok()
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
     if harness_v2_opt_in {
         tracing::warn!(
             "ALEPH_HARNESS_V2=1 is set but the production driver swap lands in \
@@ -141,9 +140,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     let (full_config, final_bind, final_port, final_max_connections) = load_gateway_config(args)?;
 
-    let addr: SocketAddr = format!("{}:{}", final_bind, final_port)
+    let addr: SocketAddr = format!("{final_bind}:{final_port}")
         .parse()
-        .map_err(|e| format!("Invalid address: {}", e))?;
+        .map_err(|e| format!("Invalid address: {e}"))?;
 
     alephcore::pii::PiiEngine::init(full_config.privacy.clone());
     if !args.daemon {
@@ -303,15 +302,14 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
     // Initialize memory backend (SQLite + sqlite-vec)
     let data_dir = alephcore::utils::paths::get_data_dir()
-        .map_err(|e| format!("Error: Failed to resolve data directory: {}. Memory backend requires a persistent directory.", e))?;
+        .map_err(|e| format!("Error: Failed to resolve data directory: {e}. Memory backend requires a persistent directory."))?;
     let db_path = data_dir.join("memory.db");
 
     // Notify user if old LanceDB data directory exists
     let lance_path = data_dir.join("memory.lance");
     if lance_path.exists() {
         println!(
-            "  Note: Old LanceDB data found at {:?}. Run: rm -rf {:?}",
-            lance_path, lance_path
+            "  Note: Old LanceDB data found at {lance_path:?}. Run: rm -rf {lance_path:?}"
         );
     }
 
@@ -327,7 +325,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 ))
             }
             Err(e) => {
-                return Err(format!("Error: Failed to initialize memory backend: {}", e).into());
+                return Err(format!("Error: Failed to initialize memory backend: {e}").into());
             }
         };
 
@@ -515,8 +513,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         );
         if migrated > 0 && !args.daemon {
             println!(
-                "  Secrets migrated to vault: {} (config plaintext stripped)",
-                migrated
+                "  Secrets migrated to vault: {migrated} (config plaintext stripped)"
             );
         }
     }
@@ -526,9 +523,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let vault = &auth_bundle.auth_ctx.shared_token_mgr;
 
         // AI providers: vault key "ai:<name>"
-        for (name, provider_cfg) in loaded_app_config.providers.iter_mut() {
+        for (name, provider_cfg) in &mut loaded_app_config.providers {
             if provider_cfg.api_key.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret(&format!("ai:{}", name)) {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("ai:{name}")) {
                     provider_cfg.api_key = Some(secret.expose().to_string());
                 }
             }
@@ -536,38 +533,38 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
         // Generation providers: vault key "gen:<name>"
         // Legacy flat map
-        for (name, provider_cfg) in loaded_app_config.generation.providers.iter_mut() {
+        for (name, provider_cfg) in &mut loaded_app_config.generation.providers {
             if provider_cfg.api_key.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{name}")) {
                     provider_cfg.api_key = Some(secret.expose().to_string());
                 }
             }
         }
         // Typed provider maps (image, video, speech)
-        for (name, provider_cfg) in loaded_app_config.generation.image_providers.iter_mut() {
+        for (name, provider_cfg) in &mut loaded_app_config.generation.image_providers {
             if provider_cfg.api_key.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{name}")) {
                     provider_cfg.api_key = Some(secret.expose().to_string());
                 }
             }
         }
-        for (name, provider_cfg) in loaded_app_config.generation.video_providers.iter_mut() {
+        for (name, provider_cfg) in &mut loaded_app_config.generation.video_providers {
             if provider_cfg.api_key.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{name}")) {
                     provider_cfg.api_key = Some(secret.expose().to_string());
                 }
             }
         }
-        for (name, provider_cfg) in loaded_app_config.generation.speech_providers.iter_mut() {
+        for (name, provider_cfg) in &mut loaded_app_config.generation.speech_providers {
             if provider_cfg.api_key.is_none() {
-                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{name}")) {
                     provider_cfg.api_key = Some(secret.expose().to_string());
                 }
             }
         }
 
         // Embedding providers: vault key "embed:<id>"
-        for provider_cfg in loaded_app_config.memory.embedding.providers.iter_mut() {
+        for provider_cfg in &mut loaded_app_config.memory.embedding.providers {
             if provider_cfg.api_key.is_none() {
                 if let Ok(Some(secret)) = vault.get_secret(&format!("embed:{}", provider_cfg.id)) {
                     provider_cfg.api_key = Some(secret.expose().to_string());
@@ -577,9 +574,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
 
         // Search backends: vault key "search:<name>"
         if let Some(ref mut search) = loaded_app_config.search {
-            for (name, backend_cfg) in search.backends.iter_mut() {
+            for (name, backend_cfg) in &mut search.backends {
                 if backend_cfg.api_key.is_none() {
-                    if let Ok(Some(secret)) = vault.get_secret(&format!("search:{}", name)) {
+                    if let Ok(Some(secret)) = vault.get_secret(&format!("search:{name}")) {
                         backend_cfg.api_key = Some(secret.expose().to_string());
                     }
                 }
@@ -598,9 +595,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Find default agent
     let default_agent_id = resolved_agents
         .iter()
-        .find(|a| a.is_default)
-        .map(|a| a.id.clone())
-        .unwrap_or_else(|| "main".to_string());
+        .find(|a| a.is_default).map_or_else(|| "main".to_string(), |a| a.id.clone());
 
     if !args.daemon {
         for agent in &resolved_agents {
@@ -645,7 +640,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             }
             Err(e) => {
                 if !args.daemon {
-                    eprintln!("Warning: Failed to initialize workspace manager: {}. channels.set_agent/agents.bindings disabled.", e);
+                    eprintln!("Warning: Failed to initialize workspace manager: {e}. channels.set_agent/agents.bindings disabled.");
                 }
                 None
             }
@@ -726,8 +721,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 Err(e) => {
                     if !args.daemon {
                         eprintln!(
-                            "Warning: Failed to initialize cron service: {}. Cron disabled.",
-                            e
+                            "Warning: Failed to initialize cron service: {e}. Cron disabled."
                         );
                     }
                     None
@@ -765,7 +759,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         }
                         Err(e) => {
                             if !args.daemon {
-                                eprintln!("Warning: Failed to initialize heartbeat service: {}. Heartbeat disabled.", e);
+                                eprintln!("Warning: Failed to initialize heartbeat service: {e}. Heartbeat disabled.");
                             }
                             None
                         }
@@ -774,8 +768,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 Err(e) => {
                     if !args.daemon {
                         eprintln!(
-                            "Warning: Failed to resolve data directory: {}. Heartbeat disabled.",
-                            e
+                            "Warning: Failed to resolve data directory: {e}. Heartbeat disabled."
                         );
                     }
                     tracing::warn!(error = %e, "Failed to resolve data directory; heartbeat disabled");
@@ -795,7 +788,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // Must be built before register_agent_handlers so it can be threaded into DreamDaemon,
     // MemoryContextProvider, and the builtin tool registry.
     let note_memory_dir = alephcore::utils::paths::get_note_memory_dir()
-        .map_err(|e| format!("Error: Failed to resolve note memory directory: {}. Note storage requires a persistent directory.", e))?;
+        .map_err(|e| format!("Error: Failed to resolve note memory directory: {e}. Note storage requires a persistent directory."))?;
     let wiki: std::sync::Arc<dyn alephcore::memory::notes::orientation::NoteOrientation> = {
         use alephcore::memory::notes::orientation::FsNoteOrientation;
         std::sync::Arc::new(FsNoteOrientation::new(
@@ -860,11 +853,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // `ToolHealthCache`. The bridge subscribes to manager events; any
     // servers that connect from this point on flow through it.
     if let Some(ref h) = mcp_handle {
-        alephcore::mcp::spawn_tool_bridge(
+        std::mem::drop(alephcore::mcp::spawn_tool_bridge(
             h.clone(),
             tool_registry_phase2.clone(),
             agent_result.tool_catalog.clone(),
-        );
+        ));
 
         // Wire MCP-type plugins into the live manager: hand each plugin's
         // `.mcp.json` servers to the manager as transient (runtime-only)
@@ -984,7 +977,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     ]),
                     move |global_event| {
                         let handler = team_logger_clone.clone();
-                        let event = global_event.event.clone();
+                        let event = global_event.event;
                         let ctx = ctx_team.clone();
                         tokio::spawn(async move {
                             match handler.handle(&event, &ctx).await {
@@ -1032,7 +1025,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                         ]),
                         move |global_event| {
                             let handler = notifier.clone();
-                            let event = global_event.event.clone();
+                            let event = global_event.event;
                             let ctx = ctx.clone();
                             tokio::spawn(async move {
                                 if let Err(e) = handler.handle(&event, &ctx).await {
@@ -1045,6 +1038,21 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 tracing::info!("Team notifier registered (TeamNotifier)");
             });
         };
+    }
+
+    // Register the subagent completion announcer — background subagent
+    // results proactively drive one turn on the parent session instead of
+    // waiting for the LLM to poll the tracker (R5; see
+    // gateway::subagent_announce module docs).
+    if let (Some(announce_adapter), Some(announce_registry)) = (
+        agent_result.execution_adapter.clone(),
+        agent_result.agent_registry.clone(),
+    ) {
+        alephcore::gateway::subagent_announce::spawn_subagent_announce(
+            announce_adapter,
+            announce_registry,
+            server.event_bus().clone(),
+        );
     }
 
     // Wire OpenAI-compatible API dependencies into GatewayServer
@@ -1397,7 +1405,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                 ));
 
                 // 4. Build agent card
-                let card = CardBuilder::build(&a2a_config.server, &format!("{}", addr));
+                let card = CardBuilder::build(&a2a_config.server, &format!("{addr}"));
 
                 // 5. Create notification service
                 let notification = Arc::new(NotificationService::new());
@@ -1577,7 +1585,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
                     "extension.reloaded",
                     serde_json::json!({
                         "kind": kind,
-                        "paths": paths.clone(),
+                        "paths": paths,
                         "timestamp": chrono::Utc::now().to_rfc3339(),
                     }),
                 );
@@ -1639,7 +1647,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             // Webhook / Memory alert targets work (not just Gateway). Same
             // engine wiring the heartbeat loop uses below.
             let cron_delivery_engine = build_task_delivery_engine(
-                cron_channel_cell.clone(),
+                cron_channel_cell,
                 memory_db.clone(),
                 webhook_ssrf_policy.clone(),
             );
@@ -1841,11 +1849,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // the platform has no `SystemCapability` (headless CI, etc.).
     {
         let presence_cfg = alephcore::tasks::presence::PresenceConfig::default();
-        if !presence_cfg.enabled {
-            if !args.daemon {
-                println!("Presence reporter: disabled");
-            }
-        } else {
+        if presence_cfg.enabled {
             let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
                 #[cfg(target_os = "macos")]
                 {
@@ -1876,6 +1880,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             } else if !args.daemon {
                 println!("Presence reporter: skipped (no SystemCapability on this platform)");
             }
+        } else if !args.daemon {
+            println!("Presence reporter: disabled");
         }
     }
 
@@ -1885,11 +1891,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // (Active/Quiet/Unavailable) snapshot on the Gateway event bus.
     {
         let mic_cfg = alephcore::tasks::mic_level::MicLevelConfig::default();
-        if !mic_cfg.enabled {
-            if !args.daemon {
-                println!("Mic-level reporter: disabled (opt-in)");
-            }
-        } else {
+        if mic_cfg.enabled {
             let platform: Arc<dyn aleph_desktop::DesktopPlatform> = {
                 #[cfg(target_os = "macos")]
                 {
@@ -1920,6 +1922,8 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
             } else if !args.daemon {
                 println!("Mic-level reporter: skipped (no MediaCapability on this platform)");
             }
+        } else if !args.daemon {
+            println!("Mic-level reporter: disabled (opt-in)");
         }
     }
 
@@ -2010,12 +2014,11 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         let store = SqlitePairingStore::new(&pairing_store_path)
             .or_else(|e| {
                 eprintln!(
-                    "Warning: Failed to create pairing store: {}. Using in-memory.",
-                    e
+                    "Warning: Failed to create pairing store: {e}. Using in-memory."
                 );
                 SqlitePairingStore::in_memory()
             })
-            .map_err(|e| format!("Failed to create pairing store: {}", e))?;
+            .map_err(|e| format!("Failed to create pairing store: {e}"))?;
         Arc::new(store)
     };
 
@@ -2284,9 +2287,9 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     if !args.daemon {
         println!();
         println!("Aleph Server:");
-        println!("  - URL:       http://{}:{}", final_bind, final_port);
-        println!("  - WebSocket: ws://{}:{}/ws", final_bind, final_port);
-        println!("  - Panel UI:  http://{}:{}/", final_bind, final_port);
+        println!("  - URL:       http://{final_bind}:{final_port}");
+        println!("  - WebSocket: ws://{final_bind}:{final_port}/ws");
+        println!("  - Panel UI:  http://{final_bind}:{final_port}/");
         println!();
     }
 
@@ -2296,7 +2299,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         "gateway",
         vec![
             ("GATEWAY_VERSION", env!("ALEPH_VERSION").to_string()),
-            ("GATEWAY_BIND", final_bind.to_string()),
+            ("GATEWAY_BIND", final_bind.clone()),
             ("GATEWAY_PORT", final_port.to_string()),
             ("GATEWAY_PID", std::process::id().to_string()),
         ],
@@ -2314,7 +2317,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
         }
     };
     if let Some(dir) = ipc_data_dir.as_deref() {
-        let endpoint = alephcore::cli::endpoint::IpcEndpoint::current(format!("http://{}", addr));
+        let endpoint = alephcore::cli::endpoint::IpcEndpoint::current(format!("http://{addr}"));
         if let Err(e) = alephcore::cli::endpoint::write_endpoint(dir, &endpoint) {
             tracing::warn!(error = %e, "failed to write IPC endpoint discovery file");
         }

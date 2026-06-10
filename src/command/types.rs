@@ -22,6 +22,7 @@ pub enum CommandType {
 
 impl CommandType {
     /// Convert to string for display/logging
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             CommandType::Action => "action",
@@ -31,6 +32,7 @@ impl CommandType {
     }
 
     /// Parse from string (for config files, case-insensitive)
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         let trimmed = s.trim();
         if trimmed.eq_ignore_ascii_case("action") {
@@ -45,6 +47,7 @@ impl CommandType {
     }
 
     /// Get default icon for this command type
+    #[must_use]
     pub fn default_icon(&self) -> &'static str {
         match self {
             CommandType::Action => "bolt",
@@ -137,28 +140,33 @@ impl CommandNode {
     }
 
     /// Builder: set source_type
+    #[must_use]
     pub fn with_source_type(mut self, source_type: ToolSourceType) -> Self {
         self.source_type = source_type;
         self
     }
 
     /// Builder: set node_type (override the default)
+    #[must_use]
     pub fn with_node_type(mut self, node_type: CommandType) -> Self {
         self.node_type = node_type;
         self
     }
 
     /// Check if this is an action node
+    #[must_use]
     pub fn is_action(&self) -> bool {
         matches!(self.node_type, CommandType::Action)
     }
 
     /// Check if this is a prompt node
+    #[must_use]
     pub fn is_prompt(&self) -> bool {
         matches!(self.node_type, CommandType::Prompt)
     }
 
     /// Check if this is a system builtin command
+    #[must_use]
     pub fn is_system(&self) -> bool {
         matches!(
             self.source_type,
@@ -167,16 +175,19 @@ impl CommandNode {
     }
 
     /// Check if this is an MCP tool
+    #[must_use]
     pub fn is_mcp(&self) -> bool {
         matches!(self.source_type, ToolSourceType::Mcp)
     }
 
     /// Check if this is a skill
+    #[must_use]
     pub fn is_skill(&self) -> bool {
         matches!(self.source_type, ToolSourceType::Skill)
     }
 
     /// Check if this is a custom command
+    #[must_use]
     pub fn is_custom(&self) -> bool {
         matches!(self.source_type, ToolSourceType::Custom)
     }

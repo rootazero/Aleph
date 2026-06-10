@@ -1,4 +1,4 @@
-//! Windows WinRT OCR implementation.
+//! Windows `WinRT` OCR implementation.
 
 #[allow(unused_imports)]
 use crate::error::{DesktopError, Result};

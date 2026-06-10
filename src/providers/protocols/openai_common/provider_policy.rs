@@ -164,6 +164,7 @@ impl PayloadPolicy {
 // =============================================================================
 
 /// Detect endpoint class from base URL.
+#[must_use]
 pub fn detect_endpoint_class(base_url: Option<&str>) -> EndpointClass {
     let url = match base_url {
         None | Some("") => return EndpointClass::OpenAiPublic,
@@ -226,6 +227,7 @@ fn is_local_host(host: &str) -> bool {
 // =============================================================================
 
 /// Resolve capabilities for a given endpoint class.
+#[must_use]
 pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
     match class {
         EndpointClass::OpenAiPublic => ProviderCapabilities {
@@ -409,6 +411,7 @@ pub fn resolve_capabilities(class: EndpointClass) -> ProviderCapabilities {
 // =============================================================================
 
 /// Build a payload policy from provider configuration.
+#[must_use]
 pub fn build_payload_policy(
     base_url: Option<&str>,
     api_type: &str,

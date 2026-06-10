@@ -175,6 +175,7 @@ const OPERATOR_TOOLS: &[&str] = &[
 
 /// True when `tool` mutates Aleph's own configuration and therefore requires an
 /// operator (config-tier) connection. Names not listed stay open to chat tier.
+#[must_use]
 pub fn tool_requires_operator(tool: &str) -> bool {
     OPERATOR_TOOLS.contains(&tool)
 }
@@ -183,6 +184,7 @@ pub fn tool_requires_operator(tool: &str) -> bool {
 ///
 /// Returns [`MethodPrivilege::Operator`] for the conservative administrative
 /// surface and [`MethodPrivilege::Authenticated`] for everything else.
+#[must_use]
 pub fn required_privilege(method: &str) -> MethodPrivilege {
     if OPERATOR_NAMESPACES.iter().any(|ns| method.starts_with(ns)) {
         return MethodPrivilege::Operator;

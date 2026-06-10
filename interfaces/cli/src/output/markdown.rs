@@ -31,7 +31,7 @@ pub fn render(markdown: &str) -> String {
 /// `render` delegates here after consulting the ambient colour gate; tests use
 /// this seam to exercise both the coloured (OSC-8 hyperlinks, SGR) and plain
 /// (`text (url)`) paths deterministically without depending on a TTY.
-pub(crate) fn render_with_color(markdown: &str, color: bool) -> String {
+pub fn render_with_color(markdown: &str, color: bool) -> String {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TABLES);
@@ -54,7 +54,7 @@ struct TableAcc {
 
 /// One open `[text](url)` link being accumulated until its closing tag, so the
 /// destination can be rendered as an OSC-8 hyperlink (coloured) or a `text
-/// (url)` suffix (plain). CommonMark links do not nest, so a single slot
+/// (url)` suffix (plain). `CommonMark` links do not nest, so a single slot
 /// suffices.
 struct LinkAcc {
     url: String,
@@ -75,7 +75,7 @@ struct Renderer {
 }
 
 impl Renderer {
-    fn new(color: bool) -> Self {
+    const fn new(color: bool) -> Self {
         Self {
             out: String::new(),
             color,
@@ -367,7 +367,7 @@ impl Renderer {
         if table.rows.is_empty() {
             return;
         }
-        let cols = table.rows.iter().map(|r| r.len()).max().unwrap_or(0);
+        let cols = table.rows.iter().map(std::vec::Vec::len).max().unwrap_or(0);
         let mut widths = vec![0usize; cols];
         for row in &table.rows {
             for (i, cell) in row.iter().enumerate() {
@@ -379,7 +379,7 @@ impl Renderer {
             let is_header = idx < table.header_rows;
             let cells: Vec<String> = (0..cols)
                 .map(|i| {
-                    let cell = row.get(i).map(String::as_str).unwrap_or("");
+                    let cell = row.get(i).map_or("", String::as_str);
                     let padded = pad_to(cell, widths[i]);
                     if is_header {
                         ansi(self.color, "1", &padded)

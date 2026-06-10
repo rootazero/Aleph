@@ -53,7 +53,10 @@ impl SessionManager {
                 )
             }
             Role::Anonymous => {
-                IdentityContext::owner(session_key.to_string(), identity_meta.source_channel)
+                // Anonymous is "always denied" (see aleph_protocol::IdentityContext);
+                // mirror SessionIdentityMeta::to_identity_context instead of
+                // escalating a stored Anonymous role to Owner.
+                IdentityContext::anonymous(session_key.to_string(), identity_meta.source_channel)
             }
         };
 

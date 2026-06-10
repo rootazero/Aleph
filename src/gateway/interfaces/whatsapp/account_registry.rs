@@ -19,6 +19,7 @@ impl Default for WhatsAppAccountRegistry {
 }
 
 impl WhatsAppAccountRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             accounts: Arc::new(RwLock::new(HashMap::new())),

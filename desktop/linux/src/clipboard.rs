@@ -22,7 +22,7 @@ use base64::{engine::general_purpose, Engine as _};
 /// Text read failure (no clipboard tool installed) is a hard error, matching
 /// the prior behavior. Image read is best-effort: any failure leaves
 /// `has_image = false` rather than failing the whole read.
-pub(crate) fn read() -> Result<ClipboardContent> {
+pub fn read() -> Result<ClipboardContent> {
     let text = read_text()?;
     let image_base64 = read_image_png_base64();
     Ok(ClipboardContent {
@@ -33,7 +33,7 @@ pub(crate) fn read() -> Result<ClipboardContent> {
 }
 
 /// Write text to the clipboard, replacing existing content.
-pub(crate) fn write(text: &str) -> Result<()> {
+pub fn write(text: &str) -> Result<()> {
     // Try wl-copy first (Wayland), then xclip/xsel (X11).
     let mut child = Command::new("wl-copy")
         .stdin(Stdio::piped())

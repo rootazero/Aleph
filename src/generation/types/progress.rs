@@ -42,6 +42,7 @@ impl GenerationProgress {
     }
 
     /// Create a progress indicator for a completed operation
+    #[must_use]
     pub fn completed() -> Self {
         Self {
             percentage: 100.0,
@@ -53,6 +54,7 @@ impl GenerationProgress {
     }
 
     /// Set the ETA
+    #[must_use]
     pub fn with_eta(mut self, eta: Duration) -> Self {
         self.eta = Some(eta);
         self

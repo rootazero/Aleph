@@ -65,6 +65,7 @@ pub struct TimeWindow {
 }
 
 impl TimeWindow {
+    #[must_use]
     pub fn contains(&self, minute_of_day: u16) -> bool {
         minute_of_day >= self.start_minute && minute_of_day < self.end_minute
     }
@@ -110,6 +111,7 @@ impl ActiveHoursSchedule {
     ///
     /// Returns `true` if any window for the current weekday (in the
     /// schedule's timezone) contains the current minute-of-day.
+    #[must_use]
     pub fn is_open_at(&self, now_ms: i64) -> bool {
         let dt = match self.tz().timestamp_millis_opt(now_ms).single() {
             Some(dt) => dt,
@@ -128,6 +130,7 @@ impl ActiveHoursSchedule {
     ///
     /// The search is bounded to at most 7 days, so the cost is O(7) per
     /// call regardless of how sparse the schedule is.
+    #[must_use]
     pub fn next_open_after(&self, now_ms: i64) -> Option<i64> {
         let tz = self.tz();
         let now = tz.timestamp_millis_opt(now_ms).single()?;
@@ -187,6 +190,7 @@ impl ActiveHoursSchedule {
 /// Convenience helper for callers that just need to push `next_due_ms`
 /// forward to the next window boundary. Returns `None` if the schedule
 /// has no future opening within the next 7 days.
+#[must_use]
 pub fn next_due_after_gate(
     schedule: &ActiveHoursSchedule,
     fallback_next_due_ms: i64,

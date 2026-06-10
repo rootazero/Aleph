@@ -41,6 +41,7 @@ pub struct TurnContext {
 impl TurnContext {
     /// True when the turn has a reachable channel to deliver a prompt to.
     /// HITL tools must deny / fail gracefully when this is false.
+    #[must_use]
     pub fn is_channel_routable(&self) -> bool {
         !self.channel_id.is_empty() && !self.conversation_id.is_empty()
     }
@@ -48,6 +49,7 @@ impl TurnContext {
     /// True when the originating connection may mutate Aleph's own config.
     /// Absent role = trusted local/internal run; `"operator"` = config tier;
     /// any other value (e.g. `"guest"`) = chat tier (gated).
+    #[must_use]
     pub fn caller_is_operator(&self) -> bool {
         match self.caller_role.as_deref() {
             None | Some("operator") => true,
@@ -62,6 +64,7 @@ task_local! {
 }
 
 /// Returns the current turn's routing context, or `None` outside a turn scope.
+#[must_use]
 pub fn current_turn_context() -> Option<TurnContext> {
     TURN_CONTEXT.try_with(|t| t.clone()).ok()
 }

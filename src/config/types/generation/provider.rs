@@ -139,16 +139,19 @@ impl GenerationProviderConfig {
     }
 
     /// Check if this provider supports a specific generation type
+    #[must_use]
     pub fn supports(&self, gen_type: GenerationType) -> bool {
         self.capabilities.contains(&gen_type)
     }
 
     /// Get the primary (default) model for this provider
+    #[must_use]
     pub fn default_model(&self) -> Option<&str> {
         self.models.first().map(|s| s.as_str())
     }
 
     /// Get the model to use, resolving aliases
+    #[must_use]
     pub fn resolve_model<'a>(&'a self, model: Option<&'a str>) -> Option<&'a str> {
         match model {
             Some(m) => self.model_aliases.get(m).map(|s| s.as_str()).or(Some(m)),

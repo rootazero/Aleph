@@ -38,8 +38,8 @@ pub(super) fn PresetSetupPanel(
 
     let build_config = {
         let provider_type = provider_type.clone();
-        let color = color.clone();
-        let capabilities = capabilities.clone();
+        let color = color;
+        let capabilities = capabilities;
         move || -> GenerationProviderConfig {
             GenerationProviderConfig {
                 provider_type: provider_type.clone(),
@@ -84,7 +84,7 @@ pub(super) fn PresetSetupPanel(
     };
 
     let handle_test = {
-        let provider_type = provider_type.clone();
+        let provider_type = provider_type;
         move |_| {
             set_testing.set(true);
             set_test_result.set(None);
@@ -119,8 +119,8 @@ pub(super) fn PresetSetupPanel(
     };
 
     let handle_add = {
-        let preset_id = preset_id.clone();
-        let gen_type_str = gen_type_str.clone();
+        let preset_id = preset_id;
+        let gen_type_str = gen_type_str;
         move |_| {
             if api_key.get().is_empty() {
                 set_error.set(Some("API Key is required".to_string()));
@@ -159,7 +159,7 @@ pub(super) fn PresetSetupPanel(
                             {match homepage {
                                 Some(url) if !url.is_empty() => view! {
                                     <a
-                                        href=url.clone()
+                                        href=url
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         class="text-xs text-primary hover:underline shrink-0"
@@ -170,7 +170,7 @@ pub(super) fn PresetSetupPanel(
                                 _ => view! { <span></span> }.into_any(),
                             }}
                         </div>
-                        <p class="text-sm text-text-tertiary">{preset.description.clone()}</p>
+                        <p class="text-sm text-text-tertiary">{preset.description}</p>
                     </div>
                 </div>
             </div>

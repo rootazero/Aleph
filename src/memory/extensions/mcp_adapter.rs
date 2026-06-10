@@ -51,6 +51,7 @@ impl McpMemoryExtension {
     /// Construct unbound: backed by `UnboundMcpCaller` until `rebind` replaces
     /// it. `server_id` (when `Some`) is the MCP server that
     /// `bind_memory_callers` will route this plugin's hook calls to.
+    #[must_use]
     pub fn new_unbound(name: String, server_id: Option<String>) -> Self {
         let caller: Arc<dyn McpCaller> = Arc::new(UnboundMcpCaller::new(name.clone()));
         Self {

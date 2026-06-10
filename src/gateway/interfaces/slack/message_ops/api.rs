@@ -227,7 +227,6 @@ impl SlackMessageOps {
             .json(&serde_json::json!({
                 "filename": filename,
                 "length": length,
-                "pretty打印": false,
             }))
             .send()
             .await

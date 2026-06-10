@@ -29,6 +29,7 @@ const MAX_BODY_CHARS: usize = 180;
 /// Pure policy: map an R5-relevant frame to the notification the user should be
 /// interrupted with, or `None` to stay silent. Focus-gating is NOT here (only
 /// the shell knows focus); this decides interrupt-worthiness + content only.
+#[must_use]
 pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification> {
     match frame {
         GatewayEventFrame::AskUser { question, .. } => {
@@ -72,6 +73,7 @@ pub fn notification_for(frame: &GatewayEventFrame) -> Option<SurfaceNotification
 /// or we re-deliver our own output and amplify infinitely. The operator-only
 /// gate is applied later, at the forward-filter (`event_scope` +
 /// `audience_allows`), not here.
+#[must_use]
 pub fn approval_for(frame: &GatewayEventFrame) -> Option<SurfaceApproval> {
     match frame {
         GatewayEventFrame::ApprovalRequested { approval_id, .. } => Some(SurfaceApproval {

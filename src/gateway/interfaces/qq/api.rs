@@ -22,6 +22,7 @@ pub struct TokenManager {
 }
 
 impl TokenManager {
+    #[must_use]
     pub fn new(app_id: String, client_secret: String) -> Self {
         Self {
             app_id,
@@ -61,9 +62,11 @@ impl TokenManager {
         let result = self.fetch_token(client).await;
         if let Ok(ref token) = result {
             let _ = tx.send(token.clone());
-        } else {
-            let _ = self.in_flight.lock().await.take();
         }
+        // Always clear the in-flight slot. A oneshot receiver left behind
+        // buffers the sent token forever, so a later caller (e.g. after the
+        // token expires) would take it and get back a stale, expired token.
+        let _ = self.in_flight.lock().await.take();
         result
     }
 
@@ -116,6 +119,7 @@ pub struct QQApiClient {
 }
 
 impl QQApiClient {
+    #[must_use]
     pub fn new(app_id: String, client_secret: String) -> Self {
         Self {
             http: reqwest::Client::new(),

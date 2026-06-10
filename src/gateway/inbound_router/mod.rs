@@ -371,7 +371,14 @@ impl InboundMessageRouter {
                                     }
                                 }
                             }
-                            Err(_) => break, // channel closed
+                            // Lagged only means this receiver fell behind and
+                            // some frames were dropped — the stream is still
+                            // live. Breaking here would permanently kill the
+                            // router after one burst.
+                            Err(broadcast::error::RecvError::Lagged(n)) => {
+                                warn!(skipped = n, "Inbound stream lagged; dropped messages");
+                            }
+                            Err(broadcast::error::RecvError::Closed) => break,
                         }
                     }
                     _ = tick_interval.tick() => {
@@ -408,7 +415,17 @@ impl InboundMessageRouter {
             }
         } else {
             // No coalescer — original direct-dispatch path (backward compatible)
-            while let Ok(msg) = rx.recv().await {
+            loop {
+                let msg = match rx.recv().await {
+                    Ok(msg) => msg,
+                    // Lagged = frames dropped but the stream is still live;
+                    // only Closed terminates the router loop.
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        warn!(skipped = n, "Inbound stream lagged; dropped messages");
+                        continue;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                };
                 if !self.dedup_check(&msg).await {
                     continue;
                 }

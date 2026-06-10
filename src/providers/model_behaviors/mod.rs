@@ -55,6 +55,7 @@ fn builtin_behavior(name: &str) -> Option<String> {
 }
 
 /// Map protocol name to default behavior name.
+#[must_use]
 pub fn protocol_to_behavior(protocol: &str) -> Option<&'static str> {
     match protocol {
         "anthropic" => Some("anthropic"),

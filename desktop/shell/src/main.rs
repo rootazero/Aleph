@@ -471,7 +471,7 @@ struct Supervisor {
 impl Supervisor {
     /// Start supervising. `daemon_up` is the outcome of the initial boot:
     /// a failed boot starts the supervisor in `Down` so it keeps retrying.
-    fn new(daemon_up: bool) -> Self {
+    const fn new(daemon_up: bool) -> Self {
         Self {
             health: if daemon_up {
                 DaemonHealth::Up
@@ -486,7 +486,7 @@ impl Supervisor {
     /// Start supervising a remote Gateway. `reachable` is the outcome of the
     /// initial TCP probe. Unlike Local mode, a failed probe does not relaunch
     /// the daemon — it surfaces a connection error instead.
-    fn new_remote(reachable: bool) -> Self {
+    const fn new_remote(reachable: bool) -> Self {
         Self {
             health: if reachable {
                 DaemonHealth::Up
@@ -501,7 +501,7 @@ impl Supervisor {
     /// The action to take when the target transitions to Down. Local mode
     /// relaunches; Remote mode surfaces a connection error instead (the remote
     /// daemon is not ours to manage).
-    fn down_action(&self) -> SupervisorAction {
+    const fn down_action(&self) -> SupervisorAction {
         if self.remote {
             SupervisorAction::ShowConnectionError
         } else {
@@ -511,7 +511,7 @@ impl Supervisor {
 
     /// Fold one probe result into the state machine and report the action
     /// the caller must take.
-    fn tick(&mut self, ready: bool) -> SupervisorAction {
+    const fn tick(&mut self, ready: bool) -> SupervisorAction {
         match (self.health, ready) {
             (DaemonHealth::Up, true) => {
                 self.consecutive_failures = 0;

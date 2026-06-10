@@ -13,6 +13,7 @@ use crate::providers::message::UnifiedMessage;
 /// character but three bytes, so byte-length over-counts CJK text ~3×. The
 /// sibling estimators (`summary_source`, `pressure::estimate_tokens_smart`)
 /// already count characters; this keeps the budget sensor consistent.
+#[must_use]
 pub fn estimate_tokens(content: &str, ratio: f64) -> usize {
     if ratio <= 0.0 {
         return 0;
@@ -21,6 +22,7 @@ pub fn estimate_tokens(content: &str, ratio: f64) -> usize {
 }
 
 /// Estimate total tokens across all messages.
+#[must_use]
 pub fn estimate_total_tokens(messages: &[UnifiedMessage], ratio: f64) -> usize {
     messages
         .iter()
@@ -32,6 +34,7 @@ pub fn estimate_total_tokens(messages: &[UnifiedMessage], ratio: f64) -> usize {
 ///
 /// Returns the index where `fresh_tail` begins. Messages in `[0..idx]` are
 /// candidates for compression; messages in `[idx..]` are kept verbatim.
+#[must_use]
 pub fn partition_fresh_tail(messages: &[UnifiedMessage], fresh_tail_count: usize) -> usize {
     if messages.len() <= fresh_tail_count {
         0
@@ -41,6 +44,7 @@ pub fn partition_fresh_tail(messages: &[UnifiedMessage], fresh_tail_count: usize
 }
 
 /// Same as [`partition_fresh_tail`] but for `(role, content)` string pairs.
+#[must_use]
 pub fn partition_fresh_tail_pairs(messages: &[(String, String)], fresh_tail_count: usize) -> usize {
     if messages.len() <= fresh_tail_count {
         0
@@ -54,6 +58,7 @@ pub fn partition_fresh_tail_pairs(messages: &[(String, String)], fresh_tail_coun
 ///
 /// An unconsumed tool result means the LLM has not yet seen the result, so it
 /// must not be compacted away.
+#[must_use]
 pub fn is_tool_result_consumed(messages: &[UnifiedMessage], idx: usize) -> bool {
     messages[(idx + 1)..].iter().any(|m| m.is_assistant())
 }

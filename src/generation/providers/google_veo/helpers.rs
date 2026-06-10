@@ -5,21 +5,25 @@ use super::types::GoogleErrorResponse;
 use crate::generation::GenerationError;
 
 /// Check if an aspect ratio is valid for Veo
+#[must_use]
 pub fn is_valid_aspect_ratio(ratio: &str) -> bool {
     ASPECT_RATIOS.contains(&ratio)
 }
 
 /// Check if a resolution is valid for Veo 3
+#[must_use]
 pub fn is_valid_resolution(resolution: &str) -> bool {
     RESOLUTIONS.contains(&resolution)
 }
 
 /// Check if a duration is valid for Veo 3
+#[must_use]
 pub fn is_valid_veo3_duration(duration: u32) -> bool {
     VEO3_DURATIONS.contains(&duration)
 }
 
 /// Check if a duration is valid for Veo 2
+#[must_use]
 pub fn is_valid_veo2_duration(duration: u32) -> bool {
     duration >= VEO2_DURATION_RANGE.0 && duration <= VEO2_DURATION_RANGE.1
 }

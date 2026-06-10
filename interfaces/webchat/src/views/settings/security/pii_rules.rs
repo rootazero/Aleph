@@ -188,7 +188,7 @@ pub(super) fn CustomPiiRulesSection(config: RwSignal<Option<SecurityConfig>>) ->
     let custom_rules = RwSignal::new(
         config
             .get()
-            .map(|c| c.custom_pii_rules.clone())
+            .map(|c| c.custom_pii_rules)
             .unwrap_or_default(),
     );
     let pattern_errors = RwSignal::new(Vec::<(usize, String)>::new());

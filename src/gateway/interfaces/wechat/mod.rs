@@ -110,9 +110,16 @@ impl Channel for WeChatChannel {
             auth::ContextTokenStore::new(&self.config.data_dir),
         ));
 
-        let sender = self.channel_state.sender();
-        runtime.start(sender).await;
         self.runtime = Some(runtime.clone());
+
+        // `WeChatRuntime::start` runs the long-poll loop until `stop()` flips
+        // the running flag, so it must run on its own task — awaiting it here
+        // would block `start()` forever and leave the channel unusable.
+        let sender = self.channel_state.sender();
+        let poll_runtime = Arc::clone(&runtime);
+        tokio::spawn(async move {
+            poll_runtime.start(sender).await;
+        });
 
         self.channel_state
             .set_status(ChannelStatus::Connected)

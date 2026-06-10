@@ -217,6 +217,7 @@ impl SessionKey {
     }
 
     /// Get the agent ID from this session key
+    #[must_use]
     pub fn agent_id(&self) -> &str {
         match self {
             Self::Main { agent_id, .. } => agent_id,
@@ -229,6 +230,7 @@ impl SessionKey {
     }
 
     /// Get the main session key for this agent
+    #[must_use]
     pub fn main_session_key(&self) -> SessionKey {
         Self::Main {
             agent_id: self.agent_id().to_string(),
@@ -238,6 +240,7 @@ impl SessionKey {
     }
 
     /// Get the epoch of this session key (only Main and DirectMessage have epochs)
+    #[must_use]
     pub fn epoch(&self) -> u32 {
         match self {
             Self::Main { epoch, .. } | Self::DirectMessage { epoch, .. } => *epoch,
@@ -246,6 +249,7 @@ impl SessionKey {
     }
 
     /// Return a clone with the given epoch (legacy compatibility alias).
+    #[must_use]
     pub fn with_epoch(&self, epoch: u32) -> Self {
         match self {
             Self::Main {
@@ -274,6 +278,7 @@ impl SessionKey {
 
     /// Return a clone with epoch incremented by 1.
     /// For non-epoch types (Group, Task, Subagent, Ephemeral), returns clone unchanged.
+    #[must_use]
     pub fn with_next_epoch(&self) -> Self {
         match self {
             Self::Main {
@@ -303,6 +308,7 @@ impl SessionKey {
     }
 
     /// Return the base key string WITHOUT epoch suffix (for SQL LIKE queries).
+    #[must_use]
     pub fn base_key_pattern(&self) -> String {
         match self {
             Self::Main {
@@ -323,6 +329,7 @@ impl SessionKey {
     }
 
     /// Serialize to string key for storage/lookup
+    #[must_use]
     pub fn to_key_string(&self) -> String {
         match self {
             Self::Main {
@@ -389,6 +396,7 @@ impl SessionKey {
     ///
     /// Epoch suffixes (`:sN`) are only recognised after the standard key segments so
     /// that IDs which happen to be formatted like `"s1"` are not mis‑interpreted.
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
         let parts: Vec<&str> = s.split(':').collect();
@@ -578,11 +586,13 @@ impl SessionKey {
     }
 
     /// Alias for `parse` with legacy fallback to match gateway/router.rs behavior.
+    #[must_use]
     pub fn from_key_string(s: &str) -> Option<Self> {
         Self::parse(s).or_else(|| Self::from_legacy(s))
     }
 
     /// Parse legacy format from gateway/router.rs for backward compatibility
+    #[must_use]
     pub fn from_legacy(s: &str) -> Option<Self> {
         let parts: Vec<&str> = s.split(':').collect();
 
@@ -610,6 +620,7 @@ impl SessionKey {
 }
 
 /// Normalize agent ID: lowercase, alphanumeric + dash/underscore, max 64 chars
+#[must_use]
 pub fn normalize_agent_id(id: &str) -> String {
     let trimmed = id.trim();
     if trimmed.is_empty() {

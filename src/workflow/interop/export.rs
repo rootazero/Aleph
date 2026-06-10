@@ -21,6 +21,7 @@ pub const EMBED_PREFIX: &str = "/* @aleph-workflow ";
 pub const EMBED_SUFFIX: &str = " */";
 
 /// Render `manifest` as a `.workflow.js` source string.
+#[must_use]
 pub fn render_workflow_js(manifest: &WorkflowManifest) -> String {
     // Escape `*/` as `*\/` (a legal JSON `/` escape) so a string field
     // containing `*/` (glob/regex/C-comment) cannot terminate the embed block

@@ -75,6 +75,7 @@ pub struct ReadSkillTool {
 
 impl ReadSkillTool {
     /// Create a new ReadSkillTool with a single directory (backwards compatible)
+    #[must_use]
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
             skills_dirs: vec![skills_dir],
@@ -83,6 +84,7 @@ impl ReadSkillTool {
     }
 
     /// Create a ReadSkillTool with multiple directories
+    #[must_use]
     pub fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
         Self {
             skills_dirs,
@@ -91,6 +93,7 @@ impl ReadSkillTool {
     }
 
     /// Create a ReadSkillTool with auto-discovery
+    #[must_use]
     pub fn with_auto_discover(project_dir: Option<&Path>) -> Self {
         let skills_dirs =
             crate::utils::paths::get_all_skills_dirs(project_dir).unwrap_or_else(|_| vec![]);
@@ -112,6 +115,7 @@ impl ReadSkillTool {
     }
 
     /// Create with custom max file size
+    #[must_use]
     pub fn with_max_size(mut self, max_size: u64) -> Self {
         self.max_file_size = max_size;
         self

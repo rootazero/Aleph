@@ -289,6 +289,7 @@ impl StabilityImageProvider {
 }
 
 /// Check if a style preset is valid
+#[must_use]
 pub fn is_valid_style_preset(preset: &str) -> bool {
     STYLE_PRESETS.contains(&preset)
 }

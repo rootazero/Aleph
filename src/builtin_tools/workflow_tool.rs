@@ -198,6 +198,7 @@ impl WorkflowTool {
     /// Wire the team roster so `run` can pre-flight team coverage. Builder form
     /// keeps `new` two-arg (every existing caller and test compiles unchanged);
     /// `None` leaves the check disabled.
+    #[must_use]
     pub fn with_team_store(mut self, team_store: Option<Arc<dyn crate::teams::TeamStore>>) -> Self {
         self.team_store = team_store;
         self
@@ -306,10 +307,7 @@ impl WorkflowTool {
             None => groups
                 .iter()
                 .max_by_key(|(rid, tasks)| {
-                    (
-                        tasks.iter().map(|t| t.created_at).max().unwrap_or(0),
-                        *rid,
-                    )
+                    (tasks.iter().map(|t| t.created_at).max().unwrap_or(0), *rid)
                 })
                 .map(|(rid, _)| rid.clone())
                 .unwrap_or_default(),

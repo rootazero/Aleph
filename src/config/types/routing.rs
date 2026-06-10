@@ -101,6 +101,7 @@ pub struct RoutingRuleConfig {
 impl RoutingRuleConfig {
     /// Create a test config (for tests only)
     /// Note: This creates a command rule since it has an explicit provider
+    #[must_use]
     pub fn test_config(regex: &str, provider: &str) -> Self {
         Self {
             rule_type: Some("command".to_string()),
@@ -116,6 +117,7 @@ impl RoutingRuleConfig {
     }
 
     /// Create a command rule config
+    #[must_use]
     pub fn command(regex: &str, provider: &str, system_prompt: Option<&str>) -> Self {
         Self {
             rule_type: Some("command".to_string()),
@@ -131,6 +133,7 @@ impl RoutingRuleConfig {
     }
 
     /// Create a keyword rule config
+    #[must_use]
     pub fn keyword(regex: &str, system_prompt: &str) -> Self {
         Self {
             rule_type: Some("keyword".to_string()),
@@ -146,18 +149,21 @@ impl RoutingRuleConfig {
     }
 
     /// Set the intent type (builder pattern)
+    #[must_use]
     pub fn with_intent_type(mut self, intent_type: &str) -> Self {
         self.intent_type = Some(intent_type.to_string());
         self
     }
 
     /// Set the preferred model (builder pattern)
+    #[must_use]
     pub fn with_preferred_model(mut self, model_id: &str) -> Self {
         self.preferred_model = Some(model_id.to_string());
         self
     }
 
     /// Get the effective rule type (with auto-detection)
+    #[must_use]
     pub fn get_rule_type(&self) -> &str {
         if let Some(ref rule_type) = self.rule_type {
             return rule_type.as_str();
@@ -171,16 +177,19 @@ impl RoutingRuleConfig {
     }
 
     /// Check if this is a command rule
+    #[must_use]
     pub fn is_command_rule(&self) -> bool {
         self.get_rule_type() == "command"
     }
 
     /// Check if this is a keyword rule
+    #[must_use]
     pub fn is_keyword_rule(&self) -> bool {
         self.get_rule_type() == "keyword"
     }
 
     /// Get provider name (required for command rules)
+    #[must_use]
     pub fn get_provider(&self) -> Option<&str> {
         if self.is_command_rule() {
             self.provider.as_deref()
@@ -190,6 +199,7 @@ impl RoutingRuleConfig {
     }
 
     /// Check if strip_prefix should be applied
+    #[must_use]
     pub fn should_strip_prefix(&self) -> bool {
         if self.is_keyword_rule() {
             false
@@ -199,11 +209,13 @@ impl RoutingRuleConfig {
     }
 
     /// Get intent type (with default value)
+    #[must_use]
     pub fn get_intent_type(&self) -> &str {
         self.intent_type.as_deref().unwrap_or("general")
     }
 
     /// Get preferred model ID
+    #[must_use]
     pub fn get_preferred_model(&self) -> Option<&str> {
         self.preferred_model.as_deref()
     }

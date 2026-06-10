@@ -71,18 +71,21 @@ impl ToolIndexEntry {
     }
 
     /// Builder: add keywords
+    #[must_use]
     pub fn with_keywords(mut self, keywords: Vec<String>) -> Self {
         self.keywords = keywords;
         self
     }
 
     /// Builder: mark as core tool
+    #[must_use]
     pub fn with_core(mut self, is_core: bool) -> Self {
         self.is_core = is_core;
         self
     }
 
     /// Format for LLM prompt (single line)
+    #[must_use]
     pub fn to_prompt_line(&self) -> String {
         format!("- {}: {}", self.name, self.summary)
     }
@@ -114,6 +117,7 @@ pub enum ToolIndexCategory {
 
 impl ToolIndexCategory {
     /// Get display name
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             ToolIndexCategory::Core => "Core",
@@ -171,6 +175,7 @@ pub struct ToolIndex {
 
 impl ToolIndex {
     /// Create empty tool index
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -188,6 +193,7 @@ impl ToolIndex {
     }
 
     /// Get total tool count
+    #[must_use]
     pub fn total_count(&self) -> usize {
         self.core.len()
             + self.builtin.len()
@@ -210,6 +216,7 @@ impl ToolIndex {
     /// ### MCP (use get_tool_schema for details)
     /// - github:pr_list: List pull requests
     /// ```
+    #[must_use]
     pub fn to_prompt(&self) -> String {
         let mut lines = vec!["## Available Tools".to_string(), String::new()];
 
@@ -271,6 +278,7 @@ impl ToolIndex {
     }
 
     /// Generate compact JSON for programmatic access
+    #[must_use]
     pub fn to_json(&self) -> Value {
         serde_json::to_value(self).unwrap_or_default()
     }

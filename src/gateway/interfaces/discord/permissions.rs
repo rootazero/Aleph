@@ -138,6 +138,7 @@ pub const ALEPH_PERMISSIONS: &[(u64, &str, RequirementLevel)] = &[
 /// `bot_permissions` is the raw Discord permission bitfield for the bot in
 /// the target guild. The function checks every flag in [`ALEPH_PERMISSIONS`]
 /// and returns a full [`PermissionAudit`].
+#[must_use]
 pub fn audit_permissions(guild_id: u64, guild_name: &str, bot_permissions: u64) -> PermissionAudit {
     let mut checks = Vec::with_capacity(ALEPH_PERMISSIONS.len());
     let mut missing_required = Vec::new();

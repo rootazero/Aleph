@@ -75,6 +75,12 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
                     continue;
                 }
 
+                // Fixed-deadline heartbeat timer: a fresh `sleep(interval)`
+                // future is recreated on every select! iteration, so steady
+                // inbound traffic would keep resetting it and starve client
+                // heartbeats, getting the connection dropped by the server.
+                let mut next_heartbeat = tokio::time::Instant::now() + heartbeat_interval;
+
                 loop {
                     let timeout = tokio::time::sleep_until(heartbeat_deadline);
                     tokio::select! {
@@ -112,11 +118,12 @@ pub async fn run_gateway(mut ctx: GatewayContext) {
                                 }
                             }
                         }
-                        _ = tokio::time::sleep(heartbeat_interval) => {
+                        _ = tokio::time::sleep_until(next_heartbeat) => {
                             let heartbeat = serde_json::json!({"op": 1});
                             if write.send(WsMessage::Text(heartbeat.to_string().into())).await.is_err() {
                                 break;
                             }
+                            next_heartbeat = tokio::time::Instant::now() + heartbeat_interval;
                         }
                         _ = timeout => {
                             tracing::warn!("QQ Gateway heartbeat timeout");

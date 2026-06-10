@@ -165,6 +165,7 @@ pub fn aggregate_no_progress(events: &[SessionEventRecord]) -> Vec<NoProgressGro
 /// Wrapped in `<system-reminder>` to match the rest of Aleph's
 /// harness-injected channel — the model reads it as harness chatter, not a
 /// fresh user instruction.
+#[must_use]
 pub fn render_no_progress_notice(events: &[SessionEventRecord]) -> Option<String> {
     let groups = aggregate_no_progress(events);
     if groups.is_empty() {

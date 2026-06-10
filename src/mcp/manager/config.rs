@@ -70,6 +70,7 @@ impl McpPersistentConfig {
     /// Get the default configuration file path
     ///
     /// Returns `~/.aleph/mcp_config.json`
+    #[must_use]
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -160,6 +161,7 @@ impl McpPersistentConfig {
     }
 
     /// Get a server configuration by ID
+    #[must_use]
     pub fn get_server(&self, id: &str) -> Option<&McpManagerConfig> {
         self.servers.get(id)
     }
@@ -167,6 +169,7 @@ impl McpPersistentConfig {
     /// Get all servers that should auto-start
     ///
     /// Returns references to all configurations where `auto_start` is true.
+    #[must_use]
     pub fn auto_start_servers(&self) -> Vec<&McpManagerConfig> {
         self.servers
             .values()

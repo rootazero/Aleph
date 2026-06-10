@@ -22,6 +22,7 @@ pub enum PageSize {
 
 impl PageSize {
     /// Get page dimensions in millimeters
+    #[must_use]
     pub fn dimensions_mm(&self) -> (f32, f32) {
         match self {
             PageSize::A4 => (210.0, 297.0),
@@ -35,6 +36,7 @@ impl PageSize {
     }
 
     /// Get page dimensions in inches (mm / 25.4)
+    #[must_use]
     pub fn dimensions_inches(&self) -> (f64, f64) {
         let (w_mm, h_mm) = self.dimensions_mm();
         (f64::from(w_mm) / 25.4, f64::from(h_mm) / 25.4)
@@ -57,6 +59,7 @@ impl ContentFormat {
     ///
     /// Returns `Markdown` if the content contains typical Markdown syntax
     /// (headings, bold/italic, lists, code blocks, links, etc.).
+    #[must_use]
     pub fn detect(content: &str) -> Self {
         // Check first ~2000 chars for performance
         let sample = if content.len() > 2000 {
@@ -163,14 +166,17 @@ pub struct PdfGenerateArgs {
     pub render_engine: RenderEngine,
 }
 
+#[must_use]
 pub fn default_font_size() -> f32 {
     12.0
 }
 
+#[must_use]
 pub fn default_line_spacing() -> f32 {
     1.5
 }
 
+#[must_use]
 pub fn default_margin() -> f32 {
     20.0
 }

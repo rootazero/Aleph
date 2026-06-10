@@ -28,6 +28,7 @@ pub trait ToolRefreshSource: Send + Sync {
 // =============================================================================
 
 /// Build a fresh `LoopToolRegistry` from a list of tools.
+#[must_use]
 pub fn build_refreshed_registry(tools: Vec<Box<dyn LoopTool>>) -> LoopToolRegistry {
     let mut registry = LoopToolRegistry::new();
     for tool in tools {
@@ -46,6 +47,7 @@ pub struct CompositeRefreshSource {
 }
 
 impl CompositeRefreshSource {
+    #[must_use]
     pub fn new(sources: Vec<Arc<dyn ToolRefreshSource>>) -> Self {
         Self { sources }
     }

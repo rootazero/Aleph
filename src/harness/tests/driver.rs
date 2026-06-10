@@ -8,9 +8,9 @@
 //! `drive` through the trait object and assert the session received the
 //! expected `AssistantMessage`.
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 

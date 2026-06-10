@@ -162,16 +162,13 @@ fn scratchpad_preview(input: &Value) -> String {
             let n = input
                 .get("items")
                 .and_then(Value::as_array)
-                .map(|a| a.len())
-                .unwrap_or(0);
+                .map_or(0, std::vec::Vec::len);
             format!("set_plan · {n} step(s)")
         }
         "start_item" | "complete_item" => {
             let idx = input
                 .get("item_index")
-                .and_then(Value::as_u64)
-                .map(|i| i.to_string())
-                .unwrap_or_else(|| "?".into());
+                .and_then(Value::as_u64).map_or_else(|| "?".into(), |i| i.to_string());
             format!("{action} #{idx}")
         }
         "set_objective" | "initialize" => {
@@ -285,6 +282,45 @@ pub fn render_reasoning(content: &str) -> Option<String> {
     let bulb = if use_unicode() { "💭" } else { ":" };
     let preview = truncate(&txt.replace('\n', " "), REASONING_MAX);
     Some(format!("  {bulb} {}", paint(Style::Muted, &preview)))
+}
+
+/// Amber status line for a transient provider failure (`stream.run_retrying`).
+/// Mirrors the Panel's retry notice so a CLI run shows "retrying" instead of
+/// minutes of silence while the provider retry ladder burns attempts.
+pub fn render_retry_notice(
+    provider: &str,
+    attempt: u32,
+    max_attempts: u32,
+    reason: &str,
+) -> String {
+    let glyph = if use_unicode() { "⟳" } else { "[~]" };
+    let head = paint(
+        Style::Warning,
+        &format!("{glyph} provider {provider} retrying ({attempt}/{max_attempts})"),
+    );
+    let detail = truncate(&reason.replace('\n', " "), ERROR_MAX);
+    if detail.is_empty() {
+        format!("  {head}")
+    } else {
+        format!("  {head}  {}", paint(Style::Muted, &detail))
+    }
+}
+
+/// Amber notice when the router fell back to a different model than the one
+/// requested (`stream.model_resolved` with `is_fallback`). Mirrors the
+/// Panel's fallback chip so terminal users learn which model actually
+/// answered.
+pub fn render_fallback_notice(model: &str, provider: &str, original: Option<&str>) -> String {
+    let glyph = if use_unicode() { "⤷" } else { "[>]" };
+    let head = match original {
+        Some(orig) if orig != model => format!("{glyph} model fallback: {orig} → {model}"),
+        _ => format!("{glyph} model fallback: {model}"),
+    };
+    format!(
+        "  {}  {}",
+        paint(Style::Warning, &head),
+        paint(Style::Muted, &format!("via {provider}"))
+    )
 }
 
 /// Optional LLM-authored one-liner summarising a tool call.
@@ -423,7 +459,7 @@ pub fn format_duration(ms: u64) -> String {
 }
 
 /// Compact a token count: `820`, `12.3k`, `1.2M`.
-fn human_count(n: u64) -> String {
+pub fn human_count(n: u64) -> String {
     if n < 1000 {
         n.to_string()
     } else if n < 1_000_000 {
@@ -664,6 +700,29 @@ mod tests {
         };
         let footer = render_summary_footer(&s);
         assert!(footer.contains("目标未达成"));
+    }
+
+    #[test]
+    fn retry_notice_carries_provider_and_attempt() {
+        let line = render_retry_notice("anthropic", 2, 12, "connect timeout\nafter 10s");
+        assert!(line.contains("anthropic"));
+        assert!(line.contains("(2/12)"));
+        // Newlines in the reason are flattened onto the single status line.
+        assert!(!line.contains('\n'));
+        assert!(line.contains("connect timeout"));
+    }
+
+    #[test]
+    fn fallback_notice_shows_requested_and_actual_model() {
+        let line = render_fallback_notice("haiku-4-5", "anthropic", Some("fable-5"));
+        assert!(line.contains("fable-5"));
+        assert!(line.contains("haiku-4-5"));
+        assert!(line.contains("anthropic"));
+        // When the original is unknown (or identical), only the resolved
+        // model is shown — no dangling arrow.
+        let bare = render_fallback_notice("haiku-4-5", "anthropic", None);
+        assert!(bare.contains("haiku-4-5"));
+        assert!(!bare.contains("→"));
     }
 
     #[test]

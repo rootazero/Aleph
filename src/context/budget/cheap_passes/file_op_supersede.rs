@@ -125,6 +125,7 @@ struct FileOpRef {
 impl FileOpSupersedeStage {
     /// Construct with the full configuration surface explicitly set.
     /// Use [`FileOpSupersedeStage::default`] for production defaults.
+    #[must_use]
     pub fn new(
         read_tools: Vec<String>,
         write_tools: Vec<String>,
@@ -265,7 +266,12 @@ impl PreflightStage for FileOpSupersedeStage {
 
         let mut freed_chars: usize = 0;
         let mut stubbed: usize = 0;
-        for msg in messages.iter_mut() {
+        // Bound the rewrite to messages before the fresh tail: a ToolResult
+        // sits one index after its ToolCall, so a call just below the boundary
+        // can have its result *inside* the protected tail — the obsolete set
+        // only checks the call's index, so the tail must be re-guarded here
+        // (safety contract 3: fresh-tail messages are immune).
+        for msg in messages.iter_mut().take(fresh_tail_start) {
             let UnifiedMessage::ToolResult {
                 tool_call_id,
                 tool_name,

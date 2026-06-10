@@ -1,4 +1,4 @@
-use super::*;
+use super::GatewayServer;
 
 use alephcore::mcp::McpManagerHandle;
 

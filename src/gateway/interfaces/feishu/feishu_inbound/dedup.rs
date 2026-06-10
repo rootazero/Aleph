@@ -22,6 +22,7 @@ impl Default for MessageDedup {
 }
 
 impl MessageDedup {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             seen: VecDeque::with_capacity(DEDUP_CAPACITY),
@@ -30,6 +31,7 @@ impl MessageDedup {
         }
     }
 
+    #[must_use]
     pub fn with_ttl(ttl_secs: u64) -> Self {
         Self {
             seen: VecDeque::with_capacity(DEDUP_CAPACITY),

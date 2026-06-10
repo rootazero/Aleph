@@ -174,7 +174,7 @@ fn TaskListPane(
                         let has_journal = journal_ids.contains(&t.id);
                         let owner = t.owner.clone().unwrap_or_else(|| "—".to_string());
                         let subject = t.subject.clone();
-                        let status = t.status.clone();
+                        let status = t.status;
                         view! {
                             <button
                                 class=move || {
@@ -186,7 +186,7 @@ fn TaskListPane(
                                     }
                                 }
                                 on:click={
-                                    let tid = tid.clone();
+                                    let tid = tid;
                                     move |_| selected.set(Some(tid.clone()))
                                 }
                             >

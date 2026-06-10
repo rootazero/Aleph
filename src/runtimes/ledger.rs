@@ -149,6 +149,7 @@ impl CapabilityLedger {
     /// Return the status of a capability by name.
     ///
     /// Returns `CapabilityStatus::Missing` if the name is unknown.
+    #[must_use]
     pub fn status(&self, name: &str) -> CapabilityStatus {
         self.entries
             .get(name)
@@ -157,6 +158,7 @@ impl CapabilityLedger {
     }
 
     /// Return the executable path *only* if the capability is `Ready`.
+    #[must_use]
     pub fn executable(&self, name: &str) -> Option<&Path> {
         self.entries.get(name).and_then(|e| {
             if e.status == CapabilityStatus::Ready {
@@ -237,6 +239,7 @@ impl CapabilityLedger {
     }
 
     /// Return all entries that are currently `Ready`.
+    #[must_use]
     pub fn list_ready(&self) -> Vec<&CapabilityEntry> {
         let mut entries: Vec<&CapabilityEntry> = self
             .entries

@@ -24,6 +24,17 @@ macro_rules! lock_conn {
     };
 }
 
+/// Build a `LIKE` prefix pattern with `%`/`_`/`\` escaped so a literal
+/// underscore in a session key or agent id cannot act as a single-char
+/// wildcard and match another session's rows. Pair with `ESCAPE '\'`.
+fn like_prefix_pattern(prefix: &str) -> String {
+    let escaped = prefix
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    format!("{escaped}%")
+}
+
 fn row_to_raw_memory(row: &rusqlite::Row) -> rusqlite::Result<RawMemory> {
     let source_str: String = row.get("source")?;
     let source_detail: Option<String> = row.get("source_detail")?;
@@ -206,13 +217,13 @@ impl RawMemoryStore for SqliteMemoryBackend {
     ) -> Result<Vec<RawMemory>, AlephError> {
         let conn = lock_conn!(self)?;
 
-        let pattern = format!("{path_prefix}%");
+        let pattern = like_prefix_pattern(path_prefix);
         let mut stmt = conn
             .prepare(
                 "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
-                 WHERE path LIKE ?1 AND agent_id = ?2 \
+                 WHERE path LIKE ?1 ESCAPE '\\' AND agent_id = ?2 \
                  ORDER BY created_at ASC \
                  LIMIT ?3",
             )
@@ -240,13 +251,13 @@ impl RawMemoryStore for SqliteMemoryBackend {
     ) -> Result<Vec<RawMemory>, AlephError> {
         let conn = lock_conn!(self)?;
 
-        let pattern = format!("{path_prefix}%");
+        let pattern = like_prefix_pattern(path_prefix);
         let mut stmt = conn
             .prepare(
                 "SELECT id, content, source, source_detail, agent_id, session_id, path, layer, attachment_text, \
                  is_processed, created_at \
                  FROM raw_memories \
-                 WHERE path LIKE ?1 AND agent_id = ?2 AND created_at > ?3 \
+                 WHERE path LIKE ?1 ESCAPE '\\' AND agent_id = ?2 AND created_at > ?3 \
                  ORDER BY created_at ASC \
                  LIMIT ?4",
             )

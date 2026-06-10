@@ -143,6 +143,7 @@ impl Default for DeliveryEngine {
 }
 
 impl DeliveryEngine {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             targets: HashMap::new(),
@@ -221,6 +222,7 @@ impl DeliveryEngine {
 // ── Helper ───────────────────────────────────────────────────────────
 
 /// Check if delivery should be skipped due to agent already sending.
+#[must_use]
 pub fn should_skip_delivery(agent_already_sent: bool, mode: &DeliveryMode) -> DeliveryStatus {
     if matches!(mode, DeliveryMode::None) {
         return DeliveryStatus::NotRequested;

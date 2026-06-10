@@ -134,6 +134,7 @@ impl WebhookChannel {
     ///
     /// This sender should be passed to `WebhookReceiver::start()` so that
     /// incoming webhook messages are forwarded into the channel's inbound queue.
+    #[must_use]
     pub fn inbound_sender(&self) -> InboundMessageSender {
         self.channel_state.sender()
     }
@@ -141,6 +142,7 @@ impl WebhookChannel {
     /// Get the webhook handler for registration with WebhookReceiver.
     ///
     /// Returns `None` if `start()` has not been called yet.
+    #[must_use]
     pub fn webhook_handler(&self) -> Option<Arc<GenericWebhookHandler>> {
         self.handler.clone()
     }

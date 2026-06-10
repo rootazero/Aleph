@@ -23,7 +23,7 @@ pub fn cleanup_old_logs(
     let retention_days = retention_days.clamp(1, 30);
 
     let cutoff = SystemTime::now()
-        .checked_sub(Duration::from_secs(retention_days as u64 * 24 * 60 * 60))
+        .checked_sub(Duration::from_secs(u64::from(retention_days) * 24 * 60 * 60))
         .ok_or("Failed to calculate cutoff time")?;
 
     let mut deleted_count = 0;
@@ -46,9 +46,9 @@ pub fn cleanup_old_logs(
             if !file_name.starts_with(prefix) {
                 continue;
             }
-            file_name == format!("{}.log", prefix)
-                || (file_name.starts_with(&format!("{}.log.", prefix)) && {
-                    let suffix = &file_name[format!("{}.log.", prefix).len()..];
+            file_name == format!("{prefix}.log")
+                || (file_name.starts_with(&format!("{prefix}.log.")) && {
+                    let suffix = &file_name[format!("{prefix}.log.").len()..];
                     suffix.len() == 10
                         && suffix.chars().nth(4) == Some('-')
                         && suffix.chars().nth(7) == Some('-')
@@ -81,7 +81,7 @@ pub fn cleanup_old_logs(
 
         if modified < cutoff {
             match fs::remove_file(&path) {
-                Ok(_) => {
+                Ok(()) => {
                     tracing::info!(
                         file = %path.display(),
                         age_days = %(SystemTime::now().duration_since(modified).unwrap_or_default().as_secs() / 86400),

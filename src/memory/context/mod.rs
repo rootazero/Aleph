@@ -42,11 +42,13 @@ pub const SINGLE_TURN_TOPIC_ID: &str = NO_SESSION;
 
 impl ContextAnchor {
     /// Create a new context anchor with current timestamp (sessionless)
+    #[must_use]
     pub fn now(window_title: String) -> Self {
         Self::with_session(window_title, NO_SESSION.to_string())
     }
 
     /// Create context anchor with specific timestamp (sessionless)
+    #[must_use]
     pub fn with_timestamp(window_title: String, timestamp: i64) -> Self {
         Self {
             window_title,
@@ -56,6 +58,7 @@ impl ContextAnchor {
     }
 
     /// Create context anchor with session ID (for multi-turn conversations)
+    #[must_use]
     pub fn with_session(window_title: String, session_id: String) -> Self {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -97,6 +100,7 @@ pub struct MemoryEntry {
 
 impl MemoryEntry {
     /// Create new memory entry without embedding
+    #[must_use]
     pub fn new(id: String, context: ContextAnchor, user_input: String, ai_output: String) -> Self {
         Self {
             id,
@@ -111,6 +115,7 @@ impl MemoryEntry {
     }
 
     /// Create memory entry with embedding
+    #[must_use]
     pub fn with_embedding(
         id: String,
         context: ContextAnchor,
@@ -131,6 +136,7 @@ impl MemoryEntry {
     }
 
     /// Set similarity score (used during retrieval)
+    #[must_use]
     pub fn with_score(mut self, score: f32) -> Self {
         self.similarity_score = Some(score);
         self

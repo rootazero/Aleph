@@ -62,7 +62,7 @@ pub(super) fn ProviderDetailView(
     let provider_name_voices = provider.name.clone();
     if is_speech {
         voices_loading.set(true);
-        let name = provider_name_voices.clone();
+        let name = provider_name_voices;
         spawn_local(async move {
             match GenerationProvidersApi::fetch_voices(&state, &name).await {
                 Ok(list) => {
@@ -96,7 +96,7 @@ pub(super) fn ProviderDetailView(
     let provider_has_api_key = provider.has_api_key;
 
     let build_config = {
-        let existing_defaults = existing_defaults.clone();
+        let existing_defaults = existing_defaults;
         move || -> GenerationProviderConfig {
             let mut defaults = existing_defaults.clone();
             // Update voice-specific defaults from form
@@ -193,7 +193,7 @@ pub(super) fn ProviderDetailView(
     };
 
     // Test connection handler
-    let build_config_test = build_config.clone();
+    let build_config_test = build_config;
     let provider_name_test = provider_name.clone();
     let handle_test = move |_| {
         testing.set(true);
@@ -283,10 +283,10 @@ pub(super) fn ProviderDetailView(
                 <div class="flex items-center justify-between">
                     <div>
                         <h2 class="text-lg font-semibold text-text-primary">
-                            {provider.name.clone()}
+                            {provider.name}
                         </h2>
                         <p class="text-sm text-text-tertiary mt-0.5">
-                            {display_provider_type.clone()}
+                            {display_provider_type}
                         </p>
                         <ProviderBadges state=BadgeState {
                             is_default: !is_default_for.is_empty(),
@@ -422,7 +422,7 @@ pub(super) fn ProviderDetailView(
                                                 format!("{} ({})", v.name, v.gender)
                                             };
                                             view! {
-                                                <option value={vid.clone()}>
+                                                <option value={vid}>
                                                     {label}
                                                 </option>
                                             }
@@ -555,7 +555,7 @@ pub(super) fn ProviderDetailView(
             // Set as default button
             {
                 let is_default = is_default_for.contains(&effective_gen_type);
-                let set_default = handle_set_default.clone();
+                let set_default = handle_set_default;
 
                 view! {
                     <div class="bg-surface-raised border border-border rounded-xl p-4 space-y-3">

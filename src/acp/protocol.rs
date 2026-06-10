@@ -30,6 +30,7 @@ impl AcpRequest {
     /// Create an `initialize` request.
     ///
     /// Sends `protocolVersion: 1` (number) as required by the ACP spec.
+    #[must_use]
     pub fn initialize() -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -59,6 +60,7 @@ impl AcpRequest {
     /// Create a `session/new` request.
     ///
     /// Requires `cwd` (working directory) and `mcpServers` (array, can be empty).
+    #[must_use]
     pub fn new_session(cwd: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -74,6 +76,7 @@ impl AcpRequest {
     /// Create a `session/prompt` request.
     ///
     /// The `prompt` field must be an array of content parts (e.g. `[{type: "text", text: "..."}]`).
+    #[must_use]
     pub fn prompt(session_id: &str, text: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -87,6 +90,7 @@ impl AcpRequest {
     }
 
     /// Create a `session/cancel` request.
+    #[must_use]
     pub fn cancel(session_id: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -99,6 +103,7 @@ impl AcpRequest {
     }
 
     /// Create a `session/load` request (best-effort session restore).
+    #[must_use]
     pub fn load_session(session_id: &str, cwd: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -115,6 +120,7 @@ impl AcpRequest {
     /// Create a `session/set_mode` request — switches the agent's interaction
     /// mode (e.g. "chat" vs "code"). The available mode IDs are adapter-specific
     /// and advertised in the `session/new` response.
+    #[must_use]
     pub fn set_mode(session_id: &str, mode_id: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -130,6 +136,7 @@ impl AcpRequest {
     /// Create a `session/set_model` request — switches the underlying model.
     /// The available model IDs are adapter-specific and advertised in the
     /// `session/new` response under `availableModels`.
+    #[must_use]
     pub fn set_model(session_id: &str, model_id: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -144,6 +151,7 @@ impl AcpRequest {
 
     /// Create a `session/set_config_option` request — sets an adapter-specific
     /// runtime knob (e.g. `temperature`, `tools.allowFileWrite`).
+    #[must_use]
     pub fn set_config_option(session_id: &str, key: &str, value: serde_json::Value) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -160,6 +168,7 @@ impl AcpRequest {
     /// Create an `authenticate` request — performs adapter-side credential
     /// handshake. `method_id` selects which auth method the adapter advertised
     /// (e.g. `"api_key"`, `"oauth2"`); `credential` is the opaque token value.
+    #[must_use]
     pub fn authenticate(method_id: &str, credential: &str) -> Self {
         Self {
             jsonrpc: "2.0".to_string(),
@@ -197,11 +206,13 @@ pub struct AcpResponse {
 
 impl AcpResponse {
     /// Returns true if this is a result response (has id and result/error).
+    #[must_use]
     pub fn is_result(&self) -> bool {
         self.id.is_some()
     }
 
     /// Returns true if this is a notification (has method, no id).
+    #[must_use]
     pub fn is_notification(&self) -> bool {
         self.id.is_none() && self.method.is_some()
     }
@@ -213,12 +224,14 @@ impl AcpResponse {
     /// inbound requests overlaps our own outbound request ids, so callers MUST
     /// test `method` presence before matching ids to avoid mistaking an agent
     /// request for our own response.
+    #[must_use]
     pub fn is_incoming_request(&self) -> bool {
         self.id.is_some() && self.method.is_some()
     }
 
     /// Borrow `(id, method, params)` when this frame is an agent→client
     /// request. Returns `None` otherwise.
+    #[must_use]
     pub fn as_incoming_request(&self) -> Option<(u64, &str, &Value)> {
         const NULL: &Value = &Value::Null;
         match (self.id, self.method.as_deref()) {
@@ -231,6 +244,7 @@ impl AcpResponse {
     ///
     /// Looks for `result.content` as a string, or `result.text`,
     /// or falls back to the stringified result value.
+    #[must_use]
     pub fn text_content(&self) -> Option<String> {
         let result = self.result.as_ref()?;
 
@@ -286,6 +300,7 @@ impl AcpResponse {
 
     /// Extract tool call info from a `tool_call` or `tool_call_update` notification.
     /// Returns (tool_name, status) if this is a tool-related notification.
+    #[must_use]
     pub fn tool_call_info(&self) -> Option<(String, String)> {
         if self.method.as_deref() != Some("session/update") {
             return None;
@@ -311,6 +326,7 @@ impl AcpResponse {
     }
 
     /// Check if this notification signals that the agent's turn is complete.
+    #[must_use]
     pub fn is_turn_complete(&self) -> bool {
         if self.method.as_deref() != Some("session/update") {
             return false;
@@ -380,6 +396,7 @@ impl AcpErrorCode {
     ///
     /// These strings are part of the gateway contract — never rename without
     /// migrating panel + downstream consumers.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::HarnessNotFound => "harness_not_found",
@@ -398,6 +415,7 @@ impl AcpErrorCode {
 
     /// Heuristic for callers deciding whether to retry. Mirrors acpx's
     /// `retryable` flag on `NormalizedOutputError`.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,

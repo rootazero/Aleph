@@ -7,6 +7,7 @@ pub const ENTRY_DELIMITER: &str = "\n§\n";
 
 /// Parse a raw file body into entries. Trims surrounding whitespace per entry,
 /// drops empty entries.
+#[must_use]
 pub fn parse(body: &str) -> Vec<String> {
     if body.trim().is_empty() {
         return Vec::new();
@@ -23,6 +24,7 @@ pub fn parse(body: &str) -> Vec<String> {
 /// `body.contains("\n§\n")` is a reliable signal that the file is curated
 /// (not legacy markdown). `parse` filters trailing empty entries, so the
 /// round-trip property `parse(serialize(x)) == x` is preserved.
+#[must_use]
 pub fn serialize(entries: &[String]) -> String {
     if entries.is_empty() {
         return String::new();

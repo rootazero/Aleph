@@ -16,6 +16,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 pub struct AuthLayer;
 
 impl AuthLayer {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

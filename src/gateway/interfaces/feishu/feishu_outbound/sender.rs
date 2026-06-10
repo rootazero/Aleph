@@ -9,6 +9,7 @@ use crate::gateway::interfaces::feishu::api::{FeishuApi, FeishuSendError};
 use crate::gateway::interfaces::feishu::config::FeishuConfig;
 use crate::gateway::interfaces::feishu::feishu_outbound::media::MediaHelper;
 
+#[must_use]
 pub fn should_use_card(text: &str, render_mode: &str) -> bool {
     match render_mode {
         "card" => true,

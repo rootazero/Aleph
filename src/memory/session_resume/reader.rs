@@ -17,6 +17,7 @@ impl SnapshotReader {
     }
 
     /// Create a reader using the default path `~/.aleph/data/sessions/`.
+    #[must_use]
     pub fn default_path() -> Option<Self> {
         dirs::home_dir().map(|h| Self::new(h.join(".aleph/data/sessions")))
     }
@@ -25,6 +26,7 @@ impl SnapshotReader {
     ///
     /// Returns `None` when no valid snapshot is found or the base directory
     /// does not exist.
+    #[must_use]
     pub fn load_latest(&self, exclude_session_id: &str) -> Option<SessionSnapshot> {
         let entries = std::fs::read_dir(&self.base_dir).ok()?;
 

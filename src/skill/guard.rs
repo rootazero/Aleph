@@ -155,6 +155,7 @@ pub fn merge_verdicts(verdicts: impl IntoIterator<Item = ScanVerdict>) -> ScanVe
 
 /// Trust × verdict install policy. `Dangerous` is blocked for everyone except
 /// `Builtin`; `Caution` is allowed for `Trusted`+; `Safe` always allowed.
+#[must_use]
 pub fn install_allowed(level: ThreatLevel, trust: TrustLevel) -> bool {
     match (level, trust) {
         (ThreatLevel::Safe, _) => true,
@@ -173,6 +174,7 @@ pub fn install_allowed(level: ThreatLevel, trust: TrustLevel) -> bool {
 ///
 /// This is the shared primitive used by both the ClawHub install path and the
 /// markdown-skills RPC install/load path.
+#[must_use]
 pub fn scan_skill_directory(dir: &std::path::Path) -> ScanVerdict {
     let mut verdicts = Vec::new();
     scan_skill_directory_inner(dir, &mut verdicts);

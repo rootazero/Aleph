@@ -108,7 +108,7 @@ pub(super) fn AddCustomProviderPanel(
         set_action_error.set(None);
 
         let rerank = build_for_save();
-        let rerank_clone = rerank.clone();
+        let rerank_clone = rerank;
         let state = save_state;
         spawn_local(async move {
             match RerankConfigApi::update(&state, rerank_clone.clone()).await {

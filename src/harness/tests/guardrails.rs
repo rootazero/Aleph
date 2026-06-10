@@ -6,9 +6,9 @@
 //! (input sanitisation), (b) the persisted `AssistantMessage` (output
 //! sanitisation), and (c) the harness's terminal state (`Block` paths).
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};

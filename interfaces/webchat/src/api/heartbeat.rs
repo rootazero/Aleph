@@ -235,7 +235,9 @@ impl HeartbeatApi {
             );
         }
 
-        let result = state.rpc_call("heartbeat.update", Value::Object(params)).await?;
+        let result = state
+            .rpc_call("heartbeat.update", Value::Object(params))
+            .await?;
 
         result
             .get("task")

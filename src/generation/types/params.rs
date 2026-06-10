@@ -78,6 +78,7 @@ pub struct GenerationParams {
 
 impl GenerationParams {
     /// Create a new empty GenerationParams
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -94,6 +95,7 @@ impl GenerationParams {
     ///     .height(512)
     ///     .build();
     /// ```
+    #[must_use]
     pub fn builder() -> GenerationParamsBuilder {
         GenerationParamsBuilder::default()
     }
@@ -202,6 +204,7 @@ impl GenerationParams {
     /// assert_eq!(merged.width, Some(512));
     /// assert_eq!(merged.height, Some(512));
     /// ```
+    #[must_use]
     pub fn merged_with(&self, other: GenerationParams) -> GenerationParams {
         let mut result = self.clone();
         result.merge(other);
@@ -219,12 +222,14 @@ pub struct GenerationParamsBuilder {
 
 impl GenerationParamsBuilder {
     /// Set the width in pixels
+    #[must_use]
     pub fn width(mut self, width: u32) -> Self {
         self.params.width = Some(width);
         self
     }
 
     /// Set the height in pixels
+    #[must_use]
     pub fn height(mut self, height: u32) -> Self {
         self.params.height = Some(height);
         self
@@ -249,12 +254,14 @@ impl GenerationParamsBuilder {
     }
 
     /// Set the number of outputs to generate
+    #[must_use]
     pub fn n(mut self, n: u32) -> Self {
         self.params.n = Some(n);
         self
     }
 
     /// Set the random seed
+    #[must_use]
     pub fn seed(mut self, seed: i64) -> Self {
         self.params.seed = Some(seed);
         self
@@ -267,12 +274,14 @@ impl GenerationParamsBuilder {
     }
 
     /// Set the video duration in seconds
+    #[must_use]
     pub fn duration_seconds(mut self, duration: f32) -> Self {
         self.params.duration_seconds = Some(duration);
         self
     }
 
     /// Set the frames per second
+    #[must_use]
     pub fn fps(mut self, fps: u32) -> Self {
         self.params.fps = Some(fps);
         self
@@ -285,6 +294,7 @@ impl GenerationParamsBuilder {
     }
 
     /// Set the speaking speed
+    #[must_use]
     pub fn speed(mut self, speed: f32) -> Self {
         self.params.speed = Some(speed);
         self
@@ -309,12 +319,14 @@ impl GenerationParamsBuilder {
     }
 
     /// Set the guidance scale
+    #[must_use]
     pub fn guidance_scale(mut self, scale: f32) -> Self {
         self.params.guidance_scale = Some(scale);
         self
     }
 
     /// Set the number of inference steps
+    #[must_use]
     pub fn steps(mut self, steps: u32) -> Self {
         self.params.steps = Some(steps);
         self
@@ -339,6 +351,7 @@ impl GenerationParamsBuilder {
     }
 
     /// Build the GenerationParams
+    #[must_use]
     pub fn build(self) -> GenerationParams {
         self.params
     }

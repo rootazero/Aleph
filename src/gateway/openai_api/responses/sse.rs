@@ -60,6 +60,7 @@ struct StreamState {
 /// 1. `response.created` — initial event with status "in_progress"
 /// 2. Per-delta events (`response.output_text.delta`, etc.)
 /// 3. `response.completed` — final event with full response object
+#[must_use]
 pub fn provider_deltas_to_responses_sse(
     deltas: BoxStream<'static, anyhow::Result<ProviderDelta>>,
     model: String,

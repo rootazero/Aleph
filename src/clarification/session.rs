@@ -65,6 +65,7 @@ pub struct ClarificationManager {
 
 impl ClarificationManager {
     /// Create an empty manager.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

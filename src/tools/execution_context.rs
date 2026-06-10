@@ -18,6 +18,7 @@ pub enum CascadePolicy {
 
 impl CascadePolicy {
     /// Classify a tool by name into its cascade policy.
+    #[must_use]
     pub fn classify(tool_name: &str) -> Self {
         match tool_name.to_lowercase().as_str() {
             "bash" | "write" | "edit" | "notebookedit" | "notebook_edit" => Self::AbortSiblings,
@@ -50,6 +51,7 @@ impl ToolExecutionContext {
     ///
     /// `batch_cancel` is the parent token shared by all tools in the batch;
     /// a child token is derived so individual tools can be cancelled independently.
+    #[must_use]
     pub fn new(
         batch_cancel: &CancellationToken,
         progress_tx: mpsc::Sender<ToolProgress>,

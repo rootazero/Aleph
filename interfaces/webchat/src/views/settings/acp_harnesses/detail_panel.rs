@@ -79,7 +79,7 @@ pub(super) fn HarnessDetailPanel(
     let (deleting, set_deleting) = signal(false);
 
     let hid = harness_id.clone();
-    let hid_for_preset = harness_id.clone();
+    let hid_for_preset = harness_id;
     let display_name_str = info.display_name.clone();
 
     // Build config from form state
@@ -169,7 +169,7 @@ pub(super) fn HarnessDetailPanel(
     };
 
     // Save handler
-    let build_for_save = build_config.clone();
+    let build_for_save = build_config;
     let hid_save = hid.clone();
     let handle_save = move |_| {
         set_action_error.set(None);
@@ -228,7 +228,7 @@ pub(super) fn HarnessDetailPanel(
     };
 
     // Delete handler (custom only)
-    let hid_delete = hid.clone();
+    let hid_delete = hid;
     let confirming = RwSignal::new(false);
     let on_confirm_delete = move || {
         set_deleting.set(true);
@@ -417,8 +417,8 @@ pub(super) fn HarnessDetailPanel(
                             </label>
                             <div class="space-y-2">
                                 {move || env_pairs.get().into_iter().enumerate().map(|(i, (k, v))| {
-                                    let k_val = k.clone();
-                                    let v_val = v.clone();
+                                    let k_val = k;
+                                    let v_val = v;
                                     view! {
                                         <div class="flex gap-2 items-center">
                                             <input

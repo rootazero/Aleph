@@ -62,6 +62,7 @@ pub enum SessionEndReason {
 impl RawMemorySource {
     /// Split enum into `(token, optional_detail_json)` for SQLite storage.
     /// Legacy variants return `(token, None)` so existing rows stay unchanged.
+    #[must_use]
     pub fn to_persisted(&self) -> (&'static str, Option<String>) {
         match self {
             Self::SessionCompressed => ("session_compressed", None),
@@ -187,11 +188,13 @@ impl RawMemorySource {
     }
 
     /// Backwards-compat shim — existing callers that only had a token.
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         self.to_persisted().0
     }
 
     /// Backwards-compat shim — existing callers that only had a token.
+    #[must_use]
     pub fn from_str_(s: &str) -> Self {
         Self::from_persisted(s, None)
     }
@@ -213,6 +216,7 @@ pub struct RawMemory {
 }
 
 impl RawMemory {
+    #[must_use]
     pub fn new(content: String, source: RawMemorySource) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),

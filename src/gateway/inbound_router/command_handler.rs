@@ -51,6 +51,7 @@ pub(super) fn truncate_for_topic(s: &str, max_chars: usize) -> &str {
 /// Without this, the fast-path's `match mode_type { "skill" => ... }` branch
 /// was dead code: every slash command was misclassified as `direct_tool` and
 /// skill instructions were silently dropped.
+#[must_use]
 pub fn serialize_parsed_command(parsed: &crate::command::ParsedCommand) -> Option<String> {
     use crate::command::CommandContext;
 

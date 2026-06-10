@@ -33,19 +33,25 @@ pub enum RetryVerdict {
 }
 
 /// Extract token gap from "prompt is too long: X tokens > Y maximum" error messages.
+#[must_use]
 pub fn parse_token_gap(err: &anyhow::Error) -> Option<usize> {
     parse_token_gap_str(&err.to_string())
 }
 
 /// String-based core of [`parse_token_gap`] — operates on a raw error message.
+#[must_use]
 pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
     let lower = msg.to_lowercase();
     if !lower.contains("prompt is too long") && !lower.contains("prompt_too_long") {
         return None;
     }
-    // Find "N tokens > M" pattern manually
+    // Find "N tokens > M" pattern manually. Slice `lower` (not `msg`):
+    // `to_lowercase` can change byte lengths for some Unicode chars, so an
+    // index found in `lower` may not be a char boundary in `msg` — slicing
+    // `msg` with it could panic on a provider-supplied error string. The
+    // digits we extract are ASCII and identical in both strings.
     let tokens_idx = lower.find("tokens")?;
-    let before_tokens = msg[..tokens_idx].trim_end();
+    let before_tokens = lower[..tokens_idx].trim_end();
     let actual_str = before_tokens.rsplit(|c: char| !c.is_ascii_digit()).next()?;
     if actual_str.is_empty() {
         return None;
@@ -73,6 +79,7 @@ pub fn parse_token_gap_str(msg: &str) -> Option<usize> {
 /// Reclassifies transient errors as `Fallback` since retries didn't help.
 /// 413 errors pass through as `CompactAndRetry` (handled separately).
 /// 400 errors remain `Fatal` (request itself is broken).
+#[must_use]
 pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
     classify_exhausted(&err.to_string())
 }
@@ -80,6 +87,7 @@ pub fn classify_exhausted_error(err: &anyhow::Error) -> RetryVerdict {
 /// String-based core of [`classify_exhausted_error`].
 ///
 /// Used by `FailoverProvider`, which classifies `AlephError` display strings.
+#[must_use]
 pub fn classify_exhausted(raw: &str) -> RetryVerdict {
     let base = classify(raw);
 
@@ -148,6 +156,7 @@ pub fn classify_exhausted(raw: &str) -> RetryVerdict {
 /// `pub` so the failover layer can parse the `Retry-After` the Anthropic
 /// adapter stashes in `AlephError::RateLimitError.suggestion` — a field the
 /// error's `Display` drops, so the string classifier never sees it.
+#[must_use]
 pub fn extract_retry_after_str(raw: &str) -> Option<Duration> {
     let msg = raw.to_lowercase();
     // Match patterns like "retry after 30 seconds" or "retry-after: 60"
@@ -171,6 +180,7 @@ pub fn extract_retry_after_str(raw: &str) -> Option<Duration> {
 ///
 /// `Retry-After` may be a delay in seconds or an HTTP-date string.
 /// `x-ratelimit-reset-*` may be a Unix timestamp or relative seconds.
+#[must_use]
 pub fn resolve_retry_delay(
     headers: &reqwest::header::HeaderMap,
     attempt: u32,
@@ -235,6 +245,7 @@ pub fn resolve_retry_delay(
 ///
 /// Returns a `RetryVerdict` with server-guided delay when available.
 /// This is the preferred entry point for HTTP-level error classification.
+#[must_use]
 pub fn classify_http_error(
     status: u16,
     headers: &reqwest::header::HeaderMap,
@@ -329,6 +340,7 @@ fn classify_rate_limit(raw: &str) -> RetryVerdict {
 /// explicitly asked the client to "try again" (the failure that crashed
 /// scheduled jobs on 2026-05-29). Callers must check `account_patterns` first
 /// so genuine quota limits stay Fatal.
+#[must_use]
 pub fn is_transient_overload(msg_lower: &str) -> bool {
     msg_lower.contains("overloaded")
         || msg_lower.contains("529")
@@ -347,6 +359,7 @@ pub fn is_transient_overload(msg_lower: &str) -> bool {
 /// excluded — a momentary "forbidden"-looking overload must not be mistaken
 /// for a dead key — and account/quota 429s are already classified `Fatal`
 /// upstream so they never reach the breaker.
+#[must_use]
 pub fn is_permanent_failure(raw: &str) -> bool {
     let msg = raw.to_lowercase();
     // Transient signals win: a 503/529 overload or a network reset is not a
@@ -361,6 +374,7 @@ pub fn is_permanent_failure(raw: &str) -> bool {
 }
 
 /// Inspect an `anyhow::Error` display string and decide whether to retry.
+#[must_use]
 pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
     classify(&err.to_string())
 }
@@ -368,6 +382,7 @@ pub fn classify_error(err: &anyhow::Error) -> RetryVerdict {
 /// String-based core of [`classify_error`] — classifies a raw error message.
 ///
 /// `FailoverProvider` calls this directly on `AlephError` display strings.
+#[must_use]
 pub fn classify(raw: &str) -> RetryVerdict {
     let msg = raw.to_lowercase();
 
@@ -421,6 +436,7 @@ pub fn classify(raw: &str) -> RetryVerdict {
 }
 
 /// Compute exponential backoff: `base * 2^attempt`, capped at `max_delay`.
+#[must_use]
 pub fn backoff_delay(base: Duration, attempt: u32, max_delay: Duration) -> Duration {
     let factor = 2u64.saturating_pow(attempt);
     let delay_ms = u64::try_from(base.as_millis())
@@ -500,8 +516,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use crate::sync_primitives::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
     fn test_classify_rate_limit_model_specific_fallback() {

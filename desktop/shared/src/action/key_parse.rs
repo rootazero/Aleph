@@ -22,8 +22,7 @@ pub fn parse_modifier(name: &str) -> Result<Key> {
         "control" | "ctrl" => Ok(Key::Control),
         "alt" | "option" => Ok(Key::Alt),
         other => Err(DesktopError::InputFailed(format!(
-            "Unknown modifier: '{}'. Expected meta/command/cmd, shift, control/ctrl, alt/option",
-            other
+            "Unknown modifier: '{other}'. Expected meta/command/cmd, shift, control/ctrl, alt/option"
         ))),
     }
 }
@@ -72,8 +71,7 @@ pub fn parse_key(name: &str) -> Result<Key> {
         "f11" => Ok(Key::F11),
         "f12" => Ok(Key::F12),
         other => Err(DesktopError::InputFailed(format!(
-            "Unknown key: '{}'. Use single char or named key (space, return, tab, escape, etc.)",
-            other
+            "Unknown key: '{other}'. Use single char or named key (space, return, tab, escape, etc.)"
         ))),
     }
 }

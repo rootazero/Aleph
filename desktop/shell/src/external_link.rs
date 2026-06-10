@@ -43,7 +43,7 @@ pub fn set_remote_host(url: Option<Url>) {
         u.host_str()
             .map(|h| h.trim_start_matches('[').trim_end_matches(']').to_string())
     });
-    *REMOTE_HOST.write().unwrap_or_else(|e| e.into_inner()) = host;
+    *REMOTE_HOST.write().unwrap_or_else(std::sync::PoisonError::into_inner) = host;
 }
 
 /// Injected into every document: redirect `target="_blank"` anchor clicks
@@ -69,7 +69,7 @@ pub fn route(url: &Url) -> bool {
 /// Whether `url` is part of the Panel/splash surface and may load inside the
 /// hosting webview. Trusts the Tauri asset/data schemes and any http(s) URL
 /// on a loopback host (the local daemon) or the `tauri.localhost` asset host
-/// (Windows WebView2 serves bundled assets there).
+/// (Windows `WebView2` serves bundled assets there).
 pub fn is_internal(url: &Url) -> bool {
     match url.scheme() {
         // Splash + bundled assets (`tauri://localhost`), and in-page schemes
@@ -85,7 +85,7 @@ pub fn is_internal(url: &Url) -> bool {
                 // Allow the currently-configured remote Gateway origin.
                 REMOTE_HOST
                     .read()
-                    .unwrap_or_else(|e| e.into_inner())
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .as_deref()
                     == Some(host)
             }

@@ -36,6 +36,7 @@ pub struct DiagnosticEngine {
 
 impl DiagnosticEngine {
     /// Construct from an explicit check list (used by tests).
+    #[must_use]
     pub fn new(checks: Vec<Arc<dyn HealthCheck>>) -> Self {
         Self { checks }
     }
@@ -77,6 +78,7 @@ impl DiagnosticEngine {
         self
     }
 
+    #[must_use]
     pub fn check_count(&self) -> usize {
         self.checks.len()
     }
@@ -111,6 +113,7 @@ pub struct DiagnosticReport {
 }
 
 impl DiagnosticReport {
+    #[must_use]
     pub fn errors(&self) -> usize {
         self.findings
             .iter()
@@ -118,6 +121,7 @@ impl DiagnosticReport {
             .count()
     }
 
+    #[must_use]
     pub fn warnings(&self) -> usize {
         self.findings
             .iter()
@@ -126,6 +130,7 @@ impl DiagnosticReport {
     }
 
     /// Count repairs that actually succeeded this run.
+    #[must_use]
     pub fn repaired(&self) -> usize {
         self.findings
             .iter()
@@ -134,6 +139,7 @@ impl DiagnosticReport {
     }
 
     /// True when no error- or warning-level findings remain unrepaired.
+    #[must_use]
     pub fn ok(&self) -> bool {
         !self.findings.iter().any(|f| {
             f.is_problem() && !matches!(f.repair_outcome, Some(RepairOutcome::Repaired { .. }))
@@ -141,6 +147,7 @@ impl DiagnosticReport {
     }
 
     /// Serialize to a stable JSON envelope for `--json` / CI.
+    #[must_use]
     pub fn to_json(&self) -> String {
         serde_json::json!({
             "ok": self.ok(),
@@ -155,6 +162,7 @@ impl DiagnosticReport {
     }
 
     /// Render a compact human report. Used by the CLI and the tool's text view.
+    #[must_use]
     pub fn render_human(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(

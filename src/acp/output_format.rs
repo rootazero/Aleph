@@ -16,6 +16,7 @@ pub enum OutputFormat {
 
 impl OutputFormat {
     /// Parse stdout according to the format specification.
+    #[must_use]
     pub fn parse(&self, stdout: &str) -> String {
         let trimmed = stdout.trim();
         match self {

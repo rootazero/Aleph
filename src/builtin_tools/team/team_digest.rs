@@ -155,7 +155,11 @@ impl AlephTool for TeamDigestTool {
             .ok_or_else(|| AlephError::other(format!("Team '{}' not found", args.team_id)))?;
 
         let now = Utc::now();
-        let since = now - Duration::hours(args.hours as i64);
+        // `hours` arrives from the LLM (untrusted); chrono::Duration::hours
+        // panics on out-of-range values, so clamp to a generous upper bound
+        // (~100 years) before converting.
+        let hours = args.hours.min(24 * 366 * 100);
+        let since = now - Duration::hours(hours as i64);
 
         let events = self
             .event_store

@@ -1,7 +1,7 @@
 //! macOS permission change monitor.
 //!
 //! Watches TCC permissions that require a daemon restart to take effect
-//! (input_monitoring, screen_recording). When the app returns to foreground
+//! (`input_monitoring`, `screen_recording`). When the app returns to foreground
 //! and a permission that was previously denied is now granted, triggers a
 //! daemon restart so the user never has to manually "restart aleph-server".
 
@@ -35,14 +35,14 @@ struct PermissionState {
 }
 
 impl PermissionState {
-    fn get(&self, kind: PermissionKind) -> Option<bool> {
+    const fn get(&self, kind: PermissionKind) -> Option<bool> {
         match kind {
             PermissionKind::InputMonitoring => self.input_monitoring,
             PermissionKind::ScreenRecording => self.screen_recording,
         }
     }
 
-    fn set(&mut self, kind: PermissionKind, granted: bool) {
+    const fn set(&mut self, kind: PermissionKind, granted: bool) {
         match kind {
             PermissionKind::InputMonitoring => self.input_monitoring = Some(granted),
             PermissionKind::ScreenRecording => self.screen_recording = Some(granted),
@@ -114,12 +114,9 @@ fn check_permission(kind: PermissionKind) -> bool {
         Some(p) if p.exists() => p,
         _ => {
             // Fallback: try PATH.
-            match find_in_path("aleph-bridge") {
-                Some(p) => p,
-                None => {
-                    tracing::debug!("aleph-bridge not found — skipping permission check");
-                    return false;
-                }
+            if let Some(p) = find_in_path("aleph-bridge") { p } else {
+                tracing::debug!("aleph-bridge not found — skipping permission check");
+                return false;
             }
         }
     };

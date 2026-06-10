@@ -29,6 +29,7 @@ use crate::tools::service::{ToolDefinition, ToolError, ToolService};
 pub struct NullToolService;
 
 impl NullToolService {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

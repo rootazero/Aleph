@@ -431,6 +431,7 @@ pub const HARNESS_PRESETS: &[PresetSpec] = &[
 
 impl AcpAdapterEntry {
     /// Preset: Claude Code (Anthropic CLI)
+    #[must_use]
     pub fn preset_claude_code() -> Self {
         Self::preset_by_id("claude-code").unwrap_or_else(|| {
             tracing::error!("claude-code preset missing from HARNESS_PRESETS");
@@ -439,6 +440,7 @@ impl AcpAdapterEntry {
     }
 
     /// Preset: Codex (OpenAI CLI)
+    #[must_use]
     pub fn preset_codex() -> Self {
         Self::preset_by_id("codex").unwrap_or_else(|| {
             tracing::error!("codex preset missing from HARNESS_PRESETS");
@@ -447,6 +449,7 @@ impl AcpAdapterEntry {
     }
 
     /// Preset: Gemini (Google CLI)
+    #[must_use]
     pub fn preset_gemini() -> Self {
         Self::preset_by_id("gemini").unwrap_or_else(|| {
             tracing::error!("gemini preset missing from HARNESS_PRESETS");
@@ -460,6 +463,7 @@ impl AcpAdapterEntry {
     }
 
     /// Return all built-in presets as (id, entry) pairs.
+    #[must_use]
     pub fn all_presets() -> Vec<(String, Self)> {
         HARNESS_PRESETS
             .iter()
@@ -468,11 +472,13 @@ impl AcpAdapterEntry {
     }
 
     /// Return all known preset identifiers.
+    #[must_use]
     pub fn preset_ids() -> Vec<&'static str> {
         HARNESS_PRESETS.iter().map(|p| p.id).collect()
     }
 
     /// Check whether a string is a known preset id.
+    #[must_use]
     pub fn is_preset_id(id: &str) -> bool {
         HARNESS_PRESETS.iter().any(|p| p.id == id)
     }

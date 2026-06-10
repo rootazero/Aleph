@@ -24,6 +24,7 @@ pub const TERMINAL_PRIORITY: &[&str] = &[VIRTUAL_FAIL, VIRTUAL_ASK_USER, VIRTUAL
 /// - `__complete`: Signal task completion with a summary
 /// - `__ask_user`: Ask the user a question for clarification
 /// - `__fail`: Report an unrecoverable failure
+#[must_use]
 pub fn virtual_tool_definitions() -> Vec<ToolDefinition> {
     vec![
         ToolDefinition::new(
@@ -80,6 +81,7 @@ pub fn virtual_tool_definitions() -> Vec<ToolDefinition> {
 }
 
 /// Check if a tool name is a virtual tool
+#[must_use]
 pub fn is_virtual_tool(name: &str) -> bool {
     matches!(name, VIRTUAL_COMPLETE | VIRTUAL_ASK_USER | VIRTUAL_FAIL)
 }

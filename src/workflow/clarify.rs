@@ -65,17 +65,20 @@ pub struct ClarifyTaskMeta {
 
 impl ClarifyTaskMeta {
     /// Serialise to the JSON value stored under [`CLARIFY_META_KEY`].
+    #[must_use]
     pub fn to_value(&self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
 
     /// Recover the clarify record from a `coord_task`'s metadata, if present.
+    #[must_use]
     pub fn from_metadata(metadata: &Value) -> Option<Self> {
         let raw = metadata.get(CLARIFY_META_KEY)?;
         serde_json::from_value(raw.clone()).ok()
     }
 
     /// Whether this is a pick-one (menu) clarification.
+    #[must_use]
     pub fn is_select(&self) -> bool {
         !self.choices.is_empty()
     }
@@ -83,6 +86,7 @@ impl ClarifyTaskMeta {
     /// Build the [`ClarificationRequest`] used to interpret the user's reply —
     /// mirrors `AskUserTool::build_request` so number/label/free-text matching
     /// behaves identically for workflow clarifications and `ask_user`.
+    #[must_use]
     pub fn build_request(&self, request_id: &str) -> ClarificationRequest {
         if self.choices.is_empty() {
             ClarificationRequest::text(request_id, &self.question, None)
@@ -98,6 +102,7 @@ impl ClarifyTaskMeta {
 
     /// Render the channel-facing prompt — identical shape to `ask_user`'s so the
     /// user sees a familiar numbered menu / free-text cue.
+    #[must_use]
     pub fn rendered_prompt(&self) -> String {
         if self.choices.is_empty() {
             format!("❓ {}\n\nReply with your answer.", self.question)
@@ -117,6 +122,7 @@ impl ClarifyTaskMeta {
 /// Whether `task` is a workflow clarify step — detected by the presence of the
 /// clarify metadata block, independent of the owner sentinel so a hand-built
 /// task is recognised too.
+#[must_use]
 pub fn is_clarify_task(task: &CoordTask) -> bool {
     task.metadata.get(CLARIFY_META_KEY).is_some()
 }

@@ -19,6 +19,7 @@ pub enum DeviceType {
 }
 
 impl DeviceType {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             DeviceType::MacOS => "macos",
@@ -30,6 +31,7 @@ impl DeviceType {
     }
 
     /// Parse from string, returning None for unknown types
+    #[must_use]
     pub fn from_str_opt(s: &str) -> Option<Self> {
         s.parse().ok()
     }
@@ -63,6 +65,7 @@ pub enum DeviceRole {
 }
 
 impl DeviceRole {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             DeviceRole::Operator => "operator",
@@ -71,6 +74,7 @@ impl DeviceRole {
     }
 
     /// Parse from string, returning None for unknown roles
+    #[must_use]
     pub fn from_str_opt(s: &str) -> Option<Self> {
         s.parse().ok()
     }
@@ -106,11 +110,13 @@ pub struct Device {
 
 impl Device {
     /// Check if device is active (not revoked)
+    #[must_use]
     pub fn is_active(&self) -> bool {
         self.revoked_at.is_none()
     }
 
     /// Check if device has a specific scope
+    #[must_use]
     pub fn has_scope(&self, scope: &str) -> bool {
         self.scopes.contains(&"*".to_string()) || self.scopes.iter().any(|s| s == scope)
     }

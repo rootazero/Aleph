@@ -52,6 +52,7 @@ impl Default for ReplyEmitterConfig {
 
 impl ReplyEmitterConfig {
     /// Create config from output_mode string ("typewriter" or "instant")
+    #[must_use]
     pub fn from_output_mode(mode: &str) -> Self {
         Self {
             stream_enabled: mode == "typewriter",

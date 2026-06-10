@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 pub struct ContextIdHasher;
 
 impl ContextIdHasher {
+    #[must_use]
     pub fn hash(input: &str) -> String {
         let digest = Sha256::digest(input.as_bytes());
         let prefix = u32::from_be_bytes(digest[0..4].try_into().unwrap_or([0; 4]));

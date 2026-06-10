@@ -76,6 +76,7 @@ impl IrcConfig {
     }
 
     /// Format the server address as `host:port`
+    #[must_use]
     pub fn addr(&self) -> String {
         format!("{}:{}", self.server, self.port)
     }

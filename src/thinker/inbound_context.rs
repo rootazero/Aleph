@@ -84,6 +84,7 @@ impl Default for InboundContext {
 impl InboundContext {
     /// Render all fields into a compact text block suitable for system prompt
     /// injection.
+    #[must_use]
     pub fn format_for_prompt(&self) -> String {
         let mut lines: Vec<String> = Vec::new();
 

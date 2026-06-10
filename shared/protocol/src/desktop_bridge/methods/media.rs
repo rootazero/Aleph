@@ -13,7 +13,7 @@ pub const METHOD_CAMERA_CLIP: &str = "media.camera.clip";
 pub const METHOD_AUDIO_LIST_DEVICES: &str = "media.audio.list_devices";
 pub const METHOD_AUDIO_RECORD: &str = "media.audio.record";
 /// Open-ended push-to-talk: start recording now, stop on a later call. Used by
-/// the Panel mic button (the WKWebView `getUserMedia` path is blocked on
+/// the Panel mic button (the `WKWebView` `getUserMedia` path is blocked on
 /// unsigned macOS builds, so capture happens natively in the helper instead).
 pub const METHOD_AUDIO_RECORD_START: &str = "media.audio.record_start";
 pub const METHOD_AUDIO_RECORD_STOP: &str = "media.audio.record_stop";
@@ -21,7 +21,7 @@ pub const METHOD_AUDIO_MIC_METER: &str = "media.audio.mic_meter";
 
 pub const METHOD_SPEECH_TRANSCRIBE_FILE: &str = "media.speech.transcribe_file";
 
-/// Snap is essentially synchronous (<1s on a warm camera) but the AVCapture
+/// Snap is essentially synchronous (<1s on a warm camera) but the `AVCapture`
 /// pipeline takes time to initialise on first use.
 pub const SUGGESTED_TIMEOUT_MS_SNAP: u64 = 10_000;
 
@@ -30,7 +30,7 @@ pub const SUGGESTED_TIMEOUT_MS_SNAP: u64 = 10_000;
 /// constant, so we expose the overhead directly.
 pub const CLIP_OVERHEAD_MS: u64 = 5_000;
 
-/// Device enumeration is fast but CoreAudio can stall.
+/// Device enumeration is fast but `CoreAudio` can stall.
 pub const SUGGESTED_TIMEOUT_MS_LIST_DEVICES: u64 = 5_000;
 
 /// Recording timeout is duration + overhead. Callers should compute
@@ -50,7 +50,7 @@ pub const SUGGESTED_TIMEOUT_MS_MIC_METER: u64 = 2_000;
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SnapParams {
     /// JPEG quality, 0.0 – 1.0. Caller is expected to clamp; helper rejects
-    /// values outside [0.05, 1.0] with ERR_INVALID_PARAMS.
+    /// values outside [0.05, 1.0] with `ERR_INVALID_PARAMS`.
     pub quality: f32,
 }
 
@@ -85,7 +85,7 @@ pub struct ListAudioDevicesParams {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AudioDeviceInfo {
-    /// Unique device identifier (CoreAudio UID).
+    /// Unique device identifier (`CoreAudio` UID).
     pub uid: String,
     /// Human-readable device name.
     pub name: String,
@@ -158,10 +158,10 @@ pub struct MicMeterResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct TranscribeFileParams {
-    /// Absolute path to the audio file (m4a / wav / mp3 supported by SFSpeechRecognizer).
+    /// Absolute path to the audio file (m4a / wav / mp3 supported by `SFSpeechRecognizer`).
     pub audio_path: String,
     /// BCP-47 language tag (e.g. "en-US", "zh-Hans"). Helper rejects unknown
-    /// locales with ERR_INVALID_PARAMS.
+    /// locales with `ERR_INVALID_PARAMS`.
     pub language: String,
 }
 

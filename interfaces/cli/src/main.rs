@@ -191,6 +191,9 @@ async fn dispatch(
         Commands::Webhook { action } => dispatch_webhook(action, json).await,
         Commands::Proxy { action } => dispatch_proxy(action, json).await,
         Commands::Open => commands::open_cmd::run(server_url, json).await,
+        Commands::Watch { session } => {
+            commands::watch::run(server_url, session.as_deref(), config, json).await
+        }
     }
 }
 
@@ -670,7 +673,7 @@ async fn dispatch_plugin(server_url: &str, action: PluginAction, json: bool) -> 
                 if json {
                     crate::output::print_json(&result);
                 } else {
-                    println!("{}", result);
+                    println!("{result}");
                 }
                 client.close().await?;
                 Ok(())
@@ -747,7 +750,7 @@ async fn dispatch_marketplace(
     } else if matches!(method, "plugin.marketplace.list") {
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else {
-        println!("{}", result);
+        println!("{result}");
     }
     client.close().await?;
     Ok(())

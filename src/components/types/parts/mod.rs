@@ -61,6 +61,7 @@ pub enum SessionPart {
 }
 
 impl SessionPart {
+    #[must_use]
     pub fn type_name(&self) -> &'static str {
         match self {
             SessionPart::UserInput(_) => "user_input",

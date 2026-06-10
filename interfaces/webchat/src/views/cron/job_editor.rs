@@ -282,7 +282,7 @@ pub(super) fn JobEditor(
         } else if let Some(idx) = selected.get() {
             if let Some(job) = jobs.get().get(idx).cloned() {
                 let patch = UpdateCronJob {
-                    job_id: job.id.clone(),
+                    job_id: job.id,
                     name: Some(name),
                     schedule_kind: schedule_kind_obj,
                     agent_id: Some(agent_id),
@@ -340,7 +340,7 @@ pub(super) fn JobEditor(
                 saving.set(true);
                 error.set(None);
 
-                let job_id = job.id.clone();
+                let job_id = job.id;
                 spawn_local(async move {
                     match CronApi::delete(&state, &job_id).await {
                         Ok(()) => {
@@ -368,7 +368,7 @@ pub(super) fn JobEditor(
             }
 
             if let Some(job) = jobs.get().get(idx).cloned() {
-                let job_id = job.id.clone();
+                let job_id = job.id;
                 let state_for_spawn = state;
                 let runs_for_spawn = runs;
                 let error_for_spawn = error;

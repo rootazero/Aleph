@@ -105,6 +105,7 @@ pub struct NodeRegistry {
 }
 
 impl NodeRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -414,7 +415,7 @@ mod tests {
     fn resolve_by_unique_id_prefix_and_name_substring() {
         let reg = NodeRegistry::new();
         reg.register(session("abcd1234", "conn-1")); // device_name = "dev-abcd1234"
-        // id prefix (≥4) uniquely matches.
+                                                     // id prefix (≥4) uniquely matches.
         assert_eq!(reg.resolve_id("abcd").unwrap(), "abcd1234");
         // name substring (case-insensitive) uniquely matches.
         assert_eq!(reg.resolve_id("ABCD1234").unwrap(), "abcd1234");
@@ -561,14 +562,28 @@ mod tests {
             "commands": [{"name": "bash", "schema": {}}],
             "tags": ["gpu", "region=us"]
         });
-        assert!(maybe_register_node(&reg, Some("node"), "d1", "c1", Some(&params), &ch));
+        assert!(maybe_register_node(
+            &reg,
+            Some("node"),
+            "d1",
+            "c1",
+            Some(&params),
+            &ch
+        ));
         let m = reg.resolve_all_by_tags(&["region=us".into()]);
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].node_id, "d1");
         // Missing "tags" key → empty, not an error.
         let ch2 = test_channel();
         let no_tags = json!({"device_name": "w2", "commands": []});
-        assert!(maybe_register_node(&reg, Some("node"), "d2", "c2", Some(&no_tags), &ch2));
+        assert!(maybe_register_node(
+            &reg,
+            Some("node"),
+            "d2",
+            "c2",
+            Some(&no_tags),
+            &ch2
+        ));
         assert_eq!(reg.resolve_all_by_tags(&[]).len(), 2);
     }
 }

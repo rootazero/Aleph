@@ -86,6 +86,7 @@ impl CarryOver {
 }
 
 /// `$ALEPH_HOME/data/cron_carryover/`. Created on first write.
+#[must_use]
 pub fn carryover_dir() -> PathBuf {
     aleph_home().join("data").join("cron_carryover")
 }
@@ -126,6 +127,7 @@ fn carryover_path_at(dir: &std::path::Path, job_id: &str) -> PathBuf {
 }
 
 /// Production helper — uses the default `carryover_dir()`.
+#[must_use]
 pub fn carryover_path(job_id: &str) -> PathBuf {
     carryover_path_at(&carryover_dir(), job_id)
 }
@@ -197,6 +199,7 @@ pub fn clear(job_id: &str) -> std::io::Result<()> {
 ///
 /// Empty `partial_summary` collapses to an empty string so callers can
 /// safely concatenate without a sentinel check.
+#[must_use]
 pub fn render_prefix(record: &CarryOver) -> String {
     let text = record.partial_summary.trim();
     if text.is_empty() {

@@ -63,6 +63,7 @@ Examples:\n\
 - Markdown: {\"content\": \"# Heading\", \"output_path\": \"doc.pdf\", \"format\": \"markdown\"}";
 
     /// Create a new PDF generation tool
+    #[must_use]
     pub fn new() -> Self {
         Self {
             tool_context_handle: None,

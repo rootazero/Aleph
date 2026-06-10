@@ -50,6 +50,7 @@ pub struct DesktopCheckPermissions {
 }
 
 impl DesktopCheckPermissions {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

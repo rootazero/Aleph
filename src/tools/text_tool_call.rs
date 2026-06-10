@@ -67,6 +67,7 @@ struct Match {
 /// block is present, or when **any** recognized block names a tool that does
 /// not resolve to an offered tool. The all-or-nothing rule mirrors openclaw's
 /// resolver: a partial promotion would silently drop calls the model intended.
+#[must_use]
 pub fn promote_plain_text_tool_calls(
     text: &str,
     allowed_names: &HashSet<&str>,

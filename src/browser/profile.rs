@@ -130,11 +130,13 @@ pub enum ProfileState {
 
 impl ProfileState {
     /// Whether the profile can transition to Starting.
+    #[must_use]
     pub fn can_start(&self) -> bool {
         matches!(self, Self::Idle)
     }
 
     /// Whether the browser process is currently running.
+    #[must_use]
     pub fn is_running(&self) -> bool {
         matches!(self, Self::Running { .. })
     }

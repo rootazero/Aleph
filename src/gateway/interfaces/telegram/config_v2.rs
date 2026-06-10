@@ -246,6 +246,7 @@ impl TelegramConfigV2 {
     /// Validate configuration at load time.
     ///
     /// Returns a list of validation errors (empty if valid).
+    #[must_use]
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
 

@@ -247,6 +247,7 @@ fn compute_layers<'a>(
 ///
 /// The first line of each text node (`**bold**` prefix optional) becomes the
 /// task `subject`; everything else becomes the `description`.
+#[must_use]
 pub fn canvas_to_new_tasks(doc: &Document, team_id: &str) -> Vec<NewCoordTask> {
     let text_nodes: Vec<(&str, &str)> = doc
         .nodes
@@ -318,6 +319,7 @@ fn split_subject(text: &str) -> (String, String) {
 /// Extract `coord_task_id` from a `CoordTask.metadata` JSON value — handy for
 /// callers wanting to round-trip-update an existing task instead of creating
 /// a new one. Returns `None` when the field is missing or not a string.
+#[must_use]
 pub fn extract_canvas_task_id(metadata: &Value) -> Option<&str> {
     metadata.get(CANVAS_NODE_TASK_ID_KEY)?.as_str()
 }

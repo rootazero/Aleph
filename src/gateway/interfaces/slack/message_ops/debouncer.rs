@@ -75,7 +75,9 @@ impl SlackDebouncer {
     }
 
     pub async fn send_immediate(&self, msg: InboundMessage) -> bool {
-        self.inbound_tx.send(msg).is_ok()
+        // Returns true only when the inbound channel is closed (send failed),
+        // matching the socket loop's "true => channel closed, stop" contract.
+        self.inbound_tx.send(msg).is_err()
     }
 
     pub async fn flush_entry(&self, entry: DebounceEntry) {
@@ -84,7 +86,11 @@ impl SlackDebouncer {
         }
 
         let combined = if entry.messages.len() == 1 {
-            entry.messages.into_iter().next().expect("length checked above")
+            entry
+                .messages
+                .into_iter()
+                .next()
+                .expect("length checked above")
         } else {
             let last = entry.messages.last().expect("non-empty checked above");
             let combined_text = entry
@@ -94,6 +100,12 @@ impl SlackDebouncer {
                 .filter(|t| !t.is_empty())
                 .collect::<Vec<_>>()
                 .join("\n");
+            // Preserve attachments from every coalesced message, not just the last.
+            let combined_attachments: Vec<_> = entry
+                .messages
+                .iter()
+                .flat_map(|m| m.attachments.iter().cloned())
+                .collect();
 
             InboundMessage {
                 id: last.id.clone(),
@@ -102,7 +114,7 @@ impl SlackDebouncer {
                 sender_id: last.sender_id.clone(),
                 sender_name: last.sender_name.clone(),
                 text: combined_text,
-                attachments: last.attachments.clone(),
+                attachments: combined_attachments,
                 timestamp: last.timestamp,
                 reply_to: last.reply_to.clone(),
                 is_group: last.is_group,

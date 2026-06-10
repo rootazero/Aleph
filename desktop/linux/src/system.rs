@@ -11,7 +11,8 @@ use async_trait::async_trait;
 pub struct LinuxSystem;
 
 impl LinuxSystem {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 }
@@ -250,10 +251,10 @@ impl SystemCapability for LinuxSystem {
     }
 }
 
-/// Query GNOME Mutter's IdleMonitor over the session bus via `gdbus`.
+/// Query GNOME Mutter's `IdleMonitor` over the session bus via `gdbus`.
 ///
 /// Returns the idle time in seconds, or `None` if `gdbus` is unavailable,
-/// the IdleMonitor object is not present (no GNOME shell), or the reply
+/// the `IdleMonitor` object is not present (no GNOME shell), or the reply
 /// cannot be parsed. The reply format is `(uint64 N,)` where N is millis.
 ///
 /// Shells out instead of taking a `zbus` dependency: idle detection is a

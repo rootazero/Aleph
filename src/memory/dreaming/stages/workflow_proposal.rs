@@ -68,6 +68,7 @@ impl Default for WorkflowProposalStage {
 /// workflow mirrors how the user actually sequenced the skills.
 ///
 /// Pure function — testable without disk.
+#[must_use]
 pub fn aggregate_chains(chains: Vec<Vec<String>>) -> HashMap<String, (u32, Vec<String>)> {
     let mut counts: HashMap<String, (u32, Vec<String>)> = HashMap::new();
     for chain in chains {

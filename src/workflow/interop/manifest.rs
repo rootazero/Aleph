@@ -99,6 +99,7 @@ fn is_false(v: &bool) -> bool {
 impl WorkflowManifest {
     /// Build a manifest from the executable core. Extra metadata fields start
     /// empty/None — a `WorkflowDef` carries none of them.
+    #[must_use]
     pub fn from_def(def: &WorkflowDef) -> Self {
         Self {
             name: def.name.clone(),
@@ -139,6 +140,7 @@ impl WorkflowManifest {
 
     /// Project to the executable core, dropping extra metadata. Callers
     /// typically `validate()` the result before persisting or running.
+    #[must_use]
     pub fn to_def(&self) -> WorkflowDef {
         WorkflowDef {
             name: self.name.clone(),

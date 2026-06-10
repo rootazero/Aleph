@@ -59,6 +59,7 @@ pub struct PolicyRule {
 /// per-session agent workspace; `Warn` entries are high-signal shapes that
 /// can occasionally be legitimate, so they are audited rather than refused.
 /// All patterns are matched case-insensitively (see [`super::CommandPolicy`]).
+#[must_use]
 pub fn default_rules() -> Vec<PolicyRule> {
     use RuleAction::{Block, Warn};
     vec![

@@ -99,12 +99,14 @@ impl DiscoveryConfig {
     }
 
     /// Disable Claude Code directory scanning
+    #[must_use]
     pub fn without_claude_dirs(mut self) -> Self {
         self.scan_claude_dirs = false;
         self
     }
 
     /// Disable project-level directory scanning
+    #[must_use]
     pub fn without_project_dirs(mut self) -> Self {
         self.scan_project_dirs = false;
         self
@@ -182,11 +184,13 @@ impl DiscoveryManager {
     }
 
     /// Get the git root directory if available
+    #[must_use]
     pub fn git_root(&self) -> Option<&Path> {
         self.scanner.git_root()
     }
 
     /// Get the working directory
+    #[must_use]
     pub fn working_dir(&self) -> &Path {
         &self.config.working_dir
     }

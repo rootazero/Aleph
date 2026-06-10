@@ -126,6 +126,7 @@ pub fn register_mcp_tools(
 /// `ToolSource` matches `Mcp { server_id }`. When `tool_catalog` is
 /// supplied, also tears down the matching health probes. Returns the set of
 /// qualified names that were removed.
+#[must_use]
 pub fn unregister_mcp_tools(
     registry: &ToolHandlerRegistry,
     tool_catalog: Option<&Arc<ToolCatalog>>,
@@ -141,7 +142,7 @@ pub fn unregister_mcp_tools(
         .collect();
     drop(snapshot);
     for name in &victims {
-        registry.unregister(name);
+        let _ = registry.unregister(name);
         if let Some(disp) = tool_catalog {
             disp.health().unregister_probe(name);
         }
@@ -176,7 +177,13 @@ mod tests {
         // the colon-bearing double prefix `server__server:tool`.
         let reg = ToolHandlerRegistry::new();
         let client = Arc::new(McpClient::new());
-        let names = register_mcp_tools(&reg, None, client, "github", &[tool("github:create_issue", "d")]);
+        let names = register_mcp_tools(
+            &reg,
+            None,
+            client,
+            "github",
+            &[tool("github:create_issue", "d")],
+        );
         assert_eq!(names, vec!["github__create_issue"]);
         assert!(reg.snapshot().contains_key("github__create_issue"));
     }

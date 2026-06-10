@@ -27,8 +27,8 @@ pub enum ConnectionTarget {
 }
 
 impl ConnectionTarget {
-    pub fn is_local(&self) -> bool {
-        matches!(self, ConnectionTarget::Local)
+    pub const fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
     }
 
     /// Parse a persisted/user-entered target string. `"local"` (any case) or
@@ -38,7 +38,7 @@ impl ConnectionTarget {
     pub fn parse(raw: &str) -> Result<Self, String> {
         let t = raw.trim();
         if t.is_empty() || t.eq_ignore_ascii_case("local") {
-            return Ok(ConnectionTarget::Local);
+            return Ok(Self::Local);
         }
         let with_scheme = if t.contains("://") {
             t.to_string()
@@ -64,7 +64,7 @@ impl ConnectionTarget {
             // set_port only errors when the URL cannot have a port (it can here)
             let _ = url.set_port(Some(DEFAULT_PORT));
         }
-        Ok(ConnectionTarget::Remote(url))
+        Ok(Self::Remote(url))
     }
 
     /// Serialise for persistence. Local → `"local"`; Remote → the URL origin
@@ -73,8 +73,8 @@ impl ConnectionTarget {
     /// the `url` crate's normalisation).
     pub fn to_persisted(&self) -> String {
         match self {
-            ConnectionTarget::Local => "local".to_string(),
-            ConnectionTarget::Remote(url) => {
+            Self::Local => "local".to_string(),
+            Self::Remote(url) => {
                 let scheme = url.scheme();
                 let host = url.host_str().unwrap_or("127.0.0.1");
                 // `url::Url::port()` returns None for scheme-default ports (443 for

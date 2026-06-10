@@ -89,6 +89,7 @@ impl Default for SandboxRateLimitConfig {
 }
 
 /// Categorize a tool name into a `ToolCategory`.
+#[must_use]
 pub fn categorize_tool(tool_name: &str) -> ToolCategory {
     match tool_name {
         "config.patch" | "config.set" | "plugins.install" | "plugins.uninstall"
@@ -118,6 +119,7 @@ pub struct SandboxRateLimiter {
 }
 
 impl SandboxRateLimiter {
+    #[must_use]
     pub fn new(config: SandboxRateLimitConfig) -> Self {
         Self {
             config,
@@ -186,6 +188,7 @@ pub struct RateLimitHook {
 }
 
 impl RateLimitHook {
+    #[must_use]
     pub fn new(limiter: Arc<SandboxRateLimiter>) -> Self {
         Self { limiter }
     }

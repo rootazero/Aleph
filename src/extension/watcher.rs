@@ -203,11 +203,23 @@ impl ExtensionWatcher {
                             return;
                         }
 
-                        // Determine change type from first path
-                        let change_type = changed_paths
-                            .first()
-                            .map(|p| ExtensionChangeType::from_path(p))
-                            .unwrap_or(ExtensionChangeType::Unknown);
+                        // Determine change type across ALL paths. A debounced
+                        // batch can mix kinds (e.g. a skill edit plus a plugin
+                        // manifest change); classifying by the first path alone
+                        // is nondeterministic (HashSet order) and could route a
+                        // mixed batch down the Skill no-op path, silently
+                        // skipping the required full reload. Homogeneous
+                        // batches keep their cheap routing; mixed batches
+                        // degrade to Unknown (full reload — safe superset).
+                        let mut types = changed_paths
+                            .iter()
+                            .map(|p| ExtensionChangeType::from_path(p));
+                        let first = types.next().unwrap_or(ExtensionChangeType::Unknown);
+                        let change_type = if types.all(|t| t == first) {
+                            first
+                        } else {
+                            ExtensionChangeType::Unknown
+                        };
 
                         debug!(?changed_paths, ?change_type, "Extension files changed");
 
@@ -263,6 +275,7 @@ impl ExtensionWatcher {
     }
 
     /// Check if the watcher is running
+    #[must_use]
     pub fn is_running(&self) -> bool {
         self.debouncer
             .lock()
@@ -335,6 +348,7 @@ impl Default for InternalWriteTracker {
 impl InternalWriteTracker {
     /// Construct a tracker with a custom TTL. Tests use a short TTL to
     /// avoid sleeping for seconds.
+    #[must_use]
     pub fn with_ttl(ttl: Duration) -> Self {
         Self {
             recent: Mutex::new(HashMap::new()),

@@ -85,6 +85,7 @@ pub struct ThreadBinding {
 
 impl ThreadBinding {
     /// Create a new thread binding from thread details
+    #[must_use]
     pub fn new(
         thread_id: u64,
         conversation_id: ConversationId,
@@ -275,11 +276,13 @@ impl DiscordChannel {
     }
 
     /// Get the account pool for multi-account management.
+    #[must_use]
     pub fn account_pool(&self) -> Option<&DiscordAccountPool> {
         self.account_pool.as_ref()
     }
 
     /// Get the settings resolver.
+    #[must_use]
     pub fn settings_resolver(&self) -> Option<&ChannelSettingsResolver> {
         self.settings_resolver.as_ref()
     }
@@ -487,6 +490,16 @@ impl EventHandler for Handler {
                 );
                 return;
             }
+        }
+
+        // Mirror the channel allowlist enforced for regular messages —
+        // slash commands must not bypass `allowed_channels`.
+        if !self.config.is_channel_allowed(command.channel_id.get()) {
+            tracing::debug!(
+                "Slash command from channel {} ignored (not in allowlist)",
+                command.channel_id
+            );
+            return;
         }
 
         tracing::info!(

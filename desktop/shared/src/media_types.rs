@@ -10,7 +10,8 @@ pub struct CameraSnapConfig {
 }
 
 impl CameraSnapConfig {
-    pub fn clamped(mut self) -> Self {
+    #[must_use]
+    pub const fn clamped(mut self) -> Self {
         self.quality = self.quality.clamp(0.05, 1.0);
         self
     }
@@ -41,7 +42,8 @@ pub struct CameraClipConfig {
 }
 
 impl CameraClipConfig {
-    pub fn clamped(mut self) -> Self {
+    #[must_use]
+    pub const fn clamped(mut self) -> Self {
         self.duration_secs = self.duration_secs.clamp(0.25, 60.0);
         self
     }
@@ -97,7 +99,8 @@ pub struct AudioRecordConfig {
 }
 
 impl AudioRecordConfig {
-    pub fn clamped(mut self) -> Self {
+    #[must_use]
+    pub const fn clamped(mut self) -> Self {
         self.duration_secs = self.duration_secs.clamp(0.25, 300.0);
         self
     }

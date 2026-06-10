@@ -42,6 +42,7 @@ pub struct DefaultProbeExecutor {
 }
 
 impl DefaultProbeExecutor {
+    #[must_use]
     pub fn new(registry: Arc<BuiltinToolRegistry>) -> Self {
         Self { registry }
     }
@@ -63,6 +64,7 @@ impl ProbeExecutor for DefaultProbeExecutor {
 ///
 /// `last_result` is the JSON string of the previous probe output, used
 /// only by `TriggerCondition::Changed`.
+#[must_use]
 pub fn evaluate_trigger(
     condition: &TriggerCondition,
     value: &Value,

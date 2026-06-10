@@ -45,7 +45,7 @@ pub fn TaskDetailDrawer(
         comments.set(Vec::new());
         events.set(Vec::new());
         if let Some(task) = task_opt {
-            let id = task.id.clone();
+            let id = task.id;
             let dash_runs = dash;
             let dash_comments = dash;
             let dash_events = dash;
@@ -83,7 +83,7 @@ pub fn TaskDetailDrawer(
         if body.is_empty() {
             return;
         }
-        let id = task.id.clone();
+        let id = task.id;
         // Panel doesn't track a per-user identity yet; comments authored from
         // the drawer are attributed to a synthetic "panel" actor. Worker-
         // initiated comments (via the dedicated builtin tool) carry the real
@@ -114,7 +114,7 @@ pub fn TaskDetailDrawer(
         let Some(task) = open_for.get_untracked() else {
             return;
         };
-        let id = task.id.clone();
+        let id = task.id;
         busy.set(true);
         error.set(None);
         spawn_local(async move {

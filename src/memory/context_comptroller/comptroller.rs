@@ -12,6 +12,7 @@ pub struct ContextComptroller {
 }
 
 impl ContextComptroller {
+    #[must_use]
     pub fn new(config: ComptrollerConfig) -> Self {
         Self { config }
     }
@@ -19,6 +20,7 @@ impl ContextComptroller {
     /// Arbitrate retrieval results to fit within token budget.
     ///
     /// With raw memories removed, this simply trims facts to fit the budget.
+    #[must_use]
     pub fn arbitrate(&self, results: RetrievalResult, budget: TokenBudget) -> ArbitratedContext {
         let mut tokens_saved = 0;
         let _ = &self.config; // config retained for future use

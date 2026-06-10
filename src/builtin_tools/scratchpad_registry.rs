@@ -111,6 +111,7 @@ pub fn set_active(session_key: &str, project_id: &str) {
 }
 
 /// The active execution-list `project_id` for `session_key`, if any.
+#[must_use]
 pub fn active(session_key: &str) -> Option<String> {
     if session_key.is_empty() {
         return None;

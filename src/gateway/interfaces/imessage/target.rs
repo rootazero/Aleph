@@ -62,6 +62,7 @@ pub enum IMessageTarget {
 
 impl IMessageTarget {
     /// Get the target string for sending
+    #[must_use]
     pub fn to_target_string(&self) -> String {
         match self {
             IMessageTarget::Phone { number, .. } => number.clone(),
@@ -175,6 +176,7 @@ pub fn parse_target(target: &str) -> Result<IMessageTarget, ParseError> {
 /// assert_eq!(normalize_phone("5551234567"), "+15551234567");
 /// assert_eq!(normalize_phone("(555) 123-4567"), "+15551234567");
 /// ```
+#[must_use]
 pub fn normalize_phone(phone: &str) -> String {
     let phone = phone.trim();
 

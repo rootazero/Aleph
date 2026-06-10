@@ -45,6 +45,7 @@ pub struct CatalogEntry {
 
 impl CatalogEntry {
     /// True if this preset can serve the requested modality.
+    #[must_use]
     pub fn supports(&self, modality: Modality) -> bool {
         match self.metadata {
             Some(meta) => meta.supports(modality),
@@ -91,6 +92,7 @@ pub fn all_presets() -> Vec<CatalogEntry> {
 /// Equivalent to `all_presets().into_iter().filter(|e| e.supports(m))` but
 /// implemented directly so callers don't have to materialise the full
 /// catalog first.
+#[must_use]
 pub fn presets_for_modality(modality: Modality) -> Vec<CatalogEntry> {
     let mut out = Vec::new();
 

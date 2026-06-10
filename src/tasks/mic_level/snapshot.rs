@@ -38,6 +38,7 @@ pub struct MicLevelSnapshot {
 
 impl MicLevelSnapshot {
     /// Build a snapshot from a level reading + threshold.
+    #[must_use]
     pub fn from_level(level: f32, active_threshold: f32, captured_at: DateTime<Utc>) -> Self {
         // A glitching native meter can emit NaN/Infinity. serde_json refuses to
         // serialize non-finite floats, so publishing one silently drops the

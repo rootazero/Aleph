@@ -23,6 +23,7 @@ impl NamespaceScope {
     /// Converts namespace scope to SQL WHERE clause filter
     ///
     /// Returns (filter_clause, bind_params)
+    #[must_use]
     pub fn to_sql_filter(&self) -> (String, Vec<String>) {
         match self {
             NamespaceScope::Owner => ("1=1".to_string(), vec![]),
@@ -37,6 +38,7 @@ impl NamespaceScope {
     /// Converts namespace scope to database column value
     ///
     /// Used for INSERT/UPDATE operations
+    #[must_use]
     pub fn to_namespace_value(&self) -> String {
         match self {
             NamespaceScope::Owner => "owner".to_string(),

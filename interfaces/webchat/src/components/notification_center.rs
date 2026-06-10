@@ -147,7 +147,7 @@ pub fn NotificationCenter() -> impl IntoView {
                                         let code_for_approve = p.code.clone();
                                         let code_for_reject = p.code.clone();
                                         let code_display = p.code.clone();
-                                        let label = p.origin_label.clone();
+                                        let label = p.origin_label;
                                         view! {
                                             <li class="px-4 py-3">
                                                 <div class="text-sm font-medium text-text-primary">

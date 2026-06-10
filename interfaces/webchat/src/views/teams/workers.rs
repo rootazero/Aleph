@@ -130,7 +130,7 @@ fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
     let session_name = snapshot.session_name.clone();
     let acp_session_id = snapshot.acp_session_id.clone();
     let alive = snapshot.alive;
-    let state = snapshot.state.clone();
+    let state = snapshot.state;
 
     let (h_cancel, c_cancel, n_cancel) = (harness.clone(), cwd.clone(), session_name.clone());
     let on_cancel = move |_| {
@@ -188,24 +188,24 @@ fn SessionCard(snapshot: AcpSessionSnapshot) -> impl IntoView {
             <div class="flex items-start justify-between gap-4">
                 <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2 mb-1">
-                        <span class="font-medium text-text-primary truncate">{harness.clone()}</span>
-                        {session_name.clone().map(|name| view! {
+                        <span class="font-medium text-text-primary truncate">{harness}</span>
+                        {session_name.map(|name| view! {
                             <span class="text-xs px-2 py-0.5 rounded-md bg-surface border border-border text-text-secondary">
                                 {format!("@{name}")}
                             </span>
                         })}
                         <span class=format!("text-xs px-2 py-0.5 rounded-md font-medium {state_chip_class}")>
-                            {state.clone()}
+                            {state}
                         </span>
                         <span class=format!("text-xs px-2 py-0.5 rounded-md font-medium {}", liveness_chip.1)>
                             {liveness_chip.0}
                         </span>
                     </div>
-                    <div class="text-xs text-text-tertiary truncate" title=cwd.clone()>
+                    <div class="text-xs text-text-tertiary truncate" title=cwd>
                         {cwd.clone()}
                     </div>
-                    {acp_session_id.clone().map(|sid| view! {
-                        <div class="text-[10px] text-text-tertiary font-mono mt-1 truncate" title=sid.clone()>
+                    {acp_session_id.map(|sid| view! {
+                        <div class="text-[10px] text-text-tertiary font-mono mt-1 truncate" title=sid>
                             {format!("acp_id={sid}")}
                         </div>
                     })}

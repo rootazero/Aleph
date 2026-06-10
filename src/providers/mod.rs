@@ -144,6 +144,7 @@ use crate::sync_primitives::Arc;
 ///
 /// Returns an Arc<dyn AiProvider> wrapping a MockProvider with a default response.
 /// This is useful for testing services that require an AiProvider.
+#[must_use]
 pub fn create_mock_provider() -> Arc<dyn AiProvider> {
     Arc::new(MockProvider::new("Mock LLM response for testing"))
 }

@@ -404,6 +404,7 @@ impl MockGenerationProvider {
     }
 
     /// Set the supported generation types
+    #[must_use]
     pub fn with_types(mut self, types: Vec<GenerationType>) -> Self {
         self.supported_types = types;
         self
@@ -540,6 +541,7 @@ impl GenerationProvider for MockGenerationProvider {
 /// let provider = create_mock_generation_provider();
 /// assert_eq!(provider.name(), "mock");
 /// ```
+#[must_use]
 pub fn create_mock_generation_provider() -> crate::sync_primitives::Arc<dyn GenerationProvider> {
     crate::sync_primitives::Arc::new(MockGenerationProvider::new("mock"))
 }

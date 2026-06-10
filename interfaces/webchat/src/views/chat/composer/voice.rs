@@ -319,7 +319,7 @@ fn finish(
     let native = handle.borrow().native;
     if native {
         state.set(RecState::Transcribing);
-        let handle = handle.clone();
+        let handle = handle;
         spawn_local(async move {
             handle.borrow_mut().native = false;
             match dash

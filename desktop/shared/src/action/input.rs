@@ -201,8 +201,7 @@ pub fn scroll(direction: &str, amount: i32) -> Result<()> {
         "left" => (Axis::Horizontal, amount.saturating_neg()),
         other => {
             return Err(DesktopError::InputFailed(format!(
-                "Unknown scroll direction: '{}'. Expected up, down, left, or right",
-                other
+                "Unknown scroll direction: '{other}'. Expected up, down, left, or right"
             )));
         }
     };
@@ -242,7 +241,7 @@ pub fn double_click(x: f64, y: f64, button: MouseButton) -> Result<()> {
     Ok(())
 }
 
-/// Drag from (start_x, start_y) to (end_x, end_y) with optional animation.
+/// Drag from (`start_x`, `start_y`) to (`end_x`, `end_y`) with optional animation.
 pub fn drag(
     start_x: f64,
     start_y: f64,
@@ -281,8 +280,8 @@ pub fn drag(
             for i in 1..=steps {
                 let t = i as f64 / steps as f64;
                 let eased = 1.0 - (1.0 - t).powi(3);
-                let cx = sx as f64 + (ex as f64 - sx as f64) * eased;
-                let cy = sy as f64 + (ey as f64 - sy as f64) * eased;
+                let cx = (f64::from(ex) - f64::from(sx)).mul_add(eased, f64::from(sx));
+                let cy = (f64::from(ey) - f64::from(sy)).mul_add(eased, f64::from(sy));
                 enigo
                     .move_mouse(cx as i32, cy as i32, Coordinate::Abs)
                     .map_err(|e| {
@@ -337,7 +336,7 @@ pub fn cursor_position() -> Result<(f64, f64)> {
     let (x, y) = enigo
         .location()
         .map_err(|e| DesktopError::InputFailed(format!("Failed to get cursor position: {e}")))?;
-    Ok((x as f64, y as f64))
+    Ok((f64::from(x), f64::from(y)))
 }
 
 /// Press, release, or click a mouse button at (x, y).

@@ -64,6 +64,7 @@ impl UserProfile {
     /// If no frontmatter delimiters are found, the entire file content is
     /// attempted as YAML. Returns `None` if the file doesn't exist or
     /// parsing fails.
+    #[must_use]
     pub fn load_from_file(path: &Path) -> Option<Self> {
         let content = std::fs::read_to_string(path).ok()?;
         let trimmed = content.trim();
@@ -87,6 +88,7 @@ impl UserProfile {
     /// Generate a prompt section describing this user profile.
     ///
     /// Only non-empty / non-None fields are included.
+    #[must_use]
     pub fn to_prompt_section(&self) -> String {
         let mut section = String::new();
         section.push_str("## User Profile\n");
@@ -133,6 +135,7 @@ impl UserProfile {
     }
 
     /// Returns true if the profile has no meaningful content (empty name).
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.name.is_empty()
     }

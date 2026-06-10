@@ -14,6 +14,7 @@ pub enum TrustLevel {
 
 impl TrustLevel {
     /// Infer trust level from a socket address
+    #[must_use]
     pub fn infer_from_addr(addr: &std::net::SocketAddr) -> Self {
         let ip = addr.ip();
         if ip.is_loopback() {
@@ -26,6 +27,7 @@ impl TrustLevel {
     }
 
     /// Infer trust level from a URL
+    #[must_use]
     pub fn infer_from_url(url: &str) -> Self {
         if let Ok(parsed) = url::Url::parse(url) {
             // Use host() to handle IPv6 addresses correctly (host_str includes brackets)

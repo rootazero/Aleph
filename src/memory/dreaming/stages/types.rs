@@ -55,6 +55,7 @@ fn range_query(points: &[Vec<f32>], idx: usize, eps: f32) -> Vec<usize> {
 /// DBSCAN clustering on embedding vectors using cosine distance.
 ///
 /// Returns a label vector where -1 means noise and ≥0 is a cluster id.
+#[must_use]
 pub fn dbscan(points: &[Vec<f32>], eps: f32, min_pts: usize) -> Vec<i32> {
     let n = points.len();
     let mut labels = vec![-1i32; n];

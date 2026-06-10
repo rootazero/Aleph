@@ -17,6 +17,7 @@ pub struct UserDirectory {
 }
 
 impl UserDirectory {
+    #[must_use]
     pub fn new(bot_token: String, ttl_secs: u64) -> Self {
         Self {
             client: reqwest::Client::new(),

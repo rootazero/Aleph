@@ -73,6 +73,7 @@ pub struct MediaUnderstandTool {
 }
 
 impl MediaUnderstandTool {
+    #[must_use]
     pub fn new(pipeline: Arc<MediaPipeline>) -> Self {
         Self { pipeline }
     }

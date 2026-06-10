@@ -284,7 +284,7 @@ pub fn DirectoryBrowser(
                 {entries.into_iter().map(|e: DirEntry| {
                     let is_dir = e.is_dir;
                     let path_for_click = e.path.clone();
-                    let name = e.name.clone();
+                    let name = e.name;
                     view! {
                         <li>
                             <button

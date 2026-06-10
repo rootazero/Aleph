@@ -11,7 +11,7 @@
 //!
 //! Spinner is a **no-op** when:
 //! - stdout is not a TTY (piped)
-//! - colour is disabled (NO_COLOR / ALEPH_COLOR=never) → still ticks but
+//! - colour is disabled (`NO_COLOR` / `ALEPH_COLOR=never`) → still ticks but
 //!   uses ASCII frames
 //! - `--json` mode (caller should not construct one in that path)
 
@@ -73,8 +73,8 @@ impl Spinner {
                 }
                 idx = idx.wrapping_add(1);
                 tokio::select! {
-                    _ = signal.notified() => break,
-                    _ = tokio::time::sleep(FRAME_INTERVAL) => {}
+                    () = signal.notified() => break,
+                    () = tokio::time::sleep(FRAME_INTERVAL) => {}
                 }
             }
             // Clear the line on exit.
