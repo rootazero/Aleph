@@ -199,7 +199,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
     },
     BuiltinToolDefinition {
         name: "doctor",
-        description: "Self-diagnose runtime health (data dir, instance lock, config parse, hook consent) with structured findings; fix=true applies safe deterministic repairs — read-only by default",
+        description: "Self-diagnose runtime health (data dir, instance lock, config parse, hook consent, live provider connectivity) with structured findings; fix=true applies safe deterministic repairs — read-only by default; also use it to verify your repairs",
         requires_config: false,
     },
     BuiltinToolDefinition {
@@ -840,7 +840,15 @@ pub fn create_tool_boxed(
         "config_audit" => config
             .and_then(|c| c.config.as_ref())
             .map(|cfg| Box::new(ConfigAuditTool::new(Arc::clone(cfg))) as Box<dyn AlephToolDyn>),
-        "doctor" => Some(Box::new(DoctorTool)),
+        "doctor" => {
+            let mut tool = DoctorTool::default();
+            if let Some(cfg) = config {
+                if let (Some(c), Some(m)) = (&cfg.config, &cfg.shared_token_manager) {
+                    tool = tool.with_runtime(Arc::clone(c), Arc::clone(m));
+                }
+            }
+            Some(Box::new(tool))
+        }
         "select_model" => Some(Box::new(SelectModelTool)),
         "self_manage" => Some(Box::new(SelfManageTool::default())),
         "desktop" => Some(Box::new(DesktopTool::new())),

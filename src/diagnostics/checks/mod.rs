@@ -9,6 +9,7 @@ pub mod browser_runtime;
 pub mod config_parse;
 pub mod data_dir;
 pub mod hooks_consent;
+pub mod providers_connectivity;
 pub mod stale_lock;
 pub mod vault;
 
@@ -16,5 +17,6 @@ pub use browser_runtime::BrowserRuntimeCheck;
 pub use config_parse::ConfigParseCheck;
 pub use data_dir::DataDirCheck;
 pub use hooks_consent::HooksConsentCheck;
+pub use providers_connectivity::ProvidersConnectivityCheck;
 pub use stale_lock::StaleLockCheck;
 pub use vault::VaultCheck;

@@ -9,7 +9,9 @@
 //! failing checks to the daemon agent for an AI-assisted repair: press `f`
 //! when prompted (or pass `--fix`). That path forwards a brief over
 //! `agent.run`; all reasoning and any state mutation happen in Core, never
-//! in this thin I/O shell (R4).
+//! in this thin I/O shell (R4). After the agent finishes, the same check
+//! battery re-runs in-process and reports the resolved/remaining delta —
+//! the verification loop the reference doctors leave to a manual re-run.
 //!
 //! Checks are grouped into four categories:
 //!
@@ -97,30 +99,7 @@ impl DoctorCheck {
 /// is the capability the reference doctors (codex / openclaw / hermes) lack —
 /// they stop at mechanical repair plus human-readable hints.
 pub async fn run(server_url: &str, json: bool, fix: bool, config: &CliConfig) -> CliResult<()> {
-    let mut checks: Vec<DoctorCheck> = vec![
-        // 1. System
-        check_cli_binary(),
-        check_server_binary(),
-        check_aleph_home(),
-        // 2. Config
-        check_config_file(),
-        check_logs_dir(),
-    ];
-
-    // 3. Runtime (only meaningful if the daemon is reachable)
-    let gateway_check = check_gateway_reachable(server_url).await;
-    let gateway_reachable = gateway_check.passed;
-    checks.push(gateway_check);
-
-    if gateway_reachable {
-        checks.push(check_daemon_version(server_url).await);
-        checks.extend(check_providers(server_url).await);
-        checks.push(check_mcp_servers(server_url).await);
-        checks.push(check_vault(server_url).await);
-    }
-
-    // 4. Sandbox (independent of daemon — uses sibling binary directly)
-    checks.push(check_sandbox_summary());
+    let checks = run_all_checks(server_url).await;
 
     // JSON / CI path: non-interactive and byte-identical to the original —
     // emit the report and gate the exit code. Repair is never offered here so
@@ -149,12 +128,19 @@ pub async fn run(server_url: &str, json: bool, fix: bool, config: &CliConfig) ->
     let launch = fix || prompt_for_repair(failing.len());
     if launch {
         let brief = build_repair_brief(&failing);
+        let before_failing = failing.len();
         match launch_llm_repair(server_url, &brief, config).await {
             Ok(()) => {
-                // The agent attempted repairs; runtime state may have changed,
-                // so don't force a non-zero exit — invite a re-run to verify.
+                // Close the loop: re-run the same check battery so the user
+                // sees exactly what the repair resolved — the reference
+                // doctors stop at "re-run to verify"; we verify in-process.
                 eprintln!();
-                eprintln!("Repair attempt finished. Re-run `aleph doctor` to verify.");
+                eprintln!("Verifying repairs…");
+                let after = run_all_checks(server_url).await;
+                render_verification(before_failing, &after);
+                if after.iter().any(|c| !c.passed && c.required) {
+                    std::process::exit(2);
+                }
                 return Ok(());
             }
             Err(e) => {
@@ -168,6 +154,56 @@ pub async fn run(server_url: &str, json: bool, fix: bool, config: &CliConfig) ->
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// Run the full diagnostic battery once. Shared by the initial report and
+/// the post-repair verification pass so both observe identical checks.
+async fn run_all_checks(server_url: &str) -> Vec<DoctorCheck> {
+    let mut checks: Vec<DoctorCheck> = vec![
+        // 1. System
+        check_cli_binary(),
+        check_server_binary(),
+        check_aleph_home(),
+        // 2. Config
+        check_config_file(),
+        check_logs_dir(),
+    ];
+
+    // 3. Runtime (only meaningful if the daemon is reachable)
+    let gateway_check = check_gateway_reachable(server_url).await;
+    let gateway_reachable = gateway_check.passed;
+    checks.push(gateway_check);
+
+    if gateway_reachable {
+        checks.push(check_daemon_version(server_url).await);
+        checks.extend(check_providers(server_url).await);
+        checks.push(check_mcp_servers(server_url).await);
+        checks.push(check_vault(server_url).await);
+    }
+
+    // 4. Sandbox (independent of daemon — uses sibling binary directly)
+    checks.push(check_sandbox_summary());
+    checks
+}
+
+/// Render the post-repair verification delta: how many of the originally
+/// failing checks are now green, and what still needs attention.
+fn render_verification(before_failing: usize, after: &[DoctorCheck]) {
+    let still_failing: Vec<&DoctorCheck> = after.iter().filter(|c| !c.passed).collect();
+    if still_failing.is_empty() {
+        println!("Verification: all {before_failing} problem(s) resolved.");
+        return;
+    }
+    let resolved = before_failing.saturating_sub(still_failing.len());
+    println!(
+        "Verification: {resolved} of {before_failing} problem(s) resolved, {} remaining:",
+        still_failing.len()
+    );
+    for c in &still_failing {
+        let sev = if c.required { "ERROR" } else { "WARN" };
+        println!("  - [{sev}] {}/{}: {}", c.category, c.name, c.message);
+    }
+    println!("Remaining issues may need manual action — see the agent's report above.");
 }
 
 // ── AI-assisted repair (the [f] path) ──────────────────────────────────────
@@ -202,9 +238,11 @@ fn build_repair_brief(failing: &[&DoctorCheck]) -> String {
         "`aleph doctor` found problems with this Aleph installation. Diagnose \
          and repair what you can safely fix using your available tools (for \
          example `doctor` with fix=true for mechanical repairs, `self_config` \
-         / `self_manage` for configuration, and filesystem tools). Do not \
-         touch anything that is already healthy. When done, report concisely \
-         what you changed and what still needs the user.\n\n",
+         / `self_manage` for configuration, `vault_store` for API keys, and \
+         filesystem tools). Do not touch anything that is already healthy. \
+         After repairing, call the `doctor` tool once more (it also probes \
+         live LLM provider connectivity) to verify your fixes. When done, \
+         report concisely what you changed and what still needs the user.\n\n",
     );
     out.push_str("Failing checks:\n");
     for c in failing {
@@ -862,9 +900,12 @@ mod tests {
 
         let brief = build_repair_brief(&failing);
 
-        // The brief instructs the agent to use its own repair tools (R9).
+        // The brief instructs the agent to use its own repair tools (R9)
+        // and to close the loop by re-running doctor afterwards.
         assert!(brief.contains("doctor"));
         assert!(brief.contains("self_config"));
+        assert!(brief.contains("vault_store"));
+        assert!(brief.contains("verify your fixes"));
         // Required failures are ERROR; optional are WARN.
         assert!(brief.contains("[ERROR] config/config.toml: parse error"));
         assert!(brief.contains("[WARN] runtime/vault: vault.status failed"));

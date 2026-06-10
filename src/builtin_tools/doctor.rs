@@ -13,10 +13,14 @@
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 use super::{notify_tool_result, notify_tool_start};
+use crate::config::Config;
 use crate::diagnostics::{DiagnosticEngine, DiagnosticReport, Posture};
 use crate::error::Result;
+use crate::gateway::security::SharedTokenManager;
+use crate::sync_primitives::Arc;
 use crate::tools::AlephTool;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -40,12 +44,34 @@ pub struct DoctorOutput {
 }
 
 #[derive(Clone, Default)]
-pub struct DoctorTool;
+pub struct DoctorTool {
+    /// Live daemon config handle. When present (together with the vault),
+    /// the engine gains the `providers/connectivity` runtime check so the
+    /// LLM can probe provider reachability — and verify its own repairs
+    /// after fixing a credential via `vault_store` / `self_config`.
+    config: Option<Arc<RwLock<Config>>>,
+    /// Shared vault handle for resolving provider API keys during probes.
+    token_manager: Option<Arc<SharedTokenManager>>,
+}
+
+impl DoctorTool {
+    /// Attach the live daemon handles that unlock runtime checks. Without
+    /// them the tool behaves exactly as before (path-based checks only).
+    pub fn with_runtime(
+        mut self,
+        config: Arc<RwLock<Config>>,
+        token_manager: Arc<SharedTokenManager>,
+    ) -> Self {
+        self.config = Some(config);
+        self.token_manager = Some(token_manager);
+        self
+    }
+}
 
 #[async_trait]
 impl AlephTool for DoctorTool {
     const NAME: &'static str = "doctor";
-    const DESCRIPTION: &'static str = "Self-diagnose Aleph runtime health: data directory, instance lock, config.toml parse, secret vault integrity, shell-hook consent registry, and browser runtime prerequisites. Returns structured findings with fix hints. Pass fix=true to apply safe, deterministic repairs (recreate a missing data dir, clear a stale lock). Use this to answer 'is something wrong with my setup?' — read-only by default.";
+    const DESCRIPTION: &'static str = "Self-diagnose Aleph runtime health: data directory, instance lock, config.toml parse, secret vault integrity, shell-hook consent registry, browser runtime prerequisites, and live LLM provider connectivity (one ping per enabled provider). Returns structured findings with fix hints. Pass fix=true to apply safe, deterministic repairs (recreate a missing data dir, clear a stale lock). Use this to answer 'is something wrong with my setup?' and to VERIFY your repairs after fixing a provider credential or config — read-only by default.";
 
     type Args = DoctorArgs;
     type Output = DoctorOutput;
@@ -53,7 +79,10 @@ impl AlephTool for DoctorTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output> {
         notify_tool_start(Self::NAME, if args.fix { "fix" } else { "inspect" });
 
-        let engine = DiagnosticEngine::default_registry()?;
+        let mut engine = DiagnosticEngine::default_registry()?;
+        if let (Some(config), Some(vault)) = (self.config.as_ref(), self.token_manager.as_ref()) {
+            engine = engine.with_runtime_checks(Arc::clone(config), Arc::clone(vault));
+        }
         let posture = if args.fix {
             Posture::Fix
         } else {

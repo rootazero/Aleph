@@ -58,6 +58,25 @@ impl DiagnosticEngine {
         Ok(Self::new(checks))
     }
 
+    /// Append runtime checks that need live daemon handles (config + vault).
+    ///
+    /// `default_registry()` stays path-only so the offline `aleph-server
+    /// doctor` command works without network access; this opt-in upgrade is
+    /// used by the `doctor` builtin tool inside the daemon, giving the LLM
+    /// repair loop the same provider-connectivity visibility as the CLI's
+    /// `providers.healthcheck` rows — so it can verify its own fixes.
+    pub fn with_runtime_checks(
+        mut self,
+        config: Arc<tokio::sync::RwLock<crate::config::Config>>,
+        vault: Arc<crate::gateway::security::SharedTokenManager>,
+    ) -> Self {
+        self.checks
+            .push(Arc::new(checks::ProvidersConnectivityCheck::new(
+                config, vault,
+            )));
+        self
+    }
+
     pub fn check_count(&self) -> usize {
         self.checks.len()
     }

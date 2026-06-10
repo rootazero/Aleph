@@ -7,9 +7,10 @@ use crate::providers::presets::get_merged_preset;
 
 use super::types::ProviderConfigJson;
 
-/// Vault key prefix for AI provider API keys
+/// Vault key for AI provider API keys (`ai:<name>`) — single definition
+/// shared with the diagnostics connectivity check.
 pub(super) fn vault_key(provider_name: &str) -> String {
-    format!("ai:{}", provider_name)
+    crate::providers::probe::provider_vault_key(provider_name)
 }
 
 /// Resolve the actual API key from vault (for internal use like test/create-provider, never serialized to responses)

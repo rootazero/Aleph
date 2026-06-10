@@ -12,8 +12,7 @@ use crate::config::{Config, ProviderConfig};
 use crate::gateway::event_bus::{ConfigChangedEvent, GatewayEvent, GatewayEventBus};
 use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR, INVALID_PARAMS};
 use crate::gateway::security::SharedTokenManager;
-use crate::providers::adapter::RequestPayload;
-use crate::providers::message::UnifiedMessage;
+use crate::providers::probe::probe_provider;
 
 // ============================================================================
 // List
@@ -434,7 +433,7 @@ async fn handle_test_inner(
     };
 
     // Probe connectivity (shared with the bulk `providers.healthcheck` probe).
-    let result = probe_provider("test", provider_config).await;
+    let result = TestResult::from(probe_provider("test", provider_config).await);
 
     // On success, persist verified=true and reset health. Only `providers.test`
     // mutates state; the bulk healthcheck is read-only.
@@ -458,40 +457,9 @@ async fn handle_test_inner(
     JsonRpcResponse::success(request.id, json!(result))
 }
 
-/// Probe a single provider with a lightweight `ping` round-trip and measure
-/// latency. Takes a fully-resolved [`ProviderConfig`] (api_key already injected
-/// from vault) and returns a [`TestResult`]. Shared by `providers.test` and the
-/// concurrent `providers.healthcheck` so the probe logic has one source of truth.
-pub(crate) async fn probe_provider(label: &str, provider_config: ProviderConfig) -> TestResult {
-    let provider = match crate::providers::create_provider(label, provider_config) {
-        Ok(p) => p,
-        Err(e) => {
-            return TestResult {
-                success: false,
-                error: Some(format!("Failed to create provider: {}", e)),
-                latency_ms: None,
-            };
-        }
-    };
-
-    let start = std::time::Instant::now();
-    let ping_msgs = [UnifiedMessage::user("ping")];
-    match provider
-        .process(RequestPayload::new(&ping_msgs).with_system(Some("Reply with 'pong'")))
-        .await
-    {
-        Ok(_) => TestResult {
-            success: true,
-            error: None,
-            latency_ms: Some(start.elapsed().as_millis() as u64),
-        },
-        Err(e) => TestResult {
-            success: false,
-            error: Some(format!("{}", e)),
-            latency_ms: Some(start.elapsed().as_millis() as u64),
-        },
-    }
-}
+// Probe logic lives in `crate::providers::probe::probe_provider` — the single
+// source of truth shared with the diagnostics engine's connectivity check.
+// This module maps its `ProbeOutcome` onto the wire-stable `TestResult`.
 
 /// `providers.healthcheck` — concurrently probe every configured provider.
 ///

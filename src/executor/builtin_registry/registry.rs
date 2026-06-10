@@ -109,6 +109,9 @@ pub struct BuiltinToolRegistry {
     pub(crate) self_config_tool: crate::builtin_tools::self_config::SelfConfigTool,
     /// List-models tool instance (LLM-facing model discovery: capability + cost)
     pub(crate) list_models_tool: crate::builtin_tools::list_models::ListModelsTool,
+    /// Doctor tool instance (self-diagnosis; carries live config + vault
+    /// handles so the engine can probe provider connectivity at runtime)
+    pub(crate) doctor_tool: crate::builtin_tools::DoctorTool,
     /// Vault store tool instance (optional - requires SharedTokenManager)
     pub(crate) vault_store_tool: Option<crate::builtin_tools::VaultStoreTool>,
     /// Desktop bridge tool instance
@@ -1693,9 +1696,7 @@ impl ToolRegistry for BuiltinToolRegistry {
                     .call_json(arguments)
                     .await
             }),
-            "doctor" => {
-                Box::pin(async move { crate::builtin_tools::DoctorTool.call_json(arguments).await })
-            }
+            "doctor" => Box::pin(async move { self.doctor_tool.call_json(arguments).await }),
             "config_audit" => Box::pin(async move {
                 let cfg = self.config.as_ref().ok_or_else(|| {
                     AlephError::tool("config_audit not available: no Config handle configured")
