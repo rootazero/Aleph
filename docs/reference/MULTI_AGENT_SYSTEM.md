@@ -751,6 +751,19 @@ the child harness. The child's `Sandbox` is replaced with `WorktreeSandbox`,
 which executes commands at the worktree path and injects `CARGO_TARGET_DIR`
 for strict build isolation.
 
+File tools are isolated too: the spawner publishes a per-run
+`tools::fs_scope::FsScope` task-local around the child harness, so
+`file_read` / `file_write` / `file_edit` / `apply_patch` / `file_ops`
+resolve relative paths at the worktree root and **rebase parent-repo
+absolute paths into the checkout** (the deny gate evaluates the post-rebase
+target). The team dispatcher gets the same guarantee through a different
+seam: `execute_member_task` points the member's `workspace_override` at the
+worktree, and `run_agent_loop` roots that run's `FsScope` / `ToolContext`
+there. Cross-agent same-path mutations (parent + non-isolated subagent
+sharing a workspace) are serialized by `tools::path_locks` — a process-wide
+per-canonical-path mutex held across each mutating tool's read-modify-write
+critical section.
+
 A subagent dispatched through the production gateway path (`AgentRuntime`)
 sources `isolation` from its `AgentDef`: declare `isolation:` with
 `kind: worktree` in an agent's markdown frontmatter to opt that named agent

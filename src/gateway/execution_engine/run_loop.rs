@@ -109,19 +109,55 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // dispatcher worker tasks, etc.) inherit the project context.
         // `None` is also published explicitly so a nested run cannot leak
         // an outer scope's project into a non-project agent.
+        //
+        // Alongside it, publish the per-run `FsScope` carrying this run's
+        // workspace artifact dir (`<workspace>/output/documents`, the same
+        // value `ToolContext::from_workspace` derives). File tools prefer the
+        // task-local over the shared `ToolContextHandle`, so a concurrent run
+        // rewriting the handle mid-run no longer redirects THIS run's
+        // relative-path writes into the other run's workspace. Mirrors the
+        // `effective_workspace` fallback inside `run_agent_loop_inner`
+        // (override > agent workspace); validation of the override stays in
+        // the inner fn — a vanished dir still fails the run there.
+        let scope_workspace = request
+            .workspace_override
+            .clone()
+            .unwrap_or_else(|| agent.workspace().to_path_buf());
+        // Team-worktree runs (dispatcher members) carry the parent repo root
+        // in metadata: build a rebasing worktree scope so the member's file
+        // tools anchor at the worktree root AND parent-repo absolute paths
+        // are redirected into the checkout — the same semantics the subagent
+        // spawner publishes for `IsolationMode::Worktree`. Everything else
+        // gets the plain workspace artifact scope.
+        let fs_scope = match request.metadata.get("team_worktree_repo_root") {
+            Some(repo_root) if request.workspace_override.is_some() => {
+                let wt = scope_workspace
+                    .canonicalize()
+                    .unwrap_or_else(|_| scope_workspace.clone());
+                let repo = std::path::PathBuf::from(repo_root);
+                let repo = repo.canonicalize().unwrap_or(repo);
+                crate::tools::fs_scope::FsScope::worktree(wt, repo)
+            }
+            _ => {
+                crate::tools::fs_scope::FsScope::workspace(scope_workspace.join("output/documents"))
+            }
+        };
         let mut result = crate::projects::with_project_root(
             request.workspace_override.clone(),
-            self.run_agent_loop_inner(
-                run_id,
-                request,
-                agent.clone(),
-                emitter,
-                deadline,
-                trace_task_id,
-                cancel_token,
-                extension_manager,
-                hook_executor.clone(),
-                hook_session_id.clone(),
+            crate::tools::fs_scope::with_fs_scope(
+                Some(fs_scope),
+                self.run_agent_loop_inner(
+                    run_id,
+                    request,
+                    agent.clone(),
+                    emitter,
+                    deadline,
+                    trace_task_id,
+                    cancel_token,
+                    extension_manager,
+                    hook_executor.clone(),
+                    hook_session_id.clone(),
+                ),
             ),
         )
         .await;
@@ -210,7 +246,12 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
         // resume, cron, heartbeat) having to remember to fire `projects.touch`
         // themselves. Best-effort: the run continues even when the store
         // write fails (read-only home dir, etc.).
-        if request.workspace_override.is_some() {
+        // Skip catalogue writes for team-worktree runs: their override points
+        // at an ephemeral `$TMPDIR` checkout that would otherwise pollute the
+        // Panel's recent-projects list with paths that vanish minutes later.
+        if request.workspace_override.is_some()
+            && !request.metadata.contains_key("team_worktree_path")
+        {
             let path = effective_workspace.clone();
             tokio::task::spawn_blocking(move || {
                 let store = crate::projects::ProjectStore::new();
@@ -690,7 +731,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                     joined += 1;
                 }
                 if joined > 0 {
-                    info!(run_id = run_id, count = joined, "MCP tools joined tool surface");
+                    info!(
+                        run_id = run_id,
+                        count = joined,
+                        "MCP tools joined tool surface"
+                    );
                 }
             }
 

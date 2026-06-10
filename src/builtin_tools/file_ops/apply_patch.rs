@@ -196,7 +196,7 @@ make several coordinated edits at once."#;
     async fn apply_one(&self, op: &PatchOp, output_dir: Option<&Path>) -> FileOutcome {
         match op {
             PatchOp::Add { path, lines } => self.do_add(path, lines, output_dir).await,
-            PatchOp::Delete { path } => self.do_delete(path, output_dir),
+            PatchOp::Delete { path } => self.do_delete(path, output_dir).await,
             PatchOp::Update {
                 path,
                 move_to,
@@ -213,6 +213,8 @@ make several coordinated edits at once."#;
             Ok(p) => p,
             Err(msg) => return fail("add", path, msg),
         };
+        // Cross-agent write guard (same lock file_write / file_edit hold).
+        let _path_guard = crate::tools::path_locks::lock_path(&resolved).await;
         if resolved.exists() {
             return fail(
                 "add",
@@ -257,11 +259,13 @@ make several coordinated edits at once."#;
         }
     }
 
-    fn do_delete(&self, path: &str, output_dir: Option<&Path>) -> FileOutcome {
+    async fn do_delete(&self, path: &str, output_dir: Option<&Path>) -> FileOutcome {
         let resolved = match self.resolve(path, output_dir) {
             Ok(p) => p,
             Err(msg) => return fail("delete", path, msg),
         };
+        // Cross-agent write guard (same lock file_write / file_edit hold).
+        let _path_guard = crate::tools::path_locks::lock_path(&resolved).await;
         if !resolved.exists() {
             return fail(
                 "delete",
@@ -290,6 +294,37 @@ make several coordinated edits at once."#;
         let resolved = match self.resolve(path, output_dir) {
             Ok(p) => p,
             Err(msg) => return fail("update", path, msg),
+        };
+        // Resolve the move-to destination BEFORE taking any lock so both
+        // locks can be acquired in a canonical (sorted) order — two
+        // concurrent updates with crossed `move_to` targets could otherwise
+        // deadlock (A holds src wants dst while B holds dst wants src).
+        // Failing a bad destination here, before hunks are applied, also
+        // avoids a half-done update followed by a rejected rename.
+        let move_dest: Option<PathBuf> = match move_to {
+            Some(new_path) => match self.resolve(new_path, output_dir) {
+                Ok(p) => Some(p),
+                Err(msg) => {
+                    return fail("update", path, format!("move-to path rejected: {}", msg));
+                }
+            },
+            None => None,
+        };
+        // Cross-agent write guard: read → apply hunks → write below is a
+        // lost-update window across concurrent harnesses; the rename target
+        // (if any) is guarded too so a concurrent writer cannot be clobbered.
+        let (_guard_a, _guard_b) = match move_dest.as_ref() {
+            Some(dest) if dest != &resolved => {
+                let (first, second) = if dest < &resolved {
+                    (dest, &resolved)
+                } else {
+                    (&resolved, dest)
+                };
+                let ga = crate::tools::path_locks::lock_path(first).await;
+                let gb = crate::tools::path_locks::lock_path(second).await;
+                (ga, Some(gb))
+            }
+            _ => (crate::tools::path_locks::lock_path(&resolved).await, None),
         };
         if !resolved.exists() {
             return fail(
@@ -387,13 +422,7 @@ make several coordinated edits at once."#;
             return fail("update", path, format!("write-back failed: {}", e));
         }
 
-        let final_path = if let Some(new_path) = move_to {
-            let new_resolved = match self.resolve(new_path, output_dir) {
-                Ok(p) => p,
-                Err(msg) => {
-                    return fail("update", path, format!("move-to path rejected: {}", msg));
-                }
-            };
+        let final_path = if let Some(new_resolved) = move_dest {
             if let Some(parent) = new_resolved.parent() {
                 if let Err(e) = std::fs::create_dir_all(parent) {
                     return fail(

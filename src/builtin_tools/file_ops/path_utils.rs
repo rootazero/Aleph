@@ -3,7 +3,6 @@
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-use super::state::get_working_dir;
 use crate::builtin_tools::error::ToolError;
 
 /// Denied paths for security.
@@ -89,12 +88,19 @@ pub fn get_denied_paths() -> Vec<String> {
 ///
 /// Path resolution rules:
 /// 1. Environment variables ($HOME, $USER, etc.) - expanded first
-/// 2. Absolute paths (starting with `/`) - used as-is
+/// 2. Absolute paths (starting with `/`) - used as-is, then rebased through
+///    the active [`FsScope`](crate::tools::fs_scope::FsScope) remap when the
+///    run is worktree-isolated (parent-repo paths land inside the worktree,
+///    mirroring what `WorktreeSandbox` already does for command execution)
 /// 3. Home paths (starting with `~`) - expanded to home directory
 /// 4. Relative paths - resolved relative to:
-///    a. `output_dir_override` if provided (workspace-scoped output dir from ToolContext)
-///    b. Session working directory (if set)
+///    a. the per-run `FsScope` task-local base — per-run truth, immune to a
+///       concurrent run rewriting the shared `ToolContextHandle` mid-run
+///    b. `output_dir_override` if provided (workspace-scoped output dir from ToolContext)
 ///    c. Error if neither is available — no global fallback
+///
+/// The deny check always runs on the FINAL path (post-rebase), so a remap can
+/// never smuggle a denied location past the gate.
 pub fn check_and_resolve_path(
     path: &Path,
     denied_paths: &[String],
@@ -137,19 +143,21 @@ pub fn check_and_resolve_path(
         )
     } else if expanded_str.is_relative() {
         // Relative paths are resolved to:
-        // 1. ToolContext output_dir override (workspace-scoped, set by ExecutionEngine)
-        // 2. Current working directory (if set by session/topic)
+        // 1. Per-run FsScope base (task-local — worktree root for isolated
+        //    agents, workspace artifact dir for normal runs)
+        // 2. ToolContext output_dir override (workspace-scoped, set by ExecutionEngine)
         // 3. Error if neither is available — callers must provide a base directory
-        let base_dir = if let Some(override_dir) = output_dir_override {
+        let base_dir = if let Some(scope) = crate::tools::fs_scope::current() {
+            info!(fs_scope = %scope.base.display(), "check_path: using per-run FsScope base");
+            scope.base
+        } else if let Some(override_dir) = output_dir_override {
             info!(output_dir = %override_dir.display(), "check_path: using ToolContext output_dir override");
             override_dir.to_path_buf()
-        } else if let Some(wd) = get_working_dir() {
-            info!(working_dir = %wd.display(), "check_path: using session working directory");
-            wd
         } else {
             return Err(ToolError::InvalidArgs(
-                "Relative path requires an output directory override or an active working directory; \
-                 provide an absolute path or set a working directory first".to_string(),
+                "Relative path requires an active run scope or an output directory override; \
+                 provide an absolute path instead"
+                    .to_string(),
             ));
         };
         base_dir.join(expanded_str)
@@ -175,6 +183,28 @@ pub fn check_and_resolve_path(
     };
 
     info!(canonical = %canonical.display(), "check_path: canonical path");
+
+    // Worktree-isolation remap: when the active FsScope declares a rebase,
+    // canonical paths under the parent repo are redirected into the isolated
+    // worktree BEFORE the deny check below — the gate therefore evaluates the
+    // path that will actually be touched.
+    let canonical = match crate::tools::fs_scope::current().and_then(|s| s.rebase_path(&canonical))
+    {
+        Some(rebased) => {
+            info!(
+                from = %canonical.display(),
+                to = %rebased.display(),
+                "check_path: FsScope rebase into isolated worktree"
+            );
+            // Re-normalize so the result stays canonical (the worktree side
+            // may sit behind a symlinked tmpdir) — keeps `path_locks` keys
+            // consistent across spellings of the same file.
+            safe_normalize(&rebased).map_err(|e| {
+                ToolError::Execution(format!("Failed to normalize rebased path: {}", e))
+            })?
+        }
+        None => canonical,
+    };
 
     // Check against denied paths
     let path_str = canonical.to_string_lossy();
@@ -312,6 +342,68 @@ mod tests {
         assert!(
             check_and_resolve_path(&allowed, &denied, None).is_ok(),
             "unrelated sibling should be allowed"
+        );
+    }
+
+    /// Relative paths anchor at the per-run `FsScope` base when one is
+    /// published — and the scope wins over the (potentially stale, shared)
+    /// `output_dir_override`.
+    #[tokio::test]
+    async fn fs_scope_base_anchors_relative_paths() {
+        let scope_root = tempdir().unwrap();
+        let other_root = tempdir().unwrap();
+        let scope = crate::tools::fs_scope::FsScope::workspace(scope_root.path().to_path_buf());
+        let resolved = crate::tools::fs_scope::with_fs_scope(Some(scope), async {
+            check_and_resolve_path(Path::new("sub/file.txt"), &[], Some(other_root.path()))
+        })
+        .await
+        .expect("relative path must resolve inside the scope base");
+        let canonical_scope = scope_root.path().canonicalize().unwrap();
+        assert_eq!(resolved, canonical_scope.join("sub/file.txt"));
+    }
+
+    /// Worktree isolation: an absolute path under the parent repo is rebased
+    /// into the worktree checkout before any filesystem access.
+    #[tokio::test]
+    async fn fs_scope_rebase_redirects_parent_repo_paths() {
+        let repo = tempdir().unwrap();
+        let wt = tempdir().unwrap();
+        fs::create_dir_all(repo.path().join("src")).unwrap();
+        fs::write(repo.path().join("src/a.rs"), b"fn main() {}").unwrap();
+        let repo_c = repo.path().canonicalize().unwrap();
+        let wt_c = wt.path().canonicalize().unwrap();
+
+        let scope = crate::tools::fs_scope::FsScope::worktree(wt_c.clone(), repo_c.clone());
+        let input = repo_c.join("src/a.rs");
+        let resolved = crate::tools::fs_scope::with_fs_scope(Some(scope), async move {
+            check_and_resolve_path(&input, &[], None)
+        })
+        .await
+        .expect("rebase must succeed");
+        assert_eq!(resolved, wt_c.join("src/a.rs"));
+    }
+
+    /// The deny gate evaluates the FINAL (post-rebase) path — a rebase can
+    /// never launder a denied target.
+    #[tokio::test]
+    async fn fs_scope_rebase_cannot_bypass_deny() {
+        let repo = tempdir().unwrap();
+        let wt = tempdir().unwrap();
+        fs::write(repo.path().join("secret.txt"), b"s").unwrap();
+        let repo_c = repo.path().canonicalize().unwrap();
+        let wt_c = wt.path().canonicalize().unwrap();
+
+        // Deny the REBASED location only.
+        let denied = vec![wt_c.join("secret.txt").to_string_lossy().to_string()];
+        let scope = crate::tools::fs_scope::FsScope::worktree(wt_c, repo_c.clone());
+        let input = repo_c.join("secret.txt");
+        let result = crate::tools::fs_scope::with_fs_scope(Some(scope), async move {
+            check_and_resolve_path(&input, &denied, None)
+        })
+        .await;
+        assert!(
+            result.is_err(),
+            "deny must apply to the post-rebase target, got {result:?}"
         );
     }
 }
