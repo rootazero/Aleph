@@ -306,14 +306,14 @@ enum Perm {
                 "打开「系统设置」→「隐私与安全性」→「输入监控」",
                 "在列表中找到 aleph-server 或 AlephBridge",
                 "拨动开关至开启状态",
-                "重启 aleph-server 使权限生效",
+                "返回 Aleph 应用，权限将自动生效",
             ]
         case .screen_recording:
             return [
                 "打开「系统设置」→「隐私与安全性」→「屏幕录制与系统录音」",
                 "在列表中找到 aleph-server 或 AlephBridge",
                 "拨动开关至开启状态",
-                "重启 aleph-server 使权限生效",
+                "返回 Aleph 应用，权限将自动生效",
             ]
         case .full_disk:
             return [

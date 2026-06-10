@@ -18,6 +18,7 @@ mod hotkey;
 #[cfg(target_os = "macos")]
 mod menu;
 mod notify;
+mod perm_monitor;
 mod tray;
 mod update;
 mod webview_perms;
@@ -147,6 +148,12 @@ fn main() {
 
             #[cfg(target_os = "macos")]
             apply_macos_vibrancy(&handle);
+
+            // Watch for TCC permission grants that require a daemon restart
+            // (input_monitoring, screen_recording). When the user grants one
+            // in System Settings and returns to the app, the daemon is
+            // restarted automatically — no manual "restart aleph-server" step.
+            perm_monitor::start_monitor(handle.clone());
 
             // Background worker: bring the daemon up, reveal the Panel, then
             // keep the notification bridge, daemon supervisor, and update

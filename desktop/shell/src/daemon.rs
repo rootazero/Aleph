@@ -136,7 +136,7 @@ fn version_marker() -> Option<PathBuf> {
 /// Poll until the daemon port is free, bounded so a stuck shutdown cannot
 /// hang startup. A still-open port afterwards is harmless — `ensure_ready`
 /// then treats it as a daemon mid-boot and waits on `/ready`.
-async fn wait_until_port_closed() {
+pub async fn wait_until_port_closed() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(6);
     while port_open().await {
         if tokio::time::Instant::now() >= deadline {
