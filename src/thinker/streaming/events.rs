@@ -76,7 +76,7 @@ impl TokenUsage {
     /// Total tokens (input + output)
     #[must_use]
     pub fn total(&self) -> u32 {
-        self.input_tokens + self.output_tokens
+        self.input_tokens.saturating_add(self.output_tokens)
     }
 }
 

@@ -4,6 +4,14 @@ use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 
+/// Escape a value for safe interpolation into a PowerShell double-quoted string.
+/// Neutralizes the backtick escape char first, then `$(...)`/`$var` subexpression
+/// expansion, then the closing quote — preventing command injection from
+/// LLM/tool-supplied folder names, search queries, and message ids.
+fn ps_escape_dq(s: &str) -> String {
+    s.replace('`', "``").replace('$', "`$").replace('"', "\"\"")
+}
+
 pub struct WindowsPim;
 
 impl WindowsPim {
@@ -107,8 +115,8 @@ impl PimCapability for WindowsPim {
         folder: Option<&str>,
         limit: u32,
     ) -> Result<Vec<MailMessage>> {
-        let folder_path = folder.unwrap_or("Inbox");
-        let escaped_query = query.replace('"', "\"\"");
+        let folder_path = ps_escape_dq(folder.unwrap_or("Inbox"));
+        let escaped_query = ps_escape_dq(query);
         let script = format!(
             r#"
             try {{
@@ -224,7 +232,7 @@ impl PimCapability for WindowsPim {
     }
 
     async fn mail_get(&self, message_id: &str) -> Result<MailMessageDetail> {
-        let escaped_id = message_id.replace('"', "\"\"");
+        let escaped_id = ps_escape_dq(message_id);
         let script = format!(
             r#"
             try {{
