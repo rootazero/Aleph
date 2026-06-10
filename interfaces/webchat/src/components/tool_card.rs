@@ -307,7 +307,7 @@ pub fn ToolCard(run_id: String, tool_id: String, tool_name: String) -> impl Into
     let failed = move || matches!(status.get(), Some((s, _)) if s == "failed");
 
     view! {
-        <div class="rounded-md hover:bg-surface-raised/30 transition-colors">
+        <div class="rounded-lg glass-inset hover:bg-surface-raised/30 transition-colors">
             <button
                 type="button"
                 class="w-full flex items-center gap-2 px-2 py-1 text-left"
@@ -391,7 +391,7 @@ fn arg_str<'a>(p: &'a ToolPayload, key: &str) -> &'a str {
 /// 把 diff 行渲染为红删/绿增/中性上下文。
 fn diff_view(lines: Vec<DiffLine>) -> AnyView {
     view! {
-        <div class=format!("{MONO_BLOCK} rounded border border-border/60 overflow-x-auto")>
+        <div class=format!("{MONO_BLOCK} rounded-md glass-inset overflow-x-auto")>
             {lines.into_iter().map(|l| {
                 let cls = match l.sign {
                     '+' => "block px-2 bg-success/10 text-success",
@@ -563,7 +563,7 @@ fn default_body(p: &ToolPayload) -> AnyView {
         <div class="flex flex-col gap-2 text-xs">
             {match p.args.clone() {
                 Some(v) => view! {
-                    <details class="rounded-md border border-border/60 bg-surface-sunken/60">
+                    <details class="rounded-md glass-inset">
                         <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">"input"</summary>
                         <div class="px-3 py-2 overflow-x-auto"><JsonViewer value=v /></div>
                     </details>
@@ -572,7 +572,7 @@ fn default_body(p: &ToolPayload) -> AnyView {
             }}
             {match p.result.clone() {
                 Some(v) => view! {
-                    <details class="rounded-md border border-border/60 bg-surface-sunken/60" open=true>
+                    <details class="rounded-md glass-inset" open=true>
                         <summary class="px-3 py-1.5 cursor-pointer text-text-tertiary font-mono uppercase tracking-wider">"result"</summary>
                         <div class="px-3 py-2 overflow-x-auto"><JsonViewer value=v /></div>
                     </details>

@@ -69,8 +69,8 @@ pub(super) fn ChatHero() -> impl IntoView {
                         view! {
                             <button
                                 class="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs
-                                       text-text-secondary bg-surface-raised/70 border border-border/60
-                                       hover:text-text-primary hover:bg-surface-raised hover:border-border
+                                       text-text-secondary glass-inset
+                                       hover:text-text-primary hover:bg-surface-raised
                                        transition-colors"
                                 on:click=move |_| chat.draft_seed.set(Some(seed.to_string()))
                             >
@@ -296,11 +296,13 @@ pub(crate) fn run_id_from_message_id(message_id: &str) -> String {
 #[component]
 fn DaySeparator(label: String) -> impl IntoView {
     view! {
-        <div class="flex items-center justify-center py-1.5 select-none">
+        <div class="flex items-center gap-3 py-1.5 select-none">
+            <span class="flex-1 h-px bg-gradient-to-r from-transparent to-border/60"></span>
             <span class="px-2.5 py-0.5 rounded-full text-[10px] font-medium uppercase tracking-wider
-                         text-text-tertiary bg-surface-sunken/60">
+                         text-text-tertiary glass-inset">
                 {label}
             </span>
+            <span class="flex-1 h-px bg-gradient-to-l from-transparent to-border/60"></span>
         </div>
     }
 }
@@ -337,7 +339,7 @@ fn MessageBubble(
     // the step strip — flow bubble-less and dense (the opencode / claude-code
     // transcript look), so the live streaming echo no longer wears card chrome.
     let bubble_style = if is_user {
-        "min-w-0 max-w-[80%] rounded-2xl px-3.5 py-2 bg-primary text-white"
+        "min-w-0 max-w-[80%] rounded-2xl px-3.5 py-2 msg-glass-user"
     } else if in_strip {
         // Intermediate step inside the run's step strip — no bubble.
         if has_error {
@@ -349,10 +351,10 @@ fn MessageBubble(
         }
     } else if has_error {
         // Standalone final answer that errored — keep the bubble.
-        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-danger-subtle text-danger border border-danger/20"
+        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 msg-glass-danger text-danger"
     } else {
         // Standalone final answer — the conversational reply keeps its bubble.
-        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 bg-surface-raised text-text-primary"
+        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 msg-glass text-text-primary"
     };
     let bubble_class = bubble_style.to_string();
 
@@ -417,7 +419,7 @@ fn MessageBubble(
 
     let streaming_cursor = if is_streaming {
         Some(view! {
-            <span class="inline-block w-1.5 h-4 bg-primary/60 animate-pulse ml-0.5 align-text-bottom"></span>
+            <span class="inline-block w-[3px] h-4 rounded-full bg-gradient-to-b from-primary to-primary/40 animate-pulse ml-0.5 align-text-bottom"></span>
         })
     } else {
         None
@@ -653,7 +655,7 @@ fn StepStrip(steps: Vec<ChatMessage>, completed: bool) -> impl IntoView {
 
     view! {
         <div class="my-1">
-            <div class="w-full rounded-lg border border-border/40 bg-surface-sunken/25">
+            <div class="w-full rounded-lg glass-inset">
                 <button
                     type="button"
                     class="w-full flex items-center gap-2 px-3 py-1.5 text-left
