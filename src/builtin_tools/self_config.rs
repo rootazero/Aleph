@@ -62,10 +62,14 @@ pub enum SelfConfigArgs {
         #[serde(default)]
         dry_run: bool,
     },
-    /// Show the current local/cloud route decision (mode +
-    /// allow_cloud_escalation). The runtime "show route decision" view that
-    /// `read_config` dot-path ergonomics can't express as nicely. To *change*
-    /// the route, use `update_config` with `config_path: "route"`.
+    /// Show the live routing/failover status: route mode, load-balance
+    /// strategy, provider pins, the failover chain order, and per-provider
+    /// runtime health — circuit-breaker state, failure counts, rate-limit
+    /// cooldowns, in-flight load, latency, rolling rpm/tpm usage vs configured
+    /// limits. Use this to diagnose "why did my request fall back / stall /
+    /// which provider is throttled" or before picking a model with
+    /// `select_model`. To *change* the route, use `update_config` with
+    /// `config_path: "route"`.
     RouteStatus,
     /// List available config.toml backup snapshots (one is taken before every
     /// applied config change), newest last. Each entry exposes a `timestamp`
@@ -301,7 +305,9 @@ impl SelfConfigTool {
         }
     }
 
-    /// Read-only view of the current local/cloud route decision.
+    /// Read-only view of the current local/cloud route decision plus, when
+    /// the production failover chain has been assembled, its live runtime
+    /// state (circuit breakers, cooldowns, load, chain composition).
     async fn route_status(&self) -> Result<SelfConfigOutput> {
         let config = match &self.config {
             Some(c) => c,
@@ -321,19 +327,31 @@ impl SelfConfigTool {
             crate::config::types::RouteMode::AlwaysLocal => "always_local",
             crate::config::types::RouteMode::AlwaysCloud => "always_cloud",
         };
+        let mut data = serde_json::json!({
+            "mode": mode_str,
+            "allow_cloud_escalation": route.allow_cloud_escalation,
+        });
+        // Live diagnostics from the boot-registered failover chain. Absent in
+        // tests / before boot — the config-only view above still answers.
+        let runtime_note = match crate::providers::route_observe::global_route_observability() {
+            Some(obs) => {
+                data["runtime"] = obs.snapshot().await;
+                " Live provider health (circuit breakers, cooldowns, in-flight \
+                 load, latency, rolling rpm/tpm usage) and the failover chain \
+                 are in data.runtime."
+            }
+            None => "",
+        };
         let message = format!(
             "Route mode: {mode_str} (allow_cloud_escalation: {}). \
              To change: update_config config_path=\"route\" \
-             config_value={{\"mode\":\"always_local\"}}.",
+             config_value={{\"mode\":\"always_local\"}}.{runtime_note}",
             route.allow_cloud_escalation
         );
         Ok(SelfConfigOutput {
             success: true,
             message,
-            data: Some(serde_json::json!({
-                "mode": mode_str,
-                "allow_cloud_escalation": route.allow_cloud_escalation,
-            })),
+            data: Some(data),
             preview_message: None,
         })
     }

@@ -196,6 +196,20 @@ impl LoadStats {
     pub fn next_round_robin(&self) -> u64 {
         self.round_robin.fetch_add(1, Ordering::Relaxed)
     }
+
+    /// Snapshot every tracked provider's metric as `(name, metric)`,
+    /// name-sorted. Raw window counts only — the caller folds configured
+    /// limits in, same contract as [`metric`](Self::metric). Diagnostic only —
+    /// feeds the `route_status` snapshot.
+    pub fn all_metrics(&self) -> Vec<(String, LoadMetric)> {
+        let mut out: Vec<(String, LoadMetric)> = self
+            .providers
+            .iter()
+            .map(|e| (e.key().clone(), e.value().metric()))
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
 }
 
 /// RAII in-flight counter. Increments on [`LoadStats::begin`], decrements on
@@ -313,6 +327,18 @@ mod tests {
         // A later minute rolls the window → counters reset.
         w.roll(11);
         assert_eq!(w.snapshot(), (0, 0));
+    }
+
+    #[test]
+    fn all_metrics_lists_tracked_providers_name_sorted() {
+        let stats = LoadStats::new();
+        assert!(stats.all_metrics().is_empty());
+        let _gz = stats.begin("zeta");
+        let _ga = stats.begin("alpha");
+        let snap = stats.all_metrics();
+        let names: Vec<&str> = snap.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["alpha", "zeta"]);
+        assert_eq!(snap[0].1.in_flight, 1);
     }
 
     #[test]

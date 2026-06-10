@@ -112,6 +112,13 @@ impl RateLimits {
         self.by_provider.is_empty()
     }
 
+    /// The configured `(rpm, tpm)` ceiling for `name`, if any. Diagnostic
+    /// accessor for the `route_status` snapshot; the hot path only ever uses
+    /// the folded output of [`assess`](Self::assess).
+    pub fn ceiling(&self, name: &str) -> Option<(Option<u32>, Option<u32>)> {
+        self.by_provider.get(name).copied()
+    }
+
     /// Fold a provider's live window counts against its ceiling into
     /// `(utilisation‰, over_limit)`.
     ///
