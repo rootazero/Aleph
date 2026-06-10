@@ -518,7 +518,23 @@ impl TeamDispatcher {
             tracing::warn!(task_id = %task_id, run_id = %run_id, error = %e, "dispatcher: finish_task_run failed");
         }
 
+        // Cancelled-while-in-flight guard: `task` is the snapshot claimed at
+        // dispatch time, so a cancel issued during the member run (workflow
+        // `cancel` / `team_task_control.cancel`) would otherwise be silently
+        // overwritten here and resurrect the task. The attempt itself is
+        // already recorded in coord_task_runs above; only the task's terminal
+        // status is preserved. A re-fetch failure proceeds normally (P7
+        // graceful degradation — same behaviour as before the guard).
+        let cancelled_mid_flight = matches!(
+            self.coord_store.get_task(&task_id).await,
+            Ok(Some(t)) if t.status == CoordTaskStatus::Cancelled
+        );
+        if cancelled_mid_flight {
+            tracing::info!(task_id = %task_id, "dispatcher: task was cancelled mid-flight; keeping it cancelled");
+        }
+
         match outcome.status {
+            _ if cancelled_mid_flight => {}
             MemberRunStatus::Completed => {
                 let reply = outcome.reply.unwrap_or_default();
                 // Review-gated tasks park in WaitingReview for the lead to
@@ -575,7 +591,19 @@ impl TeamDispatcher {
     ///
     /// `pub(super)` so the clarify executor ([`super::clarify`]) can terminate
     /// an unanswerable clarification with the same path.
+    ///
+    /// Cancelled is sticky: if the task was cancelled since the caller's
+    /// snapshot was taken, the failure is NOT written over it — the attempt
+    /// is already recorded in run history and a cancelled task must stay
+    /// cancelled.
     pub(super) async fn fail_task(&self, task: &CoordTask, error: &str) {
+        if matches!(
+            self.coord_store.get_task(&task.id).await,
+            Ok(Some(t)) if t.status == CoordTaskStatus::Cancelled
+        ) {
+            tracing::info!(task_id = %task.id, "dispatcher: not overwriting cancelled task with failure");
+            return;
+        }
         if let Err(e) = self
             .coord_store
             .update_task(
