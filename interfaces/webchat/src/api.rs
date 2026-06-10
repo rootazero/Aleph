@@ -16,7 +16,6 @@ pub mod cluster;
 
 // Split submodules
 pub mod acp;
-pub mod agent_run;
 pub mod browser;
 pub mod tauri_bridge;
 pub mod config;
@@ -43,7 +42,6 @@ pub mod workspace;
 
 // Re-export all public types for backward compatibility (crate::api::Foo)
 pub use acp::*;
-pub use agent_run::*;
 pub use browser::*;
 pub use config::*;
 pub use discord::*;
