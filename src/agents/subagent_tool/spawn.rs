@@ -178,6 +178,12 @@ impl SubagentTool {
         if !self.provider_overrides.is_empty() {
             runtime = runtime.with_provider_overrides(self.provider_overrides.clone());
         }
+        // Stage 5a (#9) — thread the parent harness's guardrail registry so
+        // the child's SpawnerBase → HarnessDeps inheritance chain (already
+        // wired downstream) actually receives a registry to inherit.
+        if let Some(g) = self.guardrails.clone() {
+            runtime = runtime.with_guardrails(g);
+        }
         runtime
     }
 }

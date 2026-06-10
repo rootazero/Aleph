@@ -776,7 +776,6 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
             // SubagentTool construction
             let subagent_tool = {
-                use crate::agents::background_tracker::BackgroundAgentTracker;
                 use crate::agents::subagent_tool::SubagentTool;
                 use crate::agents::AgentRegistry;
 
@@ -809,7 +808,11 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                         );
                         Arc::new(AgentRegistry::with_builtins())
                     });
-                let background_tracker = Arc::new(BackgroundAgentTracker::new());
+                // Engine-lifetime tracker: background sub-agents must stay
+                // pollable (`check_status` / `list`) and cancellable on turns
+                // AFTER the one that spawned them. A per-request tracker here
+                // silently dropped every result once the spawning run returned.
+                let background_tracker = self.background_tracker.clone();
                 let run_chain = crate::harness::chain_context::ChainContext::new();
                 let sub_session = orchestrator.session_service.clone();
                 // Phase 3 — route spawned subagents through the same
@@ -842,6 +845,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 .with_cancel_token(cancel_token.clone())
                 .with_trace_sink(trace_sink.clone())
                 .with_provider_overrides(agent_overrides);
+                // Stage 5a (#9) — inherit the main harness's guardrail
+                // registry so spawned subagents enforce the same
+                // Input/Output/ToolCall checks. `None` (mocks / simple
+                // engine / no [guardrails] config) leaves subagents
+                // unguarded, matching the main harness.
+                if let Some(g) = orchestrator.harness.guardrails() {
+                    t = t.with_guardrails(g);
+                }
                 if let Some(ref mgr) = self.teammate_manager {
                     t = t.with_teammate_manager(mgr.clone());
                 }
