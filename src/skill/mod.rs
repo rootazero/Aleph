@@ -170,18 +170,38 @@ impl SkillSystem {
     }
 
     /// Reload a single skill file into the registry and rebuild the snapshot.
+    ///
+    /// Emits `SkillLoaded` when the registry accepts the manifest so
+    /// subscribers (tool index coordinator, Panel) pick up hot-loaded skills
+    /// without a full rescan.
     pub async fn reload_file(&self, path: impl AsRef<Path>) -> Result<(), SkillSystemError> {
         let path = path.as_ref();
         let source = guess_source(path);
         let manifest = parse_skill_file(path, source)?;
+        let event = SkillSystemEvent::loaded(manifest.id().as_str(), manifest.name());
 
         let mut registry = self.inner.registry.write().await;
-        registry.register(manifest);
+        let accepted = registry.register(manifest);
         drop(registry);
 
+        if accepted {
+            self.emit_event(event);
+        }
         self.rebuild_snapshot().await;
 
         Ok(())
+    }
+
+    /// Ensure `dir` participates in directory rescans (idempotent).
+    ///
+    /// Used by the authoring path so a freshly created `~/.aleph/skills/`
+    /// is picked up by subsequent `rebuild()` calls even when it did not
+    /// exist at `init()` time.
+    pub async fn ensure_dir_registered(&self, dir: PathBuf) {
+        let mut dirs = self.inner.skill_dirs.write().await;
+        if !dirs.iter().any(|d| d == &dir) {
+            dirs.push(dir);
+        }
     }
 
     /// Get a clone of the current snapshot.
@@ -314,35 +334,77 @@ impl SkillSystem {
         merged
     }
 
+    /// Find the registered skills dir that owns this skill id.
+    ///
+    /// Prefers a dir with the flat `<dir>/<id>/SKILL.md` layout; falls back
+    /// to any dir whose `.usage.json` sidecar already tracks the id (nested
+    /// plugin layouts). Returns `None` for malformed ids (traversal guard)
+    /// or when no registered dir knows the skill.
+    async fn owning_dir(&self, id: &SkillId) -> Option<PathBuf> {
+        let id_str = id.as_str();
+        // Reject any path-separator or parent-dir references to prevent traversal.
+        if id_str.contains("..") || id_str.contains('/') || id_str.contains('\\') {
+            tracing::warn!(skill_id = %id_str, "owning_dir: rejecting malformed skill id");
+            return None;
+        }
+        let dirs = self.inner.skill_dirs.read().await.clone();
+        for dir in &dirs {
+            if dir.join(id_str).join("SKILL.md").exists() {
+                return Some(dir.clone());
+            }
+        }
+        for dir in &dirs {
+            if UsageStore::new(dir).get(id_str).is_some() {
+                return Some(dir.clone());
+            }
+        }
+        None
+    }
+
+    /// Locate the on-disk `SKILL.md` for a skill in the flat
+    /// `<skills_dir>/<id>/SKILL.md` layout. Returns `None` for nested
+    /// (plugin) layouts and malformed ids.
+    pub async fn locate_skill_file(&self, id: &SkillId) -> Option<PathBuf> {
+        let dir = self.owning_dir(id).await?;
+        let candidate = dir.join(id.as_str()).join("SKILL.md");
+        candidate.exists().then_some(candidate)
+    }
+
+    /// Per-skill activity telemetry from the owning dir's `.usage.json`.
+    pub async fn usage_for(&self, id: &SkillId) -> Option<UsageStats> {
+        let dir = self.owning_dir(id).await?;
+        UsageStore::new(dir).get(id.as_str())
+    }
+
+    /// Pin or unpin a skill. Pinned skills are exempt from lifecycle
+    /// auto-transitions (see `memory::dreaming::stages::SkillLifecycleStage`)
+    /// and refuse `delete` until unpinned. Best-effort no-op when the skill
+    /// cannot be located.
+    pub async fn set_pinned(&self, id: &SkillId, pinned: bool) {
+        if let Some(dir) = self.owning_dir(id).await {
+            UsageStore::new(dir).set_pinned(id.as_str(), pinned);
+        }
+    }
+
+    /// Set the lifecycle state of a skill (`active` / `stale` / `archived`).
+    ///
+    /// Archived skills stay in the registry and status surfaces but are
+    /// excluded from the injected `<available_skills>` prompt index, so the
+    /// snapshot is rebuilt after the flip.
+    pub async fn set_skill_state(&self, id: &SkillId, state: SkillState) {
+        if let Some(dir) = self.owning_dir(id).await {
+            UsageStore::new(dir).set_state(id.as_str(), state);
+            self.rebuild_snapshot().await;
+        }
+    }
+
     /// Record an LLM-driven mutation to a skill (install / enable / scope
     /// change). Bumps `patch_count` on the sidecar belonging to whichever
     /// registered dir owns this skill's `SKILL.md`. Best-effort — silently
     /// no-ops if the skill cannot be located on disk.
     pub async fn record_patch(&self, id: &SkillId) {
-        let id_str = id.as_str();
-        // Reject any path-separator or parent-dir references to prevent traversal.
-        if id_str.contains("..") || id_str.contains('/') || id_str.contains('\\') {
-            tracing::warn!(skill_id = %id_str, "record_patch: rejecting malformed skill id");
-            return;
-        }
-        let dirs = self.inner.skill_dirs.read().await.clone();
-        for dir in &dirs {
-            let candidate = dir.join(id.as_str()).join("SKILL.md");
-            if candidate.exists() {
-                UsageStore::new(dir).record_patch(id.as_str());
-                return;
-            }
-        }
-        // Skill lives in a nested layout (e.g. plugin-installed under
-        // `<dir>/<plugin>/<id>/SKILL.md`). Fall back to bumping any sidecar
-        // that already has a row for this id so we update the right one
-        // without creating fresh orphans in unrelated dirs.
-        for dir in &dirs {
-            let store = UsageStore::new(dir);
-            if store.get(id.as_str()).is_some() {
-                store.record_patch(id.as_str());
-                return;
-            }
+        if let Some(dir) = self.owning_dir(id).await {
+            UsageStore::new(dir).record_patch(id.as_str());
         }
     }
 
@@ -416,8 +478,13 @@ impl SkillSystem {
     /// registered `.usage.json` so the sidecar does not accumulate orphan
     /// telemetry over time. `forget` is idempotent so a missing row is
     /// silently ignored.
+    ///
+    /// For Global / Workspace skills in the flat `<dir>/<id>/SKILL.md`
+    /// layout the backing directory is also deleted — without this, the
+    /// next directory rescan would resurrect a skill the user removed.
     pub async fn remove_skill(&self, id: &SkillId) -> Result<bool, std::io::Error> {
         let mut registry = self.inner.registry.write().await;
+        let mut deletable_on_disk = false;
         if let Some(m) = registry.get(id) {
             if matches!(m.source(), SkillSource::Bundled) {
                 return Err(std::io::Error::new(
@@ -425,10 +492,28 @@ impl SkillSystem {
                     "Cannot remove bundled skills",
                 ));
             }
+            deletable_on_disk =
+                matches!(m.source(), SkillSource::Global | SkillSource::Workspace);
         }
         let removed = registry.remove(id);
         drop(registry);
         if removed {
+            if deletable_on_disk {
+                // Locate before `forget` below — the nested-layout fallback in
+                // `owning_dir` consults the very sidecar rows we are about to drop.
+                if let Some(skill_md) = self.locate_skill_file(id).await {
+                    if let Some(skill_dir) = skill_md.parent() {
+                        if let Err(e) = std::fs::remove_dir_all(skill_dir) {
+                            tracing::warn!(
+                                skill_id = %id.as_str(),
+                                path = %skill_dir.display(),
+                                error = %e,
+                                "remove_skill: failed to delete skill directory"
+                            );
+                        }
+                    }
+                }
+            }
             let dirs = self.inner.skill_dirs.read().await.clone();
             for dir in &dirs {
                 UsageStore::new(dir).forget(id.as_str());
@@ -491,6 +576,18 @@ impl SkillSystem {
         // locks simultaneously.
         let skill_entries = self.inner.config.read().await.entries.clone();
 
+        // Archived skills (LLM-curated via `skill_manage` or future dreaming
+        // stages) stay listed in status surfaces but must not occupy prompt
+        // budget — collect their ids so the snapshot can exclude them from
+        // the injected index.
+        let archived: std::collections::HashSet<String> = self
+            .collect_usage_snapshot()
+            .await
+            .into_iter()
+            .filter(|(_, stats)| stats.state == SkillState::Archived)
+            .map(|(id, _)| id)
+            .collect();
+
         let registry = self.inner.registry.read().await;
         let new_snapshot = SkillSnapshot::build(
             &registry,
@@ -498,6 +595,7 @@ impl SkillSystem {
             current_version,
             &config_value,
             &skill_entries,
+            &archived,
         );
         let skill_ids: Vec<String> = registry
             .list_all()

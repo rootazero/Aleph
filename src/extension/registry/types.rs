@@ -197,18 +197,6 @@ impl SkillRegistration {
         self.content.replace("$ARGUMENTS", arguments)
     }
 
-    /// Convert to SkillInfo for compatibility with ToolCatalog
-    pub fn to_skill_info(&self) -> crate::skill::SkillInfo {
-        crate::skill::SkillInfo {
-            id: self.qualified_name(),
-            name: self.name.clone(),
-            description: self.description.clone(),
-            triggers: self.triggers.clone(),
-            allowed_tools: self.allowed_tools.clone(),
-            ecosystem: "aleph".to_string(),
-        }
-    }
-
     /// Get the base directory for this skill (for file references)
     pub fn base_dir(&self) -> PathBuf {
         self.source_path
