@@ -129,6 +129,7 @@ mod tests {
             start_handler: "start".into(),
             stop_handler: "stop".into(),
             plugin_id: "wasm-noperm".into(),
+            auto_start: true,
         })];
 
         let input = serde_json::to_vec(&caps).unwrap();

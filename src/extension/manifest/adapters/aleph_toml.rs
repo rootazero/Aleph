@@ -79,6 +79,21 @@ impl ManifestAdapter for AlephTomlAdapter {
             }
         }
 
+        // Background services declared in [[services]] — gated on the
+        // `background` permission so a missing grant degrades to a warning
+        // instead of failing the whole plugin at the registrar.
+        let permissions = convert_permissions(&raw.permissions);
+        if !raw.services.is_empty() {
+            if permissions.contains(&crate::extension::manifest::PluginPermission::Background) {
+                capabilities.extend(parsers::parse_v2_services(&raw.services, &plugin_id));
+            } else {
+                tracing::warn!(
+                    plugin = %plugin_id,
+                    "[[services]] declared but permissions.background is not granted — services skipped"
+                );
+            }
+        }
+
         Ok(AdapterOutput {
             plugin_id: plugin_id.clone(),
             name: raw.plugin.name.clone(),
@@ -90,7 +105,7 @@ impl ManifestAdapter for AlephTomlAdapter {
                 origin: PluginOrigin::Global,
                 format: SourceFormat::AlephToml,
             },
-            permissions: convert_permissions(&raw.permissions),
+            permissions,
         })
     }
 
@@ -153,5 +168,111 @@ shell = true
             .capabilities
             .iter()
             .any(|c| matches!(c, CapabilityDeclaration::Skill(s) if s.name == "hello")));
+    }
+
+    #[test]
+    fn test_parse_services_with_background_permission() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join(ALEPH_PLUGIN_TOML),
+            r#"
+[plugin]
+id = "svc-plugin"
+name = "Service Plugin"
+
+[permissions]
+background = true
+
+[[services]]
+name = "worker"
+start_handler = "start_worker"
+stop_handler = "stop_worker"
+
+[[services]]
+name = "no-handlers"
+"#,
+        )
+        .unwrap();
+
+        let out = AlephTomlAdapter.parse(dir.path()).unwrap();
+        assert!(out
+            .permissions
+            .contains(&crate::extension::manifest::PluginPermission::Background));
+
+        let services: Vec<_> = out
+            .capabilities
+            .iter()
+            .filter_map(|c| match c {
+                CapabilityDeclaration::Service(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        // "no-handlers" lacks start/stop handlers and must be skipped.
+        assert_eq!(services.len(), 1);
+        assert_eq!(services[0].id, "worker");
+        assert_eq!(services[0].start_handler, "start_worker");
+        assert_eq!(services[0].stop_handler, "stop_worker");
+        assert!(services[0].auto_start, "auto_start defaults to true");
+    }
+
+    #[test]
+    fn test_parse_services_skipped_without_background_permission() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join(ALEPH_PLUGIN_TOML),
+            r#"
+[plugin]
+id = "svc-plugin"
+name = "Service Plugin"
+
+[[services]]
+name = "worker"
+start_handler = "start_worker"
+stop_handler = "stop_worker"
+"#,
+        )
+        .unwrap();
+
+        let out = AlephTomlAdapter.parse(dir.path()).unwrap();
+        // Without permissions.background the service is skipped (warn), and
+        // the rest of the plugin still parses.
+        assert!(!out
+            .capabilities
+            .iter()
+            .any(|c| matches!(c, CapabilityDeclaration::Service(_))));
+    }
+
+    #[test]
+    fn test_service_autostart_opt_out() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join(ALEPH_PLUGIN_TOML),
+            r#"
+[plugin]
+id = "svc-plugin"
+name = "Service Plugin"
+
+[permissions]
+background = true
+
+[[services]]
+name = "manual-worker"
+start_handler = "start"
+stop_handler = "stop"
+auto_start = false
+"#,
+        )
+        .unwrap();
+
+        let out = AlephTomlAdapter.parse(dir.path()).unwrap();
+        let svc = out
+            .capabilities
+            .iter()
+            .find_map(|c| match c {
+                CapabilityDeclaration::Service(s) => Some(s),
+                _ => None,
+            })
+            .expect("service capability emitted");
+        assert!(!svc.auto_start);
     }
 }

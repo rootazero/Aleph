@@ -711,7 +711,24 @@ Background services allow plugins to run long-lived processes that operate indep
 | **Running** | Service is active and processing |
 | **Stopping** | Service is shutting down gracefully |
 
+Lifecycle wiring (when services start/stop automatically):
+
+| Event | Behavior |
+|-------|----------|
+| Daemon boot | `auto_start` services of active plugins are loaded and started |
+| Hot-reload | Orphaned services (plugin removed/disabled on disk) are stopped; `auto_start` services of the new active set are started |
+| `plugins.enable` | `auto_start` services are started |
+| `plugins.disable` / `plugins.uninstall` | Plugin runtime is unloaded — its services (and transient MCP servers) are stopped first |
+| Daemon shutdown | All running services are stopped (best-effort), alongside heartbeat/ACP/mDNS teardown |
+
 ### Manifest Format
+
+> Declaring `[[services]]` requires the `background` permission
+> (`[permissions] background = true` in `aleph.plugin.toml`, or
+> `[aleph.permissions] background = true` in the CC-format manifest).
+> Without it the services are skipped with a warning; the rest of the
+> plugin still loads. Services must declare BOTH `start_handler` and
+> `stop_handler` — entries missing either are skipped.
 
 ```toml
 [[services]]
@@ -719,7 +736,7 @@ name = "file-watcher"
 description = "Watches filesystem for changes"
 start_handler = "startFileWatcher"
 stop_handler = "stopFileWatcher"
-auto_start = true              # Start when plugin loads
+auto_start = true              # Start when plugin loads (default: true)
 
 [[services]]
 name = "sync-daemon"

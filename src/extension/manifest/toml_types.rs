@@ -127,6 +127,9 @@ pub struct PermissionsSection {
     pub env: bool,
     #[serde(default)]
     pub shell: bool,
+    /// Allow the plugin to run declared `[[services]]` in the background.
+    #[serde(default)]
+    pub background: bool,
 }
 
 /// Filesystem permission level
@@ -231,6 +234,14 @@ pub struct ServiceSection {
     pub start_handler: Option<String>,
     #[serde(default)]
     pub stop_handler: Option<String>,
+    /// Start automatically when the plugin is loaded (mirrors the MCP
+    /// transient-server `auto_start(true)` precedent).
+    #[serde(default = "default_service_auto_start")]
+    pub auto_start: bool,
+}
+
+fn default_service_auto_start() -> bool {
+    true
 }
 
 /// Advanced capabilities section
@@ -456,6 +467,9 @@ pub fn convert_permissions(perms: &PermissionsSection) -> Vec<PluginPermission> 
     }
     if perms.shell {
         permissions.push(PluginPermission::Shell);
+    }
+    if perms.background {
+        permissions.push(PluginPermission::Background);
     }
     permissions
 }

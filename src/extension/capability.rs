@@ -276,6 +276,7 @@ mod tests {
                 start_handler: "start".to_string(),
                 stop_handler: "stop".to_string(),
                 plugin_id: "p".to_string(),
+                auto_start: true,
             }),
             CapabilityDeclaration::Command(CommandRegistration {
                 name: "cmd".to_string(),

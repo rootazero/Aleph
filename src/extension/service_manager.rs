@@ -75,6 +75,12 @@ use super::types::{ServiceInfo, ServiceResult, ServiceState};
 pub struct ServiceManager {
     /// Running services by service_id (format: "plugin_id:service_id")
     services: HashMap<String, ServiceInfo>,
+    /// Registration snapshot captured at start time, keyed like `services`.
+    ///
+    /// Kept so a service can still be stopped after its plugin's registry
+    /// entries were rebuilt or removed (hot-reload, manual dir deletion) —
+    /// the stop handler name would otherwise be unrecoverable.
+    registrations: HashMap<String, ServiceRegistration>,
 }
 
 impl ServiceManager {
@@ -82,6 +88,7 @@ impl ServiceManager {
     pub fn new() -> Self {
         Self {
             services: HashMap::new(),
+            registrations: HashMap::new(),
         }
     }
 
@@ -139,8 +146,10 @@ impl ServiceManager {
             error: None,
         };
 
-        // Store the starting state
+        // Store the starting state and snapshot the registration so the
+        // service stays stoppable even if the registry entry disappears.
         self.services.insert(key.clone(), info.clone());
+        self.registrations.insert(key.clone(), registration.clone());
         info!("Starting service: {} ({})", registration.name, key);
 
         // Call the start handler
@@ -391,6 +400,77 @@ impl ServiceManager {
         results
     }
 
+    /// Stop every service that is currently Running or Starting, using the
+    /// registration snapshots captured at start time.
+    ///
+    /// Used at daemon shutdown so plugin background work is torn down before
+    /// the process exits (mirrors heartbeat/ACP/mDNS shutdown).
+    pub fn stop_all(&mut self, loader: &PluginLoader) -> Vec<ServiceInfo> {
+        let to_stop: Vec<ServiceRegistration> = self
+            .services
+            .iter()
+            .filter(|(_, info)| {
+                matches!(info.state, ServiceState::Running | ServiceState::Starting)
+            })
+            .filter_map(|(key, _)| self.registrations.get(key).cloned())
+            .collect();
+
+        let mut results = Vec::new();
+        for registration in &to_stop {
+            match self.stop_service(registration, loader) {
+                Ok(info) => results.push(info),
+                Err(e) => warn!(
+                    "Failed to stop service {}:{} during stop_all - {}",
+                    registration.plugin_id, registration.id, e
+                ),
+            }
+        }
+        results
+    }
+
+    /// Stop running services whose plugin is no longer active.
+    ///
+    /// Called after a hot-reload rebuilt the plugin registry: a plugin that
+    /// was removed or disabled on disk leaves its services running with no
+    /// registry entry to stop them. `is_active` reports whether a plugin_id
+    /// is still active after the reload.
+    pub fn stop_orphaned(
+        &mut self,
+        is_active: impl Fn(&str) -> bool,
+        loader: &PluginLoader,
+    ) -> Vec<ServiceInfo> {
+        let to_stop: Vec<ServiceRegistration> = self
+            .services
+            .iter()
+            .filter(|(_, info)| {
+                matches!(info.state, ServiceState::Running | ServiceState::Starting)
+                    && !is_active(&info.plugin_id)
+            })
+            .filter_map(|(key, _)| self.registrations.get(key).cloned())
+            .collect();
+
+        let mut results = Vec::new();
+        for registration in &to_stop {
+            info!(
+                "Stopping orphaned service {}:{} (plugin no longer active)",
+                registration.plugin_id, registration.id
+            );
+            match self.stop_service(registration, loader) {
+                Ok(info) => {
+                    let key = Self::make_key(&registration.plugin_id, &registration.id);
+                    self.services.remove(&key);
+                    self.registrations.remove(&key);
+                    results.push(info);
+                }
+                Err(e) => warn!(
+                    "Failed to stop orphaned service {}:{} - {}",
+                    registration.plugin_id, registration.id, e
+                ),
+            }
+        }
+        results
+    }
+
     /// Get the count of running services.
     pub fn running_count(&self) -> usize {
         self.services
@@ -411,6 +491,7 @@ impl ServiceManager {
     /// stop services before clearing.
     pub fn clear(&mut self) {
         self.services.clear();
+        self.registrations.clear();
     }
 }
 
@@ -435,6 +516,7 @@ mod tests {
             start_handler: "startService".to_string(),
             stop_handler: "stopService".to_string(),
             plugin_id: plugin_id.to_string(),
+            auto_start: true,
         }
     }
 
@@ -644,6 +726,60 @@ mod tests {
 
         let info = result.unwrap();
         assert_eq!(info.state, ServiceState::Stopped);
+    }
+
+    fn insert_running(manager: &mut ServiceManager, plugin_id: &str, service_id: &str) {
+        let key = ServiceManager::make_key(plugin_id, service_id);
+        manager.services.insert(
+            key.clone(),
+            ServiceInfo {
+                id: service_id.to_string(),
+                plugin_id: plugin_id.to_string(),
+                name: format!("Service {}", service_id),
+                state: ServiceState::Running,
+                started_at: Some(Utc::now()),
+                error: None,
+            },
+        );
+        manager
+            .registrations
+            .insert(key, make_test_registration(plugin_id, service_id));
+    }
+
+    #[test]
+    fn test_stop_all_stops_running_services() {
+        let mut manager = ServiceManager::new();
+        let loader = PluginLoader::new();
+
+        insert_running(&mut manager, "plugin-a", "s1");
+        insert_running(&mut manager, "plugin-b", "s1");
+        assert_eq!(manager.running_count(), 2);
+
+        // Plugins aren't loaded, so stop handlers hit PluginNotFound and the
+        // services are marked Stopped — exactly the shutdown semantics we want.
+        let results = manager.stop_all(&loader);
+        assert_eq!(results.len(), 2);
+        assert_eq!(manager.running_count(), 0);
+    }
+
+    #[test]
+    fn test_stop_orphaned_only_stops_inactive_plugins() {
+        let mut manager = ServiceManager::new();
+        let loader = PluginLoader::new();
+
+        insert_running(&mut manager, "plugin-active", "s1");
+        insert_running(&mut manager, "plugin-removed", "s1");
+
+        let results = manager.stop_orphaned(|id| id == "plugin-active", &loader);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].plugin_id, "plugin-removed");
+
+        // Orphan is removed from tracking; the active service is untouched.
+        assert!(manager.get_service("plugin-removed", "s1").is_none());
+        assert_eq!(
+            manager.get_service("plugin-active", "s1").unwrap().state,
+            ServiceState::Running
+        );
     }
 
     #[test]
