@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use chrono::{Duration, Utc};
 
 use crate::exec::approval::types::ApprovalRequest;
+use crate::exec::socket::ApprovalDecisionType;
+use crate::exec::ApprovalBridge;
 use crate::gateway::channel::{
     Channel, ChannelResult, ConversationId, InlineKeyboard, OutboundMessage, UserId,
 };
@@ -23,17 +25,21 @@ impl TelegramChannelApprovalCapability {
         Self { channel, access }
     }
 
-    fn render_approval_text(&self, request: &ApprovalRequest) -> String {
+    fn render_approval_text(request: &ApprovalRequest) -> String {
         match request {
             ApprovalRequest::Command(cmd) => {
-                format!(
+                let mut text = format!(
                     "⚠️ *Command Approval Required*\n\n\
                      A command requires your approval:\n\n\
                      `{}`\n\n\
                      CWD: {}",
                     cmd.command,
                     cmd.cwd.as_deref().unwrap_or("default")
-                )
+                );
+                if let Some(reason) = cmd.reason.as_deref().filter(|r| !r.is_empty()) {
+                    text.push_str(&format!("\n\n*Why:* {}", reason));
+                }
+                text
             }
             ApprovalRequest::Capability(cap) => {
                 let stage_emoji = match cap.trust_stage {
@@ -52,11 +58,22 @@ impl TelegramChannelApprovalCapability {
         }
     }
 
-    fn approval_callback_data(action: ApprovalAction, approval_id: &str) -> String {
-        match action {
-            ApprovalAction::Approve => format!("approve:{}:once", approval_id),
-            ApprovalAction::Deny => format!("approve:{}:deny", approval_id),
-        }
+    /// Build the inline keyboard for `request` via the shared risk-aware
+    /// builder ([`ApprovalBridge::build_approval_keyboard`]) instead of a
+    /// hand-rolled Approve/Deny pair, so the rendered decision tiers follow
+    /// the request's [`allowed_decisions`] set (session/always appear only
+    /// when permitted). Capability (tool) approvals can honor at most a
+    /// session-scoped grant, so their set stops at the session tier.
+    fn approval_keyboard(request: &ApprovalRequest, approval_id: &str) -> InlineKeyboard {
+        let allowed: Vec<ApprovalDecisionType> = match request {
+            ApprovalRequest::Command(cmd) => cmd.allowed_decisions.clone(),
+            ApprovalRequest::Capability(_) => vec![
+                ApprovalDecisionType::AllowOnce,
+                ApprovalDecisionType::AllowSession,
+                ApprovalDecisionType::Deny,
+            ],
+        };
+        ApprovalBridge::build_approval_keyboard(approval_id, &allowed)
     }
 }
 
@@ -69,17 +86,9 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
         approval_id: &str,
     ) -> ChannelResult<PendingApproval> {
         let expires_at = Utc::now() + Duration::minutes(5);
-        let text = self.render_approval_text(request);
+        let text = Self::render_approval_text(request);
 
-        let keyboard = InlineKeyboard::new()
-            .button(
-                "\u{2705} Approve",
-                Self::approval_callback_data(ApprovalAction::Approve, approval_id),
-            )
-            .button(
-                "\u{274c} Deny",
-                Self::approval_callback_data(ApprovalAction::Deny, approval_id),
-            );
+        let keyboard = Self::approval_keyboard(request, approval_id);
 
         let mut message = OutboundMessage::text(conversation_id.as_str(), text);
         message.inline_keyboard = Some(keyboard);
@@ -125,17 +134,9 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
         request: &ApprovalRequest,
     ) -> ChannelResult<RenderedApproval> {
         let approval_id = format!("tg-{}", uuid::Uuid::new_v4());
-        let text = self.render_approval_text(request);
+        let text = Self::render_approval_text(request);
 
-        let keyboard = InlineKeyboard::new()
-            .button(
-                "✅ Approve",
-                Self::approval_callback_data(ApprovalAction::Approve, &approval_id),
-            )
-            .button(
-                "❌ Deny",
-                Self::approval_callback_data(ApprovalAction::Deny, &approval_id),
-            );
+        let keyboard = Self::approval_keyboard(request, &approval_id);
 
         let mut message = OutboundMessage::text(conversation_id.as_str(), text);
         message.inline_keyboard = Some(keyboard);
@@ -174,19 +175,11 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
             .authorize_actor(actor_user_id, ApprovalAction::Approve)
             .await;
 
-        let text = self.render_approval_text(request);
+        let text = Self::render_approval_text(request);
 
         match auth_result {
             AuthorizationResult::Authorized => {
-                let keyboard = InlineKeyboard::new()
-                    .button(
-                        "✅ Approve",
-                        Self::approval_callback_data(ApprovalAction::Approve, approval_id),
-                    )
-                    .button(
-                        "❌ Deny",
-                        Self::approval_callback_data(ApprovalAction::Deny, approval_id),
-                    );
+                let keyboard = Self::approval_keyboard(request, approval_id);
 
                 let mut message = OutboundMessage::text(conversation_id.as_str(), text);
                 message.inline_keyboard = Some(keyboard);
@@ -211,25 +204,97 @@ impl ChannelApprovalCapability for TelegramChannelApprovalCapability {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::exec::ApprovalBridge;
+    use crate::exec::approval::types::CommandApprovalRequest;
+
+    fn command_request(command: &str, allowed: Vec<ApprovalDecisionType>) -> ApprovalRequest {
+        ApprovalRequest::Command(CommandApprovalRequest {
+            command: command.to_string(),
+            cwd: None,
+            reason: Some("escalation: first execution".to_string()),
+            allowed_decisions: allowed,
+        })
+    }
 
     #[test]
-    fn approval_callback_data_is_three_part_and_parseable() {
-        let approve = TelegramChannelApprovalCapability::approval_callback_data(
-            ApprovalAction::Approve,
-            "rec-123",
+    fn keyboard_renders_allowed_tiers_and_parses_back() {
+        let request = command_request(
+            "ls -la",
+            vec![
+                ApprovalDecisionType::AllowOnce,
+                ApprovalDecisionType::AllowSession,
+                ApprovalDecisionType::AllowAlways,
+                ApprovalDecisionType::Deny,
+            ],
         );
-        let deny = TelegramChannelApprovalCapability::approval_callback_data(
-            ApprovalAction::Deny,
-            "rec-123",
-        );
-        assert_eq!(approve, "approve:rec-123:once");
-        assert_eq!(deny, "approve:rec-123:deny");
+        let kb = TelegramChannelApprovalCapability::approval_keyboard(&request, "rec-123");
+        let json = serde_json::to_string(&kb).unwrap();
+        for decision in ["once", "session", "always", "deny"] {
+            let data = format!("approve:rec-123:{decision}");
+            assert!(json.contains(&data), "missing button {data}: {json}");
+            // 与 RPC 侧 ApprovalBridge::parse_callback 必须双向一致
+            let (id, _) = ApprovalBridge::parse_callback(&data).expect("parses");
+            assert_eq!(id, "rec-123");
+        }
+    }
 
-        // 与 RPC 侧 ApprovalBridge::parse_callback 必须双向一致
-        let (id, _) = ApprovalBridge::parse_callback(&approve).expect("approve parses");
-        assert_eq!(id, "rec-123");
-        let (id, _) = ApprovalBridge::parse_callback(&deny).expect("deny parses");
-        assert_eq!(id, "rec-123");
+    #[test]
+    fn keyboard_for_danger_set_omits_always() {
+        let request = command_request(
+            "rm -rf ./build",
+            vec![
+                ApprovalDecisionType::AllowOnce,
+                ApprovalDecisionType::AllowSession,
+                ApprovalDecisionType::Deny,
+            ],
+        );
+        let kb = TelegramChannelApprovalCapability::approval_keyboard(&request, "danger-1");
+        let json = serde_json::to_string(&kb).unwrap();
+        assert!(!json.contains("approve:danger-1:always"));
+        assert!(json.contains("approve:danger-1:session"));
+    }
+
+    #[test]
+    fn capability_request_keyboard_stops_at_session_tier() {
+        use crate::exec::approval::parameter_binding::RequiredCapabilities;
+        use crate::exec::approval::types::{CapabilityApprovalRequest, TrustStage};
+
+        let request = ApprovalRequest::Capability(Box::new(CapabilityApprovalRequest {
+            tool_name: "vault_store".to_string(),
+            tool_description: "store a secret".to_string(),
+            required_capabilities: RequiredCapabilities {
+                base_preset: "default".to_string(),
+                description: String::new(),
+                overrides: Default::default(),
+                parameter_bindings: Default::default(),
+            },
+            resolved_capabilities: Default::default(),
+            trust_stage: TrustStage::Draft,
+        }));
+        let kb = TelegramChannelApprovalCapability::approval_keyboard(&request, "cap-1");
+        let json = serde_json::to_string(&kb).unwrap();
+        assert!(json.contains("approve:cap-1:once"));
+        assert!(json.contains("approve:cap-1:session"));
+        assert!(!json.contains("approve:cap-1:always"));
+    }
+
+    #[test]
+    fn reason_is_rendered_in_command_approval_text() {
+        let request = command_request("git push", vec![ApprovalDecisionType::AllowOnce]);
+        let text = TelegramChannelApprovalCapability::render_approval_text(&request);
+        assert!(text.contains("git push"));
+        assert!(
+            text.contains("escalation: first execution"),
+            "reason must reach the user-facing message: {text}"
+        );
+
+        // No reason → no dangling "Why:" label.
+        let bare = ApprovalRequest::Command(CommandApprovalRequest {
+            command: "git push".to_string(),
+            cwd: None,
+            reason: None,
+            allowed_decisions: vec![ApprovalDecisionType::AllowOnce],
+        });
+        let text = TelegramChannelApprovalCapability::render_approval_text(&bare);
+        assert!(!text.contains("Why:"));
     }
 }

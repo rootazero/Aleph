@@ -3,49 +3,15 @@
 //! Provides utilities for:
 //! - Building approval inline keyboards
 //! - Parsing callback data from button clicks
-//! - Tracking sent approval messages
 
-use crate::sync_primitives::Arc;
-use std::collections::HashMap;
-use tokio::sync::RwLock;
-
-use crate::gateway::channel::{ConversationId, InlineButton, InlineKeyboard, MessageId};
+use crate::gateway::channel::{InlineButton, InlineKeyboard};
 
 use super::socket::ApprovalDecisionType;
 
-/// Tracks a sent approval message for later editing
-#[derive(Debug, Clone)]
-pub struct SentApprovalMessage {
-    /// Approval ID this message is for
-    pub approval_id: String,
-    /// Channel the message was sent to
-    pub channel: String,
-    /// Chat ID where the message was sent
-    pub chat_id: ConversationId,
-    /// Message ID for editing
-    pub message_id: MessageId,
-}
-
 /// Bridge utilities for approval message handling
-pub struct ApprovalBridge {
-    /// Track sent messages for editing
-    sent_messages: Arc<RwLock<HashMap<String, Vec<SentApprovalMessage>>>>,
-}
-
-impl Default for ApprovalBridge {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub struct ApprovalBridge;
 
 impl ApprovalBridge {
-    /// Create a new bridge
-    pub fn new() -> Self {
-        Self {
-            sent_messages: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
-
     /// Build inline keyboard for an approval request, rendering only the
     /// decisions the request permits.
     ///
@@ -123,56 +89,6 @@ impl ApprovalBridge {
             ApprovalDecisionType::AllowAlways => "✅ Allowed (always)",
             ApprovalDecisionType::Deny => "❌ Denied",
         }
-    }
-
-    /// Format the status line after resolution
-    pub fn format_status_line(decision: &ApprovalDecisionType, resolved_by: &str) -> String {
-        match decision {
-            ApprovalDecisionType::AllowOnce => {
-                format!("\n\n✅ **Allowed** (once) by {}", resolved_by)
-            }
-            ApprovalDecisionType::AllowSession => {
-                format!("\n\n✅ **Allowed** (session) by {}", resolved_by)
-            }
-            ApprovalDecisionType::AllowAlways => {
-                format!("\n\n✅ **Allowed** (always) by {}", resolved_by)
-            }
-            ApprovalDecisionType::Deny => {
-                format!("\n\n❌ **Denied** by {}", resolved_by)
-            }
-        }
-    }
-
-    /// Maximum number of approval entries to retain in memory.
-    const MAX_TRACKED_APPROVALS: usize = 10_000;
-
-    /// Track a sent approval message
-    pub async fn track_sent_message(&self, msg: SentApprovalMessage) {
-        let mut messages = self.sent_messages.write().await;
-        messages
-            .entry(msg.approval_id.clone())
-            .or_default()
-            .push(msg);
-        // Prevent unbounded growth: evict oldest entries when over limit.
-        while messages.len() > Self::MAX_TRACKED_APPROVALS {
-            if let Some(oldest) = messages.keys().next().cloned() {
-                messages.remove(&oldest);
-            } else {
-                break;
-            }
-        }
-    }
-
-    /// Get sent messages for an approval
-    pub async fn get_sent_messages(&self, approval_id: &str) -> Vec<SentApprovalMessage> {
-        let messages = self.sent_messages.read().await;
-        messages.get(approval_id).cloned().unwrap_or_default()
-    }
-
-    /// Remove tracked messages for an approval
-    pub async fn remove_sent_messages(&self, approval_id: &str) {
-        let mut messages = self.sent_messages.write().await;
-        messages.remove(approval_id);
     }
 }
 
@@ -299,23 +215,5 @@ mod tests {
             ApprovalBridge::decision_response_text(&ApprovalDecisionType::Deny),
             "❌ Denied"
         );
-    }
-
-    #[tokio::test]
-    async fn test_track_sent_messages() {
-        let bridge = ApprovalBridge::new();
-
-        let msg = SentApprovalMessage {
-            approval_id: "test1".into(),
-            channel: "telegram".into(),
-            chat_id: ConversationId::new("123"),
-            message_id: MessageId::new("456"),
-        };
-
-        bridge.track_sent_message(msg).await;
-
-        let messages = bridge.get_sent_messages("test1").await;
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].channel, "telegram");
     }
 }

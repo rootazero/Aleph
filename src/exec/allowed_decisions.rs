@@ -23,7 +23,8 @@ use super::socket::ApprovalDecisionType;
 
 /// The legacy three-decision set (`Once` / `Always` / `Deny`).
 ///
-/// Doubles as the serde default for [`super::socket::ApprovalRequestPayload`],
+/// Doubles as the serde default for
+/// [`crate::exec::approval::types::CommandApprovalRequest::allowed_decisions`],
 /// so payloads serialized before the `allowed_decisions` field existed
 /// deserialize to the historical (unconstrained) behavior. Kept byte-stable on
 /// purpose: it backfills *old* payloads, so it must NOT gain the newer

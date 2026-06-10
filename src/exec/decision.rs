@@ -41,6 +41,10 @@ pub struct ApprovalRequest {
     pub agent_id: String,
     /// Session key
     pub session_key: String,
+    /// Why approval is being requested (escalation / confirmation context),
+    /// surfaced to the resolving user. `None` when the command itself is the
+    /// full context (plain exec approval).
+    pub reason: Option<String>,
 }
 
 /// Context for execution decision
@@ -200,6 +204,7 @@ fn build_approval_request(analysis: &CommandAnalysis, context: &ExecContext) -> 
         analysis: analysis.clone(),
         agent_id: context.agent_id.clone(),
         session_key: context.session_key.clone(),
+        reason: None,
     }
 }
 
