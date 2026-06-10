@@ -69,16 +69,13 @@ where
                     };
                     if let Some(target_id) = target {
                         let _ = self.cancel(&target_id).await;
-                        // Persist an interruption marker so the successor run
-                        // sees the prior task was cut short by the user, not
-                        // completed (hermes `*[interrupted]*` parity). The
-                        // cancelled run never persists its in-flight assistant
-                        // message, so without this the log just stops dead.
-                        super::steering::inject_interrupt_marker(
-                            self.orchestrator.as_ref(),
-                            &request.session_key,
-                        )
-                        .await;
+                        // No interruption marker is persisted here: the
+                        // harness bridge emits `RunFinished{Cancelled}` when
+                        // the cancelled loop tears down, and the prompt
+                        // builder replays that as a `<system-reminder>`
+                        // interruption note (covers /stop, Panel chat.abort
+                        // and this Interrupt mode alike) — single source,
+                        // nothing stored twice.
                         info!(
                             session = %request.session_key.to_key_string(),
                             target_run = %target_id,

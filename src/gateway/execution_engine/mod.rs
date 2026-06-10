@@ -113,11 +113,11 @@ pub enum BusyInputMode {
     /// Cancel the running sibling on this session, then let the inbound router's
     /// FIFO busy queue restart the message as a fresh run once the slot frees.
     /// The new message supersedes the in-flight task, picking up its full
-    /// (interrupted) context from the session log — an interruption marker is
-    /// persisted at cancel time (see `steering::inject_interrupt_marker`) so
-    /// the successor run knows the prior task was cut short rather than
-    /// completed. Reuses [`ExecutionEngine::cancel`] and the `AgentBusy`
-    /// delivery path; no new dispatch machinery.
+    /// (interrupted) context from the session log — the cancelled loop's
+    /// `RunFinished{Cancelled}` marker is replayed by the prompt builder as an
+    /// interruption note, so the successor run knows the prior task was cut
+    /// short rather than completed. Reuses [`ExecutionEngine::cancel`] and the
+    /// `AgentBusy` delivery path; no new dispatch machinery.
     Interrupt,
     /// Never disturb the running task: no mid-loop injection, no cancellation.
     /// The message waits in the inbound router's per-agent FIFO busy queue and

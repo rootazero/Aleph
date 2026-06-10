@@ -118,60 +118,6 @@ pub(super) fn apply_reconcile_preamble(text: String, has_active_scratchpad: bool
 /// the burst drains — backpressure, never a drop.
 pub(super) const MAX_PENDING_STEERING: usize = 16;
 
-/// Persisted into the session log when the `Interrupt` busy-input mode cancels
-/// a running sibling, before the superseding message restarts as a fresh run.
-/// The cancelled run never persists its in-flight assistant message (only the
-/// `Ok` teardown branch does), so without a marker the successor's prompt
-/// shows the prior task's tool stream stopping dead with no explanation — the
-/// model may try to resume it as if it merely paused. hermes persists a
-/// `*[interrupted]*` marker for the same reason; OpenSquilla records a
-/// `terminal_reason`.
-const INTERRUPT_MARKER: &str =
-    "[Task interrupted] The in-flight task above was cancelled because the user \
-     sent a new message that supersedes it. Earlier steps may have stopped \
-     mid-flight and any partial tool output may be incomplete. Prioritize the \
-     user's newest instruction; resume the interrupted work only where it still \
-     serves that instruction.";
-
-/// Append [`INTERRUPT_MARKER`] to `session_key`'s event log as a *synthetic*
-/// user message. Synthetic → the prompt builder (G2) renders it unwrapped as
-/// harness chatter (same lane as verifier vetoes / MAX_STEPS hints), it never
-/// trips the harness follow-up predicate (`has_unanswered_user_message` skips
-/// synthetic), and it does not count toward the steering burst bound
-/// ([`count_pending_steering`] skips synthetic). Best-effort: a failed write
-/// only costs the successor run this context, never the message itself.
-pub(super) async fn inject_interrupt_marker(
-    orchestrator: &OnceLock<Arc<Orchestrator>>,
-    session_key: &SessionKey,
-) {
-    let Some(orchestrator) = orchestrator.get() else {
-        return;
-    };
-    let session_id: SessionId = session_key.clone();
-    let event = SessionEvent::UserMessage {
-        turn_id: uuid::Uuid::new_v4(),
-        content: MessageContent {
-            text: INTERRUPT_MARKER.to_string(),
-            blocks: Vec::new(),
-            thinking: None,
-            thinking_signature: None,
-        },
-        at: now_ms(),
-        synthetic: true,
-    };
-    if let Err(e) = orchestrator
-        .session_service
-        .emit_event(&session_id, event)
-        .await
-    {
-        tracing::warn!(
-            session = %session_key.to_key_string(),
-            error = %e,
-            "busy-input interrupt: failed to persist interruption marker (non-fatal)",
-        );
-    }
-}
-
 /// Count the non-synthetic user messages sitting *after* the last assistant
 /// message in `events` — the steering burst already injected into this run that
 /// the model has not yet answered.
