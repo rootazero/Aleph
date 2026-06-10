@@ -60,7 +60,7 @@ fn parse_mode(s: &str) -> Result<PromptMode, String> {
     }
 }
 
-fn zone(size: &LayerSize) -> &'static str {
+const fn zone(size: &LayerSize) -> &'static str {
     use alephcore::thinker::prompt_layer::LayerStability;
     match size.stability {
         LayerStability::Stable => "stable",

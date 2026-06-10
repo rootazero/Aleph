@@ -511,7 +511,7 @@ impl Supervisor {
 
     /// Fold one probe result into the state machine and report the action
     /// the caller must take.
-    fn tick(&mut self, ready: bool) -> SupervisorAction {
+    const fn tick(&mut self, ready: bool) -> SupervisorAction {
         match (self.health, ready) {
             (DaemonHealth::Up, true) => {
                 self.consecutive_failures = 0;

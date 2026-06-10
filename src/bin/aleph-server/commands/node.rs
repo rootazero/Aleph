@@ -99,13 +99,13 @@ fn parse_pairing_outcome(resp: &Value) -> PairingOutcome {
 enum SessionOutcome {
     /// Connected and the inbound loop ended (clean reconnect).
     Ended,
-    /// Center rejected `connect` with AUTH_FAILED — credential is stale.
+    /// Center rejected `connect` with `AUTH_FAILED` — credential is stale.
     AuthFailed,
 }
 
-/// True when a `connect` reply is an AUTH_FAILED (-32001) error. Pure.
+/// True when a `connect` reply is an `AUTH_FAILED` (-32001) error. Pure.
 fn connect_rejected_auth(connect_resp: &Value) -> bool {
-    connect_resp.pointer("/error/code").and_then(|c| c.as_i64()) == Some(AUTH_FAILED_CODE)
+    connect_resp.pointer("/error/code").and_then(serde_json::Value::as_i64) == Some(AUTH_FAILED_CODE)
 }
 
 pub async fn handle_node(
@@ -126,13 +126,10 @@ pub async fn handle_node(
             tracing::info!("node '{name}' using persisted credential");
             cred.bearer
         }
-        None => match token {
-            Some(t) => t,
-            None => {
-                let cred = run_pairing(&url, &center, &name, &declared).await?;
-                persist_credential(cred_path.as_deref(), &cred);
-                cred.bearer
-            }
+        None => if let Some(t) = token { t } else {
+            let cred = run_pairing(&url, &center, &name, &declared).await?;
+            persist_credential(cred_path.as_deref(), &cred);
+            cred.bearer
         },
     };
 
@@ -316,7 +313,7 @@ async fn run_session(
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<String>(64);
     let channel = ReverseRpcChannel::new(out_tx.clone());
     let pending = channel.pending();
-    *approval_slot.write().unwrap_or_else(|e| e.into_inner()) = Some(channel);
+    *approval_slot.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(channel);
 
     let writer = tokio::spawn(async move {
         while let Some(frame) = out_rx.recv().await {
@@ -359,7 +356,7 @@ async fn run_session(
     .await;
 
     // Cleanup on every exit path: fail-close the approval slot + stop the writer.
-    *approval_slot.write().unwrap_or_else(|e| e.into_inner()) = None;
+    *approval_slot.write().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     writer.abort();
     loop_result?;
     Ok(SessionOutcome::Ended)

@@ -1,4 +1,4 @@
-//! SQLite store initialization for coord_task + snapshot + team + teams-evolution.
+//! `SQLite` store initialization for `coord_task` + snapshot + team + teams-evolution.
 //!
 //! Extracted from `agent_init.rs` to keep the boot-time orchestrator smaller.
 //! Each helper opens its own connection (via `open_sqlite_safe`), runs
@@ -9,7 +9,7 @@ use alephcore::sync_primitives::Arc;
 
 /// Open `coord.db`, create the `SqliteCoordTaskStore`, run migrations, and
 /// derive the sibling `SqliteSnapshotStore` from the same connection
-/// (avoids the SQLite "database is locked" hazard that two independent
+/// (avoids the `SQLite` "database is locked" hazard that two independent
 /// connections would hit).
 #[allow(clippy::type_complexity)]
 pub(super) async fn init_coord_and_snapshot(
@@ -28,8 +28,7 @@ pub(super) async fn init_coord_and_snapshot(
         Err(e) => {
             if !daemon {
                 eprintln!(
-                    "Warning: Failed to resolve data directory: {}. Task coordination tools disabled.",
-                    e
+                    "Warning: Failed to resolve data directory: {e}. Task coordination tools disabled."
                 );
             }
             tracing::warn!(error = %e, "Failed to resolve data directory; task coordination tools disabled");
@@ -43,8 +42,7 @@ pub(super) async fn init_coord_and_snapshot(
         Err(e) => {
             if !daemon {
                 eprintln!(
-                    "Warning: Failed to open coord.db: {}. Task coordination tools disabled.",
-                    e
+                    "Warning: Failed to open coord.db: {e}. Task coordination tools disabled."
                 );
             }
             return (None, None);
@@ -67,8 +65,7 @@ pub(super) async fn init_coord_and_snapshot(
         Err(e) => {
             if !daemon {
                 eprintln!(
-                    "Warning: Coord task store migration failed: {}. Task coordination tools disabled.",
-                    e
+                    "Warning: Coord task store migration failed: {e}. Task coordination tools disabled."
                 );
             }
             (None, None)
@@ -86,8 +83,7 @@ pub(super) async fn init_team_store(daemon: bool) -> Option<Arc<dyn alephcore::t
         Err(e) => {
             if !daemon {
                 eprintln!(
-                    "Warning: Failed to resolve data directory: {}. Team management tools disabled.",
-                    e
+                    "Warning: Failed to resolve data directory: {e}. Team management tools disabled."
                 );
             }
             tracing::warn!(error = %e, "Failed to resolve data directory; team management tools disabled");
@@ -101,8 +97,7 @@ pub(super) async fn init_team_store(daemon: bool) -> Option<Arc<dyn alephcore::t
         Err(e) => {
             if !daemon {
                 eprintln!(
-                    "Warning: Failed to open teams.db: {}. Team management tools disabled.",
-                    e
+                    "Warning: Failed to open teams.db: {e}. Team management tools disabled."
                 );
             }
             return None;
@@ -119,8 +114,7 @@ pub(super) async fn init_team_store(daemon: bool) -> Option<Arc<dyn alephcore::t
         Err(e) => {
             if !daemon {
                 eprintln!(
-                    "Warning: Team store migration failed: {}. Team management tools disabled.",
-                    e
+                    "Warning: Team store migration failed: {e}. Team management tools disabled."
                 );
             }
             None
@@ -151,8 +145,7 @@ pub(super) async fn init_teams_evolution_stores(daemon: bool) -> TeamsEvolution 
         Err(e) => {
             if !daemon {
                 eprintln!(
-                    "Warning: Failed to resolve data directory: {}. Team sub-stores disabled.",
-                    e
+                    "Warning: Failed to resolve data directory: {e}. Team sub-stores disabled."
                 );
             }
             tracing::warn!(error = %e, "Failed to resolve data directory; team sub-stores disabled");
@@ -214,8 +207,7 @@ pub(super) async fn init_teams_evolution_stores(daemon: bool) -> TeamsEvolution 
                     Err(e) => {
                         if !daemon {
                             eprintln!(
-                                "Warning: Artifact store migration failed: {}. Related tools disabled.",
-                                e
+                                "Warning: Artifact store migration failed: {e}. Related tools disabled."
                             );
                         }
                         None
@@ -225,8 +217,7 @@ pub(super) async fn init_teams_evolution_stores(daemon: bool) -> TeamsEvolution 
             Err(e) => {
                 if !daemon {
                     eprintln!(
-                        "Warning: Failed to open teams.db for Artifact store: {}. Related tools disabled.",
-                        e
+                        "Warning: Failed to open teams.db for Artifact store: {e}. Related tools disabled."
                     );
                 }
                 None

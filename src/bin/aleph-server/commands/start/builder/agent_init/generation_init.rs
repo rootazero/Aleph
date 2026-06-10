@@ -23,18 +23,16 @@ pub(super) fn init_generation_registry(
             if provider_cfg
                 .api_key
                 .as_ref()
-                .map(|k| k.is_empty())
-                .unwrap_or(true)
+                .is_none_or(std::string::String::is_empty)
             {
-                if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{}", name)) {
+                if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{name}")) {
                     provider_cfg.api_key = Some(secret.expose().to_string());
                 }
             }
             if provider_cfg
                 .api_key
                 .as_ref()
-                .map(|k| k.is_empty())
-                .unwrap_or(true)
+                .is_none_or(std::string::String::is_empty)
             {
                 continue;
             }
@@ -66,7 +64,7 @@ pub(super) fn init_generation_registry(
             while let Ok(event_json) = rx.recv().await {
                 let is_gen_event = serde_json::from_str::<serde_json::Value>(&event_json)
                     .ok()
-                    .and_then(|v| v.get("topic")?.as_str().map(|s| s.to_string()))
+                    .and_then(|v| v.get("topic")?.as_str().map(std::string::ToString::to_string))
                     == Some("config.generation.providers.changed".to_string());
                 if !is_gen_event {
                     continue;
@@ -90,18 +88,16 @@ pub(super) fn init_generation_registry(
                     if provider_cfg
                         .api_key
                         .as_ref()
-                        .map(|k| k.is_empty())
-                        .unwrap_or(true)
+                        .is_none_or(std::string::String::is_empty)
                     {
-                        if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{}", name)) {
+                        if let Ok(Some(secret)) = vault.get_secret(&format!("gen:{name}")) {
                             provider_cfg.api_key = Some(secret.expose().to_string());
                         }
                     }
                     if provider_cfg
                         .api_key
                         .as_ref()
-                        .map(|k| k.is_empty())
-                        .unwrap_or(true)
+                        .is_none_or(std::string::String::is_empty)
                     {
                         continue;
                     }
@@ -118,7 +114,7 @@ pub(super) fn init_generation_registry(
                     }
                 }
 
-                let mut guard = gen_reg.write().unwrap_or_else(|e| e.into_inner());
+                let mut guard = gen_reg.write().unwrap_or_else(std::sync::PoisonError::into_inner);
                 *guard = new_registry;
                 tracing::info!(
                     "Generation provider registry reloaded ({} providers)",

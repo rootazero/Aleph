@@ -334,13 +334,16 @@ impl RateLimiter {
             sw.timestamps.clear();
         }
 
-        // 2. Evict expired timestamps
-        let cutoff = now - window_dur;
-        while let Some(&front) = sw.timestamps.front() {
-            if front < cutoff {
-                sw.timestamps.pop_front();
-            } else {
-                break;
+        // 2. Evict expired timestamps. `Instant - Duration` panics on
+        // underflow (monotonic clock younger than the window, e.g. right
+        // after boot); with no valid cutoff nothing can be expired yet.
+        if let Some(cutoff) = now.checked_sub(window_dur) {
+            while let Some(&front) = sw.timestamps.front() {
+                if front < cutoff {
+                    sw.timestamps.pop_front();
+                } else {
+                    break;
+                }
             }
         }
 

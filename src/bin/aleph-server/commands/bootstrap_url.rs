@@ -10,7 +10,7 @@
 //! the resulting `url` field.
 //!
 //! Output contract: one line on stdout (the URL, newline-terminated)
-//! on success. Any failure exits with EX_USAGE (64) and a stderr
+//! on success. Any failure exits with `EX_USAGE` (64) and a stderr
 //! diagnostic — the shell shells out to this binary and parses stdout.
 
 use alephcore::gateway::security::{store::SecurityStore, SharedTokenManager};
@@ -53,15 +53,12 @@ pub async fn handle_bootstrap_url() -> Result<(), Box<dyn Error>> {
         let store =
             Arc::new(SecurityStore::open(&db_path).map_err(|e| format!("open store: {e}"))?);
         let mgr = SharedTokenManager::new(store, vault_path);
-        match mgr.try_load_token_from_db() {
-            Some(t) => t,
-            None => {
-                eprintln!(
-                    "aleph-server: no shared token provisioned yet — start the \
-                     server once (`aleph-server start`) to generate one."
-                );
-                std::process::exit(64);
-            }
+        if let Some(t) = mgr.try_load_token_from_db() { t } else {
+            eprintln!(
+                "aleph-server: no shared token provisioned yet — start the \
+                 server once (`aleph-server start`) to generate one."
+            );
+            std::process::exit(64);
         }
     };
 
@@ -155,7 +152,7 @@ async fn wait_for_id(
         };
         let value: Value = serde_json::from_str(&text)
             .map_err(|e| format!("parse ws frame as json: {e} (raw: {text})"))?;
-        if let Some(got) = value.get("id").and_then(|v| v.as_u64()) {
+        if let Some(got) = value.get("id").and_then(serde_json::Value::as_u64) {
             if got == id {
                 if let Some(err) = value.get("error") {
                     return Err(format!("rpc error for id={id}: {err}"));

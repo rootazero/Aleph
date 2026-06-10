@@ -16,12 +16,11 @@ use alephcore::gateway::{GatewayConfig as FullGatewayConfig, SessionManager};
 pub(super) fn validate_bind_address(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = format!("{}:{}", args.bind, args.port)
         .parse()
-        .map_err(|e| format!("Invalid address: {}", e))?;
+        .map_err(|e| format!("Invalid address: {e}"))?;
     if !args.force {
         if let Err(e) = std::net::TcpListener::bind(addr) {
             return Err(format!(
-                "Error: Cannot bind to {}: {}\nHint: Use --force to attempt to start anyway, or choose a different port with --port",
-                addr, e
+                "Error: Cannot bind to {addr}: {e}\nHint: Use --force to attempt to start anyway, or choose a different port with --port"
             ).into());
         }
     }
@@ -40,7 +39,7 @@ pub(super) fn print_startup_banner(addr: SocketAddr, full_config: &FullGatewayCo
         env!("ALEPH_VERSION")
     );
     println!("╠═══════════════════════════════════════════════╣");
-    println!("║  WebSocket: ws://{}          ║", addr);
+    println!("║  WebSocket: ws://{addr}          ║");
     println!("║  Protocol:  JSON-RPC 2.0                      ║");
     println!("╚═══════════════════════════════════════════════╝");
     println!();
@@ -67,8 +66,7 @@ pub(super) fn initialize_tracing(args: &Args) {
     let filter = format!("aleph_server={0},alephcore={0}", args.log_level);
     if let Err(e) = aleph_logging::init_component_logging("server", 7, &filter) {
         eprintln!(
-            "Warning: Failed to initialize file logging: {}. Falling back to console only.",
-            e
+            "Warning: Failed to initialize file logging: {e}. Falling back to console only."
         );
         use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
         tracing_subscriber::registry()
@@ -88,7 +86,7 @@ pub(super) fn initialize_tracing(args: &Args) {
 }
 
 /// Load gateway configuration, apply CLI overrides, and return resolved values.
-/// Returns (full_config, final_bind, final_port, final_max_connections).
+/// Returns (`full_config`, `final_bind`, `final_port`, `final_max_connections`).
 pub(super) fn load_gateway_config(
     args: &Args,
 ) -> Result<(FullGatewayConfig, String, u16, usize), Box<dyn std::error::Error>> {
@@ -113,7 +111,7 @@ pub(super) fn load_gateway_config(
             Ok(cfg) => cfg,
             Err(e) => {
                 if !args.daemon {
-                    eprintln!("Warning: {}, using defaults", e);
+                    eprintln!("Warning: {e}, using defaults");
                 }
                 FullGatewayConfig::default()
             }
@@ -121,28 +119,28 @@ pub(super) fn load_gateway_config(
     };
 
     // CLI args override config file settings
-    let final_bind = if args.bind != "127.0.0.1" {
-        args.bind.clone()
-    } else {
+    let final_bind = if args.bind == "127.0.0.1" {
         full_config.gateway.host.clone()
-    };
-    let final_port = if args.port != 18790 {
-        args.port
     } else {
+        args.bind.clone()
+    };
+    let final_port = if args.port == 18790 {
         full_config.gateway.port
-    };
-    let final_max_connections = if args.max_connections != 1000 {
-        args.max_connections
     } else {
+        args.port
+    };
+    let final_max_connections = if args.max_connections == 1000 {
         full_config.gateway.max_connections
+    } else {
+        args.max_connections
     };
 
     Ok((full_config, final_bind, final_port, final_max_connections))
 }
 
 /// Initialize the session store backend based on configuration.
-/// Defaults to SQLite; "file" enables the JSON/JSONL file backend.
-/// Returns the trait object and an optional owned SessionManager for SQLite
+/// Defaults to `SQLite`; "file" enables the JSON/JSONL file backend.
+/// Returns the trait object and an optional owned `SessionManager` for `SQLite`
 /// so the caller can attach raw-memory writer and event bus before wrapping.
 pub(super) async fn initialize_session_store(
     daemon: bool,
@@ -150,66 +148,62 @@ pub(super) async fn initialize_session_store(
     event_bus: Arc<alephcore::gateway::event_bus::GatewayEventBus>,
     raw_memory_writer: Option<Arc<dyn alephcore::memory::store::raw_memory::RawMemoryStore>>,
 ) -> Result<(Arc<dyn SessionStore>, Option<SessionManager>), Box<dyn std::error::Error>> {
-    match backend {
-        "file" => {
-            let config =
-                alephcore::gateway::session_store::file_backend::FileSessionStoreConfig::default();
-            match alephcore::gateway::session_store::file_backend::FileSessionStore::new(config) {
-                Ok(mut store) => {
-                    store = store.with_event_bus(event_bus.clone());
-                    // Spec 1 G3-A: wire the session-end emit for the file
-                    // backend too (the SQLite path does this via
-                    // `with_raw_memory_writer` in start/mod.rs).
-                    if let Some(writer) = raw_memory_writer {
-                        store = store.with_raw_memory_writer(writer);
-                    }
-                    if alephcore::gateway::session_store::migration::migration_needed(
-                        &store.config().base_dir,
-                    ) {
-                        if !daemon {
-                            println!("Migrating legacy SQLite sessions to file backend ...");
-                        }
-                        if let Err(e) =
-                            alephcore::gateway::session_store::migration::export_legacy_messages(
-                                &store,
-                            )
-                            .await
-                        {
-                            eprintln!("Warning: Session migration failed: {}", e);
-                        }
-                    }
+    if backend == "file" {
+        let config =
+            alephcore::gateway::session_store::file_backend::FileSessionStoreConfig::default();
+        match alephcore::gateway::session_store::file_backend::FileSessionStore::new(config) {
+            Ok(mut store) => {
+                store = store.with_event_bus(event_bus.clone());
+                // Spec 1 G3-A: wire the session-end emit for the file
+                // backend too (the SQLite path does this via
+                // `with_raw_memory_writer` in start/mod.rs).
+                if let Some(writer) = raw_memory_writer {
+                    store = store.with_raw_memory_writer(writer);
+                }
+                if alephcore::gateway::session_store::migration::migration_needed(
+                    &store.config().base_dir,
+                ) {
                     if !daemon {
-                        println!("Session store initialized (file backend)");
+                        println!("Migrating legacy SQLite sessions to file backend ...");
                     }
-                    Ok((Arc::new(store), None))
+                    if let Err(e) =
+                        alephcore::gateway::session_store::migration::export_legacy_messages(
+                            &store,
+                        )
+                        .await
+                    {
+                        eprintln!("Warning: Session migration failed: {e}");
+                    }
                 }
-                Err(e) => {
-                    Err(format!("Error: Failed to initialize file session store: {}", e).into())
+                if !daemon {
+                    println!("Session store initialized (file backend)");
                 }
+                Ok((Arc::new(store), None))
+            }
+            Err(e) => {
+                Err(format!("Error: Failed to initialize file session store: {e}").into())
             }
         }
-        _ => {
-            // SQLite default
-            let sm = match SessionManager::with_defaults() {
-                Ok(sm) => sm,
-                Err(e) => {
-                    return Err(format!(
-                        "Error: Failed to initialize SQLite session store: {}. Sessions are required.",
-                        e
-                    ).into());
-                }
-            };
-            if !daemon {
-                println!("Session store initialized (SQLite backend)");
+    } else {
+        // SQLite default
+        let sm = match SessionManager::with_defaults() {
+            Ok(sm) => sm,
+            Err(e) => {
+                return Err(format!(
+                    "Error: Failed to initialize SQLite session store: {e}. Sessions are required."
+                ).into());
             }
-            let dyn_store: Arc<dyn SessionStore> = Arc::new(sm.clone());
-            Ok((dyn_store, Some(sm)))
+        };
+        if !daemon {
+            println!("Session store initialized (SQLite backend)");
         }
+        let dyn_store: Arc<dyn SessionStore> = Arc::new(sm.clone());
+        Ok((dyn_store, Some(sm)))
     }
 }
 
-/// Build a `SessionService` backed by the same SQLite file that the
-/// SessionManager uses.
+/// Build a `SessionService` backed by the same `SQLite` file that the
+/// `SessionManager` uses.
 ///
 /// Phase 1 dual-write wiring: opens a **dedicated** connection to the
 /// sessions DB, runs the `session_events` migration, and returns an
@@ -252,7 +246,7 @@ pub(super) fn build_sqlite_session_service(
     Some((service, store))
 }
 
-/// Initialize the ExtensionManager for the plugin system.
+/// Initialize the `ExtensionManager` for the plugin system.
 pub(super) async fn initialize_extension_manager(daemon: bool) {
     // Migrate old single-dir layout and update official skills. Resolve via the
     // authoritative resolver (ALEPH_HOME / $HOME) so bundled content is
@@ -277,13 +271,13 @@ pub(super) async fn initialize_extension_manager(daemon: bool) {
         }
         Err(e) => {
             if !daemon {
-                eprintln!("Warning: Failed to initialize extension manager: {}. Plugin tools will be unavailable.", e);
+                eprintln!("Warning: Failed to initialize extension manager: {e}. Plugin tools will be unavailable.");
             }
         }
     }
 }
 
-/// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for run_until_shutdown.
+/// Spawn Ctrl-C and SIGTERM handlers; return the oneshot receiver for `run_until_shutdown`.
 pub(super) fn setup_graceful_shutdown(args: &Args) -> tokio::sync::oneshot::Receiver<()> {
     use alephcore::gateway::shutdown_forensics::snapshot_shutdown_context;
 
@@ -351,7 +345,7 @@ pub(super) fn build_http_provider(
 
     // Apply preset
     if let Some(preset) = presets::get_preset(&name_lower) {
-        if cfg.base_url.is_none() || cfg.base_url.as_ref().map(|s| s.is_empty()).unwrap_or(false) {
+        if cfg.base_url.is_none() || cfg.base_url.as_ref().is_some_and(std::string::String::is_empty) {
             cfg.base_url = Some(preset.base_url.to_string());
         }
         if cfg.protocol.is_none() {
@@ -366,7 +360,7 @@ pub(super) fn build_http_provider(
     }
     let adapter = registry
         .get(&protocol_name)
-        .ok_or_else(|| format!("Unknown protocol: '{}'", protocol_name))?;
+        .ok_or_else(|| format!("Unknown protocol: '{protocol_name}'"))?;
 
-    HttpProvider::new(name.to_string(), cfg, adapter).map_err(|e| e.into())
+    HttpProvider::new(name.to_string(), cfg, adapter).map_err(std::convert::Into::into)
 }

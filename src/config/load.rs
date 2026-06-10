@@ -75,8 +75,12 @@ impl Config {
             crate::config::defaults_override::init_defaults_override(defaults);
         }
 
-        let contents = Self::migrate_mcp_builtin_in_toml(&contents)?;
-        let migrated_contents = Self::migrate_vector_db_in_toml(&contents)?;
+        // Compare the final migrated string against the ORIGINAL file contents:
+        // comparing against the intermediate (post-mcp-builtin) string would
+        // miss the case where only the [mcp.builtin] migration fired, leaving
+        // it unpersisted and re-run on every load.
+        let migrated_mcp_contents = Self::migrate_mcp_builtin_in_toml(&contents)?;
+        let migrated_contents = Self::migrate_vector_db_in_toml(&migrated_mcp_contents)?;
         let migrated = migrated_contents != contents;
         let contents = migrated_contents;
 

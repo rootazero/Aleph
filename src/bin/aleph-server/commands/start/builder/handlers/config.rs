@@ -1,4 +1,4 @@
-use super::*;
+use super::{GatewayServer, PathBuf, Arc, ConfigWatcher, ConfigWatcherConfig, config_handlers, ConfigEvent, Args, serve_webchat};
 
 pub(in crate::commands::start) async fn setup_config_watcher(
     server: &mut GatewayServer,
@@ -113,7 +113,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                         }
                         ConfigEvent::ValidationFailed(err) => {
                             if !daemon_mode {
-                                eprintln!("Config validation failed: {}", err);
+                                eprintln!("Config validation failed: {err}");
                             }
                             use alephcore::gateway::TopicEvent;
                             let event = TopicEvent::new(
@@ -129,7 +129,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
                         }
                         ConfigEvent::FileError(err) => {
                             if !daemon_mode {
-                                eprintln!("Config file error: {}", err);
+                                eprintln!("Config file error: {err}");
                             }
                         }
                     }
@@ -150,7 +150,7 @@ pub(in crate::commands::start) async fn setup_config_watcher(
         }
         Err(e) => {
             if !daemon_mode {
-                eprintln!("Warning: Failed to initialize config watcher: {}", e);
+                eprintln!("Warning: Failed to initialize config watcher: {e}");
             }
             None
         }
@@ -181,13 +181,12 @@ pub(in crate::commands::start) async fn start_webchat_server(
     if let Some(webchat_path) = webchat_dir {
         if webchat_path.exists() {
             let webchat_port = args.webchat_port.unwrap_or(final_port);
-            let webchat_addr: SocketAddr = match format!("{}:{}", final_bind, webchat_port).parse()
+            let webchat_addr: SocketAddr = match format!("{final_bind}:{webchat_port}").parse()
             {
                 Ok(addr) => addr,
                 Err(e) => {
                     eprintln!(
-                        "Warning: Invalid webchat address '{}:{}': {}. WebChat server not started.",
-                        final_bind, webchat_port, e
+                        "Warning: Invalid webchat address '{final_bind}:{webchat_port}': {e}. WebChat server not started."
                     );
                     return;
                 }
@@ -204,7 +203,7 @@ pub(in crate::commands::start) async fn start_webchat_server(
 
                 if !args.daemon {
                     println!("WebChat UI:");
-                    println!("  - URL: http://{}", webchat_addr);
+                    println!("  - URL: http://{webchat_addr}");
                     println!("  - Static: {}", webchat_path.display());
                     println!();
                 }

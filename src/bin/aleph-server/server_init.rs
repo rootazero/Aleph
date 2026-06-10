@@ -1,7 +1,7 @@
 //! Server initialization helpers for Aleph Gateway
 //!
 //! This module contains helper functions for server initialization,
-//! including WebChat serving and agent run handling.
+//! including `WebChat` serving and agent run handling.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -14,7 +14,7 @@ use alephcore::gateway::{
     AgentRegistry, EventEmitter, ExecutionEngine, GatewayEventEmitter, StreamEvent,
 };
 
-/// Serve WebChat static files
+/// Serve `WebChat` static files
 pub async fn serve_webchat(
     addr: SocketAddr,
     static_dir: PathBuf,
@@ -62,7 +62,7 @@ pub async fn serve_webchat(
     Ok(())
 }
 
-/// Handle agent.run with real ExecutionEngine
+/// Handle agent.run with real `ExecutionEngine`
 pub async fn handle_run_with_engine<P, R>(
     request: alephcore::gateway::JsonRpcRequest,
     engine: Arc<ExecutionEngine<P, R>>,
@@ -99,7 +99,7 @@ where
         pub project_root: Option<String>,
     }
 
-    fn default_stream() -> bool {
+    const fn default_stream() -> bool {
         true
     }
 
@@ -119,7 +119,7 @@ where
                 return alephcore::gateway::JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 );
             }
         },
@@ -182,8 +182,7 @@ where
         let cfg = app_config.read().await;
         let behavior = cfg.behavior.as_ref();
         let mode_str = behavior
-            .map(|b| b.output_mode.as_str())
-            .unwrap_or("typewriter");
+            .map_or("typewriter", |b| b.output_mode.as_str());
         alephcore::gateway::OutputMode::from_config(mode_str)
     };
     let emitter = Arc::new(GatewayEventEmitter::with_output_mode(
@@ -272,7 +271,7 @@ where
     alephcore::gateway::JsonRpcResponse::success(request.id, json!(result))
 }
 
-/// Handle chat.send with real ExecutionEngine
+/// Handle chat.send with real `ExecutionEngine`
 ///
 /// Same as `handle_run_with_engine` but accepts `chat.send` param format
 /// (message instead of input) and returns chat-friendly response.
@@ -314,7 +313,7 @@ where
                 return alephcore::gateway::JsonRpcResponse::error(
                     request.id,
                     INVALID_PARAMS,
-                    format!("Invalid params: {}", e),
+                    format!("Invalid params: {e}"),
                 );
             }
         },
@@ -376,8 +375,7 @@ where
         let cfg = app_config.read().await;
         let behavior = cfg.behavior.as_ref();
         let mode_str = behavior
-            .map(|b| b.output_mode.as_str())
-            .unwrap_or("typewriter");
+            .map_or("typewriter", |b| b.output_mode.as_str());
         alephcore::gateway::OutputMode::from_config(mode_str)
     };
     let emitter = Arc::new(GatewayEventEmitter::with_output_mode(

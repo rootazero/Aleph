@@ -1,6 +1,6 @@
-//! `aleph-server bootstrap-runtime` — install managed runtimes via ensure_capability.
+//! `aleph-server bootstrap-runtime` — install managed runtimes via `ensure_capability`.
 //!
-//! Spec C policy: **NoLock**. Bootstrap-runtime is invoked as a child
+//! Spec C policy: **`NoLock`**. Bootstrap-runtime is invoked as a child
 //! process by `start` while the parent already holds the singleton
 //! lock; touching `~/.aleph/data/` is the parent's responsibility, so
 //! this child does not contend. The marker `run_no_lock` call at
@@ -109,16 +109,12 @@ pub async fn run(args: BootstrapRuntimeArgs) -> i32 {
     let any_failed = failed_count > 0;
     printer.summary(targets.len(), ready_count, failed_count);
 
-    if any_failed && !args.best_effort {
-        1
-    } else {
-        0
-    }
+    i32::from(any_failed && !args.best_effort)
 }
 
 fn resolve_targets(args: &BootstrapRuntimeArgs) -> Vec<String> {
     let base: Vec<String> = if args.only.is_empty() {
-        DEFAULT_TARGETS.iter().map(|s| s.to_string()).collect()
+        DEFAULT_TARGETS.iter().map(std::string::ToString::to_string).collect()
     } else {
         args.only.clone()
     };
@@ -141,7 +137,7 @@ struct ProgressPrinter {
 }
 
 impl ProgressPrinter {
-    fn new(json: bool, quiet: bool) -> Self {
+    const fn new(json: bool, quiet: bool) -> Self {
         Self { json, quiet }
     }
 

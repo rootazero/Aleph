@@ -39,7 +39,7 @@ pub struct NodeCommon {
 }
 
 /// One of four canvas node types, tagged by the `"type"` field.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Node {
     Text {
