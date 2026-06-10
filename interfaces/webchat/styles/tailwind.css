@@ -798,7 +798,7 @@ html.theme-switching::view-transition-new(root) {
 .code-block-wrapper {
   position: relative;
   margin: 0.75rem 0;
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   border: 1px solid var(--glass-inset-border);
   border-top-color: var(--glass-inset-border-top);
   overflow: hidden;

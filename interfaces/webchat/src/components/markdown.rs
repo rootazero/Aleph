@@ -157,7 +157,6 @@ fn html_escape(s: &str) -> String {
 fn render_streaming(content: &str) -> String {
     let mut html = String::with_capacity(content.len() * 2);
     let mut in_fence = false;
-    let mut fence_lang: String;
 
     for line in content.split('\n') {
         if line.starts_with("```") {
@@ -167,7 +166,7 @@ fn render_streaming(content: &str) -> String {
                 in_fence = false;
             } else {
                 // Open fence
-                fence_lang = line.trim_start_matches('`').trim().to_string();
+                let fence_lang = line.trim_start_matches('`').trim().to_string();
                 // Escape: the fence info-string is raw content interpolated
                 // into inner_html below (see render_markdown for the same fix).
                 let lang_label = if fence_lang.is_empty() {
@@ -231,6 +230,9 @@ mod tests {
     // lang takes highlight_code's early escape path); the info-string
     // escape regression is covered via render_streaming, which never
     // touches web_sys.
+    // render_markdown's lang_label escape is NOT tested here (web_sys constraint);
+    // it shares the same html_escape() call as render_streaming and is
+    // structurally identical.
 
     #[test]
     fn markdown_code_block_emits_semantic_classes() {
