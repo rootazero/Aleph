@@ -12,6 +12,7 @@ pub mod exec_echo;
 pub mod icon;
 pub mod markdown;
 pub mod spinner;
+pub mod stream_md;
 pub mod theme;
 pub mod width;
 

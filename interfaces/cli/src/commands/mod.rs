@@ -35,6 +35,7 @@ pub mod plugin_cmd;
 pub mod plugins_cmd;
 pub mod providers_cmd;
 pub mod proxy_cmd;
+pub mod run_follow;
 pub mod sandbox_cmd;
 pub mod secret_cmd;
 pub mod services_cmd;

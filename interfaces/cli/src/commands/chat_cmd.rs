@@ -5,6 +5,8 @@ use serde_json::Value;
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliResult};
 
+use super::run_follow::{self, FollowOptions};
+
 /// Send a message via RPC (non-interactive)
 pub async fn send(
     server_url: &str,
@@ -15,7 +17,7 @@ pub async fn send(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, mut events) = AlephClient::connect(server_url).await?;
     client.authenticate(config).await?;
 
     let mut params = serde_json::json!({ "message": message });
@@ -31,7 +33,13 @@ pub async fn send(
 
     let result: Value = client.call("chat.send", Some(params)).await?;
 
-    if json {
+    if stream {
+        // Follow the run live through the shared loop. Previously the flag
+        // was forwarded to the server and the event stream dropped on the
+        // floor, so `--stream` printed "Message sent." and exited.
+        let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
+        let _ = run_follow::follow_run(&mut events, &FollowOptions { json, verbose }).await;
+    } else if json {
         output::print_json(&result);
     } else {
         let run_id = result.get("run_id").and_then(|v| v.as_str()).unwrap_or("-");

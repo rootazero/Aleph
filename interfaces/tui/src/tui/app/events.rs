@@ -173,6 +173,22 @@ impl AppState {
                 self.add_system_message(msg);
                 Action::ScrollToBottomIfAutoScroll
             }
+
+            StreamEvent::RunRetrying {
+                provider,
+                attempt,
+                max_attempts,
+                reason,
+                ..
+            } => {
+                // Surface transient provider failures instead of leaving the
+                // thinking indicator spinning silently through the retry
+                // ladder (mirrors the Panel's stream.run_retrying notice).
+                self.add_system_message(format!(
+                    "Provider {provider} unreachable, retrying ({attempt}/{max_attempts}): {reason}"
+                ));
+                Action::ScrollToBottomIfAutoScroll
+            }
         }
     }
 }
