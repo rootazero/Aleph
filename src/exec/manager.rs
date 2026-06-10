@@ -47,6 +47,11 @@ pub struct ExecApprovalRecord {
     pub decision: Option<ApprovalDecisionType>,
     /// Who resolved (display name)
     pub resolved_by: Option<String>,
+    /// Why approval was requested (escalation / confirmation context),
+    /// surfaced to resolving UIs. Absent on records persisted before this
+    /// field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 impl ExecApprovalRecord {
@@ -87,6 +92,7 @@ impl ExecApprovalRecord {
             resolved_at_ms: None,
             decision: None,
             resolved_by: None,
+            reason: request.reason.clone(),
         }
     }
 
@@ -210,6 +216,13 @@ impl ExecApprovalManager {
         let (tx, rx) = oneshot::channel();
         let id = record.id.clone();
 
+        // Opportunistic sweep: a waiter whose future was dropped (aborted
+        // agent run) never reaches `await_registered`'s removal, so its entry
+        // would otherwise linger forever. Each new registration evicts
+        // anything already past its deadline — bounded work, no background
+        // task needed.
+        self.cleanup_expired();
+
         {
             let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
             pending.insert(
@@ -285,6 +298,7 @@ impl ExecApprovalManager {
                 return false;
             }
 
+            let decision = Self::clamp_decision(&entry.record.command, decision);
             entry.record.decision = Some(decision);
             entry.record.resolved_by = resolved_by;
             entry.record.resolved_at_ms = Some(
@@ -310,14 +324,16 @@ impl ExecApprovalManager {
     ///
     /// A channel reply (`/approve` / `/deny` or a button callback) carries no
     /// request id, so the inbound router resolves by session: the oldest live
-    /// pending entry for that session is picked (FIFO). Returns `true` if one
-    /// was found and resolved.
+    /// pending entry for that session is picked (FIFO). Returns the EFFECTIVE
+    /// decision applied (post risk clamp — an `AllowAlways` on a
+    /// Danger-classified command narrows to `AllowSession`), or `None` when
+    /// nothing was pending for the session.
     pub fn resolve_for_session(
         &self,
         session_key: &str,
         decision: ApprovalDecisionType,
         resolved_by: Option<String>,
-    ) -> bool {
+    ) -> Option<ApprovalDecisionType> {
         let mut pending = self.pending.write().unwrap_or_else(|e| e.into_inner());
 
         let target = pending
@@ -328,10 +344,11 @@ impl ExecApprovalManager {
 
         let Some(id) = target else {
             warn!(session_key = %session_key, "No pending approval for session");
-            return false;
+            return None;
         };
 
         if let Some(entry) = pending.get_mut(&id) {
+            let decision = Self::clamp_decision(&entry.record.command, decision);
             entry.record.decision = Some(decision);
             entry.record.resolved_by = resolved_by;
             entry.record.resolved_at_ms = Some(
@@ -344,10 +361,34 @@ impl ExecApprovalManager {
                 let _ = sender.send(Some(decision));
             }
             debug!(id = %id, ?decision, "Resolved approval by session");
-            true
+            Some(decision)
         } else {
-            false
+            None
         }
+    }
+
+    /// Clamp `requested` against the decision set the recorded command's
+    /// risk level permits (see [`crate::exec::allowed_decisions`]).
+    ///
+    /// Defense in depth for resolvers that did not render a risk-gated
+    /// button set (`/approve always` text replies, panel RPC, external
+    /// clients): a Danger-classified command must not be permanently
+    /// allowlisted in one gesture, so an unpermitted `AllowAlways`
+    /// downgrades to the session tier. An explicit human approval is never
+    /// escalated or turned into a denial here — only the persistence scope
+    /// is narrowed.
+    fn clamp_decision(command: &str, requested: ApprovalDecisionType) -> ApprovalDecisionType {
+        if requested == ApprovalDecisionType::AllowAlways {
+            let allowed = crate::exec::allowed_decisions::assess_command_decisions(command);
+            if !allowed.contains(&ApprovalDecisionType::AllowAlways) {
+                debug!(
+                    command = %command,
+                    "allow-always not permitted at this risk level — downgraded to session grant"
+                );
+                return ApprovalDecisionType::AllowSession;
+            }
+        }
+        requested
     }
 
     /// Whether `session_key` has at least one unresolved pending approval.
@@ -462,9 +503,22 @@ impl ExecApprovalManager {
     /// # Arguments
     ///
     /// * `agent_id` - Agent to add allowlist for
-    /// * `pattern` - Pattern to add (usually resolved path)
-    pub fn add_to_allowlist(&self, agent_id: &str, pattern: &str) -> Result<(), StorageError> {
+    /// * `pattern` - Pattern to add (executable name or resolved path)
+    /// * `command` - The command that earned the grant (audit provenance)
+    /// * `resolved_path` - Resolved executable path, if known
+    pub fn add_to_allowlist(
+        &self,
+        agent_id: &str,
+        pattern: &str,
+        command: Option<&str>,
+        resolved_path: Option<&str>,
+    ) -> Result<(), StorageError> {
         let ConfigWithHash { mut config, hash } = self.get_config()?;
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
 
         // Get or create agent config
         let agent_config = config.agents.entry(agent_id.to_string()).or_default();
@@ -472,8 +526,16 @@ impl ExecApprovalManager {
         // Get or create allowlist
         let allowlist = agent_config.allowlist.get_or_insert_with(Vec::new);
 
-        // Check if already exists
-        if allowlist.iter().any(|e| e.pattern == pattern) {
+        // Already present: refresh usage provenance instead of duplicating.
+        if let Some(entry) = allowlist.iter_mut().find(|e| e.pattern == pattern) {
+            entry.last_used_at = Some(now_secs);
+            if command.is_some() {
+                entry.last_used_command = command.map(str::to_string);
+            }
+            if resolved_path.is_some() {
+                entry.last_resolved_path = resolved_path.map(str::to_string);
+            }
+            self.set_config(config, &hash)?;
             return Ok(());
         }
 
@@ -481,14 +543,9 @@ impl ExecApprovalManager {
         allowlist.push(AllowlistEntry {
             id: Some(uuid::Uuid::new_v4().to_string()),
             pattern: pattern.to_string(),
-            last_used_at: Some(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs() as i64,
-            ),
-            last_used_command: None,
-            last_resolved_path: None,
+            last_used_at: Some(now_secs),
+            last_used_command: command.map(str::to_string),
+            last_resolved_path: resolved_path.map(str::to_string),
         });
 
         // Save with optimistic lock
@@ -556,6 +613,7 @@ mod tests {
             },
             agent_id: "main".to_string(),
             session_key: "agent:main:main".to_string(),
+            reason: None,
         }
     }
 
@@ -691,7 +749,14 @@ mod tests {
     fn test_add_to_allowlist() {
         let (_dir, manager) = temp_manager();
 
-        manager.add_to_allowlist("main", "/usr/bin/git").unwrap();
+        manager
+            .add_to_allowlist(
+                "main",
+                "/usr/bin/git",
+                Some("git status"),
+                Some("/usr/bin/git"),
+            )
+            .unwrap();
 
         let config = manager.get_config().unwrap();
         let agent = config.config.agents.get("main").unwrap();
@@ -699,5 +764,89 @@ mod tests {
 
         assert_eq!(allowlist.len(), 1);
         assert_eq!(allowlist[0].pattern, "/usr/bin/git");
+        assert_eq!(
+            allowlist[0].last_used_command.as_deref(),
+            Some("git status")
+        );
+        assert_eq!(
+            allowlist[0].last_resolved_path.as_deref(),
+            Some("/usr/bin/git")
+        );
+    }
+
+    #[test]
+    fn add_to_allowlist_refreshes_existing_entry_instead_of_duplicating() {
+        let (_dir, manager) = temp_manager();
+
+        manager
+            .add_to_allowlist("main", "git", Some("git status"), None)
+            .unwrap();
+        manager
+            .add_to_allowlist("main", "git", Some("git log"), Some("/usr/bin/git"))
+            .unwrap();
+
+        let config = manager.get_config().unwrap();
+        let allowlist = config
+            .config
+            .agents
+            .get("main")
+            .unwrap()
+            .allowlist
+            .clone()
+            .unwrap();
+        assert_eq!(allowlist.len(), 1, "same pattern must not duplicate");
+        assert_eq!(allowlist[0].last_used_command.as_deref(), Some("git log"));
+        assert_eq!(
+            allowlist[0].last_resolved_path.as_deref(),
+            Some("/usr/bin/git")
+        );
+    }
+
+    #[test]
+    fn clamp_downgrades_allow_always_for_danger_command() {
+        // `rm -rf ./build` classifies Danger → allow-always is not permitted
+        // and must narrow to the session tier; explicit approvals never
+        // escalate or become denials.
+        assert_eq!(
+            ExecApprovalManager::clamp_decision(
+                "rm -rf ./build",
+                ApprovalDecisionType::AllowAlways
+            ),
+            ApprovalDecisionType::AllowSession
+        );
+        // Safe command keeps allow-always.
+        assert_eq!(
+            ExecApprovalManager::clamp_decision("ls -la", ApprovalDecisionType::AllowAlways),
+            ApprovalDecisionType::AllowAlways
+        );
+        // Non-always decisions pass through untouched at every risk level.
+        assert_eq!(
+            ExecApprovalManager::clamp_decision("rm -rf /", ApprovalDecisionType::AllowOnce),
+            ApprovalDecisionType::AllowOnce
+        );
+    }
+
+    #[tokio::test]
+    async fn register_pending_sweeps_orphaned_expired_entries() {
+        // An entry whose waiter future was dropped never reaches
+        // `await_registered`'s removal; the next registration must evict it.
+        let (_dir, manager) = temp_manager();
+
+        let mut stale = mock_request();
+        stale.id = "stale-entry".to_string();
+        let record = manager.create(&stale, 1); // 1ms lifetime
+        let (stale_id, rx, _timeout) = manager.register_pending(record);
+        drop(rx); // waiter abandoned — simulates an aborted agent run
+
+        // Let the 1ms lifetime elapse for real before the sweeping call, so
+        // the eviction never races the clock.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Next registration sweeps the expired orphan.
+        let record2 = manager.create(&mock_request(), 60_000);
+        let (live_id, _rx2, _t2) = manager.register_pending(record2);
+
+        assert!(manager.get_pending(&stale_id).is_none(), "orphan evicted");
+        assert!(manager.get_pending(&live_id).is_some(), "live entry kept");
     }
 }

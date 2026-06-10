@@ -59,6 +59,7 @@ mod tests {
             analysis: CommandAnalysis::error("danger"),
             agent_id: "main".to_string(),
             session_key: "telegram:123".to_string(),
+            reason: None,
         }
     }
 

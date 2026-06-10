@@ -60,6 +60,17 @@ pub enum ApprovalRequest {
 pub struct CommandApprovalRequest {
     pub command: String,
     pub cwd: Option<String>,
+    /// Why this approval is being requested (escalation/confirmation context).
+    /// Rendered to the user so they can make an informed decision; absent on
+    /// payloads serialized before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// The decision tiers this request permits (see
+    /// [`crate::exec::allowed_decisions`]). Renderers consult this instead of
+    /// hardcoding a button set; the serde default backfills pre-existing
+    /// payloads with the historical unconstrained set.
+    #[serde(default = "crate::exec::allowed_decisions::full_set")]
+    pub allowed_decisions: Vec<crate::exec::socket::ApprovalDecisionType>,
 }
 
 #[cfg(test)]
