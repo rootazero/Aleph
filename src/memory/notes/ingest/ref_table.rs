@@ -122,7 +122,7 @@ impl RefTable {
     /// Resolve a list of link references in place, dropping entries whose token
     /// is out of range (a hallucinated link target is silently discarded
     /// rather than written as a dangling edge).
-    fn resolve_links(&self, links: &mut Vec<String>, stats: &mut ResolveStats) {
+    pub(crate) fn resolve_links(&self, links: &mut Vec<String>, stats: &mut ResolveStats) {
         links.retain_mut(|l| match self.resolve_field(l) {
             FieldOutcome::Resolved => {
                 stats.resolved += 1;

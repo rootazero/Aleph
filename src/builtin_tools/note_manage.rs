@@ -141,6 +141,11 @@ pub struct NoteManageResult {
     /// Notes returned by list/query.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<Vec<NoteListEntry>>,
+    /// Related existing notes surfaced after a create, so the model can
+    /// weave the new note into the wiki (via `links`) instead of leaving an
+    /// orphan island.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub related_notes: Option<Vec<NoteListEntry>>,
 }
 
 // =============================================================================
@@ -377,9 +382,65 @@ impl NoteManageTool {
         let note_path = format!("{category}/{safe_filename}");
         info!(path = %note_path, "Note created");
 
+        // Surface related existing notes (best-effort, FTS-only — this tool
+        // has no embedder) so the model can weave the new note into the wiki
+        // instead of leaving an orphan island. `search_notes_fts` treats its
+        // whole query as ONE FTS5 phrase, so a multi-word title+content blob
+        // would require an exact phrase hit and never match — search per
+        // significant keyword instead and merge by path. Search failure must
+        // never fail the create.
+        let query_text = format!(
+            "{} {}",
+            args.title.as_deref().unwrap_or(&safe_filename),
+            args.content.as_deref().unwrap_or("")
+        );
+        let mut rel: Vec<NoteListEntry> = Vec::new();
+        for kw in related_keywords(&query_text) {
+            match self
+                .indexer
+                .store()
+                .search_notes_fts(&kw, agent_id, 3)
+                .await
+            {
+                Ok(hits) => {
+                    for e in hits {
+                        if e.path == note_path || rel.iter().any(|r| r.path == e.path) {
+                            continue;
+                        }
+                        rel.push(NoteListEntry {
+                            path: e.path,
+                            category: e.category,
+                            filename: e.filename,
+                            tags: e.tags,
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!(error = %e, keyword = %kw, "note_manage create: related-note search failed");
+                }
+            }
+            if rel.len() >= 5 {
+                break;
+            }
+        }
+        rel.truncate(5);
+        let related_notes = (!rel.is_empty()).then_some(rel);
+        let message = match &related_notes {
+            Some(rel) => format!(
+                "Created note '{safe_filename}' in '{category}'. Found {} related note(s) — consider linking them (append with links=[...]) so this note is not an orphan: {}",
+                rel.len(),
+                rel.iter()
+                    .map(|r| r.path.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            None => format!("Created note '{safe_filename}' in '{category}'"),
+        };
+
         Ok(NoteManageResult {
+            related_notes,
             success: true,
-            message: format!("Created note '{safe_filename}' in '{category}'"),
+            message,
             note_path: Some(note_path),
             content: None,
             notes: None,
@@ -467,6 +528,7 @@ impl NoteManageTool {
         info!(path = %note_path, "Note updated");
 
         Ok(NoteManageResult {
+            related_notes: None,
             success: true,
             message: format!("Updated note '{safe_filename}' in '{category}'"),
             note_path: Some(note_path),
@@ -510,6 +572,7 @@ impl NoteManageTool {
         info!(path = %note_path, facts = new_facts.len(), "Note appended");
 
         Ok(NoteManageResult {
+            related_notes: None,
             success: true,
             message: format!(
                 "Appended {} fact(s) to '{safe_filename}' in '{category}'",
@@ -541,6 +604,7 @@ impl NoteManageTool {
 
         if results.is_empty() {
             return Ok(NoteManageResult {
+                related_notes: None,
                 success: true,
                 message: format!("No notes found matching '{query}'"),
                 note_path: None,
@@ -578,6 +642,7 @@ impl NoteManageTool {
         }
 
         Ok(NoteManageResult {
+            related_notes: None,
             success: true,
             message: format!("Found {} note(s) matching '{query}'", notes.len()),
             note_path: None,
@@ -624,6 +689,7 @@ impl NoteManageTool {
             .unwrap_or_default();
 
         Ok(NoteManageResult {
+            related_notes: None,
             success: true,
             message: format!("{} note(s){category_label}", entries.len()),
             note_path: None,
@@ -680,6 +746,7 @@ impl NoteManageTool {
         info!(path = %note_path, "Note deleted");
 
         Ok(NoteManageResult {
+            related_notes: None,
             success: true,
             message: format!("Deleted note '{safe_filename}' from '{category}'"),
             note_path: Some(note_path),
@@ -700,7 +767,11 @@ impl AlephTool for NoteManageTool {
         "Create, update, append, query, list, or delete personal knowledge notes. \
          Notes are markdown files organized by category (preference, plan, learning, \
          project, personal, tool, lesson, skill, reference, transcript, other). \
-         Use this tool to store and retrieve long-term knowledge and preferences.";
+         Use this tool to store and retrieve long-term knowledge and preferences. \
+         IMPORTANT: notes form a wiki — when creating a note, ALWAYS connect it to \
+         related notes via the `links` parameter; linkless notes become orphan \
+         islands and are archived early. The create result returns `related_notes` \
+         candidates — link the relevant ones with a follow-up append.";
 
     type Args = NoteManageArgs;
     type Output = NoteManageResult;
@@ -753,6 +824,26 @@ pub fn frontmatter_template(category: &str, title: &str, tags: &[String]) -> Str
             "---\ncategory: {category}\ntags: {tags_str}\ncreated: \"{now}\"\nupdated: \"{now}\"\n---"
         ),
     }
+}
+
+/// Extract up to 4 significant keywords (length >= 4, lowercased, deduped,
+/// input order preserved) from a note's title+content for the per-keyword
+/// related-note FTS search after `create`.
+fn related_keywords(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for word in text.split(|c: char| !c.is_alphanumeric()) {
+        if word.chars().count() < 4 {
+            continue;
+        }
+        let lower = word.to_lowercase();
+        if !out.contains(&lower) {
+            out.push(lower);
+            if out.len() >= 4 {
+                break;
+            }
+        }
+    }
+    out
 }
 
 /// Validate that the category is one of the known valid values.
@@ -816,5 +907,77 @@ mod tests {
         assert!(validate_category("subagent-run").is_ok());
         assert!(validate_category("unknown-cat").is_err());
         assert!(validate_category("").is_err());
+    }
+
+    use crate::memory::store::SqliteMemoryBackend;
+    use crate::sync_primitives::Arc;
+
+    fn mk_tool() -> (tempfile::TempDir, NoteManageTool) {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = Arc::new(SqliteMemoryBackend::new(&dir.path().join("mem.db")).unwrap());
+        let tool = NoteManageTool::new(dir.path().join("note"), backend);
+        (dir, tool)
+    }
+
+    fn create_args(filename: &str, content: &str) -> NoteManageArgs {
+        NoteManageArgs {
+            action: NoteManageAction::Create,
+            category: Some("learning".into()),
+            filename: Some(filename.into()),
+            title: Some(filename.into()),
+            content: Some(content.into()),
+            facts: None,
+            links: None,
+            tags: None,
+            query: None,
+            limit: None,
+            agent_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_surfaces_related_notes() {
+        let (_d, tool) = mk_tool();
+        let r1 = tool
+            .call(create_args(
+                "tokio-basics",
+                "- tokioruntime event loop basics",
+            ))
+            .await
+            .unwrap();
+        assert!(r1.success);
+        // Second note is highly related to the first -> related_notes must
+        // surface the first one.
+        let r2 = tool
+            .call(create_args(
+                "tokio-advanced",
+                "- advanced tokioruntime scheduling patterns",
+            ))
+            .await
+            .unwrap();
+        assert!(r2.success);
+        let related = r2.related_notes.expect("related notes should surface");
+        assert!(
+            related.iter().any(|n| n.path == "learning/tokio-basics"),
+            "expected learning/tokio-basics in {related:?}"
+        );
+        // The just-created note never appears in its own candidates.
+        assert!(related.iter().all(|n| n.path != "learning/tokio-advanced"));
+        // The message carries the linking nudge.
+        assert!(r2.message.contains("consider linking"));
+    }
+
+    #[tokio::test]
+    async fn create_with_no_related_notes_omits_field() {
+        let (_d, tool) = mk_tool();
+        let r = tool
+            .call(create_args(
+                "zzz-unique",
+                "- completely unrelated xyzzy fact",
+            ))
+            .await
+            .unwrap();
+        assert!(r.success);
+        assert!(r.related_notes.is_none());
     }
 }

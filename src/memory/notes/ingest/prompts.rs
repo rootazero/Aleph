@@ -19,14 +19,18 @@ to them, emit an IngestPlan that updates the wiki.
 4. When an existing page already covers a topic, emit `append` rather
    than creating a duplicate.
 5. When new info SUPERSEDES an older page entirely, emit `supersede`.
-6. Prefer linking a new `create` to related existing pages so it is not
-   an orphan. BUT only use `[P<n>]` tokens that ACTUALLY APPEAR in the
-   "Related existing pages" section below — never invent a token number
-   that is not shown (an out-of-range token is discarded and can cost you
-   the whole note). When the wiki is sparse or empty (few or no related
-   pages shown), it is correct to create a SEED note with an empty
-   `links` list — do NOT skip a durable fact, and do NOT fabricate tokens,
-   just to satisfy a linking preference. Later consolidation links seeds.
+6. LINKING IS MANDATORY when the "Related existing pages" section below is
+   non-empty: every `create` MUST carry at least one `links[]` entry or
+   `relations` edge pointing at a `[P<n>]` token from that section. A note
+   with no links is an orphan island — orphans rot unrecallable and are
+   archived early, defeating the wiki. Only use `[P<n>]` tokens that
+   ACTUALLY APPEAR in that section — never invent a token number (an
+   out-of-range token is discarded and can cost you the whole note). ONLY
+   when the section is empty (sparse wiki, or retrieval degraded) may you
+   create a SEED note with an empty `links` list — do NOT skip a durable
+   fact just because there is nothing to link to. Additionally, when you
+   notice two EXISTING related pages that should reference each other,
+   emit a `link` op to connect them.
 7. When you want to introduce a NEW tag (one not present in any
    provided related page), put it in `schema_proposals` as
    `new_tag`; do NOT invent a tag in `tags:` that the Schema has not
@@ -106,6 +110,27 @@ existing pages" section (e.g. if only `[P0]` is shown, never write `[P1]`):
 
 If nothing is worth ingesting, emit:
 {"reasoning": "no durable knowledge", "ops": [], "schema_proposals": []}
+"#;
+
+/// Repair prompt for the link-contract harmony gate
+/// (`enforce_link_contract`). Given the linkless `create` ops from a plan
+/// plus the same related pages the planner saw, asks the LLM to either
+/// supply `[P<n>]` links or explicitly declare the note isolated.
+pub const PROMPT_LINK_REPAIR: &str = r#"You maintain an Aleph personal-memory wiki.
+The following NEW notes are about to be written with NO links, even though
+related pages exist. For EACH note, either pick 1-3 related pages it should
+link to, or mark it isolated when truly nothing relates.
+
+Rules:
+- Only use `[P<n>]` tokens that appear in the "Related existing pages"
+  section below — never invent a token number.
+- Link a page only when a reader of one note would benefit from the other.
+- Output valid JSON only, no prose, no markdown fences:
+
+{"repairs": [{"note_index": 0, "links": ["[P2]"], "isolated": false}]}
+
+`note_index` is the `[note <i>]` index shown for each new note below.
+`links` must be empty when `isolated` is true.
 "#;
 
 /// Build the full system prompt for a batch whose rows share the given
