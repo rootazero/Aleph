@@ -350,11 +350,13 @@ fn MessageBubble(
             "min-w-0 w-full px-2 py-1 text-text-primary"
         }
     } else if has_error {
-        // Standalone final answer that errored — keep the bubble.
-        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 msg-glass-danger text-danger"
+        // Standalone final answer that errored — keep the bubble, full width
+        // so long-form prose/markdown reads comfortably.
+        "min-w-0 w-full rounded-2xl px-4 py-3 msg-glass-danger text-danger"
     } else {
-        // Standalone final answer — the conversational reply keeps its bubble.
-        "min-w-0 max-w-[80%] rounded-2xl px-4 py-3 msg-glass text-text-primary"
+        // Standalone final answer — the conversational reply keeps its bubble
+        // but spans the full column; 80% crowded long markdown answers.
+        "min-w-0 w-full rounded-2xl px-4 py-3 msg-glass text-text-primary"
     };
     let bubble_class = bubble_style.to_string();
 
