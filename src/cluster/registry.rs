@@ -7,8 +7,9 @@
 //! 红线：纯数据结构，无 LLM 推理（R7），不进 `src/harness/`（R10）。
 
 use std::collections::HashMap;
-use std::sync::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::sync_primitives::RwLock;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -801,11 +801,11 @@ pub(in crate::commands::start) fn register_config_handlers(
 pub(in crate::commands::start) fn register_voice_capability_handlers(
     server: &mut GatewayServer,
     config: Arc<tokio::sync::RwLock<alephcore::Config>>,
-    // `std::sync::RwLock` to match `AgentResult.generation_registry`
+    // `alephcore::sync_primitives::RwLock` to match `AgentResult.generation_registry`
     // (`alephcore::sync_primitives::RwLock`); the handler snapshots it under
     // the sync lock, so no guard is held across an await.
     generation_registry: Option<
-        Arc<std::sync::RwLock<alephcore::generation::GenerationProviderRegistry>>,
+        Arc<alephcore::sync_primitives::RwLock<alephcore::generation::GenerationProviderRegistry>>,
     >,
 ) {
     use alephcore::gateway::handlers::voice;

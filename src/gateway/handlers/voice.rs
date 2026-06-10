@@ -232,7 +232,7 @@ pub async fn handle_record_stop(
 pub async fn handle_synthesize(
     request: JsonRpcRequest,
     config: Arc<RwLock<Config>>,
-    generation_registry: Arc<std::sync::RwLock<crate::generation::GenerationProviderRegistry>>,
+    generation_registry: Arc<crate::sync_primitives::RwLock<crate::generation::GenerationProviderRegistry>>,
 ) -> JsonRpcResponse {
     #[derive(serde::Deserialize)]
     struct Params {

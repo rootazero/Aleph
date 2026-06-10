@@ -582,7 +582,7 @@ mod tests {
     /// test can assert what actually reached the summarizer.
     #[derive(Clone)]
     struct CapturingProvider {
-        last_prompt: Arc<std::sync::Mutex<String>>,
+        last_prompt: Arc<crate::sync_primitives::Mutex<String>>,
         response: String,
     }
 

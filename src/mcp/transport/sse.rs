@@ -91,11 +91,11 @@ pub struct SseTransport {
     client: Client,
     /// Connection state
     alive: Arc<RwLock<bool>>,
-    /// Notification handler (std::sync::Mutex wrapped in Arc so the spawned
+    /// Notification handler (crate::sync_primitives::Mutex wrapped in Arc so the spawned
     /// SSE listener task can access it without block_in_place)
-    notification_handler: Arc<std::sync::Mutex<Option<NotificationCallback>>>,
+    notification_handler: Arc<crate::sync_primitives::Mutex<Option<NotificationCallback>>>,
     /// Handler for server-initiated requests (sampling, etc.)
-    request_handler: Arc<std::sync::Mutex<Option<RequestCallback>>>,
+    request_handler: Arc<crate::sync_primitives::Mutex<Option<RequestCallback>>>,
     /// Shutdown signal sender
     shutdown_tx: RwLock<Option<mpsc::Sender<()>>>,
 }
@@ -123,8 +123,8 @@ impl SseTransport {
             config,
             client,
             alive: Arc::new(RwLock::new(true)),
-            notification_handler: Arc::new(std::sync::Mutex::new(None)),
-            request_handler: Arc::new(std::sync::Mutex::new(None)),
+            notification_handler: Arc::new(crate::sync_primitives::Mutex::new(None)),
+            request_handler: Arc::new(crate::sync_primitives::Mutex::new(None)),
             shutdown_tx: RwLock::new(None),
         })
     }
@@ -217,8 +217,8 @@ impl SseTransport {
         client: &Client,
         url: &str,
         headers: &HashMap<String, String>,
-        notification_handler: &Arc<std::sync::Mutex<Option<NotificationCallback>>>,
-        request_handler: &Arc<std::sync::Mutex<Option<RequestCallback>>>,
+        notification_handler: &Arc<crate::sync_primitives::Mutex<Option<NotificationCallback>>>,
+        request_handler: &Arc<crate::sync_primitives::Mutex<Option<RequestCallback>>>,
         server_name: &str,
     ) -> Result<()> {
         // Build request with headers
@@ -264,8 +264,8 @@ impl SseTransport {
     /// Handle a parsed SSE event
     async fn handle_sse_event(
         event: SseEvent,
-        notification_handler: &Arc<std::sync::Mutex<Option<NotificationCallback>>>,
-        request_handler: &Arc<std::sync::Mutex<Option<RequestCallback>>>,
+        notification_handler: &Arc<crate::sync_primitives::Mutex<Option<NotificationCallback>>>,
+        request_handler: &Arc<crate::sync_primitives::Mutex<Option<RequestCallback>>>,
         server_name: &str,
     ) {
         match event {

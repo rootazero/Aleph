@@ -33,7 +33,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
+
+use crate::sync_primitives::Mutex;
 
 /// Upper bound on messages waiting in one agent's FIFO lane. Past this the
 /// newest message is rejected immediately (OpenSquilla `REJECT_NEWEST`) so a
@@ -50,7 +52,7 @@ fn next_ticket() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-fn lock() -> std::sync::MutexGuard<'static, HashMap<String, VecDeque<u64>>> {
+fn lock() -> crate::sync_primitives::MutexGuard<'static, HashMap<String, VecDeque<u64>>> {
     queues().lock().unwrap_or_else(|e| e.into_inner())
 }
 

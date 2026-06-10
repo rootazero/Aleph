@@ -55,12 +55,12 @@ pub struct PtySession {
     /// Unix-epoch seconds at spawn time.
     pub created_at: i64,
     /// Writer into the child's stdin (the PTY master write side).
-    writer: std::sync::Mutex<Box<dyn Write + Send>>,
+    writer: crate::sync_primitives::Mutex<Box<dyn Write + Send>>,
     /// Master handle, retained for resize (`TIOCSWINSZ` equivalent).
-    master: std::sync::Mutex<Box<dyn MasterPty + Send>>,
+    master: crate::sync_primitives::Mutex<Box<dyn MasterPty + Send>>,
     /// Independent killer split from the child so `close` can terminate it
     /// without racing the reader thread that owns the `Child`.
-    killer: std::sync::Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    killer: crate::sync_primitives::Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// Flipped once the child exits or the session is closed.
     closed: AtomicBool,
 }
@@ -125,9 +125,9 @@ impl PtySession {
             id: id.clone(),
             shell: label,
             created_at: chrono::Utc::now().timestamp(),
-            writer: std::sync::Mutex::new(writer),
-            master: std::sync::Mutex::new(master),
-            killer: std::sync::Mutex::new(killer),
+            writer: crate::sync_primitives::Mutex::new(writer),
+            master: crate::sync_primitives::Mutex::new(master),
+            killer: crate::sync_primitives::Mutex::new(killer),
             closed: AtomicBool::new(false),
         });
 

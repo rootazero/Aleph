@@ -27,7 +27,7 @@ use crate::verification::{
 /// tool-call and bookkeeping deltas are folded by the provider's
 /// `DeltaCollector` and surface through the assembled `ProviderResponse`.
 struct CallbackSink<'c> {
-    callback: std::sync::Mutex<&'c mut dyn HarnessCallback>,
+    callback: crate::sync_primitives::Mutex<&'c mut dyn HarnessCallback>,
 }
 
 #[async_trait::async_trait]
@@ -1477,7 +1477,7 @@ impl AgentHarness {
                 .await;
         };
         let sink = CallbackSink {
-            callback: std::sync::Mutex::new(callback),
+            callback: crate::sync_primitives::Mutex::new(callback),
         };
         self.race_llm_call(
             http.execute_streaming(payload, &sink),
@@ -1822,7 +1822,7 @@ mod tests {
         let mut cb = RecordingCb::default();
         {
             let sink = CallbackSink {
-                callback: std::sync::Mutex::new(&mut cb),
+                callback: crate::sync_primitives::Mutex::new(&mut cb),
             };
             sink.on_delta(&ProviderDelta::TextDelta("Hello ".into()))
                 .await;
