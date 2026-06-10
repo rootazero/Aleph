@@ -6,6 +6,6 @@ pub mod memory_adapter;
 pub mod registry_adapter;
 
 pub use builtin_adapter::BuiltinToolAdapter;
-pub use mcp_adapter::{McpToolAdapter, McpToolSpec, McpTransportTrait};
+pub use mcp_adapter::McpRegistryTool;
 pub use memory_adapter::{MemoryBackend, MemoryEntry, MemorySearchTool, MemoryStoreTool};
 pub use registry_adapter::{build_registry_from_tools, build_tool_adapters_from_tools};

@@ -271,13 +271,22 @@ impl McpServerConnection {
                          tool is still surfaced but flagged for review"
                     );
                 }
+                // Behavioral hints (MCP `ToolAnnotations`) are consumed
+                // conservatively: read-only/idempotent only relax scheduling
+                // when explicitly true; an explicit destructive hint routes
+                // the tool through the user-confirmation gate. Absent
+                // annotations behave exactly like the pre-annotation default
+                // (exclusive, no confirmation).
+                let annotations = t.annotations.unwrap_or_default();
                 McpTool {
                     name: format!("{}:{}", self.name, t.name), // Namespace with server name
                     description,
                     input_schema: crate::mcp::normalize_tool_schema(
                         t.input_schema.unwrap_or_else(|| json!({"type": "object"})),
                     ),
-                    requires_confirmation: false, // External tools default to no confirmation
+                    requires_confirmation: annotations.is_destructive(),
+                    read_only: annotations.is_read_only(),
+                    idempotent: annotations.is_idempotent(),
                 }
             })
             .collect();

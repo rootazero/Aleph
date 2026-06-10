@@ -85,14 +85,21 @@ pub fn register_mcp_tools(
             );
             continue;
         }
-        let qualified = format!("{}__{}", server_id, tool.name);
-        let handler: Arc<dyn ToolHandler> = Arc::new(McpHandler::new(
+        let mcp_handler = McpHandler::new(
             Arc::clone(&client),
             server_id.to_string(),
             tool.name.clone(),
             tool.description.clone(),
             tool.input_schema.clone(),
-        ));
+        )
+        .with_flags(tool.read_only, tool.idempotent, tool.requires_confirmation);
+        // Single source of naming truth: the handler computes the provider-
+        // safe registry key (strips the manager's `{server}:` namespace
+        // prefix, sanitizes to `[A-Za-z0-9_-]{1,64}`). Composing the key
+        // here from the raw namespaced name would re-introduce the
+        // `server__server:tool` double-prefix the LLM providers reject.
+        let qualified = mcp_handler.qualified_name();
+        let handler: Arc<dyn ToolHandler> = Arc::new(mcp_handler);
         match registry.register(qualified.clone(), handler) {
             Ok(()) => {
                 if let Some(disp) = tool_catalog {
@@ -157,7 +164,41 @@ mod tests {
             description: desc.into(),
             input_schema: json!({"type": "object"}),
             requires_confirmation: false,
+            read_only: false,
+            idempotent: false,
         }
+    }
+
+    #[test]
+    fn register_mcp_tools_strips_namespaced_prefix_from_registry_key() {
+        // The manager hands the bridge namespaced names ("server:tool");
+        // the registry key must be the provider-safe `server__tool`, not
+        // the colon-bearing double prefix `server__server:tool`.
+        let reg = ToolHandlerRegistry::new();
+        let client = Arc::new(McpClient::new());
+        let names = register_mcp_tools(&reg, None, client, "github", &[tool("github:create_issue", "d")]);
+        assert_eq!(names, vec!["github__create_issue"]);
+        assert!(reg.snapshot().contains_key("github__create_issue"));
+    }
+
+    #[test]
+    fn register_mcp_tools_carries_annotation_flags_into_definition() {
+        let reg = ToolHandlerRegistry::new();
+        let client = Arc::new(McpClient::new());
+        let mut ro = tool("list_items", "d");
+        ro.read_only = true;
+        ro.idempotent = true;
+        let mut boom = tool("delete_item", "d");
+        boom.requires_confirmation = true;
+        register_mcp_tools(&reg, None, client, "srv", &[ro, boom]);
+        let snap = reg.snapshot();
+        let ro_def = snap.get("srv__list_items").unwrap().definition();
+        assert!(ro_def.metadata.concurrent_safe);
+        assert!(ro_def.metadata.idempotent);
+        assert!(!ro_def.metadata.requires_approval);
+        let boom_def = snap.get("srv__delete_item").unwrap().definition();
+        assert!(boom_def.metadata.requires_approval);
+        assert!(!boom_def.metadata.concurrent_safe);
     }
 
     #[test]

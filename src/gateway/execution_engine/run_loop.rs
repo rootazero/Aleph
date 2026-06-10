@@ -632,14 +632,69 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
             }
 
             // Build per-request ToolService with SubagentTool + optional MCP refresh
-            let loop_registry = Arc::new(crate::tools::adapters::build_registry_from_tools(
+            let mut loop_registry_inner = crate::tools::adapters::build_registry_from_tools(
                 self.tool_registry.clone(),
                 &allowed_tools,
                 default_working_dir.clone(),
-            ));
+            );
 
-            let allowed_names: std::collections::BTreeSet<String> =
+            let mut allowed_names: std::collections::BTreeSet<String> =
                 allowed_tools.iter().map(|t| t.name.clone()).collect();
+
+            // External MCP tools: snapshot the bridge-maintained registry
+            // (boot installs it via `set_mcp_tool_registry`) and join each
+            // entry into this request's LoopToolRegistry. This is the
+            // consumer side of `mcp::spawn_tool_bridge` — the bridge keeps
+            // the ToolHandlerRegistry in sync with every connected server's
+            // tools/list; here those handlers become LLM-visible LoopTools.
+            // Gating mirrors the builtin path above: per-agent allowlist,
+            // plus the slash-skill whitelist when one restricted this run
+            // (re-parsed from metadata — see the restriction block above).
+            // Existing names are never overwritten (builtins win collisions).
+            if let Some(mcp_registry) = super::tool_service_builder::mcp_tool_registry() {
+                let skill_whitelist: Option<std::collections::HashSet<&str>> = request
+                    .metadata
+                    .get("slash_skill_allowed_tools")
+                    .map(|raw| {
+                        raw.split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .collect::<std::collections::HashSet<&str>>()
+                    })
+                    .filter(|set| !set.is_empty());
+                let mut joined = 0usize;
+                for (name, handler) in mcp_registry.snapshot().iter() {
+                    if !agent.is_tool_allowed(name) {
+                        continue;
+                    }
+                    if let Some(ref wl) = skill_whitelist {
+                        if !wl.contains(name.as_str()) {
+                            continue;
+                        }
+                    }
+                    if loop_registry_inner.get(name).is_some() {
+                        continue;
+                    }
+                    loop_registry_inner.register(Box::new(
+                        crate::tools::adapters::McpRegistryTool::from_registry_entry(
+                            name,
+                            Arc::clone(handler),
+                        ),
+                    ));
+                    // Only widen a non-empty allow-set; an empty set already
+                    // means allow-all in ScopedToolService and inserting
+                    // names would flip it to restrictive.
+                    if !allowed_names.is_empty() {
+                        allowed_names.insert(name.clone());
+                    }
+                    joined += 1;
+                }
+                if joined > 0 {
+                    info!(run_id = run_id, count = joined, "MCP tools joined tool surface");
+                }
+            }
+
+            let loop_registry = Arc::new(loop_registry_inner);
 
             // Compose refresh sources: plugin tools (when an extension manager
             // is wired) + markdown CLI skills (always — installed via the
