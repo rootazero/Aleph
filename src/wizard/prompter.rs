@@ -270,7 +270,11 @@ mod tests {
             .await
             .unwrap();
 
-        let stored = finish_data.read().unwrap().clone().unwrap();
+        let stored = finish_data
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap();
         assert_eq!(stored["token"], "secret");
     }
 }

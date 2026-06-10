@@ -154,7 +154,7 @@ async fn verify_or_repair(
 
 // Tests that modify HOME must run serially to avoid race conditions.
 #[cfg(test)]
-pub(crate) static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static HOME_LOCK: crate::sync_primitives::Mutex<()> = crate::sync_primitives::Mutex::new(());
 
 /// RAII guard for tests that read or mutate the process-global `$HOME`.
 ///
@@ -167,7 +167,7 @@ pub(crate) static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// is derived from `$HOME`) fail with `SUN_LEN` overflow.
 #[cfg(test)]
 pub(crate) struct HomeEnvGuard {
-    _lock: std::sync::MutexGuard<'static, ()>,
+    _lock: crate::sync_primitives::MutexGuard<'static, ()>,
     prev: Option<std::ffi::OsString>,
 }
 

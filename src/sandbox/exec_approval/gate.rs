@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+use crate::sync_primitives::{Mutex, RwLock};
 
 use async_trait::async_trait;
 
@@ -45,7 +46,7 @@ pub struct ApprovalGate {
     /// exists, then wire the real requester via `set_requester` once channels
     /// are up. An empty slot denies — never a silent auto-approve.
     requester: RwLock<Option<Arc<dyn ApprovalRequester>>>,
-    retry_counts: std::sync::Mutex<HashMap<String, u8>>,
+    retry_counts: Mutex<HashMap<String, u8>>,
 }
 
 impl ApprovalGate {
@@ -53,7 +54,7 @@ impl ApprovalGate {
         Self {
             config,
             requester: RwLock::new(requester),
-            retry_counts: std::sync::Mutex::new(HashMap::new()),
+            retry_counts: Mutex::new(HashMap::new()),
         }
     }
 

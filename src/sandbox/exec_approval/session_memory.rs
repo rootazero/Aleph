@@ -10,7 +10,8 @@
 //! re-prompt, never a wrong grant.
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+use crate::sync_primitives::Mutex;
 
 /// Max distinct sessions retained before FIFO eviction kicks in.
 const MAX_SESSIONS: usize = 1024;
@@ -102,7 +103,7 @@ mod tests {
         mem.remember("s1", "vault_store");
         mem.remember("s1", "vault_store");
         assert!(mem.is_approved("s1", "vault_store"));
-        let guard = mem.inner.lock().unwrap();
+        let guard = mem.inner.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(guard.order.len(), 1, "same session enqueued once");
         assert_eq!(guard.by_session.get("s1").map(|t| t.len()), Some(1));
     }
@@ -119,7 +120,7 @@ mod tests {
         // Oldest (s0) evicted; newest retained.
         assert!(!mem.is_approved("s0", "tool"));
         assert!(mem.is_approved("overflow", "tool"));
-        let guard = mem.inner.lock().unwrap();
+        let guard = mem.inner.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(guard.order.len(), MAX_SESSIONS);
         assert_eq!(guard.by_session.len(), MAX_SESSIONS);
     }

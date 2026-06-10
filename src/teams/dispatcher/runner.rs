@@ -490,7 +490,7 @@ mod tests {
         // Serialize against any concurrent test that mutates the same env var.
         // tokio's test framework runs tests in parallel by default; we use
         // a static mutex to guarantee ordering for env-var manipulation.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        static LOCK: crate::sync_primitives::Mutex<()> = crate::sync_primitives::Mutex::new(());
         let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let prev = std::env::var("ALEPH_TEAM_MEMBER_WORKTREE").ok();
@@ -515,7 +515,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         // Save + change cwd so the env_var path below sees a non-git location.
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        static LOCK: crate::sync_primitives::Mutex<()> = crate::sync_primitives::Mutex::new(());
         let _g = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev_cwd = std::env::current_dir().expect("cwd");
         std::env::set_current_dir(tmp.path()).expect("cd tmp");

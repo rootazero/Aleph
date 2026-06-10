@@ -7,7 +7,7 @@ fn test_sqlite_vec_extension_loaded() {
     let db_path = temp_dir.path().join("test.db");
     let db = StateDatabase::new(db_path).unwrap();
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
     // vec_version() returns the sqlite-vec version if loaded
     let version: String = conn
         .query_row("SELECT vec_version()", [], |row| row.get(0))
@@ -26,7 +26,7 @@ fn test_vec0_tables_created() {
     let db_path = temp_dir.path().join("test.db");
     let db = StateDatabase::new(db_path).unwrap();
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     // Check memories_vec table exists
     let memories_vec_exists: bool = conn
@@ -63,7 +63,7 @@ fn test_migrate_to_vec0() {
     let db = StateDatabase::new(db_path.clone()).unwrap();
 
     // Verify both tables are empty initially
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
     let memories_count: i64 = conn
         .query_row("SELECT COUNT(*) FROM memories", [], |row| row.get(0))
         .unwrap();
@@ -81,7 +81,7 @@ fn test_fts5_tables_created() {
     let db_path = temp_dir.path().join("test.db");
     let db = StateDatabase::new(db_path).unwrap();
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     // Check memories_fts table exists
     let memories_fts_exists: bool = conn
@@ -113,7 +113,7 @@ fn test_fts5_sync_triggers_exist() {
     let db_path = temp_dir.path().join("test.db");
     let db = StateDatabase::new(db_path).unwrap();
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     // Check insert trigger exists for memories
     let memories_trigger: bool = conn
@@ -147,7 +147,7 @@ fn test_in_memory_database() {
     // Verify db_path is :memory:
     assert_eq!(db.db_path.to_str().unwrap(), ":memory:");
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     // Verify sqlite-vec extension is loaded
     let version: String = conn
@@ -193,7 +193,7 @@ fn test_in_memory_database() {
 #[test]
 fn test_task_traces_use_structured_agent_trace_schema() {
     let db = StateDatabase::in_memory().unwrap();
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
 
     let columns: Vec<String> = {
         let mut stmt = conn
@@ -224,7 +224,7 @@ fn test_new_with_dim_default() {
     let db_path = temp_dir.path().join("test.db");
     let db = StateDatabase::new_with_dim(db_path, 1024).unwrap();
 
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
     let dim: String = conn
         .query_row(
             "SELECT value FROM schema_info WHERE key = 'embedding_dimension'",
@@ -249,7 +249,7 @@ fn test_new_with_dim_change_survives_restart() {
     // First boot at 384, seed one memory row with a 384-dim embedding.
     {
         let db = StateDatabase::new_with_dim(db_path.clone(), 384).unwrap();
-        let conn = db.conn.lock().unwrap();
+        let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
         let embedding = StateDatabase::serialize_embedding(&vec![0.1f32; 384]);
         conn.execute(
             "INSERT INTO memories (id, window_title, user_input, ai_output, embedding, timestamp, session_id) \
@@ -270,7 +270,7 @@ fn test_new_with_dim_change_survives_restart() {
     // Third boot at the same 1024 dimension (dim_changed == false) runs
     // migrate_to_vec0 — this must NOT fail on stale 384-dim blobs.
     let db = StateDatabase::new_with_dim(db_path, 1024).unwrap();
-    let conn = db.conn.lock().unwrap();
+    let conn = db.conn.lock().unwrap_or_else(|e| e.into_inner());
     let dim: String = conn
         .query_row(
             "SELECT value FROM schema_info WHERE key = 'embedding_dimension'",

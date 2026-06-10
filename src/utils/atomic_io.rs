@@ -67,6 +67,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_primitives::Mutex;
     use std::sync::{Arc, Barrier};
     use std::thread;
 
@@ -103,7 +104,7 @@ mod tests {
     fn with_file_lock_serialises_two_threads() {
         let dir = tempfile::tempdir().unwrap();
         let lock_path = dir.path().join("x.lock");
-        let counter = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        let counter = Arc::new(Mutex::new(Vec::<u8>::new()));
         let barrier = Arc::new(Barrier::new(2));
 
         let mut handles = vec![];
@@ -114,7 +115,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 b.wait();
                 with_file_lock(&lp, |_guard| {
-                    let mut v = c.lock().unwrap();
+                    let mut v = c.lock().unwrap_or_else(|e| e.into_inner());
                     v.push(tag);
                     std::thread::sleep(std::time::Duration::from_millis(20));
                     v.push(tag);
@@ -128,7 +129,7 @@ mod tests {
         }
 
         // Each tag wrote two bytes back-to-back without interleave
-        let v = counter.lock().unwrap();
+        let v = counter.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(v.len(), 4);
         assert_eq!(v[0], v[1]);
         assert_eq!(v[2], v[3]);

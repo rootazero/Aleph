@@ -210,13 +210,13 @@ impl SandboxBeforeHook for ResourceGovernor {
 /// and used by `gateway::memory_monitor` / `system_info`). Holds a persistent
 /// `System` so consecutive CPU samples are spaced enough to be meaningful.
 pub struct SysinfoLoadProbe {
-    sys: std::sync::Mutex<sysinfo::System>,
+    sys: crate::sync_primitives::Mutex<sysinfo::System>,
 }
 
 impl SysinfoLoadProbe {
     pub fn new() -> Self {
         Self {
-            sys: std::sync::Mutex::new(sysinfo::System::new()),
+            sys: crate::sync_primitives::Mutex::new(sysinfo::System::new()),
         }
     }
 }

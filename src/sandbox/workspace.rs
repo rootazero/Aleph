@@ -702,6 +702,7 @@ mod tests {
     use crate::sandbox::driver::OsSandboxProfile;
     use crate::sandbox::exec_approval::gate::ApprovalRequester;
     use crate::sandbox::exec_approval::types::ApprovalConfig;
+    use crate::sync_primitives::Mutex;
 
     /// A no-op driver for tests — avoids invoking the real macOS sandbox-exec.
     struct FakeDriver {
@@ -765,24 +766,24 @@ mod tests {
     /// `env` + `capabilities` it would have run with. Lets us assert the
     /// proxy injection without running real macOS sandbox-exec.
     struct CapturingMacosDriver {
-        captured_env: std::sync::Mutex<HashMap<String, String>>,
-        captured_caps: std::sync::Mutex<Option<SandboxCapabilities>>,
+        captured_env: Mutex<HashMap<String, String>>,
+        captured_caps: Mutex<Option<SandboxCapabilities>>,
     }
 
     impl CapturingMacosDriver {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                captured_env: std::sync::Mutex::new(HashMap::new()),
-                captured_caps: std::sync::Mutex::new(None),
+                captured_env: Mutex::new(HashMap::new()),
+                captured_caps: Mutex::new(None),
             })
         }
 
         fn env(&self) -> HashMap<String, String> {
-            self.captured_env.lock().unwrap().clone()
+            self.captured_env.lock().unwrap_or_else(|e| e.into_inner()).clone()
         }
 
         fn caps(&self) -> Option<SandboxCapabilities> {
-            self.captured_caps.lock().unwrap().clone()
+            self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()).clone()
         }
     }
 
@@ -803,7 +804,7 @@ mod tests {
         ) -> Result<OsSandboxProfile, SandboxError> {
             // Capture the (post-proxy-rewrite, post-DNS) capabilities at the
             // exact moment the OS driver would build its profile.
-            *self.captured_caps.lock().unwrap() = Some(capabilities.clone());
+            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) = Some(capabilities.clone());
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,
@@ -823,7 +824,7 @@ mod tests {
             _timeout: Duration,
             _max_output_bytes: usize,
         ) -> Result<SandboxOutput, SandboxError> {
-            *self.captured_env.lock().unwrap() = env.clone();
+            *self.captured_env.lock().unwrap_or_else(|e| e.into_inner()) = env.clone();
             Ok(SandboxOutput {
                 exit_code: Some(0),
                 duration_ms: 1,
@@ -837,22 +838,22 @@ mod tests {
     /// (managed proxy + host bridge + route spec). The bridge itself is
     /// cross-platform (UDS ↔ TCP), so this path runs on a macOS dev box.
     struct CapturingLinuxDriver {
-        captured_env: std::sync::Mutex<HashMap<String, String>>,
-        captured_caps: std::sync::Mutex<Option<SandboxCapabilities>>,
+        captured_env: Mutex<HashMap<String, String>>,
+        captured_caps: Mutex<Option<SandboxCapabilities>>,
     }
 
     impl CapturingLinuxDriver {
         fn new() -> Arc<Self> {
             Arc::new(Self {
-                captured_env: std::sync::Mutex::new(HashMap::new()),
-                captured_caps: std::sync::Mutex::new(None),
+                captured_env: Mutex::new(HashMap::new()),
+                captured_caps: Mutex::new(None),
             })
         }
         fn env(&self) -> HashMap<String, String> {
-            self.captured_env.lock().unwrap().clone()
+            self.captured_env.lock().unwrap_or_else(|e| e.into_inner()).clone()
         }
         fn caps(&self) -> Option<SandboxCapabilities> {
-            self.captured_caps.lock().unwrap().clone()
+            self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()).clone()
         }
     }
 
@@ -869,7 +870,7 @@ mod tests {
             capabilities: &SandboxCapabilities,
             _cwd: &Path,
         ) -> Result<OsSandboxProfile, SandboxError> {
-            *self.captured_caps.lock().unwrap() = Some(capabilities.clone());
+            *self.captured_caps.lock().unwrap_or_else(|e| e.into_inner()) = Some(capabilities.clone());
             Ok(OsSandboxProfile {
                 contents: String::new(),
                 max_memory_mb: None,
@@ -888,7 +889,7 @@ mod tests {
             _timeout: Duration,
             _max_output_bytes: usize,
         ) -> Result<SandboxOutput, SandboxError> {
-            *self.captured_env.lock().unwrap() = env.clone();
+            *self.captured_env.lock().unwrap_or_else(|e| e.into_inner()) = env.clone();
             Ok(SandboxOutput {
                 exit_code: Some(0),
                 duration_ms: 1,

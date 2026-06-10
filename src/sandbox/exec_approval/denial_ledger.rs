@@ -25,7 +25,8 @@
 //! mirrors and evict identically.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
+use crate::sync_primitives::Mutex;
 
 /// Max distinct sessions retained before FIFO eviction kicks in. Matches
 /// [`session_memory`](super::session_memory)'s bound so the two stores have an
@@ -353,7 +354,7 @@ mod tests {
         // Oldest (s0) evicted; newest retained.
         assert!(led.is_blocked("s0", &fp).is_none());
         assert!(led.is_blocked("overflow", &fp).is_some());
-        let guard = led.inner.lock().unwrap();
+        let guard = led.inner.lock().unwrap_or_else(|e| e.into_inner());
         assert_eq!(guard.order.len(), MAX_SESSIONS);
         assert_eq!(guard.by_session.len(), MAX_SESSIONS);
     }

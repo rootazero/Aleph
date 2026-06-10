@@ -56,7 +56,7 @@ mod tests {
         drop(tx);
         handle.await.unwrap();
 
-        let conn = store.conn.lock().unwrap();
+        let conn = store.conn.lock().unwrap_or_else(|e| e.into_inner());
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM security_audit_log", [], |r| r.get(0))
             .unwrap();
