@@ -3,6 +3,7 @@
 use serde_json::Value;
 
 use crate::output;
+use crate::output::theme::{paint, Style};
 use aleph_client::{AlephClient, CliConfig, CliResult};
 
 use super::run_follow::{self, FollowOptions};
@@ -36,9 +37,23 @@ pub async fn send(
     if stream {
         // Follow the run live through the shared loop. Previously the flag
         // was forwarded to the server and the event stream dropped on the
-        // floor, so `--stream` printed "Message sent." and exited.
+        // floor, so `--stream` printed "Message sent." and exited. Pinned to
+        // the dispatched run so concurrent runs on the broadcast bus don't
+        // interleave.
         let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
-        let _ = run_follow::follow_run(&mut events, &FollowOptions { json, verbose }).await;
+        let run_id = result
+            .get("run_id")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let _ = run_follow::follow_run(
+            &mut events,
+            &FollowOptions {
+                json,
+                verbose,
+                run_id,
+            },
+        )
+        .await;
     } else if json {
         output::print_json(&result);
     } else {
@@ -109,26 +124,70 @@ pub async fn history(
         output::print_json(&result);
     } else {
         let count = result.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-        println!("=== Chat History ({}) ===", session_key);
-        println!();
+        println!(
+            "{}",
+            paint(Style::Header, &format!("Chat History · {session_key}"))
+        );
         if let Some(messages) = result.get("messages").and_then(|v| v.as_array()) {
             for msg in messages {
                 let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("?");
                 let content = msg.get("content").and_then(|v| v.as_str()).unwrap_or("");
-                let truncated = if content.chars().count() > 200 {
-                    format!("{}...", content.chars().take(200).collect::<String>())
-                } else {
-                    content.to_string()
-                };
-                println!("[{}] {}", role, truncated);
+                let ts = msg.get("timestamp").and_then(|v| v.as_str()).unwrap_or("");
+                println!();
+                println!("{}", render_history_entry(role, ts, content));
             }
         }
         println!();
-        println!("Total: {} messages", count);
+        println!(
+            "{}",
+            paint(Style::Muted, &format!("Total: {count} messages"))
+        );
     }
 
     client.close().await?;
     Ok(())
+}
+
+/// Render one history message for the human transcript view.
+///
+/// Pure (no I/O) so it unit-tests without a daemon. Role headers are
+/// colour-coded (user = cyan, assistant = green, everything else muted);
+/// assistant bodies go through the shared Markdown renderer — the same
+/// pipeline `ask` uses — so a replayed answer looks like it did live. User
+/// bodies print verbatim; system/tool bodies stay muted previews (they can
+/// be multi-kilobyte prompts/blobs that would drown the transcript).
+fn render_history_entry(role: &str, timestamp: &str, content: &str) -> String {
+    let style = match role {
+        "user" => Style::Info,
+        "assistant" => Style::Success,
+        _ => Style::Muted,
+    };
+    let bullet = if output::icon::use_unicode() {
+        "●"
+    } else {
+        "*"
+    };
+    let mut head = paint(style, &format!("{bullet} {role}"));
+    if !timestamp.is_empty() {
+        head.push_str(&paint(Style::Muted, &format!(" · {timestamp}")));
+    }
+
+    let body = match role {
+        "assistant" => output::markdown::render(content),
+        "user" => content.to_string(),
+        _ => {
+            let flat = content.replace('\n', " ");
+            let preview: String = flat.chars().take(200).collect();
+            let suffix = if flat.chars().count() > 200 {
+                "…"
+            } else {
+                ""
+            };
+            paint(Style::Muted, &format!("{preview}{suffix}"))
+        }
+    };
+
+    format!("{head}\n{body}")
 }
 
 /// Clear chat history for a session
@@ -165,4 +224,36 @@ pub async fn clear(
 
     client.close().await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_entry_renders_role_header_and_body() {
+        let entry = render_history_entry("user", "2026-06-10T12:00:00Z", "hello there");
+        assert!(entry.contains("user"));
+        assert!(entry.contains("2026-06-10T12:00:00Z"));
+        assert!(entry.contains("hello there"));
+    }
+
+    #[test]
+    fn history_entry_keeps_assistant_body_intact() {
+        // Assistant content goes through the Markdown renderer — long bodies
+        // must NOT be truncated (the old transcript cut everything at 200
+        // chars, which made `chat-control history` useless as a replay).
+        let long = "word ".repeat(100);
+        let entry = render_history_entry("assistant", "", &long);
+        assert!(entry.matches("word").count() >= 100);
+    }
+
+    #[test]
+    fn history_entry_previews_system_messages() {
+        let blob = "x".repeat(500);
+        let entry = render_history_entry("system", "", &blob);
+        // Muted preview keeps the transcript readable: capped + ellipsised.
+        assert!(entry.chars().filter(|c| *c == 'x').count() <= 200);
+        assert!(entry.contains('…'));
+    }
 }

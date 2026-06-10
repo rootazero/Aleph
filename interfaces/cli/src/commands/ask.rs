@@ -61,12 +61,27 @@ pub async fn run(
         input: message.to_string(),
     };
 
-    let _: Value = client.call("agent.run", Some(params)).await?;
+    let accepted: Value = client.call("agent.run", Some(params)).await?;
+    // Pin the follow loop to the accepted run: the gateway broadcasts every
+    // stream frame to every connection, so a concurrent cron/channel run
+    // would otherwise interleave into (or prematurely terminate) this one.
+    let run_id = accepted
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
 
     // Render the run live (tool activity, streamed Markdown body, retry
     // notices, summary footer) via the shared follow loop.
     let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
-    let outcome = run_follow::follow_run(&mut events, &FollowOptions { json, verbose }).await;
+    let outcome = run_follow::follow_run(
+        &mut events,
+        &FollowOptions {
+            json,
+            verbose,
+            run_id,
+        },
+    )
+    .await;
 
     if let Some(path) = output_last_message {
         if let Err(e) = std::fs::write(path, &outcome.final_text) {
