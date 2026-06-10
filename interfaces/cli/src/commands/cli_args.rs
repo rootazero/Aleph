@@ -1009,7 +1009,8 @@ pub(crate) enum ChatControlAction {
         /// Session key
         #[arg(short, long)]
         session: Option<String>,
-        /// Enable streaming
+        /// Follow the run live (tool activity + streamed response) instead
+        /// of returning after dispatch
         #[arg(long)]
         stream: bool,
         /// Thinking level (none, concise, verbose)

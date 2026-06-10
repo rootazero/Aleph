@@ -287,6 +287,28 @@ pub fn render_reasoning(content: &str) -> Option<String> {
     Some(format!("  {bulb} {}", paint(Style::Muted, &preview)))
 }
 
+/// Amber status line for a transient provider failure (`stream.run_retrying`).
+/// Mirrors the Panel's retry notice so a CLI run shows "retrying" instead of
+/// minutes of silence while the provider retry ladder burns attempts.
+pub fn render_retry_notice(
+    provider: &str,
+    attempt: u32,
+    max_attempts: u32,
+    reason: &str,
+) -> String {
+    let glyph = if use_unicode() { "⟳" } else { "[~]" };
+    let head = paint(
+        Style::Warning,
+        &format!("{glyph} provider {provider} retrying ({attempt}/{max_attempts})"),
+    );
+    let detail = truncate(&reason.replace('\n', " "), ERROR_MAX);
+    if detail.is_empty() {
+        format!("  {head}")
+    } else {
+        format!("  {head}  {}", paint(Style::Muted, &detail))
+    }
+}
+
 /// Optional LLM-authored one-liner summarising a tool call.
 pub fn render_tool_summary(summary: &str) -> Option<String> {
     let txt = summary.trim();
@@ -664,6 +686,16 @@ mod tests {
         };
         let footer = render_summary_footer(&s);
         assert!(footer.contains("目标未达成"));
+    }
+
+    #[test]
+    fn retry_notice_carries_provider_and_attempt() {
+        let line = render_retry_notice("anthropic", 2, 12, "connect timeout\nafter 10s");
+        assert!(line.contains("anthropic"));
+        assert!(line.contains("(2/12)"));
+        // Newlines in the reason are flattened onto the single status line.
+        assert!(!line.contains('\n'));
+        assert!(line.contains("connect timeout"));
     }
 
     #[test]
