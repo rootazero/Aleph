@@ -535,6 +535,18 @@ impl SkillManageTool {
                 ));
             }
         }
+        // Defense in depth: never write *through* a symlinked support file —
+        // std::fs::write follows symlinks, so a crafted link planted inside an
+        // allowed subdirectory could redirect the write outside the skills tree
+        // (mirrors the SKILL.md guard in `mutable_skill_file`).
+        let target_is_symlink = std::fs::symlink_metadata(&target)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false);
+        if target_is_symlink {
+            return Err(AlephError::tool(format!(
+                "'{file_name}' is a symlink; refusing to write through it."
+            )));
+        }
         std::fs::write(&target, file_content)
             .map_err(|e| AlephError::tool(format!("Failed to write file: {e}")))?;
         self.system.record_patch(&skill_id).await;

@@ -329,7 +329,9 @@ impl MemorySearchTool {
                 // row stored under "default" — silently returning nothing.
                 let agent_id = "default";
                 let path_prefix = format!("aleph://session/{}/", *session_key);
-                let fetch_limit = args.max_results * 2;
+                // Saturate: max_results is LLM-supplied and unclamped, so a
+                // huge value must not overflow-panic in debug builds.
+                let fetch_limit = args.max_results.saturating_mul(2);
                 let raws = self
                     .database
                     .get_raw_by_path_prefix(&path_prefix, agent_id, fetch_limit)
