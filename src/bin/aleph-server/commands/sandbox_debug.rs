@@ -7,7 +7,7 @@
 //!
 //! The `--show-summary` mode prints the LLM-facing sandbox summary
 //! (backend tag, policy tier, writable roots, network state) without
-//! executing anything — useful for verifying SecurityLayer rendering
+//! executing anything — useful for verifying `SecurityLayer` rendering
 //! before paying tokens.
 
 use std::collections::HashMap;
@@ -69,7 +69,7 @@ pub async fn handle_sandbox_debug(
     match sandbox.summary() {
         Some(summary) => {
             for line in summary.to_prompt_lines() {
-                println!("  {}", line);
+                println!("  {line}");
             }
         }
         None => println!("  (no summary — sandbox impl declined to introspect)"),
@@ -104,12 +104,9 @@ pub async fn handle_sandbox_debug(
 
     // 2. Build + execute the command.
     let session_id = alephcore::routing::session_key::SessionKey::ephemeral("sandbox-debug");
-    let (program, args) = match split_program_args(&command) {
-        Some(p) => p,
-        None => {
-            eprintln!("Error: no command given (pass after `--`)");
-            std::process::exit(2);
-        }
+    let (program, args) = if let Some(p) = split_program_args(&command) { p } else {
+        eprintln!("Error: no command given (pass after `--`)");
+        std::process::exit(2);
     };
     let cmd = SandboxCommand {
         session_id,
@@ -121,7 +118,7 @@ pub async fn handle_sandbox_debug(
         capabilities,
         timeout: None,
     };
-    println!("\n=== Executing: {} {:?} ===", program, args);
+    println!("\n=== Executing: {program} {args:?} ===");
     let started = std::time::Instant::now();
     let result = sandbox.execute(cmd).await;
     let elapsed = started.elapsed();
@@ -132,16 +129,16 @@ pub async fn handle_sandbox_debug(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let lines = denial.take_lines().await;
         denial.stop().await;
-        if !lines.is_empty() {
+        if lines.is_empty() {
+            println!("\n=== Sandbox denials: none observed ===");
+        } else {
             println!("\n=== Sandbox denials ({} lines) ===", lines.len());
             for line in lines.iter().take(50) {
-                println!("  {}", line);
+                println!("  {line}");
             }
             if lines.len() > 50 {
                 println!("  ... and {} more lines", lines.len() - 50);
             }
-        } else {
-            println!("\n=== Sandbox denials: none observed ===");
         }
     }
 
@@ -187,7 +184,7 @@ pub async fn handle_sandbox_debug(
 }
 
 fn parse_network(s: Option<&str>) -> Result<NetworkPolicy, String> {
-    match s.map(|v| v.to_ascii_lowercase()) {
+    match s.map(str::to_ascii_lowercase) {
         None => Ok(NetworkPolicy::AllowAll),
         Some(v) if v == "none" => Ok(NetworkPolicy::None),
         Some(v) if v == "all" || v == "allow" => Ok(NetworkPolicy::AllowAll),

@@ -32,7 +32,7 @@ use super::register_channel_handlers;
 
 // ── Auth ─────────────────────────────────────────────────────────────────────
 
-/// Return type for initialize_auth: all security objects needed by the caller.
+/// Return type for `initialize_auth`: all security objects needed by the caller.
 pub(in crate::commands::start) struct AuthBundle {
     pub device_store: Arc<DeviceStore>,
     pub security_store: Arc<alephcore::gateway::security::SecurityStore>,
@@ -47,7 +47,7 @@ pub(in crate::commands::start) struct AuthBundle {
     /// route) see the same nonce map.
     pub bootstrap_mgr: Arc<alephcore::gateway::bootstrap::BootstrapNonceManager>,
     /// Shared with the loopback `/auth/bootstrap` HTTP route so the
-    /// same-machine bootstrap-consume flow (inside auth_ctx) and the cookie
+    /// same-machine bootstrap-consume flow (inside `auth_ctx`) and the cookie
     /// issuer (HTTP route) operate on the same session store.
     pub session_mgr: Arc<alephcore::gateway::session::HttpSessionManager>,
 }
@@ -84,8 +84,7 @@ pub(in crate::commands::start) fn initialize_auth(
         DeviceStore::open(&device_store_path)
             .or_else(|e| {
                 eprintln!(
-                    "Warning: Failed to load device store from {:?}: {}. Using in-memory.",
-                    device_store_path, e
+                    "Warning: Failed to load device store from {device_store_path:?}: {e}. Using in-memory."
                 );
                 DeviceStore::in_memory()
             })
@@ -98,8 +97,7 @@ pub(in crate::commands::start) fn initialize_auth(
         alephcore::gateway::security::SecurityStore::open(&security_store_path)
             .or_else(|e| {
                 eprintln!(
-                    "Warning: Failed to load security store from {:?}: {}. Using in-memory.",
-                    security_store_path, e
+                    "Warning: Failed to load security store from {security_store_path:?}: {e}. Using in-memory."
                 );
                 alephcore::gateway::security::SecurityStore::in_memory()
             })
@@ -191,7 +189,7 @@ pub(in crate::commands::start) fn initialize_auth(
         security_store,
         invitation_manager: invitation_manager.clone(),
         guest_session_manager: guest_session_manager.clone(),
-        event_bus: event_bus,
+        event_bus,
         auth_mode,
         allow_guest,
         enable_pairing,
@@ -250,15 +248,15 @@ pub(in crate::commands::start) fn load_app_config(
             cfg.log_advisories();
             Ok(cfg)
         }
-        Err(e) => Err(format!("Error loading application config: {}", e).into()),
+        Err(e) => Err(format!("Error loading application config: {e}").into()),
     }
 }
 
 // ── initialize_channels ──────────────────────────────────────────────────────
 
-/// Register all messaging channels (iMessage, Telegram, Discord, WhatsApp)
-/// and the LinkManager for external bridge plugins.
-/// Returns the populated ChannelRegistry.
+/// Register all messaging channels (iMessage, Telegram, Discord, `WhatsApp`)
+/// and the `LinkManager` for external bridge plugins.
+/// Returns the populated `ChannelRegistry`.
 pub(in crate::commands::start) async fn initialize_channels(
     server: &mut GatewayServer,
     app_config: &alephcore::Config,
@@ -382,7 +380,7 @@ pub(in crate::commands::start) async fn initialize_channels(
                     }
                     let channel_id = channel_registry.register(Box::new(imessage_channel)).await;
                     if !daemon {
-                        println!("Registered channel: {} (iMessage)", channel_id);
+                        println!("Registered channel: {channel_id} (iMessage)");
                     }
                 }
                 Err(e) => {
@@ -491,8 +489,8 @@ pub(in crate::commands::start) async fn initialize_channels(
     let start_results = channel_registry.start_all().await;
     for (ch_id, result) in &start_results {
         match result {
-            Ok(()) => println!("  ✓ Channel {} started", ch_id),
-            Err(e) => eprintln!("  ✗ Channel {} failed: {}", ch_id, e),
+            Ok(()) => println!("  ✓ Channel {ch_id} started"),
+            Err(e) => eprintln!("  ✗ Channel {ch_id} failed: {e}"),
         }
     }
     if !daemon {
@@ -532,7 +530,7 @@ pub(in crate::commands::start) async fn initialize_channels(
 
 // ── initialize_inbound_router ────────────────────────────────────────────────
 
-/// Initialize InboundMessageRouter and start it.
+/// Initialize `InboundMessageRouter` and start it.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) async fn initialize_inbound_router(
     channel_registry: Arc<ChannelRegistry>,
@@ -572,29 +570,26 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     let routing_config = RoutingConfig::default().with_dm_scope(session_cfg.dm_scope.into());
 
     // Use full execution support when available, otherwise basic routing
-    let mut inbound_router = match (execution_adapter, agent_registry) {
-        (Some(ea), Some(ar)) => {
-            if !daemon {
-                println!("  Inbound router: execution support enabled");
-            }
-            InboundMessageRouter::with_execution(
-                channel_registry.clone(),
-                pairing_store.clone(),
-                routing_config,
-                ar,
-                ea,
-            )
+    let mut inbound_router = if let (Some(ea), Some(ar)) = (execution_adapter, agent_registry) {
+        if !daemon {
+            println!("  Inbound router: execution support enabled");
         }
-        _ => {
-            if !daemon {
-                println!("  Inbound router: routing only (no execution support)");
-            }
-            InboundMessageRouter::new(
-                channel_registry.clone(),
-                pairing_store.clone(),
-                routing_config,
-            )
+        InboundMessageRouter::with_execution(
+            channel_registry.clone(),
+            pairing_store.clone(),
+            routing_config,
+            ar,
+            ea,
+        )
+    } else {
+        if !daemon {
+            println!("  Inbound router: routing only (no execution support)");
         }
+        InboundMessageRouter::new(
+            channel_registry.clone(),
+            pairing_store.clone(),
+            routing_config,
+        )
     };
 
     // Wire approval-button callback dispatch (Telegram approve/deny)
@@ -816,7 +811,7 @@ pub(in crate::commands::start) async fn initialize_inbound_router(
     if let Some(gen_reg) = generation_registry {
         // Build a fresh registry snapshot from current config
         let reg = {
-            let guard = gen_reg.read().unwrap_or_else(|e| e.into_inner());
+            let guard = gen_reg.read().unwrap_or_else(std::sync::PoisonError::into_inner);
             // Rebuild a fresh registry with same providers
             let mut new_reg = alephcore::generation::GenerationProviderRegistry::new();
             for name in guard.names() {

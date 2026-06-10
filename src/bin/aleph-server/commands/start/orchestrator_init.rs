@@ -7,8 +7,8 @@
 //! Builds the `Arc<Orchestrator>` once after all five input services are
 //! available (agent registry, session, tool, provider, sandbox) and returns
 //! it to the caller. Callers typically store the result on `GatewayServer`
-//! so Task 10 (Gateway run_agent_loop replacement) can reach it without a
-//! new AppContext holder struct.
+//! so Task 10 (Gateway `run_agent_loop` replacement) can reach it without a
+//! new `AppContext` holder struct.
 //!
 //! # Simplifications accepted at this phase
 //! * Shared sandbox (Phase 3 `build_sandbox` returns a single
@@ -292,7 +292,7 @@ pub(in crate::commands::start) async fn initialize_orchestrator(
 /// Build the optional `GuardrailRegistry` from `[guardrails]`. Phase-6 wiring
 /// for Stage 5a/5b. Missing section, or `enabled = false`, returns `None`.
 /// When `enabled = true`, wires the single existing `PiiSecretsGuardrail`
-/// onto Input + Output + ToolCall surfaces (one struct, three traits).
+/// onto Input + Output + `ToolCall` surfaces (one struct, three traits).
 fn build_guardrail_registry(
     config: &Config,
     shared_token_mgr: Arc<alephcore::gateway::security::SharedTokenManager>,
@@ -360,7 +360,7 @@ fn build_guardrail_registry(
 /// Build the P0 rescue triple from `[stability]`. Forwarding wrapper around
 /// the shared assembly module; the wrapper unpacks the `StabilityTriple`
 /// struct back into the historical 3-tuple so existing callers (and the
-/// 13 builder + 4 init_audit tests) keep working unchanged.
+/// 13 builder + 4 `init_audit` tests) keep working unchanged.
 fn build_stability_triple(
     config: &Config,
 ) -> (

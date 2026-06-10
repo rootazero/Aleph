@@ -63,7 +63,7 @@ use cli::{Args, AuditAction, Command, DevicesAction, PairingAction, PluginAction
 
 /// Entry point: parse args and daemonize BEFORE starting the tokio runtime.
 ///
-/// fork() is not safe in a multi-threaded process. Since `#[tokio::main]`
+/// `fork()` is not safe in a multi-threaded process. Since `#[tokio::main]`
 /// spawns worker threads immediately, we must daemonize in a synchronous
 /// `main()` and then build the tokio runtime manually.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -277,15 +277,10 @@ async fn async_main(args: Args) -> Result<(), Box<dyn std::error::Error>> {
             // Continue with start logic
         }
         // Sync commands already handled in main()
-        Some(Command::Stop)
-        | Some(Command::Secret { .. })
-        | Some(Command::Status { .. })
-        | Some(Command::Devices { .. })
-        | Some(Command::Hooks { .. })
-        | Some(Command::BootstrapToken)
-        | Some(Command::PromptSize { .. })
-        | Some(Command::SandboxInit { .. })
-        | Some(Command::SandboxInitWindows { .. }) => unreachable!(),
+        Some(Command::Stop | Command::Secret { .. } | Command::Status { .. } |
+Command::Devices { .. } | Command::Hooks { .. } | Command::BootstrapToken |
+Command::PromptSize { .. } | Command::SandboxInit { .. } |
+Command::SandboxInitWindows { .. }) => unreachable!(),
     }
 
     // Start the gateway server

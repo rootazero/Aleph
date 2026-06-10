@@ -619,7 +619,7 @@ fn handle_palette_key(state: &mut AppState, key: KeyEvent) -> Action {
             let is_empty = state
                 .palette
                 .as_ref()
-                .map_or(true, |p| p.input.is_empty());
+                .is_none_or(|p| p.input.is_empty());
             if is_empty {
                 // If inside a namespace, go back one level
                 if state.palette_go_back() {

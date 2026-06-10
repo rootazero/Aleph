@@ -535,6 +535,26 @@ impl BuiltinToolRegistry {
             info!("Registered schemas for media_understand, audio_transcribe, document_extract");
         }
 
+        // config_audit shares the same gap: listed in BUILTIN_TOOL_DEFINITIONS
+        // and dispatched in registry.rs, but its metadata was never inserted
+        // into the runtime map, so get_tool_schema() returned None and the
+        // model was advertised the tool with an empty parameter schema. It
+        // needs the live Config handle, so register only when one is
+        // configured (matching the dispatch guard).
+        if let Some(ref cfg) = config.config {
+            use crate::tools::AlephTool;
+            let td = crate::builtin_tools::ConfigAuditTool::new(Arc::clone(cfg)).definition();
+            let mut ut = UnifiedTool::new(
+                format!("builtin:{}", td.name),
+                &td.name,
+                &td.description,
+                ToolSource::Builtin,
+            );
+            ut = ut.with_parameters_schema(td.parameters.clone());
+            tools.insert(td.name.clone(), ut);
+            info!("Registered schema for config_audit");
+        }
+
         info!(
             "Registered skill.list, skill.read, and read_config_guide tools in BuiltinToolRegistry"
         );

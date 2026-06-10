@@ -206,10 +206,15 @@ async fn handle_anonymous_rpc(
 /// from a fresh browser with no extensions.
 #[must_use]
 pub fn pair_page_html(prefilled_code: Option<&str>) -> String {
-    // Strip single quotes from the prefill to keep the inline JS literal
-    // safe even if a malicious query string slips through.
+    // Keep only ASCII alphanumerics from the prefill so a malicious query
+    // string can't break out of the inline JS literal (quotes, backslashes)
+    // or the <script> element itself ("</script>"). Pairing codes are
+    // 6-digit alphanumeric, so legitimate input passes through unchanged.
     let prefill_js = match prefilled_code {
-        Some(c) => format!("var prefilled = '{}';", c.replace('\'', "")),
+        Some(c) => {
+            let safe: String = c.chars().filter(char::is_ascii_alphanumeric).collect();
+            format!("var prefilled = '{}';", safe)
+        }
         None => "var prefilled = null;".to_string(),
     };
     format!(

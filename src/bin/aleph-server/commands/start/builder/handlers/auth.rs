@@ -1,4 +1,4 @@
-use super::*;
+use super::{GatewayServer, Arc, auth_handlers, auth_tools_handlers};
 
 // ─── register_auth_handlers ──────────────────────────────────────────────────
 

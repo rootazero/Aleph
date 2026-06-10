@@ -1,4 +1,4 @@
-use super::*;
+use super::{GatewayServer, Arc, AgentEnvStore, MemoryBackend, workspace_handlers, config_handlers};
 
 pub(in crate::commands::start) fn register_workspace_handlers(
     server: &mut GatewayServer,
@@ -791,8 +791,8 @@ pub(in crate::commands::start) fn register_config_handlers(
 /// Wire the Panel's native voice-capture + TTS-playback RPCs.
 ///
 /// - `voice.record_start` / `voice.record_stop` proxy the desktop bridge's
-///   native AVFoundation recorder — the macOS path used when the unsigned
-///   WKWebView cannot reach `getUserMedia`. Capture only; the bytes go back to
+///   native `AVFoundation` recorder — the macOS path used when the unsigned
+///   `WKWebView` cannot reach `getUserMedia`. Capture only; the bytes go back to
 ///   the Panel which posts them to `voice.transcribe`.
 /// - `voice.synthesize` reuses the channel TTS path so the Panel can play the
 ///   agent's reply back as speech.

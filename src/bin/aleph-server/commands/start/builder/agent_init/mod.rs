@@ -9,7 +9,7 @@
 //! tool registry, task routing, and handler wiring.
 //!
 //! ## Layout
-//! - [`coord_stores`] — `coord.db` + `teams.db` SQLite store initialization
+//! - [`coord_stores`] — `coord.db` + `teams.db` `SQLite` store initialization
 //! - [`generation_init`] — generation provider registry + hot-reload
 //! - this module — orchestration + signature
 
@@ -40,7 +40,7 @@ use alephcore::ProviderRegistry;
 use crate::server_init::{handle_chat_send_with_engine, handle_run_with_engine};
 
 /// Result from registering agent handlers — includes optional execution support
-/// for use by InboundMessageRouter.
+/// for use by `InboundMessageRouter`.
 pub(in crate::commands::start) struct AgentHandlersResult {
     pub _run_manager: Arc<AgentRunManager>,
     pub execution_adapter: Option<Arc<dyn alephcore::gateway::ExecutionAdapter>>,
@@ -52,11 +52,11 @@ pub(in crate::commands::start) struct AgentHandlersResult {
         Option<std::sync::Arc<alephcore::memory::compression::CompressionService>>,
     /// Multi-provider registry for routing and hot-switching
     pub multi_registry: Option<Arc<alephcore::MultiProviderRegistry>>,
-    /// Deferred injection cell for ChannelRegistry (created after agent handlers)
+    /// Deferred injection cell for `ChannelRegistry` (created after agent handlers)
     pub channel_registry_cell: Option<
         Arc<tokio::sync::OnceCell<Arc<alephcore::gateway::channel_registry::ChannelRegistry>>>,
     >,
-    /// Deferred injection cell for ClarificationManager (enables the `ask_user` tool)
+    /// Deferred injection cell for `ClarificationManager` (enables the `ask_user` tool)
     pub clarification_manager_cell:
         Option<Arc<tokio::sync::OnceCell<Arc<alephcore::clarification::ClarificationManager>>>>,
     /// Generation provider registry for TTS voice output
@@ -76,7 +76,7 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     pub snapshot_store: Option<Arc<alephcore::teams::SqliteSnapshotStore>>,
     /// State database (~/.aleph/data/state.db). Holds `task_traces` rows that
     /// the `teams.usage` RPC + `team_usage` tool aggregate by team-member
-    /// agent_id. `None` in simulated mode.
+    /// `agent_id`. `None` in simulated mode.
     pub state_db: Option<Arc<alephcore::resilience::StateDatabase>>,
     /// Event log store for team event logging
     pub event_store: Option<Arc<dyn alephcore::teams::events::EventLogStore>>,
@@ -84,22 +84,22 @@ pub(in crate::commands::start) struct AgentHandlersResult {
     /// Trait-object handle is what gateway handlers consume; the concrete
     /// `SqliteArtifactStore` is still used internally by tool wiring.
     pub artifact_store: Option<Arc<dyn alephcore::teams::artifacts::ArtifactStore>>,
-    /// Message router for the TeamNotifier event handler
+    /// Message router for the `TeamNotifier` event handler
     pub message_router: Option<Arc<alephcore::teams::messages::MessageRouter>>,
-    /// OnceLock handle shared with the real ExecutionEngine. Boot code calls
+    /// `OnceLock` handle shared with the real `ExecutionEngine`. Boot code calls
     /// `.set(orchestrator)` on this after `initialize_orchestrator` returns so
     /// that `dispatch_via_orchestrator` can resolve the orchestrator from the
     /// engine's own field rather than an external argument.
     pub orchestrator_cell: Option<
         std::sync::Arc<std::sync::OnceLock<std::sync::Arc<alephcore::orchestrator::Orchestrator>>>,
     >,
-    /// Phase 6 follow-up: MemoryContextProvider exposed for the orchestrator
+    /// Phase 6 follow-up: `MemoryContextProvider` exposed for the orchestrator
     /// path so `AgentHarnessRunner` can build the per-turn system prompt with
-    /// curated memory + hybrid retrieval. ExecutionEngine receives a clone via
+    /// curated memory + hybrid retrieval. `ExecutionEngine` receives a clone via
     /// `with_memory_context_provider`; the orchestrator path needs its own
     /// reference because it does not hold an `ExecutionEngine`.
     pub memory_context_provider: Option<Arc<alephcore::thinker::MemoryContextProvider>>,
-    /// SQLite memory backend exposed for the orchestrator path so the per-run
+    /// `SQLite` memory backend exposed for the orchestrator path so the per-run
     /// `ContextCompactor` can reuse hierarchical session summaries for
     /// zero-API-cost compaction.
     pub memory_backend: Option<alephcore::memory::store::MemoryBackend>,
@@ -108,8 +108,8 @@ pub(in crate::commands::start) struct AgentHandlersResult {
 }
 
 /// Register agent.run / agent.status / agent.cancel / chat.* handlers.
-/// Selects real ExecutionEngine when an API key is available (env or config),
-/// otherwise uses the simulated AgentRunManager.
+/// Selects real `ExecutionEngine` when an API key is available (env or config),
+/// otherwise uses the simulated `AgentRunManager`.
 /// Returns execution support components for inbound routing.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::commands::start) async fn register_agent_handlers(
@@ -212,7 +212,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         use alephcore::providers::create_provider;
 
         // Read api_key from vault for a given provider name
-        let vault_key_for = |name: &str| format!("ai:{}", name);
+        let vault_key_for = |name: &str| format!("ai:{name}");
         let vault_lookup = |name: &str| -> Option<String> {
             match shared_token_mgr.get_secret(&vault_key_for(name)) {
                 Ok(Some(secret)) => Some(secret.expose().to_string()),
@@ -222,13 +222,13 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Hydrate a ProviderConfig clone with its vault api_key (if present)
         let hydrate = |name: &str, cfg: &alephcore::ProviderConfig| -> alephcore::ProviderConfig {
             let mut c = cfg.clone();
-            if c.api_key.as_ref().map(|k| k.is_empty()).unwrap_or(true) {
+            if c.api_key.as_ref().is_none_or(std::string::String::is_empty) {
                 c.api_key = vault_lookup(name);
             }
             c
         };
         let has_key = |name: &str, cfg: &alephcore::ProviderConfig| -> bool {
-            cfg.api_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false)
+            cfg.api_key.as_ref().is_some_and(|k| !k.is_empty())
                 || vault_lookup(name).is_some()
         };
 
@@ -351,7 +351,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 "Fallback provider chain configured"
             );
             if !daemon {
-                println!("  Fallback chain: {:?}", fallbacks);
+                println!("  Fallback chain: {fallbacks:?}");
             }
         }
     }
@@ -403,7 +403,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 }
                 Err(e) => {
                     if !daemon {
-                        eprintln!("  Warning: Failed to initialize embedding provider: {}", e);
+                        eprintln!("  Warning: Failed to initialize embedding provider: {e}");
                     }
                     None
                 }
@@ -693,7 +693,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 Box::pin(async move {
                     let hit = RecallHit {
                         note_path: row.note_path.clone(),
-                        score: row.score as f64,
+                        score: f64::from(row.score),
                     };
                     store
                         .record_signals(
@@ -729,8 +729,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         Err(e) => {
                             if !daemon {
                                 eprintln!(
-                                    "Warning: Failed to resolve note memory directory: {}. Query filer disabled.",
-                                    e
+                                    "Warning: Failed to resolve note memory directory: {e}. Query filer disabled."
                                 );
                             }
                             tracing::warn!(error = %e, "Failed to resolve note memory directory; query filer disabled");
@@ -794,8 +793,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         Err(e) => {
                             if !daemon {
                                 eprintln!(
-                                    "Warning: Failed to open state.db: {}. Replay trace persistence disabled.",
-                                    e
+                                    "Warning: Failed to open state.db: {e}. Replay trace persistence disabled."
                                 );
                             }
                             None
@@ -805,8 +803,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 Err(e) => {
                     if !daemon {
                         eprintln!(
-                            "Warning: Failed to resolve data directory: {}. Replay trace persistence disabled.",
-                            e
+                            "Warning: Failed to resolve data directory: {e}. Replay trace persistence disabled."
                         );
                     }
                     tracing::warn!(error = %e, "Failed to resolve data directory; replay trace persistence disabled");
@@ -875,8 +872,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             Err(e) => {
                                 if !daemon {
                                     eprintln!(
-                                        "Warning: Failed to resolve note memory directory: {}. Compound ingestor disabled.",
-                                        e
+                                        "Warning: Failed to resolve note memory directory: {e}. Compound ingestor disabled."
                                     );
                                 }
                                 tracing::warn!(error = %e, "Failed to resolve note memory directory; compound ingestor disabled");
@@ -1094,7 +1090,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                         }
                     }
                     // Fall back to vault
-                    if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{}", name))
+                    if let Ok(Some(secret)) = shared_token_mgr.get_secret(&format!("gen:{name}"))
                     {
                         let val = secret.expose().to_string();
                         if !val.is_empty() {
@@ -1215,7 +1211,18 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             }
         }
 
-        if !app_config.agents.list.is_empty() {
+        if app_config.agents.list.is_empty() {
+            // Legacy path: use FullGatewayConfig agents
+            for agent_config in full_config.get_agent_instance_configs() {
+                let agent_id = agent_config.agent_id.clone();
+                agent_registry
+                    .register_config(agent_config, session_store.clone())
+                    .await;
+                if !daemon {
+                    println!("  Registered agent: {agent_id} (lazy)");
+                }
+            }
+        } else {
             // New path: use ResolvedAgents from AgentDefinitionResolver
             let mut resolver = alephcore::AgentDefinitionResolver::new();
             let resolved_agents = resolver.resolve_all(
@@ -1242,25 +1249,14 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                     tracing::warn!("Failed to publish agent lifecycle event: {}", e);
                 }
                 if !daemon {
-                    println!("  Registered agent: {} (lazy)", agent_id);
-                }
-            }
-        } else {
-            // Legacy path: use FullGatewayConfig agents
-            for agent_config in full_config.get_agent_instance_configs() {
-                let agent_id = agent_config.agent_id.clone();
-                agent_registry
-                    .register_config(agent_config, session_store.clone())
-                    .await;
-                if !daemon {
-                    println!("  Registered agent: {} (lazy)", agent_id);
+                    println!("  Registered agent: {agent_id} (lazy)");
                 }
             }
         }
 
         if !daemon {
             let provider_name = available_provider_from_env().unwrap_or("config");
-            println!("  Mode: Real AgentLoop ({} provider)", provider_name);
+            println!("  Mode: Real AgentLoop ({provider_name} provider)");
             println!();
         }
 
@@ -1325,61 +1321,58 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Phase-2 always overrides phase-1 to guarantee a deterministic response.
         // When state DB is absent, the override returns SERVICE_UNAVAILABLE with
         // a tighter, environment-specific reason — never the phase-1 generic.
-        match resilience_db.clone() {
-            Some(trace_db) => {
-                let trace_list_db = trace_db.clone();
-                server.handlers_mut().register("trace.list", move |req| {
-                    let db = trace_list_db.clone();
-                    async move {
-                        alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
-                    }
-                });
+        if let Some(trace_db) = resilience_db.clone() {
+            let trace_list_db = trace_db.clone();
+            server.handlers_mut().register("trace.list", move |req| {
+                let db = trace_list_db.clone();
+                async move {
+                    alephcore::gateway::handlers::trace_replay::handle_list(req, db).await
+                }
+            });
 
-                let trace_get_db = trace_db.clone();
-                server.handlers_mut().register("trace.get", move |req| {
-                    let db = trace_get_db.clone();
-                    async move {
-                        alephcore::gateway::handlers::trace_replay::handle_get(req, db).await
-                    }
-                });
+            let trace_get_db = trace_db.clone();
+            server.handlers_mut().register("trace.get", move |req| {
+                let db = trace_get_db.clone();
+                async move {
+                    alephcore::gateway::handlers::trace_replay::handle_get(req, db).await
+                }
+            });
 
-                let trace_by_runs_db = trace_db;
-                server.handlers_mut().register("trace.by_runs", move |req| {
-                    let db = trace_by_runs_db.clone();
-                    async move {
-                        alephcore::gateway::handlers::trace_replay::handle_by_runs(req, db).await
-                    }
+            let trace_by_runs_db = trace_db;
+            server.handlers_mut().register("trace.by_runs", move |req| {
+                let db = trace_by_runs_db.clone();
+                async move {
+                    alephcore::gateway::handlers::trace_replay::handle_by_runs(req, db).await
+                }
+            });
+        } else {
+            server
+                .handlers_mut()
+                .register("trace.list", |req| async move {
+                    alephcore::gateway::protocol::JsonRpcResponse::error(
+                        req.id,
+                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                        "trace.list disabled: no state_database configured".to_string(),
+                    )
                 });
-            }
-            None => {
-                server
-                    .handlers_mut()
-                    .register("trace.list", |req| async move {
-                        alephcore::gateway::protocol::JsonRpcResponse::error(
-                            req.id,
-                            alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
-                            "trace.list disabled: no state_database configured".to_string(),
-                        )
-                    });
-                server
-                    .handlers_mut()
-                    .register("trace.get", |req| async move {
-                        alephcore::gateway::protocol::JsonRpcResponse::error(
-                            req.id,
-                            alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
-                            "trace.get disabled: no state_database configured".to_string(),
-                        )
-                    });
-                server
-                    .handlers_mut()
-                    .register("trace.by_runs", |req| async move {
-                        alephcore::gateway::protocol::JsonRpcResponse::error(
-                            req.id,
-                            alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
-                            "trace.by_runs disabled: no state_database configured".to_string(),
-                        )
-                    });
-            }
+            server
+                .handlers_mut()
+                .register("trace.get", |req| async move {
+                    alephcore::gateway::protocol::JsonRpcResponse::error(
+                        req.id,
+                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                        "trace.get disabled: no state_database configured".to_string(),
+                    )
+                });
+            server
+                .handlers_mut()
+                .register("trace.by_runs", |req| async move {
+                    alephcore::gateway::protocol::JsonRpcResponse::error(
+                        req.id,
+                        alephcore::gateway::protocol::SERVICE_UNAVAILABLE,
+                        "trace.by_runs disabled: no state_database configured".to_string(),
+                    )
+                });
         }
 
         // Capture for inbound router
@@ -1492,7 +1485,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
             // SessionCoordinator::sweep_deadlocked).
             if let Some(sweep_coord) = session_coordinator.clone() {
                 tokio::spawn(async move {
-                    let mut tick = tokio::time::interval(std::time::Duration::from_secs(300));
+                    let mut tick = tokio::time::interval(std::time::Duration::from_mins(5));
                     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                     loop {
                         tick.tick().await;
@@ -1575,8 +1568,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             ..Default::default()
                         })
                         .await
-                        .map(|t| t.len() as u64)
-                        .unwrap_or(0)
+                        .map_or(0, |t| t.len() as u64)
                     } else {
                         0
                     };
@@ -1655,7 +1647,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                 let has_provider = {
                     let reg = generation_registry
                         .read()
-                        .unwrap_or_else(|e| e.into_inner());
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
                     !reg.providers_for_type(gen_type).is_empty()
                 };
                 if has_provider {
@@ -1902,7 +1894,7 @@ pub(in crate::commands::start) async fn register_agent_handlers(
                             .as_ref()
                             .and_then(|p| p.get("agent_id"))
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
+                            .map(std::string::ToString::to_string);
                         let agent_def = match &agent_id {
                             Some(id) => agents.get(id),
                             None => agents.get("main"),

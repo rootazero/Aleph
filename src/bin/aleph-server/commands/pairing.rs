@@ -1,9 +1,9 @@
 //! Pairing command handlers
 //!
 //! Spec C policy:
-//! - `pairing list`: **NoLock** — read-only against `security.db`,
+//! - `pairing list`: **`NoLock`** — read-only against `security.db`,
 //!   WAL-safe alongside the running server.
-//! - `pairing approve` / `pairing reject`: **LockOnly** — both write
+//! - `pairing approve` / `pairing reject`: **`LockOnly`** — both write
 //!   `security.db` (and `devices.db` on approve). No
 //!   `/v1/admin/pairing/*` IPC route was built, so the CLI refuses
 //!   cleanly when the server holds the lock and tells the operator
@@ -85,13 +85,13 @@ pub async fn handle_pairing_approve(code: &str) -> Result<(), Box<dyn std::error
     use alephcore::cli::policy::{with_policy, CommandPolicy};
 
     let data_dir = alephcore::utils::paths::get_data_dir()
-        .map_err(|e| format!("Failed to resolve data dir: {:#}", e))?;
+        .map_err(|e| format!("Failed to resolve data dir: {e:#}"))?;
     let code = code.to_string();
 
     with_policy::<_, ()>(
         CommandPolicy::LockOnly,
         &data_dir,
-        move |_lock| approve_locked(&code).map_err(|e| anyhow::anyhow!("{:#}", e)),
+        move |_lock| approve_locked(&code).map_err(|e| anyhow::anyhow!("{e:#}")),
         serde_json::Value::Null,
     )
     .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })
@@ -106,9 +106,9 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Get device store and security store paths
     let store_path = alephcore::utils::paths::get_devices_db_path()
-        .map_err(|e| format!("Failed to get device store path: {:#}", e))?;
+        .map_err(|e| format!("Failed to get device store path: {e:#}"))?;
     let security_store_path = alephcore::utils::paths::get_security_db_path()
-        .map_err(|e| format!("Failed to get security store path: {:#}", e))?;
+        .map_err(|e| format!("Failed to get security store path: {e:#}"))?;
     let security_store = Arc::new(SecurityStore::open(&security_store_path)?);
 
     let pairing_manager = PairingManager::new(security_store.clone());
@@ -117,7 +117,7 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
     let pairing_request = match pairing_manager.confirm_pairing(code) {
         Ok(req) => req,
         Err(e) => {
-            eprintln!("Error: Invalid or expired pairing code: {} ({})", code, e);
+            eprintln!("Error: Invalid or expired pairing code: {code} ({e})");
             std::process::exit(1);
         }
     };
@@ -138,23 +138,21 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
             // Channel pairing - approve the sender
             security_store.approve_sender(channel, sender_id)?;
             println!("Channel sender approved successfully!");
-            println!("  Channel:   {}", channel);
-            println!("  Sender ID: {}", sender_id);
+            println!("  Channel:   {channel}");
+            println!("  Sender ID: {sender_id}");
             return Ok(());
         }
         PairingRequest::Browser { code, .. } => {
             eprintln!(
-                "Error: Browser pairing code '{}' must be approved from the Panel \
-                 (notification bell), not from the CLI.",
-                code
+                "Error: Browser pairing code '{code}' must be approved from the Panel \
+                 (notification bell), not from the CLI."
             );
             std::process::exit(1);
         }
         PairingRequest::Node { code, .. } => {
             eprintln!(
-                "Error: Node pairing code '{}' must be approved from the center \
-                 Panel notification card, not the CLI.",
-                code
+                "Error: Node pairing code '{code}' must be approved from the center \
+                 Panel notification card, not the CLI."
             );
             std::process::exit(1);
         }
@@ -198,14 +196,14 @@ fn approve_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
     let token_manager = TokenManager::new(security_store);
     let signed_token = token_manager
         .issue_token(&device_id, DeviceRole::Operator, vec!["*".to_string()])
-        .map_err(|e| format!("Failed to issue token: {:#}", e))?;
+        .map_err(|e| format!("Failed to issue token: {e:#}"))?;
 
     let token = format!("{}:{}", signed_token.token, signed_token.signature);
 
     println!("Device approved successfully!");
-    println!("  Device ID:   {}", device_id);
-    println!("  Device Name: {}", device_name);
-    println!("  Token:       {}", token);
+    println!("  Device ID:   {device_id}");
+    println!("  Device Name: {device_name}");
+    println!("  Token:       {token}");
     println!();
     println!("The device can now connect using this token.");
 
@@ -217,16 +215,16 @@ pub async fn handle_pairing_reject(code: &str) -> Result<(), Box<dyn std::error:
     use alephcore::cli::policy::{with_policy, CommandPolicy};
 
     let data_dir = alephcore::utils::paths::get_data_dir()
-        .map_err(|e| format!("Failed to resolve data dir: {:#}", e))?;
+        .map_err(|e| format!("Failed to resolve data dir: {e:#}"))?;
     let code = code.to_string();
 
     with_policy::<_, ()>(
         CommandPolicy::LockOnly,
         &data_dir,
-        move |_lock| reject_locked(&code).map_err(|e| anyhow::anyhow!("{:#}", e)),
+        move |_lock| reject_locked(&code).map_err(|e| anyhow::anyhow!("{e:#}")),
         serde_json::Value::Null,
     )
-    .map_err(|e| -> Box<dyn std::error::Error> { format!("{:#}", e).into() })
+    .map_err(|e| -> Box<dyn std::error::Error> { format!("{e:#}").into() })
 }
 
 fn reject_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -239,15 +237,15 @@ fn reject_locked(code: &str) -> Result<(), Box<dyn std::error::Error>> {
     let manager = PairingManager::new(store);
 
     match manager.cancel_pairing(code) {
-        Ok(true) => println!("Pairing request rejected: {}", code),
+        Ok(true) => println!("Pairing request rejected: {code}"),
         Ok(false) => {
-            eprintln!("Error: Invalid or expired pairing code: {}", code);
+            eprintln!("Error: Invalid or expired pairing code: {code}");
             std::process::exit(1);
         }
         Err(e) => {
             // A storage/IO fault is NOT a bad code — surface the real error
             // instead of masking it as "invalid code".
-            eprintln!("Error: failed to reject pairing code {}: {:#}", code, e);
+            eprintln!("Error: failed to reject pairing code {code}: {e:#}");
             std::process::exit(1);
         }
     }

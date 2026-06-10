@@ -55,13 +55,10 @@ pub fn is_process_running(pid: i32) -> bool {
     }
     // SAFETY: kill(pid, 0) performs error checking without sending a signal.
     // It is async-signal-safe and the only way to check process existence on Unix.
-    match unsafe { libc::kill(pid, 0) } {
-        0 => true,
-        _ => {
-            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            // EPERM means process exists but we lack permission; ESRCH means it does not exist.
-            errno == libc::EPERM
-        }
+    if unsafe { libc::kill(pid, 0) } == 0 { true } else {
+        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        // EPERM means process exists but we lack permission; ESRCH means it does not exist.
+        errno == libc::EPERM
     }
 }
 
@@ -106,7 +103,7 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
         if is_process_running(pid) {
             #[cfg(unix)]
             {
-                println!("Sending SIGTERM to gateway process (PID {})", pid);
+                println!("Sending SIGTERM to gateway process (PID {pid})");
                 // SAFETY: kill() with SIGTERM is the standard way to request graceful
                 // process termination on Unix. PID was validated by is_process_running().
                 if unsafe { libc::kill(pid, libc::SIGTERM) } != 0 {
@@ -150,8 +147,7 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 return Err(format!(
-                    "Gateway process (PID {}) did not exit even after SIGKILL",
-                    pid
+                    "Gateway process (PID {pid}) did not exit even after SIGKILL"
                 )
                 .into());
             }
@@ -161,10 +157,9 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
                 eprintln!("Daemon mode is only supported on Unix systems");
                 return Err("Unsupported platform".into());
             }
-        } else {
-            println!("Gateway is not running (stale PID file)");
-            remove_pid_file(pid_file);
         }
+        println!("Gateway is not running (stale PID file)");
+        remove_pid_file(pid_file);
     } else {
         println!("No gateway daemon is running (no PID file found)");
     }
@@ -174,7 +169,7 @@ pub fn handle_stop(pid_file: &str) -> Result<(), Box<dyn std::error::Error>> {
 /// Handle status command
 pub fn handle_status(pid_file: &str, json: bool) -> Result<(), Box<dyn std::error::Error>> {
     let pid = read_pid_file(pid_file);
-    let running = pid.map(is_process_running).unwrap_or(false);
+    let running = pid.is_some_and(is_process_running);
 
     if json {
         let status = serde_json::json!({
@@ -184,8 +179,8 @@ pub fn handle_status(pid_file: &str, json: bool) -> Result<(), Box<dyn std::erro
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         match (pid, running) {
-            (Some(p), true) => println!("Gateway is running (PID {})", p),
-            (Some(p), false) => println!("Gateway is not running (stale PID file for PID {})", p),
+            (Some(p), true) => println!("Gateway is running (PID {p})"),
+            (Some(p), false) => println!("Gateway is not running (stale PID file for PID {p})"),
             (None, _) => println!("Gateway is not running (no PID file)"),
         }
     }
@@ -203,7 +198,7 @@ pub fn daemonize(
     // Check if already running
     if let Some(pid) = read_pid_file(pid_file) {
         if is_process_running(pid) {
-            return Err(format!("Gateway already running (PID {})", pid).into());
+            return Err(format!("Gateway already running (PID {pid})").into());
         }
     }
 

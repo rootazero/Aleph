@@ -178,14 +178,14 @@ fn doctor(consent: &ShellHookConsent) -> CmdResult {
 
 // -- helpers ----------------------------------------------------------------
 
-fn status_label(status: ConsentStatus) -> &'static str {
+const fn status_label(status: ConsentStatus) -> &'static str {
     match status {
         ConsentStatus::Pending => "pending",
         ConsentStatus::Approved => "approved",
     }
 }
 
-fn shell_invocation() -> (&'static str, &'static str) {
+const fn shell_invocation() -> (&'static str, &'static str) {
     if cfg!(windows) {
         ("cmd", "/C")
     } else {

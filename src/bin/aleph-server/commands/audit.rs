@@ -5,7 +5,7 @@
 //! - `audit tool <name>` - Show detailed tool info and execution history
 //! - `audit escalations` - Show all escalation events
 //!
-//! Spec C policy: **NoLock**. Audit reads from
+//! Spec C policy: **`NoLock`**. Audit reads from
 //! `~/.aleph/approval_audit.db`, which lives OUTSIDE `~/.aleph/data/`,
 //! so no singleton-lock dance is needed. Each handler enters via a
 //! marker `run_no_lock` call to satisfy the reverse-regression check.
@@ -31,29 +31,29 @@ pub enum RiskLevel {
 
 impl RiskLevel {
     /// Classify risk score into level
-    pub fn from_score(score: u32) -> Self {
+    pub const fn from_score(score: u32) -> Self {
         match score {
-            0..=30 => RiskLevel::Low,
-            31..=70 => RiskLevel::Medium,
-            _ => RiskLevel::High,
+            0..=30 => Self::Low,
+            31..=70 => Self::Medium,
+            _ => Self::High,
         }
     }
 
     /// Get color code for risk level
-    pub fn color(&self) -> &'static str {
+    pub const fn color(&self) -> &'static str {
         match self {
-            RiskLevel::Low => COLOR_GREEN,
-            RiskLevel::Medium => COLOR_YELLOW,
-            RiskLevel::High => COLOR_RED,
+            Self::Low => COLOR_GREEN,
+            Self::Medium => COLOR_YELLOW,
+            Self::High => COLOR_RED,
         }
     }
 
     /// Get display name for risk level
-    pub fn name(&self) -> &'static str {
+    pub const fn name(&self) -> &'static str {
         match self {
-            RiskLevel::Low => "LOW",
-            RiskLevel::Medium => "MEDIUM",
-            RiskLevel::High => "HIGH",
+            Self::Low => "LOW",
+            Self::Medium => "MEDIUM",
+            Self::High => "HIGH",
         }
     }
 }
@@ -99,7 +99,7 @@ pub async fn handle_audit_tools() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Print header
-    println!("\n{}Tool Risk Summary{}", COLOR_BOLD, COLOR_RESET);
+    println!("\n{COLOR_BOLD}Tool Risk Summary{COLOR_RESET}");
     println!("{}", "=".repeat(100));
     println!(
         "{:<30} {:<12} {:<15} {:<15} {:<20}",
@@ -152,7 +152,7 @@ pub async fn handle_audit_tool(
     let risk_level = RiskLevel::from_score(summary.risk_score);
 
     // Print tool summary
-    println!("\n{}Tool: {}{}", COLOR_BOLD, tool_name, COLOR_RESET);
+    println!("\n{COLOR_BOLD}Tool: {tool_name}{COLOR_RESET}");
     println!("{}", "=".repeat(80));
     println!(
         "Risk Level:      {}{}{}",
@@ -172,27 +172,26 @@ pub async fn handle_audit_tool(
 
     // Print capabilities
     if !summary.capabilities.is_empty() {
-        println!("\n{}Capabilities:{}", COLOR_BOLD, COLOR_RESET);
+        println!("\n{COLOR_BOLD}Capabilities:{COLOR_RESET}");
         for cap in &summary.capabilities {
-            println!("  - {}", cap);
+            println!("  - {cap}");
         }
     }
 
     // Get and print execution history
     let history = audit.get_tool_execution_history(tool_name, limit).await?;
 
-    if !history.is_empty() {
+    if history.is_empty() {
+        println!("\nNo execution history found");
+    } else {
         println!(
-            "\n{}Execution History (last {}):{}",
-            COLOR_BOLD, limit, COLOR_RESET
+            "\n{COLOR_BOLD}Execution History (last {limit}):{COLOR_RESET}"
         );
         println!("{}", "-".repeat(80));
 
         for record in history {
             print_execution_record(&record);
         }
-    } else {
-        println!("\nNo execution history found");
     }
 
     println!();
@@ -225,8 +224,7 @@ pub async fn handle_audit_escalations(limit: usize) -> Result<(), Box<dyn std::e
 
     // Print header
     println!(
-        "\n{}Escalation Events (last {}){}",
-        COLOR_BOLD, limit, COLOR_RESET
+        "\n{COLOR_BOLD}Escalation Events (last {limit}){COLOR_RESET}"
     );
     println!("{}", "=".repeat(100));
 
@@ -245,12 +243,12 @@ fn print_execution_record(record: &ToolExecutionRecord) {
     println!("  Timestamp:     {}", format_timestamp(record.timestamp));
 
     if record.escalation_triggered {
-        println!("  {}Escalation:    YES{}", COLOR_RED, COLOR_RESET);
+        println!("  {COLOR_RED}Escalation:    YES{COLOR_RESET}");
         if let Some(ref reason) = record.escalation_reason {
-            println!("  Reason:        {:?}", reason);
+            println!("  Reason:        {reason:?}");
         }
         if let Some(ref decision) = record.user_decision {
-            println!("  User Decision: {}", decision);
+            println!("  User Decision: {decision}");
         }
     } else {
         println!("  Escalation:    No");
@@ -259,7 +257,7 @@ fn print_execution_record(record: &ToolExecutionRecord) {
     if !record.parameters.is_empty() {
         println!("  Parameters:");
         for (key, value) in &record.parameters {
-            println!("    {}: {}", key, value);
+            println!("    {key}: {value}");
         }
     }
 }

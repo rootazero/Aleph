@@ -1,4 +1,4 @@
-use super::*;
+use super::{GatewayServer, Arc, MemoryBackend};
 
 pub(in crate::commands::start) fn register_agents_handlers(
     server: &mut GatewayServer,
