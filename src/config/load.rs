@@ -134,7 +134,11 @@ impl Config {
         config.validate()?;
 
         if migrated {
-            if let Err(e) = config.save_to_file(path) {
+            // Persist only the sections the migrations touch. A full
+            // `save_to_file` re-serializes `Config` and silently drops
+            // top-level sections that are not `Config` fields (e.g.
+            // `[gateway]`, which other subsystems parse from this same file).
+            if let Err(e) = config.save_incremental_to_file(path, &["tools", "mcp", "memory"]) {
                 warn!(path = %path.display(), error = %e, "Failed to save migrated config");
             } else {
                 info!(path = %path.display(), "Saved migrated config to file");
