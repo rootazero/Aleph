@@ -177,11 +177,17 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // (`build_tool_service`, `PermissionLayer`, `TimeoutLayer`, etc.) was
     // deleted in 2026-05-20 — gateway always overrides the harness's
     // `tool_service` slot with a per-request `ScopedToolService`, so the
-    // chain was unreachable. The registry alone is still live: the MCP
-    // tool bridge below mutates it as external servers advertise / drop
-    // tools, and `BuiltinToolRegistry` (the production tool stack) shares
-    // its snapshot for `list_tools` introspection.
+    // chain was unreachable. The registry is live on both sides today:
+    // the MCP tool bridge below WRITES it as external servers advertise /
+    // drop tools, and `run_loop` READS its snapshot per request (via
+    // `set_mcp_tool_registry` just below) so every connected server's
+    // tools join the agent's LoopToolRegistry and become LLM-callable.
     let tool_registry_phase2 = Arc::new(alephcore::tools::ToolHandlerRegistry::new());
+
+    // Consumer-side install: hand the registry to the execution engine's
+    // per-request tool-surface builder. Without this the bridge registry
+    // is write-only and external MCP tools never reach the LLM.
+    alephcore::gateway::execution_engine::set_mcp_tool_registry(tool_registry_phase2.clone());
 
     // First production consumer of `ToolHandlerRegistry::subscribe`. Logs every
     // MCP-driven register/unregister so operators can see exactly when

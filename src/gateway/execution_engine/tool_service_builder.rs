@@ -3,9 +3,10 @@
 //!
 //! Wraps the Phase 4b `ScopedToolService` adapter with the Gateway's
 //! concrete pieces:
-//!   * `LoopToolRegistry` snapshot filtered by `allowed_tools`
+//!   * `LoopToolRegistry` snapshot filtered by `allowed_tools` (builtins +
+//!     plugins + the MCP registry snapshot `run_loop` joins per request)
 //!   * optional `SubagentTool` (when the agent has it enabled)
-//!   * optional `ToolRefreshSource` for dynamic MCP tools
+//!   * optional `ToolRefreshSource` for plugin / markdown-skill hot-reload
 //!
 //! Returned as `Arc<dyn ToolService>` for `FlowRequest.tool_service`.
 
@@ -38,6 +39,26 @@ static CONFIG_APPROVAL_REQUESTER: OnceLock<Arc<dyn ApprovalRequester>> = OnceLoc
 /// Install the process-wide config-tier approval requester. Called once at boot.
 pub fn set_config_approval_requester(requester: Arc<dyn ApprovalRequester>) {
     let _ = CONFIG_APPROVAL_REQUESTER.set(requester);
+}
+
+/// Process-wide MCP tool registry, installed by boot right after the MCP
+/// tool bridge's target `ToolHandlerRegistry` is created (see
+/// `start/mod.rs`). `run_loop` snapshots it per request so every connected
+/// MCP server's tools join the agent's `LoopToolRegistry` — this is the
+/// consumer side of the bridge; without it the registry is write-only and
+/// external MCP tools never reach the LLM. Same install-once pattern as
+/// `CONFIRMATION_REQUESTER` above.
+static MCP_TOOL_REGISTRY: OnceLock<Arc<crate::tools::ToolHandlerRegistry>> = OnceLock::new();
+
+/// Install the process-wide MCP tool registry. Called once at boot.
+pub fn set_mcp_tool_registry(registry: Arc<crate::tools::ToolHandlerRegistry>) {
+    let _ = MCP_TOOL_REGISTRY.set(registry);
+}
+
+/// The MCP tool registry, if boot installed one (absent in unit tests and
+/// simulated mode — callers treat `None` as "no external MCP tools").
+pub(super) fn mcp_tool_registry() -> Option<&'static Arc<crate::tools::ToolHandlerRegistry>> {
+    MCP_TOOL_REGISTRY.get()
 }
 
 /// Build the per-request `ToolService` for a chat turn.

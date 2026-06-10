@@ -16,6 +16,19 @@ pub struct McpTool {
     pub input_schema: Value,
     /// Whether this tool requires user confirmation before execution
     pub requires_confirmation: bool,
+    /// Server-declared `annotations.readOnlyHint == true`: the tool promises
+    /// not to modify its environment. Feeds the parallel-dispatch concurrency
+    /// claim (read-only → `Shared`, everything else → whole-world exclusive,
+    /// mirroring openclaw's sequential-unless-advertised and opensquilla's
+    /// mutex-unless-safelisted defaults). Untrusted hint: it can only widen
+    /// parallelism, never bypass approval gates.
+    #[serde(default)]
+    pub read_only: bool,
+    /// Server-declared `annotations.idempotentHint == true` (or implied by
+    /// `readOnlyHint`): repeating the call with the same arguments has no
+    /// additional effect. Gates the one-shot retry on Timeout/Transport.
+    #[serde(default)]
+    pub idempotent: bool,
 }
 
 /// Per-server allow/deny filter over the tools an MCP server exposes.

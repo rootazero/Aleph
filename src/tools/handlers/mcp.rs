@@ -27,6 +27,11 @@ pub struct McpHandler {
     tool_name: String,
     description: String,
     input_schema: Value,
+    /// Scheduling/approval flags derived from the server's `ToolAnnotations`
+    /// (see `McpTool`): `concurrent_safe` ← readOnlyHint, `idempotent` ←
+    /// idempotentHint, `requires_approval` ← destructiveHint. Defaults are
+    /// all-false (whole-world exclusive, no auto-retry, no confirmation).
+    metadata: ToolDefinitionMetadata,
 }
 
 impl McpHandler {
@@ -43,13 +48,52 @@ impl McpHandler {
             tool_name,
             description,
             input_schema,
+            metadata: ToolDefinitionMetadata::default(),
         }
     }
 
-    /// The qualified name used in the registry: `{server_id}__{tool_name}`.
-    pub fn qualified_name(&self) -> String {
-        format!("{}__{}", self.server_id, self.tool_name)
+    /// Attach annotation-derived scheduling/approval flags.
+    pub fn with_flags(mut self, read_only: bool, idempotent: bool, requires_approval: bool) -> Self {
+        self.metadata.concurrent_safe = read_only;
+        self.metadata.idempotent = idempotent;
+        self.metadata.requires_approval = requires_approval;
+        self
     }
+
+    /// The provider-safe qualified name used in the registry:
+    /// `{server_id}__{short_tool_name}`, restricted to `[A-Za-z0-9_-]` and
+    /// 64 chars (OpenAI-compatible function-name charset; Anthropic and
+    /// Gemini accept the same alphabet).
+    ///
+    /// `tool_name` arrives in the manager's namespaced form
+    /// (`{server}:{tool}` — see `McpServerConnection::refresh_tools`); the
+    /// redundant prefix is stripped before composing so the LLM never sees
+    /// `server__server:tool`, and any residual unsafe character (`:`, `.`,
+    /// unicode) is mapped to `_`.
+    pub fn qualified_name(&self) -> String {
+        let short = self
+            .tool_name
+            .strip_prefix(&format!("{}:", self.server_id))
+            .unwrap_or(&self.tool_name);
+        sanitize_tool_name(&format!("{}__{}", self.server_id, short))
+    }
+}
+
+/// Map a candidate registry name onto the provider-safe alphabet
+/// `[A-Za-z0-9_-]`, truncating to 64 characters. Strict-schema providers
+/// (OpenAI function calling) reject names outside this set with a request-
+/// level 400, which would poison the whole turn for every tool.
+pub(crate) fn sanitize_tool_name(raw: &str) -> String {
+    raw.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(64)
+        .collect()
 }
 
 #[async_trait]
@@ -88,7 +132,7 @@ impl ToolHandler for McpHandler {
             source: ToolSource::Mcp {
                 server_id: self.server_id.clone(),
             },
-            metadata: ToolDefinitionMetadata::default(),
+            metadata: self.metadata.clone(),
         }
     }
 }
@@ -178,6 +222,67 @@ mod tests {
                 server_id: "time_server".into()
             }
         );
+    }
+
+    #[test]
+    fn qualified_name_strips_redundant_server_prefix() {
+        // Production registration receives the manager's namespaced name
+        // ("server:tool"); the qualified form must not double-prefix or
+        // leak the provider-invalid colon.
+        let client = Arc::new(McpClient::new());
+        let h = McpHandler::new(
+            client,
+            "github".into(),
+            "github:create_issue".into(),
+            "d".into(),
+            json!({"type": "object"}),
+        );
+        assert_eq!(h.qualified_name(), "github__create_issue");
+    }
+
+    #[test]
+    fn qualified_name_sanitizes_unsafe_chars_and_truncates() {
+        let client = Arc::new(McpClient::new());
+        let h = McpHandler::new(
+            client,
+            "svr".into(),
+            "other:tool.v2".into(), // foreign prefix is NOT stripped, only sanitized
+            "d".into(),
+            json!({}),
+        );
+        assert_eq!(h.qualified_name(), "svr__other_tool_v2");
+
+        let long = "x".repeat(100);
+        assert_eq!(sanitize_tool_name(&long).len(), 64);
+    }
+
+    #[test]
+    fn with_flags_projects_into_definition_metadata() {
+        let client = Arc::new(McpClient::new());
+        let h = McpHandler::new(
+            client,
+            "svr".into(),
+            "read_thing".into(),
+            "d".into(),
+            json!({}),
+        )
+        .with_flags(true, true, false);
+        let def = h.definition();
+        assert!(def.metadata.concurrent_safe);
+        assert!(def.metadata.idempotent);
+        assert!(!def.metadata.requires_approval);
+
+        let client = Arc::new(McpClient::new());
+        let destructive = McpHandler::new(
+            client,
+            "svr".into(),
+            "drop_db".into(),
+            "d".into(),
+            json!({}),
+        )
+        .with_flags(false, false, true);
+        assert!(destructive.definition().metadata.requires_approval);
+        assert!(!destructive.definition().metadata.concurrent_safe);
     }
 
     #[test]

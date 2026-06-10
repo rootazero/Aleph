@@ -117,6 +117,64 @@ pub struct ToolDefinition {
     /// Input schema (JSON Schema)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_schema: Option<Value>,
+    /// Behavioral hints (MCP spec `ToolAnnotations`). Absent on older
+    /// servers; every field is optional and untrusted — hints inform
+    /// scheduling (parallelism, retry) and approval friction, never
+    /// security decisions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
+}
+
+/// MCP spec tool annotations — server-declared behavioral hints.
+///
+/// Spec defaults (when the annotations object is present but a field is
+/// absent): `readOnlyHint=false`, `destructiveHint=true`,
+/// `idempotentHint=false`, `openWorldHint=true`. The helpers below encode
+/// the *conservative consumption* policy instead of the raw spec defaults:
+/// a hint only relaxes behavior when explicitly `true` (read-only,
+/// idempotent) and only adds friction when explicitly `true` (destructive),
+/// so a server that omits annotations behaves exactly like one that sends
+/// none at all.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    /// Human-readable display title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Tool does not modify its environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only_hint: Option<bool>,
+    /// Tool may perform destructive updates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub destructive_hint: Option<bool>,
+    /// Repeated calls with the same arguments have no additional effect.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotent_hint: Option<bool>,
+    /// Tool interacts with an open world of external entities.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_world_hint: Option<bool>,
+}
+
+impl ToolAnnotations {
+    /// Explicitly declared read-only. Absent → `false` (conservative:
+    /// unknown tools stay whole-world exclusive under parallel dispatch).
+    pub fn is_read_only(&self) -> bool {
+        self.read_only_hint == Some(true)
+    }
+
+    /// Explicitly declared destructive. Absent → `false` (conservative the
+    /// other way: confirmation friction is only added when the server
+    /// asks for it, so wiring annotations doesn't suddenly gate every
+    /// legacy MCP tool behind approval prompts).
+    pub fn is_destructive(&self) -> bool {
+        self.destructive_hint == Some(true)
+    }
+
+    /// Safe to retry with the same arguments: explicitly idempotent, or
+    /// read-only (reads are idempotent by definition).
+    pub fn is_idempotent(&self) -> bool {
+        self.idempotent_hint == Some(true) || self.is_read_only()
+    }
 }
 
 /// Tools list response

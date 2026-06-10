@@ -118,7 +118,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
                 // through `BuiltinToolRegistry`, which only knows builtin +
                 // plugin tools and holds no MCP client handle. The sole place an
                 // MCP tool actually executes is the full agent loop, where
-                // `McpToolAdapter` / `ScopedToolService` carry the live
+                // `McpRegistryTool` / `ScopedToolService` carry the live
                 // transport. So fall through — exactly like `skill` / `custom` —
                 // and let the LLM invoke the loop-visible MCP tool from the
                 // original `/<tool> <args>` input.
