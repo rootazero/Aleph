@@ -142,7 +142,7 @@ pub fn unregister_mcp_tools(
         .collect();
     drop(snapshot);
     for name in &victims {
-        registry.unregister(name);
+        let _ = registry.unregister(name);
         if let Some(disp) = tool_catalog {
             disp.health().unregister_probe(name);
         }

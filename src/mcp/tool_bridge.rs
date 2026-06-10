@@ -146,7 +146,7 @@ async fn sync_server(
         }
     };
     let tools = client.list_tools().await;
-    unregister_mcp_tools(registry, tool_catalog, server_id);
+    let _ = unregister_mcp_tools(registry, tool_catalog, server_id);
     let registered = register_mcp_tools(registry, tool_catalog, client, server_id, &tools);
     tracing::info!(
         server_id,
@@ -236,7 +236,7 @@ fn set_builtin(
             }
         }
     } else {
-        registry.unregister(name);
+        let _ = registry.unregister(name);
         tracing::info!(tool = name, "MCP tool bridge: capability builtin removed");
         false
     }

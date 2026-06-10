@@ -860,7 +860,7 @@ pub async fn start_server(args: &Args) -> Result<(), Box<dyn std::error::Error>>
     // `ToolHealthCache`. The bridge subscribes to manager events; any
     // servers that connect from this point on flow through it.
     if let Some(ref h) = mcp_handle {
-        alephcore::mcp::spawn_tool_bridge(
+        let _ = alephcore::mcp::spawn_tool_bridge(
             h.clone(),
             tool_registry_phase2.clone(),
             agent_result.tool_catalog.clone(),

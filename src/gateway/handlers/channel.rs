@@ -754,7 +754,7 @@ pub async fn handle_delete(
     // Stop and unregister from registry (if present)
     if in_registry {
         let _ = registry.stop_channel(&channel_id).await;
-        registry.unregister(&channel_id).await;
+        let _ = registry.unregister(&channel_id).await;
     }
 
     // Remove from app config and persist to disk

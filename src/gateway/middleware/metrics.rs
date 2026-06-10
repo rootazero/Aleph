@@ -214,7 +214,7 @@ where
             match &result {
                 Ok(resp) => {
                     if resp.is_error() {
-                        state_registry.fail(request_id);
+                        let _ = state_registry.fail(request_id);
                         tracing::debug!(
                             method = %method,
                             elapsed_ms = %elapsed_ms,
@@ -222,7 +222,7 @@ where
                             "rpc request"
                         );
                     } else {
-                        state_registry.complete(request_id);
+                        let _ = state_registry.complete(request_id);
                         tracing::debug!(
                             method = %method,
                             elapsed_ms = %elapsed_ms,
@@ -232,7 +232,7 @@ where
                     }
                 }
                 Err(_) => {
-                    state_registry.fail(request_id);
+                    let _ = state_registry.fail(request_id);
                     tracing::debug!(
                         method = %method,
                         elapsed_ms = %elapsed_ms,
