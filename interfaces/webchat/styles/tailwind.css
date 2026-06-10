@@ -520,7 +520,7 @@ html.glass .glass::after { opacity: 0.5; }
    the reduced-transparency block below.
    ============================================================ */
 :root {
-  --msg-glass-bg: oklch(1 0 0 / 0.62);
+  --msg-glass-bg: oklch(1 0 0 / 0.65);
   --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.35), transparent 42%);
   --msg-glass-border: oklch(0.40 0.02 295 / 0.14);
   --msg-glass-border-top: oklch(0.40 0.02 295 / 0.20);
@@ -558,7 +558,7 @@ html.glass {
 }
 /* System mode (no explicit class) + OS dark — same values as .dark. */
 @media (prefers-color-scheme: dark) {
-  :root:not(.light):not(.dark):not(.glass) {
+  :root:not(.light):not(.glass) {
     --msg-glass-bg: oklch(0.24 0.02 310 / 0.75);
     --msg-glass-sheen: linear-gradient(160deg, oklch(1 0 0 / 0.05), transparent 42%);
     --msg-glass-border: oklch(1 0 0 / 0.10);
@@ -586,7 +586,7 @@ html.glass {
      --color-primary via color-mix so the four accent palettes
      (ocean/forest/sunset/rose) follow automatically. */
   .msg-glass-user {
-    color: white;
+    color: var(--color-text-inverse);
     background-image: linear-gradient(160deg, oklch(1 0 0 / 0.10), transparent 45%);
     background-color: color-mix(in oklch, var(--color-primary) 68%, transparent);
     border: 1px solid color-mix(in oklch, var(--color-primary) 45%, transparent);
