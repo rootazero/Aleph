@@ -199,7 +199,7 @@ impl RequestStateData {
 
         // If entering a terminal state, record total duration
         if new_state.is_terminal() {
-            let duration = now - self.created_at.load(Ordering::SeqCst);
+            let duration = now.saturating_sub(self.created_at.load(Ordering::SeqCst));
             self.total_duration.store(duration, Ordering::SeqCst);
         }
 
