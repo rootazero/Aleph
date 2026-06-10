@@ -95,9 +95,21 @@ impl ChatSendError {
                 ChatSendErrorCode::PromptReview
             } else if l.contains("usage limit") || l.contains("quota") || l.contains("rate limit") {
                 ChatSendErrorCode::UsageLimitReached
-            } else if l.contains("safety timeout") || l.contains("timed out") {
+            } else if l.contains("safety timeout")
+                || l.contains("turn timeout")
+                || l.contains("stalled after")
+            {
+                // Harness-side watchdogs (TerminateReason::TurnTimeout /
+                // StallTimeout humanized text) — the run itself was killed.
                 ChatSendErrorCode::SafetyTimeout
-            } else if l.contains("cloud") || l.contains("http") || l.contains("provider") {
+            } else if l.contains("timed out")
+                || l.contains("cloud")
+                || l.contains("http")
+                || l.contains("provider")
+            {
+                // "Request timed out" comes from the provider transport
+                // (connect/TTFB/stream-idle), not the harness — an upstream
+                // delivery failure, so it belongs with CloudSendFailed.
                 ChatSendErrorCode::CloudSendFailed
             } else {
                 ChatSendErrorCode::Unknown
@@ -904,6 +916,32 @@ mod step_tests {
                 "tool call preserved for inline render"
             );
         });
+    }
+
+    #[test]
+    fn classify_provider_timeout_is_cloud_send_failed() {
+        // Real message from a provider-chain network outage (2026-06-10 log).
+        // Must NOT be labelled SafetyTimeout — the harness never timed out;
+        // the upstream was unreachable.
+        let e = ChatSendError::classify(
+            "Execution failed: provider failover transient: llm error: Request timed out",
+        );
+        assert_eq!(e.code, ChatSendErrorCode::CloudSendFailed);
+    }
+
+    #[test]
+    fn classify_harness_turn_timeout_is_safety_timeout() {
+        // Actual humanized TerminateReason::TurnTimeout text from
+        // orchestrator::summary_format — the case SafetyTimeout exists for.
+        let e = ChatSendError::classify("Turn timeout in think (5m 0s)");
+        assert_eq!(e.code, ChatSendErrorCode::SafetyTimeout);
+    }
+
+    #[test]
+    fn classify_harness_stall_is_safety_timeout() {
+        // Humanized TerminateReason::StallTimeout text.
+        let e = ChatSendError::classify("Stalled after 3m 0s");
+        assert_eq!(e.code, ChatSendErrorCode::SafetyTimeout);
     }
 
     #[test]

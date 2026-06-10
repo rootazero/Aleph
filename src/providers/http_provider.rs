@@ -326,7 +326,7 @@ impl HttpProvider {
                     suggestion: Some("Request timed out. Try again or switch providers.".into()),
                 }
             } else {
-                crate::error::AlephError::network(format!("Network error: {}", e))
+                crate::error::AlephError::network(e.to_string())
             }
         })?;
 

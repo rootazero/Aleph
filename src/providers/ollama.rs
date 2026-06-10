@@ -479,7 +479,7 @@ impl AiProvider for OllamaProvider {
                         ))
                     } else {
                         error!(error = %e, "Ollama network error");
-                        AlephError::network(format!("Network error: {}", e))
+                        AlephError::network(e.to_string())
                     }
                 })?;
 
