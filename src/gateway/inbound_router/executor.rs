@@ -27,9 +27,9 @@ use super::InboundMessageRouter;
 /// `permission_wiring_tests` below pin exactly this.
 /// Returns `(caller_role, locked_workspace, busy_input_mode_wire,
 /// tool_permissions)`. The third element is the channel's busy-input policy
-/// wire string (`"steer"` default / `"interrupt"`), the fourth the channel's
-/// tool permission override — both stamped into run metadata so the execution
-/// engine dispatches without re-reading channel config.
+/// wire string (`"steer"` default / `"interrupt"` / `"queue"`), the fourth the
+/// channel's tool permission override — both stamped into run metadata so the
+/// execution engine dispatches without re-reading channel config.
 fn channel_run_identity(
     configs: &HashMap<String, ChannelConfig>,
     channel_id: &str,
@@ -355,67 +355,108 @@ impl InboundMessageRouter {
         );
 
         // Spawn the execution task (non-blocking)
-        // When the agent is busy, retry with backoff instead of surfacing the
-        // error to the user. This handles rapid-fire messages (voice bursts,
-        // double-tap sends) gracefully.
+        // When the agent is busy, hold a per-agent FIFO ticket and poll until
+        // the slot frees instead of surfacing the error to the user. The FIFO
+        // gate (see `busy_queue`) keeps bursts delivering in arrival order —
+        // the old per-message exponential back-off let a later message wake
+        // first and grab the freed slot, and dropped the message entirely
+        // after ~76 s even though the run it was waiting on was still going.
         let error_channel_registry = self.channel_registry.clone();
         let error_reply_route = ctx.reply_route.clone();
         let error_app_config = self.app_config.clone();
         tokio::spawn(async move {
-            const MAX_BUSY_RETRIES: usize = 6;
-            const BUSY_BACKOFF_BASE_MS: u64 = 2000;
+            // How often a waiting message re-checks the busy agent.
+            const BUSY_POLL_MS: u64 = 2000;
+            // How long a message may wait in the FIFO lane before the user is
+            // told delivery failed. Generous on purpose: queued channel
+            // messages are an async medium (R5), and silently dropping a
+            // "user changed their mind" message minutes into a long run is
+            // the worst outcome. Bounded so a wedged run can't strand
+            // waiters forever.
+            const BUSY_QUEUE_MAX_WAIT_SECS: u64 = 1800;
 
-            let mut attempt = 0usize;
-            loop {
-                let result = execution_adapter
-                    .execute(request.clone(), agent.clone(), emitter.clone())
-                    .await;
+            use crate::gateway::execution_engine::ExecutionError;
 
-                match result {
-                    Ok(()) => break,
-                    Err(e) => {
-                        // Check if this is an AgentBusy error (retryable)
-                        let is_busy = e.to_string().contains("Agent is busy");
-                        if is_busy && attempt < MAX_BUSY_RETRIES {
-                            attempt += 1;
-                            let delay_ms = BUSY_BACKOFF_BASE_MS * (1 << attempt.min(3));
-                            tracing::info!(
-                                run_id = %run_id,
-                                attempt,
-                                delay_ms,
-                                "Agent busy, queuing retry"
+            let agent_key = request.session_key.agent_id().to_string();
+            let deadline = tokio::time::Instant::now()
+                + tokio::time::Duration::from_secs(BUSY_QUEUE_MAX_WAIT_SECS);
+
+            // Join the per-agent FIFO lane *before* the first attempt — not on
+            // first busy — so a brand-new message can never jump ahead of
+            // already-waiting siblings in the window between the slot freeing
+            // and the front waiter's next poll. With no contention the lane is
+            // just [self] and the first attempt runs immediately.
+            let final_err = match super::busy_queue::register(&agent_key) {
+                // Lane full — reject newest immediately so the sender hears
+                // back now, not after the 30-minute deadline.
+                None => Some(ExecutionError::AgentBusy(agent_key.clone())),
+                Some(ticket) => {
+                    let mut last_busy: Option<ExecutionError> = None;
+                    let outcome = loop {
+                        // FIFO gate: only the front ticket attempts delivery;
+                        // the rest poll cheaply behind it so arrival order is
+                        // preserved when the slot frees.
+                        if super::busy_queue::is_front(&agent_key, ticket) {
+                            match execution_adapter
+                                .execute(request.clone(), agent.clone(), emitter.clone())
+                                .await
+                            {
+                                Ok(()) => break None,
+                                Err(e @ ExecutionError::AgentBusy(_)) => {
+                                    if last_busy.is_none() {
+                                        tracing::info!(
+                                            run_id = %run_id,
+                                            agent = %agent_key,
+                                            ticket,
+                                            "Agent busy; message queued for FIFO delivery"
+                                        );
+                                    }
+                                    last_busy = Some(e);
+                                }
+                                Err(e) => break Some(e),
+                            }
+                        }
+
+                        if tokio::time::Instant::now() >= deadline {
+                            // Waited out the whole window — surface the last
+                            // busy error through the normal feedback path. A
+                            // gated waiter may never have executed at all, so
+                            // synthesize the busy error in that case.
+                            break Some(
+                                last_busy.unwrap_or_else(|| {
+                                    ExecutionError::AgentBusy(agent_key.clone())
+                                }),
                             );
-                            tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-                            continue;
                         }
+                        tokio::time::sleep(tokio::time::Duration::from_millis(BUSY_POLL_MS)).await;
+                    };
+                    super::busy_queue::remove(&agent_key, ticket);
+                    outcome
+                }
+            };
 
-                        error!("Agent execution failed (run_id: {}): {}", run_id, e);
+            if let Some(e) = final_err {
+                error!("Agent execution failed (run_id: {}): {}", run_id, e);
 
-                        // Resolve user locale from config
-                        let locale = if let Some(ref cfg) = error_app_config {
-                            let cfg = cfg.read().await;
-                            crate::gateway::i18n::Locale::from_config(
-                                cfg.general.language.as_deref(),
-                            )
-                        } else {
-                            crate::gateway::i18n::Locale::Zh
-                        };
+                // Resolve user locale from config
+                let locale = if let Some(ref cfg) = error_app_config {
+                    let cfg = cfg.read().await;
+                    crate::gateway::i18n::Locale::from_config(cfg.general.language.as_deref())
+                } else {
+                    crate::gateway::i18n::Locale::Zh
+                };
 
-                        // Send error feedback to user so they know what happened
-                        let user_msg =
-                            crate::gateway::i18n::format_execution_error(&e.to_string(), locale);
-                        let reply = crate::gateway::channel::OutboundMessage::text(
-                            error_reply_route.conversation_id.as_str(),
-                            &user_msg,
-                        );
-                        if let Err(send_err) = error_channel_registry
-                            .send(&error_reply_route.channel_id, reply)
-                            .await
-                        {
-                            error!("Failed to send error reply: {}", send_err);
-                        }
-                        break;
-                    }
+                // Send error feedback to user so they know what happened
+                let user_msg = crate::gateway::i18n::format_execution_error(&e.to_string(), locale);
+                let reply = crate::gateway::channel::OutboundMessage::text(
+                    error_reply_route.conversation_id.as_str(),
+                    &user_msg,
+                );
+                if let Err(send_err) = error_channel_registry
+                    .send(&error_reply_route.channel_id, reply)
+                    .await
+                {
+                    error!("Failed to send error reply: {}", send_err);
                 }
             }
         });

@@ -37,10 +37,10 @@ mod tests;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use agent_trace_emit_sink::AgentTraceEmitSink;
 pub use engine::ExecutionEngine;
-pub(crate) use slash_command::is_shorthand_alias;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use scratchpad_progress_sink::ScratchpadProgressSink;
 pub use simple::SimpleExecutionEngine;
+pub(crate) use slash_command::is_shorthand_alias;
 #[allow(unused_imports)] // wired into run_loop.rs in this commit
 pub(crate) use tool_service_builder::build_request_tool_service;
 pub use tool_service_builder::set_config_approval_requester;
@@ -111,17 +111,28 @@ pub enum BusyInputMode {
     #[default]
     Steer,
     /// Cancel the running sibling on this session, then let the inbound router's
-    /// existing busy/retry back-off restart the message as a fresh run once the
-    /// slot frees. The new message supersedes the in-flight task, picking up its
-    /// full (interrupted) context from the session log — the model sees what was
-    /// done so far plus the new instruction. Reuses [`ExecutionEngine::cancel`]
-    /// and the `AgentBusy` retry path; no new dispatch machinery.
+    /// FIFO busy queue restart the message as a fresh run once the slot frees.
+    /// The new message supersedes the in-flight task, picking up its full
+    /// (interrupted) context from the session log — an interruption marker is
+    /// persisted at cancel time (see `steering::inject_interrupt_marker`) so
+    /// the successor run knows the prior task was cut short rather than
+    /// completed. Reuses [`ExecutionEngine::cancel`] and the `AgentBusy`
+    /// delivery path; no new dispatch machinery.
     Interrupt,
+    /// Never disturb the running task: no mid-loop injection, no cancellation.
+    /// The message waits in the inbound router's per-agent FIFO busy queue and
+    /// is delivered as a fresh run once the current one finishes — the
+    /// follow-up lane every reference harness exposes (openclaw `followup`,
+    /// hermes `queue`, Pi `followUp`, OpenSquilla `followup`). Bounded wait:
+    /// past the queue deadline the user is notified instead of the message
+    /// being silently dropped.
+    Queue,
 }
 
 /// Metadata key carrying the per-run [`BusyInputMode`] wire string
-/// (`"steer"` / `"interrupt"`). Stamped by the inbound router from the channel's
-/// `ChannelPolicyConfig`; absent on Panel/CLI paths (which default to `Steer`).
+/// (`"steer"` / `"interrupt"` / `"queue"`). Stamped by the inbound router from
+/// the channel's `ChannelPolicyConfig`; absent on Panel/CLI paths (which
+/// default to `Steer`).
 pub const BUSY_INPUT_MODE_KEY: &str = "busy_input_mode";
 
 /// Metadata key carrying the originating channel's tool permission override as
@@ -138,6 +149,7 @@ impl BusyInputMode {
         match self {
             BusyInputMode::Steer => "steer",
             BusyInputMode::Interrupt => "interrupt",
+            BusyInputMode::Queue => "queue",
         }
     }
 
@@ -147,6 +159,7 @@ impl BusyInputMode {
     pub fn from_wire(s: Option<&str>) -> Self {
         match s {
             Some("interrupt") => BusyInputMode::Interrupt,
+            Some("queue") => BusyInputMode::Queue,
             _ => BusyInputMode::Steer,
         }
     }
