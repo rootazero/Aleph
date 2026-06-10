@@ -297,6 +297,7 @@ pub fn scan(content: &str, scope: ThreatScope) -> Vec<ThreatHit> {
 ///
 /// Defaults to [`ThreatScope::Strict`] semantics at the call site by
 /// convention — pass the scope the calling surface warrants.
+#[must_use]
 pub fn first_threat_message(content: &str, scope: ThreatScope) -> Option<String> {
     scan(content, scope).into_iter().next().map(|hit| {
         format!(

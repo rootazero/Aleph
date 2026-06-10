@@ -106,11 +106,13 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     /// Check if this is a successful response
+    #[must_use]
     pub fn is_success(&self) -> bool {
         self.error.is_none() && self.result.is_some()
     }
 
     /// Check if this is an error response
+    #[must_use]
     pub fn is_error(&self) -> bool {
         self.error.is_some()
     }
@@ -171,6 +173,7 @@ pub struct IdGenerator {
 
 impl IdGenerator {
     /// Create a new ID generator starting from 1
+    #[must_use]
     pub fn new() -> Self {
         Self {
             next_id: AtomicU64::new(1),

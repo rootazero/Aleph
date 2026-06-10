@@ -93,9 +93,9 @@ fn extract_depth_from_path(path: &str) -> u32 {
 mod tests {
     use super::*;
 
+    use crate::sync_primitives::Mutex as StdMutex;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use crate::sync_primitives::Mutex as StdMutex;
 
     use async_trait::async_trait;
 

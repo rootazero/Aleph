@@ -37,6 +37,7 @@ pub struct FeedbackFloorLoader {
 }
 
 impl FeedbackFloorLoader {
+    #[must_use]
     pub fn new(memory_dir: PathBuf) -> Arc<Self> {
         Arc::new(Self { memory_dir })
     }

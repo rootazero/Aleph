@@ -58,21 +58,25 @@ enum FieldOutcome {
 impl RefTable {
     /// Build a table from the related pages, in the same order they are shown
     /// to the LLM (token `[P<i>]` ↔ `related[i].path`).
+    #[must_use]
     pub fn from_related(related: &[RelatedPage]) -> Self {
         Self {
             paths: related.iter().map(|p| p.path.clone()).collect(),
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.paths.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.paths.is_empty()
     }
 
     /// The token string the prompt shows for related page index `idx`.
+    #[must_use]
     pub fn token(idx: usize) -> String {
         format!("[P{idx}]")
     }

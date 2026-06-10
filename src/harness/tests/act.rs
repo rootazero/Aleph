@@ -1,9 +1,9 @@
 //! Tests for `AgentHarness::run_turn` — Act phase + tool_use prompt
 //! reconstruction (Task 9 / Phase 4b.3).
 
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 use async_trait::async_trait;
 use tokio::sync::{broadcast, Mutex};

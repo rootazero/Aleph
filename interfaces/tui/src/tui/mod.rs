@@ -69,12 +69,12 @@ pub async fn run(
                 .as_array()
                 .and_then(|arr| arr.first())
                 .and_then(|first| {
-                    first.as_str().map(|s| s.to_string()).or_else(|| {
+                    first.as_str().map(std::string::ToString::to_string).or_else(|| {
                         first
                             .get("name")
                             .or_else(|| first.get("id"))
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
+                            .map(std::string::ToString::to_string)
                     })
                 })
                 // Also try object format: {"models": [...]}
@@ -84,12 +84,12 @@ pub async fn run(
                         .and_then(|v| v.as_array())
                         .and_then(|arr| arr.first())
                         .and_then(|first| {
-                            first.as_str().map(|s| s.to_string()).or_else(|| {
+                            first.as_str().map(std::string::ToString::to_string).or_else(|| {
                                 first
                                     .get("name")
                                     .or_else(|| first.get("id"))
                                     .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string())
+                                    .map(std::string::ToString::to_string)
                             })
                         })
                 })
@@ -188,7 +188,7 @@ async fn main_loop(
                 match client.call::<_, Value>("agent.run", Some(params)).await {
                     Ok(_) => {}
                     Err(e) => {
-                        state.add_system_message(format!("Send error: {}", e));
+                        state.add_system_message(format!("Send error: {e}"));
                     }
                 }
             }
@@ -212,7 +212,7 @@ async fn main_loop(
                 match client.call::<_, Value>("agent.run", Some(params)).await {
                     Ok(_) => {}
                     Err(e) => {
-                        state.add_system_message(format!("Command error: {}", e));
+                        state.add_system_message(format!("Command error: {e}"));
                     }
                 }
             }
@@ -224,7 +224,7 @@ async fn main_loop(
                         state.current_run = None;
                     }
                     Err(e) => {
-                        state.add_system_message(format!("Cancel error: {}", e));
+                        state.add_system_message(format!("Cancel error: {e}"));
                     }
                 }
             }
@@ -288,7 +288,7 @@ async fn main_loop(
                                 match client.call::<_, Value>("agent.run", Some(params)).await {
                                     Ok(_) => {}
                                     Err(e) => {
-                                        state.add_system_message(format!("Command error: {}", e));
+                                        state.add_system_message(format!("Command error: {e}"));
                                     }
                                 }
                             }
@@ -321,7 +321,7 @@ async fn main_loop(
                 {
                     Ok(_) => {}
                     Err(e) => {
-                        state.add_system_message(format!("Dialog response error: {}", e));
+                        state.add_system_message(format!("Dialog response error: {e}"));
                     }
                 }
                 state.close_overlay();
@@ -471,7 +471,7 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
             // browse input history
             let lines = textarea.lines();
             if lines.len() <= 1 {
-                let current_text = lines.first().map(|s| s.as_str()).unwrap_or("");
+                let current_text = lines.first().map_or("", std::string::String::as_str);
 
                 if state.send_history.is_empty() {
                     return Action::FocusChat;
@@ -540,7 +540,7 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
 
         // '/' at beginning of empty line: open command palette
         KeyCode::Char('/') => {
-            let is_empty = textarea.lines().iter().all(|line| line.is_empty());
+            let is_empty = textarea.lines().iter().all(std::string::String::is_empty);
             if is_empty {
                 Action::OpenCommandPalette
             } else {
@@ -558,7 +558,7 @@ fn handle_input_key(state: &mut AppState, textarea: &mut TextArea, key: KeyEvent
 }
 
 /// Handle key events when the chat panel is focused.
-fn handle_chat_key(state: &mut AppState, key: KeyEvent) -> Action {
+const fn handle_chat_key(state: &mut AppState, key: KeyEvent) -> Action {
     match key.code {
         // Scroll up
         KeyCode::Up | KeyCode::Char('k') => Action::ScrollUp(1),
@@ -619,8 +619,7 @@ fn handle_palette_key(state: &mut AppState, key: KeyEvent) -> Action {
             let is_empty = state
                 .palette
                 .as_ref()
-                .map(|p| p.input.is_empty())
-                .unwrap_or(true);
+                .map_or(true, |p| p.input.is_empty());
             if is_empty {
                 // If inside a namespace, go back one level
                 if state.palette_go_back() {
@@ -750,7 +749,7 @@ async fn execute_local_command(
         LocalCommand::Verbose => {
             state.toggle_verbose();
             let mode = if state.verbose { "on" } else { "off" };
-            state.add_system_message(format!("Verbose mode: {}", mode));
+            state.add_system_message(format!("Verbose mode: {mode}"));
         }
         LocalCommand::Quit => {
             state.request_quit();
@@ -766,7 +765,7 @@ async fn execute_local_command(
                 .await
             {
                 Ok(tasks) => state.add_system_message(format_replay_list(&tasks)),
-                Err(e) => state.add_system_message(format!("Replay list error: {}", e)),
+                Err(e) => state.add_system_message(format!("Replay list error: {e}")),
             }
         }
         LocalCommand::ReplayShow { task_id } => {
@@ -776,7 +775,7 @@ async fn execute_local_command(
                 .await
             {
                 Ok(replay) => state.load_trace_replay(replay),
-                Err(e) => state.add_system_message(format!("Replay load error: {}", e)),
+                Err(e) => state.add_system_message(format!("Replay load error: {e}")),
             }
         }
         LocalCommand::Usage => execute_usage(state, client).await,
@@ -815,7 +814,7 @@ async fn execute_usage(state: &mut AppState, client: &AlephClient) {
         .await
     {
         Ok(usage) => state.add_system_message(format_usage(state, &usage)),
-        Err(e) => state.add_system_message(format!("Usage error: {}", e)),
+        Err(e) => state.add_system_message(format!("Usage error: {e}")),
     }
 }
 
@@ -873,7 +872,7 @@ async fn execute_compress(state: &mut AppState, client: &AlephClient) {
             };
             state.add_system_message(summary);
         }
-        Err(e) => state.add_system_message(format!("Compact error: {}", e)),
+        Err(e) => state.add_system_message(format!("Compact error: {e}")),
     }
 }
 
@@ -886,9 +885,9 @@ async fn execute_stop(state: &mut AppState, client: &AlephClient) {
     match client.call::<_, Value>("chat.abort", Some(params)).await {
         Ok(_) => {
             state.current_run = None;
-            state.add_system_message(format!("Run aborted ({}).", run_id));
+            state.add_system_message(format!("Run aborted ({run_id})."));
         }
-        Err(e) => state.add_system_message(format!("Abort error: {}", e)),
+        Err(e) => state.add_system_message(format!("Abort error: {e}")),
     }
 }
 
@@ -932,7 +931,7 @@ async fn execute_undo(state: &mut AppState, client: &AlephClient) {
                 r.messages_removed, r.tokens_removed_estimate
             ));
         }
-        Err(e) => state.add_system_message(format!("Undo error: {}", e)),
+        Err(e) => state.add_system_message(format!("Undo error: {e}")),
     }
 }
 
@@ -957,7 +956,7 @@ async fn execute_retry(state: &mut AppState, client: &AlephClient) {
         "message": last_user,
     });
     if let Err(e) = client.call::<_, Value>("agent.run", Some(params)).await {
-        state.add_system_message(format!("Retry send error: {}", e));
+        state.add_system_message(format!("Retry send error: {e}"));
     }
 }
 
@@ -965,7 +964,7 @@ fn execute_tools(state: &mut AppState, mode: Option<ToolProgressMode>) {
     match mode {
         Some(m) => {
             state.tool_progress_mode = m;
-            state.add_system_message(format!("Tool progress: {}", m));
+            state.add_system_message(format!("Tool progress: {m}"));
         }
         None => {
             state.add_system_message(format!(
@@ -1033,8 +1032,7 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     let end = text
         .char_indices()
         .nth(max_chars)
-        .map(|(idx, _)| idx)
-        .unwrap_or(text.len());
+        .map_or(text.len(), |(idx, _)| idx);
     format!("{}...", &text[..end])
 }
 
@@ -1046,7 +1044,7 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
 fn build_help_text(state: &AppState) -> String {
     let mut lines = vec!["Local commands:".to_string()];
     for (name, desc) in slash::local_commands() {
-        lines.push(format!("  {:<14} {}", name, desc));
+        lines.push(format!("  {name:<14} {desc}"));
     }
 
     if !state.gateway_commands.is_empty() {
@@ -1057,7 +1055,7 @@ fn build_help_text(state: &AppState) -> String {
                 let param = entry
                     .param_hint
                     .as_deref()
-                    .map(|p| format!(" {}", p))
+                    .map(|p| format!(" {p}"))
                     .unwrap_or_default();
                 lines.push(format!(
                     "  /{:<13} {} (namespace)",
@@ -1068,7 +1066,7 @@ fn build_help_text(state: &AppState) -> String {
                     let child_param = child
                         .param_hint
                         .as_deref()
-                        .map(|p| format!(" {}", p))
+                        .map(|p| format!(" {p}"))
                         .unwrap_or_default();
                     lines.push(format!(
                         "    /{} {}{:<6} {}",
@@ -1079,7 +1077,7 @@ fn build_help_text(state: &AppState) -> String {
                 let param = entry
                     .param_hint
                     .as_deref()
-                    .map(|p| format!(" {}", p))
+                    .map(|p| format!(" {p}"))
                     .unwrap_or_default();
                 lines.push(format!(
                     "  /{:<13} {}",

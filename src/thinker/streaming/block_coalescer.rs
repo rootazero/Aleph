@@ -37,11 +37,13 @@ impl Default for CoalescingConfig {
 
 impl CoalescingConfig {
     /// Create config for paragraph-based coalescing (Moltbot default)
+    #[must_use]
     pub fn paragraph() -> Self {
         Self::default()
     }
 
     /// Create config for newline-based coalescing
+    #[must_use]
     pub fn newline() -> Self {
         Self {
             joiner: "\n".to_string(),
@@ -50,6 +52,7 @@ impl CoalescingConfig {
     }
 
     /// Create config for sentence-based coalescing (tighter spacing)
+    #[must_use]
     pub fn sentence() -> Self {
         Self {
             joiner: " ".to_string(),
@@ -58,18 +61,21 @@ impl CoalescingConfig {
     }
 
     /// Builder: set min chars
+    #[must_use]
     pub fn with_min_chars(mut self, chars: usize) -> Self {
         self.min_chars = chars;
         self
     }
 
     /// Builder: set max chars
+    #[must_use]
     pub fn with_max_chars(mut self, chars: usize) -> Self {
         self.max_chars = chars;
         self
     }
 
     /// Builder: set idle timeout
+    #[must_use]
     pub fn with_idle_ms(mut self, ms: u64) -> Self {
         self.idle_ms = ms;
         self
@@ -103,6 +109,7 @@ impl Default for BlockCoalescer {
 
 impl BlockCoalescer {
     /// Create a new coalescer with configuration
+    #[must_use]
     pub fn new(config: CoalescingConfig) -> Self {
         Self {
             config,
@@ -160,21 +167,25 @@ impl BlockCoalescer {
     }
 
     /// Check if buffer meets minimum size for emission
+    #[must_use]
     pub fn is_ready(&self) -> bool {
         self.buffer.len() >= self.config.min_chars
     }
 
     /// Get current buffer length
+    #[must_use]
     pub fn buffer_len(&self) -> usize {
         self.buffer.len()
     }
 
     /// Check if buffer is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 
     /// Get time until idle flush (if buffer has content)
+    #[must_use]
     pub fn time_until_idle(&self) -> Option<Duration> {
         if self.buffer.is_empty() {
             return None;
@@ -216,6 +227,7 @@ impl AsyncBlockCoalescer {
     /// Create a new async coalescer with output channel
     ///
     /// Returns the coalescer and a receiver for coalesced blocks.
+    #[must_use]
     pub fn new(config: CoalescingConfig) -> (Self, mpsc::Receiver<String>) {
         let (tx, rx) = mpsc::channel(16);
         let coalescer = Self {
@@ -249,11 +261,13 @@ impl AsyncBlockCoalescer {
     }
 
     /// Get time until next idle check is needed
+    #[must_use]
     pub fn time_until_idle(&self) -> Option<Duration> {
         self.coalescer.time_until_idle()
     }
 
     /// Check if buffer is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.coalescer.is_empty()
     }

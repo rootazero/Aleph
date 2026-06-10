@@ -45,6 +45,7 @@ impl WhatsAppConfig {
         Ok(())
     }
 
+    #[must_use]
     pub fn is_chat_allowed(&self, chat_id: &str) -> bool {
         if self.allowed_chats.is_empty() {
             return true;

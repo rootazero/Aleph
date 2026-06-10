@@ -32,13 +32,12 @@ pub fn launch_app(app_name: &str) -> Result<()> {
         };
 
         let url = url.ok_or_else(|| {
-            DesktopError::InputFailed(format!("Application '{}' not found", app_name))
+            DesktopError::InputFailed(format!("Application '{app_name}' not found"))
         })?;
 
         if !ws.openURL(&url) {
             return Err(DesktopError::InputFailed(format!(
-                "Failed to launch '{}'",
-                app_name
+                "Failed to launch '{app_name}'"
             )));
         }
 
@@ -120,7 +119,7 @@ pub fn quit_app(app_name: &str) -> Result<()> {
                 "No running application found with identifier '{app_name}'"
             )));
         }
-        for app in apps.iter() {
+        for app in &apps {
             app.terminate();
         }
         info!(app_name, "App quit requested (macOS)");

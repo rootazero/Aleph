@@ -11,7 +11,7 @@ pub(super) fn SandboxRateLimitSection(config: RwSignal<Option<SecurityConfig>>) 
     let get_rl = move || {
         config
             .get()
-            .map(|c| c.sandbox_rate_limit.clone())
+            .map(|c| c.sandbox_rate_limit)
             .unwrap_or_default()
     };
 
@@ -64,10 +64,10 @@ pub(super) fn RateLimitBucketCard(
         config
             .get()
             .map(|c| match category {
-                "read" => c.sandbox_rate_limit.read.clone(),
-                "write" => c.sandbox_rate_limit.write.clone(),
-                "dangerous" => c.sandbox_rate_limit.dangerous.clone(),
-                "admin" => c.sandbox_rate_limit.admin.clone(),
+                "read" => c.sandbox_rate_limit.read,
+                "write" => c.sandbox_rate_limit.write,
+                "dangerous" => c.sandbox_rate_limit.dangerous,
+                "admin" => c.sandbox_rate_limit.admin,
                 _ => WindowConfigSchema::default(),
             })
             .unwrap_or_default()

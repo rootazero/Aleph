@@ -42,7 +42,7 @@ pub enum GuestsAction {
     ///
     /// Examples:
     ///   aleph guests revoke 6ba7b810-9dad-11d1-80b4-00c04fd430c8
-    ///   aleph guests revoke TOKEN_VALUE --force
+    ///   aleph guests revoke `TOKEN_VALUE` --force
     Revoke {
         /// Guest ID or invitation token to revoke
         guest_id: String,
@@ -56,7 +56,7 @@ pub enum GuestsAction {
     ///
     /// Examples:
     ///   aleph guests info 6ba7b810-9dad-11d1-80b4-00c04fd430c8
-    ///   aleph guests info TOKEN_VALUE --json
+    ///   aleph guests info `TOKEN_VALUE` --json
     Info {
         /// Guest ID or invitation token
         guest_id: String,
@@ -217,7 +217,7 @@ async fn handle_revoke(
     // RPC returns an empty/success response; we only care about errors
     let _: serde_json::Value = client.call("guests.revokeInvitation", Some(params)).await?;
 
-    println!("Guest invitation revoked: {}", guest_id);
+    println!("Guest invitation revoked: {guest_id}");
 
     client.close().await?;
     Ok(())
@@ -264,7 +264,7 @@ async fn handle_info(
     if json {
         print_json(&serde_json::to_value(&response)?);
     } else {
-        println!("=== Activity Logs for Guest: {} ===", guest_id);
+        println!("=== Activity Logs for Guest: {guest_id} ===");
         println!();
 
         if response.logs.is_empty() {
@@ -287,7 +287,7 @@ async fn handle_info(
     Ok(())
 }
 
-/// Parse tools string into allowed_tools list
+/// Parse tools string into `allowed_tools` list
 fn parse_tools(tools: &str) -> CliResult<Vec<String>> {
     if tools == "*" {
         // Represent "all tools" as an empty list (server interprets empty as all)
@@ -313,9 +313,7 @@ fn format_timestamp(timestamp: i64) -> String {
 
     Local
         .timestamp_opt(timestamp, 0)
-        .single()
-        .map(|dt: DateTime<Local>| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-        .unwrap_or_else(|| format!("{}", timestamp))
+        .single().map_or_else(|| format!("{timestamp}"), |dt: DateTime<Local>| dt.format("%Y-%m-%d %H:%M:%S").to_string())
 }
 
 #[cfg(test)]

@@ -59,6 +59,7 @@ pub enum SandboxLevel {
 
 impl SandboxLevel {
     /// Returns a human-readable description for use in prompts
+    #[must_use]
     pub fn description(&self) -> &'static str {
         match self {
             Self::None => "Full system access with no sandboxing restrictions",
@@ -89,11 +90,13 @@ pub enum ToolPermission {
 
 impl ToolPermission {
     /// Check if the permission allows execution
+    #[must_use]
     pub fn is_allowed(&self) -> bool {
         matches!(self, Self::Allowed)
     }
 
     /// Check if the permission requires approval
+    #[must_use]
     pub fn requires_approval(&self) -> bool {
         matches!(self, Self::RequiresApproval { .. })
     }
@@ -145,6 +148,7 @@ impl SecurityContext {
     /// Create a permissive context with full access
     ///
     /// Use this for trusted environments where the user has full control.
+    #[must_use]
     pub fn permissive() -> Self {
         Self {
             sandbox_level: SandboxLevel::None,
@@ -162,6 +166,7 @@ impl SecurityContext {
     /// - Filesystem access scoped to workspace
     /// - Network allowed
     /// - Elevated operations require approval
+    #[must_use]
     pub fn standard_sandbox(workspace: PathBuf) -> Self {
         Self {
             sandbox_level: SandboxLevel::Standard,
@@ -189,6 +194,7 @@ impl SecurityContext {
     ///   gateway has no canonical workspace path to attach.
     ///
     /// [`permissive`]: SecurityContext::permissive
+    #[must_use]
     pub fn for_paradigm(paradigm: InteractionParadigm) -> Self {
         match paradigm {
             InteractionParadigm::CLI
@@ -213,6 +219,7 @@ impl SecurityContext {
     /// - No network access
     /// - No elevated operations (exec, bash)
     /// - File operations tool is denied
+    #[must_use]
     pub fn strict_readonly(workspace: PathBuf) -> Self {
         let mut denied_tools = HashSet::new();
         denied_tools.insert("file_ops".to_string());
@@ -239,6 +246,7 @@ impl SecurityContext {
     /// 3. If tool is exec/bash -> check elevated_policy
     /// 4. If network_allowed is false and tool is network tool -> Denied
     /// 5. Otherwise -> Allowed
+    #[must_use]
     pub fn check_tool(&self, tool_name: &str) -> ToolPermission {
         // 1. Check blacklist first (highest priority)
         if self.denied_tools.contains(tool_name) {
@@ -315,6 +323,7 @@ impl SecurityContext {
     ///
     /// Returns a list of security-related notes that should be included
     /// in the system prompt to inform the LLM of current restrictions.
+    #[must_use]
     pub fn security_notes(&self) -> Vec<String> {
         let mut notes = Vec::new();
 
@@ -381,6 +390,7 @@ impl SecurityContext {
 /// - web_search: Performs web searches
 /// - web_fetch: Fetches web pages
 /// - http_request: Makes HTTP requests
+#[must_use]
 pub fn is_network_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,

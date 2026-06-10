@@ -54,6 +54,7 @@ pub struct RawMetrics {
 
 impl SignalSnapshot {
     /// Build a snapshot from raw metrics, normalizing each to [0.0, 1.0].
+    #[must_use]
     pub fn from_metrics(m: &RawMetrics) -> Self {
         let now = chrono::Utc::now().timestamp();
         let mut signals = Vec::new();
@@ -180,6 +181,7 @@ impl SignalSnapshot {
     }
 
     /// Get score by signal name, defaulting to 0.0 if not found.
+    #[must_use]
     pub fn score(&self, name: &str) -> f64 {
         self.signals
             .iter()

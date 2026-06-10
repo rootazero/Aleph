@@ -3,9 +3,9 @@
 //! 拨向中心 WS、用 node-token 认证、声明命令、入站循环服务 `tool.call`，
 //! 在本机 sandbox 跑 bash。断线指数退避重连。无 DB / 无 harness / 无 LLM。
 
+use alephcore::sync_primitives::RwLock;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use alephcore::sync_primitives::RwLock;
 use std::time::Duration;
 
 use alephcore::cluster::{
@@ -138,7 +138,17 @@ pub async fn handle_node(
 
     let mut backoff = BACKOFF_INITIAL_MS;
     loop {
-        match run_session(&url, &bearer, &name, &declared, &tags, &table, &approval_slot).await {
+        match run_session(
+            &url,
+            &bearer,
+            &name,
+            &declared,
+            &tags,
+            &table,
+            &approval_slot,
+        )
+        .await
+        {
             Ok(SessionOutcome::Ended) => {
                 tracing::warn!("node session ended cleanly; reconnecting");
                 backoff = BACKOFF_INITIAL_MS;
@@ -180,7 +190,10 @@ fn build_command_table(name: &str) -> (CommandTable, ApprovalSlot) {
     let driver = create_platform_driver_from_config(&cfg);
     let slot: ApprovalSlot = Arc::new(RwLock::new(None));
     let requester = Arc::new(CenterApprovalRequester::new(slot.clone()));
-    let gate = Arc::new(ApprovalGate::new(ApprovalConfig::default(), Some(requester)));
+    let gate = Arc::new(ApprovalGate::new(
+        ApprovalConfig::default(),
+        Some(requester),
+    ));
     let sandbox = build_sandbox(
         &cfg,
         driver,
@@ -278,7 +291,9 @@ async fn run_session(
         "jsonrpc": "2.0", "id": 1, "method": "connect",
         "params": { "token": token, "device_name": name, "commands": declared, "tags": tags }
     });
-    write.send(Message::Text(connect.to_string().into())).await?;
+    write
+        .send(Message::Text(connect.to_string().into()))
+        .await?;
     let reply = read
         .next()
         .await

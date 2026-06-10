@@ -131,6 +131,7 @@ impl HookContext {
     }
 
     /// Set whether the tool errored
+    #[must_use]
     pub fn with_tool_error(mut self, is_error: bool) -> Self {
         self.tool_error = Some(is_error);
         self
@@ -225,11 +226,13 @@ pub struct HookResult {
 
 impl HookResult {
     /// Check if all actions succeeded
+    #[must_use]
     pub fn all_succeeded(&self) -> bool {
         self.action_results.iter().all(|r| r.success)
     }
 
     /// Get all outputs from successful actions
+    #[must_use]
     pub fn outputs(&self) -> Vec<&str> {
         self.action_results
             .iter()
@@ -239,6 +242,7 @@ impl HookResult {
     }
 
     /// Get all errors from failed actions
+    #[must_use]
     pub fn errors(&self) -> Vec<&str> {
         self.action_results
             .iter()
@@ -328,6 +332,7 @@ pub fn parse_command_output(output: &str, result: &mut HookResult) {
 /// - `$FILE` / `${FILE}` - File path
 /// - `$TOOL_NAME` / `${TOOL_NAME}` - Tool name
 /// - `$SESSION_ID` / `${SESSION_ID}` - Session ID
+#[must_use]
 pub fn substitute_variables(template: &str, context: &HookContext, plugin_root: &Path) -> String {
     let mut result = template.to_string();
     let plugin_root_str = plugin_root.to_string_lossy();

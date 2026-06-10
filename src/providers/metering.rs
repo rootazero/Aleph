@@ -12,9 +12,9 @@ use crate::harness::trace::LoopTraceEvent;
 use crate::harness::TraceSink;
 use crate::providers::adapter::{ProviderResponse, RequestPayload};
 use crate::providers::AiProvider;
+use crate::sync_primitives::Arc;
 use std::future::Future;
 use std::pin::Pin;
-use crate::sync_primitives::Arc;
 
 pub struct MeteringProvider {
     inner: Arc<dyn AiProvider>,

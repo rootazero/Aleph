@@ -50,6 +50,7 @@ pub const GATEWAY_TOOLS_ALLOW_ENV: &str = "ALEPH_GATEWAY_TOOLS_ALLOW";
 /// Matching is exact on the full tool name. A leading `category:` segment
 /// (Aleph builtins use `_`, but some external tools use `:`) is also checked
 /// against the denylist so that e.g. `exec:run` is still caught by `exec`.
+#[must_use]
 pub fn is_dangerous_tool(tool_name: &str) -> bool {
     let category = tool_name.split(':').next().unwrap_or(tool_name);
     DANGEROUS_TOOLS

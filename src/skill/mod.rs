@@ -122,6 +122,7 @@ struct Inner {
 
 impl SkillSystem {
     /// Create a new, empty skill system.
+    #[must_use]
     pub fn new() -> Self {
         let data_dir = dirs::home_dir()
             .unwrap_or_else(|| {
@@ -490,8 +491,7 @@ impl SkillSystem {
                     "Cannot remove bundled skills",
                 ));
             }
-            deletable_on_disk =
-                matches!(m.source(), SkillSource::Global | SkillSource::Workspace);
+            deletable_on_disk = matches!(m.source(), SkillSource::Global | SkillSource::Workspace);
         }
         let removed = registry.remove(id);
         drop(registry);
@@ -523,6 +523,7 @@ impl SkillSystem {
     }
 
     /// Subscribe to skill system events.
+    #[must_use]
     pub fn subscribe(&self) -> tokio::sync::broadcast::Receiver<SkillSystemEvent> {
         self.inner.event_tx.subscribe()
     }
@@ -685,6 +686,7 @@ fn is_skill_file(path: &Path) -> bool {
 /// - `~/.claude/skills/` — Claude Code compatibility
 ///
 /// Only directories that actually exist are returned.
+#[must_use]
 pub fn default_skill_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
 

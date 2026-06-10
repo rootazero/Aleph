@@ -48,6 +48,7 @@ fn evict_terminal_tasks(tasks: &mut HashMap<String, A2ATask>) {
 }
 
 impl TaskStore {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             tasks: AsyncRwLock::new(HashMap::new()),

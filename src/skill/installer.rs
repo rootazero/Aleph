@@ -9,6 +9,7 @@ use serde::Serialize;
 /// Build a shell command string for the given install spec.
 ///
 /// Returns `None` for `Download` specs that have no URL.
+#[must_use]
 pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
     // Validate shell argument: allowlist of safe characters to prevent command injection.
     // Permits alphanumeric, `-`, `_`, `.`, `/`, `@`, `:`, `+`, `=`, `~` (common in
@@ -46,6 +47,7 @@ pub fn build_install_command(spec: &InstallSpec) -> Option<String> {
 /// Filter install specs to only those matching the current OS.
 ///
 /// Specs with no OS restriction (os is `None`) are always included.
+#[must_use]
 pub fn filter_install_specs_for_current_os(specs: &[InstallSpec]) -> Vec<&InstallSpec> {
     let current = current_os();
     specs
@@ -92,6 +94,7 @@ fn install_kind_rank(kind: &InstallKind, prefer_brew: bool) -> u8 {
 }
 
 /// Select the best install spec for the current platform and preferences.
+#[must_use]
 pub fn select_best_install<'a>(
     specs: &'a [InstallSpec],
     prefs: &InstallPreferences,

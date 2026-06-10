@@ -34,6 +34,7 @@ pub enum Speaker {
 
 impl Speaker {
     /// Returns a human-readable name for the speaker.
+    #[must_use]
     pub fn name(&self) -> &str {
         match self {
             Speaker::Coordinator => "Coordinator",
@@ -197,6 +198,7 @@ pub enum GroupChatStatus {
 
 impl GroupChatStatus {
     /// Returns the status as a string slice.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             GroupChatStatus::Active => "active",

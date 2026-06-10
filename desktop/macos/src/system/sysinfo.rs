@@ -1,10 +1,10 @@
-//! System info via NSProcessInfo.
+//! System info via `NSProcessInfo`.
 
 use aleph_desktop::system_types::SystemInfo;
 use aleph_desktop::Result;
 use objc2_foundation::NSProcessInfo;
 
-/// Get system information using NSProcessInfo.
+/// Get system information using `NSProcessInfo`.
 pub fn system_info() -> Result<SystemInfo> {
     let info = NSProcessInfo::processInfo();
 

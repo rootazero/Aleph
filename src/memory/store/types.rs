@@ -23,6 +23,7 @@ use crate::memory::namespace::NamespaceScope;
 /// assert_eq!(safe, "O''Brien");
 /// format!("name = '{}'", safe); // "name = 'O''Brien'"
 /// ```
+#[must_use]
 pub fn escape_sql_string(s: &str) -> String {
     s.replace('\'', "''")
 }
@@ -78,11 +79,13 @@ pub struct SearchFilter {
 
 impl SearchFilter {
     /// Create an empty filter (no constraints).
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Shortcut: only valid facts with optional namespace.
+    #[must_use]
     pub fn valid_only(namespace: Option<NamespaceScope>) -> Self {
         Self {
             namespace,
@@ -95,36 +98,42 @@ impl SearchFilter {
     // -- builder methods ---------------------------------------------------
 
     /// Set namespace scope.
+    #[must_use]
     pub fn with_namespace(mut self, ns: NamespaceScope) -> Self {
         self.namespace = Some(ns);
         self
     }
 
     /// Set agent filter.
+    #[must_use]
     pub fn with_agent_filter(mut self, ws: AgentEnvFilter) -> Self {
         self.agent_filter = Some(ws);
         self
     }
 
     /// Set note type filter.
+    #[must_use]
     pub fn with_note_type(mut self, ft: NoteType) -> Self {
         self.note_type = Some(ft);
         self
     }
 
     /// Set memory layer filter.
+    #[must_use]
     pub fn with_layer(mut self, layer: MemoryLayer) -> Self {
         self.layer = Some(layer);
         self
     }
 
     /// Set memory category filter.
+    #[must_use]
     pub fn with_category(mut self, category: MemoryCategory) -> Self {
         self.category = Some(category);
         self
     }
 
     /// Restrict to valid facts only.
+    #[must_use]
     pub fn with_valid_only(mut self) -> Self {
         self.is_valid = Some(true);
         self
@@ -137,24 +146,28 @@ impl SearchFilter {
     }
 
     /// Set minimum confidence threshold.
+    #[must_use]
     pub fn with_min_confidence(mut self, min: f32) -> Self {
         self.min_confidence = Some(min);
         self
     }
 
     /// Set created-after timestamp.
+    #[must_use]
     pub fn with_created_after(mut self, ts: i64) -> Self {
         self.created_after = Some(ts);
         self
     }
 
     /// Set created-before timestamp.
+    #[must_use]
     pub fn with_created_before(mut self, ts: i64) -> Self {
         self.created_before = Some(ts);
         self
     }
 
     /// Set persona identifier filter.
+    #[must_use]
     pub fn with_persona_id(mut self, id: &str) -> Self {
         self.persona_id = Some(id.to_string());
         self
@@ -173,12 +186,14 @@ impl SearchFilter {
     }
 
     /// Filter to facts valid at the given Unix timestamp (point-in-time query).
+    #[must_use]
     pub fn with_as_of(mut self, ts: i64) -> Self {
         self.as_of = Some(ts);
         self
     }
 
     /// Include historically-valid facts (those with a non-NULL valid_to).
+    #[must_use]
     pub fn with_include_historical(mut self) -> Self {
         self.include_historical = true;
         self
@@ -190,6 +205,7 @@ impl SearchFilter {
     ///
     /// Returns `None` when no constraints are set, meaning "match everything".
     /// String values use single quotes as required by DataFusion.
+    #[must_use]
     pub fn to_lance_filter(&self) -> Option<String> {
         let mut clauses: Vec<String> = Vec::new();
 
@@ -314,6 +330,7 @@ pub struct MemoryFilter {
 
 impl MemoryFilter {
     /// Create an empty filter (no constraints).
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -329,6 +346,7 @@ impl MemoryFilter {
     /// Build a SQLite (DataFusion SQL) filter expression.
     ///
     /// Returns `None` when no constraints are set.
+    #[must_use]
     pub fn to_lance_filter(&self) -> Option<String> {
         let mut clauses: Vec<String> = Vec::new();
 

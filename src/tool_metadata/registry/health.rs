@@ -24,10 +24,10 @@
 //!   catalog subscribes to [`crate::tools::registry::RegistryChange`]
 //!   and calls it on every tool registration / unregistration.
 
+use crate::sync_primitives::Arc;
 use crate::sync_primitives::{AtomicU64, Ordering};
 use std::borrow::Cow;
 use std::collections::HashMap;
-use crate::sync_primitives::Arc;
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -57,6 +57,7 @@ pub enum HealthReason {
 
 impl HealthReason {
     /// One-line label suitable for prompt or log output.
+    #[must_use]
     pub fn short_label(&self) -> &str {
         match self {
             HealthReason::DependencyDown(s)
@@ -116,6 +117,7 @@ pub struct ToolHealthCache {
 }
 
 impl ToolHealthCache {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: ArcSwap::from_pointee(HashMap::new()),
@@ -254,6 +256,7 @@ impl HealthSnapshot {
     /// Tools without a cached entry report healthy (no probe, or the
     /// probe is in flight). Expired entries also report healthy — the
     /// LLM still sees the tool while a background refresh re-evaluates.
+    #[must_use]
     pub fn is_healthy(&self, name: &str) -> bool {
         let now = Instant::now();
         match self.entries.get(name) {
@@ -265,6 +268,7 @@ impl HealthSnapshot {
 
     /// If the tool is cached AS unhealthy and the entry hasn't expired,
     /// return the reason. Otherwise `None`.
+    #[must_use]
     pub fn reason(&self, name: &str) -> Option<&HealthReason> {
         let now = Instant::now();
         match self.entries.get(name) {

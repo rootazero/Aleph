@@ -18,7 +18,7 @@ pub async fn level(server_url: &str, json: bool) -> CliResult<()> {
             .get("level")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
-        println!("Log level: {}", lvl);
+        println!("Log level: {lvl}");
     }
 
     client.close().await?;
@@ -36,7 +36,7 @@ pub async fn set_level(server_url: &str, level: &str, json: bool) -> CliResult<(
     if json {
         output::print_json(&result);
     } else {
-        println!("Log level set to: {}", level);
+        println!("Log level set to: {level}");
     }
 
     client.close().await?;
@@ -56,7 +56,7 @@ pub async fn dir(server_url: &str, json: bool) -> CliResult<()> {
             .get("directory")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
-        println!("Log directory: {}", dir);
+        println!("Log directory: {dir}");
     }
 
     client.close().await?;

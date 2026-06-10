@@ -165,6 +165,7 @@ impl PairingRequestRow {
     }
 
     /// Calculate remaining seconds until expiry
+    #[must_use]
     pub fn remaining_secs(&self) -> u64 {
         let now = super::current_timestamp_ms();
         if self.expires_at > now {

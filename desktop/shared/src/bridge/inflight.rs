@@ -1,7 +1,7 @@
 //! In-flight RPC table — maps a u64 request id to a oneshot reply channel.
 //!
 //! Registered when the client sends a request; completed when the response
-//! arrives; fail_all drains everything when the helper subprocess crashes.
+//! arrives; `fail_all` drains everything when the helper subprocess crashes.
 
 use std::collections::HashMap;
 use std::sync::Arc;

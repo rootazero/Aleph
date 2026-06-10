@@ -108,6 +108,7 @@ impl SessionMetadata {
     /// (`sessions.list`, `sessions.changed`) omit a meaningless origin badge.
     /// Single source of truth for the "what counts as a real origin" rule,
     /// shared by the `SessionInfo` builder and the session-changed event.
+    #[must_use]
     pub fn origin_channel(&self) -> Option<String> {
         let im = self.identity_meta.as_ref()?;
         let c = im.source_channel.trim();

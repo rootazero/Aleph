@@ -23,6 +23,7 @@ pub struct DiscordAccountPool {
 }
 
 impl DiscordAccountPool {
+    #[must_use]
     pub fn new(config: DiscordChannelConfig) -> Self {
         Self {
             config,

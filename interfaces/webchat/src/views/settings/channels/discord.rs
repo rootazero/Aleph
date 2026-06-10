@@ -730,7 +730,7 @@ fn GuildSection(
                                                 }}
                                                 <div class="min-w-0 flex-1">
                                                     <div class="text-sm font-medium text-text-primary truncate">
-                                                        {gname.clone()}
+                                                        {gname}
                                                     </div>
                                                     {members.map(|m| {
                                                         view! {

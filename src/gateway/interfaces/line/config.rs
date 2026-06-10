@@ -127,6 +127,7 @@ impl LineConfig {
     }
 
     /// Check if a user ID is allowed for DM.
+    #[must_use]
     pub fn is_user_allowed(&self, user_id: &str) -> bool {
         if self.allowed_users.is_empty() {
             true
@@ -136,6 +137,7 @@ impl LineConfig {
     }
 
     /// Check if a group ID is allowed.
+    #[must_use]
     pub fn is_group_allowed(&self, group_id: &str) -> bool {
         if self.allowed_groups.is_empty() {
             true

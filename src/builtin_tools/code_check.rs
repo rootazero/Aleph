@@ -140,6 +140,7 @@ impl CodeCheckTool {
     /// real `Arc<dyn Sandbox>` via [`CodeCheckTool::with_sandbox`]; unconfigured
     /// instances refuse execution with a structured error rather than spawning
     /// directly.
+    #[must_use]
     pub fn new() -> Self {
         Self { sandbox: None }
     }

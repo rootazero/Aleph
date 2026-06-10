@@ -67,6 +67,7 @@ pub type SurfaceRegistry = Vec<Arc<dyn DeliverySurface>>;
 /// event, so this is byte-for-byte zero-regression. An addressed event reaches
 /// only connections whose declared kind is listed; a connection that declared
 /// no kind is excluded from any addressed event (fail-closed).
+#[must_use]
 pub fn audience_allows(event_data: Option<&Value>, channel_kind: Option<SurfaceKind>) -> bool {
     let Some(audience) = event_data
         .and_then(|d| d.get("audience"))

@@ -25,6 +25,7 @@ pub struct VisionPipeline {
 
 impl VisionPipeline {
     /// Create an empty pipeline with no providers.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             providers: Vec::new(),
@@ -37,6 +38,7 @@ impl VisionPipeline {
     }
 
     /// Return the number of registered providers.
+    #[must_use]
     pub fn provider_count(&self) -> usize {
         self.providers.len()
     }
@@ -126,6 +128,7 @@ impl VisionPipeline {
     }
 
     /// Aggregate capabilities across all registered providers.
+    #[must_use]
     pub fn capabilities(&self) -> VisionCapabilities {
         let mut caps = VisionCapabilities::none();
         for p in &self.providers {

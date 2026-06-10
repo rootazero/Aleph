@@ -66,6 +66,7 @@ impl GoogleMeetBridge {
     /// Mirrors the `TAVILY_API_KEY` env-fallback precedent used by the search
     /// tool — an external endpoint is configured out-of-band, not baked into
     /// the core TOML.
+    #[must_use]
     pub fn from_env() -> Option<Self> {
         let url = std::env::var("ALEPH_GOOGLE_MEET_BRIDGE_URL")
             .ok()
@@ -205,6 +206,7 @@ pub struct GoogleMeetTool {
 
 impl GoogleMeetTool {
     /// Construct with an optional configured bridge.
+    #[must_use]
     pub fn new(bridge: Option<Arc<GoogleMeetBridge>>) -> Self {
         Self { bridge }
     }

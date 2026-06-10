@@ -143,6 +143,7 @@ impl SessionScheduler {
     }
 
     /// Return the number of pending (not yet executing) tasks for a session.
+    #[must_use]
     pub fn queue_depth<'a>(&'a self, session_key: &str) -> QueueDepthFuture<'a> {
         QueueDepthFuture {
             queues: &self.queues,
@@ -289,6 +290,7 @@ pub struct QueueDepthFuture<'a> {
 
 impl<'a> QueueDepthFuture<'a> {
     /// Get the queue depth.
+    #[must_use]
     pub fn get(self) -> usize {
         let queues = self.queues.lock().unwrap_or_else(|e| e.into_inner());
         queues

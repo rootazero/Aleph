@@ -138,6 +138,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
 
     /// Return the orchestrator OnceLock handle so boot code can inject the
     /// `Arc<Orchestrator>` after `initialize_orchestrator` completes.
+    #[must_use]
     pub fn orchestrator_cell(
         &self,
     ) -> Arc<std::sync::OnceLock<Arc<crate::orchestrator::Orchestrator>>> {
@@ -149,6 +150,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// in `Arc`. Enables the post-run autonomous-continuation hook in
     /// `execute.rs` without storing a self-referential field at construction
     /// time (same deferred-injection pattern as `orchestrator_cell`).
+    #[must_use]
     pub fn continuation_cell(
         &self,
     ) -> Arc<
@@ -170,6 +172,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Set a memory context provider for SQLite-backed prompt augmentation.
+    #[must_use]
     pub fn with_memory_context_provider(
         mut self,
         provider: Arc<crate::thinker::MemoryContextProvider>,
@@ -179,6 +182,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Set a session compactor for hierarchical session summarization.
+    #[must_use]
     pub fn with_session_compactor(
         mut self,
         compactor: Arc<crate::memory::session_compactor::SessionCompactor>,
@@ -188,6 +192,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Set global tool permission policy.
+    #[must_use]
     pub fn with_global_tool_permissions(
         mut self,
         permissions: crate::config::types::policies::ToolPermissionsConfig,
@@ -234,6 +239,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Set the media processor for multimodal attachment handling.
+    #[must_use]
     pub fn with_media_processor(
         mut self,
         processor: Arc<crate::media::processor::MediaProcessor>,
@@ -243,6 +249,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Set the resilience state database for task/trace persistence.
+    #[must_use]
     pub fn with_state_database(mut self, state_database: Arc<StateDatabase>) -> Self {
         self.state_database = Some(state_database);
         self
@@ -253,12 +260,14 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// When set, the engine resolves the user's active workspace at the start
     /// of each run and injects the workspace profile into the prompt builder
     /// and the workspace_id into the request context metadata.
+    #[must_use]
     pub fn with_workspace_manager(mut self, manager: Arc<AgentEnvStore>) -> Self {
         self.workspace_manager = Some(manager);
         self
     }
 
     /// Set the teammate manager for named sub-agent team creation/registration.
+    #[must_use]
     pub fn with_teammate_manager(
         mut self,
         mgr: Arc<crate::agents::teammates::TeammateManager>,
@@ -268,6 +277,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Set the message router for sub-agent send_message actions.
+    #[must_use]
     pub fn with_message_router(
         mut self,
         router: Arc<crate::teams::messages::router::MessageRouter>,
@@ -277,6 +287,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     }
 
     /// Set the inbox for sub-agent read_inbox actions.
+    #[must_use]
     pub fn with_inbox(mut self, inbox: Arc<crate::teams::messages::inbox::Inbox>) -> Self {
         self.inbox = Some(inbox);
         self

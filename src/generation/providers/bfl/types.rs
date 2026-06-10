@@ -101,6 +101,7 @@ pub struct BflError {
 }
 
 impl BflError {
+    #[must_use]
     pub fn best_message(&self) -> Option<String> {
         if let Some(e) = &self.error {
             return Some(e.clone());
@@ -118,6 +119,7 @@ impl BflError {
 
 /// Classify a BFL poll status. Terminal-error variants share their string so
 /// the provider can surface a useful message to the caller.
+#[must_use]
 pub fn classify_status(status: &str) -> StatusClass {
     match status {
         "Ready" => StatusClass::Success,

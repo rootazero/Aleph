@@ -62,7 +62,7 @@ fn Tab(agent_id: String) -> impl IntoView {
     let aid_for_label = agent_id.clone();
     let aid_for_click = agent_id.clone();
     let aid_for_close = agent_id.clone();
-    let aid_for_title = agent_id.clone();
+    let aid_for_title = agent_id;
 
     view! {
         <div
@@ -76,9 +76,9 @@ fn Tab(agent_id: String) -> impl IntoView {
                     "text-text-secondary hover:bg-surface-sunken hover:text-text-primary"
                 }
             )
-            title=aid_for_title.clone()
+            title=aid_for_title
             on:click={
-                let aid = aid_for_click.clone();
+                let aid = aid_for_click;
                 move |_| sessions.activate(chat, &aid)
             }
         >
@@ -89,7 +89,7 @@ fn Tab(agent_id: String) -> impl IntoView {
                        hover:bg-danger/20 hover:text-danger leading-none"
                 title=move || t_string!(i18n, session_tabs.close_tab).to_string()
                 on:click={
-                    let aid = aid_for_close.clone();
+                    let aid = aid_for_close;
                     move |ev: web_sys::MouseEvent| {
                         ev.stop_propagation();
                         sessions.close(chat, &aid);

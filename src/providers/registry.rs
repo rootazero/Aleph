@@ -47,6 +47,7 @@ impl ProviderRegistry {
     /// let registry = ProviderRegistry::new();
     /// assert_eq!(registry.names().len(), 0);
     /// ```
+    #[must_use]
     pub fn new() -> Self {
         Self {
             providers: HashMap::new(),
@@ -120,6 +121,7 @@ impl ProviderRegistry {
     ///
     /// assert!(registry.get("nonexistent").is_none());
     /// ```
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<Arc<dyn AiProvider>> {
         self.providers.get(name).cloned()
     }
@@ -143,6 +145,7 @@ impl ProviderRegistry {
     /// let names = registry.names();
     /// assert_eq!(names, vec!["claude", "openai"]);
     /// ```
+    #[must_use]
     pub fn names(&self) -> Vec<String> {
         let mut names: Vec<_> = self.providers.keys().cloned().collect();
         names.sort();
@@ -171,6 +174,7 @@ impl ProviderRegistry {
     /// assert!(registry.contains("openai"));
     /// assert!(!registry.contains("claude"));
     /// ```
+    #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.providers.contains_key(name)
     }
@@ -189,6 +193,7 @@ impl ProviderRegistry {
     /// registry.register("openai".to_string(), Arc::new(MockProvider::new("test"))).unwrap();
     /// assert_eq!(registry.len(), 1);
     /// ```
+    #[must_use]
     pub fn len(&self) -> usize {
         self.providers.len()
     }
@@ -203,6 +208,7 @@ impl ProviderRegistry {
     /// let registry = ProviderRegistry::new();
     /// assert!(registry.is_empty());
     /// ```
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
     }

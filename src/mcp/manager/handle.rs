@@ -404,6 +404,7 @@ impl McpManagerHandle {
     ///     }
     /// });
     /// ```
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<McpManagerEvent> {
         self.event_tx.subscribe()
     }
@@ -411,6 +412,7 @@ impl McpManagerHandle {
     /// Check if the manager is still running
     ///
     /// Returns false if the command channel has been closed.
+    #[must_use]
     pub fn is_running(&self) -> bool {
         !self.tx.is_closed()
     }

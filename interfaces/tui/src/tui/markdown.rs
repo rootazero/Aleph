@@ -240,7 +240,7 @@ fn parse_inline(text: &str, base_style: Style) -> Vec<Span<'static>> {
     spans
 }
 
-/// Flush accumulated plain text (from plain_start to current byte index) as a styled span.
+/// Flush accumulated plain text (from `plain_start` to current byte index) as a styled span.
 fn flush_plain(text: &str, start: usize, end: usize, style: Style, spans: &mut Vec<Span<'static>>) {
     if start < end {
         if let Some(s) = text.get(start..end) {
@@ -262,7 +262,7 @@ fn find_double_marker(chars: &[(usize, char)], from: usize, marker: char) -> Opt
     (from..len.saturating_sub(1)).find(|&idx| chars[idx].1 == marker && chars[idx + 1].1 == marker)
 }
 
-/// Parse a markdown link: [text](url). Returns (link_text, char_index_after_closing_paren).
+/// Parse a markdown link: [text](url). Returns (`link_text`, `char_index_after_closing_paren`).
 fn parse_link(chars: &[(usize, char)], text: &str, start: usize) -> Option<(String, usize)> {
     // start is at '['
     // Find closing ']'
@@ -308,7 +308,7 @@ fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Ve
     let label = if lang.is_empty() {
         String::new()
     } else {
-        format!(" {} ", lang)
+        format!(" {lang} ")
     };
     let label_width = UnicodeWidthStr::width(label.as_str());
     let dash_count = inner_width.saturating_sub(label_width + 1);
@@ -317,7 +317,7 @@ fn render_code_block(lang: &str, lines: &[String], width: usize, result: &mut Ve
 
     // Code lines
     for code_line in lines {
-        let display = format!("\u{2502} {}", code_line);
+        let display = format!("\u{2502} {code_line}");
         result.push(Line::from(Span::styled(display, code_style)));
     }
 

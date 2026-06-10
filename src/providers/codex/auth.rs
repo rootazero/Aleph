@@ -130,6 +130,7 @@ const EXPIRY_SKEW: Duration = Duration::from_secs(60);
 
 impl CodexAuth {
     /// Check if the access token has expired (with a clock-skew safety margin)
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         SystemTime::now() + EXPIRY_SKEW >= self.expires_at
     }

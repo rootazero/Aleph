@@ -110,6 +110,7 @@ impl MemoryConfig {
     /// in, so callers building a `HybridAssembler` get a single source of truth
     /// for project namespacing (the user sets `memory.project_scoped`, not the
     /// nested `memory.assembler.project_scoped`).
+    #[must_use]
     pub fn assembler_config(&self) -> AssemblerConfig {
         let mut cfg = self.assembler.clone();
         cfg.project_scoped = self.project_scoped;

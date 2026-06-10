@@ -53,6 +53,7 @@ pub struct AccessController {
 
 impl AccessController {
     /// Create a new controller from the resolved channel config.
+    #[must_use]
     pub fn new(resolved_config: ResolvedConfig) -> Self {
         Self {
             resolved_config,
@@ -187,11 +188,13 @@ impl AccessController {
     }
 
     /// Reference to the runtime users list (for callback handler checks).
+    #[must_use]
     pub fn runtime_users(&self) -> &Arc<RwLock<Vec<i64>>> {
         &self.runtime_users
     }
 
     /// Reference to the underlying resolved config.
+    #[must_use]
     pub fn config(&self) -> &ResolvedConfig {
         &self.resolved_config
     }

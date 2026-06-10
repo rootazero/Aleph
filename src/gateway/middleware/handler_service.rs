@@ -17,6 +17,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse};
 pub struct HandlerLayer;
 
 impl HandlerLayer {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -43,6 +44,7 @@ pub struct HandlerService<S> {
 }
 
 impl HandlerService<()> {
+    #[must_use]
     pub fn new(handlers: Arc<HandlerRegistry>) -> Self {
         Self {
             _marker: (),

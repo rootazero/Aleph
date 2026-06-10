@@ -20,6 +20,7 @@ pub enum RecipientRole {
 }
 
 impl RecipientRole {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::To => "to",
@@ -71,6 +72,7 @@ pub enum MessageType {
 }
 
 impl MessageType {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Message => "message",
@@ -86,6 +88,7 @@ impl MessageType {
         }
     }
 
+    #[must_use]
     pub fn from_stored(s: &str) -> Self {
         match s {
             "message" => Self::Message,

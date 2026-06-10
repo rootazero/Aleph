@@ -5,8 +5,8 @@
 //! HarnessDeps fields consistently. Subagents inherit identical config; no
 //! override params are accepted (per P1 zero-override decision).
 
-use std::collections::HashMap;
 use crate::sync_primitives::Arc;
+use std::collections::HashMap;
 use std::time::Duration;
 
 use crate::config::types::ProviderConfig;

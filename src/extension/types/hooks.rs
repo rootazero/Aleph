@@ -131,6 +131,7 @@ pub enum HookKind {
 
 impl HookKind {
     /// Parse from string with fallback to Observer
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         s.parse().unwrap_or(HookKind::Observer)
     }
@@ -167,10 +168,12 @@ pub enum HookPriority {
 
 impl HookPriority {
     /// Parse from string with fallback to Normal
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         s.parse().unwrap_or(HookPriority::Normal)
     }
 
+    #[must_use]
     pub fn as_i32(&self) -> i32 {
         match self {
             HookPriority::System => -1000,
@@ -217,6 +220,7 @@ pub enum PromptScope {
 
 impl PromptScope {
     /// Parse from string with fallback to System
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         s.parse().unwrap_or(PromptScope::System)
     }

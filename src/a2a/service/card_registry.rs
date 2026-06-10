@@ -20,6 +20,7 @@ impl Default for CardRegistry {
 }
 
 impl CardRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             agents: AsyncRwLock::new(Vec::new()),

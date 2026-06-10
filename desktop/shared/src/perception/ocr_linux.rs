@@ -1,6 +1,6 @@
 //! Linux OCR via the `tesseract` CLI, using its TSV output to recover
 //! per-line bounding boxes and confidences (parity with the macOS Vision and
-//! Windows WinRT backends, which both supply boxes).
+//! Windows `WinRT` backends, which both supply boxes).
 //!
 //! The previous implementation read tesseract's plain-text stdout and left
 //! every `bounding_box` as `None`, which silently disabled text-anchored GUI
@@ -131,7 +131,7 @@ fn parse_tesseract_tsv(tsv: &str) -> OcrResult {
                 max_x: right,
                 max_y: bottom,
                 conf_sum: if conf >= 0.0 { conf } else { 0.0 },
-                conf_n: if conf >= 0.0 { 1 } else { 0 },
+                conf_n: u32::from(conf >= 0.0),
             }),
         }
     }
@@ -148,7 +148,7 @@ fn parse_tesseract_tsv(tsv: &str) -> OcrResult {
             }),
             confidence: if acc.conf_n > 0 {
                 // Normalize to 0..1 to match the macOS Vision backend.
-                Some((acc.conf_sum / acc.conf_n as f64) / 100.0)
+                Some((acc.conf_sum / f64::from(acc.conf_n)) / 100.0)
             } else {
                 None
             },

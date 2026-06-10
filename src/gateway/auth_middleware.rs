@@ -67,6 +67,7 @@ pub fn auth_routes(state: Arc<AuthState>) -> Router {
 /// True when the peer is on a loopback interface (127.0.0.0/8 or ::1).
 /// Used by the bootstrap-consume endpoint to refuse non-local peers
 /// regardless of the `Origin` header.
+#[must_use]
 pub fn is_loopback_peer(addr: &SocketAddr) -> bool {
     match addr.ip() {
         std::net::IpAddr::V4(v4) => v4.is_loopback(),
@@ -203,6 +204,7 @@ async fn handle_anonymous_rpc(
 /// to `/` (connect Case 1 then lands role=guest). No build step,
 /// no framework — single-file vanilla HTML/JS so the page works even
 /// from a fresh browser with no extensions.
+#[must_use]
 pub fn pair_page_html(prefilled_code: Option<&str>) -> String {
     // Strip single quotes from the prefill to keep the inline JS literal
     // safe even if a malicious query string slips through.

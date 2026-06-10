@@ -76,6 +76,7 @@ pub fn scan_directory(
 }
 
 /// Check if a plugin directory is disabled via `.disabled` marker file
+#[must_use]
 pub fn is_plugin_disabled(dir: &Path) -> bool {
     dir.join(".disabled").exists()
 }

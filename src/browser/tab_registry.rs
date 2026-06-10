@@ -50,6 +50,7 @@ pub struct TabRegistry {
 }
 
 impl TabRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -154,6 +155,7 @@ impl TabRegistry {
 /// CLI format `"Tab N: URL"`. Lower-layer twin of the `(id, url)` parser in the
 /// browser-tools layer — the reaper lives in the `browser` crate layer and may
 /// not reach up into `builtin_tools`, and it only needs the ids.
+#[must_use]
 pub fn parse_tab_ids(tabs_text: &str) -> Vec<String> {
     tabs_text
         .lines()

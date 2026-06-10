@@ -45,6 +45,7 @@ pub enum AgentLifecycleEvent {
 
 impl AgentLifecycleEvent {
     /// Get the event topic string for EventBus routing.
+    #[must_use]
     pub fn topic(&self) -> &'static str {
         match self {
             Self::Registered { .. } => "agent.lifecycle.registered",

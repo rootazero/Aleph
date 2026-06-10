@@ -68,6 +68,7 @@ pub struct CtxSearchOutput {
 pub struct CtxSearchTool;
 
 impl CtxSearchTool {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

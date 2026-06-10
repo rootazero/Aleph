@@ -68,6 +68,7 @@ impl GoalTool {
         }
     }
 
+    #[must_use]
     pub fn with_session_key_handle(mut self, handle: Option<Arc<RwLock<String>>>) -> Self {
         self.session_key = handle;
         self

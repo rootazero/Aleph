@@ -5,6 +5,7 @@ use crate::gateway::channel::{
 use crate::gateway::interfaces::wechat::types::{MediaRef, Message, MessageItem};
 
 /// Extract display text from a message item.
+#[must_use]
 pub fn extract_text(item: &MessageItem) -> String {
     match item {
         MessageItem::Text(t) => t.text.clone(),
@@ -70,6 +71,7 @@ fn item_to_attachment(item: &MessageItem, index: usize) -> Option<Attachment> {
 }
 
 /// Guess chat type (dm or group) from message.
+#[must_use]
 pub fn guess_chat_type(msg: &serde_json::Value, account_id: &str) -> (String, String) {
     let room_id = msg.get("room_id").or(msg.get("chat_room_id"));
     let to_user_id = msg.get("to_user_id").and_then(|v| v.as_str()).unwrap_or("");
@@ -99,6 +101,7 @@ pub fn guess_chat_type(msg: &serde_json::Value, account_id: &str) -> (String, St
 }
 
 /// Map an iLink message to InboundMessage.
+#[must_use]
 pub fn map_message_to_inbound(
     msg: &Message,
     channel_id: &ChannelId,

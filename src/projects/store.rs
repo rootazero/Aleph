@@ -78,6 +78,7 @@ pub enum ProjectError {
 /// would surface as "the project picker forgot everything overnight" with
 /// no diagnostic. Callers who hit the panic path can set `ALEPH_HOME` to
 /// rescue the daemon.
+#[must_use]
 pub fn default_projects_path() -> PathBuf {
     aleph_home().join("projects.json")
 }
@@ -102,6 +103,7 @@ pub(crate) fn aleph_home() -> PathBuf {
 
 /// Stable ID for a given path. Public so callers can pre-compute the ID
 /// without going through the store (e.g. UI cache lookups).
+#[must_use]
 pub fn project_id_for_path(path: &Path) -> String {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
     let mut hasher = Sha256::new();
@@ -137,11 +139,13 @@ pub struct ProjectStore {
 
 impl ProjectStore {
     /// Open the catalogue at the default location (`~/.aleph/projects.json`).
+    #[must_use]
     pub fn new() -> Self {
         Self::with_path(default_projects_path())
     }
 
     /// Open the catalogue at an explicit path. Used by tests.
+    #[must_use]
     pub fn with_path(path: PathBuf) -> Self {
         Self { path }
     }

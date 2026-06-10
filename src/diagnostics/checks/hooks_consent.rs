@@ -26,6 +26,7 @@ impl HooksConsentCheck {
     }
 
     /// Build against the default `~/.aleph/shell-hooks-allowlist.json`.
+    #[must_use]
     pub fn from_default_path() -> Self {
         Self::new(ShellHookConsent::with_path(ShellHookConsent::default_path()))
     }

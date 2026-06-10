@@ -39,10 +39,10 @@ const ESCAPE_KEY_CODE: u16 = 53;
 ///
 /// # Safety
 ///
-/// NSEvent monitor handles are reference-counted ObjC objects. They are only
+/// `NSEvent` monitor handles are reference-counted `ObjC` objects. They are only
 /// accessed through our `Mutex`-guarded `Vec`, and `NSEvent::removeMonitor`
 /// is safe to call from any thread. The `Retained` smart pointer handles
-/// the actual retain/release, which is thread-safe for ObjC objects.
+/// the actual retain/release, which is thread-safe for `ObjC` objects.
 struct MonitorHandle(Retained<AnyObject>);
 
 // SAFETY: NSEvent monitor handles are reference-counted ObjC objects whose
@@ -54,13 +54,13 @@ unsafe impl Sync for MonitorHandle {}
 // EscapeListener
 // ---------------------------------------------------------------------------
 
-/// macOS implementation of [`EscapeAbort`] using NSEvent monitors.
+/// macOS implementation of [`EscapeAbort`] using `NSEvent` monitors.
 ///
 /// Listens for Escape key presses (keycode 53) and sets an atomic flag that
 /// can be polled by the computer-use loop.
 pub struct EscapeListener {
     abort_flag: Arc<AtomicBool>,
-    /// Monitor handles returned by NSEvent; kept alive for cleanup.
+    /// Monitor handles returned by `NSEvent`; kept alive for cleanup.
     /// Wrapped in `Mutex` so `start`/`stop` can be called through `&self`
     /// (required by the `EscapeAbort` trait).
     monitors: Mutex<Vec<MonitorHandle>>,
@@ -113,7 +113,7 @@ impl EscapeAbort for EscapeListener {
         // Hold the lock across the entire check-and-install sequence to prevent
         // a race where another thread calls stop() between the emptiness check
         // and monitor installation.
-        let mut monitors = self.monitors.lock().unwrap_or_else(|e| e.into_inner());
+        let mut monitors = self.monitors.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
 
         // Re-entrant: if already active, return immediately.
         if !monitors.is_empty() {
@@ -160,7 +160,7 @@ impl EscapeAbort for EscapeListener {
     }
 
     fn stop(&self) {
-        let mut monitors = self.monitors.lock().unwrap_or_else(|e| e.into_inner());
+        let mut monitors = self.monitors.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         for handle in monitors.drain(..) {
             // SAFETY: monitors were returned by addGlobal/LocalMonitor.
             unsafe { NSEvent::removeMonitor(&handle.0) };

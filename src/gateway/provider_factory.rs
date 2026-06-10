@@ -203,6 +203,7 @@ pub fn create_provider_registry_from_env(
 /// Check if a provider can be created from environment
 ///
 /// Returns true if ANTHROPIC_API_KEY or OPENAI_API_KEY is set and non-empty
+#[must_use]
 pub fn can_create_provider_from_env() -> bool {
     env::var("ANTHROPIC_API_KEY")
         .ok()
@@ -217,6 +218,7 @@ pub fn can_create_provider_from_env() -> bool {
 /// Check which provider is available from environment
 ///
 /// Returns the name of the first available provider, or None if none available
+#[must_use]
 pub fn available_provider_from_env() -> Option<&'static str> {
     if env::var("ANTHROPIC_API_KEY")
         .ok()

@@ -41,6 +41,7 @@ enum NodeProbe {
 pub struct BrowserRuntimeCheck;
 
 impl BrowserRuntimeCheck {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

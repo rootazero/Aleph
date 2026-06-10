@@ -22,6 +22,7 @@ pub struct EventContext {
 
 impl EventContext {
     /// Create a new event context
+    #[must_use]
     pub fn new(bus: EventBus) -> Self {
         Self {
             bus,
@@ -31,6 +32,7 @@ impl EventContext {
     }
 
     /// Check if abort has been signaled
+    #[must_use]
     pub fn is_aborted(&self) -> bool {
         self.abort_signal.load(Ordering::Relaxed)
     }
@@ -100,6 +102,7 @@ pub struct EventHandlerRegistry {
 
 impl EventHandlerRegistry {
     /// Create a new empty registry
+    #[must_use]
     pub fn new() -> Self {
         Self {
             handlers: Vec::new(),

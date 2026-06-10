@@ -55,6 +55,7 @@ where
 ///
 /// Callers should treat a `Some(_)` result as fatal: a protection that
 /// cannot be enforced must fail closed, never silently pass.
+#[must_use]
 pub fn first_writable_symlink_component(path: &Path, writable_roots: &[&Path]) -> Option<PathBuf> {
     let mut current = PathBuf::new();
     for component in path.components() {

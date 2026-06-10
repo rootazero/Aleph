@@ -56,6 +56,7 @@ pub struct InvitationManager {
 
 impl InvitationManager {
     /// Create a new invitation manager
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pending: Arc::new(DashMap::new()),
@@ -65,6 +66,7 @@ impl InvitationManager {
     }
 
     /// Create a new invitation manager with custom expiry
+    #[must_use]
     pub fn with_expiry(expiry_ms: i64) -> Self {
         Self {
             pending: Arc::new(DashMap::new()),
@@ -163,6 +165,7 @@ impl InvitationManager {
     ///
     /// # Returns
     /// Vector of pending invitations with their details
+    #[must_use]
     pub fn list_pending(&self) -> Vec<Invitation> {
         let now = current_timestamp_ms();
 
@@ -196,6 +199,7 @@ impl InvitationManager {
     ///
     /// # Returns
     /// Number of invitations removed
+    #[must_use]
     pub fn cleanup_expired(&self) -> usize {
         let now = current_timestamp_ms();
         let to_remove: Vec<String> = self
@@ -213,6 +217,7 @@ impl InvitationManager {
     }
 
     /// Get the secret (for persistence or testing)
+    #[must_use]
     pub fn secret(&self) -> &[u8; 32] {
         &self.secret
     }

@@ -73,6 +73,7 @@ const BACKGROUND_TICK: Duration = Duration::from_secs(60);
 /// a refresh (it would burn the refresh grant for nothing). We match the
 /// distinctive expiry wording the OpenAI Responses API returns
 /// ("token_expired" / "authentication token is expired"). Case-insensitive.
+#[must_use]
 pub fn is_oauth_token_expired_error(message: &str) -> bool {
     let lower = message.to_lowercase();
     lower.contains("token_expired")

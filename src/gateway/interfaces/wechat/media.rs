@@ -61,6 +61,7 @@ fn pkcs7_unpad(data: &mut Vec<u8>) -> Result<(), String> {
 }
 
 /// PKCS7 pad data to block size.
+#[must_use]
 pub fn pkcs7_pad(data: &[u8], block_size: usize) -> Vec<u8> {
     let pad_len = block_size - (data.len() % block_size);
     let mut result = Vec::with_capacity(data.len() + pad_len);

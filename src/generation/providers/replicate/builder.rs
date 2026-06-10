@@ -68,12 +68,14 @@ impl ReplicateProviderBuilder {
     }
 
     /// Set the supported generation types
+    #[must_use]
     pub fn supported_types(mut self, types: Vec<GenerationType>) -> Self {
         self.supported_types = types;
         self
     }
 
     /// Build the ReplicateProvider
+    #[must_use]
     pub fn build(self) -> ReplicateProvider {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))

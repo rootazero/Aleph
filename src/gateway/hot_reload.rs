@@ -35,6 +35,7 @@ pub enum ReloadMode {
 impl ReloadMode {
     /// Whether the given configuration section should be hot-reloaded
     /// under this mode.
+    #[must_use]
     pub fn should_hot_reload(&self, section: &str) -> bool {
         match self {
             Self::Off | Self::Restart => false,
@@ -116,6 +117,7 @@ impl ConfigWatcher {
     }
 
     /// Subscribe to configuration events
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<ConfigEvent> {
         self.event_tx.subscribe()
     }
@@ -126,6 +128,7 @@ impl ConfigWatcher {
     }
 
     /// Get the config path being watched
+    #[must_use]
     pub fn config_path(&self) -> &Path {
         &self.config.config_path
     }
@@ -144,6 +147,7 @@ impl ConfigWatcher {
     ///
     /// This spawns a background task that monitors the config file.
     /// Returns a JoinHandle that can be used to stop the watcher.
+    #[must_use]
     pub fn start_watching(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
         let watcher = self.clone();
 

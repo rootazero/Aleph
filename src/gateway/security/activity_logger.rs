@@ -31,6 +31,7 @@ pub struct GuestActivityLogger {
 
 impl GuestActivityLogger {
     /// Create a new activity logger
+    #[must_use]
     pub fn new() -> Self {
         Self {
             logs: Arc::new(DashMap::new()),
@@ -170,6 +171,7 @@ impl GuestActivityLogger {
     }
 
     /// Query activity logs for a session
+    #[must_use]
     pub fn query_logs(&self, session_id: &str, query: &ActivityLogQuery) -> ActivityLogQueryResult {
         let logs = match self.logs.get(session_id) {
             Some(logs) => logs.clone(),
@@ -214,6 +216,7 @@ impl GuestActivityLogger {
     }
 
     /// Get all logs for a session
+    #[must_use]
     pub fn get_session_logs(&self, session_id: &str) -> Vec<GuestActivityLog> {
         self.logs
             .get(session_id)
@@ -259,11 +262,13 @@ impl GuestActivityLogger {
     }
 
     /// Get total number of logs across all sessions
+    #[must_use]
     pub fn total_logs(&self) -> usize {
         self.logs.iter().map(|entry| entry.value().len()).sum()
     }
 
     /// Get number of active sessions (with logs)
+    #[must_use]
     pub fn active_sessions(&self) -> usize {
         self.logs.len()
     }

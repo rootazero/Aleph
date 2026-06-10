@@ -158,7 +158,7 @@ impl TeamDelegateTool {
 
     /// Record the terminal status of the delegated task.
     async fn finish_task(&self, task_id: &str, status: CoordTaskStatus, result: String) {
-        let _ = self
+        if let Err(e) = self
             .coord_store
             .update_task(
                 task_id,
@@ -168,7 +168,16 @@ impl TeamDelegateTool {
                     ..Default::default()
                 },
             )
-            .await;
+            .await
+        {
+            // A failed write leaves the task InProgress until the zombie
+            // reclaimer force-fails it — log so the stall is diagnosable.
+            tracing::warn!(
+                task_id = %task_id,
+                error = %e,
+                "team_delegate: failed to record terminal task status"
+            );
+        }
     }
 }
 

@@ -39,6 +39,7 @@ impl Default for MattermostConfig {
 
 impl MattermostConfig {
     /// Create config from environment variables
+    #[must_use]
     pub fn from_env() -> Option<Self> {
         let server_url = std::env::var("MATTERMOST_SERVER_URL").ok()?;
         let bot_token = std::env::var("MATTERMOST_BOT_TOKEN").ok()?;
@@ -64,6 +65,7 @@ impl MattermostConfig {
     }
 
     /// Check if a channel ID is allowed
+    #[must_use]
     pub fn is_channel_allowed(&self, channel_id: &str) -> bool {
         if self.allowed_channels.is_empty() {
             true
@@ -73,6 +75,7 @@ impl MattermostConfig {
     }
 
     /// Get server URL with trailing slash removed
+    #[must_use]
     pub fn server_url_trimmed(&self) -> &str {
         self.server_url.trim_end_matches('/')
     }
@@ -81,6 +84,7 @@ impl MattermostConfig {
     ///
     /// Replaces `https://` with `wss://` and `http://` with `ws://`,
     /// then appends `/api/v4/websocket`.
+    #[must_use]
     pub fn ws_url(&self) -> String {
         let base = self.server_url_trimmed();
         let ws_base = if base.starts_with("https://") {

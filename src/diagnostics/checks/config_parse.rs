@@ -21,6 +21,7 @@ pub struct ConfigParseCheck {
 }
 
 impl ConfigParseCheck {
+    #[must_use]
     pub fn new(config_path: PathBuf) -> Self {
         Self { config_path }
     }

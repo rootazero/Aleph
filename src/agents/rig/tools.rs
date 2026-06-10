@@ -96,6 +96,7 @@ pub fn create_builtin_tool_server(config: Option<&BuiltinToolConfig>) -> AlephTo
 /// Create initial registered tools list
 ///
 /// This function uses the unified builtin registry.
+#[must_use]
 pub fn create_builtin_tools_list() -> Vec<String> {
     get_builtin_tool_names()
 }

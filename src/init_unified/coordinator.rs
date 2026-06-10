@@ -18,6 +18,7 @@ pub enum InitPhase {
 }
 
 impl InitPhase {
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             Self::Directories => "directories",
@@ -28,6 +29,7 @@ impl InitPhase {
         }
     }
 
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Directories => "Creating directories",
@@ -46,6 +48,15 @@ pub struct InitializationResult {
     pub completed_phases: Vec<String>,
     pub error_phase: Option<String>,
     pub error_message: Option<String>,
+}
+
+/// Filesystem state captured BEFORE any phase runs, so rollback can
+/// distinguish artifacts created by this initialization from pre-existing
+/// user data (which must never be deleted on rollback).
+struct PreExistingState {
+    database: bool,
+    runtimes_dir: bool,
+    skills_dir: bool,
 }
 
 /// Progress callback trait for UI updates
@@ -111,6 +122,16 @@ impl InitializationCoordinator {
         let total = phases.len() as u32;
         let mut completed_phases: Vec<InitPhase> = Vec::new();
 
+        // Snapshot which artifacts already exist: initialization can be
+        // triggered by a single missing marker (e.g. config.toml) on an
+        // otherwise populated install, and rollback must not delete
+        // pre-existing user data.
+        let pre_existing = PreExistingState {
+            database: self.config_dir.join("memory.db").exists(),
+            runtimes_dir: get_runtimes_dir().map(|d| d.exists()).unwrap_or(false),
+            skills_dir: self.config_dir.join("skills").exists(),
+        };
+
         for (i, phase) in phases.iter().enumerate() {
             let current = (i + 1) as u32;
 
@@ -135,7 +156,8 @@ impl InitializationCoordinator {
                     }
 
                     // Rollback completed phases
-                    let error_message = match self.rollback(&completed_phases).await {
+                    let error_message = match self.rollback(&completed_phases, &pre_existing).await
+                    {
                         Ok(()) => e.message,
                         Err(rollback_err) => {
                             warn!(error = %rollback_err, "Rollback failed");
@@ -180,7 +202,14 @@ impl InitializationCoordinator {
     }
 
     /// Rollback completed phases in reverse order
-    async fn rollback(&self, completed_phases: &[InitPhase]) -> Result<(), InitError> {
+    ///
+    /// `pre_existing` records which artifacts existed before this run started;
+    /// those are user data and are skipped (never deleted) here.
+    async fn rollback(
+        &self,
+        completed_phases: &[InitPhase],
+        pre_existing: &PreExistingState,
+    ) -> Result<(), InitError> {
         info!(phases = ?completed_phases, "Rolling back initialization");
 
         let mut errors: Vec<String> = Vec::new();
@@ -189,7 +218,9 @@ impl InitializationCoordinator {
             match phase {
                 InitPhase::Skills => {
                     let skills_dir = self.config_dir.join("skills");
-                    if skills_dir.exists() {
+                    if pre_existing.skills_dir {
+                        warn!(dir = ?skills_dir, "Skills directory pre-existed; skipping rollback to preserve user skills");
+                    } else if skills_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&skills_dir).await {
                             warn!(error = %e, dir = ?skills_dir, "Failed to remove skills directory during rollback");
                             errors.push(format!("skills dir: {}", e));
@@ -200,7 +231,9 @@ impl InitializationCoordinator {
                     let runtimes_dir = get_runtimes_dir().map_err(|e| {
                         InitError::new("rollback", format!("Failed to get runtimes dir: {}", e))
                     })?;
-                    if runtimes_dir.exists() {
+                    if pre_existing.runtimes_dir {
+                        warn!(dir = ?runtimes_dir, "Runtimes directory pre-existed; skipping rollback to preserve installed runtimes");
+                    } else if runtimes_dir.exists() {
                         if let Err(e) = tokio::fs::remove_dir_all(&runtimes_dir).await {
                             warn!(error = %e, dir = ?runtimes_dir, "Failed to remove runtimes directory during rollback");
                             errors.push(format!("runtimes dir: {}", e));
@@ -209,13 +242,19 @@ impl InitializationCoordinator {
                 }
                 InitPhase::Database => {
                     // Don't delete memory.db (may pre-exist), but clean up WAL files
-                    // that were created during this initialization.
-                    for suffix in ["-wal", "-shm"] {
-                        let wal_path = self.config_dir.join(format!("memory.db{}", suffix));
-                        if wal_path.exists() {
-                            if let Err(e) = tokio::fs::remove_file(&wal_path).await {
-                                warn!(error = %e, path = ?wal_path, "Failed to remove WAL file during rollback");
-                                errors.push(format!("wal {}: {}", suffix, e));
+                    // that were created during this initialization. If the database
+                    // pre-existed, its WAL may hold committed-but-uncheckpointed
+                    // transactions (or belong to a live connection) — leave it alone.
+                    if pre_existing.database {
+                        warn!("memory.db pre-existed; skipping WAL cleanup during rollback");
+                    } else {
+                        for suffix in ["-wal", "-shm"] {
+                            let wal_path = self.config_dir.join(format!("memory.db{}", suffix));
+                            if wal_path.exists() {
+                                if let Err(e) = tokio::fs::remove_file(&wal_path).await {
+                                    warn!(error = %e, path = ?wal_path, "Failed to remove WAL file during rollback");
+                                    errors.push(format!("wal {}: {}", suffix, e));
+                                }
                             }
                         }
                     }

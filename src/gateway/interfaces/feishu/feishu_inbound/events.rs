@@ -460,6 +460,7 @@ fn parse_drive_comment_event(envelope: &WsEventEnvelope) -> Result<Option<Feishu
 ///
 /// For "text" type: parses `{"text": "..."}` and returns the text.
 /// Removes bot mention placeholders from the text.
+#[must_use]
 pub fn extract_text_content(content: &str, mentions: &[Mention]) -> Option<String> {
     let parsed: TextContent = serde_json::from_str(content).ok()?;
     let mut text = parsed.text?;
@@ -495,6 +496,7 @@ pub fn mark_bot_mentions(mentions: &mut [Mention], bot_open_id: &str) {
 /// Handles both the direct `{title, content}` shape and locale-wrapped shapes
 /// (`{post:{...}}` or `{zh_cn:{...}, en_us:{...}}`). Falls back to a placeholder
 /// when the payload is not a recognizable post.
+#[must_use]
 pub fn parse_post_content(content: &str) -> String {
     const FALLBACK: &str = "[Rich text message]";
     let parsed: serde_json::Value = match serde_json::from_str(content) {
@@ -629,6 +631,7 @@ mod post_content_tests {
     }
 }
 
+#[must_use]
 pub fn parse_merge_forward_content(content: &str) -> String {
     #[derive(Debug, Deserialize)]
     struct MergeForwardItem {

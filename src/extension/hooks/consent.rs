@@ -85,6 +85,7 @@ pub struct ShellHookConsent {
 
 impl ShellHookConsent {
     /// Compute the stable fingerprint for a `(plugin_name, command)` pair.
+    #[must_use]
     pub fn fingerprint(plugin_name: &str, command: &str) -> String {
         let mut hasher = Sha256::new();
         hasher.update(plugin_name.as_bytes());
@@ -94,6 +95,7 @@ impl ShellHookConsent {
     }
 
     /// Default registry path: `~/.aleph/shell-hooks-allowlist.json`.
+    #[must_use]
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))

@@ -163,7 +163,7 @@ pub fn GraphCanvas(
 
     // Start render loop after mount
     let gs = graph_state.clone();
-    let raf_h = raf_handle.clone();
+    let raf_h = raf_handle;
     let raf_c = raf_closure.clone();
     let is_visible_for_effect = is_visible.clone();
 
@@ -295,10 +295,10 @@ pub fn GraphCanvas(
         let selected_id_sig_inner = selected_id_sig;
         let edge_label_state_inner = edge_label_state;
 
-        let canvas_for_resize = canvas.clone();
+        let canvas_for_resize = canvas;
         let is_visible_for_raf = is_visible.clone();
-        let parked_for_raf = parked.clone();
-        let pending_size_for_raf = pending_size.clone();
+        let parked_for_raf = parked;
+        let pending_size_for_raf = pending_size;
         let closure: Closure<dyn FnMut()> = Closure::new(move || {
             // Visibility pause: MainContent (app.rs) keeps every top-level
             // view mounted and toggles `display:none` for inactive tabs, so
@@ -754,7 +754,7 @@ pub fn GraphCanvas(
         // even if no capture was granted — releasePointerCapture is a
         // no-op for non-captured pointers per spec.
         if let Some(target) = ev.target() {
-            if let Ok(el) = target.clone().dyn_into::<web_sys::Element>() {
+            if let Ok(el) = target.dyn_into::<web_sys::Element>() {
                 let _ = el.release_pointer_capture(ev.pointer_id());
             }
         }
@@ -879,7 +879,7 @@ pub fn GraphCanvas(
     // to receive focus and keydown events — set in the view! below.
     // Cmd+0 resets to scale=1 and recentres the offset, matching the
     // viewport's initial state from Viewport::new().
-    let gs_key = graph_state.clone();
+    let gs_key = graph_state;
     let on_keydown = move |ev: web_sys::KeyboardEvent| {
         if !(ev.ctrl_key() || ev.meta_key()) {
             return;

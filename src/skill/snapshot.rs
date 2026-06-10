@@ -33,6 +33,7 @@ pub struct SkillSnapshot {
 
 impl SkillSnapshot {
     /// Create an empty snapshot with version 0.
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             version: 0,
@@ -66,6 +67,7 @@ impl SkillSnapshot {
     /// - eligible skill IDs
     /// - ineligible skill IDs with reasons
     /// - prompt XML for eligible + model-visible skills
+    #[must_use]
     pub fn build(
         registry: &SkillRegistry,
         eligibility: &EligibilityService,
@@ -311,8 +313,14 @@ mod tests {
             },
         );
 
-        let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries, &no_archived());
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &entries,
+            &no_archived(),
+        );
 
         assert!(
             snap.eligible.is_empty(),
@@ -346,8 +354,14 @@ mod tests {
             },
         );
 
-        let snap =
-            SkillSnapshot::build(&registry, &eligibility, 1, &serde_json::json!({}), &entries, &no_archived());
+        let snap = SkillSnapshot::build(
+            &registry,
+            &eligibility,
+            1,
+            &serde_json::json!({}),
+            &entries,
+            &no_archived(),
+        );
 
         // Still eligible (eligibility is independent of prompt scope)...
         assert!(snap.eligible.contains(&SkillId::new("git:commit")));

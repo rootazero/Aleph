@@ -6,7 +6,8 @@ use async_trait::async_trait;
 pub struct LinuxAutomation;
 
 impl LinuxAutomation {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 }

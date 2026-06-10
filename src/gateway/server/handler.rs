@@ -1582,7 +1582,10 @@ async fn handle_connection(
             // rather than "≈ connect time" for long-lived sessions.
             if let Some(tm) = ctx.token_manager.as_ref() {
                 if let Err(e) = tm.touch_device(&node_id) {
-                    debug!("failed to stamp node last_seen on disconnect for {}: {}", node_id, e);
+                    debug!(
+                        "failed to stamp node last_seen on disconnect for {}: {}",
+                        node_id, e
+                    );
                 }
             }
             let _ = ctx.event_bus.publish_json(&TopicEvent::new(

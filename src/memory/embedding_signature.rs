@@ -16,6 +16,7 @@ use crate::memory::EmbeddingProvider;
 /// The provider id is part of the signature because two providers serving the
 /// "same" model name are not guaranteed to produce identical weights — a true
 /// passthrough keeps the triple stable, an independent implementation does not.
+#[must_use]
 pub fn embedding_signature(provider_id: &str, model_name: &str, dim: usize) -> String {
     format!("{provider_id}:{model_name}:{dim}")
 }
@@ -43,6 +44,7 @@ pub enum SignatureStatus {
 }
 
 /// Compare a stored signature against the current provider's signature.
+#[must_use]
 pub fn compare(stored: Option<&str>, current: &str) -> SignatureStatus {
     match stored {
         None => SignatureStatus::Unknown,

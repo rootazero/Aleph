@@ -261,6 +261,7 @@ impl ProviderConfig {
     /// Returns the explicit protocol if set, otherwise defaults to "openai".
     /// WARNING: Callers should ensure protocol is explicitly set before calling this.
     /// The "openai" default is a legacy fallback — see Task 2 for persistence fix.
+    #[must_use]
     pub fn protocol(&self) -> String {
         self.protocol
             .clone()
@@ -271,6 +272,7 @@ impl ProviderConfig {
     ///
     /// If the first entry is a comma-separated string of fallback models
     /// (e.g. "gpt-5.4,gpt-5.3-codex"), returns only the first model name.
+    #[must_use]
     pub fn default_model(&self) -> &str {
         let first = self.models.first().map(|s| s.as_str()).unwrap_or("");
         // Handle comma-separated model lists stored as a single string
@@ -278,6 +280,7 @@ impl ProviderConfig {
     }
 
     /// Returns all configured models
+    #[must_use]
     pub fn all_models(&self) -> &[String] {
         &self.models
     }

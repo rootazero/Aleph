@@ -143,6 +143,7 @@ impl ClawHubTool {
     }
 
     /// Access the underlying HTTP client (for gateway handlers to reuse).
+    #[must_use]
     pub fn client(&self) -> &ClawHubClient {
         &self.client
     }

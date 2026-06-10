@@ -33,6 +33,7 @@ impl InboxContext {
     /// Format the inbox state as a short text block suitable for injection
     /// into an agent's system prompt. Returns `None` when the inbox is empty
     /// and there are no active sessions.
+    #[must_use]
     pub fn to_injection_text(&self) -> Option<String> {
         if self.unread_to == 0 && self.unread_cc == 0 && self.active_sessions.is_empty() {
             return None;

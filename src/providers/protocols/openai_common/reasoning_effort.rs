@@ -74,6 +74,7 @@ fn minor_of(id: &str) -> Option<u32> {
 ///
 /// Returns the generic ladder for non-gpt-5 reasoning models. The tables track
 /// openclaw's family matrix.
+#[must_use]
 pub fn supported_efforts(model: &str) -> &'static [&'static str] {
     const GPT_5: &[&str] = &["minimal", "low", "medium", "high"];
     const GPT_51: &[&str] = &["none", "low", "medium", "high"];
@@ -127,6 +128,7 @@ pub fn supported_efforts(model: &str) -> &'static [&'static str] {
 /// the disabled state would defeat the request (e.g. `minimal` on a family that
 /// exposes `none/low/…` clamps up to `low`, not down to `none`). Returns `None`
 /// only when `requested` is not a recognized effort token.
+#[must_use]
 pub fn clamp_effort(model: &str, requested: &str) -> Option<String> {
     let supported = supported_efforts(model);
     if supported.contains(&requested) {

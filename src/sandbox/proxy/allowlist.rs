@@ -54,6 +54,7 @@ impl AllowList {
 
     /// True if the allowlist permits the given hostname. Hostname is compared
     /// case-insensitively against every pattern.
+    #[must_use]
     pub fn permits(&self, host: &str) -> bool {
         let host = host.trim().trim_end_matches('.').to_ascii_lowercase();
         if host.is_empty() {
@@ -73,11 +74,13 @@ impl AllowList {
     }
 
     /// True if the allowlist permits nothing.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.exact.is_empty() && self.wildcard_suffix.is_empty()
     }
 
     /// Patterns for diagnostics.
+    #[must_use]
     pub fn patterns_for_diagnostics(&self) -> Vec<String> {
         let mut out: Vec<String> = self.exact.iter().map(|p| p.to_string()).collect();
         out.extend(

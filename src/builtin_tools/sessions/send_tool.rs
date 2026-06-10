@@ -102,6 +102,7 @@ pub struct SessionsSendOutput {
 
 impl SessionsSendOutput {
     /// Create an Ok response with reply
+    #[must_use]
     pub fn ok(run_id: String, session_key: String, reply: String) -> Self {
         Self {
             run_id,
@@ -113,6 +114,7 @@ impl SessionsSendOutput {
     }
 
     /// Create an Accepted response (fire-and-forget)
+    #[must_use]
     pub fn accepted(run_id: String, session_key: String) -> Self {
         Self {
             run_id,
@@ -124,6 +126,7 @@ impl SessionsSendOutput {
     }
 
     /// Create a Timeout response
+    #[must_use]
     pub fn timeout(run_id: String, session_key: String) -> Self {
         Self {
             run_id,
@@ -135,6 +138,7 @@ impl SessionsSendOutput {
     }
 
     /// Create a Forbidden response
+    #[must_use]
     pub fn forbidden(run_id: String, error: String) -> Self {
         Self {
             run_id,
@@ -146,6 +150,7 @@ impl SessionsSendOutput {
     }
 
     /// Create an Error response
+    #[must_use]
     pub fn error(run_id: String, error: String) -> Self {
         Self {
             run_id,
@@ -183,6 +188,7 @@ impl SessionsSendTool {
         Use this to delegate tasks to other agents or communicate across sessions.";
 
     /// Create a new SessionsSendTool without context (will fail on execute)
+    #[must_use]
     pub fn new() -> Self {
         Self {
             context: None,

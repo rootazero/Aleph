@@ -119,6 +119,7 @@ pub struct TransportPolicy {
 
 impl TransportPolicy {
     /// Static defaults that mirror [`super::super::server::GatewayConfig`].
+    #[must_use]
     pub fn defaults() -> Self {
         Self {
             ping_interval_secs: 30,
@@ -252,6 +253,7 @@ impl AuthContext {
     /// handler). Always returns `127.0.0.1:<port>` regardless of the
     /// configured bind address — the issued URL is only valid
     /// loopback-locally (the consume endpoint enforces this).
+    #[must_use]
     pub fn public_bind_for_loopback(&self) -> String {
         format!("127.0.0.1:{}", self.bind_port)
     }
@@ -288,6 +290,7 @@ pub(crate) fn build_hello_snapshot(ctx: &AuthContext) -> HelloSnapshot {
 }
 
 /// Create a "hello" notification to send to newly connected clients
+#[must_use]
 pub fn create_hello_notification(auth_mode: &AuthMode) -> JsonRpcRequest {
     JsonRpcRequest::notification(
         "hello",

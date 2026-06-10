@@ -48,6 +48,7 @@ pub struct CallbackServer {
 
 impl CallbackServer {
     /// Create a new callback server with default settings
+    #[must_use]
     pub fn new() -> Self {
         Self {
             port: DEFAULT_CALLBACK_PORT,
@@ -57,18 +58,21 @@ impl CallbackServer {
     }
 
     /// Create a callback server with custom port
+    #[must_use]
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = port;
         self
     }
 
     /// Create a callback server with custom timeout
+    #[must_use]
     pub fn with_timeout(mut self, duration: Duration) -> Self {
         self.timeout_duration = duration;
         self
     }
 
     /// Get the callback URL
+    #[must_use]
     pub fn callback_url(&self) -> String {
         format!("http://localhost:{}/callback", self.port)
     }

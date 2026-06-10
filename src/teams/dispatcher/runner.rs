@@ -53,6 +53,7 @@ pub enum MemberDispatchTarget {
 impl MemberDispatchTarget {
     /// The canonical agent_id string used for run records, locks, and
     /// `coord_tasks.owner` regardless of dispatch backend.
+    #[must_use]
     pub fn agent_id(&self) -> &str {
         match self {
             Self::Agent { agent_id } => agent_id,
@@ -63,6 +64,7 @@ impl MemberDispatchTarget {
     /// Build a target from a resolved team member row. Returns `None` for
     /// an `AcpSession` row missing required routing fields — caller should
     /// treat that as a fail-fast configuration error.
+    #[must_use]
     pub fn from_member(member: &TeamMember) -> Option<Self> {
         match member.kind {
             TeamMemberKind::Agent => Some(Self::Agent {

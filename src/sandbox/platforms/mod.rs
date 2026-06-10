@@ -11,6 +11,7 @@ pub mod windows;
 
 pub mod common;
 
+#[must_use]
 pub fn create_platform_driver() -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
     #[cfg(target_os = "macos")]
     {
@@ -30,6 +31,7 @@ pub fn create_platform_driver() -> Arc<dyn crate::sandbox::driver::OsSandboxDriv
     }
 }
 
+#[must_use]
 pub fn create_platform_driver_from_config(
     config: &crate::sandbox::config::SandboxConfig,
 ) -> Arc<dyn crate::sandbox::driver::OsSandboxDriverTrait> {
@@ -43,6 +45,7 @@ pub fn create_platform_driver_from_config(
     )
 }
 
+#[must_use]
 pub fn create_platform_driver_with_config(
     linux_config: &crate::sandbox::config::LinuxSandboxConfig,
     windows_config: &crate::sandbox::config::WindowsSandboxConfig,

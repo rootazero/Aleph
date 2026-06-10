@@ -42,6 +42,7 @@ pub struct PlanResolveTool {
 }
 
 impl PlanResolveTool {
+    #[must_use]
     pub fn new(plan_manager: Arc<PlanManager>, current_agent_id: String) -> Self {
         Self {
             plan_manager,

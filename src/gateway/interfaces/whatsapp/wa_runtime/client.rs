@@ -35,10 +35,12 @@ impl WaRuntime {
         })
     }
 
+    #[must_use]
     pub fn connection_state(&self) -> ConnectionState {
         self.state.get()
     }
 
+    #[must_use]
     pub fn state_handle(&self) -> Arc<AtomicConnectionState> {
         Arc::clone(&self.state)
     }

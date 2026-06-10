@@ -16,6 +16,7 @@ impl E164Number {
         Self(number.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -24,6 +25,7 @@ impl E164Number {
     ///
     /// 10-digit numbers are assumed to be US/Canada (country code 1).
     /// 11-15 digit numbers are assumed to already include the country code.
+    #[must_use]
     pub fn normalize(raw: &str) -> Option<Self> {
         let cleaned: String = raw.chars().filter(|c| c.is_ascii_digit()).collect();
         if cleaned.len() < 10 || cleaned.len() > 15 {
@@ -82,6 +84,7 @@ pub struct PolicyDecision {
 }
 
 impl PolicyDecision {
+    #[must_use]
     pub fn allowed() -> Self {
         Self {
             allowed: true,
@@ -159,10 +162,12 @@ pub struct WhatsAppPolicy {
 }
 
 impl WhatsAppPolicy {
+    #[must_use]
     pub fn new(config: ChannelAccessConfig) -> Self {
         Self { config }
     }
 
+    #[must_use]
     pub fn config(&self) -> &ChannelAccessConfig {
         &self.config
     }

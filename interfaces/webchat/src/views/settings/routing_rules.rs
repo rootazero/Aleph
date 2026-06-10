@@ -153,7 +153,7 @@ fn RuleCard(
 ) -> impl IntoView {
     let regex = rule.regex.clone();
     let rule_type = rule.rule_type.clone();
-    let provider = rule.provider.clone();
+    let provider = rule.provider;
 
     view! {
         <button
@@ -249,7 +249,7 @@ fn RuleEditor(
 
         let rule_config = RoutingRuleConfig {
             rule_type: Some(form_rule_type.get()),
-            regex: regex.clone(),
+            regex: regex,
             provider: {
                 let p = form_provider.get();
                 if p.is_empty() {

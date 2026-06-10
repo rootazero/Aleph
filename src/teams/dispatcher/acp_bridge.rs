@@ -47,6 +47,7 @@ pub struct AcpMemberRef {
 impl AcpMemberRef {
     /// Parse `acp:<harness>[/<session>]`. Returns `None` if the input does not
     /// start with [`ACP_MEMBER_PREFIX`] or is otherwise malformed.
+    #[must_use]
     pub fn parse(agent_id: &str) -> Option<Self> {
         let rest = agent_id.strip_prefix(ACP_MEMBER_PREFIX)?;
         if rest.is_empty() {
@@ -70,6 +71,7 @@ impl AcpMemberRef {
     }
 
     /// Render back to the canonical `acp:<harness>[/<session>]` form.
+    #[must_use]
     pub fn render(&self) -> String {
         match self.session_name.as_deref() {
             None | Some("") => format!("{ACP_MEMBER_PREFIX}{}", self.harness_id),

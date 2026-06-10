@@ -21,6 +21,7 @@ pub struct ToolHandlerRegistry {
 }
 
 impl ToolHandlerRegistry {
+    #[must_use]
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(256);
         Self {
@@ -44,6 +45,7 @@ impl ToolHandlerRegistry {
         Ok(())
     }
 
+    #[must_use]
     pub fn unregister(&self, name: &str) -> Option<Arc<dyn ToolHandler>> {
         let current = self.inner.load();
         let handler = current.get(name).cloned()?;
@@ -58,6 +60,7 @@ impl ToolHandlerRegistry {
         Some(handler)
     }
 
+    #[must_use]
     pub fn snapshot(&self) -> Arc<HashMap<String, Arc<dyn ToolHandler>>> {
         self.inner.load_full()
     }
@@ -73,6 +76,7 @@ impl ToolHandlerRegistry {
     /// `aleph-server commands::start` records every MCP server connect /
     /// disconnect for ops visibility. Treat additional consumers as additive
     /// — never block on this channel.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<RegistryChange> {
         self.change_tx.subscribe()
     }

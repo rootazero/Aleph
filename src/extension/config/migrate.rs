@@ -21,6 +21,7 @@ pub struct MigrationResult {
 
 impl MigrationResult {
     /// Check if a backup was created during migration.
+    #[must_use]
     pub fn had_backup(&self) -> bool {
         self.backup.is_some()
     }
@@ -136,6 +137,7 @@ pub fn migrate_to_toml(jsonc_path: &Path) -> Result<MigrationResult, ExtensionEr
 /// # Returns
 ///
 /// `true` if the directory has JSONC config but no TOML config.
+#[must_use]
 pub fn needs_migration(dir: &Path) -> bool {
     let toml_exists = dir.join("aleph.toml").exists();
     let jsonc_exists = dir.join("aleph.jsonc").exists() || dir.join("aleph.json").exists();
@@ -154,6 +156,7 @@ pub fn needs_migration(dir: &Path) -> bool {
 /// # Returns
 ///
 /// Path to the source file if migration is needed, or None.
+#[must_use]
 pub fn get_migration_source(dir: &Path) -> Option<PathBuf> {
     if !needs_migration(dir) {
         return None;

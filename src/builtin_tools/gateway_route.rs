@@ -63,6 +63,7 @@ pub struct GatewayRouteTool {
 }
 
 impl GatewayRouteTool {
+    #[must_use]
     pub fn new(
         bindings: Vec<crate::routing::RouteBinding>,
         session_config: SessionConfig,
@@ -77,6 +78,7 @@ impl GatewayRouteTool {
         }
     }
 
+    #[must_use]
     pub fn with_defaults() -> Self {
         Self::new(Vec::new(), SessionConfig::default(), "main".to_string())
     }

@@ -27,6 +27,7 @@ pub struct WindowsPower {
 }
 
 impl WindowsPower {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             count: Arc::new(Mutex::new(0)),
@@ -44,7 +45,7 @@ impl PowerCapability for WindowsPower {
     fn inhibit_sleep(&self, _reason: &str) -> Result<InhibitorGuard> {
         let count = Arc::clone(&self.count);
         {
-            let mut g = count.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = count.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             *g = g.saturating_add(1);
             if *g == 1 {
                 #[cfg(windows)]
@@ -56,7 +57,7 @@ impl PowerCapability for WindowsPower {
         }
         let count_for_release = Arc::clone(&count);
         Ok(InhibitorGuard::new(move || {
-            let mut g = count_for_release.lock().unwrap_or_else(|e| e.into_inner());
+            let mut g = count_for_release.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             *g = g.saturating_sub(1);
             if *g == 0 {
                 #[cfg(windows)]

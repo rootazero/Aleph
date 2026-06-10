@@ -5,6 +5,8 @@ use serde_json::Value;
 use crate::output;
 use aleph_client::{AlephClient, CliConfig, CliResult};
 
+use super::run_follow::{self, FollowOptions};
+
 /// Send a message via RPC (non-interactive)
 pub async fn send(
     server_url: &str,
@@ -15,7 +17,7 @@ pub async fn send(
     config: &CliConfig,
     json: bool,
 ) -> CliResult<()> {
-    let (client, _events) = AlephClient::connect(server_url).await?;
+    let (client, mut events) = AlephClient::connect(server_url).await?;
     client.authenticate(config).await?;
 
     let mut params = serde_json::json!({ "message": message });
@@ -31,7 +33,13 @@ pub async fn send(
 
     let result: Value = client.call("chat.send", Some(params)).await?;
 
-    if json {
+    if stream {
+        // Follow the run live through the shared loop. Previously the flag
+        // was forwarded to the server and the event stream dropped on the
+        // floor, so `--stream` printed "Message sent." and exited.
+        let verbose = std::env::var("ALEPH_VERBOSE").is_ok();
+        let _ = run_follow::follow_run(&mut events, &FollowOptions { json, verbose }).await;
+    } else if json {
         output::print_json(&result);
     } else {
         let run_id = result.get("run_id").and_then(|v| v.as_str()).unwrap_or("-");
@@ -40,8 +48,8 @@ pub async fn send(
             .and_then(|v| v.as_str())
             .unwrap_or("-");
         println!("Message sent.");
-        println!("  Run ID:  {}", run_id);
-        println!("  Session: {}", session_key);
+        println!("  Run ID:  {run_id}");
+        println!("  Session: {session_key}");
     }
 
     client.close().await?;
@@ -66,12 +74,12 @@ pub async fn abort(
     } else {
         let aborted = result
             .get("aborted")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if aborted {
-            println!("Run '{}' aborted.", run_id);
+            println!("Run '{run_id}' aborted.");
         } else {
-            println!("Run '{}' was not running or already completed.", run_id);
+            println!("Run '{run_id}' was not running or already completed.");
         }
     }
 
@@ -100,8 +108,8 @@ pub async fn history(
     if json {
         output::print_json(&result);
     } else {
-        let count = result.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
-        println!("=== Chat History ({}) ===", session_key);
+        let count = result.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        println!("=== Chat History ({session_key}) ===");
         println!();
         if let Some(messages) = result.get("messages").and_then(|v| v.as_array()) {
             for msg in messages {
@@ -112,11 +120,11 @@ pub async fn history(
                 } else {
                     content.to_string()
                 };
-                println!("[{}] {}", role, truncated);
+                println!("[{role}] {truncated}");
             }
         }
         println!();
-        println!("Total: {} messages", count);
+        println!("Total: {count} messages");
     }
 
     client.close().await?;
@@ -146,12 +154,12 @@ pub async fn clear(
     } else {
         let cleared = result
             .get("cleared")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if cleared {
-            println!("Chat history cleared for session '{}'.", session_key);
+            println!("Chat history cleared for session '{session_key}'.");
         } else {
-            println!("No history to clear for session '{}'.", session_key);
+            println!("No history to clear for session '{session_key}'.");
         }
     }
 

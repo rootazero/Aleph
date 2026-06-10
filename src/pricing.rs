@@ -708,6 +708,7 @@ fn effective_rates(
 /// Return the per-million-token [`RateCard`] for a `(provider, model)` pair,
 /// or `None` when the model is not priced. Powers the model picker's
 /// cost-at-a-glance column (`providers.catalog`).
+#[must_use]
 pub fn rate_card(provider: &str, model: &str) -> Option<RateCard> {
     lookup_rates(provider, model).map(|r| RateCard {
         input_per_mtok: r.input_per_mtok,
@@ -745,6 +746,7 @@ fn apply_rates(b: &TokenBreakdown, r: &Rates) -> (f64, CostStatus) {
 ///
 /// Returns `CostStatus::Unknown` when either provider or model is not in
 /// the table — callers should treat that as "no estimate available".
+#[must_use]
 pub fn estimate(provider: &str, model: &str, breakdown: &TokenBreakdown) -> CostEstimate {
     let base = match lookup_rates(provider, model) {
         Some(r) => r,
@@ -1176,7 +1178,11 @@ mod tests {
             },
         );
         assert_eq!(o3.status, CostStatus::Complete);
-        assert!((o3.usd - 2.0).abs() < 1e-6, "expected $2.00, got ${}", o3.usd);
+        assert!(
+            (o3.usd - 2.0).abs() < 1e-6,
+            "expected $2.00, got ${}",
+            o3.usd
+        );
         assert_eq!(
             rate_card("openai", "o3-mini").unwrap().input_per_mtok,
             Some(1.10)
@@ -1257,7 +1263,11 @@ mod tests {
             },
         );
         assert_eq!(ds.status, CostStatus::Complete);
-        assert!((ds.usd - 0.42).abs() < 1e-6, "expected $0.42, got ${}", ds.usd);
+        assert!(
+            (ds.usd - 0.42).abs() < 1e-6,
+            "expected $0.42, got ${}",
+            ds.usd
+        );
 
         let k26 = estimate("moonshot", "kimi-k2.6", &input_1m);
         assert!(

@@ -97,12 +97,10 @@ fn fmt_tools(items: &[ToolSummaryItem]) -> Option<String> {
     let mut counts: std::collections::HashMap<&str, (u32, bool, &str)> =
         std::collections::HashMap::new();
     for item in items {
-        let entry = counts
-            .entry(item.tool_name.as_str())
-            .or_insert_with(|| {
-                order.push(item.tool_name.as_str());
-                (0, false, item.emoji.as_str())
-            });
+        let entry = counts.entry(item.tool_name.as_str()).or_insert_with(|| {
+            order.push(item.tool_name.as_str());
+            (0, false, item.emoji.as_str())
+        });
         entry.0 += 1;
         entry.1 |= !item.success;
     }
@@ -147,6 +145,7 @@ fn home_relative_cwd(cwd: &str, home: Option<&str>) -> String {
 ///
 /// Callers should append `"\n\n"` + footer to the final reply text — this
 /// function returns only the footer payload (no leading whitespace).
+#[must_use]
 pub fn build_footer_line(
     inputs: &RuntimeFooterInputs<'_>,
     fields: &[String],
@@ -223,6 +222,7 @@ pub fn global_config() -> RuntimeFooterConfig {
 /// Top-level entry. Returns the rendered footer (with the conventional
 /// double-newline separator already attached) or an empty string when
 /// disabled / no data.
+#[must_use]
 pub fn build_footer_block(
     cfg: &RuntimeFooterConfig,
     inputs: &RuntimeFooterInputs<'_>,

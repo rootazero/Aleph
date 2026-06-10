@@ -78,6 +78,7 @@ fn get_patterns() -> &'static PiiPatterns {
 /// let scrubbed = scrub_pii(text);
 /// assert_eq!(scrubbed, "Contact me at [EMAIL] or call [PHONE]");
 /// ```
+#[must_use]
 pub fn scrub_pii(text: &str) -> String {
     let patterns = get_patterns();
 

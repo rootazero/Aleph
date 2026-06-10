@@ -89,6 +89,7 @@ pub enum PairingRequest {
 
 impl PairingRequest {
     /// Get the pairing code
+    #[must_use]
     pub fn code(&self) -> &str {
         match self {
             PairingRequest::Device { code, .. } => code,
@@ -99,6 +100,7 @@ impl PairingRequest {
     }
 
     /// Get the expiry timestamp (ms since UNIX epoch)
+    #[must_use]
     pub fn expires_at(&self) -> i64 {
         match self {
             PairingRequest::Device { expires_at, .. } => *expires_at,
@@ -109,6 +111,7 @@ impl PairingRequest {
     }
 
     /// Get remaining seconds until expiry
+    #[must_use]
     pub fn remaining_secs(&self) -> u64 {
         let expires_at = self.expires_at();
         let now = current_timestamp_ms();
@@ -484,6 +487,7 @@ impl PairingManager {
     /// Resolve the current state of a Browser pairing for the polling
     /// client. Tri-state: Pending while the DB row exists, Approved /
     /// Rejected per the in-memory side-tables, Expired otherwise.
+    #[must_use]
     pub fn poll_browser_pairing(&self, code: &str) -> PollState {
         self.gc_browser_state();
         // Single-use: drain the credential on the first approved poll. The

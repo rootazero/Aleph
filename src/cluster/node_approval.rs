@@ -54,11 +54,7 @@ impl ApprovalRequester for CenterApprovalRequester {
     async fn request_approval(&self, tool_name: &str, reason: &str) -> ApprovalOutcome {
         // Clone the channel out of the lock and drop the guard before awaiting —
         // a std RwLock guard is not Send.
-        let channel = self
-            .slot
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let channel = self.slot.read().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(channel) = channel else {
             tracing::warn!("node approval requested with no live center channel; denying");
             return ApprovalOutcome::Denied;
@@ -93,7 +89,11 @@ mod tests {
     use serde_json::Value;
     use tokio::sync::mpsc;
 
-    fn slot_with_channel() -> (ApprovalSlot, mpsc::Receiver<String>, Arc<crate::cluster::PendingInvokes>) {
+    fn slot_with_channel() -> (
+        ApprovalSlot,
+        mpsc::Receiver<String>,
+        Arc<crate::cluster::PendingInvokes>,
+    ) {
         let (out_tx, out_rx) = mpsc::channel::<String>(8);
         let channel = ReverseRpcChannel::new(out_tx);
         let pending = channel.pending();

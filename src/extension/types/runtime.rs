@@ -42,6 +42,7 @@ pub struct ServiceResult {
 }
 
 impl ServiceResult {
+    #[must_use]
     pub fn ok() -> Self {
         Self {
             success: true,

@@ -33,6 +33,7 @@ pub struct PiiSecretsGuardrail {
 impl PiiSecretsGuardrail {
     /// Construct over an existing orchestrator with no resolver. Placeholder
     /// substitution at the tool_call surface will be inert.
+    #[must_use]
     pub fn new(guard: Arc<RuntimeSecurityGuard>) -> Self {
         Self {
             guard,
@@ -41,6 +42,7 @@ impl PiiSecretsGuardrail {
     }
 
     /// Construct over an existing orchestrator with a resolver wired in.
+    #[must_use]
     pub fn with_guard_and_resolver(
         guard: Arc<RuntimeSecurityGuard>,
         resolver: Option<Arc<dyn AsyncSecretResolver>>,
@@ -52,6 +54,7 @@ impl PiiSecretsGuardrail {
     /// Convenience for the boot path. Audit channel from the orchestrator
     /// is dropped here — callers that want audit drainage should construct
     /// via `with_guard_and_resolver` after spawning their own drain.
+    #[must_use]
     pub fn with_resolver(resolver: Option<Arc<dyn AsyncSecretResolver>>) -> Self {
         let guard = Arc::new(RuntimeSecurityGuard::default_guard());
         Self { guard, resolver }

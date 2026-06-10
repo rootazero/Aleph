@@ -20,6 +20,7 @@ impl SnapshotWriter {
     }
 
     /// Create a writer using the default path `~/.aleph/data/sessions/`.
+    #[must_use]
     pub fn default_path() -> Option<Self> {
         dirs::home_dir().map(|h| Self::new(h.join(".aleph/data/sessions")))
     }

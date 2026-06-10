@@ -25,6 +25,7 @@ pub enum MediaCategory {
 
 impl MediaCategory {
     /// Derive category from a MIME type string.
+    #[must_use]
     pub fn from_mime(mime: &str) -> Self {
         let mime_lower = mime.to_ascii_lowercase();
         if mime_lower.starts_with("image/") {
@@ -109,6 +110,7 @@ pub struct MergedMessage {
 
 impl MergedMessage {
     /// Wrap a single inbound context as-is.
+    #[must_use]
     pub fn from_single(ctx: InboundContext) -> Self {
         let text = ctx.message.text.clone();
         let attachments = ctx.message.attachments.clone();
@@ -126,6 +128,7 @@ impl MergedMessage {
     ///
     /// Text is joined by newlines; attachments are aggregated in order.
     /// The first context becomes the primary (used for routing).
+    #[must_use]
     pub fn from_batch(contexts: Vec<InboundContext>) -> Self {
         assert!(
             !contexts.is_empty(),
@@ -175,6 +178,7 @@ pub struct EnrichedMessage {
 
 impl EnrichedMessage {
     /// Build an enriched message from pipeline stage outputs.
+    #[must_use]
     pub fn build(
         merged: MergedMessage,
         local_media: Vec<LocalMedia>,
@@ -193,6 +197,7 @@ impl EnrichedMessage {
     /// Append an `[Attachment Understanding]` section to the original text.
     ///
     /// Skipped entries are omitted from the output.
+    #[must_use]
     pub fn build_enriched_text(original: &str, understandings: &[MediaUnderstanding]) -> String {
         let descriptions: Vec<String> = understandings
             .iter()

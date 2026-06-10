@@ -68,6 +68,7 @@ impl AgentEnvFilter {
     ///
     /// Returns a string suitable for use in a SQL `WHERE` clause that filters
     /// on the `agent` column.
+    #[must_use]
     pub fn to_sql_filter(&self) -> String {
         match self {
             AgentEnvFilter::Single(id) => {
@@ -117,6 +118,7 @@ impl AgentEnvContext {
     /// Convenience constructor for the default owner context.
     ///
     /// Uses `DEFAULT_AGENT` ("main") and `NamespaceScope::Owner`.
+    #[must_use]
     pub fn default_owner() -> Self {
         Self {
             agent_id: DEFAULT_AGENT.to_string(),
@@ -126,6 +128,7 @@ impl AgentEnvContext {
 
     /// Build a `SearchFilter` pre-populated with this agent context
     /// and namespace, restricted to valid facts only.
+    #[must_use]
     pub fn to_search_filter(&self) -> SearchFilter {
         SearchFilter::new()
             .with_namespace(self.namespace.clone())
@@ -134,6 +137,7 @@ impl AgentEnvContext {
     }
 
     /// Return a reference to the agent identifier.
+    #[must_use]
     pub fn agent_id(&self) -> &str {
         &self.agent_id
     }
@@ -227,6 +231,7 @@ impl AgentEnv {
     }
 
     /// Get the session key for this agent environment
+    #[must_use]
     pub fn session_key(&self, agent_id: &str) -> SessionKey {
         SessionKey::Main {
             agent_id: agent_id.to_string(),
@@ -236,11 +241,13 @@ impl AgentEnv {
     }
 
     /// Get the storage key string
+    #[must_use]
     pub fn storage_key(&self, agent_id: &str) -> String {
         self.session_key(agent_id).to_key_string()
     }
 
     /// Check if this is the global/default agent
+    #[must_use]
     pub fn is_global(&self) -> bool {
         self.id == "global" || self.id == "main"
     }
@@ -292,6 +299,7 @@ pub enum CacheState {
 
 impl CacheState {
     /// Check if cache is active and valid
+    #[must_use]
     pub fn is_active(&self) -> bool {
         match self {
             CacheState::None => false,
@@ -305,6 +313,7 @@ impl CacheState {
     }
 
     /// Get the cached token count
+    #[must_use]
     pub fn tokens_cached(&self) -> Option<u64> {
         match self {
             CacheState::None => None,
@@ -417,6 +426,7 @@ impl ActiveAgentEnv {
     ///
     /// Uses "global" as the agent ID, default profile configuration,
     /// and a memory filter scoped to "global".
+    #[must_use]
     pub fn default_global() -> Self {
         Self {
             agent_id: "global".to_string(),
@@ -574,12 +584,14 @@ impl AgentEnvStore {
     }
 
     /// Get a profile by name
+    #[must_use]
     pub fn get_profile(&self, name: &str) -> Option<ProfileConfig> {
         let cache = self.profiles.lock().unwrap_or_else(|e| e.into_inner());
         cache.get(name).cloned()
     }
 
     /// List all available profiles
+    #[must_use]
     pub fn list_profiles(&self) -> Vec<String> {
         let cache = self.profiles.lock().unwrap_or_else(|e| e.into_inner());
         cache.keys().cloned().collect()
@@ -601,6 +613,7 @@ impl SessionKey {
     }
 
     /// Check if this is an agent-env session key
+    #[must_use]
     pub fn is_agent_env(&self) -> bool {
         match self {
             Self::Main { main_key, .. } => main_key.starts_with("agent-env-"),
@@ -609,6 +622,7 @@ impl SessionKey {
     }
 
     /// Get the env ID if this is an agent-env session key
+    #[must_use]
     pub fn env_id(&self) -> Option<&str> {
         match self {
             Self::Main { main_key, .. } if main_key.starts_with("agent-env-") => {

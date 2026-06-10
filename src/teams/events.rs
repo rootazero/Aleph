@@ -40,6 +40,7 @@ pub enum TeamEventType {
     ArtifactSubmitted,
     SessionStarted,
     SessionConcluded,
+    SessionDeadlocked,
     DigestGenerated,
     ShutdownRequested,
     ShutdownResolved,
@@ -56,6 +57,7 @@ pub enum TeamEventType {
 }
 
 impl TeamEventType {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::MessageSent => "message_sent",
@@ -66,6 +68,7 @@ impl TeamEventType {
             Self::ArtifactSubmitted => "artifact_submitted",
             Self::SessionStarted => "session_started",
             Self::SessionConcluded => "session_concluded",
+            Self::SessionDeadlocked => "session_deadlocked",
             Self::DigestGenerated => "digest_generated",
             Self::ShutdownRequested => "shutdown_requested",
             Self::ShutdownResolved => "shutdown_resolved",
@@ -80,6 +83,7 @@ impl TeamEventType {
         }
     }
 
+    #[must_use]
     pub fn from_stored(s: &str) -> Option<Self> {
         match s {
             "message_sent" => Some(Self::MessageSent),
@@ -90,6 +94,7 @@ impl TeamEventType {
             "artifact_submitted" => Some(Self::ArtifactSubmitted),
             "session_started" => Some(Self::SessionStarted),
             "session_concluded" => Some(Self::SessionConcluded),
+            "session_deadlocked" => Some(Self::SessionDeadlocked),
             "digest_generated" => Some(Self::DigestGenerated),
             "shutdown_requested" => Some(Self::ShutdownRequested),
             "shutdown_resolved" => Some(Self::ShutdownResolved),

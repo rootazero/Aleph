@@ -42,6 +42,7 @@ pub struct HeartbeatL2Result {
 // ── Prompt Builder ───────────────────────────────────────────────────
 
 /// Build the L2 prompt with probe context and optional wake reason.
+#[must_use]
 pub fn build_heartbeat_prompt(
     task: &HeartbeatTask,
     probe_result: &ProbeResult,

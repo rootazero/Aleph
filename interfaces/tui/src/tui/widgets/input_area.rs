@@ -16,7 +16,7 @@ pub struct InputWidget<'a> {
     pub focused: bool,
 }
 
-impl<'a> InputWidget<'a> {
+impl InputWidget<'_> {
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let border_color = if self.focused {
             DEFAULT_THEME.border_focused

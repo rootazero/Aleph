@@ -51,6 +51,7 @@ impl Knowledge {
     }
 
     /// Create with specific confidence
+    #[must_use]
     pub fn with_confidence(mut self, confidence: f32) -> Self {
         self.confidence = confidence.clamp(0.0, 1.0);
         self
@@ -80,6 +81,7 @@ impl Entity {
     }
 
     /// Add metadata
+    #[must_use]
     pub fn with_metadata(mut self, metadata: serde_json::Value) -> Self {
         self.metadata = Some(metadata);
         self
@@ -123,6 +125,7 @@ impl UserIntent {
     }
 
     /// Add an entity
+    #[must_use]
     pub fn with_entity(mut self, entity: Entity) -> Self {
         self.key_entities.push(entity);
         self
@@ -270,6 +273,7 @@ pub struct ExecutionContext {
 
 impl ExecutionContext {
     /// Create a new execution context
+    #[must_use]
     pub fn new(intent: UserIntent, goal: Goal) -> Self {
         let now = chrono::Utc::now().timestamp();
         Self {
@@ -326,11 +330,13 @@ impl ExecutionContext {
     }
 
     /// Get knowledge by key
+    #[must_use]
     pub fn get_knowledge(&self, key: &str) -> Option<&Knowledge> {
         self.acquired_knowledge.iter().find(|k| k.key == key)
     }
 
     /// Generate context string based on verbosity level
+    #[must_use]
     pub fn to_prompt(&self, verbosity: ContextVerbosity) -> String {
         match verbosity {
             ContextVerbosity::Full => self.to_full_prompt(),
@@ -435,6 +441,7 @@ impl ExecutionContext {
     }
 
     /// Generate context summary for LLM prompt (minimal version)
+    #[must_use]
     pub fn to_minimal_prompt(&self) -> String {
         let knowledge_str = self
             .acquired_knowledge

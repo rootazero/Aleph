@@ -54,6 +54,7 @@ pub enum CleanupPolicy {
 
 impl CleanupPolicy {
     /// Returns the string representation of the cleanup policy
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Ephemeral => "ephemeral",
@@ -167,6 +168,7 @@ pub struct SessionsSpawnOutput {
 
 impl SessionsSpawnOutput {
     /// Create an Accepted response
+    #[must_use]
     pub fn accepted(
         child_session_key: String,
         run_id: String,
@@ -184,6 +186,7 @@ impl SessionsSpawnOutput {
     }
 
     /// Create a Forbidden response
+    #[must_use]
     pub fn forbidden(run_id: String, error: String) -> Self {
         Self {
             status: SpawnStatus::Forbidden,
@@ -196,6 +199,7 @@ impl SessionsSpawnOutput {
     }
 
     /// Create an Error response
+    #[must_use]
     pub fn error(run_id: String, error: String) -> Self {
         Self {
             status: SpawnStatus::Error,
@@ -252,6 +256,7 @@ impl SessionsSpawnTool {
         Returns immediately with the child session key and run ID for tracking.";
 
     /// Create a new SessionsSpawnTool without context (will fail on execute)
+    #[must_use]
     pub fn new() -> Self {
         Self {
             context: None,

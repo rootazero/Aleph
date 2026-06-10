@@ -29,6 +29,7 @@ pub struct EmbeddingManager {
 
 impl EmbeddingManager {
     /// Create a new EmbeddingManager from settings
+    #[must_use]
     pub fn new(settings: EmbeddingSettings) -> Self {
         Self {
             settings: Arc::new(RwLock::new(settings)),

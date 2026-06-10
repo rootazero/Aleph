@@ -66,6 +66,16 @@ impl MarketplaceManager {
             ));
         }
 
+        // Reject names that could traverse outside the cache directory —
+        // `name` may come from user input and is joined into a deletion path
+        // below, so a crafted value like `../../etc` must never reach
+        // `remove_dir_all`.
+        if name.is_empty() || name.contains('/') || name.contains('\\') || name.contains("..") {
+            return Err(format!(
+                "Invalid marketplace name '{name}': must not be empty or contain path separators or '..'."
+            ));
+        }
+
         self.marketplaces.remove(name);
 
         // Delete local cache directory if it exists.
@@ -92,6 +102,7 @@ impl MarketplaceManager {
     }
 
     /// Alias for [`all_marketplaces`] — convenient for serialising back to config.
+    #[must_use]
     pub fn list(&self) -> HashMap<String, MarketplaceConfig> {
         self.all_marketplaces()
     }
@@ -100,6 +111,7 @@ impl MarketplaceManager {
     ///
     /// Use this when saving back to the config file so the built-in is not
     /// persisted as a user entry.
+    #[must_use]
     pub fn get_config(&self) -> &HashMap<String, MarketplaceConfig> {
         &self.marketplaces
     }
@@ -165,6 +177,7 @@ impl MarketplaceManager {
     ///
     /// Returns every matching [`PluginSearchResult`] — the same plugin name may
     /// appear in multiple marketplaces.
+    #[must_use]
     pub fn search_plugin(&self, name: &str) -> Vec<PluginSearchResult> {
         let all = self.all_marketplaces();
         let mut results = Vec::new();

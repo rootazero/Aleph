@@ -36,6 +36,7 @@ const DEFAULT_JITTER_FACTOR: f64 = 0.25;
 /// just hit. Spreading retries across a window of `factor * base` decorrelates
 /// the storm without ever sleeping *less* than the deterministic backoff,
 /// so the "at least exponential" contract is preserved.
+#[must_use]
 pub fn apply_jitter(base: Duration, factor: f64) -> Duration {
     if factor <= 0.0 {
         return base;
@@ -108,6 +109,7 @@ fn is_overloaded_message(message: &str) -> bool {
 /// Extended retryable check that returns the reason if retryable
 ///
 /// Matches OpenCode's retryable() function signature.
+#[must_use]
 pub fn retryable_reason(error: &AlephError) -> Option<String> {
     let default_policy = RetryPolicy::default();
     if is_retryable_with_policy(error, &default_policy) {
@@ -124,6 +126,7 @@ pub fn retryable_reason(error: &AlephError) -> Option<String> {
 /// 1. Use retry_after_ms if provided (from Retry-After-Ms header)
 /// 2. Use retry_after_secs if provided (from Retry-After header, parsed)
 /// 3. Fall back to exponential backoff
+#[must_use]
 pub fn calculate_delay(
     attempt: u32,
     retry_after_ms: Option<u64>,
@@ -154,6 +157,7 @@ pub fn calculate_delay(
 /// - An HTTP date (e.g., "Wed, 21 Oct 2015 07:28:00 GMT")
 ///
 /// Returns the delay in milliseconds.
+#[must_use]
 pub fn parse_retry_after(value: &str) -> Option<u64> {
     // Try parsing as seconds first
     if let Ok(secs) = value.parse::<u64>() {

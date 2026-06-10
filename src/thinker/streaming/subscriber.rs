@@ -25,6 +25,7 @@ impl Default for StreamSubscriber {
 
 impl StreamSubscriber {
     /// Create a new stream subscriber
+    #[must_use]
     pub fn new() -> Self {
         Self {
             callbacks: Vec::new(),
@@ -33,6 +34,7 @@ impl StreamSubscriber {
     }
 
     /// Create with a channel sender
+    #[must_use]
     pub fn with_channel(sender: mpsc::Sender<StreamEvent>) -> Self {
         Self {
             callbacks: Vec::new(),
@@ -137,6 +139,7 @@ impl StreamSubscriber {
     }
 
     /// Check if any subscribers are registered
+    #[must_use]
     pub fn has_subscribers(&self) -> bool {
         !self.callbacks.is_empty() || self.sender.is_some()
     }
@@ -149,6 +152,7 @@ pub struct StreamSubscriberBuilder {
 
 impl StreamSubscriberBuilder {
     /// Create a new builder
+    #[must_use]
     pub fn new() -> Self {
         Self {
             subscriber: StreamSubscriber::new(),
@@ -216,6 +220,7 @@ impl StreamSubscriberBuilder {
     }
 
     /// Build the subscriber
+    #[must_use]
     pub fn build(self) -> StreamSubscriber {
         self.subscriber
     }

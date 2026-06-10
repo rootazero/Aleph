@@ -26,6 +26,7 @@ pub struct SimpleExecutionEngine {
 
 impl SimpleExecutionEngine {
     /// Create a new simple execution engine
+    #[must_use]
     pub fn new(config: ExecutionEngineConfig) -> Self {
         Self {
             config,
@@ -36,6 +37,7 @@ impl SimpleExecutionEngine {
 
     /// Attach the global event bus so session updates reach UI clients
     /// (mirrors `ExecutionEngine::publish_session_updated`).
+    #[must_use]
     pub fn with_event_bus(
         mut self,
         event_bus: Arc<crate::gateway::event_bus::GatewayEventBus>,

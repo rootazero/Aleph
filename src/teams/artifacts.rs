@@ -31,6 +31,7 @@ pub enum ArtifactType {
 
 impl ArtifactType {
     /// Canonical string representation for storage.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Report => "report",
@@ -41,6 +42,7 @@ impl ArtifactType {
     }
 
     /// Reconstruct from a stored string value.
+    #[must_use]
     pub fn from_stored(s: &str) -> Self {
         match s {
             "report" => Self::Report,
@@ -72,6 +74,7 @@ pub enum TaskStatus {
 }
 
 impl TaskStatus {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Pending => "pending",
@@ -82,6 +85,7 @@ impl TaskStatus {
         }
     }
 
+    #[must_use]
     pub fn from_stored(s: &str) -> Self {
         match s {
             "pending" => Self::Pending,
@@ -94,6 +98,7 @@ impl TaskStatus {
     }
 
     /// Whether self can transition to new_status.
+    #[must_use]
     pub fn can_transition_to(&self, new_status: &TaskStatus) -> bool {
         match (self, new_status) {
             (a, b) if a == b => true,

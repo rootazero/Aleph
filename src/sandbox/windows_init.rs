@@ -76,6 +76,7 @@ pub struct WindowsInitPolicy {
 
 /// Translate `NetworkPolicy` → AppContainer capability names. Lives at
 /// crate top so it's testable cross-platform.
+#[must_use]
 pub fn capability_names_for_network(
     net: &crate::sandbox::capabilities::NetworkPolicy,
 ) -> Vec<String> {

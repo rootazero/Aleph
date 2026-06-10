@@ -7,6 +7,7 @@ pub struct AccountResolver {
 }
 
 impl AccountResolver {
+    #[must_use]
     pub fn new(config: &DiscordChannelConfig) -> Self {
         let mut channel_to_account = HashMap::new();
         let mut guild_to_account = HashMap::new();
@@ -26,10 +27,12 @@ impl AccountResolver {
         }
     }
 
+    #[must_use]
     pub fn resolve_account(&self, channel_id: u64) -> Option<String> {
         self.channel_to_account.get(&channel_id).cloned()
     }
 
+    #[must_use]
     pub fn resolve_account_by_guild(&self, guild_id: u64) -> Option<String> {
         self.guild_to_account.get(&guild_id).cloned()
     }

@@ -70,45 +70,53 @@ impl ExecutionResult {
     }
 
     /// Builder: add tool calls
+    #[must_use]
     pub fn with_tool_calls(mut self, calls: Vec<ToolCallRecord>) -> Self {
         self.tool_calls = calls;
         self
     }
 
     /// Builder: add task results
+    #[must_use]
     pub fn with_task_results(mut self, results: Vec<TaskExecutionResult>) -> Self {
         self.task_results = Some(results);
         self
     }
 
     /// Builder: set execution time from Duration
+    #[must_use]
     pub fn with_execution_time(mut self, time: Duration) -> Self {
         self.execution_time_ms = u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
         self
     }
 
     /// Builder: set execution time in milliseconds
+    #[must_use]
     pub fn with_execution_time_ms(mut self, ms: u64) -> Self {
         self.execution_time_ms = ms;
         self
     }
 
     /// Get the number of successful tool calls
+    #[must_use]
     pub fn successful_tool_calls(&self) -> usize {
         self.tool_calls.iter().filter(|c| c.success).count()
     }
 
     /// Get the number of failed tool calls
+    #[must_use]
     pub fn failed_tool_calls(&self) -> usize {
         self.tool_calls.iter().filter(|c| !c.success).count()
     }
 
     /// Check if any tool calls failed
+    #[must_use]
     pub fn has_tool_failures(&self) -> bool {
         self.tool_calls.iter().any(|c| !c.success)
     }
 
     /// Get all tool names that were called
+    #[must_use]
     pub fn tool_names(&self) -> Vec<&str> {
         self.tool_calls
             .iter()
@@ -179,12 +187,14 @@ impl ToolCallRecord {
     }
 
     /// Builder: set execution time from Duration
+    #[must_use]
     pub fn with_execution_time(mut self, time: Duration) -> Self {
         self.execution_time_ms = u64::try_from(time.as_millis()).unwrap_or(u64::MAX);
         self
     }
 
     /// Builder: set execution time in milliseconds
+    #[must_use]
     pub fn with_execution_time_ms(mut self, ms: u64) -> Self {
         self.execution_time_ms = ms;
         self
@@ -332,6 +342,7 @@ impl ExecutionContext {
     /// Create a new execution context with default values
     ///
     /// Note: stream defaults to true for optimal user experience
+    #[must_use]
     pub fn new() -> Self {
         Self {
             app_context: None,
@@ -360,17 +371,20 @@ impl ExecutionContext {
     }
 
     /// Builder: set streaming mode
+    #[must_use]
     pub fn with_stream(mut self, stream: bool) -> Self {
         self.stream = stream;
         self
     }
 
     /// Check if this context has any application information
+    #[must_use]
     pub fn has_app_info(&self) -> bool {
         self.app_context.is_some() || self.window_title.is_some()
     }
 
     /// Get a combined app description
+    #[must_use]
     pub fn app_description(&self) -> Option<String> {
         match (&self.app_context, &self.window_title) {
             (Some(app), Some(title)) => Some(format!("{} - {}", app, title)),

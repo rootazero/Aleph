@@ -4,7 +4,7 @@
 //! `aleph calls cancel <call_id>` → `tools.cancel_call`
 //!
 //! Production target: a tool is stuck or running away (long bash, runaway
-//! web_fetch) and the user wants to abort just THAT call without losing the
+//! `web_fetch`) and the user wants to abort just THAT call without losing the
 //! rest of the session. Pair with `aleph calls list` to recover the
 //! `tool_call_id` if you don't already have it.
 
@@ -59,8 +59,7 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
     println!();
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_millis() as u64);
     for call in &response.calls {
         let elapsed_ms = now_ms.saturating_sub(call.started_at_ms);
         println!(

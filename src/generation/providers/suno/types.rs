@@ -60,11 +60,13 @@ pub struct SunoClip {
 impl SunoClip {
     /// True if the wrapper has reported terminal success and the audio URL
     /// is present.
+    #[must_use]
     pub fn is_complete(&self) -> bool {
         matches!(self.status.as_deref(), Some("complete"))
             && self.audio_url.as_deref().is_some_and(|u| !u.is_empty())
     }
 
+    #[must_use]
     pub fn is_error(&self) -> bool {
         matches!(self.status.as_deref(), Some("error"))
     }
@@ -83,6 +85,7 @@ pub struct SunoError {
 }
 
 impl SunoError {
+    #[must_use]
     pub fn best_message(&self) -> Option<String> {
         self.message
             .clone()

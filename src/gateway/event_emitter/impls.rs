@@ -33,6 +33,7 @@ pub struct GatewayEventEmitter {
 }
 
 impl GatewayEventEmitter {
+    #[must_use]
     pub fn new(event_bus: Arc<GatewayEventBus>) -> Self {
         Self {
             event_bus,
@@ -43,6 +44,7 @@ impl GatewayEventEmitter {
     }
 
     /// Create with a specific output mode
+    #[must_use]
     pub fn with_output_mode(event_bus: Arc<GatewayEventBus>, output_mode: OutputMode) -> Self {
         Self {
             event_bus,
@@ -189,6 +191,7 @@ pub struct NoOpEventEmitter {
 }
 
 impl NoOpEventEmitter {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             seq_counter: AtomicU64::new(0),
@@ -223,6 +226,7 @@ pub struct CollectingEventEmitter {
 }
 
 impl CollectingEventEmitter {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             events: tokio::sync::Mutex::new(Vec::new()),

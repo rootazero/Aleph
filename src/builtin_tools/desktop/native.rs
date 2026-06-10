@@ -795,7 +795,9 @@ impl super::DesktopTool {
                         match screen.launch_app(bundle_id).await {
                             Ok(()) => Ok(Some(DesktopOutput {
                                 success: true,
-                                data: Some(serde_json::json!({"restarted": true, "bundle_id": bundle_id})),
+                                data: Some(
+                                    serde_json::json!({"restarted": true, "bundle_id": bundle_id}),
+                                ),
                                 message: None,
                             })),
                             Err(e) => Ok(Some(DesktopOutput {

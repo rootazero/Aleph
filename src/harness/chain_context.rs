@@ -40,6 +40,7 @@ pub struct ChainContext {
 
 impl ChainContext {
     /// Create a root context with a generated chain_id, depth=0, max_depth=5.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             chain_id: generate_chain_id(),
@@ -49,6 +50,7 @@ impl ChainContext {
     }
 
     /// Create a root context with a custom max_depth.
+    #[must_use]
     pub fn with_max_depth(max_depth: u32) -> Self {
         Self {
             chain_id: generate_chain_id(),
@@ -61,6 +63,7 @@ impl ChainContext {
     ///
     /// Returns `None` if the current depth has reached max_depth,
     /// preventing infinite recursion.
+    #[must_use]
     pub fn child(&self) -> Option<ChainContext> {
         if self.depth >= self.max_depth {
             return None;
@@ -73,6 +76,7 @@ impl ChainContext {
     }
 
     /// Returns true if this is a root-level context (depth == 0).
+    #[must_use]
     pub fn is_root(&self) -> bool {
         self.depth == 0
     }

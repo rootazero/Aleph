@@ -131,6 +131,7 @@ impl MatrixConfig {
     }
 
     /// Return the default state store path.
+    #[must_use]
     pub fn default_state_store_path() -> String {
         dirs::data_dir()
             .map(|p| p.join("aleph").join("state").join("matrix_sync.db"))
@@ -139,6 +140,7 @@ impl MatrixConfig {
     }
 
     /// Return the default dedupe store path.
+    #[must_use]
     pub fn default_dedupe_store_path() -> String {
         dirs::data_dir()
             .map(|p| p.join("aleph").join("state").join("matrix_dedupe.db"))
@@ -161,11 +163,13 @@ impl MatrixConfig {
     }
 
     /// Maximum inbound media download size in bytes (`media_max_mb` × 1 MiB).
+    #[must_use]
     pub fn media_max_bytes(&self) -> u64 {
         self.media_max_mb.saturating_mul(1024 * 1024)
     }
 
     /// Check if a room ID is allowed
+    #[must_use]
     pub fn is_room_allowed(&self, room_id: &str) -> bool {
         if self.allowed_rooms.is_empty() {
             true
@@ -175,6 +179,7 @@ impl MatrixConfig {
     }
 
     /// Check if a user ID is allowed
+    #[must_use]
     pub fn is_user_allowed(&self, user_id: &str) -> bool {
         if self.allowed_users.is_empty() {
             true
@@ -187,6 +192,7 @@ impl MatrixConfig {
     ///
     /// Returns the per-room [`MatrixRoomPolicy::require_mention`] override when
     /// present, otherwise the global [`mention_gating`](Self::mention_gating).
+    #[must_use]
     pub fn effective_mention_gating(&self, room_id: &str) -> bool {
         if let Some(policy) = self.rooms.get(room_id) {
             if let Some(require_mention) = policy.require_mention {
@@ -197,6 +203,7 @@ impl MatrixConfig {
     }
 
     /// Check if a user is allowed in a specific room.
+    #[must_use]
     pub fn is_user_allowed_in_room(&self, user_id: &str, room_id: &str) -> bool {
         let base_allowed = self.is_user_allowed(user_id);
         if !base_allowed {
@@ -218,6 +225,7 @@ impl MatrixConfig {
     /// so a per-room [`MatrixRoomPolicy::require_mention`] override takes
     /// precedence over the global flag. When gating is off, every message
     /// passes; when on, only messages that @mention the bot pass.
+    #[must_use]
     pub fn check_mention(&self, body: &str, user_id: &str, room_id: &str) -> bool {
         if !self.effective_mention_gating(room_id) {
             return true;

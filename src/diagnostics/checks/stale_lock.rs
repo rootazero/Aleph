@@ -25,6 +25,7 @@ pub struct StaleLockCheck {
 }
 
 impl StaleLockCheck {
+    #[must_use]
     pub fn new(data_dir: PathBuf) -> Self {
         Self { data_dir }
     }

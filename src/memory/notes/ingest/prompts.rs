@@ -136,6 +136,7 @@ Rules:
 /// Build the full system prompt for a batch whose rows share the given
 /// raw source. Appends the Spec-1 source-aware block (RESCUE / LESSON /
 /// DIGEST / RETRO) when applicable.
+#[must_use]
 pub fn build_compound_system_prompt(source: &RawMemorySource) -> String {
     let mut out = String::from(PROMPT_COMPOUND_PLAN);
     if let Some(suffix) = prompt_for(source) {

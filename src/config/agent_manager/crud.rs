@@ -491,9 +491,14 @@ impl AgentManager {
             || filename.contains('/')
             || filename.contains('\\')
             || filename.contains("..")
+            || filename.contains(':')
         {
+            // ':' is rejected because on Windows a drive-qualified name like
+            // "C:evil" has a prefix component, so `agent_dir.join(filename)`
+            // would REPLACE the base path entirely (path traversal); it also
+            // blocks NTFS alternate data stream names.
             return Err(AlephError::invalid_config(format!(
-                "Invalid filename '{}': must not contain '/', '\\', or '..'",
+                "Invalid filename '{}': must not contain '/', '\\', ':', or '..'",
                 filename
             )));
         }

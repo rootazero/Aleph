@@ -86,6 +86,7 @@ pub fn aleph_plugins_dir() -> DiscoveryResult<PathBuf> {
 ///
 /// Traverses upward until finding a .git directory or reaching filesystem root.
 /// Guarded by a max depth to prevent unbounded traversal in pathological cases.
+#[must_use]
 pub fn find_git_root(start: &Path) -> Option<PathBuf> {
     const MAX_DEPTH: usize = 100;
     let mut current = start.to_path_buf();

@@ -618,6 +618,7 @@ impl FailoverProvider {
     /// `approval` gate is never consulted. In `AlwaysLocal` with
     /// `allow_cloud_escalation`, the gate authorises borrowing a cloud
     /// endpoint as a terminal fallback; absent a gate, escalation fails closed.
+    #[must_use]
     pub fn with_route(
         mut self,
         mode: RouteMode,
@@ -647,6 +648,7 @@ impl FailoverProvider {
     /// cloud pin through the borrow-cloud approval instead of silently allowing
     /// it. The global default chain omits this — its primary stays `Unknown`
     /// (the operator's configured default is always allowed).
+    #[must_use]
     pub fn with_primary_tier(mut self, tier: EndpointTier) -> Self {
         self.primary_tier = tier;
         self
@@ -664,6 +666,7 @@ impl FailoverProvider {
     /// Attach the shared per-model rate-limit cooldown registry. Wired only in
     /// production (`build_failover_chain`) with one registry cloned across all
     /// chains; tests omit it and keep no cooldown (byte-identical to before).
+    #[must_use]
     pub fn with_model_cooldown(mut self, cooldown: ModelCooldown) -> Self {
         self.model_cooldown = Some(cooldown);
         self
@@ -672,6 +675,7 @@ impl FailoverProvider {
     /// Attach the shared per-provider rate-limit cooldown gate. Wired only in
     /// production (`build_failover_chain`) with one registry cloned across all
     /// chains; tests omit it and keep no pacing (byte-identical to before).
+    #[must_use]
     pub fn with_provider_cooldown(mut self, cooldown: ProviderCooldown) -> Self {
         self.provider_cooldown = Some(cooldown);
         self
@@ -1246,9 +1250,9 @@ mod tests {
     use super::*;
     use crate::providers::message::UnifiedMessage;
     use crate::providers::StaticDefault;
+    use crate::sync_primitives::Mutex;
     use std::collections::VecDeque;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use crate::sync_primitives::Mutex;
 
     /// Test provider: each `process()` call consumes the next scripted
     /// outcome. `Ok(())` → a text response tagged with the provider name;

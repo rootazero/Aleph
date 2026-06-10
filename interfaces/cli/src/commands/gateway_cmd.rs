@@ -17,7 +17,7 @@ pub async fn call(
     let params: Option<Value> = match params_json {
         Some(s) => {
             let v: Value = serde_json::from_str(s)
-                .map_err(|e| CliError::Other(format!("Invalid JSON params: {}", e)))?;
+                .map_err(|e| CliError::Other(format!("Invalid JSON params: {e}")))?;
             Some(v)
         }
         None => None,

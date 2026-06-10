@@ -805,6 +805,7 @@ pub const BUILTIN_TOOL_DEFINITIONS: &[BuiltinToolDefinition] = &[
 /// # Returns
 /// * `Some(tool)` - Boxed tool instance if the tool exists
 /// * `None` - If the tool name is unknown or requires missing config
+#[must_use]
 pub fn create_tool_boxed(
     name: &str,
     config: Option<&BuiltinToolConfig>,
@@ -1062,6 +1063,7 @@ pub fn create_tool_boxed(
 /// Get list of all builtin tool names
 ///
 /// This is used for initialization and display purposes.
+#[must_use]
 pub fn get_builtin_tool_names() -> Vec<String> {
     BUILTIN_TOOL_DEFINITIONS
         .iter()

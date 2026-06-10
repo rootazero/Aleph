@@ -40,6 +40,7 @@ const LOGIN_TOOL: &str = "mcp_login";
 /// in sync with every server's discovered tools. Returns the `JoinHandle` so
 /// callers may abort it on shutdown; dropping the handle merely detaches the
 /// task, which exits on its own once the manager's event channel closes.
+#[must_use]
 pub fn spawn_tool_bridge(
     handle: McpManagerHandle,
     registry: Arc<ToolHandlerRegistry>,
@@ -145,7 +146,7 @@ async fn sync_server(
         }
     };
     let tools = client.list_tools().await;
-    unregister_mcp_tools(registry, tool_catalog, server_id);
+    let _ = unregister_mcp_tools(registry, tool_catalog, server_id);
     let registered = register_mcp_tools(registry, tool_catalog, client, server_id, &tools);
     tracing::info!(
         server_id,
@@ -235,7 +236,7 @@ fn set_builtin(
             }
         }
     } else {
-        registry.unregister(name);
+        let _ = registry.unregister(name);
         tracing::info!(tool = name, "MCP tool bridge: capability builtin removed");
         false
     }

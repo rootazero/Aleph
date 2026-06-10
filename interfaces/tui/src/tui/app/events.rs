@@ -13,14 +13,14 @@ use super::super::slash::ToolProgressMode;
 use super::{Action, AppState, ChatMessage};
 
 impl AppState {
-    /// Request application quit. Sets should_quit flag.
-    pub fn request_quit(&mut self) {
+    /// Request application quit. Sets `should_quit` flag.
+    pub const fn request_quit(&mut self) {
         self.should_quit = true;
     }
 
     // -- Gateway event handling -----------------------------------------
 
-    /// Handle a StreamEvent from the gateway. Returns an Action if the event
+    /// Handle a `StreamEvent` from the gateway. Returns an Action if the event
     /// should trigger further side effects (e.g. scrolling to bottom).
     pub fn handle_gateway_event(&mut self, event: StreamEvent) -> Action {
         match event {
@@ -137,7 +137,7 @@ impl AppState {
                 self.current_run_trace_summary_applied = false;
                 self.mark_current_assistant_complete();
 
-                self.add_system_message(format!("Error: {}", error));
+                self.add_system_message(format!("Error: {error}"));
                 Action::ScrollToBottomIfAutoScroll
             }
 
@@ -171,6 +171,22 @@ impl AppState {
                     suggested_action.description()
                 );
                 self.add_system_message(msg);
+                Action::ScrollToBottomIfAutoScroll
+            }
+
+            StreamEvent::RunRetrying {
+                provider,
+                attempt,
+                max_attempts,
+                reason,
+                ..
+            } => {
+                // Surface transient provider failures instead of leaving the
+                // thinking indicator spinning silently through the retry
+                // ladder (mirrors the Panel's stream.run_retrying notice).
+                self.add_system_message(format!(
+                    "Provider {provider} unreachable, retrying ({attempt}/{max_attempts}): {reason}"
+                ));
                 Action::ScrollToBottomIfAutoScroll
             }
         }

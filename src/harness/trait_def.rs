@@ -152,6 +152,7 @@ impl HarnessError {
     /// consciously classified. Do not "fix" a `non_exhaustive_patterns` error
     /// by adding `_ => ErrorClass::Unexpected` — pick the variant's true class
     /// instead.
+    #[must_use]
     pub fn class(&self) -> crate::error::ErrorClass {
         use crate::error::ErrorClass;
         match self {

@@ -79,6 +79,7 @@ impl ChannelId {
         Self(id.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -99,6 +100,7 @@ impl ConversationId {
         Self(id.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -113,6 +115,7 @@ impl UserId {
         Self(id.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -127,6 +130,7 @@ impl MessageId {
         Self(id.into())
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -153,11 +157,13 @@ pub struct InlineKeyboard {
 
 impl InlineKeyboard {
     /// Create empty keyboard
+    #[must_use]
     pub fn new() -> Self {
         Self { rows: Vec::new() }
     }
 
     /// Add a row of buttons
+    #[must_use]
     pub fn row(mut self, buttons: Vec<InlineButton>) -> Self {
         self.rows.push(buttons);
         self
@@ -282,6 +288,7 @@ pub struct InboundMessage {
 
 impl InboundMessage {
     /// Returns the `media_group_id` if present in metadata.
+    #[must_use]
     pub fn meta_media_group_id(&self) -> Option<&str> {
         self.metadata.iter().find_map(|m| match m {
             MessageMeta::MediaGroupId(id) => Some(id.as_str()),
@@ -290,6 +297,7 @@ impl InboundMessage {
     }
 
     /// Returns `true` if this message was forwarded from another conversation.
+    #[must_use]
     pub fn is_forwarded(&self) -> bool {
         self.metadata
             .iter()
@@ -297,6 +305,7 @@ impl InboundMessage {
     }
 
     /// Returns the quoted reply content if present in metadata.
+    #[must_use]
     pub fn meta_quote(&self) -> Option<(&Option<String>, &str)> {
         self.metadata.iter().find_map(|m| match m {
             MessageMeta::Quote { sender, body } => Some((sender, body.as_str())),
@@ -308,6 +317,7 @@ impl InboundMessage {
     ///
     /// Consumed by the pair-loop guard to gate bot↔bot reply storm protection.
     /// Adapters opt in by pushing [`MessageMeta::BotAuthored`].
+    #[must_use]
     pub fn is_bot_authored(&self) -> bool {
         self.metadata
             .iter()
@@ -354,6 +364,7 @@ impl OutboundMessage {
     }
 
     /// Add an attachment
+    #[must_use]
     pub fn with_attachment(mut self, attachment: Attachment) -> Self {
         self.attachments.push(attachment);
         self
@@ -463,6 +474,7 @@ pub struct ChannelHealth {
 
 impl ChannelHealth {
     /// Create a new health tracker with the current timestamp
+    #[must_use]
     pub fn new() -> Self {
         Self {
             last_event_at: Utc::now(),
@@ -490,6 +502,7 @@ impl ChannelHealth {
     }
 
     /// Check if the channel is stale (no events within threshold)
+    #[must_use]
     pub fn is_stale(&self, stale_threshold: chrono::Duration) -> bool {
         Utc::now() - self.last_event_at > stale_threshold
     }
@@ -565,6 +578,7 @@ pub struct ChannelState {
 
 impl ChannelState {
     /// Create with initial Disconnected status and a broadcast channel.
+    #[must_use]
     pub fn new(buffer_size: usize) -> Self {
         let (tx, _) = broadcast::channel(buffer_size);
         Self {
@@ -587,11 +601,13 @@ impl ChannelState {
         self.health.write().await.record_failure(reason);
     }
 
+    #[must_use]
     pub fn health_handle(&self) -> Arc<tokio::sync::RwLock<ChannelHealth>> {
         self.health.clone()
     }
 
     /// Read current status (non-blocking via try_read, fallback Connecting).
+    #[must_use]
     pub fn status(&self) -> ChannelStatus {
         self.status
             .try_read()
@@ -604,26 +620,32 @@ impl ChannelState {
         *self.status.write().await = status;
     }
 
+    #[must_use]
     pub fn inbound_subscribe(&self) -> broadcast::Receiver<InboundMessage> {
         self.inbound_broadcast.subscribe()
     }
 
+    #[must_use]
     pub fn send_inbound(&self, message: InboundMessage) -> bool {
         self.inbound_broadcast.send(message).is_ok()
     }
 
+    #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
     }
 
+    #[must_use]
     pub fn status_handle(&self) -> Arc<tokio::sync::RwLock<ChannelStatus>> {
         self.status.clone()
     }
 
+    #[must_use]
     pub fn sender(&self) -> InboundMessageSender {
         InboundMessageSender::from(self.inbound_broadcast.clone())
     }
 
+    #[must_use]
     pub fn take_receiver(&self) -> Option<broadcast::Receiver<InboundMessage>> {
         Some(self.inbound_broadcast.subscribe())
     }
@@ -821,6 +843,7 @@ pub trait NativeStreamHandler: Send + Sync {
 /// channel type is added without an entry, it falls through to
 /// `Background`, which is the safest default (subagent-style execution
 /// without user-facing chrome).
+#[must_use]
 pub fn paradigm_for_channel_type(
     channel_type: &str,
 ) -> crate::thinker::interaction::InteractionParadigm {

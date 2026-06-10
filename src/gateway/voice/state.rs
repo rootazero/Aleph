@@ -15,6 +15,7 @@ pub struct VoiceState {
 impl VoiceState {
     /// Returns true when voice mode is explicitly enabled.
     /// Provider resolution happens at TTS generation time (auto-detect fallback).
+    #[must_use]
     pub fn is_active(&self) -> bool {
         self.enabled
     }

@@ -28,6 +28,7 @@ pub fn sync_body_to_frontmatter(note: &mut KnowledgeNote, full_markdown: &str) {
 /// Append `## Superseded by [[X]]` sections to the markdown for any
 /// `superseded_by` entry not already present. Idempotent: re-running the
 /// function on already-synced markdown does not duplicate sections.
+#[must_use]
 pub fn ensure_supersession_section(markdown: &str, note: &KnowledgeNote) -> String {
     let mut out = markdown.to_string();
     for target in &note.superseded_by {

@@ -23,7 +23,7 @@ pub struct BridgeAccessibility {
 
 impl BridgeAccessibility {
     /// Build a new `BridgeAccessibility` that issues RPC calls via `bridge`.
-    pub fn new(bridge: Arc<SwiftBridge>) -> Self {
+    pub const fn new(bridge: Arc<SwiftBridge>) -> Self {
         Self { bridge }
     }
 }

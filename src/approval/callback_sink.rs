@@ -15,6 +15,7 @@ pub struct ManagerCallbackSink {
 }
 
 impl ManagerCallbackSink {
+    #[must_use]
     pub fn new(manager: Arc<ExecApprovalManager>) -> Self {
         Self { manager }
     }

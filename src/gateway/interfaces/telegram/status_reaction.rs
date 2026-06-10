@@ -25,6 +25,7 @@ pub struct StatusReactionController {
 }
 
 impl StatusReactionController {
+    #[must_use]
     pub fn new(bot: Bot, chat_id: i64, message_id: Option<i32>) -> Self {
         Self {
             bot,

@@ -42,7 +42,9 @@ pub struct ListModelsArgs {
     /// with a configured credential. Default false → only models you can
     /// actually switch to right now.
     #[serde(default)]
-    #[schemars(description = "Include unconfigured presets too (default: only credentialed providers).")]
+    #[schemars(
+        description = "Include unconfigured presets too (default: only credentialed providers)."
+    )]
     pub all: bool,
 }
 
@@ -103,6 +105,7 @@ pub struct ListModelsTool {
 }
 
 impl ListModelsTool {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -135,7 +138,13 @@ impl ListModelsTool {
 
 /// Project a `(provider, model)` pair into a fully-enriched [`ModelEntry`].
 /// Pure given the static capability/cost tables — no I/O.
-fn enrich(provider: &str, model: &str, configured: bool, is_default: bool, display_name: Option<String>) -> ModelEntry {
+fn enrich(
+    provider: &str,
+    model: &str,
+    configured: bool,
+    is_default: bool,
+    display_name: Option<String>,
+) -> ModelEntry {
     let caps = crate::providers::capabilities_for(model);
     let rate = crate::pricing::rate_card(provider, model);
     ModelEntry {
@@ -184,15 +193,15 @@ impl crate::tools::AlephTool for ListModelsTool {
 
         // Built-in chat presets, joined with per-provider credential state.
         let entries = crate::providers::catalog::presets_for_modality(Modality::Chat);
-        let preset_ids: std::collections::HashSet<&str> =
-            entries.iter().map(|e| e.name).collect();
+        let preset_ids: std::collections::HashSet<&str> = entries.iter().map(|e| e.name).collect();
 
         for entry in &entries {
             let Some(preset) = crate::providers::presets::get_preset(entry.name) else {
                 continue;
             };
             let cfg = guard.providers.get(entry.name);
-            let configured = self.provider_configured(entry.name, cfg.and_then(|c| c.api_key.as_ref()));
+            let configured =
+                self.provider_configured(entry.name, cfg.and_then(|c| c.api_key.as_ref()));
             if !args.all && !configured {
                 continue;
             }
@@ -213,7 +222,13 @@ impl crate::tools::AlephTool for ListModelsTool {
                 }
                 let is_default = default_provider.as_deref() == Some(entry.name)
                     && model.eq_ignore_ascii_case(preset.default_model);
-                models.push(enrich(entry.name, &model, configured, is_default, display_name.clone()));
+                models.push(enrich(
+                    entry.name,
+                    &model,
+                    configured,
+                    is_default,
+                    display_name.clone(),
+                ));
             }
         }
 
@@ -277,7 +292,12 @@ mod tests {
     use crate::tools::AlephTool;
     use serde_json::json;
 
-    fn config_with(provider: &str, api_key: Option<&str>, models: &[&str], default: bool) -> Arc<RwLock<Config>> {
+    fn config_with(
+        provider: &str,
+        api_key: Option<&str>,
+        models: &[&str],
+        default: bool,
+    ) -> Arc<RwLock<Config>> {
         let mut cfg = Config::default();
         let pc: crate::config::types::provider::ProviderConfig = serde_json::from_value(json!({
             "api_key": api_key,
@@ -298,7 +318,12 @@ mod tests {
         // Credential it; every other preset (no api_key) is excluded.
         // (ProviderConfig.models rejects an empty list; the default model is
         // de-duplicated against it case-insensitively.)
-        let cfg = config_with("claude", Some("sk-test"), &["claude-sonnet-4-5-20250514"], true);
+        let cfg = config_with(
+            "claude",
+            Some("sk-test"),
+            &["claude-sonnet-4-5-20250514"],
+            true,
+        );
         let tool = ListModelsTool::new().with_config(cfg);
 
         let out = tool.call(ListModelsArgs { all: false }).await.unwrap();
@@ -309,7 +334,11 @@ mod tests {
             "only the credentialed provider is listed by default"
         );
         // The anthropic default model carries capability + cost metadata.
-        let def = out.models.iter().find(|m| m.is_default).expect("a default model");
+        let def = out
+            .models
+            .iter()
+            .find(|m| m.is_default)
+            .expect("a default model");
         assert!(def.configured);
         assert!(def.context_window.is_some(), "capability metadata surfaced");
         assert!(def.input_per_mtok.is_some(), "cost metadata surfaced");
@@ -317,7 +346,12 @@ mod tests {
 
     #[tokio::test]
     async fn all_flag_includes_unconfigured_presets() {
-        let cfg = config_with("claude", Some("sk-test"), &["claude-sonnet-4-5-20250514"], true);
+        let cfg = config_with(
+            "claude",
+            Some("sk-test"),
+            &["claude-sonnet-4-5-20250514"],
+            true,
+        );
         let tool = ListModelsTool::new().with_config(cfg);
 
         let configured_only = tool.call(ListModelsArgs { all: false }).await.unwrap();

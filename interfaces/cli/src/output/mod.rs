@@ -12,6 +12,7 @@ pub mod exec_echo;
 pub mod icon;
 pub mod markdown;
 pub mod spinner;
+pub mod stream_md;
 pub mod theme;
 pub mod width;
 
@@ -90,14 +91,14 @@ pub fn print_table(headers: &[&str], rows: &[Vec<String>], json_mode: bool, raw:
 
     // Print separator row.
     let sep = box_draw::separator(&widths, 2);
-    if !sep.is_empty() {
-        println!("{}", paint(Style::Muted, &sep));
-    } else {
+    if sep.is_empty() {
         // Fallback when widths is empty (shouldn't happen — defensive).
         let sep: String = (0..widths.iter().sum::<usize>())
             .map(|_| horizontal())
             .collect();
         println!("{sep}");
+    } else {
+        println!("{}", paint(Style::Muted, &sep));
     }
 
     // Print data rows.

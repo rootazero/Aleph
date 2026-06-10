@@ -33,6 +33,7 @@ pub enum EmbeddingLocality {
 
 impl EmbeddingLocality {
     /// Classify a preset by storage locality.
+    #[must_use]
     pub fn of(preset: &EmbeddingPreset) -> Self {
         match preset {
             EmbeddingPreset::Ollama => Self::Local,
@@ -58,6 +59,7 @@ pub enum ResolutionReason {
 
 impl ResolutionReason {
     /// Stable machine-readable tag (for structured logs / model-perceivable hints).
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::ExactMatch => "exact_match",
@@ -99,6 +101,7 @@ fn is_auto(id: &str) -> bool {
 ///    (`AutoLocalFirst`), else the first enabled *remote* provider
 ///    (`AutoRemoteFallback`).
 /// 3. Otherwise `Unresolved`.
+#[must_use]
 pub fn resolve(settings: &EmbeddingSettings) -> EmbeddingDecision<'_> {
     let requested = settings.active_provider_id.clone();
 

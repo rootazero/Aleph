@@ -50,13 +50,9 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
                         d.device_name.clone(),
                         d.device_type.clone().unwrap_or_else(|| "-".into()),
                         d.approved_at
-                            .clone()
-                            .map(short_ts)
-                            .unwrap_or_else(|| "-".into()),
+                            .clone().map_or_else(|| "-".into(), short_ts),
                         d.last_seen_at
-                            .clone()
-                            .map(short_ts)
-                            .unwrap_or_else(|| "-".into()),
+                            .clone().map_or_else(|| "-".into(), short_ts),
                     ]
                 })
                 .collect();

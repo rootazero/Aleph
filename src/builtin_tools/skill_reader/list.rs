@@ -76,6 +76,7 @@ pub struct ListSkillsTool {
 
 impl ListSkillsTool {
     /// Create a new ListSkillsTool with a single directory (backwards compatible)
+    #[must_use]
     pub fn new(skills_dir: PathBuf) -> Self {
         Self {
             skills_dirs: vec![skills_dir],
@@ -83,11 +84,13 @@ impl ListSkillsTool {
     }
 
     /// Create a ListSkillsTool with multiple directories
+    #[must_use]
     pub fn with_directories(skills_dirs: Vec<PathBuf>) -> Self {
         Self { skills_dirs }
     }
 
     /// Create a ListSkillsTool with auto-discovery
+    #[must_use]
     pub fn with_auto_discover(project_dir: Option<&Path>) -> Self {
         let skills_dirs =
             crate::utils::paths::get_all_skills_dirs(project_dir).unwrap_or_else(|_| vec![]);

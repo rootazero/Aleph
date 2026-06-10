@@ -126,6 +126,7 @@ impl ConnectionState {
     /// Whether this connection authenticated as an operator (full control-plane
     /// access). Guest / node connections return `false` and are barred from
     /// operator-only RPC methods by the dispatch-time authorization gate.
+    #[must_use]
     pub fn is_operator(&self) -> bool {
         self.role.as_deref() == Some("operator")
     }
@@ -493,11 +494,13 @@ impl GatewayServer {
     }
 
     /// Get a reference to the subscription manager
+    #[must_use]
     pub fn subscription_manager(&self) -> &Arc<SubscriptionManager> {
         &self.subscription_manager
     }
 
     /// Get a reference to the handler registry for registering custom handlers
+    #[must_use]
     pub fn handlers(&self) -> &Arc<HandlerRegistry> {
         &self.handlers
     }
@@ -511,6 +514,7 @@ impl GatewayServer {
     }
 
     /// Get a reference to the event bus for publishing events
+    #[must_use]
     pub fn event_bus(&self) -> &Arc<GatewayEventBus> {
         &self.event_bus
     }

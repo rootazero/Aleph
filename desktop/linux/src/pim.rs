@@ -1,4 +1,4 @@
-use aleph_desktop::pim_types::*;
+use aleph_desktop::pim_types::{MailFolder, MailMessage, MailMessageDetail, NoteInfo, NoteContent, CalendarEvent, NewCalendarEvent, CalendarInfo, Reminder, NewReminder, ReminderList, Contact, ContactDetail, ContactGroup};
 use aleph_desktop::traits::PimCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
@@ -9,7 +9,8 @@ use std::path::{Path, PathBuf};
 pub struct LinuxPim;
 
 impl LinuxPim {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 
@@ -39,7 +40,7 @@ impl LinuxPim {
         let Ok(entries) = std::fs::read_dir(current) else {
             return;
         };
-        for entry in entries.filter_map(|e| e.ok()) {
+        for entry in entries.filter_map(std::result::Result::ok) {
             let path = entry.path();
             if path.is_dir() {
                 Self::walk_mail_dir(root, &path, out);

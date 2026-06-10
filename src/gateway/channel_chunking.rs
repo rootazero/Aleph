@@ -41,6 +41,7 @@ impl Default for WhatsAppChunker {
 }
 
 impl WhatsAppChunker {
+    #[must_use]
     pub fn new(mode: ChunkMode, max_size: usize) -> Self {
         Self { mode, max_size }
     }
@@ -68,6 +69,7 @@ impl TextChunker for WhatsAppChunker {
 }
 
 impl WhatsAppChunker {
+    #[must_use]
     pub fn chunk_by_length(text: &str, limit: usize) -> Vec<String> {
         if text.len() <= limit {
             return vec![text.to_string()];
@@ -115,6 +117,7 @@ impl WhatsAppChunker {
         chunks
     }
 
+    #[must_use]
     pub fn chunk_by_newline(text: &str, limit: usize) -> Vec<String> {
         let paragraphs: Vec<&str> = text.split("\n\n").collect();
 

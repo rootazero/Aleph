@@ -28,6 +28,7 @@ pub const MAX_COMPILED_SIZE: usize = 1 << 20;
 /// A [`RegexBuilder`] pre-configured with conservative size limits, suitable for
 /// compiling untrusted patterns. Callers finish with `.build()` (and may set
 /// extra options such as `.case_insensitive(true)` beforehand).
+#[must_use]
 pub fn bounded_builder(pattern: &str) -> RegexBuilder {
     let mut builder = RegexBuilder::new(pattern);
     builder

@@ -17,6 +17,7 @@ pub struct RateLimitLayer {
 }
 
 impl RateLimitLayer {
+    #[must_use]
     pub fn new(limiter: Arc<RateLimiter>) -> Self {
         Self { limiter }
     }

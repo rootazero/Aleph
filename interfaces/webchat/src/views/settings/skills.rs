@@ -484,7 +484,7 @@ fn SkillCard(
                     {skill.name.clone()}
                 </button>
                 <p class="text-xs text-text-secondary mt-0.5 truncate">
-                    {skill.description.clone()}
+                    {skill.description}
                 </p>
             </div>
 
@@ -540,7 +540,7 @@ fn SkillDetailDialog(
     let skill_for_reqs = skill.clone();
     let skill_for_api = skill.clone();
     let skill_for_settings = skill.clone();
-    let skill_for_info = skill.clone();
+    let skill_for_info = skill;
 
     view! {
         <div class="aleph-scrim fixed inset-0 bg-black/50 flex items-center justify-center z-50"
@@ -610,12 +610,12 @@ fn SkillDetailDialog(
                 // Scrollable body
                 <div class="p-4 overflow-y-auto space-y-5 flex-1">
                     // Description
-                    <p class="text-sm text-text-secondary">{skill_for_header.description.clone()}</p>
+                    <p class="text-sm text-text-secondary">{skill_for_header.description}</p>
 
                     // Requirements section
                     {
                         let missing = skill_for_reqs.missing.clone();
-                        let install_opts = skill_for_reqs.install_options.clone();
+                        let install_opts = skill_for_reqs.install_options;
                         let has_missing = !missing.bins.is_empty()
                             || !missing.env.is_empty()
                             || !missing.config.is_empty();
@@ -638,7 +638,7 @@ fn SkillDetailDialog(
                                                         .filter(|o| o.bins.contains(&bin))
                                                         .cloned()
                                                         .collect();
-                                                    let bin_label = bin.clone();
+                                                    let bin_label = bin;
                                                     view! {
                                                         <div class="flex items-center gap-2">
                                                             <span class="text-warning text-sm">"⚠"</span>
@@ -647,7 +647,7 @@ fn SkillDetailDialog(
                                                             {if !opts.is_empty() {
                                                                 let opt = opts[0].clone();
                                                                 let opt_id = opt.id.clone();
-                                                                let opt_label = opt.label.clone();
+                                                                let opt_label = opt.label;
                                                                 let skill_id_v = skill_id;
                                                                 view! {
                                                                     <button
@@ -744,9 +744,9 @@ fn SkillDetailDialog(
                     {
                         let primary_env = skill_for_api.primary_env.clone();
                         let api_key_set = skill_for_api.api_key_set;
-                        let homepage = skill_for_api.homepage.clone();
+                        let homepage = skill_for_api.homepage;
                         if let Some(env_name) = primary_env {
-                            let env_label = env_name.clone();
+                            let env_label = env_name;
                             view! {
                                 <div class="space-y-2">
                                     <h3 class="text-xs font-semibold text-text-tertiary uppercase tracking-wider">
@@ -916,7 +916,7 @@ fn SkillDetailDialog(
                                 <span class="text-text-tertiary w-16">"ID"</span>
                                 <span class="text-text-primary font-mono">{skill_for_info.id.clone()}</span>
                             </div>
-                            {if let Some(hp) = skill_for_info.homepage.clone() {
+                            {if let Some(hp) = skill_for_info.homepage {
                                 view! {
                                     <div class="flex items-center gap-2">
                                         <span class="text-text-tertiary w-16">"Homepage"</span>

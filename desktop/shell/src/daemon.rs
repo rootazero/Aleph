@@ -170,8 +170,7 @@ fn remove_legacy_autostart() {
             bootout_ok = Command::new("launchctl")
                 .args(["bootout", &format!("gui/{uid}/com.aleph.server")])
                 .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false);
+                .is_ok_and(|o| o.status.success());
         }
     }
     if !bootout_ok {
@@ -263,7 +262,7 @@ async fn probe_port() -> PortOccupant {
 }
 
 /// Map a `/ready` probe result to the kind of process holding the port.
-fn classify_ready_status(status: Option<u16>) -> PortOccupant {
+const fn classify_ready_status(status: Option<u16>) -> PortOccupant {
     match status {
         Some(200) => PortOccupant::DaemonReady,
         Some(503) => PortOccupant::DaemonBooting,
@@ -283,7 +282,7 @@ pub async fn tcp_reachable(host: &str, port: u16) -> bool {
     tokio::time::timeout(PROBE_TIMEOUT, TcpStream::connect((host, port)))
         .await
         .ok()
-        .and_then(|r| r.ok())
+        .and_then(std::result::Result::ok)
         .is_some()
 }
 
@@ -321,7 +320,7 @@ fn launch_detached() -> Result<(), String> {
 }
 
 /// Platform-specific daemon binary file name.
-fn daemon_bin_name() -> &'static str {
+const fn daemon_bin_name() -> &'static str {
     if cfg!(windows) {
         "aleph-server.exe"
     } else {
@@ -340,7 +339,7 @@ fn daemon_bin_name() -> &'static str {
 ///
 /// Phase 4 removed the Phase 1 `legacy_token` parameter; the
 /// `?token=` URL fallback no longer exists.
-pub(crate) fn build_panel_url(bootstrap_url: Option<&str>) -> Result<Url, url::ParseError> {
+pub fn build_panel_url(bootstrap_url: Option<&str>) -> Result<Url, url::ParseError> {
     if let Some(u) = bootstrap_url {
         return Url::parse(u);
     }
@@ -357,7 +356,7 @@ pub(crate) fn build_panel_url(bootstrap_url: Option<&str>) -> Result<Url, url::P
 // Only the macOS tray menu wires this today; other platforms reach the same
 // flow via the CLI, so the symbol is dead in those builds.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) async fn open_in_system_browser() {
+pub async fn open_in_system_browser() {
     let url = match tokio::task::spawn_blocking(load_bootstrap_url).await {
         Ok(Some(u)) => u,
         Ok(None) => {
@@ -376,7 +375,7 @@ pub(crate) async fn open_in_system_browser() {
 /// stdout. Returns `None` on any failure so the caller can degrade
 /// gracefully — the user can always run `aleph open` from a terminal,
 /// or open `/pair` in the browser and approve from the desktop app.
-pub(crate) fn load_bootstrap_url() -> Option<String> {
+pub fn load_bootstrap_url() -> Option<String> {
     let bin = resolve_daemon_binary()?;
     let output = std::process::Command::new(&bin)
         .arg("bootstrap-url")
@@ -404,7 +403,7 @@ pub(crate) fn load_bootstrap_url() -> Option<String> {
 /// (mode 0600) and is read directly from the DB — no running daemon and no OS
 /// keychain are involved, so this never triggers a Keychain UI prompt. Returns
 /// `None` on first run (before the daemon has provisioned a token).
-pub(crate) fn load_shared_token() -> Option<String> {
+pub fn load_shared_token() -> Option<String> {
     let bin = resolve_daemon_binary()?;
     let output = std::process::Command::new(&bin)
         .arg("bootstrap-token")
@@ -431,7 +430,7 @@ pub(crate) fn load_shared_token() -> Option<String> {
 /// the menu handler and as the fallback path in `reveal_panel`.
 // Reachable only through the macOS tray menu today; dead in other builds.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-pub(crate) fn open_url_in_browser(url: &str) {
+pub fn open_url_in_browser(url: &str) {
     let result = if cfg!(target_os = "macos") {
         std::process::Command::new("open").arg(url).status()
     } else if cfg!(target_os = "linux") {

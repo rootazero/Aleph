@@ -112,7 +112,7 @@ pub fn GeneralView() -> impl IntoView {
                             }}
 
                             <LanguageSection
-                                language=cfg.language.clone()
+                                language=cfg.language
                                 on_change=move |lang| {
                                     if let Some(mut c) = config.get() {
                                         c.language = lang;

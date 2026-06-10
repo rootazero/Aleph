@@ -21,11 +21,13 @@ pub enum RuntimeKind {
 
 impl RuntimeKind {
     /// Parse runtime kind from string with fallback to None
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         s.parse().unwrap_or(Self::None)
     }
 
     /// Get the command to check for this runtime
+    #[must_use]
     pub fn check_command(&self) -> Option<&'static str> {
         match self {
             Self::Node => Some("node"),
@@ -37,6 +39,7 @@ impl RuntimeKind {
     }
 
     /// Get human-readable name
+    #[must_use]
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Node => "Node.js",

@@ -38,6 +38,7 @@ impl Default for RetryConfig {
 
 impl RetryConfig {
     /// Create a new RetryConfig with custom values.
+    #[must_use]
     pub fn new(base_delay: Duration, max_delay: Duration, max_attempts: u32) -> Self {
         Self {
             base_delay,
@@ -47,6 +48,7 @@ impl RetryConfig {
     }
 
     /// Create a RetryConfig with only base_delay customized.
+    #[must_use]
     pub fn with_base_delay(base_delay: Duration) -> Self {
         Self {
             base_delay,
@@ -55,6 +57,7 @@ impl RetryConfig {
     }
 
     /// Create a RetryConfig with only max_delay customized.
+    #[must_use]
     pub fn with_max_delay(max_delay: Duration) -> Self {
         Self {
             max_delay,
@@ -88,6 +91,7 @@ impl RetryConfig {
 /// assert_eq!(compute_retry_delay(1, &config), std::time::Duration::from_secs(10));
 /// assert_eq!(compute_retry_delay(2, &config), std::time::Duration::from_secs(20));
 /// ```
+#[must_use]
 pub fn compute_retry_delay(attempt: u32, config: &RetryConfig) -> Duration {
     if attempt == 0 {
         return config.base_delay;
@@ -116,6 +120,7 @@ pub fn compute_retry_delay(attempt: u32, config: &RetryConfig) -> Duration {
 /// # Arguments
 /// * `attempt` - The current attempt number (0-indexed, before first attempt = 0)
 /// * `config` - The retry configuration
+#[must_use]
 pub fn should_retry(attempt: u32, config: &RetryConfig) -> bool {
     attempt < config.max_attempts
 }

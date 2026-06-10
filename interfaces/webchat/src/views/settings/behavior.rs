@@ -92,7 +92,7 @@ pub fn BehaviorView() -> impl IntoView {
 fn OutputModeSection(config: RwSignal<BehaviorConfig>) -> impl IntoView {
     let state = expect_context::<DashboardState>();
     let i18n = use_i18n();
-    let output_mode = RwSignal::new(config.get().output_mode.clone());
+    let output_mode = RwSignal::new(config.get().output_mode);
     let saving = RwSignal::new(false);
     let save_error = RwSignal::new(Option::<String>::None);
     let save_success = RwSignal::new(false);

@@ -161,6 +161,7 @@ pub(crate) fn merge_usage(prev: TokenUsage, next: TokenUsage) -> TokenUsage {
 
 impl DeltaCollector {
     /// Create a new empty collector
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -233,6 +234,7 @@ impl DeltaCollector {
     /// (including the full raw payload for telemetry) and an empty object
     /// `Value::Object({})` returned with `truncated_tool_call` flagged, so the
     /// consumer promotes the turn to a retryable transient error.
+    #[must_use]
     pub fn finish(mut self) -> ProviderResponse {
         // First non-empty-but-unparseable tool call: the signature of a stream
         // truncated mid-arguments (a complete tool call is always well-formed
@@ -416,7 +418,9 @@ fn repair_json_emission_defects(raw: &str) -> Option<String> {
                     out.push(c);
                 }
                 '\\' => match chars.get(i + 1) {
-                    Some(&next) if matches!(next, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') => {
+                    Some(&next)
+                        if matches!(next, '"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') =>
+                    {
                         out.push('\\');
                         out.push(next);
                         i += 1;
@@ -492,6 +496,7 @@ pub struct IndexIdTracker {
 
 impl IndexIdTracker {
     /// Create a new empty tracker
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -502,6 +507,7 @@ impl IndexIdTracker {
     }
 
     /// Look up the id for a given index, returning `None` if not tracked
+    #[must_use]
     pub fn get(&self, index: u64) -> Option<&str> {
         self.map.get(&index).map(|s| s.as_str())
     }
@@ -511,6 +517,7 @@ impl IndexIdTracker {
     /// Robust against sparse/non-contiguous indices: some OpenAI-compatible
     /// backends do not number tool-call deltas contiguously from 0, so probing
     /// `0,1,2,…` and stopping at the first gap would silently drop tool calls.
+    #[must_use]
     pub fn ids_in_order(&self) -> Vec<&str> {
         let mut entries: Vec<(&u64, &String)> = self.map.iter().collect();
         entries.sort_by_key(|(index, _)| **index);
@@ -774,10 +781,7 @@ mod tests {
         // open-weight emission defect (code or prose in arguments).
         let raw = "{\"content\": \"line one\nline two\tend\"}";
         let v = salvage_malformed_args(raw).expect("salvageable");
-        assert_eq!(
-            v,
-            serde_json::json!({"content": "line one\nline two\tend"})
-        );
+        assert_eq!(v, serde_json::json!({"content": "line one\nline two\tend"}));
     }
 
     #[test]

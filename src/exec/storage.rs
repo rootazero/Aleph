@@ -42,16 +42,19 @@ pub struct ExecApprovalsStorage {
 
 impl ExecApprovalsStorage {
     /// Create storage with default path (~/.aleph/exec-approvals.json)
+    #[must_use]
     pub fn new() -> Self {
         Self::with_path(Self::default_path())
     }
 
     /// Create storage with custom path
+    #[must_use]
     pub fn with_path(path: PathBuf) -> Self {
         Self { path }
     }
 
     /// Get default config path
+    #[must_use]
     pub fn default_path() -> PathBuf {
         dirs::home_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -60,6 +63,7 @@ impl ExecApprovalsStorage {
     }
 
     /// Get the config path
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
@@ -173,6 +177,7 @@ impl ExecApprovalsStorage {
     }
 
     /// Check if config file exists
+    #[must_use]
     pub fn exists(&self) -> bool {
         self.path.exists()
     }

@@ -64,6 +64,7 @@ pub struct ProviderFactoryRegistry {
 
 impl ProviderFactoryRegistry {
     /// Construct an empty registry. Mostly for tests.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             factories: HashMap::new(),
@@ -73,6 +74,7 @@ impl ProviderFactoryRegistry {
     /// Default registry containing every first-party search provider.
     /// Edit this list when adding a new provider — the only required edit
     /// is one line here, plus the provider's own `pub struct XxxFactory;`.
+    #[must_use]
     pub fn with_defaults() -> Self {
         let mut r = Self::new();
         r.register(Box::new(crate::search::providers::TavilyFactory));
@@ -94,6 +96,7 @@ impl ProviderFactoryRegistry {
     /// Return the set of provider_type strings this registry can build.
     /// Used by the config validator so it stays in sync without a
     /// hard-coded allowlist.
+    #[must_use]
     pub fn known_provider_types(&self) -> Vec<&'static str> {
         let mut v: Vec<&'static str> = self.factories.keys().copied().collect();
         v.sort();

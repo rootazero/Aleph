@@ -39,6 +39,7 @@ pub struct OAuthTokenCache {
 
 impl OAuthTokenCache {
     /// Build from a completed `CodexAuth`.
+    #[must_use]
     pub fn from_auth(auth: &CodexAuth) -> Self {
         let expires_at_unix = auth
             .expires_at
@@ -54,6 +55,7 @@ impl OAuthTokenCache {
     }
 
     /// Reconstruct a `CodexAuth` from this cache.
+    #[must_use]
     pub fn to_auth(&self) -> CodexAuth {
         CodexAuth {
             access_token: self.access_token.clone(),
@@ -64,6 +66,7 @@ impl OAuthTokenCache {
     }
 
     /// Whether the cached token has expired.
+    #[must_use]
     pub fn is_expired(&self) -> bool {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -73,6 +76,7 @@ impl OAuthTokenCache {
     }
 
     /// Seconds remaining until expiry, or None if already expired.
+    #[must_use]
     pub fn expires_in_seconds(&self) -> Option<u64> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)

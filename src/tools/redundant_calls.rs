@@ -186,6 +186,7 @@ pub fn aggregate_redundant_calls(events: &[SessionEventRecord]) -> Vec<Redundant
 ///
 /// Wrapped in `<system-reminder>` to match the rest of Aleph's harness-injected
 /// channel — the model reads it as harness chatter, not a fresh user instruction.
+#[must_use]
 pub fn render_redundant_call_notice(events: &[SessionEventRecord]) -> Option<String> {
     let groups = aggregate_redundant_calls(events);
     if groups.is_empty() {

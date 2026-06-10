@@ -21,6 +21,7 @@ pub struct ArenaId(String);
 
 impl ArenaId {
     /// Create a new random ArenaId.
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }
@@ -31,6 +32,7 @@ impl ArenaId {
     }
 
     /// Borrow the inner string.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -54,6 +56,7 @@ pub struct ArtifactId(String);
 
 impl ArtifactId {
     /// Create a new random ArtifactId.
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
     }
@@ -64,6 +67,7 @@ impl ArtifactId {
     }
 
     /// Borrow the inner string.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -165,6 +169,7 @@ pub struct ArenaPermissions {
 
 impl ArenaPermissions {
     /// Create permissions appropriate for the given role.
+    #[must_use]
     pub fn from_role(role: ParticipantRole) -> Self {
         match role {
             ParticipantRole::Coordinator => Self {
@@ -504,6 +509,7 @@ pub struct ArenaSlot {
 
 impl ArenaSlot {
     /// Create a new idle slot for the given agent.
+    #[must_use]
     pub fn new(agent_id: AgentId) -> Self {
         Self {
             agent_id,
@@ -584,6 +590,7 @@ impl SharedFact {
     }
 
     /// Get the confidence score.
+    #[must_use]
     pub fn confidence(&self) -> f32 {
         self.confidence
     }

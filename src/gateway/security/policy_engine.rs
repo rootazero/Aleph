@@ -14,6 +14,7 @@ pub enum PermissionResult {
 }
 
 impl PermissionResult {
+    #[must_use]
     pub fn is_allowed(&self) -> bool {
         matches!(self, PermissionResult::Allowed)
     }
@@ -76,6 +77,7 @@ impl PolicyEngine {
     /// assert!(PolicyEngine::check_tool_permission(&guest, "translate").is_allowed());
     /// assert!(!PolicyEngine::check_tool_permission(&guest, "shell:exec").is_allowed());
     /// ```
+    #[must_use]
     pub fn check_tool_permission(identity: &IdentityContext, tool_name: &str) -> PermissionResult {
         match identity.role {
             Role::Owner => {

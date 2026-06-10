@@ -34,6 +34,7 @@ pub struct SecurityKernel {
 
 impl SecurityKernel {
     /// Create a new security kernel with default patterns.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -117,6 +118,7 @@ impl SecurityKernel {
     /// (e.g. the sandbox command-policy hook) without re-enforcing — and
     /// possibly diverging from — the built-in floor. Returns `None` when no
     /// custom pattern matches.
+    #[must_use]
     pub fn assess_custom(&self, command: &str) -> Option<RiskLevel> {
         let cmd = command.trim();
         if self.custom_blocked.iter().any(|p| p.is_match(cmd)) {
@@ -129,6 +131,7 @@ impl SecurityKernel {
     }
 
     /// Assess a command and return detailed result.
+    #[must_use]
     pub fn assess_detailed(&self, command: &str) -> RiskAssessment {
         let level = self.assess(command);
         let reason = match level {

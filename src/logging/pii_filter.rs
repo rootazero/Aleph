@@ -52,6 +52,7 @@ impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
 ///     .with(create_pii_scrubbing_layer())
 ///     .init();
 /// ```
+#[must_use]
 pub fn create_pii_scrubbing_layer<S>() -> Box<dyn Layer<S> + Send + Sync + 'static>
 where
     S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,

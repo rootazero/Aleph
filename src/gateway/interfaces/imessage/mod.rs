@@ -64,6 +64,7 @@ pub struct IMessageChannel {
 
 impl IMessageChannel {
     /// Create a new iMessage channel
+    #[must_use]
     pub fn new(config: IMessageConfig) -> Self {
         Self::with_mode(config, false)
     }
@@ -104,6 +105,7 @@ impl IMessageChannel {
         }
     }
 
+    #[must_use]
     pub fn for_test(config: IMessageConfig) -> Self {
         Self::with_mode(config, true)
     }
@@ -313,6 +315,7 @@ pub struct IMessageChannelFactory;
 
 impl IMessageChannelFactory {
     /// Create a new factory
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

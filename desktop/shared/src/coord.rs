@@ -1,7 +1,7 @@
 //! Coordinate space contract for GUI agent input.
 //!
-//! UI-TARS-finetuned VLMs emit clicks/drags in a normalized [0, factor_w] ×
-//! [0, factor_h] space (factor defaults to 1000×1000), so the same model can
+//! UI-TARS-finetuned VLMs emit clicks/drags in a normalized [0, `factor_w`] ×
+//! [0, `factor_h`] space (factor defaults to 1000×1000), so the same model can
 //! drive any display regardless of physical resolution or DPR. Aleph's desktop
 //! capability layer expects pixel coordinates, so callers must convert before
 //! dispatch.
@@ -24,7 +24,7 @@ pub enum CoordinateSpace {
     /// Physical pixels, top-left origin. Default for direct/JSON callers.
     #[default]
     Pixel,
-    /// Normalized [0, factor_w] × [0, factor_h]. UI-TARS uses (1000, 1000).
+    /// Normalized [0, `factor_w`] × [0, `factor_h`]. UI-TARS uses (1000, 1000).
     Normalized { factor_w: u32, factor_h: u32 },
 }
 
@@ -39,13 +39,14 @@ impl CoordinateSpace {
     ///
     /// `viewport_w` / `viewport_h` are the physical pixel dimensions of the
     /// target display. Returns the input unchanged for `Pixel` space.
+    #[must_use]
     pub fn to_pixels(&self, x: f64, y: f64, viewport_w: u32, viewport_h: u32) -> (f64, f64) {
         match *self {
             Self::Pixel => (x, y),
             Self::Normalized { factor_w, factor_h } => {
-                let fw = factor_w.max(1) as f64;
-                let fh = factor_h.max(1) as f64;
-                ((x / fw) * viewport_w as f64, (y / fh) * viewport_h as f64)
+                let fw = f64::from(factor_w.max(1));
+                let fh = f64::from(factor_h.max(1));
+                ((x / fw) * f64::from(viewport_w), (y / fh) * f64::from(viewport_h))
             }
         }
     }
@@ -61,7 +62,8 @@ pub struct Point {
 }
 
 impl Point {
-    pub fn pixel(x: f64, y: f64) -> Self {
+    #[must_use]
+    pub const fn pixel(x: f64, y: f64) -> Self {
         Self {
             x,
             y,
@@ -69,7 +71,8 @@ impl Point {
         }
     }
 
-    pub fn normalized(x: f64, y: f64, factor_w: u32, factor_h: u32) -> Self {
+    #[must_use]
+    pub const fn normalized(x: f64, y: f64, factor_w: u32, factor_h: u32) -> Self {
         Self {
             x,
             y,
@@ -77,8 +80,9 @@ impl Point {
         }
     }
 
-    /// Resolve to (pixel_x, pixel_y). For `Pixel` points the viewport is
+    /// Resolve to (`pixel_x`, `pixel_y`). For `Pixel` points the viewport is
     /// ignored and the values pass through.
+    #[must_use]
     pub fn to_pixels(&self, viewport_w: u32, viewport_h: u32) -> (f64, f64) {
         self.space.to_pixels(self.x, self.y, viewport_w, viewport_h)
     }

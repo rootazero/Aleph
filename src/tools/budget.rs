@@ -46,6 +46,7 @@ pub const BUILTIN_TOOL_BUDGETS_MS: &[(&str, u64)] = &[
 /// Returns the configured wall-clock budget for a builtin tool, or
 /// `None` if the tool is not listed. `None` callers fall back to the
 /// harness-wide `turn_timeout`.
+#[must_use]
 pub fn builtin_tool_budget_ms(name: &str) -> Option<u64> {
     BUILTIN_TOOL_BUDGETS_MS
         .iter()

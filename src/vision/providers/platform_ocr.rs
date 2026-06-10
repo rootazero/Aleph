@@ -31,6 +31,7 @@ pub struct PlatformOcrProvider {
 
 impl PlatformOcrProvider {
     /// Create a new platform OCR provider using the default native screen capability.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             screen: Arc::new(aleph_desktop::NativeScreen::new()),

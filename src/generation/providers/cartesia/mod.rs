@@ -108,6 +108,7 @@ impl CartesiaProvider {
     /// endpoint and rotates often; we surface a stable handful so the panel
     /// has something to show, and let callers pass any UUID via
     /// `params.voice`.
+    #[must_use]
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         const VOICES: &[(&str, &str, &str, &str)] = &[
             (

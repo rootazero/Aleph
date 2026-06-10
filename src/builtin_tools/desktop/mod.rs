@@ -54,6 +54,7 @@ pub struct DesktopTool {
 }
 
 impl DesktopTool {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             approval_policy: None,

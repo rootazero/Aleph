@@ -31,6 +31,7 @@ pub struct RichUserResponse {
 }
 
 impl RichUserResponse {
+    #[must_use]
     pub fn to_llm_feedback(&self) -> String {
         self.response.clone()
     }
@@ -65,6 +66,7 @@ pub enum Action {
 
 impl Action {
     /// Get the action type string
+    #[must_use]
     pub fn action_type(&self) -> &str {
         match self {
             Action::ToolCalls { calls } => {
@@ -83,6 +85,7 @@ impl Action {
     }
 
     /// Get a summary of arguments
+    #[must_use]
     pub fn args_summary(&self) -> String {
         match self {
             Action::ToolCalls { calls } => {
@@ -132,6 +135,7 @@ pub enum ActionResult {
 
 impl ActionResult {
     /// Check if the result indicates success
+    #[must_use]
     pub fn is_success(&self) -> bool {
         match self {
             ActionResult::ToolResults { results } => results
@@ -144,6 +148,7 @@ impl ActionResult {
     }
 
     /// Check if the result is a non-retryable error
+    #[must_use]
     pub fn is_non_retryable_error(&self) -> bool {
         match self {
             ActionResult::ToolResults { results } => results.iter().any(|r| {
@@ -161,6 +166,7 @@ impl ActionResult {
     }
 
     /// Get the first tool output value
+    #[must_use]
     pub fn first_tool_output(&self) -> Option<Value> {
         match self {
             ActionResult::ToolResults { results } => {
@@ -174,6 +180,7 @@ impl ActionResult {
     }
 
     /// Get the first tool error message
+    #[must_use]
     pub fn first_tool_error(&self) -> Option<String> {
         match self {
             ActionResult::ToolResults { results } => {
@@ -187,6 +194,7 @@ impl ActionResult {
     }
 
     /// Get a summary string
+    #[must_use]
     pub fn summary(&self) -> String {
         match self {
             ActionResult::ToolResults { results } => {

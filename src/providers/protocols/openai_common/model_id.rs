@@ -31,6 +31,7 @@ use std::borrow::Cow;
 /// (`gpt4o` → `gpt-4o`, `gpt4omini` → `gpt-4o-mini`, `o3mini` → `o3-mini`).
 /// Anything already canonical passes through unchanged as `Cow::Borrowed`
 /// (zero-copy).
+#[must_use]
 pub fn normalize_openai_model_id<'a>(model_id: &'a str, base_url: Option<&str>) -> Cow<'a, str> {
     let trimmed = model_id.trim();
     // Strip the `openai/` vendor-routing prefix only on first-party OpenAI

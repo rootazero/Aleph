@@ -154,6 +154,7 @@ impl ElevenLabsProvider {
     }
 
     /// Return the static list of available voices for this provider
+    #[must_use]
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         vec![
             VoiceInfo {

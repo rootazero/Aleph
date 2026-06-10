@@ -29,6 +29,7 @@ pub struct SemanticPurposeInferrer {
 
 impl SemanticPurposeInferrer {
     /// Create a new inferrer without LLM support (L0/L1 only)
+    #[must_use]
     pub fn new() -> Self {
         Self { llm_provider: None }
     }
@@ -41,6 +42,7 @@ impl SemanticPurposeInferrer {
     }
 
     /// Check if L2 optimization is available
+    #[must_use]
     pub fn has_l2_support(&self) -> bool {
         self.llm_provider.is_some()
     }
@@ -51,6 +53,7 @@ impl SemanticPurposeInferrer {
     /// - LLM provider is available
     /// - L1 confidence is below threshold (< 0.7)
     /// - No structured_meta available (level != 0)
+    #[must_use]
     pub fn should_trigger_l2(&self, inferred: &InferredPurpose) -> bool {
         self.llm_provider.is_some()
             && inferred.level != 0  // Not L0 (already high quality)
@@ -64,6 +67,7 @@ impl SemanticPurposeInferrer {
     /// * `description` - Tool's existing description (if any)
     /// * `category` - Tool category (e.g., "file", "search", "code")
     /// * `structured_meta` - Optional curated semantic metadata
+    #[must_use]
     pub fn infer(
         &self,
         name: &str,

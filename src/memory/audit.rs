@@ -143,6 +143,7 @@ pub struct AuditEntry {
 
 impl AuditEntry {
     /// Create a new audit entry
+    #[must_use]
     pub fn new(
         fact_id: String,
         action: AuditAction,
@@ -167,6 +168,7 @@ impl AuditEntry {
     }
 
     /// Serialize details to JSON string
+    #[must_use]
     pub fn details_json(&self) -> Option<String> {
         self.details
             .as_ref()
@@ -174,6 +176,7 @@ impl AuditEntry {
     }
 
     /// Parse details from JSON string
+    #[must_use]
     pub fn parse_details(json: &str) -> Option<AuditDetails> {
         serde_json::from_str(json).ok()
     }

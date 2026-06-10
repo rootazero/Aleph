@@ -14,6 +14,7 @@ pub struct LineMessagingApi {
 }
 
 impl LineMessagingApi {
+    #[must_use]
     pub fn new(channel_access_token: String) -> Self {
         Self::with_base(channel_access_token, "https://api.line.me")
     }
@@ -399,6 +400,7 @@ pub struct FlexBubbleContents {
 }
 
 impl FlexBubbleContents {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             bubble_type: "bubble".to_string(),

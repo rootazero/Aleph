@@ -34,6 +34,7 @@ impl Default for AuthProfileStore {
 
 impl AuthProfileStore {
     /// Create an empty store
+    #[must_use]
     pub fn new() -> Self {
         Self {
             version: AUTH_STORE_VERSION,
@@ -45,6 +46,7 @@ impl AuthProfileStore {
     }
 
     /// List profile IDs for a given provider
+    #[must_use]
     pub fn list_profiles_for_provider(&self, provider: &str) -> Vec<String> {
         let normalized = normalize_provider_id(provider);
         self.profiles
@@ -55,6 +57,7 @@ impl AuthProfileStore {
     }
 
     /// Get usage stats for a profile
+    #[must_use]
     pub fn get_usage_stats(&self, profile_id: &str) -> Option<&ProfileUsageStats> {
         self.usage_stats.as_ref()?.get(profile_id)
     }
@@ -68,6 +71,7 @@ impl AuthProfileStore {
     }
 
     /// Check if a profile is in cooldown
+    #[must_use]
     pub fn is_profile_in_cooldown(&self, profile_id: &str) -> bool {
         self.get_usage_stats(profile_id)
             .is_some_and(|stats| stats.is_in_cooldown())

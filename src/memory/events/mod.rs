@@ -201,6 +201,7 @@ pub enum MemoryEvent {
 
 impl MemoryEvent {
     /// Extract the note_path (legacy: fact_id) from any event variant.
+    #[must_use]
     pub fn fact_id(&self) -> &str {
         match self {
             MemoryEvent::NoteCreated { note_path, .. }
@@ -219,6 +220,7 @@ impl MemoryEvent {
     ///
     /// Matches the `#[serde(tag = "type")]` discriminant so callers can
     /// filter events by type without deserializing the full payload.
+    #[must_use]
     pub fn event_type_tag(&self) -> &'static str {
         match self {
             MemoryEvent::NoteCreated { .. } => "NoteCreated",
@@ -237,6 +239,7 @@ impl MemoryEvent {
     ///
     /// Only `NoteAccessed` is Pulse (buffered).
     /// All other variants are Skeleton.
+    #[must_use]
     pub fn is_skeleton(&self) -> bool {
         !matches!(self, MemoryEvent::NoteAccessed { .. })
     }
@@ -271,6 +274,7 @@ pub struct MemoryEventEnvelope {
 
 impl MemoryEventEnvelope {
     /// Build a new envelope. `id` is set to 0 (assigned by DB on insert).
+    #[must_use]
     pub fn new(
         fact_id: String,
         seq: u64,
@@ -294,11 +298,13 @@ impl MemoryEventEnvelope {
     }
 
     /// Convenience: return the event type tag.
+    #[must_use]
     pub fn event_type_tag(&self) -> &'static str {
         self.event.event_type_tag()
     }
 
     /// Convenience: whether the inner event is Skeleton.
+    #[must_use]
     pub fn is_skeleton(&self) -> bool {
         self.event.is_skeleton()
     }

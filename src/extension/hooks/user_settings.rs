@@ -112,6 +112,7 @@ struct UserHooksFile {
 /// above. Layer order is irrelevant for semantics — every hook is added to
 /// the executor independently — but it determines the `plugin_name` label
 /// surfaced in logs / consent flows.
+#[must_use]
 pub fn load_user_hooks(cwd: Option<&Path>, project_roots: &[PathBuf]) -> Vec<HookConfig> {
     let mut out = Vec::new();
 

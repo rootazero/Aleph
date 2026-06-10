@@ -20,10 +20,10 @@ pub const NOTIFY_STATUS_CHANGED: &str = "perm.status_changed";
 /// native (desktop/macos) probe path and the Swift-bridge `perm.*` RPC path.
 /// Variants split into:
 /// - "TCC-managed" — checkable natively via TCC framework APIs
-///   (Accessibility, ScreenRecording, Camera, Microphone, SpeechRecognition,
+///   (Accessibility, `ScreenRecording`, Camera, Microphone, `SpeechRecognition`,
 ///   Notifications). See `desktop/shared::permission_types::TCC_MANAGED`.
 /// - "Bridge-only" — handled via the Swift helper's `perm.check` RPC
-///   (InputMonitoring, FullDisk, Automation, Contacts, Calendars, Reminders,
+///   (`InputMonitoring`, `FullDisk`, Automation, Contacts, Calendars, Reminders,
 ///   Photos, Location).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

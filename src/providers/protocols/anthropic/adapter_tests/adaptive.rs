@@ -36,7 +36,9 @@ fn supports_adaptive_thinking_recognises_future_generations() {
     assert!(AnthropicProtocol::supports_adaptive_thinking(
         "claude-fable-5"
     ));
-    assert!(AnthropicProtocol::forbids_sampling_params("claude-opus-4-8"));
+    assert!(AnthropicProtocol::forbids_sampling_params(
+        "claude-opus-4-8"
+    ));
     assert!(AnthropicProtocol::forbids_sampling_params("claude-fable-5"));
     assert!(AnthropicProtocol::supports_xhigh_effort("claude-opus-4-8"));
     assert!(!AnthropicProtocol::supports_xhigh_effort("claude-opus-4-6"));

@@ -1,6 +1,7 @@
 use crate::tasks::cron::config::{CronJob, FailureAlertConfig};
 
 /// Check if a failure alert should be sent. Returns alert message if conditions met.
+#[must_use]
 pub fn should_send_alert(
     job: &CronJob,
     alert_config: &FailureAlertConfig,

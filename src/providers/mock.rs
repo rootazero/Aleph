@@ -102,6 +102,7 @@ impl MockProvider {
     /// # Arguments
     ///
     /// * `delay` - Duration to sleep before returning
+    #[must_use]
     pub fn with_delay(mut self, delay: Duration) -> Self {
         self.delay = Some(delay);
         self
@@ -112,6 +113,7 @@ impl MockProvider {
     /// # Arguments
     ///
     /// * `error` - The error to return from `process()`
+    #[must_use]
     pub fn with_error(mut self, error: MockError) -> Self {
         self.error = Some(error);
         self

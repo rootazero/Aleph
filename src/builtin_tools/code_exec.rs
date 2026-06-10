@@ -238,6 +238,7 @@ Examples:
     /// Boot wiring injects the real `Arc<dyn Sandbox>` via
     /// [`CodeExecTool::with_sandbox`]; unconfigured instances will refuse
     /// execution with a clear error rather than bypass sandboxing.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pass_env: default_pass_env(),

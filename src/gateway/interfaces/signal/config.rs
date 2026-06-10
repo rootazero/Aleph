@@ -105,6 +105,7 @@ impl SignalConfig {
     }
 
     /// Check if a phone number is allowed
+    #[must_use]
     pub fn is_user_allowed(&self, phone: &str) -> bool {
         if self.allowed_users.is_empty() {
             true

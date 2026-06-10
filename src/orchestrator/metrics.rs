@@ -1,7 +1,7 @@
 //! Orchestrator metrics for monitoring flow execution, retry rates, and stall detection.
 
-use crate::sync_primitives::{AtomicU64, Ordering};
 use crate::sync_primitives::Arc;
+use crate::sync_primitives::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Metrics collected by the orchestrator during flow execution.
@@ -18,6 +18,7 @@ pub struct OrchestratorMetrics {
 }
 
 impl OrchestratorMetrics {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -117,6 +118,7 @@ pub struct FlowMetrics {
 
 #[allow(dead_code)] // test-only metrics helper
 impl FlowMetrics {
+    #[must_use]
     pub fn new(flow_id: Arc<str>) -> Self {
         Self {
             flow_id,

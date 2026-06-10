@@ -12,6 +12,7 @@ pub const PROMPT_CACHE_KEY_MAX_CHARS: usize = 64;
 /// the key). Mirrors pi's `clampOpenAIPromptCacheKey`, but clamps by `char`
 /// rather than UTF-16 code unit so a multibyte key is never split mid-codepoint.
 /// Returns `Cow::Borrowed` (no allocation) when already within bounds.
+#[must_use]
 pub fn clamp_prompt_cache_key(key: &str) -> Cow<'_, str> {
     // `char_indices` finds the byte offset of the 65th char without counting the
     // whole string when it is long; fall through to borrow when short enough.

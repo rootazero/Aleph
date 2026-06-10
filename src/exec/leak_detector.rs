@@ -50,11 +50,13 @@ pub struct ScanResult {
 
 impl ScanResult {
     /// Returns true if any finding requires blocking.
+    #[must_use]
     pub fn has_blocks(&self) -> bool {
         self.findings.iter().any(|f| f.action == LeakAction::Block)
     }
 
     /// Returns true if any finding is a warning.
+    #[must_use]
     pub fn has_warnings(&self) -> bool {
         self.findings.iter().any(|f| f.action == LeakAction::Warn)
     }
@@ -64,11 +66,13 @@ impl ScanResult {
     /// A `Redact` finding is neither a block nor a warning, so consumers that
     /// only check `has_blocks()`/`has_warnings()` would silently let the matched
     /// secret through. Callers must consult this and apply [`LeakDetector::redact`].
+    #[must_use]
     pub fn has_redacts(&self) -> bool {
         self.findings.iter().any(|f| f.action == LeakAction::Redact)
     }
 
     /// Returns true if no findings were detected.
+    #[must_use]
     pub fn is_clean(&self) -> bool {
         self.findings.is_empty()
     }
@@ -87,6 +91,7 @@ pub struct LeakDetector {
 
 impl LeakDetector {
     /// Create a new LeakDetector with the given prefixes and patterns.
+    #[must_use]
     pub fn new(prefixes: Vec<&'static str>, patterns: Vec<LeakPattern>) -> Self {
         // ASCII case-insensitive so the fast-path prefix gate matches the
         // case-insensitive `(?i)` regexes below. Without this, content like
@@ -100,6 +105,7 @@ impl LeakDetector {
     }
 
     /// Create a LeakDetector with default patterns for common secret types.
+    #[must_use]
     pub fn default_patterns() -> Self {
         let assets = crate::exec::secret_patterns::leak_detector_assets();
         let patterns = assets
@@ -153,11 +159,13 @@ impl LeakDetector {
     }
 
     /// Scan outbound content (being sent to LLM or external service).
+    #[must_use]
     pub fn scan_outbound(&self, content: &str) -> ScanResult {
         self.scan(content)
     }
 
     /// Scan inbound content (received from LLM or external service).
+    #[must_use]
     pub fn scan_inbound(&self, content: &str) -> ScanResult {
         self.scan(content)
     }
@@ -169,6 +177,7 @@ impl LeakDetector {
     /// untouched because their disposition is the caller's policy decision
     /// (block the whole message, or warn-and-pass). This is the missing "last
     /// mile" for `LeakAction::Redact`, which otherwise has no honoring consumer.
+    #[must_use]
     pub fn redact(&self, content: &str) -> String {
         let mut current = content.to_string();
         for pattern in &self.patterns {

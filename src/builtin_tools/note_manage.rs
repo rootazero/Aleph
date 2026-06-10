@@ -179,6 +179,7 @@ impl NoteManageTool {
 
     /// Enable per-project memory namespacing for this tool. Wired from
     /// `MemoryConfig.project_scoped` at construction; default-off otherwise.
+    #[must_use]
     pub fn with_project_scoping(mut self, enabled: bool) -> Self {
         self.project_scoped = enabled;
         self
@@ -186,6 +187,7 @@ impl NoteManageTool {
 
     /// Attach an event-sourcing handler so note mutations are recorded in the
     /// per-note event log that the `memory_timeline` tool reads.
+    #[must_use]
     pub fn with_command_handler(mut self, handler: Arc<MemoryCommandHandler>) -> Self {
         self.command_handler = Some(handler);
         self
@@ -807,6 +809,7 @@ impl AlephTool for NoteManageTool {
 /// Build a category-specific YAML frontmatter block.
 ///
 /// Used by tests to verify template output.
+#[must_use]
 pub fn frontmatter_template(category: &str, title: &str, tags: &[String]) -> String {
     let now = chrono::Local::now().format("%Y-%m-%d").to_string();
     let tags_str = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());

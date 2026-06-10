@@ -72,6 +72,7 @@ pub const IDEMPOTENT_BUILTIN_TOOLS: &[&str] = &[
 ];
 
 /// Returns true iff `name` is a built-in tool that is safe to auto-retry.
+#[must_use]
 pub fn is_idempotent_builtin_name(name: &str) -> bool {
     IDEMPOTENT_BUILTIN_TOOLS.contains(&name)
 }

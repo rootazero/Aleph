@@ -76,6 +76,7 @@ pub struct WizardSession {
 
 impl WizardSession {
     /// Create a new wizard session and start the flow
+    #[must_use]
     pub fn new(flow: Box<dyn WizardFlow>) -> Self {
         let id = uuid::Uuid::new_v4().to_string();
         let (step_tx, step_rx) = mpsc::channel(16);
@@ -160,11 +161,13 @@ impl WizardSession {
     }
 
     /// Get the session ID
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.id
     }
 
     /// Get the current status
+    #[must_use]
     pub fn status(&self) -> WizardStatus {
         *self.status.read().unwrap_or_else(|e| e.into_inner())
     }
@@ -278,6 +281,7 @@ impl WizardSession {
     }
 
     /// Check if the session is done
+    #[must_use]
     pub fn is_done(&self) -> bool {
         self.status() != WizardStatus::Running
     }

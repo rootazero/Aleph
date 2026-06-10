@@ -117,6 +117,7 @@ impl CoOccurrenceLog {
     }
 
     /// Read the full ring, oldest first. Empty when nothing recorded.
+    #[must_use]
     pub fn snapshot(&self) -> Vec<RecentUse> {
         self.load()
     }
@@ -131,6 +132,7 @@ impl CoOccurrenceLog {
 /// Pure function — no I/O, deterministic. Entries are assumed roughly sorted by
 /// `at_ms` (the ring appends in time order); a defensive sort guards against a
 /// hand-edited sidecar.
+#[must_use]
 pub fn cluster_chains(entries: &[RecentUse], window_secs: u64) -> Vec<Vec<String>> {
     if entries.is_empty() {
         return Vec::new();

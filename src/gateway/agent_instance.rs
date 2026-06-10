@@ -72,11 +72,13 @@ impl Default for AgentInstanceConfig {
 
 impl AgentInstanceConfig {
     /// Return the agent's tool permissions config, or a default (all-Allow).
+    #[must_use]
     pub fn tool_permissions(&self) -> crate::config::types::policies::ToolPermissionsConfig {
         self.tool_permissions.clone().unwrap_or_default()
     }
 
     /// Return the agent's timeout override, if set.
+    #[must_use]
     pub fn timeout_secs(&self) -> Option<u64> {
         self.timeout_secs
     }
@@ -87,6 +89,7 @@ impl AgentInstanceConfig {
     /// - system_prompt <- soul_md (workspace SOUL.md content), falls back to agents_md
     /// - tool_whitelist <- skills
     /// - workspace <- workspace_path
+    #[must_use]
     pub fn from_resolved(agent: &crate::config::agent_resolver::ResolvedAgent) -> Self {
         // Prioritize SOUL.md over AGENTS.md for system prompt
         let system_prompt = agent.soul_md.clone().or_else(|| agent.agents_md.clone());
@@ -215,11 +218,13 @@ impl AgentInstance {
     }
 
     /// Get the agent ID
+    #[must_use]
     pub fn id(&self) -> &str {
         &self.config.agent_id
     }
 
     /// Get the human-readable display name (falls back to agent_id)
+    #[must_use]
     pub fn display_name(&self) -> &str {
         self.config
             .display_name
@@ -228,16 +233,19 @@ impl AgentInstance {
     }
 
     /// Get the agent configuration
+    #[must_use]
     pub fn config(&self) -> &AgentInstanceConfig {
         &self.config
     }
 
     /// Get the workspace directory
+    #[must_use]
     pub fn workspace(&self) -> &Path {
         &self.config.workspace
     }
 
     /// Get the agent directory
+    #[must_use]
     pub fn agent_dir(&self) -> &Path {
         &self.agent_dir
     }
@@ -466,6 +474,7 @@ impl AgentInstance {
     }
 
     /// Check if a tool is allowed for this agent
+    #[must_use]
     pub fn is_tool_allowed(&self, tool_name: &str) -> bool {
         // Check blacklist first
         if self.config.tool_blacklist.contains(&tool_name.to_string()) {
@@ -579,6 +588,7 @@ pub struct AgentRegistry {
 
 impl AgentRegistry {
     /// Create a new registry with default "main" agent
+    #[must_use]
     pub fn new() -> Self {
         Self {
             agents: Arc::new(RwLock::new(HashMap::new())),
@@ -759,6 +769,7 @@ impl AgentRegistry {
     }
 
     /// Get default agent ID
+    #[must_use]
     pub fn default_agent_id(&self) -> &str {
         &self.default_agent
     }

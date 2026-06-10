@@ -180,7 +180,7 @@ fn ingest_dropped_file(file: web_sys::File, attachments: RwSignal<Vec<PendingAtt
         return;
     };
     let reader_clone = reader.clone();
-    let file_name = name.clone();
+    let file_name = name;
     let file_mime = if mime_type.is_empty() {
         "application/octet-stream".to_string()
     } else {

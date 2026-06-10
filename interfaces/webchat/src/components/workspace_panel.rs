@@ -134,7 +134,7 @@ fn StepCard(group: StepGroup) -> impl IntoView {
         })
         .collect::<Vec<_>>()
         .join(" · ");
-    let tools = group.tools.clone();
+    let tools = group.tools;
 
     view! {
         <div
@@ -163,19 +163,19 @@ fn StepCard(group: StepGroup) -> impl IntoView {
             {if !narration.is_empty() {
                 view! {
                     <div class="text-sm text-text-primary leading-relaxed aleph-step-narration">
-                        <MarkdownRenderer content=narration.clone() />
+                        <MarkdownRenderer content=narration />
                     </div>
                 }.into_any()
             } else if !fallback_title.is_empty() {
                 view! {
-                    <div class="text-xs text-text-tertiary font-mono">{fallback_title.clone()}</div>
+                    <div class="text-xs text-text-tertiary font-mono">{fallback_title}</div>
                 }.into_any()
             } else {
                 view! { <span /> }.into_any()
             }}
             <div class="flex flex-col gap-2">
                 {tools
-                    .clone()
+                    
                     .into_iter()
                     .map(|(tool_id, tool_name)| {
                         view! {
@@ -342,7 +342,7 @@ fn FilesDrawer() -> impl IntoView {
                                         {if f.truncated { " (truncated)" } else { "" }}
                                     </div>
                                     <pre class="text-xs whitespace-pre-wrap break-words font-mono
-                                                text-text-secondary">{f.content.clone()}</pre>
+                                                text-text-secondary">{f.content}</pre>
                                 </div>
                             }
                             .into_any(),

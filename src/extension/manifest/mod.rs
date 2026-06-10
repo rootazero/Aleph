@@ -58,6 +58,7 @@ use std::path::{Path, PathBuf};
 ///
 /// Converts to lowercase, replaces invalid chars with hyphens,
 /// collapses consecutive hyphens, and trims leading/trailing hyphens.
+#[must_use]
 pub fn sanitize_plugin_id(name: &str) -> String {
     let mut id: String = name
         .to_lowercase()

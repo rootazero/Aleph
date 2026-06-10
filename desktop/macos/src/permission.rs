@@ -1,7 +1,7 @@
 //! macOS TCC permission check and request via native APIs.
 //!
-//! Covers 6 permissions: ScreenRecording, Camera, Microphone,
-//! SpeechRecognition, Accessibility, Notifications.
+//! Covers 6 permissions: `ScreenRecording`, Camera, Microphone,
+//! `SpeechRecognition`, Accessibility, Notifications.
 //!
 //! Three additional bridge-backed methods (`check_permission`, `guide_permission`,
 //! `open_settings`) route to the Swift helper via JSON-RPC (Stage 4).
@@ -64,7 +64,7 @@ pub struct MacOSPermission {
 }
 
 impl MacOSPermission {
-    pub fn new(bridge: Arc<SwiftBridge>) -> Self {
+    pub const fn new(bridge: Arc<SwiftBridge>) -> Self {
         Self { bridge }
     }
 }
@@ -276,7 +276,7 @@ fn request_notifications() -> PermissionStatus {
 // Status mappers
 // ---------------------------------------------------------------------------
 
-fn av_status_to_permission(status: AVAuthorizationStatus) -> PermissionStatus {
+const fn av_status_to_permission(status: AVAuthorizationStatus) -> PermissionStatus {
     match status {
         AVAuthorizationStatus::Authorized => PermissionStatus::Granted,
         AVAuthorizationStatus::Denied => PermissionStatus::Denied,
@@ -286,7 +286,7 @@ fn av_status_to_permission(status: AVAuthorizationStatus) -> PermissionStatus {
     }
 }
 
-fn sf_status_to_permission(status: SFSpeechRecognizerAuthorizationStatus) -> PermissionStatus {
+const fn sf_status_to_permission(status: SFSpeechRecognizerAuthorizationStatus) -> PermissionStatus {
     match status {
         SFSpeechRecognizerAuthorizationStatus::Authorized => PermissionStatus::Granted,
         SFSpeechRecognizerAuthorizationStatus::Denied => PermissionStatus::Denied,
@@ -296,7 +296,7 @@ fn sf_status_to_permission(status: SFSpeechRecognizerAuthorizationStatus) -> Per
     }
 }
 
-fn un_status_to_permission(status: UNAuthorizationStatus) -> PermissionStatus {
+const fn un_status_to_permission(status: UNAuthorizationStatus) -> PermissionStatus {
     match status {
         UNAuthorizationStatus::Authorized
         | UNAuthorizationStatus::Provisional
@@ -311,7 +311,7 @@ fn un_status_to_permission(status: UNAuthorizationStatus) -> PermissionStatus {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn build_info(permission: PermissionKind, status: PermissionStatus) -> PermissionInfo {
+const fn build_info(permission: PermissionKind, status: PermissionStatus) -> PermissionInfo {
     let can_request = matches!(status, PermissionStatus::NotDetermined);
     PermissionInfo {
         permission,

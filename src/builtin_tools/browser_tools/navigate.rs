@@ -148,10 +148,7 @@ impl AlephTool for BrowserNavigateTool {
             Ok((backend, tab_id)) => match backend.history(&tab_id, nav).await {
                 Ok(_) => Ok(BrowserNavigateOutput {
                     success: true,
-                    message: Some(format!(
-                        "Navigated {nav:?} in profile '{}'",
-                        args.profile
-                    )),
+                    message: Some(format!("Navigated {nav:?} in profile '{}'", args.profile)),
                 }),
                 Err(e) => Ok(BrowserNavigateOutput {
                     success: false,

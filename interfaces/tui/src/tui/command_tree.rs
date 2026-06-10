@@ -12,7 +12,7 @@ pub struct CommandEntry {
     pub hint: String,
     pub is_namespace: bool,
     pub param_hint: Option<String>,
-    pub children: Vec<CommandEntry>,
+    pub children: Vec<Self>,
 }
 
 /// A flattened display item for the command palette, produced from
@@ -30,9 +30,9 @@ pub struct DisplayEntry {
 }
 
 impl CommandEntry {
-    /// Parse a list of CommandEntry from a JSON value (the "commands" array
+    /// Parse a list of `CommandEntry` from a JSON value (the "commands" array
     /// returned by the `commands.list` RPC).
-    pub fn parse_from_json(value: &serde_json::Value) -> Vec<CommandEntry> {
+    pub fn parse_from_json(value: &serde_json::Value) -> Vec<Self> {
         let commands = value
             .get("commands")
             .and_then(|v| v.as_array())
@@ -42,7 +42,7 @@ impl CommandEntry {
         commands.iter().filter_map(Self::parse_one).collect()
     }
 
-    fn parse_one(val: &serde_json::Value) -> Option<CommandEntry> {
+    fn parse_one(val: &serde_json::Value) -> Option<Self> {
         let name = val
             .get("name")
             .and_then(|v| v.as_str())
@@ -56,12 +56,12 @@ impl CommandEntry {
             .to_string();
         let is_namespace = val
             .get("is_namespace")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         let param_hint = val
             .get("param_hint")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         let children = val
             .get("children")
@@ -69,7 +69,7 @@ impl CommandEntry {
             .map(|arr| arr.iter().filter_map(Self::parse_one).collect())
             .unwrap_or_default();
 
-        Some(CommandEntry {
+        Some(Self {
             name: name.to_string(),
             hint,
             is_namespace,
@@ -79,12 +79,12 @@ impl CommandEntry {
     }
 
     /// Flatten the root level into display entries.
-    pub fn root_display_entries(entries: &[CommandEntry]) -> Vec<DisplayEntry> {
+    pub fn root_display_entries(entries: &[Self]) -> Vec<DisplayEntry> {
         entries
             .iter()
             .map(|e| {
                 let label = if e.is_namespace {
-                    e.name.to_string()
+                    e.name.clone()
                 } else if let Some(ref ph) = e.param_hint {
                     format!("{} {}", e.name, ph)
                 } else {
@@ -106,7 +106,7 @@ impl CommandEntry {
     }
 
     /// Find a namespace by name at the root level.
-    pub fn find_namespace<'a>(entries: &'a [CommandEntry], name: &str) -> Option<&'a CommandEntry> {
+    pub fn find_namespace<'a>(entries: &'a [Self], name: &str) -> Option<&'a Self> {
         entries
             .iter()
             .find(|e| e.is_namespace && e.name.eq_ignore_ascii_case(name))
@@ -114,7 +114,7 @@ impl CommandEntry {
 
     /// Flatten children of a namespace into display entries.
     pub fn namespace_display_entries(
-        namespace: &CommandEntry,
+        namespace: &Self,
         namespace_path: &str,
     ) -> Vec<DisplayEntry> {
         namespace

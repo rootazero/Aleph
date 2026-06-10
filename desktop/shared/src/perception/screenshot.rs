@@ -116,10 +116,10 @@ pub fn list_displays() -> Result<Vec<DisplayInfo>> {
         .into_iter()
         .map(|m| DisplayInfo {
             id: m.id().unwrap_or(0),
-            name: m.name().unwrap_or_default().to_string(),
+            name: m.name().unwrap_or_default(),
             width: m.width().unwrap_or(0),
             height: m.height().unwrap_or(0),
-            scale_factor: m.scale_factor().unwrap_or(1.0) as f64,
+            scale_factor: f64::from(m.scale_factor().unwrap_or(1.0)),
             is_primary: m.is_primary().unwrap_or(false),
             origin_x: m.x().unwrap_or(0),
             origin_y: m.y().unwrap_or(0),

@@ -11,9 +11,9 @@ use std::fmt;
 pub enum ToolProgressMode {
     /// Suppress all ToolStart/ToolUpdate/ToolEnd display.
     Off,
-    /// Show ToolStart + ToolEnd only; drop mid-execution ToolUpdate noise.
+    /// Show `ToolStart` + `ToolEnd` only; drop mid-execution `ToolUpdate` noise.
     New,
-    /// Show ToolStart + ToolEnd + ToolUpdate (default — preserves the
+    /// Show `ToolStart` + `ToolEnd` + `ToolUpdate` (default — preserves the
     /// pre-`/tools` TUI behaviour and matches hermes-agent's default).
     #[default]
     All,
@@ -34,7 +34,7 @@ impl fmt::Display for ToolProgressMode {
 
 impl ToolProgressMode {
     /// Single-character glyph for the status bar.
-    pub fn glyph(&self) -> char {
+    pub const fn glyph(&self) -> char {
         match self {
             Self::Off => '-',
             Self::New => 'n',
@@ -62,7 +62,7 @@ pub enum LocalCommand {
     ReplayShow { task_id: String },
     /// Show session token usage + cost estimate
     Usage,
-    /// Trigger session compaction (KeepLastN strategy)
+    /// Trigger session compaction (`KeepLastN` strategy)
     Compress,
     /// Abort the currently active run, if any
     Stop,
@@ -107,9 +107,9 @@ pub enum ParsedInput {
     NotSlashCommand,
 }
 
-/// Parse user input into a ParsedInput.
+/// Parse user input into a `ParsedInput`.
 ///
-/// - If input doesn't start with "/", returns NotSlashCommand.
+/// - If input doesn't start with "/", returns `NotSlashCommand`.
 /// - If input matches a local command, returns Local(...).
 /// - Otherwise, returns Gateway(text) — the full original input to send as a chat message.
 pub fn parse_input(input: &str) -> ParsedInput {

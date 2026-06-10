@@ -270,7 +270,7 @@ fn ProviderTierSelect(
 ) -> impl IntoView {
     let i18n = use_i18n();
     let is_local = tier == "local";
-    let tier_for_filter = tier.clone();
+    let tier_for_filter = tier;
     let matching = Signal::derive(move || {
         providers
             .get()
@@ -302,7 +302,7 @@ fn ProviderTierSelect(
                     };
                     let suffix = if p.enabled { "" } else { " (disabled)" };
                     view! {
-                        <option value=p.name.clone()>{label}{suffix}</option>
+                        <option value=p.name>{label}{suffix}</option>
                     }
                 }).collect::<Vec<_>>()}
             </select>
@@ -342,13 +342,13 @@ fn RateLimitEditor(
                             .map(|v| v.to_string()).unwrap_or_default()
                     };
                     let tpm_val = {
-                        let name = name.clone();
+                        let name = name;
                         move || rate_limits.get().get(&name).and_then(|r| r.tpm)
                             .map(|v| v.to_string()).unwrap_or_default()
                     };
                     view! {
                         <div class="flex items-center gap-3 bg-surface-raised rounded-lg border border-border p-3">
-                            <span class="flex-1 text-sm text-text-primary truncate">{p.name.clone()}</span>
+                            <span class="flex-1 text-sm text-text-primary truncate">{p.name}</span>
                             <input
                                 type="number"
                                 min="0"

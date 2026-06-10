@@ -85,6 +85,7 @@ pub struct DesktopAxQueryFocused {
 }
 
 impl DesktopAxQueryFocused {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -135,6 +136,7 @@ pub struct DesktopAxQueryTree {
 }
 
 impl DesktopAxQueryTree {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -189,6 +191,7 @@ pub struct DesktopAxQueryByRole {
 }
 
 impl DesktopAxQueryByRole {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -315,6 +318,7 @@ pub struct DesktopAxSnapshot {
 }
 
 impl DesktopAxSnapshot {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

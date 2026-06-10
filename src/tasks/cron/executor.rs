@@ -64,6 +64,7 @@ pub fn build_cron_executor_fn(
 /// Gateway. Previously this hand-rolled a Gateway-only match and silently
 /// dropped Webhook/Memory targets even though both `DeliveryTarget`
 /// implementations already exist.
+#[must_use]
 pub fn build_cron_alert_dispatcher_fn(delivery_engine: Arc<DeliveryEngine>) -> AlertDispatcherFn {
     Arc::new(move |alerts: Vec<PendingAlert>| {
         let engine = Arc::clone(&delivery_engine);

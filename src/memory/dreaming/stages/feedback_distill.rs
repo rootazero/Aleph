@@ -281,6 +281,7 @@ impl DreamStage for FeedbackDistillStage {
 
 /// Build the LLM prompt for FeedbackDistill with code-injected candidates and
 /// an injection-resistant fence around each user-supplied correction.
+#[must_use]
 pub fn build_feedback_distill_prompt(
     corrections: &[RawMemory],
     existing_candidates: &[String],
@@ -349,6 +350,7 @@ struct DistillResponse {
 /// Tolerant parser shared in spirit with `skill_distill::parse_distill_response`:
 /// extracts the outermost `{...}` JSON object and deserializes it as
 /// `DistillResponse`. Returns empty on any parse failure.
+#[must_use]
 pub fn parse_distill_response(text: &str) -> Vec<DistillAction> {
     let start = match text.find('{') {
         Some(s) => s,

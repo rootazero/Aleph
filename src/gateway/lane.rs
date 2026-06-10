@@ -57,6 +57,7 @@ impl Lane {
     /// The previous implementation defaulted to `Lane::Query`, which let
     /// every uncovered side-effecting method silently bypass idempotency
     /// (Spec 2 / G1 fix).
+    #[must_use]
     pub fn for_method(method: &str) -> Self {
         if let Some(lane) = Self::override_for(method) {
             return lane;
@@ -114,6 +115,7 @@ impl Lane {
 
     /// Whether this lane's methods should be idempotency-guarded.
     /// Query lane is read-only and doesn't need protection.
+    #[must_use]
     pub fn needs_idempotency(&self) -> bool {
         !matches!(self, Lane::Query)
     }
@@ -275,6 +277,7 @@ pub struct LaneManager {
 
 impl LaneManager {
     /// Create a new `LaneManager` from the given configuration.
+    #[must_use]
     pub fn new(config: LaneConfig) -> Self {
         let mut lanes = HashMap::new();
 
@@ -372,6 +375,7 @@ impl LaneManager {
     /// Each entry's `*_available` field is sampled from the underlying
     /// [`Semaphore`] and races with concurrent acquires/releases — treat it
     /// as a gauge, not a transactional reading.
+    #[must_use]
     pub fn snapshot(&self) -> Vec<LaneOccupancy> {
         // Fixed iteration order makes the output stable and predictable.
         // (HashMap iteration would otherwise reshuffle on each call.)

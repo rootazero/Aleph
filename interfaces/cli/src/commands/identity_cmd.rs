@@ -16,7 +16,7 @@ pub async fn get(server_url: &str, json: bool) -> CliResult<()> {
     } else {
         let has_override = result
             .get("has_session_override")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         println!("=== Current Identity ===");
@@ -27,14 +27,14 @@ pub async fn get(server_url: &str, json: bool) -> CliResult<()> {
                 .get("identity")
                 .and_then(|v| v.as_str())
                 .unwrap_or("(empty)");
-            println!("Identity: {}", identity);
+            println!("Identity: {identity}");
 
             if let Some(directives) = soul.get("directives").and_then(|v| v.as_array()) {
                 if !directives.is_empty() {
                     println!("Directives:");
                     for d in directives {
                         if let Some(s) = d.as_str() {
-                            println!("  - {}", s);
+                            println!("  - {s}");
                         }
                     }
                 }
@@ -57,7 +57,7 @@ pub async fn set(server_url: &str, manifest_json: &str, json: bool) -> CliResult
     let (client, _events) = AlephClient::connect(server_url).await?;
 
     let soul: Value = serde_json::from_str(manifest_json)
-        .map_err(|e| CliError::Other(format!("Invalid soul manifest JSON: {}", e)))?;
+        .map_err(|e| CliError::Other(format!("Invalid soul manifest JSON: {e}")))?;
     let params = serde_json::json!({ "soul": soul });
     let result: Value = client.call("identity.set", Some(params)).await?;
 
@@ -82,7 +82,7 @@ pub async fn clear(server_url: &str, json: bool) -> CliResult<()> {
     } else {
         let had = result
             .get("had_override")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if had {
             println!("Session identity override cleared.");
@@ -114,9 +114,8 @@ pub async fn list(server_url: &str, json: bool) -> CliResult<()> {
                     .unwrap_or("-")
                     .to_string(),
                 s.get("loaded")
-                    .and_then(|v| v.as_bool())
-                    .map(|b| if b { "yes" } else { "no" })
-                    .unwrap_or("-")
+                    .and_then(serde_json::Value::as_bool)
+                    .map_or("-", |b| if b { "yes" } else { "no" })
                     .to_string(),
             ]);
         }

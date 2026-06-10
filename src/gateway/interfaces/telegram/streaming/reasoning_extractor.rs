@@ -21,6 +21,7 @@ impl Default for ReasoningExtractor {
 }
 
 impl ReasoningExtractor {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: ExtractorState::Answer,

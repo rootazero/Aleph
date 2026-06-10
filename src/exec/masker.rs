@@ -18,6 +18,7 @@ pub struct SecretMasker {
 
 impl SecretMasker {
     /// Create a new secret masker with default patterns.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }

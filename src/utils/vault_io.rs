@@ -17,10 +17,12 @@ pub struct VaultIo {
 }
 
 impl VaultIo {
+    #[must_use]
     pub fn new(data_dir: &Path) -> Self {
         Self::new_with_path(data_dir.join(VAULT_FILENAME))
     }
 
+    #[must_use]
     pub fn new_with_path(path: PathBuf) -> Self {
         let lock_path = {
             let mut p = path.as_os_str().to_owned();
@@ -30,6 +32,7 @@ impl VaultIo {
         Self { path, lock_path }
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }

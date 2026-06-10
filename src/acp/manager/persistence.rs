@@ -19,6 +19,7 @@ fn acp_sessions_path() -> std::path::PathBuf {
 }
 
 /// Load persisted ACP sessions from disk (best-effort).
+#[must_use]
 pub fn load_persisted_sessions() -> Vec<crate::acp::session::PersistedAcpSession> {
     let path = acp_sessions_path();
     match std::fs::read_to_string(&path) {

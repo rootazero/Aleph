@@ -30,6 +30,7 @@ impl EmailMessageOps {
     /// assert_eq!(EmailMessageOps::extract_agent_from_subject("[coder] Fix the bug"), Some("coder".to_string()));
     /// assert_eq!(EmailMessageOps::extract_agent_from_subject("No brackets"), None);
     /// ```
+    #[must_use]
     pub fn extract_agent_from_subject(subject: &str) -> Option<String> {
         let subject = subject.trim();
         if subject.starts_with('[') {
@@ -47,6 +48,7 @@ impl EmailMessageOps {
     ///
     /// `[agent-name] Hello` -> `"Hello"`
     /// `No brackets` -> `"No brackets"`
+    #[must_use]
     pub fn strip_agent_tag(subject: &str) -> String {
         let subject = subject.trim();
         if subject.starts_with('[') {
@@ -61,6 +63,7 @@ impl EmailMessageOps {
     ///
     /// Prefers plain text part over HTML. Falls back to extracting
     /// text from HTML if no plain text part is available.
+    #[must_use]
     pub fn extract_body_text(raw_email: &[u8]) -> String {
         use mail_parser::MessageParser;
 
@@ -83,6 +86,7 @@ impl EmailMessageOps {
     }
 
     /// Extract sender email address from raw email bytes.
+    #[must_use]
     pub fn extract_sender(raw_email: &[u8]) -> Option<String> {
         use mail_parser::MessageParser;
 
@@ -94,6 +98,7 @@ impl EmailMessageOps {
     }
 
     /// Extract subject from raw email bytes.
+    #[must_use]
     pub fn extract_subject(raw_email: &[u8]) -> Option<String> {
         use mail_parser::MessageParser;
 
@@ -102,6 +107,7 @@ impl EmailMessageOps {
     }
 
     /// Extract Message-ID from raw email bytes.
+    #[must_use]
     pub fn extract_message_id(raw_email: &[u8]) -> Option<String> {
         use mail_parser::MessageParser;
 
@@ -112,6 +118,7 @@ impl EmailMessageOps {
     /// Build a simple HTML email body from Markdown text.
     ///
     /// Wraps the Markdown content in a minimal HTML template.
+    #[must_use]
     pub fn markdown_to_html_email(markdown: &str) -> String {
         // Simple Markdown-to-HTML conversion for email
         let mut html = markdown.to_string();

@@ -502,12 +502,14 @@ fn apply_memory_rlimit(cmd: &mut Command, mb: u64) {
 }
 
 impl SeatbeltDriver {
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Construct with boot-time options (e.g. the config-driven
     /// `deny_read_globs` security floor).
+    #[must_use]
     pub fn with_options(options: SeatbeltOptions) -> Self {
         Self { options }
     }

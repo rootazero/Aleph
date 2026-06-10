@@ -112,6 +112,7 @@ impl DeepgramTtsProvider {
 
     /// Static voice catalogue exposed via `list_voices`. Gender/description
     /// matches Deepgram's published voice cards (as of 2026-05).
+    #[must_use]
     pub fn static_voice_list() -> Vec<VoiceInfo> {
         const VOICES: &[(&str, &str, &str, &str)] = &[
             (

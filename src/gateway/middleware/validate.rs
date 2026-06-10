@@ -12,6 +12,7 @@ use crate::gateway::protocol::{JsonRpcRequest, JsonRpcResponse, INVALID_REQUEST}
 pub struct ValidateLayer;
 
 impl ValidateLayer {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

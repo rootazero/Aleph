@@ -17,7 +17,6 @@ pub mod cluster;
 // Split submodules
 pub mod acp;
 pub mod browser;
-pub mod tauri_bridge;
 pub mod config;
 pub mod discord;
 pub mod embedding;
@@ -36,6 +35,7 @@ pub mod search;
 pub mod security;
 pub mod settings;
 pub mod system;
+pub mod tauri_bridge;
 pub mod teams;
 pub mod trace;
 pub mod workspace;

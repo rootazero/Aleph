@@ -104,6 +104,7 @@ pub fn detect_by_extension(ext: &str) -> Result<MediaType, MediaError> {
 }
 
 /// Detect media type from file magic bytes (first 16 bytes).
+#[must_use]
 pub fn detect_by_magic(bytes: &[u8]) -> MediaType {
     if bytes.len() < 4 {
         return MediaType::Unknown;

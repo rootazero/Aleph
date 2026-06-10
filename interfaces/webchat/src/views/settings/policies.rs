@@ -200,7 +200,7 @@ pub fn PoliciesView() -> impl IntoView {
                                 {current_groups.into_iter().map(|group| {
                                     let group_tools: Vec<String> = group.tools.iter().map(|t| t.name.clone()).collect();
                                     let gt_toggle = group_tools.clone();
-                                    let gt_check = group_tools.clone();
+                                    let gt_check = group_tools;
 
                                     view! {
                                         <div class="bg-surface-raised border border-border rounded-xl overflow-hidden">
@@ -216,7 +216,7 @@ pub fn PoliciesView() -> impl IntoView {
                                                         }
                                                     })
                                                     class=("bg-border", {
-                                                        let gt = gt_check.clone();
+                                                        let gt = gt_check;
                                                         move || {
                                                             let perms = tool_perms.get();
                                                             !gt.iter().all(|t| perms.get(t).map(|v| v == ALLOW).unwrap_or(false))
@@ -252,8 +252,8 @@ pub fn PoliciesView() -> impl IntoView {
                                                     view! {
                                                         <div class="flex items-center justify-between px-5 py-2.5">
                                                             <div class="flex-1 min-w-0">
-                                                                <span class="text-sm font-medium text-text-primary">{tn.clone()}</span>
-                                                                <p class="text-xs text-text-tertiary truncate mt-0.5">{tool.description.clone()}</p>
+                                                                <span class="text-sm font-medium text-text-primary">{tn}</span>
+                                                                <p class="text-xs text-text-tertiary truncate mt-0.5">{tool.description}</p>
                                                             </div>
                                                             <div class="ml-4 flex-shrink-0">
                                                                 <PolicySegmentedControl
@@ -262,7 +262,7 @@ pub fn PoliciesView() -> impl IntoView {
                                                                         perms.get(&tn_perm).cloned().unwrap_or_else(|| default_perm.get())
                                                                     })
                                                                     on_change={
-                                                                        let tn_c = tn_set.clone();
+                                                                        let tn_c = tn_set;
                                                                         move |level: String| {
                                                                             set_tool_perm(tn_c.clone(), level);
                                                                         }
@@ -480,7 +480,7 @@ fn PolicySegmentedControl(
         move |_| cb(ASK.to_string())
     };
     let on_deny = {
-        let cb = on_change.clone();
+        let cb = on_change;
         move |_| cb(DENY.to_string())
     };
 

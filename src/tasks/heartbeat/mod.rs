@@ -52,6 +52,7 @@ impl HeartbeatService {
     }
 
     /// Builder: attach an event bus for `HeartbeatTaskChanged` push.
+    #[must_use]
     pub fn with_event_bus(mut self, bus: Arc<crate::gateway::event_bus::GatewayEventBus>) -> Self {
         self.event_bus = Some(bus);
         self
@@ -70,11 +71,13 @@ impl HeartbeatService {
     }
 
     /// Access the shared service state (for the timer loop).
+    #[must_use]
     pub fn state(&self) -> &Arc<HeartbeatServiceState> {
         &self.state
     }
 
     /// Access the wake queue (for external wake triggers).
+    #[must_use]
     pub fn wake_queue(&self) -> &Arc<wake::WakeQueue> {
         &self.wake_queue
     }

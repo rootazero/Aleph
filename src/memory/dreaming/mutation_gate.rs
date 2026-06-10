@@ -28,6 +28,7 @@ pub struct MutationGate {
 }
 
 impl MutationGate {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             merge_history: VecDeque::with_capacity(MERGE_CYCLE_WINDOW),
@@ -89,6 +90,7 @@ impl MutationGate {
         }
     }
 
+    #[must_use]
     pub fn evaluate(&self) -> GateDecision {
         if self.cooldown > 0 {
             return GateDecision::Conserve {

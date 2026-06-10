@@ -37,6 +37,7 @@ pub const MENTION_ALL: &str = "*all*";
 ///
 /// See the module docs for the full grammar. Returns identifiers in document
 /// order with duplicates removed.
+#[must_use]
 pub fn extract_mentions(content: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();

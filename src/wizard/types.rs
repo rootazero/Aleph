@@ -170,6 +170,7 @@ impl WizardStep {
     }
 
     /// Mark as sensitive input
+    #[must_use]
     pub fn with_sensitive(mut self, sensitive: bool) -> Self {
         self.sensitive = sensitive;
         self
@@ -222,6 +223,7 @@ impl WizardOption {
     }
 
     /// Mark as disabled
+    #[must_use]
     pub fn disabled(mut self) -> Self {
         self.disabled = true;
         self
@@ -250,6 +252,7 @@ pub struct WizardNextResult {
 
 impl WizardNextResult {
     /// Create a "next step" result
+    #[must_use]
     pub fn step(step: WizardStep) -> Self {
         Self {
             done: false,
@@ -261,6 +264,7 @@ impl WizardNextResult {
     }
 
     /// Create a "done" result
+    #[must_use]
     pub fn done() -> Self {
         Self {
             done: true,
@@ -272,6 +276,7 @@ impl WizardNextResult {
     }
 
     /// Done with a flow-specific payload (e.g. issued token).
+    #[must_use]
     pub fn done_with_data(data: Value) -> Self {
         Self {
             done: true,
@@ -283,6 +288,7 @@ impl WizardNextResult {
     }
 
     /// Create a "cancelled" result
+    #[must_use]
     pub fn cancelled() -> Self {
         Self {
             done: true,

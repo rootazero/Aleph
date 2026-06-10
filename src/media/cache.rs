@@ -61,6 +61,7 @@ pub struct MediaCache {
 
 impl MediaCache {
     /// Create a new cache with a shared HTTP client.
+    #[must_use]
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
             .timeout(DOWNLOAD_TIMEOUT)

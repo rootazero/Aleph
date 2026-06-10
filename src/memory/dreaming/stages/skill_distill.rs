@@ -207,6 +207,7 @@ impl DreamStage for SkillDistillStage {
 /// The prompt instructs the LLM to choose one of four `DistillAction` variants
 /// (`new`/`strengthen`/`supersede`/`skip`) per insight and to reference
 /// candidate IDs verbatim when strengthening or superseding.
+#[must_use]
 pub fn build_distill_prompt_with_candidates(
     synthesis_text: &str,
     source_category: &str,
@@ -254,6 +255,7 @@ struct DistillResponse {
 /// Tolerant parser: extracts the outermost `{...}` JSON object from the LLM
 /// response text and deserializes it as `DistillResponse`. Returns empty on
 /// any parse failure.
+#[must_use]
 pub fn parse_distill_response(text: &str) -> Vec<DistillAction> {
     let start = match text.find('{') {
         Some(s) => s,

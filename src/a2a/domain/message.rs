@@ -100,6 +100,7 @@ impl A2AMessage {
     }
 
     /// Extract all text parts concatenated with newlines
+    #[must_use]
     pub fn text_content(&self) -> String {
         self.parts
             .iter()

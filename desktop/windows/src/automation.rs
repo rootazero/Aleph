@@ -12,7 +12,8 @@ pub struct WindowsAutomation {
 }
 
 impl WindowsAutomation {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self { _private: () }
     }
 }

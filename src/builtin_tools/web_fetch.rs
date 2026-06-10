@@ -7,6 +7,7 @@ use crate::config::WebFetchPolicy;
 use crate::error::Result;
 use crate::security::content_sanitizer::{wrap_external_content, ContentSource};
 use crate::security::ssrf::{safe_fetch, SafeFetchRequest, SsrfPolicy};
+use crate::sync_primitives::Mutex;
 use crate::tools::AlephTool;
 use async_trait::async_trait;
 use lru::LruCache;
@@ -16,7 +17,6 @@ use schemars::JsonSchema;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroUsize;
-use crate::sync_primitives::Mutex;
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 
@@ -294,6 +294,7 @@ impl WebFetchTool {
     const MAX_RESPONSE_BYTES: usize = 10 * 1024 * 1024;
 
     /// Create a new WebFetchTool with default settings
+    #[must_use]
     pub fn new() -> Self {
         Self {
             max_content_length: Self::DEFAULT_MAX_CONTENT_LENGTH,
@@ -306,12 +307,14 @@ impl WebFetchTool {
     }
 
     /// Set the SSRF policy
+    #[must_use]
     pub fn with_ssrf_policy(mut self, policy: SsrfPolicy) -> Self {
         self.ssrf_policy = policy;
         self
     }
 
     /// Create a new WebFetchTool with policy configuration
+    #[must_use]
     pub fn with_policy(policy: &WebFetchPolicy) -> Self {
         Self {
             max_content_length: policy.max_content_length as usize,

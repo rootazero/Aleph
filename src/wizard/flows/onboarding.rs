@@ -34,6 +34,7 @@ pub struct OnboardingFlow;
 
 impl OnboardingFlow {
     /// Create a new onboarding flow
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -332,6 +333,7 @@ impl WizardFlow for OnboardingFlow {
 pub struct QuickSetupFlow;
 
 impl QuickSetupFlow {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -382,6 +384,7 @@ pub struct ProviderSetupFlow {
 }
 
 impl ProviderSetupFlow {
+    #[must_use]
     pub fn new(provider: Option<String>) -> Self {
         Self { provider }
     }

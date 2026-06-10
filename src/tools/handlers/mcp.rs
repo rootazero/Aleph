@@ -53,7 +53,13 @@ impl McpHandler {
     }
 
     /// Attach annotation-derived scheduling/approval flags.
-    pub fn with_flags(mut self, read_only: bool, idempotent: bool, requires_approval: bool) -> Self {
+    #[must_use]
+    pub fn with_flags(
+        mut self,
+        read_only: bool,
+        idempotent: bool,
+        requires_approval: bool,
+    ) -> Self {
         self.metadata.concurrent_safe = read_only;
         self.metadata.idempotent = idempotent;
         self.metadata.requires_approval = requires_approval;
@@ -70,6 +76,7 @@ impl McpHandler {
     /// redundant prefix is stripped before composing so the LLM never sees
     /// `server__server:tool`, and any residual unsafe character (`:`, `.`,
     /// unicode) is mapped to `_`.
+    #[must_use]
     pub fn qualified_name(&self) -> String {
         let short = self
             .tool_name

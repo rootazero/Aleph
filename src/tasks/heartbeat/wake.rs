@@ -54,6 +54,7 @@ pub struct WakeQueue {
 }
 
 impl WakeQueue {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pending: Mutex::new(HashMap::new()),

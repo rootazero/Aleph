@@ -263,6 +263,7 @@ impl ExtensionWatcher {
     }
 
     /// Check if the watcher is running
+    #[must_use]
     pub fn is_running(&self) -> bool {
         self.debouncer
             .lock()
@@ -335,6 +336,7 @@ impl Default for InternalWriteTracker {
 impl InternalWriteTracker {
     /// Construct a tracker with a custom TTL. Tests use a short TTL to
     /// avoid sleeping for seconds.
+    #[must_use]
     pub fn with_ttl(ttl: Duration) -> Self {
         Self {
             recent: Mutex::new(HashMap::new()),

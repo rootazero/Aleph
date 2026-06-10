@@ -157,6 +157,7 @@ impl SubagentTool {
 
     /// Phase 3 — wire the per-`provider_hint` override registry. A subagent
     /// whose `AgentDef.provider_hint` matches a key runs on that provider.
+    #[must_use]
     pub fn with_provider_overrides(
         mut self,
         overrides: HashMap<String, Arc<dyn AiProvider>>,
@@ -166,6 +167,7 @@ impl SubagentTool {
     }
 
     /// B2 — wire the global plugin registry for per-agent MCP scope.
+    #[must_use]
     pub fn with_plugin_registry(
         mut self,
         registry: Arc<crate::extension::registry::PluginRegistry>,
@@ -175,36 +177,42 @@ impl SubagentTool {
     }
 
     /// B3 — wire the stall watchdog config inherited by subagents.
+    #[must_use]
     pub fn with_stall_config(mut self, config: crate::harness::StallConfig) -> Self {
         self.stall_config = Some(config);
         self
     }
 
     /// B3 — wire the consecutive-failure cap inherited by subagents.
+    #[must_use]
     pub fn with_consecutive_failure_cap(mut self, cap: usize) -> Self {
         self.consecutive_failure_cap = Some(cap);
         self
     }
 
     /// B3 — wire the per-turn wall-clock timeout inherited by subagents.
+    #[must_use]
     pub fn with_turn_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.turn_timeout = Some(timeout);
         self
     }
 
     /// Set the teammate manager for auto team creation/registration.
+    #[must_use]
     pub fn with_teammate_manager(mut self, mgr: Arc<TeammateManager>) -> Self {
         self.teammate_manager = Some(mgr);
         self
     }
 
     /// Set the message router for send_message actions.
+    #[must_use]
     pub fn with_message_router(mut self, router: Arc<MessageRouter>) -> Self {
         self.message_router = Some(router);
         self
     }
 
     /// Set the inbox for read_inbox actions.
+    #[must_use]
     pub fn with_inbox(mut self, inbox: Arc<Inbox>) -> Self {
         self.inbox = Some(inbox);
         self
@@ -249,6 +257,7 @@ impl SubagentTool {
 
     /// A3 — wire the parent run's cancellation token so spawned subagents
     /// stop when the parent is cancelled.
+    #[must_use]
     pub fn with_cancel_token(mut self, token: CancellationToken) -> Self {
         self.parent_cancel = Some(token);
         self

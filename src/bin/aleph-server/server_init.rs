@@ -235,7 +235,7 @@ where
 
     // Spawn execution task
     let engine_clone = engine.clone();
-    let emitter_clone = emitter.clone();
+    let emitter_clone = emitter;
     let run_id_clone = run_id.clone();
     tokio::spawn(async move {
         match engine_clone

@@ -1,4 +1,4 @@
-use aleph_desktop::pim_types::*;
+use aleph_desktop::pim_types::{MailFolder, MailMessage, MailMessageDetail, MailAttachment, NoteInfo, NoteContent, CalendarEvent, NewCalendarEvent, CalendarInfo, Reminder, NewReminder, ReminderList, Contact, ContactDetail, ContactGroup};
 use aleph_desktop::traits::PimCapability;
 use aleph_desktop::{DesktopError, Result};
 use async_trait::async_trait;
@@ -7,7 +7,8 @@ use chrono::{DateTime, TimeZone, Utc};
 pub struct WindowsPim;
 
 impl WindowsPim {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self
     }
 
@@ -139,7 +140,7 @@ impl PimCapability for WindowsPim {
                     $subject = $item.Subject
                     $sender = $item.SenderName
                     $body = $item.Body
-                    if ($subject -like "*{query}*" -or $sender -like "*{query}*" -or $body -like "*{query}*") {{
+                    if ($subject -like "*{escaped_query}*" -or $sender -like "*{escaped_query}*" -or $body -like "*{escaped_query}*") {{
                         $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
                         $messages += [PSCustomObject]@{{
                             id=$item.EntryID
@@ -158,10 +159,7 @@ impl PimCapability for WindowsPim {
                 Write-Error "Outlook error: $_"
                 exit 1
             }}
-            "#,
-            folder_path = folder_path,
-            query = escaped_query,
-            limit = limit
+            "#
         );
 
         let output = self.run_powershell(&script).await?;
@@ -199,7 +197,7 @@ impl PimCapability for WindowsPim {
                     .get("recipients")?
                     .as_array()?
                     .iter()
-                    .filter_map(|r| r.as_str().map(|s| s.to_string()))
+                    .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
                     .collect();
 
                 Some(MailMessage {
@@ -232,7 +230,7 @@ impl PimCapability for WindowsPim {
             try {{
                 $outlook = New-Object -ComObject Outlook.Application
                 $ns = $outlook.GetNamespace("MAPI")
-                $item = $ns.GetItemFromID("{id}")
+                $item = $ns.GetItemFromID("{escaped_id}")
                 $date = $item.ReceivedTime.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
                 $recipients = @($item.To -split ';' | ForEach-Object {{ $_.Trim() }})
                 $cc = @($item.CC -split ';' | ForEach-Object {{ $_.Trim() }})
@@ -260,8 +258,7 @@ impl PimCapability for WindowsPim {
                 Write-Error "Outlook error: $_"
                 exit 1
             }}
-            "#,
-            id = escaped_id
+            "#
         );
 
         let output = self.run_powershell(&script).await?;
@@ -283,16 +280,14 @@ impl PimCapability for WindowsPim {
             .and_then(|d| d.as_str())
             .unwrap_or("1970-01-01T00:00:00Z");
         let date = DateTime::parse_from_rfc3339(date_str)
-            .ok()
-            .map(|d| d.with_timezone(&Utc))
-            .unwrap_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap_or(Utc::now()));
+            .ok().map_or_else(|| Utc.timestamp_opt(0, 0).single().unwrap_or(Utc::now()), |d| d.with_timezone(&Utc));
 
         let recipients = v
             .get("recipients")
             .and_then(|r| r.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|r| r.as_str().map(|s| s.to_string()))
+                    .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
                     .collect()
             })
             .unwrap_or_default();
@@ -302,7 +297,7 @@ impl PimCapability for WindowsPim {
             .and_then(|r| r.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|r| r.as_str().map(|s| s.to_string()))
+                    .filter_map(|r| r.as_str().map(std::string::ToString::to_string))
                     .collect()
             })
             .unwrap_or_default();
@@ -348,7 +343,7 @@ impl PimCapability for WindowsPim {
                 .and_then(|s| s.as_str())
                 .unwrap_or("")
                 .to_string(),
-            is_read: v.get("is_read").and_then(|b| b.as_bool()).unwrap_or(true),
+            is_read: v.get("is_read").and_then(serde_json::Value::as_bool).unwrap_or(true),
             attachments,
         })
     }

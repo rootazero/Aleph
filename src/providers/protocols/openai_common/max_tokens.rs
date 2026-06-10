@@ -8,6 +8,7 @@
 //! The Responses protocol is unaffected — it uses `max_output_tokens`.
 
 /// Returns true if the model requires `max_completion_tokens` instead of `max_tokens`.
+#[must_use]
 pub fn uses_max_completion_tokens(model: &str) -> bool {
     let m = model.trim();
     m.starts_with("o1-") || m.starts_with("o3-") || m.starts_with("o4-") || m.starts_with("gpt-5")

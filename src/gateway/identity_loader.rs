@@ -35,6 +35,7 @@ pub struct IdentityFileLoader {
 
 impl IdentityFileLoader {
     /// Create a new loader with an empty cache.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             cache: HashMap::new(),

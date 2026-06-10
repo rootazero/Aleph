@@ -45,6 +45,7 @@ pub struct CacheMonitor {
 
 impl CacheMonitor {
     /// Create a new monitor with empty state.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             state: Mutex::new(MonitorState::new()),

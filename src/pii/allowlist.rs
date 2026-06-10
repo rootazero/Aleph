@@ -71,6 +71,7 @@ impl Default for PiiAllowlist {
 
 impl PiiAllowlist {
     /// Check if a matched value should be excluded from PII detection
+    #[must_use]
     pub fn is_allowed(&self, value: &str, rule_name: &str) -> bool {
         match rule_name {
             "phone" => self.test_phones.contains(value),

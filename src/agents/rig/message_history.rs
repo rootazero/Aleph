@@ -26,6 +26,7 @@ pub enum MessageRole {
 
 impl MessageRole {
     /// Get the role as a string for API calls
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             MessageRole::System => "system",
@@ -98,6 +99,7 @@ impl ChatMessage {
     }
 
     /// Create an assistant message with tool calls
+    #[must_use]
     pub fn assistant_with_tool_calls(
         content: Option<String>,
         tool_calls: Vec<ToolCallInfo>,
@@ -117,6 +119,7 @@ impl ChatMessage {
     /// extracted_knowledge) are prepended to the content so they are available
     /// to the LLM in subsequent turns even though they are not stored as
     /// first-class message fields.
+    #[must_use]
     pub fn tool_result(result: &ToolCallResult) -> Self {
         let mut content_parts = Vec::new();
 
@@ -177,11 +180,13 @@ impl ChatMessage {
     }
 
     /// Check if this message has tool calls
+    #[must_use]
     pub fn has_tool_calls(&self) -> bool {
         self.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty())
     }
 
     /// Convert to JSON value for API calls (OpenAI format)
+    #[must_use]
     pub fn to_openai_format(&self) -> Value {
         let mut msg = serde_json::json!({
             "role": self.role.as_str()
@@ -222,6 +227,7 @@ impl ChatMessage {
     }
 
     /// Convert to JSON value for API calls (Anthropic format)
+    #[must_use]
     pub fn to_anthropic_format(&self) -> Value {
         match self.role {
             MessageRole::System => {
@@ -303,6 +309,7 @@ pub struct ConversationHistory {
 
 impl ConversationHistory {
     /// Create a new empty conversation
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -321,6 +328,7 @@ impl ConversationHistory {
     }
 
     /// Get the system prompt
+    #[must_use]
     pub fn system_prompt(&self) -> Option<&str> {
         self.system_prompt.as_deref()
     }
@@ -351,31 +359,37 @@ impl ConversationHistory {
     }
 
     /// Get all messages (excluding system prompt)
+    #[must_use]
     pub fn messages(&self) -> &[ChatMessage] {
         &self.messages
     }
 
     /// Get the number of messages
+    #[must_use]
     pub fn len(&self) -> usize {
         self.messages.len()
     }
 
     /// Check if conversation is empty
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.messages.is_empty()
     }
 
     /// Get the last message
+    #[must_use]
     pub fn last_message(&self) -> Option<&ChatMessage> {
         self.messages.last()
     }
 
     /// Check if the last message has pending tool calls
+    #[must_use]
     pub fn has_pending_tool_calls(&self) -> bool {
         self.messages.last().is_some_and(|m| m.has_tool_calls())
     }
 
     /// Convert to OpenAI API format
+    #[must_use]
     pub fn to_openai_messages(&self) -> Vec<Value> {
         let mut messages = Vec::new();
 
@@ -396,6 +410,7 @@ impl ConversationHistory {
     }
 
     /// Convert to Anthropic API format
+    #[must_use]
     pub fn to_anthropic_messages(&self) -> (Option<String>, Vec<Value>) {
         let messages: Vec<Value> = self
             .messages

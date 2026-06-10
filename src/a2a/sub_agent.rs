@@ -214,8 +214,20 @@ impl A2ASubAgent {
                     tracing::warn!("Failed to serialize A2ATask: {}", e);
                     serde_json::Value::Null
                 });
-                let result =
-                    SubAgentResult::success(request.id.clone(), summary).with_output(output);
+                // A transport-level success can still carry a task that ended in
+                // a failed terminal state — mirror fold_stream (streaming path)
+                // and report it as a failure instead of a false success.
+                let failed = matches!(
+                    task.status.state,
+                    crate::a2a::domain::TaskState::Failed
+                        | crate::a2a::domain::TaskState::Rejected
+                        | crate::a2a::domain::TaskState::Canceled
+                );
+                let result = if failed {
+                    SubAgentResult::failure(request.id.clone(), summary).with_output(output)
+                } else {
+                    SubAgentResult::success(request.id.clone(), summary).with_output(output)
+                };
 
                 // Spec 1 G2: record delegation outcome for parent-agent memory.
                 if let Some(w) = self.raw_memory_writer.clone() {

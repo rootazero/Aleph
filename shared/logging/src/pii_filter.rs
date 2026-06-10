@@ -1,6 +1,6 @@
 /// PII scrubbing format layer for tracing
 ///
-/// Custom FormatEvent implementation that scrubs PII from all log messages
+/// Custom `FormatEvent` implementation that scrubs PII from all log messages
 /// before writing to console or file output.
 use crate::pii::scrub_pii;
 use tracing::{field::Visit, Event, Subscriber};
@@ -16,6 +16,7 @@ impl<S: Subscriber> Layer<S> for PiiScrubbingLayer {
 }
 
 /// Create a PII scrubbing format layer
+#[must_use]
 pub fn create_pii_scrubbing_layer<S>() -> Box<dyn Layer<S> + Send + Sync + 'static>
 where
     S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
@@ -49,13 +50,13 @@ where
         let level = metadata.level();
         let target = metadata.target();
 
-        write!(writer, "{} {:5} {}: ", timestamp, level, target)?;
+        write!(writer, "{timestamp} {level:5} {target}: ")?;
 
         let mut visitor = StringVisitor::default();
         event.record(&mut visitor);
 
         let scrubbed_message = scrub_pii(&visitor.message);
-        write!(writer, "{}", scrubbed_message)?;
+        write!(writer, "{scrubbed_message}")?;
 
         if let Some(scope) = ctx.event_scope() {
             let mut seen = false;
@@ -71,7 +72,7 @@ where
 
                 write!(writer, "{}{{", span.name())?;
                 if !fields.is_empty() {
-                    write!(writer, "{}", fields)?;
+                    write!(writer, "{fields}")?;
                 }
                 write!(writer, "}}")?;
             }
@@ -107,7 +108,7 @@ impl Visit for StringVisitor {
             self.message.push_str(", ");
         }
         let _ = if field.name() == "message" {
-            write!(&mut self.message, "{:?}", value)
+            write!(&mut self.message, "{value:?}")
         } else {
             write!(&mut self.message, "{}={:?}", field.name(), value)
         };

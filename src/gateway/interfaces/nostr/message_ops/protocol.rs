@@ -11,6 +11,7 @@ use super::types::{NostrEvent, RelayMessage};
 ///
 /// The canonical format per NIP-01 is:
 /// `[0, <pubkey>, <created_at>, <kind>, <tags>, <content>]`
+#[must_use]
 pub fn compute_event_id(
     pubkey: &str,
     created_at: u64,
@@ -38,6 +39,7 @@ fn now_unix() -> u64 {
 ///
 /// Creates a public text note. The `sig` field is left empty;
 /// use `sign_event()` to sign before publishing.
+#[must_use]
 pub fn build_text_note(content: &str, pubkey: &str) -> NostrEvent {
     let created_at = now_unix();
     let tags: Vec<Vec<String>> = Vec::new();
@@ -62,6 +64,7 @@ pub fn build_text_note(content: &str, pubkey: &str) -> NostrEvent {
 /// as a future enhancement.
 ///
 /// Tags include `["p", <recipient_pubkey>]` to identify the recipient.
+#[must_use]
 pub fn build_dm(content: &str, pubkey: &str, recipient_pubkey: &str) -> NostrEvent {
     let created_at = now_unix();
     let tags = vec![vec!["p".to_string(), recipient_pubkey.to_string()]];
@@ -82,6 +85,7 @@ pub fn build_dm(content: &str, pubkey: &str, recipient_pubkey: &str) -> NostrEve
 ///
 /// Creates a reaction (e.g., "+") to an existing event.
 /// Tags include `["e", <event_id>]` and `["p", <author_pubkey>]`.
+#[must_use]
 pub fn build_reaction(
     reaction: &str,
     event_id: &str,
@@ -112,6 +116,7 @@ pub fn build_reaction(
 /// by the bot's own pubkey (to receive DMs addressed to it).
 ///
 /// Format: `["REQ", <subscription_id>, {kinds: [...], #p: [<pubkey>]}]`
+#[must_use]
 pub fn build_subscription(sub_id: &str, pubkey: &str, kinds: &[u64]) -> String {
     let filter = serde_json::json!({
         "kinds": kinds,
@@ -124,6 +129,7 @@ pub fn build_subscription(sub_id: &str, pubkey: &str, kinds: &[u64]) -> String {
 /// Build an EVENT publish message.
 ///
 /// Format: `["EVENT", <event_json>]`
+#[must_use]
 pub fn build_event_message(event: &NostrEvent) -> String {
     let msg = serde_json::json!(["EVENT", event]);
     serde_json::to_string(&msg).unwrap_or_default()
@@ -132,6 +138,7 @@ pub fn build_event_message(event: &NostrEvent) -> String {
 /// Build a CLOSE subscription message.
 ///
 /// Format: `["CLOSE", <subscription_id>]`
+#[must_use]
 pub fn build_close_message(sub_id: &str) -> String {
     let msg = serde_json::json!(["CLOSE", sub_id]);
     serde_json::to_string(&msg).unwrap_or_default()
@@ -141,6 +148,7 @@ pub fn build_close_message(sub_id: &str) -> String {
 ///
 /// Relay messages are JSON arrays with the message type as the first element.
 /// Returns `None` for unrecognized or malformed messages.
+#[must_use]
 pub fn parse_relay_message(msg: &str) -> Option<RelayMessage> {
     let parsed: serde_json::Value = serde_json::from_str(msg).ok()?;
     let arr = parsed.as_array()?;

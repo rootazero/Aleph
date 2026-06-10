@@ -32,6 +32,7 @@ pub trait EmbeddingProvider: Send + Sync {
 /// storage dimension. Borrowed from OpenViking's design.
 ///
 /// If `embedding.len() <= target_dim`, returns the embedding unchanged.
+#[must_use]
 pub fn truncate_and_normalize(embedding: Vec<f32>, target_dim: usize) -> Vec<f32> {
     if embedding.len() <= target_dim {
         return embedding;

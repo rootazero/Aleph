@@ -163,6 +163,7 @@ pub struct AuthorInfo {
 
 impl AuthorInfo {
     /// Check if this author info has any content
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.name.is_none() && self.email.is_none() && self.url.is_none()
     }
@@ -323,6 +324,7 @@ pub struct PluginManifest {
 
 impl PluginManifest {
     /// Create a new plugin manifest with required fields
+    #[must_use]
     pub fn new(id: String, name: String, kind: PluginKind, entry: PathBuf) -> Self {
         Self {
             id,
@@ -358,6 +360,7 @@ impl PluginManifest {
     }
 
     /// Set the root directory and return self (builder pattern)
+    #[must_use]
     pub fn with_root_dir(mut self, root: PathBuf) -> Self {
         self.root_dir = root;
         self
@@ -401,11 +404,13 @@ impl PluginManifest {
     }
 
     /// Check if this manifest has configuration schema
+    #[must_use]
     pub fn has_config(&self) -> bool {
         self.config_schema.is_some()
     }
 
     /// Check if this manifest requires any permissions
+    #[must_use]
     pub fn requires_permissions(&self) -> bool {
         !self.permissions.is_empty()
     }

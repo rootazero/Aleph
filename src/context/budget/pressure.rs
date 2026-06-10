@@ -113,6 +113,7 @@ const CODE_RATIO: f64 = 2.5;
 /// caller's `prose_ratio` as the anchor means a configured estimate ratio still
 /// governs prose, so wiring this into the budget sensor stays backward-compatible
 /// for English conversations while fixing the CJK/code blind spots.
+#[must_use]
 pub fn content_ratio_with_baseline(text: &str, prose_ratio: f64) -> f64 {
     if text.is_empty() {
         return prose_ratio;
@@ -142,11 +143,13 @@ pub fn content_ratio_with_baseline(text: &str, prose_ratio: f64) -> f64 {
 /// - Returns `3.5` for default English prose.
 ///
 /// This is [`content_ratio_with_baseline`] anchored at [`DEFAULT_PROSE_RATIO`].
+#[must_use]
 pub fn detect_content_ratio(text: &str) -> f64 {
     content_ratio_with_baseline(text, DEFAULT_PROSE_RATIO)
 }
 
 /// Estimates token count using content-aware ratio detection.
+#[must_use]
 pub fn estimate_tokens_smart(content: &str) -> usize {
     estimate_tokens_aware(content, DEFAULT_PROSE_RATIO)
 }
@@ -158,6 +161,7 @@ pub fn estimate_tokens_smart(content: &str) -> usize {
 /// chars-per-token anchor (e.g. a configured `token_estimate_ratio`), while CJK
 /// and code content still override with their denser ratios. Counts Unicode
 /// scalar values, not UTF-8 bytes, so CJK text is not over-counted ~3×.
+#[must_use]
 pub fn estimate_tokens_aware(content: &str, prose_ratio: f64) -> usize {
     let ratio = content_ratio_with_baseline(content, prose_ratio);
     if ratio <= 0.0 {
@@ -191,6 +195,7 @@ pub const IMAGE_TOKENS_ESTIMATE: usize = 1500;
 ///
 /// Image-free messages contain no image blocks, so this is byte-identical to
 /// `estimate_tokens_aware(&msg.text_content(), prose_ratio)` for the common case.
+#[must_use]
 pub fn estimate_message_tokens_aware(msg: &UnifiedMessage, prose_ratio: f64) -> usize {
     let text_tokens = estimate_tokens_aware(&msg.text_content(), prose_ratio);
     let image_count = msg

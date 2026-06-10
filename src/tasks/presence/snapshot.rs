@@ -23,6 +23,7 @@ pub enum IdleState {
 
 impl IdleState {
     /// Classify by elapsed idle time. Mirrors openclaw's PresenceReporter thresholds.
+    #[must_use]
     pub fn classify(idle_seconds: Option<f64>) -> Self {
         match idle_seconds {
             None => IdleState::Unknown,

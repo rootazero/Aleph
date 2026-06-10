@@ -85,6 +85,7 @@ pub struct UsageStats {
 impl UsageStats {
     /// Newest activity timestamp across use / view / patch. Returns
     /// `None` if the skill has only been created and never touched.
+    #[must_use]
     pub fn latest_activity_at(&self) -> Option<&str> {
         [
             self.last_used_at.as_deref(),
@@ -97,6 +98,7 @@ impl UsageStats {
     }
 
     /// Total observed activity events (use + view + patch).
+    #[must_use]
     pub fn activity_count(&self) -> u64 {
         self.use_count
             .saturating_add(self.view_count)
@@ -174,11 +176,13 @@ impl UsageStore {
     }
 
     /// Read stats for one skill, if any.
+    #[must_use]
     pub fn get(&self, skill: &str) -> Option<UsageStats> {
         self.load_map().get(skill).cloned()
     }
 
     /// Snapshot the entire usage map. Used by status reporting.
+    #[must_use]
     pub fn snapshot(&self) -> HashMap<String, UsageStats> {
         self.load_map()
     }

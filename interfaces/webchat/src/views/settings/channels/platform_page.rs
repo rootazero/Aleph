@@ -135,7 +135,7 @@ pub fn ChannelPlatformPage(platform_type: String) -> impl IntoView {
         new_error.set(None);
 
         let pt = platform_type_stored.get_value();
-        let id = trimmed.clone();
+        let id = trimmed;
         spawn_local(async move {
             match state
                 .rpc_call("channel.create", json!({ "type": pt, "id": id }))

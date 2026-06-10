@@ -65,6 +65,7 @@ impl MemoryReflectTool {
     }
 
     /// Attach the reflector instance (called by Task 8 server builder).
+    #[must_use]
     pub fn with_reflector(mut self, reflector: Arc<MemoryReflector>) -> Self {
         self.reflector = Some(reflector);
         self

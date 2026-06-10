@@ -33,11 +33,13 @@ pub struct VaultCheck {
 }
 
 impl VaultCheck {
+    #[must_use]
     pub fn new(vault_path: PathBuf) -> Self {
         Self { vault_path }
     }
 
     /// Build against the default `~/.aleph/secrets.vault`.
+    #[must_use]
     pub fn from_default_path() -> Self {
         Self::new(SecretVault::default_path())
     }

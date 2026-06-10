@@ -1,4 +1,4 @@
-//! Clipboard access via NSPasteboard.
+//! Clipboard access via `NSPasteboard`.
 
 use aleph_desktop::system_types::ClipboardContent;
 use aleph_desktop::{DesktopError, Result};
@@ -44,7 +44,7 @@ pub fn write(text: &str) -> Result<()> {
 }
 
 /// Try to read an image from the pasteboard.
-/// Returns (has_image, optional_base64_png).
+/// Returns (`has_image`, `optional_base64_png`).
 fn read_image(pb: &NSPasteboard) -> (bool, Option<String>) {
     let types = match pb.types() {
         Some(t) => t,

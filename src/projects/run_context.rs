@@ -37,6 +37,7 @@ where
 /// Read the active project root, if any. Returns `None` outside a
 /// [`with_project_root`] scope or when the surrounding scope explicitly
 /// set `None` (non-project run).
+#[must_use]
 pub fn current() -> Option<PathBuf> {
     CURRENT_PROJECT_ROOT.try_with(|p| p.clone()).ok().flatten()
 }

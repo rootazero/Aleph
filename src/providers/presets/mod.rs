@@ -110,6 +110,7 @@ impl Default for ProviderPreset {
 
 impl ProviderPreset {
     /// Const factory for the required four-tuple; extensions stay defaulted.
+    #[must_use]
     pub const fn new(
         base_url: &'static str,
         protocol: &'static str,
@@ -135,67 +136,80 @@ impl ProviderPreset {
         }
     }
 
+    #[must_use]
     pub const fn with_aliases(mut self, aliases: &'static [&'static str]) -> Self {
         self.aliases = aliases;
         self
     }
 
+    #[must_use]
     pub const fn with_fallback_models(mut self, models: &'static [&'static str]) -> Self {
         self.fallback_models = models;
         self
     }
 
+    #[must_use]
     pub const fn with_aux_model(mut self, model: &'static str) -> Self {
         self.default_aux_model = Some(model);
         self
     }
 
+    #[must_use]
     pub const fn with_signup(mut self, url: &'static str) -> Self {
         self.signup_url = Some(url);
         self
     }
 
+    #[must_use]
     pub const fn with_display(mut self, name: &'static str) -> Self {
         self.display_name = Some(name);
         self
     }
 
+    #[must_use]
     pub const fn with_description(mut self, desc: &'static str) -> Self {
         self.description = Some(desc);
         self
     }
 
+    #[must_use]
     pub const fn with_models_url(mut self, url: &'static str) -> Self {
         self.models_url = Some(url);
         self
     }
 
+    #[must_use]
     pub const fn with_temperature_policy(mut self, p: TemperaturePolicy) -> Self {
         self.temperature_policy = Some(p);
         self
     }
 
+    #[must_use]
     pub const fn no_health_check(mut self) -> Self {
         self.supports_health_check = false;
         self
     }
 
+    #[must_use]
     pub const fn with_homepage(mut self, url: &'static str) -> Self {
         self.homepage = Some(url);
         self
     }
 
+    #[must_use]
     pub const fn with_modalities(mut self, modalities: &'static [Modality]) -> Self {
         self.modalities = modalities;
         self
     }
 
     /// Resolve aux model, falling back to `default_model` when unset.
+    #[must_use]
     pub fn aux_model(&self) -> &'static str {
         self.default_aux_model.unwrap_or(self.default_model)
     }
 
     /// Resolve `/models` discovery URL, falling back to `{base_url}/models`.
+    #[must_use]
     pub fn resolve_models_url(&self) -> String {
         match self.models_url {
             Some(u) => u.to_string(),
@@ -289,6 +303,7 @@ pub fn get_merged_preset(
 /// `config.base_url`, which they already have on hand. Custom base_urls
 /// (user override) silently miss the lookup, which is the right default —
 /// users overriding base_url have opted out of preset assumptions.
+#[must_use]
 pub fn apply_temperature_policy(
     policy: Option<TemperaturePolicy>,
     raw: Option<f32>,

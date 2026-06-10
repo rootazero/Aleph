@@ -108,7 +108,7 @@ fn DetailFor(
     let tags = excerpt.tags.clone();
     let node_id = excerpt.id.clone();
     let title = excerpt.name.clone();
-    let body_markdown = excerpt.body_markdown.clone();
+    let body_markdown = excerpt.body_markdown;
 
     // Edit state — local to this node's detail card.
     let is_editing = RwSignal::new(false);
@@ -117,7 +117,7 @@ fn DetailFor(
     let error = RwSignal::new(None::<String>);
 
     let start_edit = {
-        let body_markdown = body_markdown.clone();
+        let body_markdown = body_markdown;
         move |_| {
             draft.set(body_markdown.clone());
             error.set(None);
@@ -131,7 +131,7 @@ fn DetailFor(
     };
 
     let save_edit = {
-        let node_id = node_id.clone();
+        let node_id = node_id;
         move |_| {
             if is_saving.get_untracked() {
                 return;

@@ -36,7 +36,7 @@ pub struct QueryTreeParams {
     pub max_depth: u32,
 }
 
-fn default_depth() -> u32 {
+const fn default_depth() -> u32 {
     6
 }
 
@@ -72,7 +72,7 @@ pub struct AxElement {
     pub pid: i32,
     /// Child elements (empty when depth limit reached).
     #[serde(default)]
-    pub children: Vec<AxElement>,
+    pub children: Vec<Self>,
 }
 
 /// Result for `ax.query_focused` and `ax.query_tree`.

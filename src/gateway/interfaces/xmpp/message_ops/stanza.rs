@@ -12,6 +12,7 @@ use super::xml_helpers::{
 /// Build the opening `<stream:stream>` XML header.
 ///
 /// This is the first thing sent after TCP connection.
+#[must_use]
 pub fn build_stream_header(domain: &str) -> String {
     format!(
         "<?xml version='1.0'?>\
@@ -28,6 +29,7 @@ pub fn build_stream_header(domain: &str) -> String {
 ///
 /// SASL PLAIN format: base64(\0user\0password)
 /// The authzid is empty (first \0), authcid is the JID local part.
+#[must_use]
 pub fn build_auth_stanza(jid: &str, password: &str) -> String {
     let local = jid.split('@').next().unwrap_or(jid);
     let plain = format!("\0{}\0{}", local, password);
@@ -40,6 +42,7 @@ pub fn build_auth_stanza(jid: &str, password: &str) -> String {
 }
 
 /// Build a presence stanza for going online.
+#[must_use]
 pub fn build_presence_stanza() -> String {
     "<presence/>".to_string()
 }
@@ -47,6 +50,7 @@ pub fn build_presence_stanza() -> String {
 /// Build a MUC join presence stanza.
 ///
 /// Sends presence to `room_jid/nick` with MUC extension element.
+#[must_use]
 pub fn build_muc_join_stanza(room_jid: &str, nick: &str) -> String {
     format!(
         "<presence to='{}/{}'>\
@@ -60,6 +64,7 @@ pub fn build_muc_join_stanza(room_jid: &str, nick: &str) -> String {
 /// Build a message stanza.
 ///
 /// - `msg_type` should be "chat" for 1-on-1 or "groupchat" for MUC.
+#[must_use]
 pub fn build_message_stanza(to: &str, body: &str, msg_type: &str) -> String {
     let id = format!("msg-{}", Utc::now().timestamp_millis());
     format!(
@@ -76,6 +81,7 @@ pub fn build_message_stanza(to: &str, body: &str, msg_type: &str) -> String {
 /// Build a resource bind IQ stanza.
 ///
 /// Sent after successful SASL auth to bind a resource.
+#[must_use]
 pub fn build_bind_stanza(resource: &str) -> String {
     format!(
         "<iq type='set' id='bind-1'>\
@@ -88,6 +94,7 @@ pub fn build_bind_stanza(resource: &str) -> String {
 }
 
 /// Build a session establishment IQ stanza.
+#[must_use]
 pub fn build_session_stanza() -> String {
     "<iq type='set' id='session-1'>\
      <session xmlns='urn:ietf:params:xml:ns:xmpp-session'/>\
@@ -96,6 +103,7 @@ pub fn build_session_stanza() -> String {
 }
 
 /// Build a stream close tag.
+#[must_use]
 pub fn build_stream_close() -> String {
     "</stream:stream>".to_string()
 }
@@ -106,6 +114,7 @@ pub fn build_stream_close() -> String {
 ///
 /// Returns `Some(XmppMessage)` if the stanza is a `<message>` with a `<body>`.
 /// Returns `None` for non-message stanzas or messages without body.
+#[must_use]
 pub fn parse_message_stanza(stanza: &str) -> Option<XmppMessage> {
     // Must be a message stanza
     if !stanza.contains("<message") {
@@ -135,16 +144,19 @@ pub fn parse_message_stanza(stanza: &str) -> Option<XmppMessage> {
 }
 
 /// Check if a stanza indicates successful SASL authentication.
+#[must_use]
 pub fn is_auth_success(stanza: &str) -> bool {
     stanza.contains("<success") && stanza.contains("urn:ietf:params:xml:ns:xmpp-sasl")
 }
 
 /// Check if a stanza indicates SASL authentication failure.
+#[must_use]
 pub fn is_auth_failure(stanza: &str) -> bool {
     stanza.contains("<failure") && stanza.contains("urn:ietf:params:xml:ns:xmpp-sasl")
 }
 
 /// Check if a stanza is a stream features element.
+#[must_use]
 pub fn is_stream_features(stanza: &str) -> bool {
     stanza.contains("<stream:features")
 }
@@ -152,6 +164,7 @@ pub fn is_stream_features(stanza: &str) -> bool {
 /// Check if a stanza is a ping IQ that needs a pong response.
 ///
 /// Returns the IQ `id` and `from` if it's a ping.
+#[must_use]
 pub fn extract_ping(stanza: &str) -> Option<(String, String)> {
     if !stanza.contains("urn:xmpp:ping")
         || !stanza.contains("type='get'") && !stanza.contains("type=\"get\"")
@@ -166,6 +179,7 @@ pub fn extract_ping(stanza: &str) -> Option<(String, String)> {
 }
 
 /// Build a pong response to a ping IQ.
+#[must_use]
 pub fn build_pong_stanza(id: &str, to: &str, from: &str) -> String {
     if to.is_empty() {
         format!(
@@ -195,6 +209,7 @@ pub fn build_pong_stanza(id: &str, to: &str, from: &str) -> String {
 /// - Stream headers: `<stream:stream ...>`
 /// - Simple paired tags: `<message ...>...</message>`
 /// - SASL responses: `<success .../>`, `<failure.../>`
+#[must_use]
 pub fn extract_stanza(buffer: &str) -> Option<(String, String)> {
     let trimmed = buffer.trim_start();
     if trimmed.is_empty() {

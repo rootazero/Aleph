@@ -29,6 +29,7 @@ pub enum TeamStatus {
 }
 
 impl TeamStatus {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Active => "active",
@@ -93,6 +94,7 @@ pub enum TeamMemberKind {
 }
 
 impl TeamMemberKind {
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Agent => "agent",
@@ -143,6 +145,7 @@ pub struct TeamMember {
 ///
 /// The id is stable for a given (harness, cwd, session_name) triple so the
 /// dispatcher can reconcile a `CoordTask.owner` string back to a member row.
+#[must_use]
 pub fn acp_member_id(harness_id: &str, cwd: &str, session_name: Option<&str>) -> String {
     match session_name {
         Some(name) if !name.is_empty() => format!("acp:{harness_id}:{cwd}:{name}"),

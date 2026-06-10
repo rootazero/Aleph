@@ -55,6 +55,7 @@ pub enum NoteType {
 
 impl NoteType {
     /// Convert to string representation
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             NoteType::Preference => "preference",
@@ -80,6 +81,7 @@ impl NoteType {
     ///
     /// Matches the names in `CATEGORY_DIRS` (uses hyphens for subagent variants,
     /// not underscores as `as_str()` does).
+    #[must_use]
     pub fn to_category_dir(&self) -> &'static str {
         match self {
             NoteType::Preference => "preference",
@@ -102,11 +104,13 @@ impl NoteType {
     }
 
     /// Parse from string with fallback to Other
+    #[must_use]
     pub fn from_str_or_other(s: &str) -> Self {
         s.parse().unwrap_or(NoteType::Other)
     }
 
     /// Get default aleph:// path for this fact type
+    #[must_use]
     pub fn default_path(&self) -> &str {
         match self {
             NoteType::Preference => "aleph://user/preferences/",
@@ -129,6 +133,7 @@ impl NoteType {
     }
 
     /// Map fact type to standardized memory category.
+    #[must_use]
     pub fn default_category(&self) -> MemoryCategory {
         match self {
             NoteType::Preference => MemoryCategory::Preferences,
@@ -202,6 +207,7 @@ pub enum FactSource {
 }
 
 impl FactSource {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Extracted => "extracted",
@@ -213,6 +219,7 @@ impl FactSource {
         }
     }
 
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "extracted" => Self::Extracted,
@@ -266,6 +273,7 @@ pub enum MemoryLayer {
 }
 
 impl MemoryLayer {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::L0Abstract => "l0_abstract",
@@ -274,6 +282,7 @@ impl MemoryLayer {
         }
     }
 
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         s.parse().unwrap_or(Self::L2Detail)
     }
@@ -326,6 +335,7 @@ pub enum CognitiveLayer {
 
 impl CognitiveLayer {
     /// Stable machine tag (also the serde representation).
+    #[must_use]
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Working => "working",
@@ -360,6 +370,7 @@ pub enum MemoryCategory {
 }
 
 impl MemoryCategory {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Profile => "profile",
@@ -371,6 +382,7 @@ impl MemoryCategory {
         }
     }
 
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         s.parse().unwrap_or(Self::Entities)
     }
@@ -418,6 +430,7 @@ pub enum FactSpecificity {
 }
 
 impl FactSpecificity {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Abstract => "abstract",
@@ -428,6 +441,7 @@ impl FactSpecificity {
     }
 
     /// Parse from string with fallback to Pattern
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         s.parse().unwrap_or(Self::Pattern)
     }
@@ -471,6 +485,7 @@ pub enum TemporalScope {
 }
 
 impl TemporalScope {
+    #[must_use]
     pub fn as_str(&self) -> &str {
         match self {
             Self::Permanent => "permanent",
@@ -480,6 +495,7 @@ impl TemporalScope {
     }
 
     /// Parse from string with fallback to Contextual
+    #[must_use]
     pub fn from_str_or_default(s: &str) -> Self {
         s.parse().unwrap_or(Self::Contextual)
     }

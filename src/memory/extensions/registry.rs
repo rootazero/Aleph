@@ -63,6 +63,7 @@ impl Clone for MemoryExtensionRegistry {
 }
 
 impl MemoryExtensionRegistry {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             extensions: RwLock::new(Vec::new()),

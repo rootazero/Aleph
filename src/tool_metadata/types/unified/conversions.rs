@@ -30,6 +30,7 @@ impl UnifiedTool {
     /// let tool = UnifiedTool::new(...);
     /// let entry = tool.to_index_entry(&["search", "file_ops"]);
     /// ```
+    #[must_use]
     pub fn to_index_entry(&self, core_tools: &[&str]) -> ToolIndexEntry {
         let category = ToolIndexCategory::from(&self.source);
         let summary = truncate_string(&self.description, 50);
@@ -70,6 +71,7 @@ impl UnifiedTool {
     ///
     /// If a `ToolSafetyPolicy` is provided, uses configurable keywords from policy.
     /// Otherwise, uses hardcoded defaults for backward compatibility.
+    #[must_use]
     pub fn infer_safety_level(
         name: &str,
         category: ToolCategory,
@@ -124,6 +126,7 @@ impl UnifiedTool {
     ///
     /// Returns a markdown-formatted line for system prompt injection.
     /// Builtin and Native tools are marked as "Preferred" to guide L3 routing priority.
+    #[must_use]
     pub fn to_prompt_line(&self) -> String {
         let source_badge = match &self.source {
             ToolSource::Native => " [Native - Preferred]".to_string(),

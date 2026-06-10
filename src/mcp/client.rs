@@ -34,11 +34,13 @@ pub struct McpStartupReport {
 
 impl McpStartupReport {
     /// Check if all servers started successfully
+    #[must_use]
     pub fn all_succeeded(&self) -> bool {
         self.failed.is_empty()
     }
 
     /// Get total number of servers attempted
+    #[must_use]
     pub fn total(&self) -> usize {
         self.succeeded.len() + self.failed.len()
     }
@@ -83,6 +85,7 @@ pub struct McpClient {
 
 impl McpClient {
     /// Create a new empty MCP client
+    #[must_use]
     pub fn new() -> Self {
         Self {
             external_servers: tokio::sync::RwLock::new(HashMap::new()),
@@ -794,6 +797,7 @@ pub struct McpClientBuilder {
 
 impl McpClientBuilder {
     /// Create a new builder
+    #[must_use]
     pub fn new() -> Self {
         Self {
             client: McpClient::new(),

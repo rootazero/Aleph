@@ -18,6 +18,7 @@ use subtle::ConstantTimeEq;
 /// matching-prefix length from timing.
 ///
 /// Two empty inputs compare equal.
+#[must_use]
 pub fn secret_equal_bytes(provided: &[u8], expected: &[u8]) -> bool {
     let n = provided.len().max(expected.len());
     if n == 0 {
@@ -34,6 +35,7 @@ pub fn secret_equal_bytes(provided: &[u8], expected: &[u8]) -> bool {
 /// Convenience wrapper for UTF-8 string secrets (bearer tokens, signature
 /// headers). Uses byte-level comparison; treats either side being absent as
 /// "not equal".
+#[must_use]
 pub fn secret_equal(provided: Option<&str>, expected: Option<&str>) -> bool {
     match (provided, expected) {
         (Some(p), Some(e)) => secret_equal_bytes(p.as_bytes(), e.as_bytes()),

@@ -75,6 +75,7 @@ impl ProviderHealth {
     /// - Healthy: always usable
     /// - Degraded: usable only after cooldown expires
     /// - Unavailable: never usable
+    #[must_use]
     pub fn is_usable(&self) -> bool {
         match self {
             ProviderHealth::Healthy => true,

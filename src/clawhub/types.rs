@@ -23,6 +23,7 @@ pub enum SortOrder {
 }
 
 impl SortOrder {
+    #[must_use]
     pub fn as_api_str(&self) -> &'static str {
         match self {
             Self::Downloads => "downloads",
@@ -96,6 +97,7 @@ pub struct ModerationInfo {
 }
 
 impl ModerationInfo {
+    #[must_use]
     pub fn is_malware_blocked(&self) -> bool {
         self.is_malware_blocked_flag || self.verdict.eq_ignore_ascii_case("malware")
     }

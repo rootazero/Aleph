@@ -29,6 +29,7 @@ pub enum PromptMode {
 
 impl PromptMode {
     /// Human-readable label for logging / debug.
+    #[must_use]
     pub fn label(&self) -> &'static str {
         match self {
             Self::Full => "full",

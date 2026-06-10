@@ -37,26 +37,31 @@ struct OpenFence {
 
 impl FenceSpan {
     /// Byte offset of the opening fence line start.
+    #[must_use]
     pub fn start(&self) -> usize {
         self.start
     }
 
     /// Byte offset of the closing fence line start (or text end if unclosed).
+    #[must_use]
     pub fn end(&self) -> usize {
         self.end
     }
 
     /// The fence marker (e.g., "```" or "~~~~").
+    #[must_use]
     pub fn marker(&self) -> &str {
         &self.marker
     }
 
     /// Leading indentation (0-3 spaces).
+    #[must_use]
     pub fn indent(&self) -> &str {
         &self.indent
     }
 
     /// Language tag if present (e.g., "rust", "javascript").
+    #[must_use]
     pub fn language(&self) -> Option<&str> {
         self.language.as_deref()
     }
@@ -77,16 +82,19 @@ impl FenceSpan {
     /// reopens the fence correctly. Newline-anchored breaks are inherently
     /// safe: the `\n` preceding the closing fence sits at `end - 1`, which is
     /// still inside the span.
+    #[must_use]
     pub fn contains(&self, index: usize) -> bool {
         index > self.start && index < self.end
     }
 
     /// Get the closing fence line for this span.
+    #[must_use]
     pub fn close_line(&self) -> String {
         format!("{}{}", self.indent, self.marker)
     }
 
     /// Get the reopening fence line (preserves language tag).
+    #[must_use]
     pub fn reopen_line(&self) -> String {
         match &self.language {
             Some(lang) if !lang.is_empty() => format!("{}{}{}", self.indent, self.marker, lang),
@@ -207,11 +215,13 @@ pub fn parse_fence_spans(text: &str) -> Vec<FenceSpan> {
 /// Check if an index is a safe place to break (not inside any fence).
 ///
 /// Returns `true` if the index is outside all fence spans.
+#[must_use]
 pub fn is_safe_fence_break(spans: &[FenceSpan], index: usize) -> bool {
     !spans.iter().any(|span| span.contains(index))
 }
 
 /// Find the fence span containing the given index, if any.
+#[must_use]
 pub fn find_fence_at(spans: &[FenceSpan], index: usize) -> Option<&FenceSpan> {
     spans.iter().find(|span| span.contains(index))
 }
@@ -220,6 +230,7 @@ pub fn find_fence_at(spans: &[FenceSpan], index: usize) -> Option<&FenceSpan> {
 ///
 /// Returns `Some(FenceSplit)` if the index is inside a fence, containing
 /// the lines needed to close and reopen the fence.
+#[must_use]
 pub fn get_fence_split(spans: &[FenceSpan], index: usize) -> Option<FenceSplit> {
     find_fence_at(spans, index).map(|span| FenceSplit {
         close_line: span.close_line(),

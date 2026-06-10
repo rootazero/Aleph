@@ -59,9 +59,9 @@ async fn delete_agent(
 mod tests {
     use super::*;
     use crate::config::agent_manager::AgentManager;
+    use crate::sync_primitives::Arc;
     use axum::body::Body;
     use axum::http::Request;
-    use crate::sync_primitives::Arc;
     use tempfile::TempDir;
     use tower::ServiceExt;
 

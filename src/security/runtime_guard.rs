@@ -92,17 +92,20 @@ pub struct RuntimeSecurityGuard {
 
 impl RuntimeSecurityGuard {
     /// Create a new guard with default configuration.
+    #[must_use]
     pub fn default_guard() -> Self {
         Self::new(SecurityGuardConfig::default())
     }
 
     /// Create a new guard with the given configuration.
+    #[must_use]
     pub fn new(config: SecurityGuardConfig) -> Self {
         let (guard, _rx) = Self::new_with_audit(config);
         guard
     }
 
     /// Create a new guard with the given configuration and return the audit receiver.
+    #[must_use]
     pub fn new_with_audit(
         config: SecurityGuardConfig,
     ) -> (Self, tokio::sync::mpsc::Receiver<AuditEntry>) {

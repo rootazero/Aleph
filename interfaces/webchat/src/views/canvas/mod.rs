@@ -265,7 +265,7 @@ fn RadialCanvasView() -> impl IntoView {
     let nav_reset = nav.clone();
     let gs_reset = graph_state.clone();
     let prefetch_reset = prefetch.clone();
-    let detail_cache_reset = detail_cache.clone();
+    let detail_cache_reset = detail_cache;
     let in_flight_reset = in_flight.clone();
     let pending_hover_timer_reset = pending_hover_timer.clone();
     Effect::new(move |prev: Option<String>| {
@@ -318,7 +318,7 @@ fn RadialCanvasView() -> impl IntoView {
     // -----------------------------------------------------------------------
     let nav_init = nav.clone();
     let gs_init = graph_state.clone();
-    let minimap_init = minimap.clone();
+    let minimap_init = minimap;
     let prefetch_init = prefetch.clone();
     Effect::new(move || {
         if !state.is_connected.get() {
@@ -496,14 +496,14 @@ fn RadialCanvasView() -> impl IntoView {
     // fires. Re-arms (= cancels previous, starts new) on each hover change, so
     // skimming across nodes never reaches the fire path.
     // -----------------------------------------------------------------------
-    let pending_hover_timer_e = pending_hover_timer.clone();
+    let pending_hover_timer_e = pending_hover_timer;
     Effect::new(move || {
         let target = hover_intent.get();
         // Drop any pending timer; replacing the Option cancels the underlying
         // gloo Timeout via Drop.
         *pending_hover_timer_e.borrow_mut() = None;
         let Some(id) = target else { return };
-        let id_for_timer = id.clone();
+        let id_for_timer = id;
         let timer = Timeout::new(HOVER_DEBOUNCE_MS as u32, move || {
             prefetch_request.set(Some(id_for_timer));
         });
@@ -523,8 +523,8 @@ fn RadialCanvasView() -> impl IntoView {
     // bridged), subscribe here and call `prefetch.invalidate(id)` so edits
     // bust the cache before the 90s TTL expires.
     // -----------------------------------------------------------------------
-    let prefetch_e4 = prefetch.clone();
-    let in_flight_e4 = in_flight.clone();
+    let prefetch_e4 = prefetch;
+    let in_flight_e4 = in_flight;
     Effect::new(move || {
         let Some(id) = prefetch_request.get() else {
             return;
@@ -654,9 +654,9 @@ fn RadialCanvasView() -> impl IntoView {
     view! {
         <div class="relative w-full h-full bg-[#080818]">
             <GraphCanvas
-                graph_state=graph_state.clone()
+                graph_state=graph_state
                 on_event=Callback::new(on_event)
-                nav=nav.clone()
+                nav=nav
                 excerpt_by_id=excerpt_by_id
             />
             {

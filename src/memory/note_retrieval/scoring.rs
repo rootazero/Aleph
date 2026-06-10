@@ -24,6 +24,7 @@ use std::collections::HashSet;
 /// A note updated *now* scores `1.0`; after one half-life it scores `0.5`, after
 /// two `0.25`, and so on. A non-positive `half_life_days` disables decay
 /// (returns `1.0`) so misconfiguration can never zero out results.
+#[must_use]
 pub fn recency_multiplier(updated_at: i64, now: i64, half_life_days: f32) -> f32 {
     if half_life_days <= 0.0 {
         return 1.0;
@@ -38,6 +39,7 @@ pub fn recency_multiplier(updated_at: i64, now: i64, half_life_days: f32) -> f32
 /// `weight == 0.0` leaves the score untouched (legacy behaviour); `weight == 1.0`
 /// multiplies the score fully by the recency multiplier. Intermediate weights let
 /// recency nudge ordering without dominating raw relevance.
+#[must_use]
 pub fn apply_recency(score: f32, mult: f32, weight: f32) -> f32 {
     let w = weight.clamp(0.0, 1.0);
     score * (1.0 - w + w * mult)
@@ -54,6 +56,7 @@ pub fn apply_recency(score: f32, mult: f32, weight: f32) -> f32 {
 /// `weight == 0.0` or `hit_count <= 0` leaves the score untouched (legacy
 /// behaviour). Reads counts already recorded in `recall_signals`, so no extra
 /// LLM or embedding call is required.
+#[must_use]
 pub fn apply_reinforcement(score: f32, hit_count: i64, weight: f32) -> f32 {
     if weight <= 0.0 || hit_count <= 0 {
         return score;

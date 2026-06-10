@@ -1,8 +1,8 @@
-//! Windows `PermissionCapability` via the CapabilityAccessManager ConsentStore.
+//! Windows `PermissionCapability` via the `CapabilityAccessManager` `ConsentStore`.
 //!
 //! Windows has no monolithic TCC database like macOS. Instead, the small set of
 //! genuinely user-gated capabilities (camera, microphone, location) live under
-//! `HKCU\…\CapabilityAccessManager\ConsentStore\<capability>\Value` as a REG_SZ
+//! `HKCU\…\CapabilityAccessManager\ConsentStore\<capability>\Value` as a `REG_SZ`
 //! of `"Allow"` / `"Deny"`. Everything macOS gates through TCC but Windows does
 //! *not* gate for a desktop app — screen capture, sending synthetic input
 //! (accessibility / input monitoring), and posting toast notifications — is
@@ -13,7 +13,7 @@
 //! idioms so the already-wired `permission` and `desktop_check_permissions`
 //! tools return real answers on Windows instead of "not supported".
 //!
-//! The ConsentStore is read by shelling out to `powershell.exe` (consistent
+//! The `ConsentStore` is read by shelling out to `powershell.exe` (consistent
 //! with the rest of this crate, which already drives toasts and shortcuts the
 //! same way) — the capability name is always one of a fixed allowlist, never
 //! user input, so the query string is injection-free. All pure mapping logic is
@@ -31,13 +31,14 @@ use aleph_protocol::desktop_bridge::methods::perm::{
     PermissionGuide, PermissionStatus as ProtocolPermissionStatus,
 };
 
-/// Windows permission capability backed by the CapabilityAccessManager.
+/// Windows permission capability backed by the `CapabilityAccessManager`.
 pub struct WindowsPermission {
     _private: (),
 }
 
 impl WindowsPermission {
-    pub fn new() -> Self {
+    #[must_use]
+    pub const fn new() -> Self {
         Self { _private: () }
     }
 }
@@ -52,10 +53,10 @@ impl Default for WindowsPermission {
 // Pure mapping helpers (platform-independent, unit-tested)
 // ---------------------------------------------------------------------------
 
-/// The ConsentStore capability key for a permission kind, when Windows actually
+/// The `ConsentStore` capability key for a permission kind, when Windows actually
 /// gates it per-app. `None` means Windows does not have a consent prompt for
 /// this kind (see [`ungated_status`]).
-fn consent_capability(kind: PermissionKind) -> Option<&'static str> {
+const fn consent_capability(kind: PermissionKind) -> Option<&'static str> {
     match kind {
         PermissionKind::Camera => Some("webcam"),
         PermissionKind::Microphone => Some("microphone"),
@@ -64,14 +65,14 @@ fn consent_capability(kind: PermissionKind) -> Option<&'static str> {
     }
 }
 
-/// Status for kinds Windows does not gate behind a ConsentStore entry.
+/// Status for kinds Windows does not gate behind a `ConsentStore` entry.
 ///
 /// A Win32 desktop process can capture the screen, send synthetic input, and
 /// post toast notifications with no per-app grant, so those report `Granted`.
 /// Kinds that simply do not map onto a Windows concept (or that Aleph cannot
 /// determine without overreaching) report `Unknown`, mirroring how the macOS
 /// native probe returns `Unknown` for bridge-only kinds.
-fn ungated_status(kind: PermissionKind) -> PermissionStatus {
+const fn ungated_status(kind: PermissionKind) -> PermissionStatus {
     match kind {
         PermissionKind::ScreenRecording
         | PermissionKind::Accessibility
@@ -92,7 +93,7 @@ fn ungated_status(kind: PermissionKind) -> PermissionStatus {
     }
 }
 
-/// Parse a raw ConsentStore `Value` into a [`PermissionStatus`].
+/// Parse a raw `ConsentStore` `Value` into a [`PermissionStatus`].
 ///
 /// Only the `#[cfg(windows)]` registry read calls this in a production build;
 /// on other hosts it is exercised solely by unit tests.
@@ -108,7 +109,7 @@ fn parse_consent_value(raw: &str) -> PermissionStatus {
 
 /// `ms-settings:` deep link to the Settings page where the user can grant a
 /// kind. Ungated kinds fall back to the top-level privacy page.
-fn settings_uri(kind: PermissionKind) -> &'static str {
+const fn settings_uri(kind: PermissionKind) -> &'static str {
     match kind {
         PermissionKind::Camera => "ms-settings:privacy-webcam",
         PermissionKind::Microphone => "ms-settings:privacy-microphone",
@@ -118,7 +119,7 @@ fn settings_uri(kind: PermissionKind) -> &'static str {
 }
 
 /// One-sentence rationale relayed to the user when a permission is missing.
-fn rationale(kind: PermissionKind) -> &'static str {
+const fn rationale(kind: PermissionKind) -> &'static str {
     match kind {
         PermissionKind::Camera => "Aleph needs camera access to capture photos on your behalf.",
         PermissionKind::Microphone => {
@@ -155,7 +156,7 @@ fn steps(kind: PermissionKind) -> Vec<String> {
 /// Build a [`PermissionInfo`]. On Windows a desktop app cannot programmatically
 /// trigger a consent prompt, so `can_request` is always `false` — the user must
 /// toggle the capability in Settings.
-fn build_info(permission: PermissionKind, status: PermissionStatus) -> PermissionInfo {
+const fn build_info(permission: PermissionKind, status: PermissionStatus) -> PermissionInfo {
     PermissionInfo {
         permission,
         status,
@@ -167,7 +168,7 @@ fn build_info(permission: PermissionKind, status: PermissionStatus) -> Permissio
 // ConsentStore read (Windows-only) + cross-platform fallback
 // ---------------------------------------------------------------------------
 
-/// Read a single ConsentStore capability value and map it to a status.
+/// Read a single `ConsentStore` capability value and map it to a status.
 async fn query_consent(capability: &str) -> PermissionStatus {
     #[cfg(windows)]
     {

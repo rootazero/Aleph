@@ -20,6 +20,7 @@ pub struct CancellationToken {
 
 impl CancellationToken {
     /// Create a new token that is not cancelled.
+    #[must_use]
     pub fn new() -> Self {
         let (cancel_broadcast, _) = broadcast::channel(16);
         Self {
@@ -36,12 +37,14 @@ impl CancellationToken {
     }
 
     /// Returns `true` if cancellation has been requested.
+    #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.inner.load(Ordering::SeqCst)
     }
 
     /// Subscribe to cancellation events.
     /// The returned receiver will receive `()` exactly once when `cancel` is called.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<()> {
         self.cancel_broadcast.subscribe()
     }

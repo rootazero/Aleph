@@ -39,6 +39,7 @@ pub struct SelfManageTool {
 }
 
 impl SelfManageTool {
+    #[must_use]
     pub fn new(skill_search_dirs: Vec<PathBuf>) -> Self {
         Self { skill_search_dirs }
     }

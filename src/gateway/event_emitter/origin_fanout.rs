@@ -45,6 +45,7 @@ pub fn set_channel_registry(registry: Arc<ChannelRegistry>) {
 /// Fetch the injected channel registry, if boot wired one. `None` in contexts
 /// that never built a gateway (unit tests, CLI subcommands) — fan-out is then
 /// simply skipped.
+#[must_use]
 pub fn channel_registry() -> Option<Arc<ChannelRegistry>> {
     let guard = registry_slot().read().unwrap_or_else(|e| e.into_inner());
     guard.clone()

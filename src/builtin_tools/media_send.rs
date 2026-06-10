@@ -49,6 +49,7 @@ pub struct MediaSendOutput {
 pub struct MediaSendTool;
 
 impl MediaSendTool {
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
