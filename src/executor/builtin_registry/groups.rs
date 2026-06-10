@@ -60,6 +60,7 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "session_search",
             "skill_list",
             "skill_read",
+            "scratchpad",
         ],
     },
     ToolCategory {
@@ -101,6 +102,12 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "skill_status",
             "skill_install",
             "skill_manage",
+            "system",
+            "pim",
+            "permission",
+            "automation",
+            "media",
+            "goal",
         ],
     },
     ToolCategory {
@@ -148,7 +155,12 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
     ToolCategory {
         id: "delegate",
         name: "Agent 间通信",
-        tools: &["session_send", "session_list", "gateway_route"],
+        tools: &[
+            "session_send",
+            "session_list",
+            "gateway_route",
+            "channel_message",
+        ],
     },
     ToolCategory {
         id: "team",
@@ -188,6 +200,9 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
             "session_collaborate",
             "session_turn",
             "session_read",
+            "arena_create",
+            "arena_query",
+            "arena_settle",
         ],
     },
     // -- Infrastructure --
@@ -232,6 +247,11 @@ pub static TOOL_CATEGORIES: &[ToolCategory] = &[
         id: "cluster",
         name: "集群节点",
         tools: &["node_list", "node_invoke", "node_invoke_many", "node_file"],
+    },
+    ToolCategory {
+        id: "tool_discovery",
+        name: "工具发现",
+        tools: &["list_tools", "get_tool_schema", "search_tools"],
     },
 ];
 

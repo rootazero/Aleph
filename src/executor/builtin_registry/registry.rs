@@ -524,6 +524,18 @@ impl BuiltinToolRegistry {
         self.tools.contains_key(name)
     }
 
+    /// Iterate every `UnifiedTool` registered in the runtime metadata map.
+    ///
+    /// The constructor populates this map conditionally (a tool is only
+    /// present when its dependencies are wired) and with full parameter
+    /// schemas, so it is the authoritative answer to "what can this registry
+    /// actually execute right now". The LLM tool list is completed from this
+    /// iterator — `BUILTIN_TOOL_DEFINITIONS` alone is a static subset that
+    /// misses conditionally-registered and LLM-only tools.
+    pub fn unified_tools(&self) -> impl Iterator<Item = &UnifiedTool> {
+        self.tools.values()
+    }
+
     pub(crate) fn resolve_plugin_handler(&self, tool_name: &str) -> Option<(String, String)> {
         resolve_plugin_handler_from_sources(
             self.extension_manager.as_deref(),
