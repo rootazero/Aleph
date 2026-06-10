@@ -11,8 +11,6 @@ pub struct SkillInfo {
     pub id: String,
     pub name: String,
     pub description: String,
-    pub triggers: Vec<String>,
-    pub allowed_tools: Vec<String>,
     pub ecosystem: String,
 }
 
@@ -22,8 +20,6 @@ impl From<SkillManifest> for SkillInfo {
             id: manifest.id().as_str().to_string(),
             name: manifest.name().to_string(),
             description: manifest.description().to_string(),
-            triggers: Vec::new(),
-            allowed_tools: Vec::new(),
             ecosystem: "aleph".to_string(),
         }
     }
