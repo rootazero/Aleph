@@ -300,9 +300,17 @@ impl WorkflowTool {
         let selected = match run_id {
             Some(rid) => rid.to_string(),
             // Latest run = the group whose newest task was created last.
+            // created_at is epoch *seconds*, so two runs started within the
+            // same second tie; the run id breaks the tie deterministically
+            // (arbitrary but stable — pass run_id explicitly to disambiguate).
             None => groups
                 .iter()
-                .max_by_key(|(_, tasks)| tasks.iter().map(|t| t.created_at).max().unwrap_or(0))
+                .max_by_key(|(rid, tasks)| {
+                    (
+                        tasks.iter().map(|t| t.created_at).max().unwrap_or(0),
+                        rid.clone(),
+                    )
+                })
                 .map(|(rid, _)| rid.clone())
                 .unwrap_or_default(),
         };
