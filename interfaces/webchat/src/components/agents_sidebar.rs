@@ -183,9 +183,9 @@ pub fn AgentsSidebar() -> impl IntoView {
                                             href=agent_path
                                             class=move || {
                                                 if is_active {
-                                                    "flex items-center gap-2 px-4 py-2 mx-2 rounded-lg text-sm bg-sidebar-active text-sidebar-accent font-medium"
+                                                    "nav-tile-active flex items-center gap-2 px-4 py-2 mx-2 rounded-lg text-sm"
                                                 } else {
-                                                    "flex items-center gap-2 px-4 py-2 mx-2 rounded-lg text-sm hover:bg-sidebar-active/50 text-text-secondary hover:text-text-primary"
+                                                    "nav-tile flex items-center gap-2 px-4 py-2 mx-2 rounded-lg text-sm"
                                                 }
                                             }
                                         >
