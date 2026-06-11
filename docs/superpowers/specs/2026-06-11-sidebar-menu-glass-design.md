@@ -29,6 +29,14 @@
 
 **核心原则**：仿玻璃、零 backdrop-filter（与消息气泡同决策——菜单项多、随路由频繁切换，不付模糊合成成本；瓷砖坐在 `.aleph-sidebar` 已有真磨砂层之上）。材质层级：玻璃外壳 → 内嵌瓷砖。
 
+### 显著性调校（本轮精修，2026-06-11）
+
+前序三轮玻璃刷新整体反馈"效果不明显"。本轮在保持方案 A 身份（内嵌、不浮起）的前提下，把选中态显著性上调，确保"一眼可辨"，避免再次落入"太淡看不出"。三个杠杆：
+
+1. **着色 16% → 22%** — 16% 是"效果不明显"会复发的临界点；22% 清晰可辨但仍半透（非实色块）。
+2. **描边 26% → 38%** — 清晰的 accent 描边是 **light 主题**下瓷砖能成立的关键（淡着色在亮底易被冲淡，是上轮 spec 自标的薄弱点）。这是不靠投影/"浮起"就达到显著性的真正杠杆。
+3. **不加外投影** — 刻意只保留 inset 高光。用户在"更明显"与"浮起"之间选了前者：显著性全部来自 着色 + 描边 + 顶部高光，绝不靠浮起。
+
 ## 材质规格（CSS）
 
 新增两个 `@layer components` 组件类（`styles/tailwind.css`），与 `.msg-glass`/`.glass-inset` 同源：
@@ -40,15 +48,15 @@
   transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
 }
 .nav-tile:hover {
-  background-color: color-mix(in oklch, var(--color-text-primary) 7%, transparent);
+  background-color: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
   color: var(--color-text-primary);
 }
 
 .nav-tile-active {
   color: var(--color-sidebar-accent);
-  background-color: color-mix(in oklch, var(--color-sidebar-accent) 16%, transparent);
-  border: 1px solid color-mix(in oklch, var(--color-sidebar-accent) 26%, transparent);
-  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.07);   /* 顶部高光:玻璃感来源 */
+  background-color: color-mix(in oklch, var(--color-sidebar-accent) 22%, transparent);  /* 显著性:16%→22% */
+  border: 1px solid color-mix(in oklch, var(--color-sidebar-accent) 38%, transparent);  /* 清晰描边:26%→38% */
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.10);   /* 顶部高光:玻璃感来源,0.07→0.10 */
   font-weight: 600;
 }
 ```
@@ -83,7 +91,7 @@
 
 1. **构建**：`cargo build --target wasm32-unknown-unknown`（强制——上轮教训：native `cargo check` 会漏掉 `#[cfg(target_arch="wasm32")]` 门控代码的编译错）→ 重建 dist 包（wasm-bindgen + wasm-opt，绝对 target 路径，规避 worktree 共享 target-dir 雷）→ 重编 `aleph-server` binary（`rust_embed` 烧入新 dist）→ 替换运行中 .app binary，supervisor 重拉。
 2. **视觉核验**（不污染对话历史）：`aleph-server bootstrap-url` 认证 → chrome-devtools 注入 `position:fixed` 覆盖层，用**真实 `.aleph-sidebar` + 真实 token** 渲染六处侧栏选中/悬停态 → 切 **dark/glass/light 三主题**（+ 抽查 accent 色板）截图。
-3. **重点核对**：行间对齐无位移；light 主题下 16% accent 着色可辨但不刺眼；reduced-transparency 回退确为不透明。
+3. **重点核对**：行间对齐无位移；light 主题下 22% accent 着色 + 38% 描边**一眼可辨**（本轮显著性目标，重点验亮底）但不刺眼；选中态明显强于现状中性灰块；reduced-transparency 回退确为不透明。
 
 ## 改动量
 
@@ -94,7 +102,8 @@
 
 ## 成功标准
 
-- 六处左栏菜单项选中/悬停态统一为磨砂内嵌瓷砖材质，两套旧词汇消除
+- 六处左栏菜单项选中/悬停态统一为磨砂内嵌瓷砖材质，两套旧词汇消除（Chat/NavMenu 的 accent-purple 离群消失）
+- 选中态**显著性达标**：着色 22% + 描边 38% + 高光，明显强于现状中性灰块，三主题下一眼可辨——修正前序"效果不明显"
 - dark/glass/light 三主题 + 四 accent 色板下瓷砖均成立、行对齐、无刺眼
 - 整体与 chrome / 消息流玻璃语言连贯，扁平断档消除
 - 349+ panel 测试通过、clippy 干净、wasm 构建通过
