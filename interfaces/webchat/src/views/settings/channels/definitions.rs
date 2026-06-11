@@ -9,7 +9,7 @@
 // ---------------------------------------------------------------------------
 
 /// Field input type for form rendering.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FieldKind {
     Text,
     Secret,

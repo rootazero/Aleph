@@ -6,7 +6,7 @@ use serde_json::json;
 use crate::context::DashboardState;
 use crate::i18n::*;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClawHubSkill {
     pub slug: String,
     pub name: String,

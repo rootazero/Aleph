@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A type that can hold either one value or many values
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum OneOrMany<T> {
     /// Single value

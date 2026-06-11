@@ -19,7 +19,7 @@ pub struct InstallRegistry {
 ///
 /// Named `SkillOrigin` to avoid collision with `domain::skill::SkillSource`
 /// and `skills::registry::SkillSource`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum SkillOrigin {
     /// Bundled with the binary, extracted on startup.

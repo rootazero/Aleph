@@ -176,7 +176,7 @@ pub struct GoogleMeetArgs {
 // =============================================================================
 
 /// Output from the `google_meet` tool.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GoogleMeetOutput {
     /// Whether the bridge accepted and performed the action.
     pub ok: bool,

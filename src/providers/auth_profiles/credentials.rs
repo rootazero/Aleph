@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 /// API key credential (static key)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApiKeyCredential {
     pub provider: String,
     pub key: String,
@@ -14,7 +14,7 @@ pub struct ApiKeyCredential {
 }
 
 /// Token credential (bearer-style, optionally expiring)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TokenCredential {
     pub provider: String,
     pub token: String,
@@ -26,7 +26,7 @@ pub struct TokenCredential {
 }
 
 /// OAuth credential (refreshable)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OAuthCredential {
     pub provider: String,
     pub access: String,
@@ -48,7 +48,7 @@ pub struct OAuthCredential {
 }
 
 /// Auth profile credential (discriminated union)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuthProfileCredential {
     ApiKey(ApiKeyCredential),

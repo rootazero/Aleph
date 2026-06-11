@@ -54,7 +54,7 @@ where
 }
 
 /// Partial update for an agent definition
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentPatch {
     pub name: Option<String>,
     pub identity: Option<AgentIdentity>,

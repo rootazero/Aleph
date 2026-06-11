@@ -25,7 +25,7 @@ use crate::extension::PermissionAction;
 /// shell = "ask"
 /// file_delete = "deny"
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ToolPermissionsConfig {
     /// Default permission for tools not listed in overrides
     #[serde(default = "default_allow")]

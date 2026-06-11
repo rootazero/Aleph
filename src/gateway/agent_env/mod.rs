@@ -263,7 +263,7 @@ impl AgentEnv {
 /// - Anthropic: Ephemeral (cache_control blocks, no persistent state)
 /// - Gemini: Persistent (explicit cache name, stored on provider side)
 /// - OpenAI: Transparent (automatic, no state needed)
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum CacheState {
     /// No caching active

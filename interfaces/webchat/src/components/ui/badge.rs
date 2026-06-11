@@ -2,7 +2,7 @@ use crate::components::sidebar::AlertLevel;
 use leptos::prelude::*;
 use tailwind_fuse::*;
 
-#[derive(TwVariant, PartialEq)]
+#[derive(TwVariant, PartialEq, Eq)]
 pub enum BadgeVariant {
     #[tw(default, class = "bg-primary-subtle text-primary border-primary/20")]
     Indigo,

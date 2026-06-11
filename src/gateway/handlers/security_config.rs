@@ -22,7 +22,7 @@ mod toml_io;
 /// Write gateway.host to the config TOML file on disk.
 
 /// Network access scope for gateway binding
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkAccess {
     /// Localhost only (127.0.0.1) — most secure

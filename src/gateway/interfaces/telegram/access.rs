@@ -13,7 +13,7 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 
 /// Result of an access check on an incoming message.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AccessDecision {
     /// User is authorized — process the message.
     Allowed,
@@ -24,7 +24,7 @@ pub enum AccessDecision {
 }
 
 /// Result of a pairing attempt.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairingResult {
     /// Pairing succeeded — user is now authorized.
     Success,

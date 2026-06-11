@@ -121,7 +121,7 @@ pub struct CanvasEdge {
     pub is_active_link: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ViewMode {
     Global { top_k: usize },
     Local { center_node_id: String, depth: u8 },

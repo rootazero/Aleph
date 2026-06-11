@@ -98,7 +98,7 @@ pub struct RunState {
     pub input: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunStatus {
     Running,
     Completed,

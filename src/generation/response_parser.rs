@@ -10,7 +10,7 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// Parsed generation request from AI response
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedGenerationRequest {
     /// Generation type (image, video, audio, speech)
     pub gen_type: String,

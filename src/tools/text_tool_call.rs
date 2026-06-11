@@ -37,14 +37,14 @@ use std::collections::HashSet;
 
 /// One tool call recovered from assistant text, with its name already resolved
 /// to the canonical form offered to the provider this turn.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PromotedToolCall {
     pub name: String,
     pub arguments: Value,
 }
 
 /// Outcome of a successful promotion.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Promotion {
     /// The recovered calls, in source order.
     pub calls: Vec<PromotedToolCall>,

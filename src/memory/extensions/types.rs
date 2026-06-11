@@ -29,7 +29,7 @@ pub struct ProduceCtx {
     pub tick: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CaptureDecision {
     Allow,

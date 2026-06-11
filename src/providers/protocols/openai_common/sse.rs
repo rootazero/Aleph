@@ -2,7 +2,7 @@ use crate::error::{AlephError, Result};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SseLine {
     Data(String),
     Done,

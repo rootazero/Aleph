@@ -113,7 +113,7 @@ impl AgentInstanceConfig {
 }
 
 /// Agent instance state
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentState {
     /// Agent is idle, ready to accept requests
     Idle,
@@ -160,7 +160,7 @@ pub struct SessionMessage {
     pub metadata: Option<HashMap<String, String>>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MessageRole {
     User,
     Assistant,

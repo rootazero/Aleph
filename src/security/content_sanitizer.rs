@@ -84,7 +84,7 @@ impl ContentSource {
 }
 
 /// A detected injection pattern within content.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InjectionPattern {
     pub pattern_type: &'static str,
     pub offset: usize,

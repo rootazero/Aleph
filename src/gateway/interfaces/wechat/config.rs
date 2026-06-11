@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use super::types::{ILINK_BASE_URL, WEIXIN_CDN_BASE_URL};
 
 /// DM access policy.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DmPolicy {
     /// Accept messages from any user (default).
@@ -20,7 +20,7 @@ pub enum DmPolicy {
 }
 
 /// Group access policy.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupPolicy {
     /// Reject all group messages (default).

@@ -35,7 +35,7 @@ pub enum CompressionSignal {
 }
 
 /// Priority level for compression
-#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum CompressionPriority {
     /// Compress immediately (corrections)
     Immediate,

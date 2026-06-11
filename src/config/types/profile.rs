@@ -93,7 +93,7 @@ pub struct ProfileConfig {
 /// - Anthropic: Ephemeral (cache_control blocks, stateless)
 /// - Gemini: Persistent (explicit cache creation, stateful)
 /// - OpenAI: Transparent (automatic caching)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum CacheStrategy {
     /// Automatic: Let the system decide based on provider

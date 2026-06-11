@@ -1,6 +1,6 @@
 use super::error::ChannelResolutionError;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParsedInput {
     Id(String),
     GuildPrefix { guild: String, channel: String },

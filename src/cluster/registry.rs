@@ -17,7 +17,7 @@ use serde_json::Value;
 use crate::cluster::ReverseRpcChannel;
 
 /// 节点声明的一个 command（名字 + 自描述 schema）。0b 不解析 schema，原样透传。
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommandDescriptor {
     pub name: String,
     pub schema: Value,
@@ -45,7 +45,7 @@ pub struct NodeSession {
 /// 节点寻址失败的结构化结果（取代旧的 `Option`，让歧义对调用方显式可见）。
 /// 映射 openclaw `node-match.ts` 的多级匹配，但用类型安全枚举表达——
 /// 让"歧义"成为不可忽略的一等状态，而非 stringly error。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ResolveError {
     /// 没有任何在线节点匹配该 name/id。
     NotFound,

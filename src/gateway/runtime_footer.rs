@@ -34,7 +34,7 @@ pub const SEPARATOR: &str = " · ";
 pub const DEFAULT_FIELDS: &[&str] = &["model", "tokens", "duration", "cost", "cwd"];
 
 /// Runtime-footer configuration. Disabled by default to keep replies minimal.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct RuntimeFooterConfig {
     /// When true, the footer is appended to the final agent reply.

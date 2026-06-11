@@ -245,7 +245,7 @@ impl Default for GatewayServerConfig {
 }
 
 /// Authentication mode
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AuthMode {
     /// Require shared token for access (default)

@@ -169,7 +169,7 @@ pub struct RouteProviderInfo {
 /// (`[route.rate_limits.<provider>]`). `skip_serializing_if` matches the wire
 /// bytes exactly: an omitted dimension means "unbounded on that axis", so the
 /// `usage_based` strategy treats it as infinite headroom.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RateLimit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rpm: Option<u32>,

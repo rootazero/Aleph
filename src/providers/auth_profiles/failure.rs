@@ -39,7 +39,7 @@ impl AuthProfileFailureReason {
 }
 
 /// Per-profile usage statistics for round-robin and cooldown tracking
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ProfileUsageStats {
     /// Last successful use timestamp (ms since epoch)
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -76,7 +76,7 @@ impl AgentConfig {
 // =============================================================================
 
 /// How a tool call relates to the current goal
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum GoalRelation {
     /// Directly achieves the goal
     DirectlyAchieves,

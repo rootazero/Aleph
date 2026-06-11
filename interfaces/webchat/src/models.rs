@@ -25,7 +25,7 @@ pub struct TraceNode {
 }
 
 /// Trace node type
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceNodeType {
     /// Agent thinking
@@ -41,7 +41,7 @@ pub enum TraceNodeType {
 }
 
 /// Trace status
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum TraceStatus {
     /// Pending

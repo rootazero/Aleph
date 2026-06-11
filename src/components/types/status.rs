@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Session execution status
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SessionStatus {
     Running,
     Completed,

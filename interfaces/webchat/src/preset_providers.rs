@@ -13,7 +13,7 @@ use crate::generation::GenerationType;
 use serde::{Deserialize, Serialize};
 
 /// Catalog entry rendered as a card in the Generation Providers settings view.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PresetProvider {
     pub id: String,
     pub name: String,

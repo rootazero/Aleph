@@ -11,7 +11,7 @@ use super::signals::SignalSnapshot;
 use super::strategy::DreamStrategy;
 
 /// Mutation gate decision (input to selector).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum GateDecision {
     Allow,

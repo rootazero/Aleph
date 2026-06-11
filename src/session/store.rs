@@ -93,7 +93,7 @@ pub trait SessionEventStore: Send + Sync + 'static {
 }
 
 /// One BM25 hit from [`SessionEventStore::search_events`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionEventHit {
     /// Sequence number of the matching event within its session.
     pub seq: EventSeq,

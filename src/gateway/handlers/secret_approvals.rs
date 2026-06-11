@@ -17,7 +17,7 @@ use super::super::protocol::{JsonRpcRequest, JsonRpcResponse, INTERNAL_ERROR};
 use super::parse_params;
 
 /// Approval decision
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ApprovalDecision {
     Approved,

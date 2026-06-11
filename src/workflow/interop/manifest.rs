@@ -22,7 +22,7 @@ use crate::workflow::def::{WorkflowDef, WorkflowStepDef, WorkflowStepKind};
 
 /// Declarative interchange manifest. JSON keys are camelCase to match the
 /// `.workflow.js` `meta` block (`dependsOn`, `whenToUse`).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowManifest {
     pub name: String,
@@ -35,7 +35,7 @@ pub struct WorkflowManifest {
     pub steps: Vec<WorkflowManifestStep>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowPhase {
     pub title: String,
@@ -47,7 +47,7 @@ pub struct WorkflowPhase {
     pub model: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkflowManifestStep {
     pub id: String,

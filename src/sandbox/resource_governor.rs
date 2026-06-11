@@ -100,7 +100,7 @@ impl GovernorThresholds {
 
 /// Outcome of an admission attempt. Exhaustive enum (vs. the shell's
 /// stringly-typed loop) so callers handle both arms.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdmissionDecision {
     /// The machine can take the load — proceed.
     Admit,

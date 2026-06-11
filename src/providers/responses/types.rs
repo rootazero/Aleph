@@ -116,7 +116,7 @@ pub enum InputItem {
 }
 
 /// Message content — either plain text or multimodal (text + images)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum MessageContent {
     /// Simple text content
@@ -144,7 +144,7 @@ impl MessageContent {
 }
 
 /// A part of multimodal input content
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum InputContentPart {
     /// Text part
@@ -156,7 +156,7 @@ pub enum InputContentPart {
 }
 
 /// Reasoning effort configuration
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReasoningConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,

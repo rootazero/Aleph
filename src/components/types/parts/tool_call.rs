@@ -15,7 +15,7 @@ pub struct ToolCallPart {
     pub completed_at: Option<i64>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ToolCallStatus {
     Pending,
     Running,

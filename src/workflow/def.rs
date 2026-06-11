@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::error::{AlephError, Result};
 
 /// A reusable multi-step workflow template.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkflowDef {
     /// Logical name. Used as the storage key and as the `coord_task` subject
     /// prefix at materialisation time. Sanitised on save.
@@ -61,7 +61,7 @@ impl WorkflowStepKind {
 /// **clarify** step pauses the DAG to collect a structured answer from the user;
 /// its `prompt` is the question and `choices` (if any) the menu — `agent` is
 /// ignored.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkflowStepDef {
     /// Step-local identifier, unique within the workflow. Referenced by other
     /// steps' [`depends_on`](Self::depends_on). NOT the runtime `coord_task`

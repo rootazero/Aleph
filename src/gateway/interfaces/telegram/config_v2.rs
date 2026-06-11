@@ -2,7 +2,7 @@ use crate::gateway::coalescer::CoalescingConfig;
 use serde::{Deserialize, Serialize};
 
 /// DM access policy.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DmPolicy {
     Disabled,
@@ -13,7 +13,7 @@ pub enum DmPolicy {
 }
 
 /// Group access policy.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum GroupPolicy {
     Disabled,
@@ -23,7 +23,7 @@ pub enum GroupPolicy {
 }
 
 /// Status reaction configuration for streaming lifecycle.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct StatusReactionConfig {
     /// Reaction to set when agent starts processing
     #[serde(default)]
@@ -58,7 +58,7 @@ pub enum LinkPreviewMode {
 }
 
 /// Streaming mode for Telegram delivery.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum StreamingMode {
     /// Edit-based streaming (default): updates message via editMessageText
@@ -71,7 +71,7 @@ pub enum StreamingMode {
 }
 
 /// Streaming delivery options for Telegram.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct StreamingOptions {
     /// Overall streaming toggle (legacy, prefer `mode`)
     #[serde(default = "default_true")]
@@ -150,7 +150,7 @@ fn default_max_retries() -> u32 {
     3
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorPolicyMode {
     #[default]
@@ -160,7 +160,7 @@ pub enum ErrorPolicyMode {
     AdminOnly,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ErrorPolicy {
     #[serde(default)]
     pub mode: ErrorPolicyMode,

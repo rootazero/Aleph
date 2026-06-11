@@ -66,7 +66,7 @@ use serde_json::Value;
 use similar::{ChangeTag, TextDiff};
 
 /// 一行 diff：`sign` 为 `'+'`(新增)/`'-'`(删除)/`' '`(上下文)。
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiffLine {
     pub sign: char,
     pub text: String,

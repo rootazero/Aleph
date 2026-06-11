@@ -20,7 +20,7 @@ const MAX_DELAY: Duration = Duration::from_secs(30);
 const LLM_RETRY_JITTER_FACTOR: f64 = 0.25;
 
 /// Outcome of classifying an error for retry decisions.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetryVerdict {
     /// The error is transient; wait `delay` before retrying.
     Retry { delay: Duration },

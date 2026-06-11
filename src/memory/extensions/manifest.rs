@@ -13,7 +13,7 @@ pub enum MemoryHook {
     Produce,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MemoryManifestSection {
     /// Hooks the plugin implements. Other hooks use the trait's no-op defaults.
     pub hooks: Vec<MemoryHook>,

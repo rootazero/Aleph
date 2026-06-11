@@ -65,7 +65,7 @@ impl fmt::Display for LinkId {
 ///
 /// Links bind a bridge to a specific account and define message routing
 /// policies (which agent handles DMs vs group messages, allowlists, etc.).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LinkConfig {
     /// Manifest schema version (e.g. "1")
     pub spec_version: String,

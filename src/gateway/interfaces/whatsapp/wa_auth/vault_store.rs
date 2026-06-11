@@ -4,7 +4,7 @@ use crate::secrets::vault::SecretVault;
 use crate::sync_primitives::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WaAuthData {
     pub creds_blob: Vec<u8>,
     pub keys_blob: Vec<u8>,

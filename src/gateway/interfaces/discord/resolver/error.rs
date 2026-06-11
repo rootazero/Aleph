@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Errors that can occur during channel resolution.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ChannelResolutionError {
     /// No channel matched the input.
     NotFound(String),
@@ -14,7 +14,7 @@ pub enum ChannelResolutionError {
 }
 
 /// A channel candidate when resolution is ambiguous.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Candidate {
     pub channel_id: String,
     pub channel_name: String,

@@ -186,7 +186,7 @@ pub fn topic_matches(topic: &str, pattern: &str) -> bool {
 /// `equals` is matched with `==` against the resolved [`serde_json::Value`].
 /// Strings, numbers, booleans, and JSON null all work; nested objects compare
 /// structurally (rarely useful — prefer narrowing the path).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FieldPredicate {
     /// Dot-separated path inside the event's `data` object.
     pub field: String,
@@ -201,7 +201,7 @@ pub struct FieldPredicate {
 /// `data` field — useful for splitting a noisy fan-out topic like
 /// `tools.changed` into per-`scope` channels without server-side knowledge
 /// of subscriber intent.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TopicSubscription {
     /// Glob-style topic pattern (see [`topic_matches`]).
     pub pattern: String,

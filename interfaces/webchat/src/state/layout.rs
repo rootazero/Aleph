@@ -29,7 +29,7 @@ const LAYOUT_MODE_KEY: &str = "aleph.panel.layout_mode";
 /// on `tool_call_completed`. Stored under `(run_id, tool_id)` so the
 /// workspace pane can look it up by reference from a chip click without
 /// the events stream having to round-trip through ChatState.
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ToolPayload {
     pub args: Option<serde_json::Value>,
     pub result: Option<serde_json::Value>,

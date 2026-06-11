@@ -108,7 +108,7 @@ pub struct ToolCallRecord {
 }
 
 /// Complexity level for planning decisions
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Complexity {
     Simple,
     NeedsPlan,

@@ -7,7 +7,7 @@ pub type Timestamp = i64; // unix milliseconds
 pub type EventSeq = u64;
 pub type TurnId = uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnTrigger {
     UserMessage,
@@ -16,7 +16,7 @@ pub enum TurnTrigger {
     Wake,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnOutcome {
     Completed,
@@ -24,7 +24,7 @@ pub enum TurnOutcome {
     Errored { kind: ErrorKind },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalSource {
     User,
@@ -32,7 +32,7 @@ pub enum ApprovalSource {
     Autoconfirm,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
     Llm,
@@ -43,7 +43,7 @@ pub enum ErrorKind {
     Other,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessageContent {
     /// Free-form text body (UI-displayable).
     pub text: String,
@@ -61,14 +61,14 @@ pub struct MessageContent {
     pub thinking_signature: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolOutput {
     pub value: serde_json::Value,
     #[serde(default)]
     pub metadata: ToolOutputMetadata,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolOutputMetadata {
     #[serde(default)]
     pub latency_ms: u64,

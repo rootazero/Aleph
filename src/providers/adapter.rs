@@ -18,7 +18,7 @@ use super::delta::ProviderDelta;
 use super::message::UnifiedMessage;
 
 /// Tool selection control for protocol adapters.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolChoice {
     /// LLM decides whether to use tools (default)
     Auto,
@@ -323,7 +323,7 @@ pub struct NativeToolCall {
 }
 
 /// Why the LLM stopped generating
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum StopReason {
     /// LLM finished its response naturally
     #[default]

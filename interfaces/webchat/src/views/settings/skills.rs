@@ -10,14 +10,14 @@ use crate::i18n::*;
 // Local types matching the JSON shape from `skills.status` RPC
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MissingRequirements {
     pub bins: Vec<String>,
     pub env: Vec<String>,
     pub config: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallOption {
     pub id: String,
     pub kind: String,

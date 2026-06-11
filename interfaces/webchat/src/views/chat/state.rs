@@ -151,7 +151,7 @@ pub struct ContextUsage {
 }
 
 /// Model resolution info (mirrors core ModelInfo).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ModelInfo {
     pub model: String,
     pub provider: String,
@@ -209,7 +209,7 @@ pub struct ChatMessage {
 }
 
 /// Minimal tool call record for display.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolCallEntry {
     pub tool_id: String,
     pub tool_name: String,
@@ -219,7 +219,7 @@ pub struct ToolCallEntry {
 }
 
 /// Top-level Chat UI phase.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChatPhase {
     #[default]
     Idle,

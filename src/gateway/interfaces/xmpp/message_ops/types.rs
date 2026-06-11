@@ -5,7 +5,7 @@
 /// A full JID has the form: `local@domain/resource`
 /// - `local@domain` is the bare JID
 /// - `/resource` is optional
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JidParts {
     /// User/local part (before @)
     pub local: String,
@@ -24,7 +24,7 @@ impl JidParts {
 }
 
 /// Parsed XMPP message stanza.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct XmppMessage {
     /// Sender JID
     pub from: String,

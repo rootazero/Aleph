@@ -30,7 +30,7 @@ pub const ENV_SESSION_SECRET: &str = "ALEPH_SESSION_SECRET";
 /// Field naming mirrors the openclaw planner so cross-project ops tooling
 /// can consume both with the same dashboard schema where the field exists
 /// in both worlds.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CredentialPlan {
     /// `"token"` or `"none"` — see [`AuthMode`].
     pub auth_mode: String,

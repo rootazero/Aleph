@@ -96,7 +96,7 @@ impl Default for CompressionSettings {
 }
 
 /// Available cross-encoder reranking providers
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RerankProviderType {
     #[default]

@@ -5,7 +5,7 @@ use teloxide::prelude::Requester;
 use teloxide::Bot;
 use tokio::sync::Mutex;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReactionState {
     Idle,
     Thinking,

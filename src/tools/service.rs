@@ -66,7 +66,7 @@ impl ToolError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolSource {
     Builtin,
@@ -74,7 +74,7 @@ pub enum ToolSource {
     Extension { plugin_id: String },
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinitionMetadata {
     #[serde(default)]
     pub hidden_from_llm: bool,
@@ -109,7 +109,7 @@ pub struct ToolDefinitionMetadata {
     pub concurrent_safe: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,

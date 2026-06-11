@@ -240,7 +240,7 @@ impl std::fmt::Debug for RunRequest {
 }
 
 /// Run state
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunState {
     /// Run is queued
     Queued,

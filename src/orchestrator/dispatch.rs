@@ -315,7 +315,7 @@ impl TokenBreakdown {
 /// One tool invocation in run order. Sourced from
 /// `LoopTraceEvent::ToolCallCompleted` — the harness already records every
 /// field; the timeline is the missing aggregation seam.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ToolInvocation {
     /// Provider-supplied tool_use id (correlates with the matching
     /// `FlowStreamEvent::ToolCallStart`).

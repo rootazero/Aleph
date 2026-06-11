@@ -39,7 +39,7 @@ pub trait RerankProvider: Send + Sync {
 }
 
 /// Available cross-encoder reranking providers
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RerankProviderType {
     /// Jina AI reranking API

@@ -3,7 +3,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 /// Source of raw memory data.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RawMemorySource {
     // Legacy — keep for backward compatibility.
@@ -50,7 +50,7 @@ pub enum RawMemorySource {
 }
 
 /// Sub-reason for `RawMemorySource::SessionEnd`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionEndReason {
     /// Gateway close or idle timeout.

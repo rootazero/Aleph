@@ -155,7 +155,7 @@ pub struct Goal {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum GoalStatus {
     #[default]
     Pending,
@@ -221,7 +221,7 @@ impl DecisionRecord {
 }
 
 /// Execution phase
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum ExecutionPhase {
     /// Understanding user intent
     #[default]
@@ -237,7 +237,7 @@ pub enum ExecutionPhase {
 }
 
 /// Context verbosity levels for prompt generation
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ContextVerbosity {
     /// First request: full context
     #[default]

@@ -22,7 +22,7 @@ use super::config::{ConfigError, GatewayConfig};
 /// - `Restart`: Never hot-reload; all changes require restart.
 /// - `Hybrid`: Hot-reload only safe sections (ui, channels, skills, workspace, cron);
 ///   other sections require restart.
-#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ReloadMode {
     Off,

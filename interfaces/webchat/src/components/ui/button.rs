@@ -1,7 +1,7 @@
 use leptos::prelude::*;
 use tailwind_fuse::*;
 
-#[derive(TwVariant, PartialEq)]
+#[derive(TwVariant, PartialEq, Eq)]
 pub enum ButtonVariant {
     #[tw(default, class = "bg-primary text-text-inverse hover:bg-primary-hover")]
     Primary,
@@ -17,7 +17,7 @@ pub enum ButtonVariant {
     Destructive,
 }
 
-#[derive(TwVariant, PartialEq)]
+#[derive(TwVariant, PartialEq, Eq)]
 pub enum ButtonSize {
     #[tw(class = "h-8 px-3 text-xs")]
     Sm,

@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// Node.js package manager preference.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeManager {
     #[default]

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::gateway::coalescer::CoalescingConfig;
 
 /// DM access policy.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LineDmPolicy {
     /// Require a pairing code before accepting messages (safe default).
@@ -22,7 +22,7 @@ pub enum LineDmPolicy {
 }
 
 /// Group access policy.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum LineGroupPolicy {
     /// Only accept messages from allowed groups (default).

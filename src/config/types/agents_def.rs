@@ -120,7 +120,7 @@ pub struct AgentDefaults {
 // =============================================================================
 
 /// Agent identity for display purposes
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct AgentIdentity {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emoji: Option<String>,
@@ -257,7 +257,7 @@ pub struct AgentDefinition {
 /// [agents.list.subagents]
 /// allow = ["reviewer", "tester"]
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 pub struct SubagentPolicy {
     /// List of allowed sub-agent IDs, or `["*"]` for unrestricted
     #[serde(default)]

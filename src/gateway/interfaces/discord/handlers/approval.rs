@@ -22,7 +22,7 @@ pub struct PendingExec {
     pub status: ApprovalStatus,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApprovalStatus {
     Pending,
     Approved,

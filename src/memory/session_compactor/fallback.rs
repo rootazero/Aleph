@@ -5,7 +5,7 @@
 //! context within budget.
 
 /// Fallback level controlling how aggressively to compress.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FallbackLevel {
     Normal,
     Aggressive,

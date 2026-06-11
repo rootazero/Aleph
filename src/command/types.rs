@@ -68,7 +68,7 @@ impl std::fmt::Display for CommandType {
 /// In flat namespace mode, all commands are at root level.
 /// The `source_type` field indicates where the command comes from
 /// (System, MCP, Skill, Custom) for UI badge display.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandNode {
     /// Unique identifier within parent namespace (e.g., "search", "git", "commit")
     pub key: String,
