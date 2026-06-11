@@ -190,8 +190,13 @@ impl MemoryContextProvider {
         // Snapshots live under ~/.aleph/data/sessions by convention; we pass
         // whatever the `session_resume` defaults produce, falling back to the
         // memory_dir/sessions subdir if the home dir resolution fails.
-        let snapshot_dir = SnapshotReader::default_path()
-            .map(|_| {
+        let snapshot_dir = SnapshotReader::default_path().map_or_else(|| {
+                memory_dir
+                    .parent().map_or_else(|| {
+                        tracing::warn!("Memory dir has no parent, using memory_dir for sessions");
+                        memory_dir.clone()
+                    }, |p| p.join("sessions"))
+            }, |_| {
                 dirs::home_dir()
                     .unwrap_or_else(|| {
                         tracing::warn!(
@@ -200,13 +205,6 @@ impl MemoryContextProvider {
                         std::env::temp_dir()
                     })
                     .join(".aleph/data/sessions")
-            })
-            .unwrap_or_else(|| {
-                memory_dir
-                    .parent().map_or_else(|| {
-                        tracing::warn!("Memory dir has no parent, using memory_dir for sessions");
-                        memory_dir.clone()
-                    }, |p| p.join("sessions"))
             });
         let snapshots = Arc::new(SnapshotReader::new(snapshot_dir));
         let feedback_floor = FeedbackFloorLoader::new(memory_dir.clone());

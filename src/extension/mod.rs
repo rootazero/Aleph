@@ -952,11 +952,9 @@ impl ExtensionManager {
 /// Get the default plugins directory (user scope: ~/.aleph/plugins/installed/)
 #[must_use]
 pub fn default_plugins_dir() -> std::path::PathBuf {
-    crate::discovery::aleph_plugins_dir()
-        .map(|p| p.join("installed"))
-        .unwrap_or_else(|_| {
+    crate::discovery::aleph_plugins_dir().map_or_else(|_| {
             dirs::home_dir().map_or_else(|| std::path::PathBuf::from(".aleph/plugins/installed"), |h| h.join(".aleph/plugins/installed"))
-        })
+        }, |p| p.join("installed"))
 }
 
 // =============================================================================
