@@ -6,7 +6,7 @@ pub mod store;
 pub mod types;
 
 pub use store::GoalStore;
-pub use types::{Goal, GoalStatus, PursuitMode};
+pub use types::{GateOutcome, Goal, GoalStatus, PursuitMode};
 
 use crate::sync_primitives::Arc;
 use once_cell::sync::OnceCell;
