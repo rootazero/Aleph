@@ -118,6 +118,29 @@ presence / mic-level reporters and the builtin tool registry each construct thei
 **验收门**：spike 若能稳定回收且不引入 splash/导航回归，则另起 spec 正式实现；否则记录结论
 并放弃。本 spec 不承诺 P2 落地。
 
+#### P2 Spike Result（2026-06-11）：**NOT-WORTH-IT**
+
+调查（代码 + 运行态观测，未做全量重建）：
+
+- **拓扑确认**：`desktop/shell/src/main.rs:205` 只建**单个** `main` 窗口（注释自称「the lone
+  webview」），加载 `tauri://localhost/index.html`（splash），daemon 就绪后
+  `navigate_to_panel`（:351）把同一 webview 跨源切到 `http://127.0.0.1:18790`。跨源后 WebKit
+  为 Panel 起新 WebContent（159MB），把旧 `tauri://localhost`（14MB）留作挂起/bfcache 进程。
+- **无干净 API**：栈是 Tauri **2** + wry 包装 WKWebView。shell 内无任何 bfcache / process-pool
+  控制；Tauri/wry 公开面**不暴露**进程保留控制。唯一入口是 `with_webview` 取原始 `WKWebView`
+  指针做 objc/私有 API 调用——脆弱、不受支持、易随系统升级失效（违反「面向未来测试」精神）。
+- **候选方向 B 不可行**：splash 无法同源化到 `:18790`——splash 阶段 daemon 尚未起来（这正是
+  splash 存在的理由），鸡生蛋。
+- **并非真泄漏**：WebKit 挂起 WebContent 在内存压力下 jetsam 可回收；14MB 是软上限而非常驻泄漏。
+
+**结论**：回收对象仅 ~14MB / 1 进程，且无受支持的 Tauri API，唯一手段（objc 私有调用）的脆弱性
+成本远超收益。**放弃 P2**，不另起实现 spec。若未来 Tauri/wry 暴露官方 bfcache/进程控制 API，可
+重新评估；在此之前进程数下限即为 P1 达成后的 6~7。
+
+> 运行态旁证：spike 当时 GUI 窗口已关闭，仅剩 daemon（aleph-server）+ **3 个 AlephBridge**
+> （pid 90126/90134/90136，各 ~6MB）持续存活——印证 P1 修复的必要性（bridge 是 daemon 子进程，
+> UI 关闭也不释放）；新二进制部署后该数应降为 0（空闲）/ 1（用到桌面能力）。
+
 ## 4. 不做（Out of Scope）
 
 - 内联 aleph-server（R6 红线）。
