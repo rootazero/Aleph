@@ -53,6 +53,9 @@ pub struct GoalArgs {
     /// Optional lesson to append to the goal's state file — for `update`.
     /// Record what you learned so future autonomous iterations don't repeat it.
     pub lesson: Option<String>,
+    /// For `set`: wall-clock budget in minutes. Converted to an absolute
+    /// deadline (now + minutes) at set time. None = no time limit.
+    pub timeout_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -102,6 +105,9 @@ impl GoalTool {
                 goal.continuations_used
             ));
         }
+        if goal.deadline_ms.is_some() {
+            s.push_str(", deadline set");
+        }
         if let Some(note) = goal.note.as_deref() {
             if !note.is_empty() {
                 s.push_str(&format!("\nnote: {note}"));
@@ -140,8 +146,8 @@ impl AlephTool for GoalTool {
         "Manage a STANDING GOAL — a persistent objective you keep pursuing \
          across turns until it is achieved. Create one with action='set' ONLY \
          when the user explicitly asks you to pursue a standing objective \
-         (optionally with a token_budget, and pursuit_max_iterations to let \
-         the system continue autonomously). Optionally attach a gate_command (a shell test like 'cargo test' that must \
+         (optionally with a token_budget, pursuit_max_iterations to let \
+         the system continue autonomously, and timeout_minutes to cap wall-clock pursuit). Optionally attach a gate_command (a shell test like 'cargo test' that must \
 exit 0 before an autonomous goal is accepted as complete). On action='update' \
 you may also pass a lesson to record what you learned for future iterations. \
          Read it with action='get'. When \
@@ -157,6 +163,7 @@ you may also pass a lesson to record what you learned for future iterations. \
     fn examples(&self) -> Option<Vec<String>> {
         Some(vec![
             "goal(action='set', objective='Migrate the auth module to the new API', token_budget=50000)".into(),
+            "goal(action='set', objective='Triage failing CI', pursuit_max_iterations=10, timeout_minutes=30)".into(),
             "goal(action='get')".into(),
             "goal(action='update', status='complete', note='all endpoints migrated and tests green')".into(),
             "goal(action='update', lesson='remember to run db migrations before tests')".into(),
@@ -197,6 +204,10 @@ you may also pass a lesson to record what you learned for future iterations. \
                     goal = goal.with_pursuit(PursuitMode::Active { max_iterations });
                 }
                 goal = goal.with_gate_command(args.gate_command.clone());
+                if let Some(minutes) = args.timeout_minutes {
+                    let deadline = now.saturating_add(u64::from(minutes).saturating_mul(60_000));
+                    goal = goal.with_deadline_ms(Some(deadline));
+                }
                 self.store.put(&goal)?;
                 Ok(GoalOutput {
                     success: true,
@@ -273,6 +284,7 @@ mod tests {
             pursuit_max_iterations: None,
             gate_command: None,
             lesson: None,
+            timeout_minutes: None,
         })
         .await
         .unwrap();
@@ -287,6 +299,7 @@ mod tests {
                 pursuit_max_iterations: None,
                 gate_command: None,
                 lesson: None,
+                timeout_minutes: None,
             })
             .await
             .unwrap();
@@ -306,6 +319,7 @@ mod tests {
             pursuit_max_iterations: None,
             gate_command: None,
             lesson: None,
+            timeout_minutes: None,
         })
         .await
         .unwrap();
@@ -319,6 +333,7 @@ mod tests {
                 pursuit_max_iterations: None,
                 gate_command: None,
                 lesson: None,
+                timeout_minutes: None,
             })
             .await
             .unwrap();
@@ -338,6 +353,7 @@ mod tests {
             pursuit_max_iterations: Some(1_000_000),
             gate_command: None,
             lesson: None,
+            timeout_minutes: None,
         })
         .await
         .unwrap();
@@ -351,6 +367,7 @@ mod tests {
                 pursuit_max_iterations: None,
                 gate_command: None,
                 lesson: None,
+                timeout_minutes: None,
             })
             .await
             .unwrap();
@@ -373,6 +390,7 @@ mod tests {
                 pursuit_max_iterations: None,
                 gate_command: None,
                 lesson: None,
+                timeout_minutes: None,
             })
             .await
             .unwrap();
@@ -393,6 +411,7 @@ mod tests {
                 pursuit_max_iterations: None,
                 gate_command: None,
                 lesson: None,
+                timeout_minutes: None,
             })
             .await;
         assert!(err.is_err(), "set without objective must error");
@@ -410,6 +429,7 @@ mod tests {
             pursuit_max_iterations: None,
             gate_command: None,
             lesson: None,
+            timeout_minutes: None,
         })
         .await
         .unwrap();
@@ -422,6 +442,7 @@ mod tests {
             pursuit_max_iterations: None,
             gate_command: None,
             lesson: None,
+            timeout_minutes: None,
         })
         .await
         .unwrap();
@@ -435,6 +456,7 @@ mod tests {
                 pursuit_max_iterations: None,
                 gate_command: None,
                 lesson: None,
+                timeout_minutes: None,
             })
             .await
             .unwrap();
@@ -453,6 +475,7 @@ mod tests {
             pursuit_max_iterations: Some(3),
             gate_command: Some("cargo test".into()),
             lesson: None,
+            timeout_minutes: None,
         })
         .await
         .unwrap();
@@ -461,7 +484,7 @@ mod tests {
                 action: GoalAction::Get,
                 objective: None, status: None, note: None,
                 token_budget: None, pursuit_max_iterations: None,
-                gate_command: None, lesson: None,
+                gate_command: None, lesson: None, timeout_minutes: None,
             })
             .await
             .unwrap();
@@ -476,6 +499,7 @@ mod tests {
             objective: Some("Y".into()),
             status: None, note: None, token_budget: None,
             pursuit_max_iterations: None, gate_command: None, lesson: None,
+            timeout_minutes: None,
         })
         .await
         .unwrap();
@@ -485,10 +509,35 @@ mod tests {
                 objective: None, status: None, note: None,
                 token_budget: None, pursuit_max_iterations: None,
                 gate_command: None, lesson: Some("don't skip lint".into()),
+                timeout_minutes: None,
             })
             .await
             .unwrap();
         assert!(out.message.contains("lessons (1)"));
         assert!(out.message.contains("don't skip lint"));
+    }
+
+    #[tokio::test]
+    async fn set_with_timeout_minutes_sets_deadline() {
+        let (tool, _d) = tool_with_session("sess-timeout");
+        tool.call(GoalArgs {
+            action: GoalAction::Set,
+            objective: Some("bounded run".into()),
+            status: None, note: None, token_budget: None,
+            pursuit_max_iterations: Some(5), gate_command: None, lesson: None,
+            timeout_minutes: Some(30),
+        })
+        .await
+        .unwrap();
+        let out = tool
+            .call(GoalArgs {
+                action: GoalAction::Get,
+                objective: None, status: None, note: None,
+                token_budget: None, pursuit_max_iterations: None,
+                gate_command: None, lesson: None, timeout_minutes: None,
+            })
+            .await
+            .unwrap();
+        assert!(out.message.contains("deadline set"));
     }
 }
