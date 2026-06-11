@@ -191,6 +191,35 @@ pub async fn execute_stop_hooks(
     StopHookAggregateResult { verdicts }
 }
 
+/// `execute_stop_hooks` 的 `Arc` 入参版本——用于 harness 之外、以 `Arc`
+/// 持有闸门的消费者（goal-loop 闸门、`StopHookVerifier`）。把每个 `Arc`
+/// 包成 forwarding box，复用上面的并发 runner，不克隆 hook 实现。
+pub async fn execute_stop_hooks_arc(
+    hooks: &[Arc<dyn StopHookHandler>],
+    context: &StopHookContext,
+    cancel: &CancellationToken,
+) -> StopHookAggregateResult {
+    struct ArcHook(Arc<dyn StopHookHandler>);
+    #[async_trait::async_trait]
+    impl StopHookHandler for ArcHook {
+        fn name(&self) -> &str {
+            self.0.name()
+        }
+        async fn evaluate(
+            &self,
+            ctx: &StopHookContext,
+            cancel: &CancellationToken,
+        ) -> StopHookVerdict {
+            self.0.evaluate(ctx, cancel).await
+        }
+    }
+    let boxed: Vec<Box<dyn StopHookHandler>> = hooks
+        .iter()
+        .map(|h| Box::new(ArcHook(h.clone())) as Box<dyn StopHookHandler>)
+        .collect();
+    execute_stop_hooks(&boxed, context, cancel).await
+}
+
 // ---------------------------------------------------------------------------
 // Shell execution helper
 // ---------------------------------------------------------------------------

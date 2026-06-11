@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::ErrorClass;
 use crate::verification::stop_hooks::{
-    execute_stop_hooks, StopHookContext, StopHookHandler, StopHookVerdict,
+    execute_stop_hooks_arc, StopHookContext, StopHookHandler,
 };
 use crate::verification::turn_verifier::{TurnVerifier, TurnVerifyContext, VerifierVerdict};
 
@@ -47,35 +47,13 @@ impl TurnVerifier for StopHookVerifier {
         if self.hooks.is_empty() {
             return VerifierVerdict::Continue;
         }
-        // `execute_stop_hooks` wants `&[Box<dyn StopHookHandler>]`; we
-        // hold `Arc`s for shareability. Wrap each in a forwarding box —
-        // avoids cloning the hook implementations.
-        struct ArcHook(Arc<dyn StopHookHandler>);
-        #[async_trait]
-        impl StopHookHandler for ArcHook {
-            fn name(&self) -> &str {
-                self.0.name()
-            }
-            async fn evaluate(
-                &self,
-                hctx: &StopHookContext,
-                cancel: &CancellationToken,
-            ) -> StopHookVerdict {
-                self.0.evaluate(hctx, cancel).await
-            }
-        }
-        let boxed: Vec<Box<dyn StopHookHandler>> = self
-            .hooks
-            .iter()
-            .map(|h| Box::new(ArcHook(h.clone())) as Box<dyn StopHookHandler>)
-            .collect();
         let hctx = StopHookContext {
             final_text: ctx.final_text.map(|s| s.to_string()),
             iterations: ctx.iterations,
             tool_calls_made: ctx.tool_calls_made,
             stop_reason: stop_reason.to_string(),
         };
-        let result = execute_stop_hooks(&boxed, &hctx, cancel).await;
+        let result = execute_stop_hooks_arc(&self.hooks, &hctx, cancel).await;
         // Halt outranks Block — when both fire, the loop must exit
         // (claude-code's preventContinuation semantics). A Halt verdict
         // is permanent; a Block verdict triggers a Continue+retry.

@@ -1384,7 +1384,16 @@ pub(in crate::commands::start) async fn register_agent_handlers(
         // Wire goal-pursuit autonomous-continuation deps (opt-in, only fires
         // for sessions whose goal has PursuitMode::Active). Idempotent: a
         // second set is ignored by the OnceLock. Registry clone is cheap (Arc).
-        let _ = continuation_cell.set((agent_registry.clone(), engine_arc.clone()));
+        // Goal-loop 客观闸门：复用全局 config.toml [[stop_hooks]]（与
+        // within-turn StopHookVerifier 同源）。None → 无闸门，complete 主张
+        // 立即终止（行为与本特性引入前一致）。
+        let goal_gate =
+            alephcore::verification::stop_hooks::build_from_config(&app_config.stop_hooks);
+        let _ = continuation_cell.set(alephcore::gateway::execution_engine::ContinuationDeps {
+            registry: agent_registry.clone(),
+            adapter: engine_arc.clone(),
+            gate: goal_gate,
+        });
 
         // Create run_manager with real execution dependencies.
         // Inject the live config so Panel runs honor the global output_mode

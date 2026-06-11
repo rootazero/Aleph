@@ -11,7 +11,7 @@
 //! state — no judgment); iteration/token caps are structural backstops. Lives
 //! in `src/tasks/`, never in `src/harness/` (R10 12-file redline).
 
-use crate::goal::{Goal, GoalStatus, PursuitMode};
+use crate::goal::{GateOutcome, Goal, GoalStatus, PursuitMode};
 
 /// Pure decision: should this goal get one more autonomous continuation?
 /// `tokens_now` is the session's current total-token count (pass 0 when a
@@ -103,6 +103,66 @@ pub fn cap_reached_note(goal: &Goal) -> String {
         ),
         PursuitMode::Passive => "Autonomous pursuit ended.".to_string(),
     }
+}
+
+/// 模型在 `Active` 续跑下自报 `Complete`，但客观闸门尚未确认。
+/// 调用方据此在续跑钩子里跑闸门。被动/交互 goal（非 Active 续跑）永远
+/// 返回 false——它们的 complete 立即终止，不经闸门。
+#[must_use]
+pub fn awaiting_gate(goal: &Goal, gate_configured: bool) -> bool {
+    gate_configured
+        && matches!(goal.pursuit, PursuitMode::Active { .. })
+        && goal.status == GoalStatus::Complete
+        && goal.gate_outcome == GateOutcome::Unchecked
+}
+
+/// 闸门通过：完成被确认（`gate_outcome = Passed`），循环终止。
+#[must_use]
+pub fn confirm_complete(goal: &Goal, now_ms: u64) -> Goal {
+    goal.clone().with_gate_outcome(GateOutcome::Passed, now_ms)
+}
+
+/// 闸门否决（Ralph Wiggum 营救）：把误报完成的 goal 退回 `Active` 并把
+/// 闸门失败原因写入 `note`，让下一次续跑能据此行动。若迭代上限已耗尽，
+/// 退回 Active 会立刻再次 exhaust——直接转 `Blocked`（复用 `cap_reached_note`，
+/// 不复制 Blocked 逻辑）。无论哪条路径都把 `gate_outcome` 复位 `Unchecked`，
+/// 保证下一次 complete 主张会被重新 gate。
+#[must_use]
+pub fn reopen_after_gate_failure(goal: &Goal, reason: &str, now_ms: u64) -> Goal {
+    let cap_spent = match goal.pursuit {
+        PursuitMode::Active { max_iterations } => goal.continuations_used >= max_iterations,
+        PursuitMode::Passive => true,
+    };
+    if cap_spent {
+        let note = cap_reached_note(goal);
+        goal.clone()
+            .with_status(GoalStatus::Blocked, now_ms)
+            .with_note(Some(note), now_ms)
+            .with_gate_outcome(GateOutcome::Unchecked, now_ms)
+    } else {
+        let trimmed: String = reason.chars().take(300).collect();
+        let note = format!("Objective gate vetoed completion: {trimmed}");
+        goal.clone()
+            .with_status(GoalStatus::Active, now_ms)
+            .with_note(Some(note), now_ms)
+            .with_gate_outcome(GateOutcome::Unchecked, now_ms)
+    }
+}
+
+/// 闸门失败后的续跑 prompt——把客观失败信号注入下一轮（R9 智慧在 prompt）。
+#[must_use]
+pub fn gate_failure_prompt(goal: &Goal, reason: &str) -> String {
+    let trimmed: String = reason.chars().take(600).collect();
+    format!(
+        "[Your standing goal is NOT done — the objective gate rejected your \
+         completion claim]\nGoal: {}\n\nThe automated gate (tests / build / \
+         lint) failed with:\n{trimmed}\n\nThis is an objective signal, not an \
+         opinion. Fix what the gate flagged, then call goal(action='update', \
+         status='complete') again only when the work truly passes. If you \
+         cannot resolve it, call goal(action='update', status='blocked') with \
+         a note describing what remains.",
+        goal.objective,
+    )
 }
 
 #[cfg(test)]
@@ -202,5 +262,59 @@ mod tests {
         let g = active_goal(7);
         assert!(cap_reached_note(&g).contains('7'));
         assert!(cap_reached_note(&g).contains("Blocked"));
+    }
+
+    #[test]
+    fn awaiting_gate_true_only_for_active_pursuit_complete_unchecked() {
+        let mut g = active_goal(5);
+        g = g.with_status(GoalStatus::Complete, 1);
+        // Active pursuit + Complete + Unchecked + gate → true
+        assert!(awaiting_gate(&g, true));
+        // 无闸门 → false（回归保护：无 stop_hooks 用户行为不变）
+        assert!(!awaiting_gate(&g, false));
+        // 已 Passed → false（不重复 gate）
+        let passed = g.clone().with_gate_outcome(GateOutcome::Passed, 2);
+        assert!(!awaiting_gate(&passed, true));
+        // 仍 Active 状态（未自报 complete）→ false
+        assert!(!awaiting_gate(&active_goal(5), true));
+        // 被动 goal → false（交互 complete 不经闸门）
+        let mut passive = Goal::new("s", "o", 0, 0);
+        passive = passive.with_status(GoalStatus::Complete, 1);
+        assert!(!awaiting_gate(&passive, true));
+    }
+
+    #[test]
+    fn confirm_complete_sets_passed() {
+        let g = active_goal(5).with_status(GoalStatus::Complete, 1);
+        let c = confirm_complete(&g, 9);
+        assert_eq!(c.gate_outcome, GateOutcome::Passed);
+        assert_eq!(c.updated_at_ms, 9);
+    }
+
+    #[test]
+    fn reopen_after_gate_failure_reopens_active_when_cap_remaining() {
+        let g = active_goal(5).with_status(GoalStatus::Complete, 1);
+        let r = reopen_after_gate_failure(&g, "tests failed: 3 errors", 9);
+        assert_eq!(r.status, GoalStatus::Active);
+        assert_eq!(r.gate_outcome, GateOutcome::Unchecked);
+        assert!(r.note.unwrap().contains("tests failed"));
+    }
+
+    #[test]
+    fn reopen_after_gate_failure_blocks_when_cap_spent() {
+        let mut g = active_goal(3).with_status(GoalStatus::Complete, 1);
+        g.continuations_used = 3; // cap 已满
+        let r = reopen_after_gate_failure(&g, "still red", 9);
+        assert_eq!(r.status, GoalStatus::Blocked);
+        assert!(r.note.unwrap().contains("Blocked"));
+    }
+
+    #[test]
+    fn gate_failure_prompt_restates_goal_and_reason() {
+        let g = active_goal(5);
+        let p = gate_failure_prompt(&g, "lint: 2 warnings");
+        assert!(p.contains(&g.objective));
+        assert!(p.contains("lint: 2 warnings"));
+        assert!(p.contains("objective gate"));
     }
 }

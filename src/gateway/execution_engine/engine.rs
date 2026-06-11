@@ -20,6 +20,18 @@ use crate::executor::ToolRegistry;
 use crate::thinker::ProviderRegistry as ThinkerProviderRegistry;
 use crate::tool_metadata::UnifiedTool;
 
+/// Deferred-injected deps for the post-run autonomous-continuation hook.
+/// 命名结构替代旧 2-tuple，并携带 goal-loop 的客观闸门 handler。
+/// `gate` 为 `None` 时（无 `config.toml [[stop_hooks]]`）loop 行为不变。
+#[derive(Clone)]
+pub struct ContinuationDeps {
+    pub registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
+    pub adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
+    /// 客观闸门 handler（与 `StopHookVerifier` 共享同一份），守护自主
+    /// 续跑的完成决策。`None` → 无闸门，complete 主张立即终止。
+    pub gate: Option<Arc<Vec<Arc<dyn crate::verification::stop_hooks::StopHookHandler>>>>,
+}
+
 /// Execution engine that bridges Gateway to the AgentLoop
 pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> {
     pub(super) config: ExecutionEngineConfig,
@@ -73,12 +85,7 @@ pub struct ExecutionEngine<P: ThinkerProviderRegistry + 'static, R: ToolRegistry
     /// Holds (AgentInstanceRegistry, self-as-ExecutionAdapter). `None` / empty
     /// until populated via `continuation_cell()` + boot wiring; absent in all
     /// tests and non-production paths, so the hook is a safe no-op by default.
-    pub(super) continuation_deps: Arc<
-        std::sync::OnceLock<(
-            Arc<crate::gateway::agent_instance::AgentRegistry>,
-            Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
-        )>,
-    >,
+    pub(super) continuation_deps: Arc<std::sync::OnceLock<ContinuationDeps>>,
     /// Deferred channel-registry handle for the R5 progress side-channel.
     /// Shares the same `OnceCell` the boot path populates once channels are
     /// up (see `agent_init` / boot wiring); empty until then, so the progress
@@ -151,14 +158,7 @@ impl<P: ThinkerProviderRegistry + 'static, R: ToolRegistry + 'static> ExecutionE
     /// `execute.rs` without storing a self-referential field at construction
     /// time (same deferred-injection pattern as `orchestrator_cell`).
     #[must_use]
-    pub fn continuation_cell(
-        &self,
-    ) -> Arc<
-        std::sync::OnceLock<(
-            Arc<crate::gateway::agent_instance::AgentRegistry>,
-            Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
-        )>,
-    > {
+    pub fn continuation_cell(&self) -> Arc<std::sync::OnceLock<ContinuationDeps>> {
         self.continuation_deps.clone()
     }
 
