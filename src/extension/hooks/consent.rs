@@ -450,7 +450,7 @@ mod tests {
         let (_d, consent) = tmp_consent();
         consent.record_pending("p", "echo hi", "e");
         let fp = consent.entries()[0].fingerprint.clone();
-        let approved = consent.approve(&fp[..6]).expect("approve").expect("entry");
+        let approved = consent.approve(fp.get(..6).unwrap_or(&fp)).expect("approve").expect("entry");
         assert_eq!(approved.fingerprint, fp);
     }
 
