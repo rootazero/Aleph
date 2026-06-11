@@ -4,8 +4,12 @@
 //! 0. **Bare manifest JSON** (starts with `{`) → exact parse, lossless.
 //! 1. **Embedded block** (`/* @aleph-workflow {json} */`) → exact parse, lossless.
 //! 2. **Bare `.workflow.js`** → light-weight scan of the pure-literal `meta`
-//!    block + ordered `phase()` / `agent()` calls; imperative constructs go into
-//!    `dropped`. `phase()` markers are captured and assigned to the steps that
+//!    block + ordered `phase()` / `agent()` / `clarify()` calls; imperative
+//!    constructs go into `dropped`. A `clarify("q", ["a", "b"])` step is the
+//!    inverse of `export`'s `render_clarify_call`, so a header-stripped export
+//!    of a workflow with clarify steps re-imports them faithfully (the bare path
+//!    is symmetric for every body construct export emits, not only agents).
+//!    `phase()` markers are captured and assigned to the steps that
 //!    follow them, so a hand-written phased workflow keeps its phase plan. Each
 //!    `agent(prompt, { opts })` call's opts object is parsed too — the literal
 //!    `label`/`phase`/`model`/`isolation`/`agentType` fields and a JSON `schema`
@@ -95,10 +99,6 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
         ("while ", "while loop"),
         ("if (", "if conditional"),
         ("if(", "if conditional"),
-        (
-            "clarify(",
-            "clarify(...) step — re-import via the @aleph-workflow header to preserve it (bare scan maps only agent())",
-        ),
     ] {
         if skeleton.contains(needle) {
             dropped.push(label.to_string());
@@ -187,6 +187,43 @@ fn scan_bare(src: &str) -> Result<ImportOutcome> {
                 });
                 // A sibling inside a parallel block extends the current group; a
                 // sequential step becomes the next singleton layer.
+                if parallel_depth > 0 {
+                    parallel_group.push(i);
+                } else {
+                    prev_layer = vec![i];
+                }
+            }
+            ScanEvent::Clarify(call) => {
+                // A `clarify("q", [choices])` step is the exact inverse of
+                // `export`'s `render_clarify_call` — recover it so the bare path
+                // is symmetric for every body construct export emits (agent,
+                // parallel, phase, opts, AND clarify), not only the embed header.
+                // It joins the DAG with the same layer logic as an agent step:
+                // it can follow the prior layer and be depended on by the next.
+                let i = steps.len();
+                let depends_on: Vec<String> = prev_layer
+                    .iter()
+                    .map(|&p| format!("step_{}", p + 1))
+                    .collect();
+                steps.push(WorkflowManifestStep {
+                    id: format!("step_{}", i + 1),
+                    // A clarify step is owned by the sentinel, not a team member,
+                    // so its `agent` is intentionally empty (matches `from_def`).
+                    agent: String::new(),
+                    prompt: call.prompt,
+                    depends_on,
+                    label: None,
+                    model: None,
+                    // A clarify step has no opts object, so it inherits the active
+                    // `phase()` marker just like a sequential agent step would.
+                    phase: current_phase.clone(),
+                    schema: None,
+                    isolation: None,
+                    agent_type: None,
+                    kind: crate::workflow::def::WorkflowStepKind::Clarify,
+                    choices: call.choices,
+                    review: false,
+                });
                 if parallel_depth > 0 {
                     parallel_group.push(i);
                 } else {
@@ -384,6 +421,45 @@ fn parse_join_separator(chars: &[char], start: usize) -> Option<(String, usize)>
         return None;
     }
     Some((sep, j + 1))
+}
+
+/// Read an optional `, ["a", "b"]` choices array that follows a clarify
+/// question. `start` is the index just past the prompt argument. Returns the
+/// decoded choice literals, or an empty vec when no array follows (a free-text
+/// clarification) — the inverse of `export`'s `render_clarify_call`. A
+/// non-literal element makes the menu dynamic, so the whole read abstains
+/// (returns empty) rather than half-capturing it (R7/R10), exactly like the
+/// prompt readers.
+fn read_clarify_choices(chars: &[char], start: usize) -> Vec<String> {
+    let i = first_non_ws(chars, start);
+    if chars.get(i) != Some(&',') {
+        return Vec::new();
+    }
+    let i = first_non_ws(chars, i + 1);
+    if chars.get(i) != Some(&'[') {
+        return Vec::new();
+    }
+    let n = chars.len();
+    let mut j = i + 1; // past '['
+    let mut out: Vec<String> = Vec::new();
+    loop {
+        while j < n && (chars[j].is_whitespace() || chars[j] == ',') {
+            j += 1;
+        }
+        match chars.get(j) {
+            Some(']') | None => break,
+            Some('\'') | Some('"') => match read_literal_at(chars, j) {
+                Some((lit, next)) => {
+                    out.push(lit);
+                    j = next;
+                }
+                None => break,
+            },
+            // Identifier / expression element → dynamic menu, abstain entirely.
+            _ => return Vec::new(),
+        }
+    }
+    out
 }
 
 /// Literal opts recovered from an `agent(prompt, { … })` call. Every field is
@@ -616,6 +692,9 @@ enum ScanEvent {
     Phase(String),
     /// An `agent("prompt", { opts })` call — the prompt plus any recovered opts.
     Agent(AgentCall),
+    /// A `clarify("question", ["a", "b"])` call (an Aleph extension to the
+    /// `.workflow.js` vocabulary) — the question plus any literal choices.
+    Clarify(ClarifyCall),
     /// The opening of a `parallel([...])` block — the agents up to the matching
     /// [`ParallelEnd`](ScanEvent::ParallelEnd) are siblings (same DAG layer).
     ParallelStart,
@@ -627,6 +706,13 @@ enum ScanEvent {
 struct AgentCall {
     prompt: String,
     opts: AgentOpts,
+}
+
+/// A recovered `clarify()` call: its question and the literal choice menu
+/// (empty for a free-text clarification — the inverse of `render_clarify_call`).
+struct ClarifyCall {
+    prompt: String,
+    choices: Vec<String>,
 }
 
 /// Scan `src` for `phase(...)` and `agent(...)` calls in source order, string-
@@ -677,7 +763,7 @@ fn scan_events(src: &str) -> Vec<ScanEvent> {
                 i += 1;
             }
             let ident: String = chars[start..i].iter().collect();
-            if ident == "phase" || ident == "agent" || ident == "parallel" {
+            if ident == "phase" || ident == "agent" || ident == "parallel" || ident == "clarify" {
                 let mut j = i;
                 while j < n && chars[j].is_whitespace() {
                     j += 1;
@@ -699,6 +785,16 @@ fn scan_events(src: &str) -> Vec<ScanEvent> {
                             if let Some((prompt, end)) = read_agent_prompt(after, 0) {
                                 let opts = read_agent_opts(after, end);
                                 events.push(ScanEvent::Agent(AgentCall { prompt, opts }));
+                            }
+                        }
+                        // A clarify question is a plain/`join`-array literal (the
+                        // `read_agent_prompt` shape), optionally followed by a
+                        // `["a", "b"]` choices array — the inverse of export's
+                        // `render_clarify_call`.
+                        "clarify" => {
+                            if let Some((prompt, end)) = read_agent_prompt(after, 0) {
+                                let choices = read_clarify_choices(after, end);
+                                events.push(ScanEvent::Clarify(ClarifyCall { prompt, choices }));
                             }
                         }
                         // The block opens at the `(` the main loop is about to
@@ -1360,6 +1456,147 @@ await agent('fix more')
                 .map(|p| p.title.as_str())
                 .collect::<Vec<_>>(),
             vec!["Review"]
+        );
+    }
+
+    // ---- Clarify steps on the bare path -----------------------------------
+
+    #[test]
+    fn bare_js_imports_clarify_with_choices() {
+        // A hand-written `clarify("q", ["a", "b"])` re-imports as a Clarify step
+        // carrying its choices — the inverse of export's render_clarify_call.
+        let src = "export const meta = { name: 'deploy' }\n\
+                   await clarify('Deploy where?', ['staging', 'prod'])\n\
+                   await agent('deploy it')";
+        let outcome = parse_workflow_js(src).expect("scan clarify");
+        let m = &outcome.manifest;
+        assert_eq!(m.steps.len(), 2);
+        assert_eq!(
+            m.steps[0].kind,
+            crate::workflow::def::WorkflowStepKind::Clarify
+        );
+        assert_eq!(m.steps[0].prompt, "Deploy where?");
+        assert_eq!(m.steps[0].choices, vec!["staging", "prod"]);
+        assert!(m.steps[0].agent.is_empty(), "clarify owns no team member");
+        // The agent step fans in from the clarify step (DAG wiring shared).
+        assert_eq!(m.steps[1].depends_on, vec!["step_1".to_string()]);
+        // clarify is no longer reported as a dropped construct.
+        assert!(
+            !outcome.dropped.iter().any(|d| d.contains("clarify")),
+            "clarify captured, not dropped: {:?}",
+            outcome.dropped
+        );
+    }
+
+    #[test]
+    fn bare_js_imports_free_text_clarify() {
+        // A `clarify("q")` with no choices array → a free-text Clarify step.
+        let src = "export const meta = { name: 'wf' }\n\
+                   await clarify('Which file?')";
+        let m = parse_workflow_js(src).expect("scan").manifest;
+        assert_eq!(m.steps.len(), 1);
+        assert_eq!(
+            m.steps[0].kind,
+            crate::workflow::def::WorkflowStepKind::Clarify
+        );
+        assert_eq!(m.steps[0].prompt, "Which file?");
+        assert!(m.steps[0].choices.is_empty(), "free-text → no choices");
+    }
+
+    #[test]
+    fn clarify_with_dynamic_choices_abstains() {
+        // A non-literal choices element makes the menu dynamic; the read abstains
+        // (empty choices) rather than half-capturing it (R7/R10). The step is
+        // still recovered as a free-text clarify.
+        let src = "export const meta = { name: 'wf' }\n\
+                   await clarify('Pick', [ENVS, 'prod'])";
+        let m = parse_workflow_js(src).expect("scan").manifest;
+        assert_eq!(m.steps.len(), 1);
+        assert!(
+            m.steps[0].choices.is_empty(),
+            "dynamic menu abstains, not guessed: {:?}",
+            m.steps[0].choices
+        );
+    }
+
+    #[test]
+    fn clarify_in_prompt_text_is_not_a_call() {
+        // A prompt that merely mentions `clarify(` must NOT register a phantom
+        // clarify step — the scan is string-aware.
+        let src = "export const meta = { name: 'wf' }\n\
+                   await agent('please clarify(the spec) before coding')";
+        let m = parse_workflow_js(src).expect("scan").manifest;
+        assert_eq!(m.steps.len(), 1);
+        assert_eq!(
+            m.steps[0].kind,
+            crate::workflow::def::WorkflowStepKind::Agent,
+            "string-mention of clarify( is not a call"
+        );
+    }
+
+    #[test]
+    fn clarify_workflow_survives_header_stripped_export_roundtrip() {
+        // The headline symmetry: export a workflow whose first step is a clarify
+        // gate, drop the lossless `@aleph-workflow` embed header, and prove the
+        // bare scanner rebuilds the clarify kind + choices + the dependency edge.
+        // Before this, the bare path silently dropped the clarify step, so a
+        // header-stripped export re-imported as a different (gate-less) workflow.
+        let m = WorkflowManifest {
+            name: "deploy".into(),
+            description: String::new(),
+            when_to_use: String::new(),
+            phases: vec![],
+            steps: vec![
+                WorkflowManifestStep {
+                    id: "ask".into(),
+                    agent: String::new(),
+                    prompt: "Deploy where?".into(),
+                    depends_on: vec![],
+                    label: None,
+                    model: None,
+                    phase: None,
+                    schema: None,
+                    isolation: None,
+                    agent_type: None,
+                    kind: crate::workflow::def::WorkflowStepKind::Clarify,
+                    choices: vec!["staging".into(), "prod".into()],
+                    review: false,
+                },
+                WorkflowManifestStep {
+                    id: "run".into(),
+                    agent: "deployer".into(),
+                    prompt: "deploy".into(),
+                    depends_on: vec!["ask".into()],
+                    label: None,
+                    model: None,
+                    phase: None,
+                    schema: None,
+                    isolation: None,
+                    agent_type: None,
+                    kind: crate::workflow::def::WorkflowStepKind::Agent,
+                    choices: vec![],
+                    review: false,
+                },
+            ],
+        };
+        let js = render_workflow_js(&m);
+        let bare: String = js.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert!(!bare.contains("@aleph-workflow"), "header stripped: {bare}");
+        let back = parse_workflow_js(&bare)
+            .expect("bare scan of clarify export")
+            .manifest;
+        assert_eq!(back.steps.len(), 2);
+        assert_eq!(
+            back.steps[0].kind,
+            crate::workflow::def::WorkflowStepKind::Clarify,
+            "clarify kind survives the bare round-trip"
+        );
+        assert_eq!(back.steps[0].prompt, "Deploy where?");
+        assert_eq!(back.steps[0].choices, vec!["staging", "prod"]);
+        assert_eq!(
+            back.steps[1].depends_on,
+            vec!["step_1".to_string()],
+            "the gated agent step still fans in from the clarify step"
         );
     }
 }
