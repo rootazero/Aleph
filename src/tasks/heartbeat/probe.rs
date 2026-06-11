@@ -84,7 +84,7 @@ pub fn evaluate_trigger(
         }
         TriggerCondition::Changed => {
             let current = value.to_string();
-            last_result.map_or(true, |prev| prev != current)
+            last_result.is_none_or(|prev| prev != current)
         }
         TriggerCondition::Always => true,
     }

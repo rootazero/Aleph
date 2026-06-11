@@ -320,7 +320,7 @@ impl McpClient {
             if name.starts_with(&format!("{id}:"))
                 && best
                     .as_ref()
-                    .map_or(true, |b| b.name().len() < id.len())
+                    .is_none_or(|b| b.name().len() < id.len())
             {
                 best = Some(conn);
             }

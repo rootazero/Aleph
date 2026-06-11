@@ -168,7 +168,7 @@ pub fn resolve_route(
         b.match_rule
             .account_id
             .as_ref()
-            .map_or(true, |a| a == "*")
+            .is_none_or(|a| a == "*")
             && b.match_rule.peer.is_none()
             && b.match_rule.guild_id.is_none()
             && b.match_rule.team_id.is_none()

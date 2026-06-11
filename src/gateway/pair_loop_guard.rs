@@ -308,7 +308,7 @@ impl PairLoopGuard {
     fn maybe_prune(state: &mut GuardState, config: &PairLoopGuardConfig, now: Instant) {
         let due = state
             .last_prune
-            .map_or(true, |t| now.saturating_duration_since(t) >= PRUNE_INTERVAL);
+            .is_none_or(|t| now.saturating_duration_since(t) >= PRUNE_INTERVAL);
         if !due && state.pairs.len() <= MAX_TRACKED_PAIRS {
             return;
         }
