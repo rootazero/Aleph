@@ -669,6 +669,8 @@ git add -A && git commit -m "panel/css: atmosphere/blur/popover primitives + can
 
 数值来源：`docs/superpowers/specs/assets/2026-06-11-glass-material/direction.html` 六个 skin 的换算锚点；Task 11 截图验收时允许微调（每次微调单独 commit）。
 
+> **粒面值重校（Task 4 评审修正后）**：画布粒面 SVG 已换回全强度 tile（无内嵌 opacity），`--mat-grain` 即有效 alpha。本任务粒面值按修正后乘法链给出：liquid 0.05/0.09、aurora 0.02/0.035（强度排序 liquid > luxe 0.035/0.06 > aurora）。下方代码块中的粒面值已同步更新；不要参照 direction.html 推回旧值。
+
 - [ ] **Step 1: 插入四个材质原色块 + 两个系统镜像**
 
 ```css
@@ -699,7 +701,7 @@ html[data-material="liquid"] {
   --mat-glow-counter: color-mix(in oklch, oklch(0.70 0.14 250) 26%, transparent);
   --mat-sheen: oklch(1 0 0 / 0.85);
   --mat-raised: oklch(1 0 0 / 0.42);
-  --mat-grain: 0.20;
+  --mat-grain: 0.05;
   --mat-fill-chrome: 58%;
   --mat-chrome-topline: oklch(1 0 0 / 0.35);
   --mat-pop-spec-hi: oklch(1 0 0 / 0.95);
@@ -734,7 +736,7 @@ html[data-material="liquid"].dark {
   --mat-glow-counter: color-mix(in oklch, oklch(0.66 0.14 250) 26%, transparent);
   --mat-sheen: oklch(1 0 0 / 0.08);
   --mat-raised: oklch(0.25 0.020 300 / 0.38);
-  --mat-grain: 0.30;
+  --mat-grain: 0.09;
   --mat-fill-chrome: 55%;
   --mat-chrome-topline: oklch(1 0 0 / 0.06);
   --mat-pop-spec-hi: oklch(1 0 0 / 0.62);
@@ -770,7 +772,7 @@ html[data-material="aurora"] {
   --mat-glow-counter: color-mix(in oklch, oklch(0.72 0.12 200) 34%, transparent);
   --mat-sheen: oklch(1 0 0 / 0.90);
   --mat-raised: oklch(1 0 0 / 0.60);
-  --mat-grain: 0.08;
+  --mat-grain: 0.02;
   --mat-fill-chrome: 72%;
   --mat-chrome-topline: oklch(1 0 0 / 0.25);
   --mat-pop-spec-hi: oklch(1 0 0 / 0.95);
@@ -804,7 +806,7 @@ html[data-material="aurora"].dark {
   --mat-glow-counter: color-mix(in oklch, oklch(0.62 0.13 230) 30%, transparent);
   --mat-sheen: oklch(1 0 0 / 0.06);
   --mat-raised: oklch(0.24 0.030 310 / 0.50);
-  --mat-grain: 0.12;
+  --mat-grain: 0.035;
   --mat-fill-chrome: 64%;
   --mat-chrome-topline: oklch(1 0 0 / 0.05);
   --mat-pop-spec-hi: oklch(1 0 0 / 0.50);
