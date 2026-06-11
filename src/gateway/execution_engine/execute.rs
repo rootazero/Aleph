@@ -4,6 +4,7 @@ use crate::gateway::event_emitter::{EventEmitter, StreamEvent};
 use crate::gateway::inbound_router::SLASH_COMMAND_MODE_KEY;
 use crate::resilience::TaskStatus;
 use crate::sync_primitives::Arc;
+use crate::verification::stop_hooks::{execute_stop_hooks_arc, StopHookContext};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -629,97 +630,117 @@ where
                                 let now_ms = std::time::SystemTime::now()
                                     .duration_since(std::time::UNIX_EPOCH)
                                     .map_or(0, |d| d.as_millis() as u64);
-                                if crate::tasks::goal_pursuit::should_continue(&goal, 0) {
+
+                                // 闸门分支：模型在 Active 续跑下自报 Complete，
+                                // 但客观闸门（stop_hooks 退出码）尚未确认。
+                                // 在接受 complete 为终止前先跑闸门（Ralph
+                                // Wiggum 营救）。结构化退出码，零 LLM 调用（R7）。
+                                if crate::tasks::goal_pursuit::awaiting_gate(
+                                    &goal,
+                                    cont_deps.gate.is_some(),
+                                ) {
+                                    let gate = cont_deps.gate.clone().expect("is_some checked");
+                                    let hctx = StopHookContext {
+                                        final_text: Some(goal.objective.clone()),
+                                        iterations: goal.continuations_used as usize,
+                                        tool_calls_made: 0,
+                                        stop_reason: "goal_complete_claim".to_string(),
+                                    };
+                                    let result = execute_stop_hooks_arc(
+                                        &gate,
+                                        &hctx,
+                                        &CancellationToken::new(),
+                                    )
+                                    .await;
+                                    let vetoed = result
+                                        .halt_reason()
+                                        .or_else(|| result.blocking_reason());
+                                    match vetoed {
+                                        None => {
+                                            // 闸门通过 → 确认完成，循环终止。
+                                            let confirmed =
+                                                crate::tasks::goal_pursuit::confirm_complete(
+                                                    &goal, now_ms,
+                                                );
+                                            if let Err(e) = store.put(&confirmed) {
+                                                warn!(error = %e, session = %session_key_str,
+                                                    "goal pursuit: failed to persist gate confirmation");
+                                            } else {
+                                                info!(session = %session_key_str,
+                                                    "goal pursuit: objective gate passed, goal verified complete");
+                                            }
+                                        }
+                                        Some(reason) => {
+                                            // 闸门否决 → 退回 Active(或 Blocked)。
+                                            let reopened =
+                                                crate::tasks::goal_pursuit::reopen_after_gate_failure(
+                                                    &goal, reason, now_ms,
+                                                );
+                                            let reopened_active = reopened.is_active();
+                                            if let Err(e) = store.put(&reopened) {
+                                                warn!(error = %e, session = %session_key_str,
+                                                    "goal pursuit: failed to persist gate veto");
+                                            } else if reopened_active {
+                                                let bumped =
+                                                    reopened.clone().spent_continuation(now_ms);
+                                                if let Err(e) = store.put(&bumped) {
+                                                    warn!(error = %e, session = %session_key_str,
+                                                        "goal pursuit: failed to persist continuation counter after veto");
+                                                } else {
+                                                    let prompt =
+                                                        crate::tasks::goal_pursuit::gate_failure_prompt(
+                                                            &goal, reason,
+                                                        );
+                                                    info!(session = %session_key_str,
+                                                        "goal pursuit: objective gate vetoed completion, re-running with feedback");
+                                                    spawn_continuation_run(
+                                                        cont_deps.registry.clone(),
+                                                        cont_deps.adapter.clone(),
+                                                        request.session_key.clone(),
+                                                        session_key_str.clone(),
+                                                        prompt,
+                                                    );
+                                                }
+                                            } else {
+                                                info!(session = %session_key_str,
+                                                    "goal pursuit: objective gate vetoed at iteration cap, goal blocked");
+                                            }
+                                        }
+                                    }
+                                } else if crate::tasks::goal_pursuit::should_continue(&goal, 0) {
                                     let bumped = goal.clone().spent_continuation(now_ms);
                                     if let Err(e) = store.put(&bumped) {
-                                        warn!(
-                                            error = %e,
-                                            session = %session_key_str,
-                                            "goal pursuit: failed to persist continuation counter; skipping"
-                                        );
+                                        warn!(error = %e, session = %session_key_str,
+                                            "goal pursuit: failed to persist continuation counter; skipping");
                                     } else {
                                         let prompt =
                                             crate::tasks::goal_pursuit::continuation_prompt(&goal);
-                                        let cont_request = super::RunRequest {
-                                            run_id: uuid::Uuid::new_v4().to_string(),
-                                            input: prompt,
-                                            session_key: request.session_key.clone(),
-                                            timeout_secs: None,
-                                            metadata: std::collections::HashMap::new(),
-                                            attachments: Vec::new(),
-                                            pending_media: crate::sync_primitives::Arc::new(
-                                                tokio::sync::Mutex::new(Vec::new()),
-                                            ),
-                                            sandbox_override: None,
-                                            workspace_override: None,
-                                            max_iterations_override: None,
-                                            model_override: None,
-                                        };
-                                        let cont_agent_id =
-                                            request.session_key.agent_id().to_string();
-                                        let cont_registry = cont_deps.registry.clone();
-                                        let cont_adapter = cont_deps.adapter.clone();
-                                        let cont_session = session_key_str.clone();
-                                        tokio::spawn(async move {
-                                            let resolved_agent =
-                                                cont_registry.get(&cont_agent_id).await;
-                                            let Some(cont_agent) = resolved_agent else {
-                                                warn!(
-                                                    agent_id = %cont_agent_id,
-                                                    session = %cont_session,
-                                                    "goal pursuit: agent not found, skipping continuation"
-                                                );
-                                                return;
-                                            };
-                                            use crate::gateway::event_emitter::CollectingEventEmitter;
-                                            let emitter: crate::sync_primitives::Arc<
-                                                dyn EventEmitter + Send + Sync,
-                                            > = crate::sync_primitives::Arc::new(
-                                                CollectingEventEmitter::new(),
-                                            );
-                                            if let Err(e) = cont_adapter
-                                                .execute(cont_request, cont_agent, emitter)
-                                                .await
-                                            {
-                                                warn!(
-                                                    error = %e,
-                                                    session = %cont_session,
-                                                    "goal pursuit: continuation run failed"
-                                                );
-                                            }
-                                        });
-                                        info!(
-                                            session = %session_key_str,
-                                            continuations_used = bumped.continuations_used,
-                                            "goal pursuit: enqueued autonomous continuation"
+                                        spawn_continuation_run(
+                                            cont_deps.registry.clone(),
+                                            cont_deps.adapter.clone(),
+                                            request.session_key.clone(),
+                                            session_key_str.clone(),
+                                            prompt,
                                         );
+                                        info!(session = %session_key_str,
+                                            continuations_used = bumped.continuations_used,
+                                            "goal pursuit: enqueued autonomous continuation");
                                     }
                                 } else if crate::tasks::goal_pursuit::exhausted_while_active(
                                     &goal, 0,
                                 ) {
-                                    // Active pursuit hit its iteration cap without the
-                                    // model self-reporting complete/blocked. Transition
-                                    // Active→Blocked (codex BudgetLimited parity) so the
-                                    // goal stops surfacing as an active pursuit every turn
-                                    // and the user is cued to take over. Structural
-                                    // backstop, not a judgment about the work (R7).
                                     let note = crate::tasks::goal_pursuit::cap_reached_note(&goal);
                                     let blocked = goal
                                         .clone()
                                         .with_status(crate::goal::GoalStatus::Blocked, now_ms)
                                         .with_note(Some(note), now_ms);
                                     if let Err(e) = store.put(&blocked) {
-                                        warn!(
-                                            error = %e,
-                                            session = %session_key_str,
-                                            "goal pursuit: failed to persist cap-reached block"
-                                        );
+                                        warn!(error = %e, session = %session_key_str,
+                                            "goal pursuit: failed to persist cap-reached block");
                                     } else {
-                                        info!(
-                                            session = %session_key_str,
+                                        info!(session = %session_key_str,
                                             continuations_used = goal.continuations_used,
-                                            "goal pursuit: iteration cap reached, goal blocked for user guidance"
-                                        );
+                                            "goal pursuit: iteration cap reached, goal blocked for user guidance");
                                     }
                                 }
                             }
@@ -819,4 +840,50 @@ where
 
         final_result
     }
+}
+
+/// 入队一次自主续跑 run（同一 session、同一 agent，给定 prompt）。
+/// 被 should_continue 续跑分支与 gate-failure 续跑分支共用——消除重复的
+/// `RunRequest` 构造与 `tokio::spawn` 样板。
+fn spawn_continuation_run(
+    registry: Arc<crate::gateway::agent_instance::AgentRegistry>,
+    adapter: Arc<dyn crate::gateway::execution_adapter::ExecutionAdapter>,
+    session_key: crate::routing::session_key::SessionKey,
+    session_key_str: String,
+    prompt: String,
+) {
+    let cont_request = super::RunRequest {
+        run_id: uuid::Uuid::new_v4().to_string(),
+        input: prompt,
+        session_key: session_key.clone(),
+        timeout_secs: None,
+        metadata: std::collections::HashMap::new(),
+        attachments: Vec::new(),
+        pending_media: Arc::new(tokio::sync::Mutex::new(Vec::new())),
+        sandbox_override: None,
+        workspace_override: None,
+        max_iterations_override: None,
+        model_override: None,
+    };
+    let cont_agent_id = session_key.agent_id().to_string();
+    tokio::spawn(async move {
+        let Some(cont_agent) = registry.get(&cont_agent_id).await else {
+            warn!(
+                agent_id = %cont_agent_id,
+                session = %session_key_str,
+                "goal pursuit: agent not found, skipping continuation"
+            );
+            return;
+        };
+        let emitter: Arc<dyn EventEmitter + Send + Sync> = Arc::new(
+            crate::gateway::event_emitter::CollectingEventEmitter::new(),
+        );
+        if let Err(e) = adapter.execute(cont_request, cont_agent, emitter).await {
+            warn!(
+                error = %e,
+                session = %session_key_str,
+                "goal pursuit: continuation run failed"
+            );
+        }
+    });
 }
